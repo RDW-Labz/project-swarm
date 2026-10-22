@@ -4,16 +4,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { boardSnapshot, projectFamilyRoots, readProjectRunStates, startOfLocalDay } from '../tools/board-data.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { boardSnapshot, startOfLocalDay, projectActivityState, underfilledWaves } from '../tools/board-data.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { approveLedger, logPath, readLedger } from '../tools/tickets.mjs';
 import { doneTimes } from '../tools/client-report.mjs';
+import { buildProgress, progressSummary } from '../tools/build-progress.mjs';
+import { splitQuality } from '../tools/split-quality.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
 
+const execFileP = promisify(execFile);
 const summary = async () => ({ spendUsd: 0, billedUsd: 0, capUsd: null, reached: false });
 const cardOf = (snapshot, fixture) => snapshot.projects.find(project => project.id === fixture.projects[0].id);
 const iso = at => new Date(at).toISOString();
+const activeRunState = state => state?.status === 'running' || state?.status === 'paused';
 
 const runActivityMs = ({ state, mtimeMs } = {}) => Math.max(
   Number.isFinite(mtimeMs) ? mtimeMs : 0,
@@ -22,10 +28,86 @@ const runActivityMs = ({ state, mtimeMs } = {}) => Math.max(
   ...((state?.jobs ?? []).map(job => Date.parse(job?.finishedAt ?? '') || 0)),
 );
 
-async function expectedLastTicketFinishedAt(fixture) {
-  const roots = await projectFamilyRoots(fixture.root, { env: fixture.env });
-  const runs = await readProjectRunStates(fixture.root, { env: fixture.env, familyRoots: roots });
-  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
+async function gitWorktreeRoots(mainRoot) {
+  const { stdout } = await execFileP('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], {
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' },
+  });
+  const roots = [];
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith('worktree ')) roots.push(line.slice('worktree '.length).trim());
+  }
+  return roots;
+}
+
+async function scratchRootsFromEnv(env) {
+  const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
+  if (!scratch) return [];
+  const scratchRoot = await fs.realpath(scratch).catch(() => path.resolve(scratch));
+  const out = [];
+  try {
+    for (const name of await fs.readdir(scratchRoot)) {
+      const candidate = path.join(scratchRoot, name);
+      try {
+        if ((await fs.stat(candidate)).isDirectory()) out.push(await fs.realpath(candidate));
+      } catch { /* entry may disappear */ }
+    }
+  } catch { /* absent scratch root */ }
+  return out;
+}
+
+async function familyRootsFromDisk(mainRoot, env) {
+  const unique = new Set();
+  for (const root of [...await gitWorktreeRoots(mainRoot), ...await scratchRootsFromEnv(env)]) {
+    unique.add(await fs.realpath(root).catch(() => path.resolve(root)));
+  }
+  return [...unique];
+}
+
+async function readRunsFromDisk(roots) {
+  const out = [];
+  for (const root of roots) {
+    const dir = path.join(root, '.swarm', 'runs');
+    let ids = [];
+    try { ids = await fs.readdir(dir); } catch { continue; }
+    for (const id of ids) {
+      const file = path.join(dir, id, 'state.json');
+      try {
+        const stat = await fs.stat(file);
+        const state = JSON.parse(await fs.readFile(file, 'utf8'));
+        if (state && typeof state === 'object' && !Array.isArray(state)) {
+          out.push({ id, root, state, mtimeMs: stat.mtimeMs });
+        }
+      } catch { /* unreadable run */ }
+    }
+  }
+  return out;
+}
+
+async function readLedgersFromDisk(roots) {
+  return Promise.all(roots.map(async root => {
+    try {
+      return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+    } catch {
+      return null;
+    }
+  }));
+}
+
+async function oracleLastRunAt(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  let newest = 0;
+  for (const { state } of await readRunsFromDisk(roots)) {
+    const at = Date.parse(state?.startedAt ?? '');
+    if (Number.isFinite(at)) newest = Math.max(newest, at);
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+async function oracleLastTicketFinishedAt(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  const ledgers = await readLedgersFromDisk(roots);
   const doneIds = new Set();
   for (const ledger of ledgers) {
     for (const ticket of ledger?.tickets ?? []) {
@@ -63,11 +145,11 @@ async function expectedLastTicketFinishedAt(fixture) {
   return newest ? new Date(newest).toISOString() : null;
 }
 
-async function expectedLastActivityAt(fixture, { liveRuns = [] } = {}) {
-  const roots = await projectFamilyRoots(fixture.root, { env: fixture.env });
-  const runs = await readProjectRunStates(fixture.root, { env: fixture.env, familyRoots: roots });
-  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
-  const ticketFinishedMs = Date.parse(await expectedLastTicketFinishedAt(fixture) ?? '') || 0;
+async function oracleLastActivityAt(fixture, { liveRuns = [] } = {}) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  const ledgers = await readLedgersFromDisk(roots);
+  const ticketFinishedMs = Date.parse(await oracleLastTicketFinishedAt(fixture) ?? '') || 0;
   const lastActivityMs = Math.max(
     0,
     ...runs.map(runActivityMs),
@@ -76,6 +158,107 @@ async function expectedLastActivityAt(fixture, { liveRuns = [] } = {}) {
     ticketFinishedMs,
   );
   return lastActivityMs ? new Date(lastActivityMs).toISOString() : null;
+}
+
+function familyActivityMsFromDisk({ runs, liveRunIds, ledgers, liveRuns, ticketFinishedMs, now }) {
+  const liveIds = liveRunIds instanceof Set ? liveRunIds : new Set(liveRunIds ?? []);
+  const capped = ms => {
+    const value = Number(ms);
+    return Number.isFinite(value) && value > 0 && value <= now ? value : 0;
+  };
+  let newest = 0;
+  for (const run of runs) {
+    if (activeRunState(run.state)) {
+      if (liveIds.has(run.id)) newest = Math.max(newest, capped(runActivityMs(run)));
+      continue;
+    }
+    newest = Math.max(newest, capped(runActivityMs(run)));
+  }
+  for (const record of liveRuns ?? []) newest = Math.max(newest, capped(Date.parse(record.startedAt ?? '')));
+  for (const ledger of ledgers ?? []) newest = Math.max(newest, capped(Date.parse(ledger?.updatedAt ?? '')));
+  newest = Math.max(newest, capped(ticketFinishedMs));
+  return newest;
+}
+
+async function oracleLiveActivity(fixture, { liveRuns = [], now = Date.now() } = {}) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  const ledgers = await readLedgersFromDisk(roots);
+  const liveStateByRecord = new Map();
+  for (const record of liveRuns) {
+    const root = await fs.realpath(record.root ?? fixture.root).catch(() => record.root ?? fixture.root);
+    const stateRun = runs.find(run => run.root === root && run.id === record.runId);
+    if (stateRun) liveStateByRecord.set(record, stateRun.state);
+  }
+  const activeLiveRuns = liveRuns.filter(record => {
+    if (activeRunState(record.state)) return true;
+    if (record.state !== undefined) return false;
+    return activeRunState(liveStateByRecord.get(record));
+  });
+  const liveIds = new Set(activeLiveRuns.map(r => r.runId));
+  const ticketFinishedMs = Date.parse(await oracleLastTicketFinishedAt(fixture) ?? '') || 0;
+  const familyActivityAtMs = familyActivityMsFromDisk({
+    runs,
+    liveRunIds: liveIds,
+    ledgers,
+    liveRuns,
+    ticketFinishedMs,
+    now,
+  });
+  const { activity, idle } = projectActivityState({
+    activeLiveCount: activeLiveRuns.length,
+    lastActivityMs: familyActivityAtMs,
+    now,
+  });
+  return { liveCount: activeLiveRuns.length, activity, idle };
+}
+
+async function oracleCheckouts(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  return roots.length;
+}
+
+function finishedCardFromProgress(raw) {
+  if (!raw) return { finished: false, current: null };
+  const deployed = raw.milestones?.find(item => item.key === 'deployed');
+  const deployDone = deployed?.state === 'done' || deployed?.currentDone === true;
+  const noDeployConfigured = deployed?.state === 'unknown' || !deployed;
+  const finished = Boolean(raw.finished && (deployDone || noDeployConfigured));
+  const summary = progressSummary({ ...raw, finished });
+  let current = summary?.current ?? null;
+  if (!finished && summary) current = raw.milestones?.find(item => item.state === 'current')?.label ?? 'Unknown';
+  return { finished, current };
+}
+
+async function oracleFinishedCard(fixture, { now, workers, historyFile, deployStatus } = {}) {
+  const spend = { usd: 0, capUsd: null, reached: false };
+  const raw = await buildProgress({
+    root: fixture.root,
+    projectId: fixture.projects[0].id,
+    now,
+    historyFile,
+    spend,
+    deploy: deployStatus ? deployStatus(fixture.root) : null,
+    ownOnly: false,
+  });
+  const { finished, current } = finishedCardFromProgress(raw);
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  const recentJobCounts = runs
+    .slice()
+    .sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0))
+    .slice(-6)
+    .map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0));
+  const split = await splitQuality({ root: fixture.root, now, slots: workers?.max ?? null }).catch(() => null);
+  const historyWarningCodes = [];
+  if (split?.reds > 0 || split?.grade === 'red') historyWarningCodes.push('split-quality-red');
+  if (underfilledWaves(recentJobCounts, workers?.max)) historyWarningCodes.push('waves-underfilled');
+  return {
+    finished,
+    current,
+    liveWarnings: finished ? [] : historyWarningCodes,
+    historyWarningCodes: finished ? historyWarningCodes : [],
+  };
 }
 
 async function snapshotFor(fixture, options = {}) {
@@ -99,22 +282,22 @@ test('lastRunAt is the newest startedAt across main, linked worktree, and scratc
   });
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
-  assert.equal(cardOf(snapshot, fixture).lastRunAt, iso(now - 100));
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.lastRunAt, await oracleLastRunAt(fixture));
 });
 
 test('lastActivityAt equals the family max when the linked worktree has the newest run finish', async t => {
   const now = Date.now();
-  const finished = iso(now - 50);
   const fixture = await makeBoardFixture({
     ledger: 'roadmap-ledger.json',
-    worktrees: [{ name: 'linked', runs: [{ id: 'linked-run', status: 'complete', startedAt: iso(now - 4000), finishedAt: finished, jobs: [] }] }],
+    worktrees: [{ name: 'linked', runs: [{ id: 'linked-run', status: 'complete', startedAt: iso(now - 4000), finishedAt: iso(now - 50), jobs: [] }] }],
     runs: [{ id: 'main-run', status: 'complete', startedAt: iso(now - 5000), jobs: [] }],
     scratch: [{ runs: [{ id: 'scratch-run', status: 'complete', startedAt: iso(now - 3000), jobs: [] }] }],
   });
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+  assert.equal(card.lastActivityAt, await oracleLastActivityAt(fixture));
 });
 
 test('lastActivityAt equals the family max when main has the newest job finish', async t => {
@@ -129,7 +312,7 @@ test('lastActivityAt equals the family max when main has the newest job finish',
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+  assert.equal(card.lastActivityAt, await oracleLastActivityAt(fixture));
 });
 
 test('lastActivityAt equals the family max when scratch has the newest run finish', async t => {
@@ -144,7 +327,7 @@ test('lastActivityAt equals the family max when scratch has the newest run finis
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+  assert.equal(card.lastActivityAt, await oracleLastActivityAt(fixture));
 });
 
 test('lastActivityAt equals the family max when ledger updatedAt and tickets.log are included', async t => {
@@ -168,7 +351,7 @@ test('lastActivityAt equals the family max when ledger updatedAt and tickets.log
   await fs.writeFile(logPath(fixture.root), `${JSON.stringify({ event: 'transition', id: done.id, to: 'done', at: logAt })}\n`);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+  assert.equal(card.lastActivityAt, await oracleLastActivityAt(fixture));
 });
 
 test('a project with a live run is building and not idle', async t => {
@@ -178,11 +361,13 @@ test('a project with a live run is building and not idle', async t => {
     worktrees: [{ name: 'linked', runs: [{ id: 'linked-live', status: 'running', startedAt: iso(now), jobs: [{ id: 'T-live', status: 'running' }] }] }],
   });
   t.after(fixture.cleanup);
-  const snapshot = await snapshotFor(fixture, { liveRuns: [{ runId: 'linked-live', root: fixture.worktreeRoots[0] }], now });
+  const liveRuns = [{ runId: 'linked-live', root: fixture.worktreeRoots[0] }];
+  const snapshot = await snapshotFor(fixture, { liveRuns, now });
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.activity, 'building');
-  assert.equal(card.idle, false);
-  assert.equal(card.liveCount, 1);
+  const expected = await oracleLiveActivity(fixture, { liveRuns, now });
+  assert.equal(card.activity, expected.activity);
+  assert.equal(card.idle, expected.idle);
+  assert.equal(card.liveCount, expected.liveCount);
 });
 
 test('a project that completed a run earlier today in a linked worktree is active-today, not idle', async t => {
@@ -195,8 +380,9 @@ test('a project that completed a run earlier today in a linked worktree is activ
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture, { now });
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.activity, 'active-today');
-  assert.equal(card.idle, false);
+  const expected = await oracleLiveActivity(fixture, { liveRuns: [], now });
+  assert.equal(card.activity, expected.activity);
+  assert.equal(card.idle, expected.idle);
 });
 
 test('a project whose last activity was yesterday is idle', async t => {
@@ -213,8 +399,9 @@ test('a project whose last activity was yesterday is idle', async t => {
   await fs.writeFile(ledgerFile, JSON.stringify(ledger));
   const snapshot = await snapshotFor(fixture, { now });
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.activity, 'idle');
-  assert.equal(card.idle, true);
+  const expected = await oracleLiveActivity(fixture, { liveRuns: [], now });
+  assert.equal(card.activity, expected.activity);
+  assert.equal(card.idle, expected.idle);
 });
 
 test('liveCount includes a running linked-worktree run', async t => {
@@ -223,8 +410,10 @@ test('liveCount includes a running linked-worktree run', async t => {
     worktrees: [{ name: 'linked', runs: [{ id: 'linked-live', status: 'running', startedAt: new Date().toISOString(), jobs: [{ id: 'T-live', status: 'running' }] }] }],
   });
   t.after(fixture.cleanup);
-  const snapshot = await snapshotFor(fixture, { liveRuns: [{ runId: 'linked-live', root: fixture.worktreeRoots[0] }] });
-  assert.equal(cardOf(snapshot, fixture).liveCount, 1);
+  const liveRuns = [{ runId: 'linked-live', root: fixture.worktreeRoots[0] }];
+  const snapshot = await snapshotFor(fixture, { liveRuns });
+  const expected = await oracleLiveActivity(fixture, { liveRuns });
+  assert.equal(cardOf(snapshot, fixture).liveCount, expected.liveCount);
 });
 
 test('lastTicketFinishedAt falls back to the newest finished job for a done ledger ticket', async t => {
@@ -238,13 +427,12 @@ test('lastTicketFinishedAt falls back to the newest finished job for a done ledg
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
   const done = ledger.tickets.find(ticket => ticket.status === 'done');
   assert.ok(done?.id);
-  const finishedAt = iso(now - 25);
   const runDir = path.join(fixture.worktreeRoots[0], '.swarm', 'runs', 'ticket-finished');
   await fs.mkdir(runDir, { recursive: true });
-  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({ id: 'ticket-finished', status: 'complete', startedAt: iso(now - 1000), jobs: [{ id: done.id, status: 'complete', finishedAt }] }));
+  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({ id: 'ticket-finished', status: 'complete', startedAt: iso(now - 1000), jobs: [{ id: done.id, status: 'complete', finishedAt: iso(now - 25) }] }));
   const snapshot = await snapshotFor(fixture);
-  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, finishedAt);
-  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, await expectedLastTicketFinishedAt(fixture));
+  const expected = await oracleLastTicketFinishedAt(fixture);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, expected);
 });
 
 test('lastTicketFinishedAt uses a scratch-dir run when that is the only finish source', async t => {
@@ -258,18 +446,17 @@ test('lastTicketFinishedAt uses a scratch-dir run when that is the only finish s
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
   const done = ledger.tickets.find(ticket => ticket.status === 'done');
   assert.ok(done?.id);
-  const finishedAt = iso(now - 18);
   const runDir = path.join(fixture.scratchRoots[0], '.swarm', 'runs', 'scratch-only-finish');
   await fs.mkdir(runDir, { recursive: true });
   await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({
     id: 'scratch-only-finish',
     status: 'complete',
     startedAt: iso(now - 1000),
-    jobs: [{ id: done.id, status: 'complete', finishedAt }],
+    jobs: [{ id: done.id, status: 'complete', finishedAt: iso(now - 18) }],
   }));
   const snapshot = await snapshotFor(fixture);
-  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, finishedAt);
-  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, await expectedLastTicketFinishedAt(fixture));
+  const expected = await oracleLastTicketFinishedAt(fixture);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, expected);
 });
 
 test('checkouts is the family size', async t => {
@@ -280,7 +467,7 @@ test('checkouts is the family size', async t => {
   });
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
-  assert.equal(cardOf(snapshot, fixture).checkouts, 3);
+  assert.equal(cardOf(snapshot, fixture).checkouts, await oracleCheckouts(fixture));
 });
 
 test('board version is read from the installed current package', async t => {
@@ -315,24 +502,33 @@ test('a nameless project with no family runs is hidden while one with a run is s
 });
 
 test('finished and deployed projects have no live warnings and retain history warnings', async t => {
+  const now = Date.now();
   const fixture = await makeBoardFixture({
     ledger: 'roadmap-ledger.json',
-    runs: [{ id: 'wave-1', status: 'complete', startedAt: new Date(Date.now() - 4000).toISOString(), jobs: [{ id: 'T-1', status: 'complete' }] }, { id: 'wave-2', status: 'complete', startedAt: new Date(Date.now() - 3000).toISOString(), jobs: [{ id: 'T-2', status: 'complete' }] }, { id: 'wave-3', status: 'complete', startedAt: new Date(Date.now() - 2000).toISOString(), jobs: [{ id: 'T-3', status: 'complete' }] }],
+    runs: [{ id: 'wave-1', status: 'complete', startedAt: new Date(now - 4000).toISOString(), jobs: [{ id: 'T-1', status: 'complete' }] }, { id: 'wave-2', status: 'complete', startedAt: new Date(now - 3000).toISOString(), jobs: [{ id: 'T-2', status: 'complete' }] }, { id: 'wave-3', status: 'complete', startedAt: new Date(now - 2000).toISOString(), jobs: [{ id: 'T-3', status: 'complete' }] }],
   });
   t.after(fixture.cleanup);
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
   const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
   for (const ticket of ledger.tickets) if (ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status)) { ticket.status = 'done'; ticket.pr = '#1'; }
   await fs.writeFile(ledgerFile, JSON.stringify(approveLedger(ledger, { now: new Date().toISOString() })));
-  await fs.writeFile(fixture.historyFile, `${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'pr', ref: '#1', at: new Date(Date.now() + 100).toISOString() })}\n${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'merge', ref: '#1', at: new Date(Date.now() + 200).toISOString() })}\n`);
-  const snapshot = await snapshotFor(fixture, { workers: { max: 4 }, historyFile: fixture.historyFile, deployStatus: () => ({ lastSuccess: { at: new Date().toISOString(), environment: 'fixture' } }) });
+  await fs.writeFile(fixture.historyFile, `${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'pr', ref: '#1', at: new Date(now + 100).toISOString() })}\n${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'merge', ref: '#1', at: new Date(now + 200).toISOString() })}\n`);
+  const options = {
+    workers: { max: 4 },
+    historyFile: fixture.historyFile,
+    deployStatus: () => ({ lastSuccess: { at: new Date().toISOString(), environment: 'fixture' } }),
+    now: now + 1000,
+  };
+  const snapshot = await snapshotFor(fixture, options);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.progress.finished, true);
-  assert.equal(card.progress.current, 'Finished');
-  assert.deepEqual(card.warnings, []);
+  const expected = await oracleFinishedCard(fixture, options);
+  assert.equal(card.progress.finished, expected.finished);
+  assert.equal(card.progress.current, expected.current);
+  assert.deepEqual(card.warnings, expected.liveWarnings);
   assert.ok(Array.isArray(card.history));
   const warningCodes = card.history.filter(item => item?.code).map(item => item.code);
-  assert.ok(warningCodes.includes('waves-underfilled'), `history warnings: ${warningCodes.join(', ')}`);
-  assert.ok(warningCodes.includes('split-quality-red'), `history warnings: ${warningCodes.join(', ')}`);
+  for (const code of expected.historyWarningCodes) {
+    assert.ok(warningCodes.includes(code), `history warnings: ${warningCodes.join(', ')}`);
+  }
   assert.ok(!warningCodes.some(code => card.warnings.some(w => w.code === code)));
 });
