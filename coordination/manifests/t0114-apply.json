@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-apply",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/board-owner-actions.mjs",
+        "tools/watch-cli.mjs",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "tests/board-owner-routes.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/inbox.mjs",
+        "tools/handbuild.mjs",
+        "tools/tickets.mjs",
+        "tools/board-inbox.mjs",
+        "tools/board-action-guard.mjs",
+        "contracts/watch-s4-ops.json"
+      ],
+      "prompt": "Opus review t0114-sec3 (low, but the owner wants it fixed before shipping): a successful approve/deny in tools/board-owner-actions.mjs decide (~line 337) only writes an audit entry and returns approved/denied; the choice is never applied, so the board says 'approved' while nothing happened. Fix: decide must APPLY the decision through the same library code the CLI uses, injected as an `apply(item, decision, { identity, now })` dependency of createOwnerActions, and write the 'approved'/'denied' audit entry only AFTER apply succeeds; if apply throws or returns { ok: false }, respond 409 { error: 'apply-failed', message } (no internals, no paths) and audit outcome 'apply-failed', and consume the confirm id either way. tools/watch-cli.mjs buildOwnerActions provides apply per allowed kind, using the item's projectRoot: decision -> decide(root, item.id, choice) from tools/inbox.mjs, where approve confirms the decision's recorded default choice and deny picks the option literally named 'deny' when the options include it, else refuses with apply-failed 'this decision has no deny option; answer it in the terminal'; handbuild (hand-build request decisions, id prefixed 'handbuild-' or kind handbuild) -> decideRequest(root, requestId, 'approve'|'deny', { by: 'owner', channel: 'board' }) from tools/handbuild.mjs; proposed-ticket -> approve: the same function `swarm tickets ID --approve` uses (find it in tools/tickets.mjs / its command module), deny: set the proposed ticket to cancelled with a note 'denied on the board by <identity>'; scope -> approve: refuse with apply-failed 'scope approval runs its gate in the terminal: swarm scope approve' (scope approval must stay a terminal action; keep it listed but not appliable), deny: same refusal. Every apply is fail-closed. Tests: tests/board-owner-actions-handlers.test.mjs: audit approved only after apply succeeds; apply failure gives 409 apply-failed with no approved entry; tests/board-owner-routes.test.mjs end to end on the real remote board: approving a board-safe decision records the confirmed choice in the project journal (read it back); approving a hand-build request changes its status in the hand-build store; approving a proposed ticket approves it in the ledger and denying one cancels it; scope approve returns apply-failed. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-inbox.test.mjs tests/decision-board-safe.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use watch-cli or the owner actions for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
