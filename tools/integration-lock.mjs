@@ -36,16 +36,39 @@ function ownerFields(owner) {
   return field;
 }
 
-async function tryAcquireLock(lock, { owner, isAlive, now, staleMs, staleOwnerlessMs, integrateStale, warnings, staleWarning }) {
-  await fs.mkdir(path.dirname(lock), { recursive: true });
+function lockRaceExhausted() {
+  return Object.assign(new Error('lock-race-exhausted'), { code: 'lock-race-exhausted' });
+}
+
+function retryLockRace(raceRetries) {
+  if (raceRetries < 50) return raceRetries + 1;
+  throw lockRaceExhausted();
+}
+
+export async function tryAcquireLock(lock, { owner, isAlive, now, staleMs, staleOwnerlessMs, integrateStale, warnings, staleWarning, fsImpl = fs } = {}) {
+  await fsImpl.mkdir(path.dirname(lock), { recursive: true });
+  let raceRetries = 0;
   for (let attempt = 0; ; attempt++) {
-    try { await fs.mkdir(lock); }
+    try { await fsImpl.mkdir(lock); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock);
+      let stat;
+      try { stat = await fsImpl.lstat(lock); }
+      catch (lstatError) {
+        if (lstatError.code === 'ENOENT') raceRetries = retryLockRace(raceRetries);
+        else throw lstatError;
+        continue;
+      }
       let existing;
       if (stat.isDirectory()) {
-        try { existing = JSON.parse(await fs.readFile(path.join(lock, 'owner.json'), 'utf8')); } catch { /* ownerless creation window */ }
+        try { existing = JSON.parse(await fsImpl.readFile(path.join(lock, 'owner.json'), 'utf8')); }
+        catch (readError) {
+          if (readError.code === 'ENOENT') {
+            raceRetries = retryLockRace(raceRetries);
+            continue;
+          }
+          /* ownerless creation window */
+        }
       }
       const valid = existing && typeof existing === 'object' && Number.isInteger(existing.pid) && existing.pid > 0 && typeof existing.host === 'string';
       const stale = stat.isDirectory() && (integrateStale
@@ -53,13 +76,20 @@ async function tryAcquireLock(lock, { owner, isAlive, now, staleMs, staleOwnerle
         : (valid ? !isAlive(existing.pid) || now() - stat.mtimeMs > staleMs : now() - stat.mtimeMs > staleMs));
       const field = ownerFields(existing);
       if (stale && attempt === 0) {
-        await fs.rm(lock, { recursive: true, force: true });
+        try { await fsImpl.rm(lock, { recursive: true, force: true }); }
+        catch (rmError) {
+          if (rmError.code === 'ENOENT') {
+            raceRetries = retryLockRace(raceRetries);
+            continue;
+          }
+          throw rmError;
+        }
         if (staleWarning) warnings.push(staleWarning(lock, field));
         continue;
       }
       return { ok: false, owner: existing, field };
     }
-    await fs.writeFile(path.join(lock, 'owner.json'), JSON.stringify(owner));
+    await fsImpl.writeFile(path.join(lock, 'owner.json'), JSON.stringify(owner));
     return { ok: true };
   }
 }
