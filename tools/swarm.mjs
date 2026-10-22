@@ -3050,6 +3050,8 @@ async function mainInner() {
     const status=await projectStatus(root,{doctorAll:()=>deadline(doctorAll({root,probeLocal:true,skipRemote:true}),'the lane check'),spendToday:()=>deadline(spendToday(),'the spend read')});
     const {autopilotStatusForRoot,computeIdleWithReady,countReadyTickets}=await import('./autopilot.mjs');
     status.autopilot=await autopilotStatusForRoot(root);
+    status.idleWithReady=false;
+    status.readyTickets=0;
     try{
       const {readLedger}=await import('./tickets.mjs');
       const ledger=await readLedger(root);
@@ -3073,8 +3075,9 @@ async function mainInner() {
     if(args[0]==='--json'){
       process.stdout.write(`${JSON.stringify(status)}\n`,()=>process.exit(process.exitCode??0));
     }else{
-      const lines=[formatStatus(status),`autopilot: ${status.autopilot}`];
+      const lines=[`autopilot: ${status.autopilot}`];
       if(status.idleWithReady)lines.push(`idle with ready work: ${status.readyTickets} ticket(s) with free machine slots`);
+      lines.push(formatStatus(status));
       process.stdout.write(`${lines.join('\n')}\n`,()=>process.exit(process.exitCode??0));
     }
     return;
