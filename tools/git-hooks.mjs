@@ -116,6 +116,29 @@ function backupUserHook(fsMod, hookPath) {
   fsMod.renameSync(hookPath, dest);
 }
 
+/** Re-point an existing swarm git hook wrapper at a new githook-check.mjs path without touching user backups. */
+export function refreshGitHooksCheckScript(root, checkScript, { fs: fsMod = fs, exec, nodePath = process.execPath } = {}) {
+  if (!checkScript) return { status: 'skipped', reason: 'no checkScript' };
+  const dir = hooksDir(root, exec);
+  let updated = false;
+  let sawOurHook = false;
+  for (const kind of ['pre-commit', 'pre-push', 'commit-msg']) {
+    const hookPath = path.join(dir, kind);
+    const existing = readHook(fsMod, hookPath);
+    if (existing === null || !isOurHook(existing)) continue;
+    sawOurHook = true;
+    const nodeMatch = /NODE_RECORD='([^']*)'/.exec(existing);
+    const recordedNode = nodeMatch ? nodeMatch[1].replace(/'\\''/g, `'`) : nodePath;
+    const next = hookBody(kind, { nodePath: recordedNode, checkScript });
+    if (existing !== next) {
+      fsMod.writeFileSync(hookPath, next, { mode: 0o755 });
+      updated = true;
+    }
+  }
+  if (!sawOurHook) return { status: 'absent' };
+  return { status: updated ? 'updated' : 'unchanged' };
+}
+
 /** @param {string} root project root @param {{ fs?: typeof fs, exec?: Function, checkScript: string, nodePath?: string, forceShared?: boolean, warn?: (msg: string) => void }} opts */
 export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodePath = process.execPath, forceShared = false, warn = msg => console.warn(msg) } = {}) {
   if (!checkScript) throw Error('installGitHooks: checkScript is required');
