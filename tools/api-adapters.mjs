@@ -202,12 +202,24 @@ export function anthropicSchema(schema) {
 // anthropicSchema drops maxLength/maxItems before the API sees the contract, so models may return
 // strings longer than our limits. Structural mistakes still fail the envelope; over-long text is
 // truncated to the same caps as security-review normalization and bad line values become null.
-function limitUtf8String(value, maxBytes) {
+export function limitUtf8String(value, maxBytes) {
   const text = String(value ?? '');
-  if (Buffer.byteLength(text) <= maxBytes) return text;
-  let end = text.length;
-  while (end > 0 && Buffer.byteLength(text.slice(0, end)) > maxBytes) end -= 1;
-  return text.slice(0, end);
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let used = 0;
+  let out = '';
+  for (const char of text) {
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (used + charBytes > maxBytes) break;
+    used += charBytes;
+    out += char;
+  }
+  return out;
+}
+
+function collectRetainedStrings(value, out) {
+  if (typeof value === 'string') { out.push(value); return; }
+  if (Array.isArray(value)) { for (const item of value) collectRetainedStrings(item, out); return; }
+  if (object(value)) { for (const nested of Object.values(value)) collectRetainedStrings(nested, out); }
 }
 
 function validateReviewResult(result) {
@@ -639,7 +651,9 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const edits = envelope.edits ?? [];
     // JSON escapes can hide an echo until content is decoded. Scan the strings
     // we retain, not envelope property names that may match a short local key.
-    const retainedStrings = [envelope.summary, ...envelope.files.flatMap(file => [file.path, file.content]), ...edits.flatMap(edit => [edit.path, edit.find, edit.replace]), result.actualModel, ...Object.keys(result.usage || {})].filter(value => typeof value === 'string');
+    const resultStrings = [];
+    if (object(envelope.result)) collectRetainedStrings(envelope.result, resultStrings);
+    const retainedStrings = [envelope.summary, ...envelope.files.flatMap(file => [file.path, file.content]), ...edits.flatMap(edit => [edit.path, edit.find, edit.replace]), ...resultStrings, result.actualModel, ...Object.keys(result.usage || {})].filter(value => typeof value === 'string');
     if (credentials.some(key => retainedStrings.some(value => value.includes(key)))) fail('Provider response contained a credential; output discarded');
     // Lesson 295: Include structured review verdicts (or other result keys) as the last JSON line in response.txt.
     const responseText = isReadOnlyReviewJob(job)

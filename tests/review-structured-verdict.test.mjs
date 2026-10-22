@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { executeApi, outputSchema, isReadOnlyReviewJob, validateEnvelope } from '../tools/api-adapters.mjs';
-import { parseReviewVerdicts, reviewNotes } from '../tools/security-review.mjs';
+import { executeApi, outputSchema, isReadOnlyReviewJob, validateEnvelope, limitUtf8String } from '../tools/api-adapters.mjs';
+import { parseReviewVerdicts, reviewNotes, normalizeReviewEntries } from '../tools/security-review.mjs';
 
 const KEY = 'sk-ant-test-0123456789';
 const BUILD_SCHEMA_SNAPSHOT = {
@@ -274,4 +274,72 @@ test('coordinator Opus review envelope with a 326-character finding issue valida
   const verdicts = parseReviewVerdicts(result.response);
   assert.equal(verdicts?.[0]?.ticket, 'T-8025');
   assert.equal(verdicts?.[0]?.verdict, 'fail');
+});
+
+test('credential-shaped text in a review finding is caught after envelope decode', async () => {
+  const cred = ['sk', '-ant-test', '-0123456789'].join('');
+  const env = { SWARM_LOGS_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'review-cred-')), SWARM_ANTHROPIC_API_KEY: KEY };
+  const answer = {
+    summary: 'Reviewed routes.',
+    files: [],
+    edits: [],
+    result: {
+      reviews: [{
+        ticket: 'T-0001',
+        verdict: 'pass',
+        findings: [{ file: 'src/a.ts', line: 1, severity: 'low', issue: `echo ${cred}`, fix: 'remove' }],
+      }],
+      notes: '',
+    },
+  };
+  const result = await executeApi(reviewJob(), [], {
+    env,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: new Response(JSON.stringify({
+        type: 'message',
+        model: 'claude-haiku-5-5',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify(answer) }],
+        usage: { input_tokens: 10, output_tokens: 10 },
+      })).body,
+    }),
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /credential/);
+});
+
+test('limitUtf8String truncates on a code-point boundary within the byte limit', () => {
+  const prefix = 'a'.repeat(10);
+  const emoji = '😀';
+  const text = prefix + emoji + 'tail';
+  const maxBytes = Buffer.byteLength(prefix, 'utf8') + 2;
+  const cut = limitUtf8String(text, maxBytes);
+  assert.ok(Buffer.byteLength(cut, 'utf8') <= maxBytes);
+  assert.equal(cut, prefix);
+  assert.ok(!/\uD800|\uDFFF/.test(cut) || cut === prefix);
+});
+
+test('duplicate pass and fail entries for one ticket resolve to fail with merged findings', () => {
+  const reviews = [
+    { ticket: 'T-0001', verdict: 'pass', findings: [] },
+    { ticket: 'T-0001', verdict: 'fail', findings: [{ file: 'a.ts', line: 2, severity: 'high', issue: 'gap', fix: 'check' }] },
+  ];
+  const parsed = parseReviewVerdicts(`${JSON.stringify({ reviews })}\n`);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].ticket, 'T-0001');
+  assert.equal(parsed[0].verdict, 'fail');
+  assert.equal(parsed[0].findings.length, 1);
+  assert.equal(normalizeReviewEntries(reviews)[0].verdict, 'fail');
+});
+
+test('entries for tickets outside allowedTickets are dropped', () => {
+  const reviews = [
+    { ticket: 'T-0001', verdict: 'pass', findings: [] },
+    { ticket: 'T-9999', verdict: 'pass', findings: [] },
+  ];
+  const parsed = parseReviewVerdicts(JSON.stringify({ reviews }), ['T-0001']);
+  assert.deepEqual(parsed.map(r => r.ticket), ['T-0001']);
 });

@@ -63,26 +63,45 @@ export async function securityReviewManifest(root, runId, items, tickets = []) {
   return { version: 1, jobs: [{ id: `sec-review-${runId}`.slice(0, 60), type: 'review', agent: 'claude', model: 'opus', tier: 'expensive', tierReason: 'Automatic security review of tickets that touch auth, API routes, migrations, policies or sensitive paths.', prompt, context, outputs: [], timeoutMs: 900000 }] };
 }
 
-function normalizeReviewEntries(reviews) {
-  if (!Array.isArray(reviews)) return null;
-  const out = reviews.filter(r => r && /^T-[0-9]{4,}$/.test(r.ticket)).map(r => ({
-    ticket: r.ticket,
-    verdict: r.verdict === 'pass' && !(r.findings ?? []).some(f => ['high', 'medium'].includes(String(f?.severity).toLowerCase())) ? 'pass' : 'fail',
-    findings: (Array.isArray(r.findings) ? r.findings : []).slice(0, 10).map(f => ({
-      file: String(f?.file ?? '').slice(0, 200),
-      line: Number.isFinite(f?.line) ? f.line : null,
-      severity: String(f?.severity ?? 'medium').slice(0, 10),
-      issue: String(f?.issue ?? '').slice(0, 300),
-      fix: String(f?.fix ?? '').slice(0, 300),
-    })),
+function normalizeOneReviewEntry(r) {
+  const findings = (Array.isArray(r.findings) ? r.findings : []).map(f => ({
+    file: String(f?.file ?? '').slice(0, 200),
+    line: Number.isFinite(f?.line) ? f.line : null,
+    severity: String(f?.severity ?? 'medium').slice(0, 10),
+    issue: String(f?.issue ?? '').slice(0, 300),
+    fix: String(f?.fix ?? '').slice(0, 300),
   }));
+  const verdict = r.verdict === 'pass' && !findings.some(f => ['high', 'medium'].includes(String(f.severity).toLowerCase())) ? 'pass' : 'fail';
+  return { ticket: r.ticket, verdict, findings };
+}
+
+function mergeReviewEntries(a, b) {
+  const verdict = a.verdict === 'fail' || b.verdict === 'fail' ? 'fail' : 'pass';
+  const findings = [...a.findings, ...b.findings].slice(0, 10);
+  return { ticket: a.ticket, verdict, findings };
+}
+
+export function normalizeReviewEntries(reviews, allowedTickets) {
+  if (!Array.isArray(reviews)) return null;
+  const allowed = allowedTickets === undefined || allowedTickets === null
+    ? null
+    : (allowedTickets instanceof Set ? allowedTickets : new Set(allowedTickets));
+  const byTicket = new Map();
+  for (const r of reviews) {
+    if (!r || !/^T-[0-9]{4,}$/.test(r.ticket)) continue;
+    if (allowed && !allowed.has(r.ticket)) continue;
+    const entry = normalizeOneReviewEntry(r);
+    const existing = byTicket.get(r.ticket);
+    byTicket.set(r.ticket, existing ? mergeReviewEntries(existing, entry) : entry);
+  }
+  const out = [...byTicket.values()];
   return out.length ? out : null;
 }
 
-function reviewsFromJson(value) {
+function reviewsFromJson(value, allowedTickets) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  if (Array.isArray(value.reviews)) return normalizeReviewEntries(value.reviews);
-  if (value.result && Array.isArray(value.result.reviews)) return normalizeReviewEntries(value.result.reviews);
+  if (Array.isArray(value.reviews)) return normalizeReviewEntries(value.reviews, allowedTickets);
+  if (value.result && Array.isArray(value.result.reviews)) return normalizeReviewEntries(value.result.reviews, allowedTickets);
   return null;
 }
 
@@ -115,18 +134,18 @@ export function reviewNotes(text) {
 }
 
 // Structured verdict from the envelope or the final {"reviews":[...]} line; prose alone never counts.
-export function parseReviewVerdicts(text) {
+export function parseReviewVerdicts(text, allowedTickets) {
   const trimmed = String(text ?? '').trim();
   if (trimmed) {
     try {
-      const whole = reviewsFromJson(JSON.parse(trimmed));
+      const whole = reviewsFromJson(JSON.parse(trimmed), allowedTickets);
       if (whole) return whole;
     } catch { /* not a whole-json envelope */ }
   }
   const last = verdictLine(text);
   try {
     const parsed = JSON.parse(last);
-    return reviewsFromJson(parsed);
+    return reviewsFromJson(parsed, allowedTickets);
   } catch { /* no verdict line */ }
   return null;
 }
