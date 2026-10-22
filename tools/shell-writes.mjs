@@ -513,7 +513,17 @@ export function executablePlainWordsForHandbuild(plain) {
           i += 1;
         }
       }
+      const tailStart = i;
       i = skipSwarmSubcommandTail(plain, subLow, i);
+      if (subLow === 'change') {
+        for (let k = tailStart; k < plain.length; k += 1) {
+          const low = plain[k].toLowerCase();
+          if (low === '--yes' || low.startsWith('--yes=')) {
+            out.push(plain[k]);
+            break;
+          }
+        }
+      }
       continue;
     }
     if (HANDBUILD_VALUE_FLAGS.has(low)) {

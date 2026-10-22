@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url';
 import { guardDecision } from '../tools/handbuild.mjs';
 import {
   HANDBUILD_CHANGE_RECORD_RULE_ID,
-  CHANGE_RECORD_DENY_REASON,
   isSelfApprovalCommand,
   swarmChangeShellPolicy,
 } from '../tools/self-approval.mjs';
@@ -110,7 +109,8 @@ test('swarm change --yes is refused with handbuild-change-record rule id', async
     const d = decide(root, form.cmd);
     assert.equal(d.allow, false, form.name);
     assert.equal(d.ruleId, HANDBUILD_CHANGE_RECORD_RULE_ID, form.name);
-    assert.equal(d.reason, CHANGE_RECORD_DENY_REASON, form.name);
+    assert.match(d.reason, new RegExp(`\\[${HANDBUILD_CHANGE_RECORD_RULE_ID}\\]`));
+    assert.match(d.reason, /matched "[^"]+" at executable position \d+/);
     assert.match(d.reason, /without --yes to preview/i);
     const hook = runGuardHook(root, form.cmd);
     const out = hookDenied(hook);

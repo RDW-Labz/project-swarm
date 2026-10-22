@@ -19,7 +19,11 @@ export const HANDBUILD_OWNER_RULE_ID = 'handbuild-owner-verb';
 export const HANDBUILD_SELF_APPROVAL_RULE_ID = 'handbuild-self-approval';
 export const HANDBUILD_CHANGE_RECORD_RULE_ID = 'handbuild-change-record';
 
-export const CHANGE_RECORD_DENY_REASON = `Hand-build guard [${HANDBUILD_CHANGE_RECORD_RULE_ID}]: recording a change order (swarm change --yes) is the owner's alone (or machine policy). Run swarm change "reason" [FILE] without --yes to preview impact first.`;
+export function changeRecordDenyReason({ token, position }) {
+  return `Hand-build guard [${HANDBUILD_CHANGE_RECORD_RULE_ID}]: matched "${token}" at executable position ${position} (recording a change order (swarm change --yes) is the owner's alone (or machine policy). Run swarm change "reason" [FILE] without --yes to preview impact first.)`;
+}
+
+export const CHANGE_RECORD_DENY_REASON = changeRecordDenyReason({ token: '--yes', position: 2 });
 
 export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
 
@@ -94,11 +98,29 @@ export function swarmChangeShellPolicy(commandText) {
   }
   if (!inv) return { applies: false };
   if (inv.records) {
+    let matchedToken = '--yes';
+    let matchedPosition = 0;
+    for (const words of tokenize(text)) {
+      const plain = plainWords(words);
+      const exec = executablePlainWordsForHandbuild(plain);
+      const hit = swarmChangeFromPlain(plain);
+      if (!hit?.records) continue;
+      for (let i = 0; i < exec.length; i += 1) {
+        const low = exec[i].toLowerCase();
+        if (low === '--yes' || low.startsWith('--yes=')) {
+          matchedToken = exec[i];
+          matchedPosition = i;
+          break;
+        }
+      }
+    }
     return {
       applies: true,
       allow: false,
       ruleId: HANDBUILD_CHANGE_RECORD_RULE_ID,
-      reason: CHANGE_RECORD_DENY_REASON,
+      matchedToken,
+      matchedPosition,
+      reason: changeRecordDenyReason({ token: matchedToken, position: matchedPosition }),
     };
   }
   return { applies: true, allow: true };

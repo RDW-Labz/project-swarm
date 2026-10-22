@@ -94,7 +94,7 @@ function parseRecord(text, kind) {
   try { data = JSON.parse(text); } catch { return { error: `could not parse ${kind} server record` }; }
   if (!data || typeof data !== 'object') return { error: `could not parse ${kind} server record` };
   if (!Number.isInteger(data.pid) || data.pid <= 0) return { error: `invalid pid in ${kind} server record` };
-  if (typeof data.version !== 'string' || !data.version) return { error: `missing version in ${kind} server record` };
+  const version = (typeof data.version === 'string' && data.version) ? data.version : null;
   if (!Array.isArray(data.argv) || !data.argv.every(a => typeof a === 'string')) return { error: `invalid argv in ${kind} server record` };
   if (typeof data.cwd !== 'string' || !data.cwd) return { error: `missing cwd in ${kind} server record` };
   if (!Number.isInteger(data.port)) return { error: `missing port in ${kind} server record` };
@@ -102,7 +102,7 @@ function parseRecord(text, kind) {
   const env = data.env && typeof data.env === 'object' && !Array.isArray(data.env)
     ? safeEnvSubset(data.env)
     : {};
-  return { record: { ...data, env, kind } };
+  return { record: { ...data, version, env, kind } };
 }
 
 async function readKind(file, kind) {

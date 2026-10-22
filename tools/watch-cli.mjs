@@ -37,6 +37,7 @@ import { loadLocalConfig } from './local-config.mjs';
 import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { createDeployTracker } from './deploy-status.mjs';
+import { runnerVersion } from './runner-version.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -353,6 +354,17 @@ export function registryModeFields(mode, { stdin = process.stdin, stdout = proce
 
 async function readPackageVersion(root = here) {
   try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
+}
+
+/** Version stamped on board/remote server records: the runner executing this code, not SWARM_INSTALL_DIR. */
+export async function serverRecordVersion(importMetaUrl = import.meta.url) {
+  try {
+    const fromRunner = await runnerVersion(importMetaUrl);
+    if (fromRunner) return fromRunner;
+  } catch { /* fall through */ }
+  const fromPkg = await readPackageVersion();
+  if (fromPkg) return fromPkg;
+  throw new Error('could not determine swarm runner version for server record');
 }
 
 async function installedVersionFor(env, versionState = {}) {
@@ -688,7 +700,7 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   });
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
-  const version = await readPackageVersion();
+  const version = await serverRecordVersion();
   const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
   const swarmEntry = path.join(here, 'swarm.mjs');
   const baseRegistry = {
