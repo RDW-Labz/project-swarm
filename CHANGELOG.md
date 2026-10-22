@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.165.2
+
+No money figure is left on Swarm Watch.
+- **Board:** the orchestrator panel, run pages, plan views, API responses, event stream, history and CSV carry no money figures; NO CAP shows as a plain warning; a test requests every route and scans every board script and page for money.
+- **Board:** one percent function everywhere, activity counted across every checkout and scratch folder, installed version shown, nameless projects hidden, finished projects as a quiet card.
+
 ## 1.165.1
 
 The board shows no money figures it cannot prove, and Live no longer flaps.
