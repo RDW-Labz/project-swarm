@@ -50,6 +50,26 @@ test('tryAcquireLock retries after lstat ENOENT when lock dir vanishes', async (
   await fs.rm(base, { recursive: true, force: true });
 });
 
+test('fresh ownerless lock refuses integrate-locked; stale ownerless clears', async () => {
+  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lock-ownerless-'));
+  await execFileAsync('git', ['init'], { cwd: repoRoot });
+  const liveDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lock-ownerless-live-'));
+  const lock = path.join(repoRoot, '.swarm', 'integration.lock');
+  await fs.mkdir(lock, { recursive: true });
+  await assert.rejects(
+    acquireIntegrationLock(repoRoot, { runId: 'blocked', liveDir }),
+    (error) => error.code === 'integrate-locked',
+  );
+  const old = new Date(Date.now() - 61000);
+  await fs.utimes(lock, old, old);
+  const held = await acquireIntegrationLock(repoRoot, { runId: 'cleared', liveDir });
+  assert.equal(held.warnings.length, 1);
+  assert.match(held.warnings[0], /integrate-lock-stale-cleared:/);
+  await held.release();
+  await fs.rm(liveDir, { recursive: true, force: true });
+  await fs.rm(repoRoot, { recursive: true, force: true });
+});
+
 test('tryAcquireLock throws lock-race-exhausted when lstat ENOENT never ends', async () => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'lock-enoent-'));
   const lock = path.join(base, 'locks', 'shared-race');

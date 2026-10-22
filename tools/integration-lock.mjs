@@ -62,11 +62,7 @@ export async function tryAcquireLock(lock, { owner, isAlive, now, staleMs, stale
       let existing;
       if (stat.isDirectory()) {
         try { existing = JSON.parse(await fsImpl.readFile(path.join(lock, 'owner.json'), 'utf8')); }
-        catch (readError) {
-          if (readError.code === 'ENOENT') {
-            raceRetries = retryLockRace(raceRetries);
-            continue;
-          }
+        catch {
           /* ownerless creation window */
         }
       }
