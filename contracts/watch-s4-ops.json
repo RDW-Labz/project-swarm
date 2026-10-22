@@ -179,6 +179,16 @@
             "$ref": "#/components/parameters/ItemId"
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerPrepareRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/PrepareOwnerAction"
@@ -203,7 +213,17 @@
             "$ref": "#/components/responses/ConfirmConflict"
           },
           "422": {
-            "$ref": "#/components/responses/NotOwnerDecidable"
+            "description": "Not owner-decidable or unknown choice.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {"$ref": "#/components/schemas/Error"},
+                    {"$ref": "#/components/schemas/UnknownChoice"}
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -574,15 +594,58 @@
           {"type": "object", "additionalProperties": true}
         ]
       },
-      "OwnerDecisionRequest": {
+      "OwnerPrepareRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["decision", "confirm"],
         "properties": {
-          "decision": {"type": "string", "enum": ["approve", "deny"]},
-          "confirm": {"type": "string", "minLength": 1},
-          "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+          "choice": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required for decision items: must match one of the item option labels exactly."
+          }
         }
+      },
+      "OwnerDecisionRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["decision", "confirm"],
+            "properties": {
+              "decision": {"type": "string", "enum": ["approve", "deny"]},
+              "confirm": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["choice", "confirm"],
+            "properties": {
+              "choice": {"type": "string", "minLength": 1},
+              "confirm": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }
+          }
+        ]
+      },
+      "UnknownChoice": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {"type": "string", "const": "unknown-choice"},
+          "message": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      },
+      "OwnerDecisionOption": {
+        "type": "object",
+        "required": ["label"],
+        "properties": {
+          "label": {"type": "string"},
+          "recommended": {"type": "boolean"}
+        },
+        "additionalProperties": false
       },
       "PrepareOwnerAction": {
         "type": "object",
@@ -646,7 +709,12 @@
             "default": false,
             "description": "True only when the decision journal event was raised with boardSafe. Default false. Decisions about merge, deploy, spend, caps, keys, or migrations are never board-safe."
           },
-          "choices": {"type": "array", "items": {"type": "string"}}
+          "choices": {"type": "array", "items": {"type": "string"}},
+          "options": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/OwnerDecisionOption"},
+            "description": "Decision options with recommended true only on the recorded default choice."
+          }
         },
         "additionalProperties": true
       },

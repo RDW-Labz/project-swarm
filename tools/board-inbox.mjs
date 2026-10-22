@@ -144,6 +144,14 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
           text: txt(it.text ?? it.title, TITLE_MAX),
           ...(it.kind === 'decision' ? { protectedTopic: decisionProtectedTopic(it) } : {}),
           ...(it.boardSafe === true ? { boardSafe: true } : {}),
+          ...(it.kind === 'decision' ? (() => {
+            const choiceOptions = Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)).filter(Boolean) : [];
+            const defaultChoice = it.default !== undefined ? txt(String(it.default), 40) : null;
+            return {
+              ...(defaultChoice ? { defaultChoice } : {}),
+              ...(choiceOptions.length ? { choiceOptions } : {}),
+            };
+          })() : {}),
           since: it.since ?? null,
           unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
           steps: (it.steps ?? []).length,
@@ -189,7 +197,9 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
     // The items that unblock the most come first, then the oldest; a project's list is capped, and the cap is reported, not hidden.
     mine.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)));
     hidden += Math.max(0, mine.length - MAX_PER_PROJECT);
-    for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
+    for (const it of mine.slice(0, MAX_PER_PROJECT)) {
+      items.push({ projectId: project.id, project: txt(project.name, 80), projectRoot: project.root, ...it });
+    }
   }
   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
   const phoneIssue = rec => {

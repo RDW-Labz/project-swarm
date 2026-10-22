@@ -117,6 +117,13 @@ test('every x-tickets route is present in the contract', () => {
   }
 });
 
+test('owner prepare and decision request schemas support per-option choices', () => {
+  assert.ok(contract.components?.schemas?.OwnerPrepareRequest?.properties?.choice);
+  assert.ok(contract.components?.schemas?.OwnerDecisionRequest?.oneOf);
+  assert.ok(contract.components?.schemas?.UnknownChoice?.properties?.error?.const === 'unknown-choice');
+  assert.ok(contract.components?.schemas?.OwnerInboxItem?.properties?.options);
+});
+
 test('S4 read and owner response shapes are represented', () => {
   const schemas = contract.components.schemas;
   for (const name of ['Money', 'IdleLaneReason', 'SplitQuality', 'Federation', 'AuditEntry']) {

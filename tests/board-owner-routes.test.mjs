@@ -16,7 +16,8 @@ import { appendEvent, readJournal } from '../tools/journal.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { cleanupTestProject } from './_isolate-config.mjs';
 import { guardBoardAction } from '../tools/board-action-guard.mjs';
-import { startBoardServer, readOwnerAudit } from '../tools/watch-cli.mjs';
+import { startBoardServer, readOwnerAudit, boardOwnerApply } from '../tools/watch-cli.mjs';
+import { readState as readHandbuildState } from '../tools/handbuild.mjs';
 import { remoteFile } from '../tools/remote.mjs';
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
@@ -42,6 +43,7 @@ function ownerActionsFixture(overrides = {}) {
       ownerIdentities: [LOGIN],
       confirmTtlMs: overrides.confirmTtlMs ?? 120_000,
       verifyIdentity: (req, identity) => req.tailnetVerified === true && identity === LOGIN,
+      apply: overrides.apply ?? (async () => ({ ok: true })),
       ...overrides.ownerActions,
     }),
   };
@@ -360,6 +362,7 @@ function ownerActionsFromInbox(project, env, now = () => Date.now()) {
     ownerIdentities: [LOGIN],
     confirmTtlMs: 120_000,
     verifyIdentity: (req, identity) => req.tailnetVerified === true && identity === LOGIN,
+    apply: boardOwnerApply(env, () => time),
   });
   return { actions, audit, setTime: value => { time = value; } };
 }
@@ -417,20 +420,20 @@ test('a board-safe decision raised with --board-safe can be approved end to end'
   const project = { id: projectId(root), name: 'app', root };
   const env = { ...process.env, HOME: home, SWARM_PROJECTS_FILE: path.join(home, 'projects.json') };
   await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [{ ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }] }));
-  await runInboxCommand(root, 'decision', ['Use pnpm for installs?', '--choice', 'yes', '--id', 'use-pnpm', '--board-safe'], { now: () => 1_700_000_000_000 });
+  await runInboxCommand(root, 'decision', ['Use pnpm for installs?', '--choice', 'yes', '--option', 'no', '--id', 'use-pnpm', '--board-safe'], { now: () => 1_700_000_000_000 });
   const { actions, audit } = ownerActionsFromInbox(project, env, () => 1_700_000_000_000);
   const { port, token } = await startServer(t, { ownerActions: actions });
   const headers = { 'x-watch-token': token };
-  const prepared = await tailnet(port, '/api/owner/actions/use-pnpm/prepare', { method: 'POST', headers });
+  const prepared = await tailnet(port, '/api/owner/actions/use-pnpm/prepare', { method: 'POST', headers, body: { choice: 'yes' } });
   assert.equal(prepared.status, 200);
   const approved = await tailnet(port, '/api/owner/actions/use-pnpm/decision', {
     method: 'POST',
     headers,
-    body: { decision: 'approve', confirm: prepared.json.confirmToken },
+    body: { choice: 'yes', confirm: prepared.json.confirmToken },
   });
   assert.equal(approved.status, 200);
-  assert.equal(approved.json.result, 'approved');
-  assert.equal(audit.some(entry => entry.outcome === 'approved'), true);
+  assert.equal(approved.json.result, 'answered');
+  assert.equal(audit.some(entry => entry.outcome === 'answered'), true);
 });
 
 test('a hand-build request decision is answerable from the board', async t => {
@@ -450,7 +453,7 @@ test('a hand-build request decision is answerable from the board', async t => {
   const { actions, audit } = ownerActionsFromInbox(project, env, () => 1_700_000_000_000);
   const { port, token } = await startServer(t, { ownerActions: actions });
   const headers = { 'x-watch-token': token };
-  const prepared = await tailnet(port, `/api/owner/actions/${open.id}/prepare`, { method: 'POST', headers });
+  const prepared = await tailnet(port, `/api/owner/actions/${open.id}/prepare`, { method: 'POST', headers, body: { choice: 'approve' } });
   assert.equal(prepared.status, 200);
   const approved = await tailnet(port, `/api/owner/actions/${open.id}/decision`, {
     method: 'POST',
@@ -458,8 +461,8 @@ test('a hand-build request decision is answerable from the board', async t => {
     body: { decision: 'approve', confirm: prepared.json.confirmToken },
   });
   assert.equal(approved.status, 200);
-  assert.equal(approved.json.result, 'approved');
-  assert.equal(audit.some(entry => entry.outcome === 'approved'), true);
+  assert.equal(approved.json.result, 'answered');
+  assert.equal(audit.some(entry => entry.outcome === 'answered'), true);
   await cleanupTestProject(root);
 });
 
@@ -512,22 +515,27 @@ test('production remote board lists inbox decisions through ownerItemsFromBoardI
   const board = await startBoardServer({
     env,
     root: suiteHome,
+    now,
     remote: { port: 0, token: 'e'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
   });
   t.after(async () => { await board.server.close(); await board.api.close(); });
   const port = Number(new URL(board.url).port);
   const headers = { 'x-watch-token': board.server.token };
 
-  async function approveItem(itemId) {
-    const prepared = await tailnet(port, `/api/owner/actions/${itemId}/prepare`, { method: 'POST', headers });
+  async function approveItem(itemId, { choice } = {}) {
+    const prepareBody = choice ? { choice } : {};
+    const prepared = await tailnet(port, `/api/owner/actions/${itemId}/prepare`, { method: 'POST', headers, body: prepareBody });
     assert.equal(prepared.status, 200, `prepare ${itemId}`);
+    const decideBody = choice
+      ? { choice, confirm: prepared.json.confirmToken }
+      : { decision: 'approve', confirm: prepared.json.confirmToken };
     const decided = await tailnet(port, `/api/owner/actions/${itemId}/decision`, {
       method: 'POST',
       headers,
-      body: { decision: 'approve', confirm: prepared.json.confirmToken },
+      body: decideBody,
     });
     assert.equal(decided.status, 200, `decide ${itemId}`);
-    assert.equal(decided.json.result, 'approved');
+    assert.equal(['approved', 'answered'].includes(decided.json.result), true);
   }
 
   async function refuseItem(itemId) {
@@ -536,18 +544,112 @@ test('production remote board lists inbox decisions through ownerItemsFromBoardI
     assert.equal(refused.json?.error, 'decision-not-board-safe');
   }
 
-  await approveItem('safe-accent');
-  await approveItem(handbuildId);
+  await approveItem('safe-accent', { choice: 'blue' });
+  await approveItem(handbuildId, { choice: 'approve' });
   await refuseItem('theme-default');
   await refuseItem('long-merge-tail');
   assert.equal((await tailnet(port, '/api/owner/actions/scratch-only/prepare', { method: 'POST', headers })).status, 404);
 
   const auditGet = await tailnet(port, '/api/owner/audit', { headers });
   assert.equal(auditGet.status, 200);
-  const approvedIds = auditGet.json.filter(entry => entry.outcome === 'approved').map(entry => entry.itemId);
-  assert.deepEqual(approvedIds.sort(), ['safe-accent', handbuildId].sort());
+  const answeredIds = auditGet.json.filter(entry => entry.outcome === 'answered' || entry.outcome === 'approved').map(entry => entry.itemId);
+  assert.deepEqual(answeredIds.sort(), ['safe-accent', handbuildId].sort());
   assert.equal(auditGet.json.some(entry => entry.itemId === 'theme-default' && entry.outcome === 'approved'), false);
   assert.equal(auditGet.json.some(entry => entry.itemId === 'long-merge-tail' && entry.outcome === 'approved'), false);
+
+  await cleanupTestProject(root);
+});
+
+test('board answers apply to journal, handbuild, tickets, and refuse scope', async t => {
+  const home = await fs.mkdtemp(path.join(process.env.HOME, 'owner-apply-e2e-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, 'repos', 'owner-apply-app');
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  await fs.mkdir(path.join(root, 'docs', 'scope'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'scope', 'roadmap.md'), '# roadmap\n');
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'fix.ts'), 'export const x = 1;\n');
+  const project = { id: projectId(root), name: 'owner-apply-app', root };
+  const env = {
+    ...process.env,
+    HOME: home,
+    SWARM_PROJECTS_FILE: path.join(home, 'projects.json'),
+    SWARM_PHONE_DIR: path.join(home, 'no-phone'),
+    SWARM_LANES_DIR: path.join(home, 'lanes'),
+  };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({
+    version: 1,
+    projects: [{ ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }],
+  }));
+  const now = () => 1_700_000_000_100;
+  await runInboxCommand(root, 'decision', [
+    'pick a theme',
+    '--choice', 'dark',
+    '--option', 'light',
+    '--option', 'system',
+    '--id', 'theme-pick',
+    '--board-safe',
+  ], { now });
+  const handbuild = await runHandbuildCommand(root, ['request', '--kind', 'tiny', '--reason', 'One-off fix for apply e2e', '--files', 'src/fix.ts'], { env, now });
+  assert.equal(handbuild.exitCode, 0);
+  const handbuildId = (await readJournal(root, { limit: Infinity })).find(e => e.kind === 'decision' && String(e.id).startsWith('handbuild-'))?.id;
+  assert.ok(handbuildId);
+  const hbRequestId = handbuildId.slice('handbuild-'.length);
+
+  const board = await startBoardServer({
+    env,
+    root: home,
+    now,
+    remote: { port: 0, token: 'f'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
+  });
+  t.after(async () => { await board.server.close(); await board.api.close(); });
+  const port = Number(new URL(board.url).port);
+  const headers = { 'x-watch-token': board.server.token };
+
+  const themePrepared = await tailnet(port, '/api/owner/actions/theme-pick/prepare', {
+    method: 'POST',
+    headers,
+    body: { choice: 'system' },
+  });
+  assert.equal(themePrepared.status, 200);
+  const themeDecided = await tailnet(port, '/api/owner/actions/theme-pick/decision', {
+    method: 'POST',
+    headers,
+    body: { choice: 'system', confirm: themePrepared.json.confirmToken },
+  });
+  assert.equal(themeDecided.status, 200);
+  const themeEvent = (await readJournal(root, { limit: Infinity })).find(e => e.kind === 'decision' && e.id === 'theme-pick' && e.confirmed === true);
+  assert.equal(themeEvent?.choice, 'system');
+
+  const hbPrepared = await tailnet(port, `/api/owner/actions/${handbuildId}/prepare`, {
+    method: 'POST',
+    headers,
+    body: { choice: 'approve' },
+  });
+  assert.equal(hbPrepared.status, 200);
+  const hbDecided = await tailnet(port, `/api/owner/actions/${handbuildId}/decision`, {
+    method: 'POST',
+    headers,
+    body: { decision: 'approve', confirm: hbPrepared.json.confirmToken },
+  });
+  assert.equal(hbDecided.status, 200);
+  assert.equal(readHandbuildState(root).requests[hbRequestId]?.status, 'approved');
+
+  const scopeFixture = ownerActionsFixture({
+    items: [{ id: 'scope-approval', kind: 'scope', title: 'Approve scope', projectRoot: root }],
+    apply: boardOwnerApply(env, now),
+  });
+  const scopeServer = await startServer(t, { ownerActions: scopeFixture.actions });
+  const scopeHeaders = { 'x-watch-token': scopeServer.token };
+  const scopePrepared = await tailnet(scopeServer.port, '/api/owner/actions/scope-approval/prepare', { method: 'POST', headers: scopeHeaders });
+  assert.equal(scopePrepared.status, 200);
+  const scopeFail = await tailnet(scopeServer.port, '/api/owner/actions/scope-approval/decision', {
+    method: 'POST',
+    headers: scopeHeaders,
+    body: { decision: 'approve', confirm: scopePrepared.json.confirmToken },
+  });
+  assert.equal(scopeFail.status, 409);
+  assert.equal(scopeFail.json.error, 'apply-failed');
 
   await cleanupTestProject(root);
 });

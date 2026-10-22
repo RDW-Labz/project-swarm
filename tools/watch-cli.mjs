@@ -17,7 +17,18 @@ import { readGallery, approveScreens, addComment } from './watch-gallery.mjs';
 import { ticketComments } from './gallery-tickets.mjs';
 import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
-import { readLedger } from './tickets.mjs';
+import {
+  readLedger,
+  writeLedger,
+  validateTicket,
+  approveLedger,
+  isApproved,
+  transition,
+  appendLog,
+} from './tickets.mjs';
+import { decide } from './inbox.mjs';
+import { inboxDeps } from './inbox-commands.mjs';
+import { decideRequest } from './handbuild.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
 import { isBoardTempRoot } from './scratch-roots.mjs';
@@ -519,6 +530,84 @@ export async function readOwnerAudit(env = process.env) {
   return { entries, skipped };
 }
 
+export async function approveProposedTicketOnBoard(root, ticketId, { now: nowFn }) {
+  const fresh = await readLedger(root);
+  if (!fresh) return { ok: false, message: 'no ticket ledger; run swarm scope split first' };
+  const ticket = fresh.tickets.find(x => x.id === ticketId);
+  if (!ticket) return { ok: false, message: `no ticket ${ticketId}` };
+  if (ticket.status !== 'proposed') return { ok: false, message: `${ticket.id} is ${ticket.status}, not proposed` };
+  if (!(ticket.files ?? []).length) return { ok: false, message: `${ticket.id} names no files yet` };
+  const clash = [];
+  for (const f of ticket.files) {
+    const owners = fresh.tickets.filter(x => x.id !== ticket.id && ['todo', 'ready', 'running', 'review', 'blocked'].includes(x.status) && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
+    if (owners.length) clash.push(`${f} (${owners.map(o => o.id).join(', ')})`);
+  }
+  if (clash.length) return { ok: false, message: `${ticket.id} writes files that open tickets also write` };
+  const next = { ...ticket, status: 'todo', approvedBy: 'owner' };
+  const v = validateTicket(next);
+  if (!v.ok) return { ok: false, message: v.errors[0] };
+  const wasApproved = isApproved(fresh);
+  fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
+  const prev = fresh.approved;
+  const saved = wasApproved
+    ? { ...fresh, approved: { ...prev, ...approveLedger(fresh, { by: 'owner', now: nowFn() }).approved, at: prev.at, ...(prev.ciTickets ? { ciTickets: prev.ciTickets } : {}) } }
+    : fresh;
+  saved.updatedAt = new Date(nowFn()).toISOString();
+  await writeLedger(root, saved);
+  await appendLog(root, { event: 'proposed-approved', id: ticket.id, by: 'owner', note: 'board' });
+  return { ok: true };
+}
+
+export function boardOwnerApply(env, now = Date.now) {
+  const inboxApplyDeps = inboxDeps({ channel: 'board', now });
+  return async (item, answer, { identity, now: nowFn }) => {
+    const root = item?.projectRoot;
+    if (!root) return { ok: false, message: 'the action could not be applied' };
+    const kind = item.kind;
+    const decision = answer?.decision;
+    const choice = answer?.choice ?? null;
+    if (kind === 'scope') {
+      return { ok: false, message: 'scope approval runs its gate in the terminal: swarm scope approve' };
+    }
+    const handbuildId = String(item.id ?? '');
+    if (handbuildId.startsWith('handbuild-') || kind === 'handbuild') {
+      const picked = choice ?? (decision === 'approve' ? 'approve' : 'deny');
+      try {
+        const hbRef = handbuildId.startsWith('handbuild-') ? handbuildId.slice('handbuild-'.length) : handbuildId;
+        decideRequest(root, hbRef, picked, { now: nowFn, by: 'owner', channel: 'board' });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    if (kind === 'decision') {
+      const picked = choice;
+      try {
+        await decide(root, item.id, picked, { ...inboxApplyDeps, now: nowFn, channel: 'board' });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    if (kind === 'proposed-ticket') {
+      if (decision === 'approve') {
+        return approveProposedTicketOnBoard(root, item.id, { now: nowFn });
+      }
+      try {
+        await transition(root, item.id, 'cancelled', {
+          by: 'owner',
+          note: `denied on the board by ${identity}`,
+          now: nowFn(),
+        });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    return { ok: false, message: 'the action could not be applied' };
+  };
+}
+
 function buildOwnerActions({ env, now, live, remoteLogin }) {
   const auditFile = ownerAuditPath(env);
   const appendAudit = async entry => {
@@ -527,6 +616,7 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
   };
   const readAudit = async () => (await readOwnerAudit(env)).entries;
   const login = typeof remoteLogin === 'string' ? remoteLogin : '';
+  const apply = boardOwnerApply(env, now);
   return createOwnerActions({
     listItems: async () => {
       const opts = boardProjectOpts(env);
@@ -537,6 +627,7 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
     appendAudit,
     readAudit,
     guard: guardBoardAction,
+    apply,
     now,
     randomId: () => randomBytes(16).toString('hex'),
     ownerIdentities: login ? [login] : [],
@@ -716,8 +807,8 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // Starts the board server in this process and records its address for run pages that want to go back to it.
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
-export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
-  const api = createBoardApi({ env, remote });
+export async function startBoardServer({ env = process.env, root, remote, registry = null, now = Date.now } = {}) {
+  const api = createBoardApi({ env, remote, now });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
     root,

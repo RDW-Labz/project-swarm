@@ -61,6 +61,30 @@ function decisionBoardSafeOnClient(item) {
   return item.boardSafe === true;
 }
 
+function itemOptions(item) {
+  if (Array.isArray(item.options) && item.options.length) {
+    return item.options.map(function (option) {
+      if (option && typeof option === 'object') {
+        return { label: String(option.label), recommended: option.recommended === true };
+      }
+      return { label: String(option), recommended: false };
+    });
+  }
+  return [];
+}
+
+function isYesNoOptions(options) {
+  if (!options || options.length !== 2) { return false; }
+  var labels = options.map(function (o) { return String(o.label).toLowerCase(); }).sort();
+  var joined = labels.join(',');
+  return joined === 'approve,deny' || joined === 'no,yes';
+}
+
+function optionButtonLabel(option) {
+  if (option.recommended) { return option.label + ' (recommended)'; }
+  return option.label;
+}
+
 export function ownerActionAvailable(item, options) {
   if (!options || !options.signedIn) { return false; }
   if (!item || item.needsOwner !== true) { return false; }
@@ -78,6 +102,9 @@ export function renderOwnerActions(container, item, options) {
   if (!ownerActionAvailable(item, { signedIn })) { return; }
 
   var itemId = String(item.id);
+  var itemKind = String(item.kind);
+  var decisionOptions = itemKind === 'decision' ? itemOptions(item) : [];
+  var yesNo = itemKind === 'decision' && isYesNoOptions(decisionOptions);
   var wrap = el(doc, 'div', 'owner-actions');
   var status = el(doc, 'div', 'owner-actions-status');
   var row = el(doc, 'div', 'owner-actions-row');
@@ -101,36 +128,90 @@ export function renderOwnerActions(container, item, options) {
   function renderIdle() {
     pending = null;
     row.textContent = '';
+    if (itemKind === 'decision' && decisionOptions.length) {
+      if (yesNo) {
+        var approve = el(doc, 'button', 'owner-approve', 'Approve');
+        approve.type = 'button';
+        var deny = el(doc, 'button', 'owner-deny', 'Deny');
+        deny.type = 'button';
+        approve.addEventListener('click', function () { enterConfirm({ decision: 'approve' }); });
+        deny.addEventListener('click', function () { enterConfirm({ decision: 'deny' }); });
+        row.appendChild(approve);
+        row.appendChild(deny);
+        return;
+      }
+      decisionOptions.forEach(function (option) {
+        var btn = el(doc, 'button', 'owner-option', optionButtonLabel(option));
+        btn.type = 'button';
+        btn.addEventListener('click', function () { enterConfirm({ choice: option.label }); });
+        row.appendChild(btn);
+      });
+      return;
+    }
     var approve = el(doc, 'button', 'owner-approve', 'Approve');
     approve.type = 'button';
     var deny = el(doc, 'button', 'owner-deny', 'Deny');
     deny.type = 'button';
-    approve.addEventListener('click', function () { enterConfirm('approve'); });
-    deny.addEventListener('click', function () { enterConfirm('deny'); });
+    approve.addEventListener('click', function () { enterConfirm({ decision: 'approve' }); });
+    deny.addEventListener('click', function () { enterConfirm({ decision: 'deny' }); });
     row.appendChild(approve);
     row.appendChild(deny);
   }
 
-  function enterConfirm(decision) {
-    pending = decision;
+  function confirmLabel(pendingAnswer) {
+    if (pendingAnswer.choice) {
+      return 'Answer "' + pendingAnswer.choice + '"?';
+    }
+    if (pendingAnswer.decision === 'approve') { return 'Confirm approve?'; }
+    return 'Confirm deny?';
+  }
+
+  function enterConfirm(pendingAnswer) {
+    pending = pendingAnswer;
     row.textContent = '';
-    var label = decision === 'approve' ? 'Confirm approve?' : 'Confirm deny?';
-    var confirmBtn = el(doc, 'button', 'owner-confirm', label);
+    var confirmBtn = el(doc, 'button', 'owner-confirm', confirmLabel(pendingAnswer));
     confirmBtn.type = 'button';
     var cancel = el(doc, 'button', 'owner-cancel', 'Cancel');
     cancel.type = 'button';
     cancel.addEventListener('click', function () { if (!busy) { renderIdle(); } });
-    confirmBtn.addEventListener('click', function () { submitDecision(decision); });
+    confirmBtn.addEventListener('click', function () { submitDecision(pendingAnswer); });
     row.appendChild(confirmBtn);
     row.appendChild(cancel);
   }
 
-  function submitDecision(decision) {
+  function yesNoLabel(decision) {
+    var wantApprove = decision === 'approve';
+    var match = decisionOptions.find(function (option) {
+      var lower = String(option.label).toLowerCase();
+      return wantApprove ? (lower === 'approve' || lower === 'yes') : (lower === 'deny' || lower === 'no');
+    });
+    return match ? match.label : null;
+  }
+
+  function prepareBody(pendingAnswer) {
+    if (pendingAnswer.choice) {
+      return JSON.stringify({ choice: pendingAnswer.choice });
+    }
+    if (itemKind === 'decision' && yesNo && pendingAnswer.decision) {
+      var mapped = yesNoLabel(pendingAnswer.decision);
+      if (mapped) { return JSON.stringify({ choice: mapped }); }
+    }
+    return '{}';
+  }
+
+  function decisionBody(pendingAnswer, confirmToken) {
+    if (pendingAnswer.choice) {
+      return JSON.stringify({ choice: pendingAnswer.choice, confirm: confirmToken });
+    }
+    return JSON.stringify({ decision: pendingAnswer.decision, confirm: confirmToken });
+  }
+
+  function submitDecision(pendingAnswer) {
     if (busy) { return; }
     setBusy(true);
     showStatus('');
     var prepareUrl = actionPath(itemId, 'prepare');
-    fetchImpl(prepareUrl, { method: 'POST', headers: authHeaders(token) })
+    fetchImpl(prepareUrl, { method: 'POST', headers: authHeaders(token), body: prepareBody(pendingAnswer) })
       .then(function (res) {
         return res.json().catch(function () { return null; }).then(function (body) {
           if (!res.ok) { throw new Error(readError(body)); }
@@ -144,7 +225,7 @@ export function renderOwnerActions(container, item, options) {
         return fetchImpl(decisionUrl, {
           method: 'POST',
           headers: authHeaders(token),
-          body: JSON.stringify({ decision: decision, confirm: confirmToken }),
+          body: decisionBody(pendingAnswer, confirmToken),
         }).then(function (res) {
           return res.json().catch(function () { return null; }).then(function (body) {
             if (!res.ok) { throw new Error(readError(body)); }
@@ -154,7 +235,7 @@ export function renderOwnerActions(container, item, options) {
       })
       .then(function (result) {
         row.textContent = '';
-        var msg = result && result.result ? String(result.result) : (decision === 'approve' ? 'Approved' : 'Denied');
+        var msg = result && result.result ? String(result.result) : (pendingAnswer.decision === 'approve' ? 'Approved' : (pendingAnswer.choice ? 'Recorded' : 'Denied'));
         showStatus(msg);
       })
       .catch(function (err) {
