@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013-node20c",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/board-card-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs"
+      ],
+      "prompt": "Exact bug (coordinator-diagnosed) in tests/board-card-ui.test.mjs: savedGlobalNavigatorDescriptor uses undefined for BOTH 'not captured yet' and 'globalThis has no navigator property' (Node 20 has no global navigator, so Object.getOwnPropertyDescriptor returns undefined). As a result applyGlobalNavigatorStub (~line 134: `if (!stubNavigator || savedGlobalNavigatorDescriptor === undefined) return;`) always returns early on Node 20 and the stub is never installed. Fix: add a separate boolean `navigatorDescriptorCaptured`; capture sets it true and stores the descriptor (which may be undefined); applyGlobalNavigatorStub returns early only when !stubNavigator || !navigatorDescriptorCaptured; restoreGlobalNavigator: if the captured descriptor is undefined, `delete globalThis.navigator`, else redefine it. Change only this test file. Verify: `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs` reports 0 failures on this Node 20 machine."
+    }
+  ]
+}

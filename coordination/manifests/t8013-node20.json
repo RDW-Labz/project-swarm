@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013-node20",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/board-card-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "prompt": "tests/board-card-ui.test.mjs fails 2 tests on Node 20.19 (this machine; CI runs Node 20 and 22): 'need-you list opens ... copy' and 'ready list opens ... copy' get 0 clipboard writes. The fake DOM stubs win.navigator.clipboard (~lines 159-175), but tools/watch-assets/board.js copyCommandButton calls the global `navigator`, which on Node 20 is not the stub (and on Node 22 is a read-only getter). Make the stub reach the global on every Node version: save the original property descriptor of globalThis.navigator, then Object.defineProperty(globalThis, 'navigator', { value: win.navigator, configurable: true, writable: true }) for the test and restore the original descriptor in an after/finally hook. Do not change board.js. Verify locally with `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs` (must be 0 failures) and with the whole board set: `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-*.test.mjs`."
+    }
+  ]
+}
