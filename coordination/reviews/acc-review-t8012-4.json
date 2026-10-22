@@ -1,0 +1,35 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8012",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:567-622 buildWatchCard + enrichWatchCard; tests/board-accuracy-card.test.mjs COVERAGE (lines 153-189) and per-field tests (e.g. card.now.buildingTickets, card.slots reports machine use, card.eta.basis, card.headsUp)",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/board-data.mjs:605 ready command, 501-502 blocked release; tools/board-inbox.mjs:64-93 need-you commands; tests card.next.items fields match disk oracle, card.blocked.items command follows release rule, card.blocked.needYouItems match inbox-on-disk oracle",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/board-accuracy-card.test.mjs disk oracles (readLedgersFromDisk, oracleEta, oracleUntrackedRuns, etc.), forbids build-progress/readyTickets imports (board-accuracy test file avoids forbidden tools imports), card COVERAGE lists every leaf field on a populated card",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tests/board-accuracy-card.test.mjs card JSON omits money-shaped keys and dollar values (assertCardHasNoMoney on projectOverview card only)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}
