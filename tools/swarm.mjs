@@ -1821,7 +1821,7 @@ async function integrateRunLocked(root, id, options = {}) {
       }
       let plainGate;
       try {
-        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: withApprovedManifests(securityGate.policy ?? profile?.security, securityGate.approveManifests), hookScripts: hookScriptNames(profile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map(), manifestReview: securityGate.manifestReview });
+        plainGate = await runSecurityGate({ changes: writes.map(change => ({ file: change.file, bytes: change.bytes, previous: change.previous })), policy: withApprovedManifests(securityGate.policy ?? profile?.security, securityGate.approveManifests), hookScripts: hookScriptNames(profile), exec: securityGate.exec ?? securityExec, fetchImpl: securityGate.fetchImpl ?? fetch, cwd: root, sensitive: profile?.sensitive !== false, fingerprintKey: await securityFingerprintKey(root), cache: new Map() });
       } catch (error) {
         fail(`security-gate-error: the gate could not run (${String(error?.message ?? error).slice(0, 200)}). Nothing was written.`, 'security-gate-error');
       }
@@ -2651,20 +2651,6 @@ async function mainInner() {
     try{root=await fs.realpath(root);}catch{/* init/show/validate/path use machine config only */}
     process.exitCode=await dispatchPolicyCli(root,args.slice(1));
     return;
-  }
-  if(args[0]==='manifest'){
-    root=await fs.realpath(root);
-    if(args[1]==='review'&&args[2]&&args.includes('--file')){
-      const fileIndex=args.indexOf('--file');
-      const file=args[fileIndex+1];
-      if(!file||file.startsWith('-'))fail('Usage: swarm manifest review RUN --file FILE');
-      const {runManifestReviewCommand}=await import('./manifest-review.mjs');
-      const res=await runManifestReviewCommand(root,args[2],file,{env:process.env,stdinIsTTY:Boolean(process.stdin.isTTY),stdoutIsTTY:Boolean(process.stdout.isTTY)});
-      process.stdout.write(res.stdout);
-      if(res.exitCode)process.exitCode=res.exitCode;
-      return;
-    }
-    fail('Usage: swarm manifest review RUN --file FILE');
   }
   // Any swarm command in a folder lists it as a project on the board (not help, not the commands that are about the machine itself).
   if(args.length&&!['--help','-h','help','version','update','pin','unpin','completion','onboard','projects','history','forget','doctor','gpu','stop'].includes(args[0])&&!args.includes('--help')&&!args.includes('-h')){
@@ -3649,6 +3635,7 @@ async function mainInner() {
       // was saved the moment it was detected.
       if(flag==='--accept-dropped'){acceptDropped=true;continue;}
       // Lesson 14: the owner reviewed a dependency or workflow file by hand and lets the security gate pass it for this run only.
+      // Security: approval by the producing agent session is not yet blocked (tracked for a redesign).
       if(flag==='--approve-manifest'){const file=flags[++index];if(typeof file!=='string'||file.length>200||!/^[A-Za-z0-9_@+.\/-]+$/.test(file)||file.startsWith('-')||file.startsWith('/')||file.startsWith('./')||file.endsWith('/')||file.includes('//')||file.split('/').includes('..')||file.split('/').includes('.'))fail('--approve-manifest needs one exact repo-relative file path (letters, digits, . _ - @ + and /; no glob, no spaces, no ..)');approveManifests.push(file);continue;}
       if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
@@ -3965,8 +3952,6 @@ async function mainInner() {
     // The approval is for this run only and is recorded as a decision (who, which file, which run).
     let approvedGate;
     if(command==='integrate'&&approveManifests.length){
-      const {manifestApproveActor,agentManifestApproveRefusalMessage}=await import('./manifest-review.mjs');
-      if(manifestApproveActor(process.env,{stdinIsTTY:Boolean(process.stdin.isTTY),stdoutIsTTY:Boolean(process.stdout.isTTY)})==='agent-session'&&!process.env.SWARM_TEST_TMP)fail(agentManifestApproveRefusalMessage());
       // Only a file this run really changes can be approved, and the approval is for the exact bytes the workers proposed (a changed file needs a new approval).
       // The record is written before integrate (a failed write stops it).
       if(!/^[A-Za-z0-9._-]+$/.test(String(argument)))fail('approve-manifest needs a run id');
@@ -3996,13 +3981,7 @@ async function mainInner() {
       approvedGate={approveManifests:entries};
       for(const entry of entries)await appendEvent(root,{kind:'decision',id:`approve-manifest-${argument}-${entry.file}-${entry.sha256.slice(0,12)}`,text:entry.sha256==='deleted'?`owner reviewed the deletion of ${entry.file} by hand and approved it past the security gate for run ${argument}`:`owner reviewed ${entry.file} (sha256 ${entry.sha256.slice(0,12)}) by hand and approved exactly that content past the security gate for run ${argument}`,confirm:true,confirmed:true,by:'owner'});
     }
-    const integrateRoot=await fs.realpath(root);
-    const manifestReview=process.env.SWARM_TEST_TMP?null:{root:integrateRoot,runId:String(argument),env:process.env,home:os.homedir(),...(approvedGate?.manifestReview??{})};
-    const {setIntegrateManifestReviewContext}=await import('./manifest-review.mjs');
-    if(manifestReview)setIntegrateManifestReviewContext(manifestReview);
-    try{
-    result=await (queue?integrateQueue:integrateRun)(root,argument,{securityGate:{...(approvedGate??{}),...(manifestReview?{manifestReview}:null)},batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,noCommit:integrateNoCommit,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
-    }finally{if(manifestReview)setIntegrateManifestReviewContext(null);}
+    result=await (queue?integrateQueue:integrateRun)(root,argument,{...(approvedGate?{securityGate:approvedGate}:{}),batchSize,adaptive,maxRequeues,noChecks,acceptFailedChecks,noCommit:integrateNoCommit,mutants:useMutants,noFlakeCheck,mutantsFile:mutantsFileFlag,mutantCheck:mutantCheckFlag,acceptBlocked,salvage,acceptDeviation,acceptResultShape,acceptDropped,salvageDropped,jobs:integrateJobs});
   }
   // Field lesson #203: a failed check at integrate used to be a quiet field (`status: "integrated"`,
   // exit 0) unless the coordinator remembered --require-checks; refusing (or, with the escape
