@@ -131,6 +131,17 @@ test('readRunStatesSync reads only the newest 200 folders and skips invalid file
   assert.equal(states['run-000'], undefined);
 });
 
+test('provider credit and quota failures do not count toward lane pass rates', () => {
+  const jobs = Array.from({ length: 6 }, () => ({
+    agent: 'cursor',
+    status: 'failed',
+    agentError: 'insufficient_quota: billing hard limit reached',
+  }));
+  const rates = lanePassRates({ only: { jobs } });
+  assert.deepEqual(rates, {});
+  assert.deepEqual(routingFailures(rates), {});
+});
+
 test('passRateFailuresFor memoizes state reads per resolved root', () => {
   const root = `/fixture-root-cache-${Date.now()}-${Math.random()}`;
   let readdirCalls = 0;
