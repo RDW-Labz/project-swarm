@@ -15,12 +15,6 @@
 
   function num(v) { return v == null ? '–' : Number(v).toLocaleString('en-US'); }
 
-  function fmt$(v) {
-    if (v == null || isNaN(v)) return '–';
-    v = Number(v);
-    return v < 0.01 && v > 0 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
-  }
-
   function fmtT(ms) {
     var s = Math.max(0, Math.round((ms || 0) / 1000));
     var m = Math.floor(s / 60), r = s % 60;
@@ -117,16 +111,15 @@
     if (sparkPath) sparkPath.setAttribute('d', linePath(sp, mx, 78, 1, 2, 20));
     setText('kPass', k.firstTryPassRate == null ? '–' : (k.firstTryPassRate * 100).toFixed(1) + '%');
     passSub(k);
-    setKpi('kSpend', fmt$(k.spendUsd || 0), null);
-    var elapsedMin = (run.elapsedMs || 0) / 60000;
-    var spendRate = elapsedMin > 0 ? (k.spendUsd || 0) / elapsedMin : 0;
-    var bar = $('kSpendBar');
-    if (bar && bar.parentNode) bar.parentNode.hidden = true;
     var pj = run.project;
-    var billedForecast = pj && (pj.capBasis === 'billed' || typeof pj.billedUsd === 'number');
-    var capBasis = billedForecast ? 'billed only' : 'billed + list value';
-    var capLabel = pj && pj.capUsd ? ' (cap counts ' + capBasis + ')' : '';
-    setText('kForecast', (pj ? 'project ' + fmt$(billedForecast ? pj.billedUsd : pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') + capLabel : (pj.capError ? ' CAP INVALID' : (pj.noCap ? ' NO CAP' : ''))) + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
+    var capNote = '';
+    if (pj) {
+      if (pj.capError) capNote = 'CAP INVALID';
+      else if (pj.reached) capNote = 'CAP REACHED';
+      else if (pj.noCap) capNote = 'NO CAP';
+    }
+    var forecast = (k.jobsPerSec || 0).toFixed(1) + ' jobs/s';
+    setText('kForecast', capNote ? capNote + ' · ' + forecast : forecast);
     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
     var mq = run.mergeQueue;
@@ -182,12 +175,6 @@
     var c = r.counts || {};
     banner.appendChild(el('h2', null, run.status === 'complete' ? 'Run complete' : 'Run finished with failures'));
     banner.appendChild(el('div', 'label', 'done ' + num(c.done || 0) + ' · failed ' + num(c.failed || 0) + ' · cancelled ' + num(c.cancelled || 0) + ' · total ' + num(c.total || 0)));
-    var spendRow = el('div', 'legend');
-    var spend = r.spendByLane || {};
-    Object.keys(spend).sort().forEach(function (name) {
-      spendRow.appendChild(el('span', 'pill info', name + ' ' + fmt$(spend[name])));
-    });
-    banner.appendChild(spendRow);
     banner.appendChild(el('div', 'label', 'time ' + fmtT(r.elapsedMs) + ' · branch ' + (r.branch || run.branch || '–')));
     var cmd = 'swarm inspect ' + run.runId;
     var row = el('div', 'legend');

@@ -108,11 +108,11 @@ function hit(e) {
 
 function showTip(j, x, y, r) {
   while (tip.firstChild) tip.removeChild(tip.firstChild);
-  var cost = typeof j.costUsd === 'number' ? '$' + j.costUsd.toFixed(4) : '–';
+  var dur = typeof j.durationMs === 'number' && isFinite(j.durationMs) ? (j.durationMs / 1000).toFixed(1) + 's' : '–';
   var rows = [
     'id: ' + fmt(j.id), 'file: ' + fmt(j.file), 'lead: ' + fmt(j.lead || 'main'),
     'wave: ' + fmt(j.wave), 'type: ' + fmt(j.type), 'lane: ' + fmt(j.lane),
-    'model: ' + fmt(j.model), 'attempts: ' + fmt(j.attempts), 'cost: ' + cost
+    'model: ' + fmt(j.model), 'attempts: ' + fmt(j.attempts), 'duration: ' + dur
   ];
   rows.forEach(function (text) {
     var d = document.createElement('div');

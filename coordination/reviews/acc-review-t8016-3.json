@@ -1,0 +1,23 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8016",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/index.html:44-55 (no spend/dollar KPIs; grep finds no $ in watch-assets/*.html); tools/watch-server.mjs:280-283,315-320,402,418 (stripMoney on /api/snapshot, SSE snapshots/deltas, /api/run); tools/watch-cli.mjs:430-443,567,579-586,598-607 (stripMoney on /api/board via redact, /api/project, /api/live, /api/run, history); tools/watch-assets/orchestrator-view.js:70 (tokens only, no list cost); tools/watch-assets/board.js:427-454,project.js:204-207 (lanes tab, spend UI hidden); tests/board-no-money.test.mjs:177-253 (HTML + run Watch GET /, /project, /run bodies)",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tests/board-no-money.test.mjs:383-392 (every board browser script avoids money output patterns); tests/board-no-money.test.mjs:256-311 (every WATCH_ROUTES JSON + SSE snapshot); tests/board-no-money.test.mjs:336-381 (/api/history and /history.csv with spend fixture); tests/board-no-money.test.mjs:394-438 (run /api/snapshot, /api/run, SSE with costUsd/capUsd fixture); tests/board-no-money.test.mjs:313-326 (stripMoney unit)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

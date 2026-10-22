@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8016-history",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tools/watch-server.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "coordination/reviews/acc-review-t8016-2.json",
+        "tools/history.mjs"
+      ],
+      "prompt": "T-8016 acceptance gap (coordination/reviews/acc-review-t8016-2.json): /api/history and /history.csv are not redacted: history events of kind 'spend' (and any event carrying usd/cost fields) still reach the browser. Fix where the board serves them (find the handlers in tools/watch-cli.mjs / tools/watch-server.mjs): pass /api/history JSON through stripMoney and drop events whose kind is 'spend' entirely (they carry nothing but money), and remove money columns and spend rows from the CSV. Extend tests/board-no-money.test.mjs: seed SWARM_HISTORY_FILE with spend, run, merge and stage events that carry usd fields, then request /api/history and /history.csv (header auth) and assert no money-shaped key, no spend-kind event and no dollar-shaped value; keep the generic every-route sweep and make sure its fixture now includes that history file so the sweep would have caught it. Update tests that asserted spend in history output (search tests for history.csv and /api/history) by removing only the money assertions; list them in notes. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-no-money.test.mjs tests/board-*.test.mjs tests/watch-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the watch server for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

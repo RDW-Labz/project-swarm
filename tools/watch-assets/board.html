@@ -26,7 +26,7 @@
   </header>
   <nav class="tabs" id="tabs" role="tablist" aria-label="Board sections">
     <button class="tab" role="tab" id="tab-overview-btn" aria-controls="tab-overview" aria-selected="true" data-tab="overview" type="button">Overview <span class="kbd">1</span></button>
-    <button class="tab" role="tab" id="tab-cost-btn" aria-controls="tab-cost" aria-selected="false" tabindex="-1" data-tab="cost" type="button">Cost <span class="kbd">2</span></button>
+    <button class="tab" role="tab" id="tab-cost-btn" aria-controls="tab-cost" aria-selected="false" tabindex="-1" data-tab="cost" type="button">Sessions <span class="kbd">2</span></button>
     <button class="tab" role="tab" id="tab-agents-btn" aria-controls="tab-agents" aria-selected="false" tabindex="-1" data-tab="agents" type="button">Agents <span class="kbd">3</span></button>
     <button class="tab" role="tab" id="tab-events-btn" aria-controls="tab-events" aria-selected="false" tabindex="-1" data-tab="events" type="button">Events <span class="kbd">4</span></button>
   </nav>
@@ -41,7 +41,7 @@
           <section class="card" aria-label="Projects"><h2>Projects</h2>
             <p class="board-note" id="machinesNote"></p>
             <div class="tablewrap collapse"><table id="projTable"></table></div><div class="cards" id="projCards"></div>
-            <p class="board-note">Open a project for its tickets, runs, spend and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>
+            <p class="board-note">Open a project for its tickets, runs, and lessons. A run opens in the run inspector (graph, journal, compare).</p></section>
         </div>
         <aside>
           <section class="card" id="needsCard" aria-label="Needs you"><h2>Needs you <span class="badge" id="needsBadge" hidden>0</span> <button class="btn" id="markRead" type="button" hidden>Mark all read</button></h2><div id="needs" class="needs" aria-live="off"></div>
@@ -52,9 +52,9 @@
     </section>
     <section id="tab-cost" role="tabpanel" aria-labelledby="tab-cost-btn" class="stack" hidden>
       <div class="kpis" id="costKpis"></div>
-      <section class="card" aria-label="Orchestrator cost"><h2>Orchestrator sessions</h2><div class="tablewrap"><table id="orchTable"></table></div><p class="board-note">Claude Code sessions run on a subscription: nothing is billed. The dollars are what the same tokens would cost at list price, read from each session's own transcript, and are not part of the billed totals.</p></section>
+      <section class="card" aria-label="Orchestrator sessions"><h2>Orchestrator sessions</h2><div class="tablewrap"><table id="orchTable"></table></div></section>
       <section class="card"><h2>Lanes today</h2><div class="tablewrap"><table id="laneTable"></table></div><p class="board-note" id="laneNote"></p></section>
-      <section class="card"><h2>Projects: spend against cap</h2><div class="tablewrap"><table id="spendTable"></table></div></section>
+      <section class="card"><h2>Projects</h2><div class="tablewrap"><table id="spendTable"></table></div></section>
     </section>
     <section id="tab-agents" role="tabpanel" aria-labelledby="tab-agents-btn" class="stack" hidden>
       <section class="card"><h2>Live agents <span class="badge quiet" id="agentsCount">0</span></h2><div class="agents-grid" id="agentsGrid"></div>
@@ -67,7 +67,7 @@
         <form id="filters" class="filters" autocomplete="off">
           <input id="q" type="search" placeholder="Search events (press /)" aria-label="Search events">
           <select id="fproject" aria-label="Project"><option value="">All projects</option></select>
-          <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option><option>spend</option></select>
+          <select id="fkind" aria-label="Type"><option value="">All types</option><option>project</option><option>stage</option><option>run</option><option>pr</option><option>merge</option><option>lesson</option></select>
           <input id="ffrom" type="date" aria-label="From"><input id="fto" type="date" aria-label="To">
           <a id="csv" class="btn" href="#">Export CSV</a>
         </form>
@@ -77,7 +77,7 @@
 </div>
 <div class="overlay" id="help" hidden role="dialog" aria-modal="true" aria-labelledby="helpTitle"><div class="dialog">
   <h2 id="helpTitle">Keyboard</h2>
-  <dl><dt><span class="kbd">1</span> to <span class="kbd">4</span></dt><dd>Overview, Cost, Agents, Events</dd><dt><span class="kbd">/</span></dt><dd>Search events</dd><dt><span class="kbd">u</span></dt><dd>Mark Needs you as read</dd><dt><span class="kbd">p</span></dt><dd>Pause or resume motion</dd><dt><span class="kbd">?</span></dt><dd>This list</dd><dt><span class="kbd">Esc</span></dt><dd>Close</dd></dl>
+  <dl><dt><span class="kbd">1</span> to <span class="kbd">4</span></dt><dd>Overview, Sessions, Agents, Events</dd><dt><span class="kbd">/</span></dt><dd>Search events</dd><dt><span class="kbd">u</span></dt><dd>Mark Needs you as read</dd><dt><span class="kbd">p</span></dt><dd>Pause or resume motion</dd><dt><span class="kbd">?</span></dt><dd>This list</dd><dt><span class="kbd">Esc</span></dt><dd>Close</dd></dl>
   <p class="note">A run link such as <span class="mono">#run=PROJECT/RUN</span> opens that run in the inspector; <span class="mono">#tab=cost</span> opens a tab.</p>
   <button class="btn primary" id="helpClose" type="button">Close</button>
 </div></div>

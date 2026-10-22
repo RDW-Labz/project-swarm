@@ -9,11 +9,6 @@
     return v === null || v === undefined || v === '' ? '-' : String(v);
   }
 
-  function money(v) {
-    if (typeof v !== 'number' || !isFinite(v)) { return '-'; }
-    return '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2));
-  }
-
   function secs(ms) {
     if (typeof ms !== 'number' || !isFinite(ms)) { return '-'; }
     return (ms / 1000).toFixed(1) + 's';
@@ -165,7 +160,6 @@
     node.appendChild(row('Wave', job.wave, true));
     node.appendChild(row('Type', job.type, true));
     node.appendChild(row('File', job.file, true));
-    node.appendChild(row('Cost', money(job.costUsd), true));
     node.appendChild(row('Time', secs(job.durationMs), true));
 
     // The worker's own report, fetched when the drawer opens. It is worker text: shown as plain text, never as markup, under its warning label.
