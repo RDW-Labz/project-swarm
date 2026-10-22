@@ -8,10 +8,14 @@ import {
   HANDBUILD_OWNER_VERBS,
   swarmHandbuildVerbFromPlain,
   plainSetsHandbuildSelfApproval,
+  swarmChangeFromPlain,
 } from './shell-writes.mjs';
 
 export const HANDBUILD_OWNER_RULE_ID = 'handbuild-owner-verb';
 export const HANDBUILD_SELF_APPROVAL_RULE_ID = 'handbuild-self-approval';
+export const HANDBUILD_CHANGE_RECORD_RULE_ID = 'handbuild-change-record';
+
+export const CHANGE_RECORD_DENY_REASON = `Hand-build guard [${HANDBUILD_CHANGE_RECORD_RULE_ID}]: recording a change order (swarm change --yes) is the owner's alone (or machine policy). Run swarm change "reason" [FILE] without --yes to preview impact first.`;
 
 export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
 
@@ -73,6 +77,33 @@ export function handbuildOrchestratorCommandAllowed(commandText) {
   return pol.applies && pol.allow;
 }
 
+/** Preview `swarm change` (no --yes) is read-only; recording needs the owner or policy. */
+export function swarmChangeShellPolicy(commandText) {
+  const text = String(commandText ?? '');
+  if (!text) return { applies: false };
+  let inv = null;
+  for (const words of tokenize(text)) {
+    const plain = plainWords(words);
+    const hit = swarmChangeFromPlain(plain);
+    if (hit) inv = hit;
+  }
+  if (!inv) return { applies: false };
+  if (inv.records) {
+    return {
+      applies: true,
+      allow: false,
+      ruleId: HANDBUILD_CHANGE_RECORD_RULE_ID,
+      reason: CHANGE_RECORD_DENY_REASON,
+    };
+  }
+  return { applies: true, allow: true };
+}
+
+export function swarmChangeOrchestratorCommandAllowed(commandText) {
+  const pol = swarmChangeShellPolicy(commandText);
+  return pol.applies && pol.allow;
+}
+
 const SHELL_CODE_RE = /\b(?:bash|sh|zsh)\s+(?:[^\s|;&]+\s+)*-(?:[A-Za-z]*c|--command)(?:=|\s+)(['"])([\s\S]*?)\1/gi;
 const EVAL_RE = /\beval\s+(['"])([\s\S]*?)\1/gi;
 
@@ -102,6 +133,8 @@ const SAFE_SWARM = [
   /\bhandbuild\s+check\b/,
   /\bhandbuild\s+help\b/,
   /\bhandbuild\s*(--help|-h)\b/,
+  /\bswarm\s+change\b(?!.*\s--yes(?:\s|$|=))/,
+  /\bswarm\.mjs\b[\s\S]*\bchange\b(?!.*\s--yes(?:\s|$|=))/,
   /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|help)\b/,
   /\bswarm\s+go\b/,
   /\bswarm\s+run\b/,
@@ -817,6 +850,7 @@ function plainHasStaticMarker(plain) {
 /** Pipeline segments are tokenized separately; markers like base64 -d | sh need the joined surface. */
 function fullCommandHasStaticMarker(commandText) {
   if (handbuildOrchestratorCommandAllowed(commandText)) return false;
+  if (swarmChangeOrchestratorCommandAllowed(commandText)) return false;
   const parts = [];
   for (const words of tokenize(commandText)) {
     parts.push(executablePlainWords(plainWords(words)).join(' '));
@@ -827,6 +861,7 @@ function fullCommandHasStaticMarker(commandText) {
 
 function surfaceHasStaticMarker(surface) {
   if (!surface) return false;
+  if (swarmChangeOrchestratorCommandAllowed(surface)) return false;
   if (SAFE_SWARM.some(re => re.test(surface))) return false;
   return STATIC_MARKERS.some(re => re.test(surface));
 }
@@ -881,6 +916,7 @@ export function isSelfApprovalCommand(commandText) {
   const text = String(commandText ?? '');
   if (!text) return false;
   if (handbuildOrchestratorCommandAllowed(text)) return false;
+  if (swarmChangeOrchestratorCommandAllowed(text)) return false;
   if (rawHasRiskyClaudeInvocation(text, 0)) return true;
   if (heredocBodiesRisky(text, 0)) return true;
   if (commandTouchesGuardInstallScripts(text)) return true;

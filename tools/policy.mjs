@@ -97,6 +97,12 @@ export const DEFAULT_RULES = Object.freeze([
     description: 'Auto-approve change-order-split for a named project.',
   },
   {
+    id: 'change-order-rename-only',
+    kind: 'change-order',
+    description:
+      'Auto-approve change-order when renameOnly is true, no requirements were added or removed, no tickets are cancelled or reopened, one to five path renames touch no protected paths, and the ledger is already approved.',
+  },
+  {
     id: 'workflow-change',
     kind: 'workflow-change',
     description:
@@ -318,6 +324,66 @@ function pathHasDotDot(rel) {
   const p = normPath(rel);
   if (p === '..' || p.startsWith('../') || p.endsWith('/..') || p.includes('/../')) return true;
   return p.split('/').some(seg => seg === '..');
+}
+
+const PACKAGE_BASENAMES = new Set([
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lockb',
+  'npm-shrinkwrap.json',
+]);
+
+function pathLooksSecretLike(rel) {
+  const p = normPath(rel);
+  const base = p.split('/').pop()?.toLowerCase() ?? '';
+  if (!base) return false;
+  if (base.startsWith('.env')) return true;
+  if (base.includes('credential') || base.includes('secret') || base.includes('private-key')) return true;
+  if (/\.(pem|key|p12|pfx)$/i.test(base)) return true;
+  return false;
+}
+
+export function isChangeOrderProtectedRenamePath(rel) {
+  if (typeof rel !== 'string' || !rel) return true;
+  const p = normPath(rel);
+  if (pathHasDotDot(p)) return true;
+  const lower = p.toLowerCase();
+  if (lower === 'coordination/checks.json' || lower === '.project-swarm.json') return true;
+  if (lower.startsWith('.github/workflows/')) return true;
+  const base = lower.split('/').pop() ?? '';
+  if (PACKAGE_BASENAMES.has(base)) return true;
+  if (pathLooksSecretLike(p)) return true;
+  return false;
+}
+
+function renameListOk(renames) {
+  if (!Array.isArray(renames)) return { ok: false, reason: 'renames missing' };
+  if (renames.length < 1 || renames.length > 5) return { ok: false, reason: 'rename count out of range' };
+  for (const entry of renames) {
+    const from = entry?.from;
+    const to = entry?.to;
+    if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) {
+      return { ok: false, reason: 'invalid rename entry' };
+    }
+    if (isChangeOrderProtectedRenamePath(from) || isChangeOrderProtectedRenamePath(to)) {
+      return { ok: false, reason: 'protected path in rename' };
+    }
+  }
+  return { ok: true };
+}
+
+function factsForChangeOrderRenameOnly(facts) {
+  if (facts.renameOnly !== true) return { ok: false, reason: 'not rename-only' };
+  if (Number(facts.addedRequirements) !== 0) return { ok: false, reason: 'requirements added' };
+  if (Number(facts.removedRequirements) !== 0) return { ok: false, reason: 'requirements removed' };
+  if (Number(facts.cancelsTickets) !== 0) return { ok: false, reason: 'cancels tickets' };
+  if (Number(facts.reopensTickets) !== 0) return { ok: false, reason: 'reopens tickets' };
+  if (facts.hasApprovedLedger !== true) return { ok: false, reason: 'ledger not approved' };
+  const renames = renameListOk(facts.renames);
+  if (!renames.ok) return renames;
+  return { ok: true };
 }
 
 function swarmSegmentSensitive(seg) {
@@ -653,6 +719,10 @@ function factsForKind(kind, facts = {}, ruleId = null, request = {}) {
     if (p !== reqProject) return { ok: false, reason: 'project mismatch' };
     return { ok: true };
   }
+  if (kind === 'change-order') {
+    if (ruleId === 'change-order-rename-only') return factsForChangeOrderRenameOnly(facts);
+    return { ok: false, reason: 'no matching rule' };
+  }
   return { ok: false, reason: 'no matching rule' };
 }
 
@@ -663,6 +733,9 @@ function candidateRuleIds(kind, facts = {}) {
   }
   if (kind === 'hand-build-request') {
     return ['commit-window-generated', 'setup-and-routing-hand-build'];
+  }
+  if (kind === 'change-order') {
+    return ['change-order-rename-only'];
   }
   const id = ruleIdForKind(kind, facts) ?? DEFAULT_BY_KIND.get(kind)?.id ?? null;
   return id ? [id] : [];
@@ -717,6 +790,9 @@ export function autoDecisionEvent(request, result, { now = Date.now, machine = '
     }
     if (Array.isArray(request.facts.files)) event.files = request.facts.files.map(String);
     if (typeof request.facts.branch === 'string') event.branch = request.facts.branch;
+  }
+  if (result?.rule === 'change-order-rename-only' && Array.isArray(request?.facts?.renames)) {
+    event.renames = request.facts.renames.map(r => ({ from: String(r.from), to: String(r.to) }));
   }
   return event;
 }

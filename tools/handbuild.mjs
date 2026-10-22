@@ -12,7 +12,13 @@ import { execFileSync } from 'node:child_process';
 import { analyzeShell, writesAnything, TOOL_DIRS, tokenize, isReadOnlyGitSub } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
-import { isSelfApprovalCommand, SELF_APPROVAL_REASON, handbuildShellPolicy, HANDBUILD_SELF_APPROVAL_RULE_ID } from './self-approval.mjs';
+import {
+  isSelfApprovalCommand,
+  SELF_APPROVAL_REASON,
+  handbuildShellPolicy,
+  HANDBUILD_SELF_APPROVAL_RULE_ID,
+  swarmChangeShellPolicy,
+} from './self-approval.mjs';
 export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
@@ -1278,6 +1284,13 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const handbuildPol = handbuildShellPolicy(ti.command);
     if (handbuildPol.applies && !handbuildPol.allow) {
       return { allow: false, files: [], reason: handbuildPol.reason, ruleId: handbuildPol.ruleId };
+    }
+    const changePol = swarmChangeShellPolicy(ti.command);
+    if (changePol.applies && !changePol.allow) {
+      return { allow: false, files: [], reason: changePol.reason, ruleId: changePol.ruleId };
+    }
+    if (changePol.applies && changePol.allow) {
+      return { allow: true };
     }
     if (handbuildPol.applies && handbuildPol.allow
       && !a.writes.length && !a.git.length && !a.inline && !a.protectedOutside.length && !(a.outsideDeletes?.length)) {
