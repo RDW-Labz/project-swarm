@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "ar2",
+      "agent": "auto",
+      "prompt": "Append the whole content of docs/design/asset-research-round2-draft.md to the end of docs/design/asset-research.md, verbatim (same words, same tables, same order), separated by a blank line and a horizontal rule, starting with its own heading ## Round 2 (2026-10-22). Change nothing else in asset-research.md and do not edit the draft file. Check that every table row of the draft appears in the output file (compare line counts: the new file has the old line count plus the draft line count plus the separator lines). ignoreTests reason: only docs/design/asset-research.md changes.",
+      "context": [
+        "docs/design/asset-research.md",
+        "docs/design/asset-research-round2-draft.md"
+      ],
+      "outputs": [
+        "docs/design/asset-research.md"
+      ],
+      "timeoutMs": 900000
+    }
+  ]
+}

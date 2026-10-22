@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "proc-fallback",
+      "agent": "auto",
+      "prompt": "tests/restart-any-server.test.mjs fails in a Linux container (node:22 image: ps and readlink exist, lsof and ss do NOT): dummy board must listen. The discovery code (tools/server-discovery.mjs or tools/server-restart.mjs) finds the listening port only through lsof or ss. Add a pure-Node Linux fallback with no external command: map the process listening sockets by reading /proc/PID/fd (readlink of each fd, entries of the form socket:[INODE]) and /proc/net/tcp and /proc/net/tcp6 (state 0A is LISTEN, local address hex with port hex; only loopback or any-address listeners), returning the ports whose inode belongs to the pid; use it when lsof and ss are missing or fail, and also for the working directory use readlink /proc/PID/cwd (already). Make the test independent of the presence of lsof: the real-process test must pass in this container and on macOS and on a runner that has lsof. Add unit tests for the /proc parser with fixture text (an IPv4 loopback listener, an IPv6 any-address listener, a non-LISTEN row, a foreign inode). Verify by running tests/restart-any-server.test.mjs 10 times in the container (docker run --rm -v THISDIR:/w -w /w node:22 node --import ./tests/_isolate-config.mjs --test tests/restart-any-server.test.mjs; must be 0 failures of 10) and 10 times natively, plus every test file with server-restart or watch-cli in the name natively. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/server-discovery.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tools/server-restart.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/server-discovery.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tools/server-restart.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

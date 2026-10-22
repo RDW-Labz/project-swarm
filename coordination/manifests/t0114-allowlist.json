@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-allowlist",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "contracts/watch-s4-ops.json",
+        "tools/board-action-guard.mjs",
+        "tools/watch-assets/board-owner-actions.js",
+        "tests/board-action-guard-unit.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/watch-s4-contract.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/board-owner-actions.mjs",
+        "tools/board-inbox.mjs",
+        "tools/watch-server.mjs",
+        "tests/board-owner-actions-handlers.test.mjs"
+      ],
+      "prompt": "Owner decision: invert the board action guard to an ALLOW-LIST. (1) contracts/watch-s4-ops.json: add components/schemas/allowedKinds (type string, enum exactly ['handbuild', 'decision', 'proposed-ticket', 'scope'], description: 'The only item kinds the board may approve or deny; every other kind is refused server-side.') next to refusedKinds, reference it from the owner action request/response schemas where the item kind appears, and say in the owner route descriptions that unknown kinds are refused by default. Keep refusedKinds. (2) tools/board-action-guard.mjs: export ALLOWED_KINDS = Object.freeze(['handbuild','decision','proposed-ticket','scope']) (must equal the contract enum: add a test that reads the contract and compares); guardBoardAction({ kind, source, itemKind }) allows ONLY when source is 'board' or 'phone', kind is 'approve' or 'deny', and itemKind (trimmed, lowercased) is EXACTLY one of ALLOWED_KINDS; everything else is refused by default with a fixed reason ('not an allowed action kind'). Keep the protected-word check as a SECOND layer that runs before the allow-list: any itemKind containing a protected word (merge, deploy, cap, budget, spend, key, keys, secret, migration, migrate, and the existing REFUSED_KINDS) as a whole word after camelCase/separator splitting is refused with the existing protected reason, even if a future allow-list entry contained it. Unknown, non-string, empty kinds and unknown sources stay refused. (3) tools/watch-assets/board-owner-actions.js: the client shows Approve/Deny only for items whose kind is in the same four-kind list (and not protected); mirror the list with a comment pointing at the contract. (4) Tests: tests/board-action-guard-unit.test.mjs: each allowed kind approve and deny is allowed; 'limit-up' is refused (not allowed); 'human', 'blocker', 'held-ticket', 'cap', 'cap-increase', 'capRaise', 'budget', 'deploy-preview', 'merge-request', '' , null, 42 are refused; ALLOWED_KINDS equals the contract enum; tests/board-owner-routes.test.mjs: an inbox item of kind 'limit-up' is refused end to end through the route with no audit 'approved' entry; tests/board-owner-actions-ui.test.mjs: no buttons for 'limit-up' or 'human'. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-action-guard-unit.test.mjs tests/board-owner-routes.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/watch-s4-contract.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the contract or guard for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

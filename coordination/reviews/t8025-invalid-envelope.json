@@ -1,0 +1,37 @@
+{
+  "failures": [
+    {
+      "what": "Opus review envelope rejected by validateReviewResult (issue length 326 > 300)",
+      "envelope": {
+        "summary": "Read-only review of T-8025 using the supplied diff and files. The structured verdict path is mostly sound. It fails on one medium finding: the review-job heuristic can reroute non-review jobs, which breaks the requirement that non-review jobs stay unchanged. There is also one low finding: a review envelope with non-empty files or edits is not rejected.",
+        "files": [],
+        "edits": [],
+        "result": {
+          "reviews": [
+            {
+              "ticket": "T-8025",
+              "verdict": "fail",
+              "findings": [
+                {
+                  "file": "tools/api-adapters.mjs",
+                  "line": 125,
+                  "severity": "medium",
+                  "issue": "isReadOnlyReviewJob treats any job with outputs [] and an id starting with review-, acc-review- or sec-review- as a review job. This holds even when type is not 'review'. Such a job gets the review schema, the review instructions and forced result.reviews validation. Non-review jobs are therefore not byte-for-byte unchanged.",
+                  "fix": "Key review handling on job.type === 'review' only, or on an explicit flag set by the manifest builders. Drop the id-prefix fallback."
+                },
+                {
+                  "file": "tools/api-adapters.mjs",
+                  "line": 240,
+                  "severity": "low",
+                  "issue": "The review schema's maxItems:0 on files and edits is removed by anthropicSchema. validateEnvelope/validateReviewResult never checks that files and edits are empty for a review job, so a read-only review can return file writes that pass envelope validation.",
+                  "fix": "In validateEnvelope, when review is true, fail closed unless value.files and value.edits are both empty arrays."
+                }
+              ]
+            }
+          ],
+          "notes": "The verdict is read only from the whole-JSON envelope (reviews or result.reviews) or from the final verdict line. result.notes is never parsed for verdicts. Envelope validation fails closed on a missing or malformed result for review jobs. The format re-ask behavior in the recorders was not in the supplied files and could not be verified."
+        }
+      }
+    }
+  ]
+}
