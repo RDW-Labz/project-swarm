@@ -222,6 +222,7 @@ export function autopilotRunFromState(state, directoryName) {
     pause: state.pause ?? null,
     integrated: runIntegratedFromState(state),
     integratedAt: state.integratedAt ?? null,
+    integrationStatus: state.integrationStatus ?? null,
     handled: state.handled === true,
     integrable: integrableFromJobs(state.jobs),
   };
@@ -229,9 +230,16 @@ export function autopilotRunFromState(state, directoryName) {
 
 function runCountsAsIntegrated(run) {
   if (!run || typeof run !== 'object') return false;
-  if (run.integrated === true) return true;
-  if (run.integratedAt) return true;
-  return false;
+  if (run.integrationStatus === 'partial' || run.integrationStatus === 'queued') return false;
+  return run.integrated === true;
+}
+
+function retryFailedCounted(events, runId) {
+  return actionEvents(events, 'retry-failed', runId).some(event => !failedResult(event));
+}
+
+function retryRunInFlight(events, runId) {
+  return events.some(e => e && e.kind === 'run' && e.retryOf === runId && e.status === 'running');
 }
 
 function runIsHandled(run, events) {
@@ -279,7 +287,7 @@ export function runSkipsIntegrateAttention(run, events) {
   if (runCountsAsIntegrated(run)) return true;
   if (['cancelled', 'abandoned'].includes(run.status)) return true;
   const manifest = runManifest(run, events);
-  if (isAskRun(run, manifest)) return true;
+  if (isAskRun(run, manifest) && runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
   if (run.integrable === false) return true;
   if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
   return isNonIntegratingRun(run, manifest);
@@ -386,6 +394,7 @@ export function decide(run, ctx) {
   const failedCount = Number(run.counts?.failed) || 0;
 
   if (run.status === 'complete' && !runCountsAsIntegrated(run)) {
+    if (runIsHandled(run, events)) return null;
     if (run.integrable === false) return null;
     if (runSkipsIntegrateAttention(run, events)) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
@@ -429,9 +438,10 @@ export function decide(run, ctx) {
     const manifest = c.manifest ?? runManifest(run, events);
     if (runIsHandled(run, events)) return null;
     if (supersedingSuccessfulRun(run, { runs: c.runs, events, manifest })) return null;
-    const retried = actionEvents(events, 'retry-failed', id).length > 0;
+    const retried = retryFailedCounted(events, id);
     const isRetry = events.some(e => e && e.kind === 'run' && e.id === id && e.retryOf);
     if (retried) {
+      if (retryRunInFlight(events, id)) return { action: 'wait', run: id, reason: 'retry run in flight' };
       // The retry is a new run linked by retryOf. If it finished, this original run is handled.
       if (events.some(e => e && e.kind === 'run' && e.retryOf === id && e.status === 'complete')) return null;
       return { action: 'block', run: id, id: `failed-${id}`, text: `Run ${id} still has failed jobs after one retry: swarm inspect ${id} --results` };
@@ -547,7 +557,9 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
   }
 
-  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null } = {}) {
+  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null, allowPartial = false, force = false } = {}) {
+    const runRecord = runs.find(r => r.id === runId);
+    if (!force && !allowPartial && runRecord && !runCountsAsIntegrated(runRecord)) return;
     for (const integrateKind of ['integrate', 'integrate-checkout']) {
       const candidates = events.filter(event => event?.kind === 'blocker' && event.resolved !== true
         && (event.integrateRun === runId || integrateBlockerRunIdFromId(event.id) === runId)
@@ -600,8 +612,15 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     try {
       if (decision.action === 'integrate') {
         const out = await deps.integrate(root, runId);
-        await write({ kind: 'integration', run: runId, status: 'complete', ...(Number.isFinite(out?.files) ? { files: out.files } : {}) });
-        await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate' });
+        const integrationIncomplete = out?.integrationStatus === 'partial' || out?.integrationStatus === 'queued';
+        const integrationComplete = !integrationIncomplete;
+        await write({
+          kind: 'integration',
+          run: runId,
+          status: integrationComplete ? 'complete' : 'partial',
+          ...(Number.isFinite(out?.files) ? { files: out.files } : {}),
+        });
+        if (integrationComplete) await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate', force: true });
       } else if (decision.action === 'resume') await deps.resume(root, runId);
       else if (decision.action === 'retry-failed') {
         const out = await deps.retryFailed(root, runId);
@@ -625,8 +644,10 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
     await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) }, { incidental: true });
-    if (run.integrated === true || ['cancelled', 'abandoned'].includes(run.status)) {
-      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : run.integrated ? 'integrate' : 'abandoned' });
+    if (runCountsAsIntegrated(run)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: 'integrate' });
+    } else if (['cancelled', 'abandoned'].includes(run.status)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : 'abandoned', allowPartial: true });
     }
   }
 
@@ -1071,6 +1092,49 @@ export async function buildAutopilotPollDigest(root, deps, { now = Date.now, leg
     };
   }
   const wave = legacyPlan ? nextWave(eventList, plan) : null;
+  let unlockTickets = null;
+  if (typeof deps.readTickets === 'function') {
+    const tickets = await safe(() => deps.readTickets(root), []);
+    unlockTickets = stableDigest(
+      (Array.isArray(tickets) ? tickets : []).map(t => ({
+        id: t?.id ?? null,
+        status: t?.status ?? null,
+        blockedBy: t?.blockedBy ?? null,
+        dependsOn: t?.dependsOn ?? t?.deps ?? null,
+      })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    );
+  }
+  let policyPass = null;
+  const policyCfg = deps.policyPass;
+  if (policyCfg && typeof policyCfg === 'object' && typeof policyCfg.loadRules === 'function') {
+    const rules = await safe(() => policyCfg.loadRules(root), null);
+    if (rules != null) {
+      const listOpen = policyCfg.openRequests ?? policyCfg.listOpenRequests;
+      if (typeof listOpen === 'function') {
+        const items = await safe(() => listOpen(root), []);
+        policyPass = stableDigest(
+          filterPolicyPassItems(items).map(item => ({ kind: item.kind, id: item.id ?? null })).sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`)),
+        );
+      }
+    }
+  }
+  let notify = null;
+  if (typeof deps.pendingNotifications === 'function') {
+    const pending = await safe(() => deps.pendingNotifications(root), []);
+    notify = stableDigest(Array.isArray(pending) ? pending : []);
+  } else {
+    notify = stableDigest(
+      runs.map(r => ({ id: r.id, status: r.status ?? null, unblocks: r.unblocks ?? null })),
+    );
+  }
+  const triage = stableDigest({
+    failed: runs.filter(r => r.status === 'failed').map(r => ({
+      id: r.id,
+      counts: r.counts ?? null,
+      handled: r.handled === true,
+    })),
+    openTriageBlockers: [...open].filter(id => id.startsWith('triage-')).sort(),
+  });
   const payload = {
     v: 1,
     legacyPlan: Boolean(legacyPlan),
@@ -1079,6 +1143,10 @@ export async function buildAutopilotPollDigest(root, deps, { now = Date.now, leg
     runs: runParts,
     wave: wave?.id ?? null,
     startReady,
+    unlockTickets,
+    policyPass,
+    notify,
+    triage,
   };
   return { digest: stableDigest(payload), idle: autopilotPollSnapshotIdle(payload), payload };
 }

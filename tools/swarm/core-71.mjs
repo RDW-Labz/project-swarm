@@ -246,10 +246,12 @@ export function recordQueuePass(state, manifest, mergeQueue, { prior, at }) {
     pass.integrated.push(jobId);
   }
   for (const blocked of mergeQueue.securityBlocked ?? []) {
+    if (prior.jobIntegration[blocked.job]?.status === 'integrated' || isJobIntegrated(state, blocked.job)) continue;
     state.jobIntegration[blocked.job] = { status: 'blocked', at, reason: 'security-gate', blocks: blocked.blocks };
     pass.blocked.push({ job: blocked.job, kind: 'security-gate' });
   }
   for (const conflict of mergeQueue.conflicts ?? []) {
+    if (prior.jobIntegration[conflict.job]?.status === 'integrated' || isJobIntegrated(state, conflict.job)) continue;
     state.jobIntegration[conflict.job] = { status: 'blocked', at, reason: conflict.reason ?? 'conflict', files: conflict.files };
     pass.conflicts.push(conflict);
   }
@@ -261,17 +263,26 @@ export function recordQueuePass(state, manifest, mergeQueue, { prior, at }) {
   }
   for (const failed of mergeQueue.checkFailed ?? []) {
     if (!failed.job || failed.job === '(final full check)') continue;
+    if (prior.jobIntegration[failed.job]?.status === 'integrated' || isJobIntegrated(state, failed.job)) continue;
     state.jobIntegration[failed.job] = { status: 'blocked', at, reason: 'checks-failed', checks: failed.checks, ...(failed.tail ? { tail: failed.tail } : {}) };
     pass.blocked.push({ job: failed.job, kind: 'checks-failed' });
   }
   state.integrationPasses = [...prior.integrationPasses, pass];
   state.integratedFiles = [...new Set([...prior.integratedFiles, ...(state.integratedFiles ?? [])])];
   state.integratedNewFiles = [...new Set([...prior.integratedNewFiles, ...(state.integratedNewFiles ?? [])])];
+  state.integratedHashes = {
+    ...prior.integratedHashes,
+    ...(state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes)
+      ? state.integratedHashes
+      : {}),
+  };
+  const finalCheckFailed = (mergeQueue.checkFailed ?? []).some(f => f.job === '(final full check)');
   const allIntegrated = jobs.every(job => state.jobIntegration[job.id]?.status === 'integrated');
-  if (allIntegrated) state.integrationStatus = 'complete';
-  else if ((mergeQueue.securityBlocked ?? []).length) state.integrationStatus = 'partial';
+  const complete = allIntegrated && !finalCheckFailed;
+  if (complete) state.integrationStatus = 'complete';
+  else if (finalCheckFailed || (mergeQueue.securityBlocked ?? []).length) state.integrationStatus = 'partial';
   else state.integrationStatus = 'queued';
-  return allIntegrated;
+  return complete;
 }
 
 export async function applyQueuePlans(root, id, state, manifest, plans, options) {
