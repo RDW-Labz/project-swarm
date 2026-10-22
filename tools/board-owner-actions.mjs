@@ -105,6 +105,22 @@ export function createOwnerActions({
   const confirms = new Map();
   let confirmSuffix = 0;
 
+  const sweepExpired = time => {
+    for (const [token, pending] of confirms) {
+      if (pending.expiresAt <= time) confirms.delete(token);
+    }
+  };
+
+  const capPendingForIdentity = (identity, time) => {
+    const pending = [...confirms.entries()]
+      .filter(([, value]) => value.identity === identity && value.expiresAt > time)
+      .sort((a, b) => (a[1].createdAt - b[1].createdAt) || (a[1].expiresAt - b[1].expiresAt));
+    while (pending.length >= 5) {
+      const [token] = pending.shift();
+      confirms.delete(token);
+    }
+  };
+
   const auth = req => {
     if (req?.tokenInQuery !== false) return response(401, 'not-signed-in', 'owner routes require x-watch-token');
     if (req?.tokenOk !== true) return response(403, 'owner-forbidden', 'the board token was not accepted');
@@ -166,6 +182,7 @@ export function createOwnerActions({
 
   const prepare = async (itemId, req = {}) => {
     const time = clock(now);
+    sweepExpired(time);
     const authorized = auth(req);
     if (authorized.status) return authorized;
     const checked = await itemCheck(itemId);
@@ -174,10 +191,11 @@ export function createOwnerActions({
     const guardError = await guardItem('approve', checked.item.kind);
     if (guardError) return guardError.error;
 
+    capPendingForIdentity(authorized.identity, time);
     let confirmToken = String(randomId());
     while (confirms.has(confirmToken)) confirmToken = `${String(randomId())}-${++confirmSuffix}`;
     const expiresAt = time + Math.max(0, Number(confirmTtlMs) || 0);
-    confirms.set(confirmToken, { itemId, identity: authorized.identity, expiresAt });
+    confirms.set(confirmToken, { itemId, identity: authorized.identity, expiresAt, createdAt: time });
     return {
       status: 200,
       body: {
@@ -191,6 +209,20 @@ export function createOwnerActions({
   const decide = async (itemId, body, req = {}) => {
     const time = clock(now);
     const identity = header(req?.headers, 'Tailscale-User-Login');
+    const confirmId = body && typeof body.confirm === 'string' ? body.confirm : '';
+    if (confirmId && confirms.has(confirmId)) {
+      const pending = confirms.get(confirmId);
+      if (pending.expiresAt <= time) {
+        confirms.delete(confirmId);
+        sweepExpired(time);
+        const authorized = auth(req);
+        if (authorized.status) {
+          return refusal(time, itemId, body, identity, { response: authorized, outcome: 'refused-authentication' });
+        }
+        return refusal(time, itemId, body, authorized.identity, { response: response(409, 'confirm-conflict', 'the confirmation is expired'), outcome: 'refused-confirmation-expired' });
+      }
+    }
+    sweepExpired(time);
     const authorized = auth(req);
     if (authorized.status) {
       return refusal(time, itemId, body, identity, { response: authorized, outcome: 'refused-authentication' });

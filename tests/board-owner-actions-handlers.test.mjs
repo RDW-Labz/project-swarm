@@ -154,6 +154,53 @@ test('every refused decision is audited and audit output is newest first without
   assert.equal((await actions.audit(req({ tokenInQuery: true }))).status, 401);
 });
 
+test('sweeps expired confirmations on prepare and decide', async () => {
+  const items = [
+    { id: 'item-1', kind: 'scope', title: 'One' },
+    { id: 'item-2', kind: 'scope', title: 'Two' },
+  ];
+  let time = 1000;
+  const actions = createOwnerActions({
+    listItems: () => items,
+    appendAudit: () => {},
+    readAudit: () => [],
+    guard: () => ({ allowed: true }),
+    now: () => time,
+    randomId: () => 'confirm-1',
+    ownerIdentities: [identity],
+    confirmTtlMs: 100,
+    verifyIdentity: () => true,
+  });
+  const prepared = await actions.prepare('item-1', req());
+  time = 1200;
+  assert.equal((await actions.prepare('item-2', req())).status, 200);
+  assert.equal((await actions.decide('item-1', { decision: 'approve', confirm: prepared.body.confirmToken }, req())).status, 409);
+});
+
+test('caps pending confirmations at five per identity and drops the oldest', async () => {
+  const items = Array.from({ length: 6 }, (_, i) => ({ id: `item-${i + 1}`, kind: 'scope', title: `Item ${i + 1}` }));
+  let time = 1000;
+  const actions = createOwnerActions({
+    listItems: () => items,
+    appendAudit: () => {},
+    readAudit: () => [],
+    guard: () => ({ allowed: true }),
+    now: () => time,
+    randomId: (() => { let n = 0; return () => `confirm-${++n}`; })(),
+    ownerIdentities: [identity],
+    confirmTtlMs: 60_000,
+    verifyIdentity: () => true,
+  });
+  const tokens = [];
+  for (const item of items) {
+    const out = await actions.prepare(item.id, req());
+    assert.equal(out.status, 200);
+    tokens.push(out.body.confirmToken);
+  }
+  assert.equal((await actions.decide('item-1', { decision: 'approve', confirm: tokens[0] }, req())).status, 409);
+  assert.equal((await actions.decide('item-6', { decision: 'approve', confirm: tokens[5] }, req())).status, 200);
+});
+
 test('sanitizes crafted identities on refusal audit paths', async () => {
   const { actions, audit } = fixture();
   const crafted = 'owner@example.test/<script>';

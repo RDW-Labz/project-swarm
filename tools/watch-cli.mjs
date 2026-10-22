@@ -25,6 +25,9 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
+import { createOwnerActions } from './board-owner-actions.mjs';
+import { guardBoardAction } from './board-action-guard.mjs';
+import { remoteFile } from './remote.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
 import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, readProjectRunStates, projectFamilyRoots, isTestOrTempProject } from './board-data.mjs';
 import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
@@ -490,7 +493,51 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
   return { total: filtered.length, events: filtered.slice(offset, offset + limit) };
 }
 
-export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
+function ownerAuditPath(env) {
+  const home = env.HOME ?? os.homedir();
+  return path.join(path.dirname(remoteFile(env, home)), '.swarm', 'owner', 'audit.ndjson');
+}
+
+function buildOwnerActions({ env, now, live, remoteLogin }) {
+  const auditFile = ownerAuditPath(env);
+  const appendAudit = async entry => {
+    await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
+    await fs.appendFile(auditFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  };
+  const readAudit = async () => {
+    try {
+      const text = await fs.readFile(auditFile, 'utf8');
+      return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    } catch {
+      return [];
+    }
+  };
+  const login = typeof remoteLogin === 'string' ? remoteLogin : '';
+  return createOwnerActions({
+    listItems: async () => {
+      const all = await listProjects({ file: projectsFile(env) });
+      const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
+      const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
+      const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
+      return (inbox.items ?? []).map(item => ({
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        summary: item.title,
+        projectId: item.projectId,
+      }));
+    },
+    appendAudit,
+    readAudit,
+    guard: guardBoardAction,
+    now,
+    randomId: () => randomBytes(16).toString('hex'),
+    ownerIdentities: login ? [login] : [],
+    verifyIdentity: (req, identity) => req.tailnetVerified === true && identity === login,
+  });
+}
+
+export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools, remote = null } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   const deployTracker = createDeployTracker({ env });
   const peersCache = peerCache ?? createPeerCache({
@@ -655,6 +702,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
     async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
   };
+  if (remote) api.ownerActions = buildOwnerActions({ env, now, live, remoteLogin: remote.login });
   return api;
 }
 
@@ -662,7 +710,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
 export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
-  const api = createBoardApi({ env });
+  const api = createBoardApi({ env, remote });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
     root,
@@ -676,7 +724,13 @@ export async function startBoardServer({ env = process.env, root, remote, regist
     contextCommands,
     assetDir: path.join(here, 'watch-assets'),
     deltaFile: path.join(here, 'watch-delta.mjs'),
-    ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
+    ...(remote ? {
+      port: remote.port,
+      token: remote.token,
+      remote: { hosts: remote.hosts, login: remote.login },
+      idleMs: Infinity,
+      ownerActions: api.ownerActions,
+    } : {}),
   });
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
