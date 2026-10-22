@@ -3,7 +3,7 @@
 // (state.json, manifest.json, through buildRunSnapshot), so a number here is the sum of the numbers on those pages. Nothing is estimated beyond
 // what a run page already estimates; with nothing running it says so and shows what the project did last.
 import { buildRunSnapshot } from './watch-state.mjs';
-import { readRunStates, laneLabel, agentState, costOf } from './board-data.mjs';
+import { readProjectRunStates, projectFamilyRoots, laneLabel, agentState, costOf } from './board-data.mjs';
 import { runTotals } from './spend.mjs';
 import { readLedger } from './tickets.mjs';
 import { projectSummary } from './project-spend.mjs';
@@ -106,19 +106,22 @@ export function combineLive({ project, runs, finishedToday = [], tickets = [], c
 }
 
 // The IO around it: reads this project's own folder only. `liveRuns` are the alive runs of this project (their process exists).
-export async function liveOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, readManifest } = {}) {
-  const all = await readRunStates(project.root, { limit: 400 });
-  const liveIds = new Set(liveRuns.map(r => r.runId));
+export async function liveOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, readManifest, env = process.env, familyRoots = null, extraRoots = [] } = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(project.root, { env, extraRoots });
+  const all = await readProjectRunStates(project.root, { env, familyRoots: roots, limit: 400 });
+  const rootOf = value => value ? String(value) : project.root;
+  const liveKeys = new Set(liveRuns.map(r => `${rootOf(r.root)}|${r.runId}`));
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
-  const manifestOf = readManifest ?? (async id => { try { return JSON.parse(await fs.readFile(path.join(project.root, '.swarm', 'runs', id, 'manifest.json'), 'utf8')); } catch { return null; } });
+  const manifestOf = readManifest ?? (async (id, root = project.root) => { try { return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'runs', id, 'manifest.json'), 'utf8')); } catch { return null; } });
   const live = [];
-  for (const r of all.filter(x => liveIds.has(x.id))) live.push({ id: r.id, state: r.state, manifest: await manifestOf(r.id) });
+  for (const r of all.filter(x => liveKeys.has(`${x.root}|${x.id}`))) live.push({ id: r.id, state: r.state, manifest: await manifestOf(r.id, r.root) });
   const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
-  const finishedToday = all.filter(r => !liveIds.has(r.id) && FINISHED.has(r.state.status) && (Date.parse(r.state.finishedAt ?? '') || 0) >= startOfDay.getTime());
+  const finishedToday = all.filter(r => !liveKeys.has(`${r.root}|${r.id}`) && FINISHED.has(r.state.status) && (Date.parse(r.state.finishedAt ?? '') || 0) >= startOfDay.getTime());
   const ledger = await readLedger(project.root).catch(() => null);
+  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
   const spend = await summary(project.root).catch(error => ({ capUsd: null, capError: String(error.message).slice(0, 120) }));
-  const lastMs = Math.max(0, ...all.map(r => r.mtimeMs), Date.parse(ledger?.updatedAt ?? '') || 0);
+  const lastMs = Math.max(0, ...all.map(r => Math.max(r.mtimeMs ?? 0, Date.parse(r.state?.startedAt ?? '') || 0, Date.parse(r.state?.finishedAt ?? '') || 0, ...(r.state?.jobs ?? []).map(job => Date.parse(job?.finishedAt ?? '') || 0))), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
   const orchestrator = (() => { try { return projectOrchestrator(project, { runs: all, now }); } catch { return null; } })();
   const combined = combineLive({
     project, runs: live, finishedToday, tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 2000),

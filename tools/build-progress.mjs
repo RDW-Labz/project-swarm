@@ -26,6 +26,13 @@ const text = (value, fallback = '') => value === undefined || value === null ? f
 const iso = value => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const requirementIdRe = /R-\d{3,}/gi;
 
+// Board progress is the floor of done / counted tickets in the approved scope selected above.
+// Counted excludes human, cancelled, and proposed tickets; all board consumers use this basis.
+export function boardPercent(progress) {
+  const basis = progress?.percent?.board ?? progress?.percent?.tickets;
+  return pct(Number(basis?.done ?? 0), Number(basis?.total ?? 0));
+}
+
 function requirementIds(ticket) {
   const ids = new Set();
   const visit = value => {
@@ -626,7 +633,6 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     for (const ticket of allTickets.filter(ticket => ticket.status === 'proposed')) approvals.push({ kind: 'proposal', id: text(ticket.id), title: text(ticket.title, text(ticket.id)) });
     for (const decision of journal ? openDecisions(journal) : []) approvals.push({ kind: 'decision', id: text(decision.id), title: text(decision.text ?? decision.question, text(decision.id)) });
 
-    const openTickets = tickets.filter(ticket => OPEN.has(ticket.status));
     const ownerTickets = allTickets.filter(OWNER_TICKET);
     const ownerOpenTickets = ownerTickets.filter(ticket => OPEN.has(ticket.status));
     const openByType = Object.create(null);
@@ -684,7 +690,8 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const etaFor = (count, days, basis) => {
       const unroundedRate = count / days;
       const perDay = Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.round(unroundedRate * 100) / 100 : 0;
-      const remaining = openTickets.length;
+      // The ETA must use the same selected, counted ticket set as boardPercent: done / counted.
+      const remaining = Math.max(0, tickets.length - ticketDone);
       const etaDays = remaining === 0 ? 0 : perDay > 0 ? Math.min(3650, Math.ceil(remaining / perDay)) : Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.min(3650, Math.ceil(remaining / unroundedRate)) : 3650;
       const source = usedRunFallback ? ' (from run finish times)' : usedMergeFallback ? ' (from merge history)' : usedWaveAtFallback ? ' (from wave timestamps)' : '';
       return { remaining, perDay, days: etaDays, basis: `${basis}${source}` };
@@ -718,6 +725,9 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
       build: { done: total.build.done + item.build.done, total: total.build.total + item.build.total },
       human: { done: total.human.done + item.human.done, total: total.human.total + item.human.total },
     }), { build: { done: 0, total: 0 }, human: { done: 0, total: 0 } });
+    // `percent.tickets` remains the scope-row rollup used by the existing headline/detail view.
+    // The board value is deliberately based only on the approved ledger selected above, so it
+    // cannot mix family ledgers while stages and ETA use the selected `tickets` array.
     const buildStats = scopes.length ? aggregate.build : { done: ticketDone, total: tickets.length };
     const humanStats = scopes.length ? aggregate.human : ticketStats(allTickets).human;
     const allLedgerTicketIds = new Set();
@@ -725,7 +735,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds, projectId);
     const headline = ledger ? headlineFor(buildStats, humanStats) : 'no ledger';
     const result = {
-      percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, requirements, overall: pct(buildStats.done, buildStats.total) },
+      percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, board: { done: ticketDone, total: tickets.length, pct: pct(ticketDone, tickets.length) }, requirements, overall: null },
       stages: stageRows(scope, tickets),
       left: { openByType: Object.fromEntries(Object.entries(openByType).filter(([, count]) => count > 0)), human: ownerOpenTickets.filter(ticket => ticket.type === 'human').map(ticket => { const stageId = effectiveStage(scope, ticket); return { id: text(ticket.id), title: text(ticket.title, text(ticket.id)), stage: stageDisplay(scope, stageId), stageId }; }), blockers, approvals },
       milestones,
@@ -739,6 +749,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
       source,
       notes,
     };
+    result.percent.overall = boardPercent(result);
     return result;
   } catch (error) {
     notes.push(`build progress unavailable: ${text(error.message, 'unknown error')}`);
@@ -755,7 +766,7 @@ export function progressSummary(progress) {
   const headline = progress.headline ?? headlineFor(build, human);
   const untracked = { runs: untrackedRuns, jobs: progress.untracked?.jobs ?? 0 };
   const summary = {
-    overall: progress.percent?.overall ?? null,
+    overall: boardPercent(progress),
     ticketsPct: progress.percent?.tickets?.pct ?? null,
     current,
     eta: progress.eta?.days ?? null,

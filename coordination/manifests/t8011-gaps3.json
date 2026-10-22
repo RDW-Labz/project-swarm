@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8011-gaps3",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tools/board-data.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-board-accuracy-a3.json",
+        "tools/board-live.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "FINAL test-strength round for T-8011 (coordination/reviews/acc-review-board-accuracy-a3.json). Rewrite the expectations in tests/board-accuracy-activity.test.mjs so EVERY expected value is computed by an oracle that reads the sources on disk after the fixture is built, never from constants the test passed to the fixture: (1) lastRunAt = max startedAt over all .swarm/runs/*/state.json files found under every root listed by `git worktree list --porcelain` run in the main root plus the fixture's scratch roots (read with fs, not with board functions); (2) liveCount and activity (building / active-today / idle) = computed from the registry file (SWARM_PROJECTS_FILE), the live-run records and run state files on disk, and startOfLocalDay; (3) checkouts = number of entries from `git worktree list --porcelain` plus scratch roots that are worktrees of the repo; (4) lastActivityAt and lastTicketFinishedAt = independent max over the run files, ledger updatedAt and tickets.log lines read from disk; (5) finished/deployed: recompute from the ledger file (all counted tickets done), the history file (merge/pr events) and the deploy fixture, then assert the card's finished flag, its 'Finished' label and that live warnings moved to history. Put the oracles in a small helper inside the test file. Change tools/board-data.mjs only if an oracle exposes a real mismatch, and say so. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-activity.test.mjs tests/board-accuracy-percent.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

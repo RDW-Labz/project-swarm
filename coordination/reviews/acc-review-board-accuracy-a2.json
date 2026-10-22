@@ -1,0 +1,35 @@
+{
+  "reviewer": "codex",
+  "reviews": [
+    {
+      "ticket": "T-8011",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:289-322 projectFamilyRoots/readProjectRunStates; tools/board-data.mjs:325-352 lastTicketFinishedAt; tools/board-data.mjs:528-528 projectActivityState via familyActivityMs; tests/board-accuracy-activity.test.mjs lastRunAt/liveCount/lastTicketFinishedAt/checkouts/active-today",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/watch-cli.mjs:357-364 installedVersionFor; tools/watch-cli.mjs:522-529 snapshot.machine.version; test board version is read from the installed current package",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tools/board-data.mjs:620-621 hide nameless no runs; tools/board-data.mjs:358-367 finishedProgress; tools/board-data.mjs:652-660 warnings to history when finished; tests board-accuracy-activity.test.mjs nameless hidden and finished and deployed projects",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": false,
+          "evidence": "tests/board-accuracy-activity.test.mjs lastActivityAt includes finished activity; tests/board-accuracy-activity.test.mjs finished and deployed projects",
+          "gap": "lastActivityAt only asserts >= one worktree finishedAt, not an independent max over all family run/ledger/ticket sources; finished-card test does not assert progress.current Finished or that generated live warnings appear under history; lastTicketFinishedAt not exercised from a scratch-dir run file"
+        }
+      ]
+    }
+  ]
+}
