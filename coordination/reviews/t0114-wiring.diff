@@ -1,8 +1,68 @@
 diff --git a/tools/board-inbox.mjs b/tools/board-inbox.mjs
-index 1e1e30e..a5991b8 100644
+index 1e1e30e..525558c 100644
 --- a/tools/board-inbox.mjs
 +++ b/tools/board-inbox.mjs
-@@ -112,21 +112,34 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+@@ -3,20 +3,21 @@
+ // and which of those were also asked on the phone. READ-ONLY: the board never answers anything. Answers go through the commands shown here at the
+ // computer, or through the private swarm-inbox issues from the phone (swarm phone sync).
+ import os from 'node:os';
+ import path from 'node:path';
+ import { collectInbox } from './inbox.mjs';
+ import { inboxDeps } from './inbox-commands.mjs';
+ import { readLedger, isApproved } from './tickets.mjs';
+ import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
+ import { sanitizeText } from './journal.mjs';
+ import { isScratchRoot } from './scratch-roots.mjs';
++import { isProtectedTopic } from './board-action-guard.mjs';
+ 
+ // Secrets redacted, control characters (terminal escapes) removed, length bounded: everything shown here came from a file on disk.
+ const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/;   // controls, C1, zero-width and text-direction characters
+ const txt = (v, n = 160) => (v === null || v === undefined ? null : clip(sanitizeText(v).replace(new RegExp(UNSAFE.source, 'g'), ' ').replace(/\s+/g, ' ').trim(), n));
+ // Cut at a word, never in the middle of one (the board wraps text; this only bounds how much is sent).
+ const clip = (text, n) => {
+   if (text === null || text.length <= n) return text;
+   const cut = text.slice(0, n);
+   const space = cut.lastIndexOf(' ');
+   return `${(space > n * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:(-]+$/, '')}…`;
+@@ -54,20 +55,37 @@ export function needYouForProject(inbox, projectId) {
+     })),
+   };
+ }
+ const phoneOf = (rec, now) => (rec ? { status: Number.isFinite(rec.expiresAt) && rec.expiresAt <= now ? 'expired' : rec.status, expiresAt: Number.isFinite(rec.expiresAt) ? new Date(rec.expiresAt).toISOString() : null, issue: Number.isInteger(rec.number) ? rec.number : null } : null);
+ 
+ // "FYI, no action needed" notes are not for the owner: they are listed apart, collapsed, and never counted.
+ const isFyi = it => it.kind === 'human' && (String(it.id).startsWith('prune-') || /^FYI, no action needed/i.test(String(it.title ?? '')));
+ 
+ // The commands (with a label) the owner can run at the computer, and for a blocker always a plain "do this" line.
+ const plain = value => !UNSAFE.test(String(value)) && String(value) !== '';
++
++function decisionProtectedTopic(it) {
++  if (it?.kind !== 'decision') return undefined;
++  const fields = [
++    it.text ?? it.title,
++    it.title,
++    it.id,
++    it.default ?? it.choice,
++    ...(Array.isArray(it.choices) ? it.choices : []),
++    ...(Array.isArray(it.options) ? it.options : []),
++  ];
++  for (const field of fields) {
++    if (field !== undefined && field !== null && isProtectedTopic(String(field))) return true;
++  }
++  return false;
++}
++
+ function nextFor(item, root) {
+   if (![root, String(item.id)].every(plain)) return { commands: [], next: null };
+   const swarm = `swarm --root ${quote(root)}`;
+   const commands = [];
+   let next = null;
+   if (item.kind === 'human') commands.push({ label: 'Mark it done', cmd: `${swarm} done ${quote(item.id)}` });
+   else if (item.kind === 'decision') {
+     const choice = String(item.default ?? item.choices?.[0] ?? 'CHOICE');
+     if (plain(choice) && !choice.startsWith('-')) commands.push({ label: 'Choose', cmd: `${swarm} decide ${quote(item.id)} ${quote(choice)}` });
+   } else if (item.kind === 'proposed-ticket') commands.push(item.files ? { label: 'Approve it', cmd: `${swarm} tickets ${quote(item.id)} --approve --yes` } : { label: 'Name its files first', cmd: `${swarm} tickets ${quote(item.id)} --files FILE[,FILE] --yes` });
+@@ -112,21 +130,35 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
    const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
    const asked = new Map();
    for (const rec of Object.values(state.issues)) if (rec && (rec.status === 'open' || rec.status === 'confirming')) asked.set(rec.key, rec);
@@ -19,6 +79,7 @@ index 1e1e30e..a5991b8 100644
 +          id: txt(it.id, 80),
 +          title: txt(it.title, TITLE_MAX),
 +          text: txt(it.text ?? it.title, TITLE_MAX),
++          ...(it.kind === 'decision' ? { protectedTopic: decisionProtectedTopic(it) } : {}),
 +          ...(it.boardSafe === true ? { boardSafe: true } : {}),
 +          since: it.since ?? null,
 +          unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
@@ -213,7 +274,7 @@ index e633ebe..06da5d9 100644
    const { listRuns, readState, readJournal, now, onNote } = deps;
    const ms = nowOf(now);
 diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
-index b283f96..7604e03 100644
+index b283f96..c7a5cdb 100644
 --- a/tools/watch-cli.mjs
 +++ b/tools/watch-cli.mjs
 @@ -18,20 +18,23 @@ import { ticketComments } from './gallery-tickets.mjs';
@@ -227,7 +288,7 @@ index b283f96..7604e03 100644
  import { randomBytes } from 'node:crypto';
  import { readHistory, historyFile } from './history.mjs';
  import { boardInbox, inboxText } from './board-inbox.mjs';
-+import { createOwnerActions } from './board-owner-actions.mjs';
++import { createOwnerActions, ownerItemsFromBoardInbox } from './board-owner-actions.mjs';
 +import { guardBoardAction } from './board-action-guard.mjs';
 +import { remoteFile } from './remote.mjs';
  import { runDetail, compareRuns } from './board-run.mjs';
@@ -240,7 +301,7 @@ index b283f96..7604e03 100644
  import { loadLocalConfig } from './local-config.mjs';
  import { backfillHistory } from './board-commands.mjs';
  import { projectSummary } from './project-spend.mjs';
-@@ -483,21 +486,79 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
+@@ -483,21 +486,72 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
      fold: true,
      exclude: showsScratch ? undefined : scratchIds,
    };
@@ -288,17 +349,10 @@ index b283f96..7604e03 100644
 +  const login = typeof remoteLogin === 'string' ? remoteLogin : '';
 +  return createOwnerActions({
 +    listItems: async () => {
-+      const all = await listProjects({ file: projectsFile(env) });
-+      const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
-+      const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
-+      const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
-+      return (inbox.items ?? []).map(item => ({
-+        id: item.id,
-+        kind: item.kind,
-+        title: item.title,
-+        summary: item.title,
-+        projectId: item.projectId,
-+      }));
++      const opts = boardProjectOpts(env);
++      const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
++      const inbox = await boardInbox({ projects, env, forOwner: true, now: now() }).catch(() => null);
++      return ownerItemsFromBoardInbox(inbox ?? { items: [] });
 +    },
 +    appendAudit,
 +    readAudit,
@@ -321,7 +375,7 @@ index b283f96..7604e03 100644
      },
    });
    let boardUrl = null;
-@@ -648,42 +709,49 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+@@ -648,42 +702,49 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
        })();
        watchers.set(key, entry);
        entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
