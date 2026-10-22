@@ -13,7 +13,7 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
+import { boardPercent, buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
 import { effectiveStage, stageDisplay } from './build-progress.mjs';
 import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
@@ -342,8 +342,14 @@ export function ticketsOf(ledger, scope = null) {
   return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus: plain(byStatus), stage: stageId === 'done' ? 'done' : stageDisplay(scope, stageId), stageId };
 }
 
+// A linked worktree reads its own ledger; a main checkout reads the newest approved ledger in
+// its family. Both board cards and project pages use this single ownership decision.
+export async function boardOwnOnly(root) {
+  return Boolean(await mainWorktreeRoot(root));
+}
+
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root);
   const liveStateRuns = [];
   const liveStateByRecord = new Map();
@@ -368,14 +374,15 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
-  try { selected = await ledgerRoot(project.root, { ownOnly: worktree }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  const ownOnly = await boardOwnOnly(project.root);
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly: worktree }).then(progressSummary, () => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...progressSummary(raw), overall: boardPercent(raw) } : null, () => null);
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.length ? runs[runs.length - 1].state : null;
@@ -579,9 +586,9 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
 export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
   const runs = await readRunStates(project.root, { limit: 200 });
-  const worktree = Boolean(await mainWorktreeRoot(project.root));
+  const ownOnly = await boardOwnOnly(project.root);
   let selected;
-  try { selected = await ledgerRoot(project.root, { ownOnly: worktree }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => { const stageId = effectiveStage(scope, t); return { id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: stageDisplay(scope, stageId), stageId, risk: txt(t.risk, 10) }; });
@@ -593,7 +600,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly: worktree }).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...raw, percent: { ...raw.percent, overall: boardPercent(raw) } } : null).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
