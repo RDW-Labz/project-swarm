@@ -12,6 +12,11 @@ function span(ms) { var s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? 
 
 export var STATE_TEXT = { working: 'working', thinking: 'thinking', waiting: 'waiting on you', idle: 'idle', ended: 'ended' };
 
+/** Only claude.ai Remote Control session URLs from the server may be linked. */
+export function allowedChatUrl(url) {
+  return typeof url === 'string' && /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]{10,80}$/.test(url);
+}
+
 function stateText(s, now) {
   if (s.state === 'ended') {
     var at = Date.parse(s.endedAt || s.since);
@@ -53,18 +58,18 @@ export function renderOrchestrator(host, sessions, opts) {
       var card = el('div', 'orch-card'); var holder = el('div', 'orch-head');
       var handle = mountRobotHead(holder, { state: HEAD[s.state] || 'idle', size: size, color: COLOR, screenColor: '#efe4ff', id: 'orch|' + key, label: 'orchestrator session in ' + s.project + ', ' + stateText(s, now) });
       var text = el('div', 'orch-text');
-      hit = { card: card, handle: handle, name: el('div', 'orch-name'), chat: el('a', 'board-link', 'Open chat'), doing: el('div', 'orch-doing mono'), cost: el('div', 'orch-cost sub'), hand: el('div', 'orch-hand') };
-      hit.chat.target = '_blank'; hit.chat.rel = 'noopener noreferrer';
+      hit = { card: card, handle: handle, name: el('div', 'orch-name'), chat: el('a', 'board-link orch-chat', 'Open chat'), doing: el('div', 'orch-doing mono'), cost: el('div', 'orch-cost sub'), hand: el('div', 'orch-hand') };
+      hit.chat.target = '_blank'; hit.chat.rel = 'noopener noreferrer'; hit.chat.title = 'Open Remote Control session';
       card.appendChild(holder); text.appendChild(hit.name); text.appendChild(hit.doing); text.appendChild(hit.cost); text.appendChild(hit.hand); card.appendChild(text);
       host.appendChild(card); map.set(key, hit);
     }
     hit.handle.setState(HEAD[s.state] || 'idle');
     hit.card.dataset.state = s.state;
     hit.name.textContent = s.project + '  ' + s.id + (s.machine ? ' · ' + s.machine : '');
-    var chatOk = typeof s.chatUrl === 'string' && /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]{10,80}$/.test(s.chatUrl);
+    var chatOk = allowedChatUrl(s.chatUrl);
     if (chatOk) {
       hit.chat.setAttribute('href', s.chatUrl);
-      if (!hit.chat.parentNode) { hit.doing.parentNode.insertBefore(hit.chat, hit.doing); }
+      if (!hit.chat.parentNode) { hit.name.parentNode.insertBefore(hit.chat, hit.name.nextSibling); }
     } else if (hit.chat.parentNode) { hit.chat.remove(); }
     hit.doing.textContent = doingText(s, now);
     hit.cost.textContent = typeof s.tokensToday === 'number' ? tokens(s.tokensToday) + ' tokens today' : 'tokens not read yet';
