@@ -11,7 +11,6 @@ import { createBoardApi } from '../tools/watch-cli.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { approveLedger, logPath, readLedger } from '../tools/tickets.mjs';
 import { doneTimes } from '../tools/client-report.mjs';
-import { buildProgress, progressSummary } from '../tools/build-progress.mjs';
 import { splitQuality } from '../tools/split-quality.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
 
@@ -218,30 +217,107 @@ async function oracleCheckouts(fixture) {
   return roots.length;
 }
 
-function finishedCardFromProgress(raw) {
-  if (!raw) return { finished: false, current: null };
-  const deployed = raw.milestones?.find(item => item.key === 'deployed');
-  const deployDone = deployed?.state === 'done' || deployed?.currentDone === true;
-  const noDeployConfigured = deployed?.state === 'unknown' || !deployed;
-  const finished = Boolean(raw.finished && (deployDone || noDeployConfigured));
-  const summary = progressSummary({ ...raw, finished });
-  let current = summary?.current ?? null;
-  if (!finished && summary) current = raw.milestones?.find(item => item.state === 'current')?.label ?? 'Unknown';
+const COUNTED_TICKET = ticket => ticket && ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status);
+
+async function readProjectHistoryEvents(historyFile, projectId) {
+  if (!historyFile) return [];
+  let text;
+  try {
+    text = await fs.readFile(historyFile, 'utf8');
+  } catch {
+    return [];
+  }
+  const events = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.projectId === projectId || event.project === projectId) events.push(event);
+    } catch { /* damaged line */ }
+  }
+  return events;
+}
+
+function prNumber(value) {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return String(value);
+  if (typeof value !== 'string') return null;
+  const url = /\/pull\/(\d+)(?:\/?$)/i.exec(value.trim());
+  if (url) return url[1];
+  const hash = /^#(\d+)$/.exec(value.trim());
+  return hash ? hash[1] : null;
+}
+
+function ticketPr(ticket) {
+  return prNumber(ticket?.pr);
+}
+
+function acceptanceBlocked(ticket) {
+  return Boolean(ticket.acceptanceBlocked)
+    || (Array.isArray(ticket.acceptanceResults) && ticket.acceptanceResults.some(result => !['pass', 'passed', 'met'].includes(result?.verdict)));
+}
+
+function linkedHistoryFromFixtures(events, ledger) {
+  const approvedAt = ledger?.approved?.at ?? null;
+  const approvedMs = Date.parse(approvedAt ?? '');
+  const tickets = Array.isArray(ledger?.tickets) ? ledger.tickets : [];
+  return events.map(event => {
+    const at = Date.parse(event?.at ?? '');
+    if (Number.isFinite(approvedMs) && (!Number.isFinite(at) || at < approvedMs)) return { event, ticketIds: [] };
+    const linked = new Set();
+    const eventPr = prNumber(event?.ref);
+    if (eventPr) {
+      for (const ticket of tickets) if (ticketPr(ticket) === eventPr) linked.add(ticket.id);
+    }
+    return { event, ticketIds: [...linked] };
+  }).filter(item => item.ticketIds.length);
+}
+
+function mergeSatisfiedFromFixtures(linked) {
+  const prs = linked.filter(item => item.event.kind === 'pr').map(item => item.event);
+  const merges = linked.filter(item => item.event.kind === 'merge').map(item => item.event);
+  const newestPr = prs.slice().sort((a, b) => Date.parse(b.at ?? '') - Date.parse(a.at ?? ''))[0];
+  const newestMerge = merges.slice().sort((a, b) => Date.parse(b.at ?? '') - Date.parse(a.at ?? ''))[0];
+  return Boolean(newestPr && newestMerge && Date.parse(newestMerge.at ?? '') >= Date.parse(newestPr.at ?? ''));
+}
+
+async function oracleFinishedProgressFromFixtures(fixture, { historyFile, deployStatus } = {}) {
+  const projectId = fixture.projects[0].id;
+  let ledger;
+  try {
+    ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+  } catch {
+    return { finished: false, current: 'Unknown' };
+  }
+  const tickets = Array.isArray(ledger.tickets) ? ledger.tickets : [];
+  const counted = tickets.filter(COUNTED_TICKET);
+  const e2eGreen = counted.length > 0 && counted.every(ticket => ticket.status === 'done') && !counted.some(acceptanceBlocked);
+  const historyEvents = await readProjectHistoryEvents(historyFile ?? fixture.historyFile, projectId);
+  const linked = linkedHistoryFromFixtures(historyEvents, ledger);
+  const merged = mergeSatisfiedFromFixtures(linked);
+  const deploy = deployStatus ? deployStatus(fixture.root) : null;
+  const coreFinished = Boolean(e2eGreen && merged);
+  // build-progress: deploy counts when lastSuccess exists and is not before merge; board-data
+  // finishedProgress: card finished needs core finished AND (deploy milestone done/current OR deploy
+  // not configured — deploy input null leaves deploy milestone "unknown").
+  let deployAllowsFinished = !deploy;
+  if (deploy) {
+    const deploySuccess = deploy.lastSuccess;
+    if (deploySuccess) {
+      const merges = linked.filter(item => item.event.kind === 'merge').map(item => item.event);
+      const mergeAt = merges.slice().sort((a, b) => Date.parse(b.at ?? '') - Date.parse(a.at ?? ''))[0];
+      const mergeAtMs = Date.parse(mergeAt?.at ?? '');
+      deployAllowsFinished = Boolean(!merged || !Number.isFinite(mergeAtMs) || Date.parse(deploySuccess.at ?? '') >= mergeAtMs);
+    } else {
+      deployAllowsFinished = false;
+    }
+  }
+  const finished = Boolean(coreFinished && deployAllowsFinished);
+  const current = finished ? 'Finished' : 'Unknown';
   return { finished, current };
 }
 
 async function oracleFinishedCard(fixture, { now, workers, historyFile, deployStatus } = {}) {
-  const spend = { usd: 0, capUsd: null, reached: false };
-  const raw = await buildProgress({
-    root: fixture.root,
-    projectId: fixture.projects[0].id,
-    now,
-    historyFile,
-    spend,
-    deploy: deployStatus ? deployStatus(fixture.root) : null,
-    ownOnly: false,
-  });
-  const { finished, current } = finishedCardFromProgress(raw);
+  const { finished, current } = await oracleFinishedProgressFromFixtures(fixture, { historyFile, deployStatus });
   const roots = await familyRootsFromDisk(fixture.root, fixture.env);
   const runs = await readRunsFromDisk(roots);
   const recentJobCounts = runs
@@ -511,13 +587,19 @@ test('finished and deployed projects have no live warnings and retain history wa
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
   const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
   for (const ticket of ledger.tickets) if (ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status)) { ticket.status = 'done'; ticket.pr = '#1'; }
-  await fs.writeFile(ledgerFile, JSON.stringify(approveLedger(ledger, { now: new Date().toISOString() })));
-  await fs.writeFile(fixture.historyFile, `${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'pr', ref: '#1', at: new Date(now + 100).toISOString() })}\n${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'merge', ref: '#1', at: new Date(now + 200).toISOString() })}\n`);
+  const approvedAt = new Date().toISOString();
+  const approvedLedger = approveLedger(ledger, { now: approvedAt });
+  await fs.writeFile(ledgerFile, JSON.stringify(approvedLedger));
+  const approvedMs = Date.parse(approvedAt);
+  const prAt = new Date(approvedMs + 100).toISOString();
+  const mergeAt = new Date(approvedMs + 200).toISOString();
+  const deployAt = new Date(approvedMs + 300).toISOString();
+  await fs.writeFile(fixture.historyFile, `${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'pr', ref: '#1', at: prAt })}\n${JSON.stringify({ projectId: fixture.projects[0].id, kind: 'merge', ref: '#1', at: mergeAt })}\n`);
   const options = {
     workers: { max: 4 },
     historyFile: fixture.historyFile,
-    deployStatus: () => ({ lastSuccess: { at: new Date().toISOString(), environment: 'fixture' } }),
-    now: now + 1000,
+    deployStatus: () => ({ lastSuccess: { at: deployAt, environment: 'fixture' } }),
+    now: approvedMs + 1000,
   };
   const snapshot = await snapshotFor(fixture, options);
   const card = cardOf(snapshot, fixture);
