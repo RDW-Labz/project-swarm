@@ -9,6 +9,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { ORCHESTRATOR_OWN, insideProject, realOf, isWorkerCwd } from './orchestrator-events.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
+import {
+  branchOf as policyGitBranch,
+  policyGitCommitAllowed,
+  policyGitPushAllowed,
+  policyGitSwitchCheckoutAllowed,
+  policyGitWorktreeAllowed,
+  policyGitRestoreDenied,
+} from './auto-approve-policy.mjs';
 
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
@@ -413,7 +421,7 @@ export function isReadOnlyGitSub(sub, rest = []) {
 }
 
 const READ_ONLY_PIPE_FILTERS = new Set(['jq', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'cut', 'sort', 'uniq', 'tr']);
-const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list', 'log', 'check', 'help']);
+const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list', 'log', 'check', 'help', 'stats']);
 const SWARM_CLI_READ_VERBS = new Set(['status', 'tickets', 'run', 'go', 'scope', 'change']);
 export const HANDBUILD_OWNER_VERBS = new Set(['approve', 'deny', 'on', 'off', 'install', 'uninstall']);
 export const HANDBUILD_VALUE_FLAGS = new Set([
@@ -1360,9 +1368,26 @@ const omGitSubAllowed = (sub, rest) => {
   }
 };
 
-const omGitInvocationAllowed = args => {
-  if (args.some(a => /^GIT_[A-Z_]+=/.test(a))) return false;
+
+const omPolicyGitWriteAllowed = (args, ctx) => {
+  if (!ctx?.root) return false;
+  if (args.some(a => /^GIT_[A-Z0-9_]+=/.test(a))) return false;
   if (!args.length || args[0].startsWith('-')) return false;
+  if (policyGitRestoreDenied(args)) return false;
+  const current = policyGitBranch(ctx.root);
+  const sub = args[0];
+  const opts = { root: ctx.root, currentBranch: current, home: ctx.home ?? os.homedir() };
+  if (sub === 'commit' && policyGitCommitAllowed(args, opts)) return true;
+  if (sub === 'push' && policyGitPushAllowed(args, opts)) return true;
+  if ((sub === 'switch' || sub === 'checkout') && policyGitSwitchCheckoutAllowed(args, opts)) return true;
+  if (sub === 'worktree' && policyGitWorktreeAllowed(args, opts)) return true;
+  return false;
+};
+
+const omGitInvocationAllowed = (args, ctx = {}) => {
+  if (args.some(a => /^GIT_[A-Z0-9_]+=/.test(a))) return false;
+  if (!args.length || args[0].startsWith('-')) return false;
+  if (omPolicyGitWriteAllowed(args, ctx)) return true;
   return omGitSubAllowed(args[0], args.slice(1));
 };
 
@@ -1532,7 +1557,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   if (words.piped) {
     if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args);
-    if (cmd === 'git') return omGitInvocationAllowed(args);
+    if (cmd === 'git') return omGitInvocationAllowed(args, local);
     if (cmd === 'gh') return omGhReadOnly(args, commandText, true);
     if (OM_PIPE_FILTERS.has(cmd)) {
       if (cmd === 'sed') return omSedReadOnly(args, true);
@@ -1548,7 +1573,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
     if (cmd === 'swarm' || cmd === 'vercel') return false;
     return false;
   }
-  if (cmd === 'git') return omGitInvocationAllowed(args);
+  if (cmd === 'git') return omGitInvocationAllowed(args, ctx);
   if (cmd === 'gh') return omGhReadOnly(args, commandText, words.piped || words.sepAfter === '|');
   if (cmd === 'vercel') return omVercelReadOnly(args);
   if (omSwarmInvocation(cmd, args)) return true;

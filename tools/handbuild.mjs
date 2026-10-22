@@ -31,6 +31,14 @@ import {
   HANDBUILD_SELF_APPROVAL_RULE_ID,
   swarmChangeShellPolicy,
 } from './self-approval.mjs';
+import {
+  AUTO_OFF_FILE,
+  STATS_FILE,
+  POLICY_ID,
+  POLICY_VERSION,
+  evaluateHandbuildAutoApprove,
+  autoApproveKillSwitchOn,
+} from './auto-approve-policy.mjs';
 export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
@@ -945,6 +953,7 @@ const ghApiWrite = (command, ops) => {
 export const STATE_FILE = '.swarm/handbuild/state.json';
 export const LOG_FILE = '.swarm/handbuild/log.ndjson';
 export const OFF_FILE = '.swarm/handbuild/off';
+export { AUTO_OFF_FILE, STATS_FILE, POLICY_ID, POLICY_VERSION };
 export { ORCHESTRATOR_MODE_OFF_FILE, ORCHESTRATOR_MODE_RULE_ID, ORCHESTRATOR_MODE_DENY_REASON, orchestratorModeEnabled } from './shell-writes.mjs';
 export const MAX_MINUTES = 120;
 export const DEFAULT_MINUTES = 30;
@@ -1096,15 +1105,45 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
   for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error(`handbuild-git: --git must name one of ${GIT_REQUEST_OPS.join(', ')}`);
+  const policy = evaluateHandbuildAutoApprove(root, { files: list, minutes: mins, git: ops });
   return withStateLock(root, () => {
   const state = readState(root);
   const id = newId(now());
-  state.requests[id] = { id, kind, reason: why, files: list, git: ops, minutes: mins, status: 'pending', requestedAt: new Date(now()).toISOString(), requestedBy: cleanText(by, 40) };
+  const at = new Date(now()).toISOString();
+  const row = { id, kind, reason: why, files: list, git: ops, minutes: mins, requestedAt: at, requestedBy: cleanText(by, 40) };
+  if (policy.ok) {
+    row.status = 'approved';
+    row.decidedAt = at;
+    row.decidedBy = 'policy';
+    row.policyId = policy.policyId;
+    row.policyVersion = policy.policyVersion;
+    row.expiresAt = new Date(now() + policy.minutes * 60000).toISOString();
+    row.autoApproved = true;
+  } else {
+    row.status = 'pending';
+  }
+  state.requests[id] = row;
   // Old finished requests are dropped so the file stays small.
   const done = Object.values(state.requests).filter(r => r.status !== 'pending' && r.status !== 'approved').sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt)));
   for (const r of done.slice(0, Math.max(0, done.length - 50))) delete state.requests[r.id];
   writeState(root, state);
   logAction(root, { event: 'request', id, by, files: list, reason: `${kind}: ${why}` }, { now });
+  if (policy.ok) {
+    const stats = readHandbuildStatsRaw(root);
+    bumpHandbuildStatsInMemory(stats, 'autoApproved', now());
+    writeHandbuildStats(root, stats);
+    logAction(root, {
+      event: 'auto-approved',
+      id,
+      by: 'policy',
+      files: list,
+      reason: `${policy.policyId} v${policy.policyVersion}`,
+      policyId: policy.policyId,
+      policyVersion: policy.policyVersion,
+      minutes: policy.minutes,
+      branch: policy.branch,
+    }, { now });
+  }
   return state.requests[id];
   });
 }
@@ -1170,6 +1209,11 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner', 
     ? [ruleNote, `until ${r.expiresAt}`].filter(Boolean).join(' ')
     : '';
   logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: approveReason }, { now });
+  if (choice === 'approve' && by === 'owner' && channel !== 'board' && channel !== 'phone' && channel !== 'policy') {
+    const stats = readHandbuildStatsRaw(root);
+    bumpHandbuildStatsInMemory(stats, 'ownerTerminal', now());
+    writeHandbuildStats(root, stats);
+  }
   return r;
   });
 }
@@ -1188,6 +1232,66 @@ export function applyHandbuildPolicyApproval(root, item, { now = Date.now, polic
 }
 
 export function listRequests(root) { return Object.values(readState(root).requests).sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt))); }
+
+function statsDayKey(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+function readHandbuildStatsRaw(root) {
+  try {
+    const file = path.join(root, STATS_FILE);
+    if (isLink(file)) return {};
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeHandbuildStats(root, data) {
+  const dir = safeDir(root);
+  const temp = path.join(dir, `stats.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  fs.writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(temp, path.join(dir, 'stats.json'));
+}
+
+function bumpHandbuildStatsInMemory(data, field, now) {
+  const day = statsDayKey(now);
+  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
+  row[field] = (Number(row[field]) || 0) + 1;
+  data[day] = row;
+  return row;
+}
+
+/** Increment per-day { autoApproved, ownerTerminal } counters. */
+export function bumpHandbuildStats(root, field, { now = Date.now } = {}) {
+  if (field !== 'autoApproved' && field !== 'ownerTerminal') return;
+  return withStateLock(root, () => {
+    const data = readHandbuildStatsRaw(root);
+    bumpHandbuildStatsInMemory(data, field, now());
+    writeHandbuildStats(root, data);
+    return data[statsDayKey(now())];
+  });
+}
+
+export function readHandbuildStats(root, { now = Date.now } = {}) {
+  const data = readHandbuildStatsRaw(root);
+  const day = statsDayKey(now());
+  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
+  return {
+    day,
+    autoApproved: Number(row.autoApproved) || 0,
+    ownerTerminal: Number(row.ownerTerminal) || 0,
+    killSwitch: autoApproveKillSwitchOn(root),
+    policyId: POLICY_ID,
+    policyVersion: POLICY_VERSION,
+  };
+}
+
+/** `swarm handbuild stats --json` body (callable from CLI when wired). */
+export function handbuildStatsJson(root, { now = Date.now } = {}) {
+  return JSON.stringify(readHandbuildStats(root, { now }));
+}
 
 /** The live approvals (approved and not expired). */
 export function activeApprovals(root, now = Date.now()) { return listRequests(root).filter(r => r.status === 'approved' && Date.parse(r.expiresAt) > now); }
@@ -1307,7 +1411,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (omActive && rel !== null) {
       const rlow = rel.replace(/\\/g, '/');
-      if (rlow === ORCHESTRATOR_MODE_OFF_FILE || rlow === OFF_FILE) {
+      if (rlow === ORCHESTRATOR_MODE_OFF_FILE || rlow === OFF_FILE || rlow === AUTO_OFF_FILE) {
         return omDeny([rel]);
       }
     }
@@ -1405,7 +1509,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           continue;
         }
         if (op.sub === 'commit') {
-          if (protBranch || op.globalOpts || op.hasConfig || op.gitEnv) policyGitOps.push('commit');
+          const rest = op.rest ?? [];
+          const noVerify = rest.some(a => a === '--no-verify' || a === '-n' || a.startsWith('--no-verify=')
+            || (!a.startsWith('--') && a.startsWith('-') && a.slice(1).includes('n')));
+          if (protBranch || op.globalOpts || op.hasConfig || op.gitEnv || noVerify) policyGitOps.push('commit');
           else commitStagedCheck = 'allowlist';
           continue;
         }

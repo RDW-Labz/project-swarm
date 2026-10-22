@@ -1,0 +1,65 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "autoapprove",
+   "agent": "auto",
+   "prompt": "Owner top priority: zero owner terminal commands for routine approvals. Build a POLICY AUTO-APPROVE for hand-build requests and git actions, on top of orchestrator mode (tools/handbuild.mjs createRequest/decideRequest/guardDecision, tools/self-approval.mjs, tools/shell-writes.mjs, tools/handbuild-guard.mjs, tools/handbuild-commands.mjs if present). SECURITY LESSON (an earlier autonomous approval was removed because an Opus review found it forgeable): a decision must NEVER rest on what the requester says. Rules for the design: (a) the policy lives in code as a frozen constant with an id and version (tools/auto-approve-policy.mjs), not in a file an agent can write; (b) it is evaluated INSIDE the swarm process at createRequest time from the normalized request, and the approved window covers exactly the declared file patterns (the guard already matches real write paths against the window at write time, so a false claim gains nothing); (c) every auto decision is appended to .swarm/handbuild/log.ndjson as event 'auto-approved' with policy id, version, files, minutes, branch, and shows in `swarm handbuild list`; (d) a kill switch only the owner can flip: .swarm/handbuild/auto-off (an orchestrator cannot create it: add it to the protected write paths with the other off files) and the owner's phrase unchanged. POLICY: (1) A file window is auto-approved when EVERY file matches swarm-admin patterns: coordination/manifests/** , coordination/HANDOFF*.md, coordination/review/**, docs/scope/**, docs/plans/**, docs/state/**, docs/design/** (docs only, no code), .project-swarm.json, .swarm/project/tickets.json and tickets.log style ledger files, and manifests under jobs/; window at most 60 minutes, at most 20 files; anything else (tools/, tests/, bin, config of other tools, CI, package files, secrets, the protected set) is NOT auto-approved and follows the existing flow. (2) Git: `git commit` and `git push origin HEAD|<branch>` (no --force/--force-with-lease/--delete/+refspec, no push to protected branches main/master/HEAD, remote must be an existing origin of this repo) are allowed without a request when the CURRENT branch, read from git at the moment of the command (not from the command text), matches ^swarm/[A-Za-z0-9._/-]+$ or ^(feat|fix|docs|chore)/ with the working directory being a git worktree under the scratch base or the main checkout; never on a protected branch. Never merge, deploy, rebase, reset --hard, branch -D, force: those stay owner/request-only exactly as today. (3) Branch switches (`git switch`/`git checkout <branch>` without paths, `git checkout -b`) between non-protected branches and `git worktree add <path> -b <branch> <origin/ref>` / `git worktree remove` for paths under the scratch base are allowed without a request; `git checkout -- <paths>` / restore / clean stay denied. In orchestrator mode these must be added to the allowlist with exact option sets (deny by default for unknown options). (4) Count: every auto-approved or owner-approved action increments a per-day counter in .swarm/handbuild/stats.json with {autoApproved, ownerTerminal} where ownerTerminal counts approvals that came through the CLI (`swarm handbuild approve`) as opposed to the board, and expose `swarm handbuild stats --json` so the board owner can show it. Tests (new tests/auto-approve.test.mjs, drive the real guard as a subprocess where possible): every allowed class, every non-allowed class, a FORGERY set: request with files claiming docs/ but containing ../ or symlinks into tools/, wildcard patterns, a file list mixing one code file, case and Unicode variants of the docs folder names, a branch named swarm/x whose git state differs from the command text, push with +refspec, push to another remote or URL, `git -c` options, commit --amend on a pushed branch is fine but --no-verify is denied, window longer than 60 minutes, more than 20 files, kill switch, stats counters. Keep all handbuild, self-approval, shell-writes and orchestrator-mode tests passing. Docs: one section in the docs describing the policy and the kill switch.",
+   "context": [
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/self-approval.mjs",
+    "tools/shell-writes.mjs",
+    "tools/projects.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/auto-approve-policy.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tools/self-approval.mjs",
+    "docs/auto-approve.md",
+    "tests/auto-approve.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-claude-word.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}
