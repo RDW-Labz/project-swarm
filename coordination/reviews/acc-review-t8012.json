@@ -1,0 +1,35 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8012",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:574-625 buildWatchCard (now/next/blocked/eta/facts/headsUp); tools/board-data.mjs:565-571 enrichWatchCard (slots, needYou); tools/board-data.mjs:697-710 projectOverview attaches card. tests/board-accuracy-card.test.mjs: buildingTickets, checkoutsBuilding, lastTicketFinishedAt, next, blocked, needYou, slots, eta, handEditsBlocked24h, headsUp.",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/board-data.mjs:501-502 blocked.items command via ticketReleaseAllowed; tools/board-data.mjs:608 ready command `swarm tickets ${id}`; tools/board-inbox.mjs:69-91 need-you commands (e.g. swarm resolve, swarm done, swarm tickets --release). tests/board-accuracy-card.test.mjs: card.next.ready and items; card.blocked.needYou asserts --release on held-ticket.",
+          "gap": "No test that blocked.items[].command matches ticketReleaseAllowed when set; no test for blocker needYouItems using swarm resolve ID."
+        },
+        {
+          "n": 3,
+          "met": false,
+          "evidence": "tests/board-accuracy-card.test.mjs: disk oracles for ledger, git worktrees, lanes.json, tickets.log, orchestrator events.ndjson; tests/helpers/board-accuracy-fixture.mjs: fixture layout and fake prState hook (unused by card tests).",
+          "gap": "No per-field test for card.facts.untrackedRuns or card.facts.checkouts (offLedgerRuns/oracle from run state files vs ledger); no test exercising fixture prs for card data; no assertion that card omits money fields (line 4)."
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tools/board-data.mjs:600-625 buildWatchCard return shape has no spend/usd/cost keys on card.",
+          "gap": "No test would fail if monetary fields were added to card."
+        }
+      ]
+    }
+  ]
+}
