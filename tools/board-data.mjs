@@ -22,6 +22,7 @@ import { effectiveStage, stageDisplay } from './build-progress.mjs';
 import { doneTimes } from './client-report.mjs';
 import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
+import { isProviderLimitFailure } from './lane-pass-routing.mjs';
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
@@ -184,7 +185,14 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
       const pause = valueObject(pauses)[agent];
       if (pause && Number.isFinite(pause.until) && pause.until > now) {
         const rate = pause.state === 'backoff';
-        answer = { reason: rate ? 'rate-limited' : 'paused', text: `${rate ? 'rate limited' : 'quota paused'}, back in ${idleCountdown(pause.until, now)}`, until: new Date(pause.until).toISOString() };
+        const backIn = idleCountdown(pause.until, now);
+        answer = {
+          reason: rate ? 'rate-limited' : 'paused',
+          text: rate
+            ? `${label} is rate limited; back in ${backIn}.`
+            : `${label} is paused by its provider (quota or credit limit); back in ${backIn}.`,
+          until: new Date(pause.until).toISOString(),
+        };
         break;
       }
     }
@@ -196,48 +204,76 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
           const tomorrow = new Date(now);
           tomorrow.setUTCHours(0, 0, 0, 0);
           tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-          answer = { reason: 'daily-cap', text: `daily cap reached ($${idleMoney(spent)} of $${idleMoney(cap)})`, until: tomorrow.toISOString() };
+          answer = {
+            reason: 'daily-cap',
+            text: `${label} hit its daily spend cap ($${idleMoney(spent)} of $${idleMoney(cap)}).`,
+            until: tomorrow.toISOString(),
+          };
           break;
         }
       }
     }
     const configuredAgents = agents.filter(agent => configuredEntries.some(([name]) => name === agent));
     if (!answer && configuredAgents.length === 0) {
-      answer = { reason: 'not-set-up', text: label === 'GPU' ? 'no GPU configured' : 'not set up (no model in local config)' };
+      answer = {
+        reason: 'not-set-up',
+        text: label === 'GPU'
+          ? `${label} is not set up: no GPU configured in the local config.`
+          : `${label} is not set up: no model in the local config.`,
+      };
     }
     if (!answer) {
       for (const agent of agents) {
         const count = Number(valueObject(demand)[agent]);
-        if (count > 0) { answer = { reason: 'waiting-slot', text: `${count} job${count === 1 ? '' : 's'} waiting for a slot` }; break; }
+        if (count > 0) {
+          answer = { reason: 'waiting-slot', text: `${count} ${label} job${count === 1 ? '' : 's'} waiting for a free slot.` };
+          break;
+        }
       }
     }
     if (!answer) {
       for (const agent of agents) {
         const count = Number(valueObject(queued)[agent]);
-        if (count > 0) { answer = { reason: 'queued', text: `${count} queued, starting soon` }; break; }
+        if (count > 0) {
+          answer = { reason: 'queued', text: `${count} job${count === 1 ? '' : 's'} queued for ${label}, starting soon.` };
+          break;
+        }
       }
     }
     if (!answer && (label === 'Cursor' || label === 'Codex') && Number(valueObject(queued).auto) > 0) {
       const count = Number(valueObject(queued).auto);
-      answer = { reason: 'routing', text: `${count} auto job${count === 1 ? '' : 's'} not routed yet` };
+      answer = { reason: 'routing', text: `${count} auto job${count === 1 ? '' : 's'} not routed yet.` };
     }
     if (!answer && MODEL_LANES.has(label) && configuredAgents.length === 1 && configuredAgents[0] === 'claude') {
-      answer = { reason: 'not-routed', text: 'only for expensive tier or after 2 failures' };
+      answer = { reason: 'not-routed', text: `${label} is not in auto routing: only expensive-tier jobs or jobs after two failures on cheaper lanes.` };
     }
     if (!answer) {
       for (const agent of configuredAgents) {
         if (agent !== 'hermes' && !ROUTABLE_AGENTS.has(agent)) {
-          answer = { reason: 'not-routed', text: 'not in auto routing; only explicit jobs' };
+          answer = { reason: 'not-routed', text: `${label} is not in auto routing: only jobs that name it explicitly.` };
           break;
         }
         if (agent === 'hermes') {
-          answer = { reason: 'not-routed', text: 'research job type only' };
+          answer = { reason: 'not-routed', text: `${label} is not in auto routing: research job type only.` };
           break;
         }
       }
     }
     if (!answer) {
-      let recentLabel = null;
+      for (const agent of agents) {
+        const value = valueObject(recent)[agent];
+        if (value?.lastProviderLimitAt) {
+          answer = {
+            reason: 'provider-limit',
+            text: `${label} may be out of credits: its last job failed with a provider limit message. Refill it, or route work to another lane.`,
+          };
+          break;
+        }
+      }
+    }
+    if (!answer) {
+      let recentOther = null;
+      let recentOtherJobs = 0;
       if (label === 'Codex' || label === 'Cursor') {
         const other = label === 'Codex' ? 'Cursor' : 'Codex';
         let thisRecentJobs = 0;
@@ -250,11 +286,21 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
             if (idleLabelForAgent(agent, configured) !== other) continue;
             const jobs = Number(value?.jobs);
             const explicit = Number(value?.explicit);
-            if (jobs > 0 && explicit >= jobs / 2) { recentLabel = other; break; }
+            if (jobs > 0 && explicit >= jobs / 2) {
+              recentOther = other;
+              recentOtherJobs = jobs;
+              break;
+            }
           }
         }
       }
-      answer = { reason: 'no-ready-jobs', text: recentLabel ? `no ready jobs; recent jobs named ${recentLabel} explicitly` : 'no ready jobs' };
+      const idleBase = `${label} is idle: nothing in the queue is routed to ${label} right now.`;
+      answer = {
+        reason: 'no-ready-jobs',
+        text: recentOther
+          ? `${idleBase} The last ${recentOtherJobs} job${recentOtherJobs === 1 ? '' : 's'} went to ${recentOther} because their manifests named it.`
+          : `${idleBase}`,
+      };
     }
     out[label] = answer;
   }
@@ -896,6 +942,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}, machine.cost.laneJobsToday ?? {}) : [];
   const queued = dict();
   const recent = dict();
+  const recentLatest = dict();
   try {
     for (const project of inputProjects) {
       const states = await readRunStates(project.root);
@@ -910,8 +957,15 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
           const entry = recent[job.agent] ??= { jobs: 0, explicit: 0 };
           entry.jobs += 1;
           if ((job.requestedAgent ?? job.agent) !== 'auto') entry.explicit += 1;
+          const latest = recentLatest[job.agent];
+          if (!latest || finished > latest.finished) recentLatest[job.agent] = { finished, job };
         }
       }
+    }
+    for (const [agent, { finished, job }] of Object.entries(recentLatest)) {
+      if (!isProviderLimitFailure(job)) continue;
+      const entry = recent[agent] ??= { jobs: 0, explicit: 0 };
+      entry.lastProviderLimitAt = finished;
     }
     const extra = typeof laneState === 'function' ? await laneState() : {};
     machine.laneIdle = laneIdleReasons({ running: machine.agents.byLane, ...valueObject(extra), todayUsd: machine.cost.laneToday ?? {}, queued, recent, now });
