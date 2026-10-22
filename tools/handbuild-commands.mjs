@@ -1,10 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 // `swarm handbuild request | approve | deny | status | log | install | uninstall | off | on`: the hand-build guard's commands (see tools/handbuild.mjs and docs/handbuild-guard.md).
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { appendEvent, sanitizeText } from './journal.mjs';
-import { createRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE } from './handbuild.mjs';
-import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir } from './install.mjs';
+import { createRequest, createScratchDeniedHandbuildRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE, SCRATCH_DENY_REASON } from './handbuild.mjs';
+import { isScratchRoot } from './scratch-roots.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+
+async function registeredScratchHandbuildRoot(root, installRoot, env = process.env) {
+  const home = env.HOME ?? os.homedir();
+  const file = projectsFile(env, home);
+  const projects = await listProjects({
+    file,
+    forOwner: false,
+    includeScratch: true,
+    pruneGone: false,
+    env,
+    home,
+    installRoot,
+  });
+  return isScratchRoot(root, {
+    env,
+    home,
+    installRoot,
+    strict: true,
+    registeredRoots: projects.map(p => p.root),
+  });
+}
+import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir, refreshTrackedSettingsHooks, readGuardHookCommandFromSettings, guardHookPathStatus } from './install.mjs';
 import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
 
 export const HANDBUILD_USAGE = [
@@ -26,12 +51,21 @@ const flagsOf = args => {
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
 const describe = r => `${r.id}  ${r.status.padEnd(8)} ${r.kind}  ${r.files.join(', ')}${r.git?.length ? `  git: ${r.git.join(', ')}` : ''}${r.status === 'approved' ? `  until ${r.expiresAt}` : ''}\n    ${r.reason}`;
 
-export async function runHandbuildCommand(root, args, { installRoot, now = Date.now } = {}) {
+export async function runHandbuildCommand(root, args, { installRoot, env = process.env, now = Date.now } = {}) {
   const [sub, ...tail] = args;
   const { flags, rest } = flagsOf(tail);
   try {
     if (sub === 'request') {
-      const r = createRequest(root, { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git }, { now });
+      const fields = { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git };
+      const r = (await registeredScratchHandbuildRoot(root, installRoot, env))
+        ? createScratchDeniedHandbuildRequest(root, fields, { now })
+        : createRequest(root, fields, { now });
+      if (r.status === 'denied' && r.denyReason === SCRATCH_DENY_REASON) {
+        return out(
+          `Hand-build request auto-denied: ${r.id} (${SCRATCH_DENY_REASON}). Move the project out of the scratch base or remove the .swarm-scratch marker.`,
+          1,
+        );
+      }
       const id = `handbuild-${r.id}`;
       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.
       await appendEvent(root, { kind: 'decision', id, confirm: true, choice: 'deny', options: ['approve', 'deny'], text: sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`) }, { now });
@@ -46,8 +80,32 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
     if (sub === 'status') {
       const all = listRequests(root);
       const live = activeApprovals(root, now());
-      if (flags.json) return out(JSON.stringify({ requests: all, active: live.map(r => r.id), off: fs.existsSync(path.join(root, OFF_FILE)) }));
-      return out([`guard: ${fs.existsSync(path.join(root, OFF_FILE)) ? 'OFF (.swarm/handbuild/off exists)' : 'on where the hook is installed (swarm handbuild install)'}`, `${live.length} live approval(s), ${all.filter(r => r.status === 'pending').length} pending`, ...all.slice(0, 20).map(describe)].join('\n'));
+      let hookSettings = {};
+      try {
+        hookSettings = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.local.json'), 'utf8'));
+      } catch { /* no local settings */ }
+      const hookCommand = readGuardHookCommandFromSettings(hookSettings);
+      const hookInfo = installRoot ? guardHookPathStatus({ hookCommand, installRoot }) : null;
+      if (flags.json) {
+        return out(JSON.stringify({
+          requests: all,
+          active: live.map(r => r.id),
+          off: fs.existsSync(path.join(root, OFF_FILE)),
+          guardHook: hookInfo,
+        }));
+      }
+      const hookLines = [];
+      if (hookInfo?.hookPath) {
+        hookLines.push(`guard hook: ${hookInfo.hookPath}`);
+        hookLines.push(`guard hook stable: ${hookInfo.matches ? 'yes' : 'no'}`);
+        if (hookInfo.warn) hookLines.push('warning: guard hook path is not under the install current/ release; run swarm update or swarm handbuild install');
+      }
+      return out([
+        `guard: ${fs.existsSync(path.join(root, OFF_FILE)) ? 'OFF (.swarm/handbuild/off exists)' : 'on where the hook is installed (swarm handbuild install)'}`,
+        ...hookLines,
+        `${live.length} live approval(s), ${all.filter(r => r.status === 'pending').length} pending`,
+        ...all.slice(0, 20).map(describe),
+      ].join('\n'));
     }
     if (sub === 'log') {
       let lines = [];
@@ -57,9 +115,12 @@ export async function runHandbuildCommand(root, args, { installRoot, now = Date.
     if (sub === 'install') {
       const r = await ensureHandbuildGuard(root, installRoot);
       if (r.status === 'skipped') return out(`not installed: ${r.reason}`, 1);
+      const tracked = await refreshTrackedSettingsHooks(root, installRoot);
       const install = stableInstallDir(installRoot);
-      installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
-      return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)\ngit hooks installed`);
+      const hooks = installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
+      const hookNote = hooks?.status === 'skipped' ? `git hooks not installed (${hooks.reason})` : 'git hooks installed';
+      const trackedNote = tracked.status === 'updated' ? '\nhooks-path-fixed-tracked: .claude/settings.json (commit this file if your project tracks it)' : '';
+      return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)${trackedNote}\n${hookNote}`);
     }
     if (sub === 'uninstall') {
       const r = await removeHandbuildGuard(root);

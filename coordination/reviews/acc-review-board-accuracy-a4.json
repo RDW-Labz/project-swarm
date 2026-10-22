@@ -1,0 +1,35 @@
+{
+  "reviewer": "codex",
+  "reviews": [
+    {
+      "ticket": "T-8011",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:289-323,472-559; tests/board-accuracy-activity.test.mjs: lastRunAt is the newest startedAt across main, linked worktree, and scratch runs; lastTicketFinishedAt falls back to the newest finished job for a done ledger ticket; a project that completed a run earlier today in a linked worktree is active-today, not idle; liveCount includes a running linked-worktree run",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/watch-cli.mjs:357-364,524-525; tests/board-accuracy-activity.test.mjs: board version is read from the installed current package",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tools/watch-cli.mjs:94-99,118-128; tools/board-data.mjs:619-621,652-660; tests/board-accuracy-activity.test.mjs: a nameless project with no family runs is hidden while one with a run is shown; finished and deployed projects have no live warnings and retain history warnings",
+          "gap": "Finished/current oracle in that test calls buildProgress (tests/board-accuracy-activity.test.mjs:233-244), so progress.finished and progress.current are not guarded by a source-only oracle"
+        },
+        {
+          "n": 4,
+          "met": false,
+          "evidence": "tests/board-accuracy-activity.test.mjs: oracleLastRunAt/oracleLastTicketFinishedAt/oracleLiveActivity read fixture disk; board version test reads install dir package.json",
+          "gap": "Finished card progress.finished and progress.current lack fixture-source oracles (oracleFinishedCard uses buildProgress at tests/board-accuracy-activity.test.mjs:233-244)"
+        }
+      ]
+    }
+  ]
+}

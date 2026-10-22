@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixsem",
+      "agent": "auto",
+      "prompt": "After the round 3 fixes in tools/server-restart.mjs (integrated, uncommitted in the working tree: commit state is the copied workspace) these tests fail because they encode the old semantics; the code is right, fix the TESTS only: (a) tests/server-restart-round3.test.mjs test (1) real ps: the record startedAt is one hour BEFORE the spawned process started, which the identity check correctly treats as pid reuse (process start newer than record); set the record startedAt to the moment just before the spawn (record time <= process start <= record time + 5 seconds is the legitimate case) and add a second case where startedAt is an hour AFTER the process start (record newer than process) that must still verify ok if the command matches; keep the real ps call. (b) tests/review-high-regressions.test.mjs high-1 and tests/server-restart-review.test.mjs test (1): the intended behavior now is: a command-line mismatch alone keeps the record and returns identity-unverified (nothing signalled); only a dead pid or a process whose start time is newer than the record start (proving reuse) returns stale-record with the record removed. Split each into two cases with those expectations. Run every test file under tests/ whose name contains server-restart, update-pending, review-high, registry, commit-msg, scratch, forget and make them all pass (list them with ls tests). ignoreTests reason: only test files change.",
+      "context": [
+        "tests/server-restart-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tools/server-restart.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/server-restart-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

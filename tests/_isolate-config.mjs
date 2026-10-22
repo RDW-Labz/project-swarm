@@ -76,3 +76,28 @@ export function assertIsolatedHome(candidate = nativeHome()) {
 
 const testTmpDir = fs.mkdtempSync(path.join(testTmpBase, 'swarm-test-tmp-'));
 process.env.SWARM_TEST_TMP = testTmpDir;
+
+/** After hand-build or inbox fixtures: drop request state and owner decisions for a temp project root. */
+export async function cleanupTestProject(root) {
+  const fsPromises = await import('node:fs/promises');
+  const handbuildDir = path.join(root, '.swarm', 'handbuild');
+  await fsPromises.rm(handbuildDir, { recursive: true, force: true }).catch(() => {});
+  const journal = path.join(root, '.swarm', 'project', 'journal.ndjson');
+  try {
+    const text = await fsPromises.readFile(journal, 'utf8');
+    const kept = text.split('\n').filter(line => {
+      if (!line.trim()) return false;
+      try {
+        const event = JSON.parse(line);
+        if (event.kind === 'decision' && String(event.id ?? '').startsWith('handbuild-')) return false;
+        return true;
+      } catch {
+        return true;
+      }
+    });
+    if (kept.length) await fsPromises.writeFile(journal, `${kept.join('\n')}\n`, { mode: 0o600 });
+    else await fsPromises.rm(journal, { force: true }).catch(() => {});
+  } catch {
+    /* no journal */
+  }
+}

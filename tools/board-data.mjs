@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
-import { readLedger } from './tickets.mjs';
+import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
 import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
 import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
@@ -13,16 +13,58 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
+import { boardPercent, buildProgress, cardEtaFromFamily, ledgerRoot, offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID, progressSummary } from './build-progress.mjs';
+import { checkTicketTree } from './scope-integrity.mjs';
+import { readEvents } from './orchestrator-events.mjs';
+import { lanesDir } from './lanes.mjs';
+import { boardInbox, needYouForProject, ticketReleaseAllowed } from './board-inbox.mjs';
 import { effectiveStage, stageDisplay } from './build-progress.mjs';
+import { doneTimes } from './client-report.mjs';
 import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
+import { isProviderLimitFailure } from './lane-pass-routing.mjs';
 import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
+
+/** Start of the calendar day containing `now`, in the machine's local time zone (for tests and board activity). */
+export function startOfLocalDay(now = Date.now()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function projectActivityState({ activeLiveCount, lastActivityMs, now = Date.now() } = {}) {
+  const live = Number(activeLiveCount) > 0;
+  if (live) return { activity: 'building', idle: false };
+  const start = startOfLocalDay(now);
+  const at = Number(lastActivityMs);
+  const activeToday = at >= start && at > 0 && at <= now;
+  return activeToday ? { activity: 'active-today', idle: false } : { activity: 'idle', idle: true };
+}
+
+function familyActivityMs({ runs, liveRunIds, ledgers, liveRuns, ticketFinishedMs, now }) {
+  const liveIds = liveRunIds instanceof Set ? liveRunIds : new Set(liveRunIds ?? []);
+  const capped = ms => {
+    const value = Number(ms);
+    return Number.isFinite(value) && value > 0 && value <= now ? value : 0;
+  };
+  let newest = 0;
+  for (const run of runs) {
+    if (activeRunState(run.state)) {
+      if (liveIds.has(run.id)) newest = Math.max(newest, capped(runActivityMs(run)));
+      continue;
+    }
+    newest = Math.max(newest, capped(runActivityMs(run)));
+  }
+  for (const record of liveRuns ?? []) newest = Math.max(newest, capped(Date.parse(record.startedAt ?? '')));
+  for (const ledger of ledgers ?? []) newest = Math.max(newest, capped(Date.parse(ledger?.updatedAt ?? '')));
+  newest = Math.max(newest, capped(ticketFinishedMs));
+  return newest;
+}
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
 const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -143,7 +185,14 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
       const pause = valueObject(pauses)[agent];
       if (pause && Number.isFinite(pause.until) && pause.until > now) {
         const rate = pause.state === 'backoff';
-        answer = { reason: rate ? 'rate-limited' : 'paused', text: `${rate ? 'rate limited' : 'quota paused'}, back in ${idleCountdown(pause.until, now)}`, until: new Date(pause.until).toISOString() };
+        const backIn = idleCountdown(pause.until, now);
+        answer = {
+          reason: rate ? 'rate-limited' : 'paused',
+          text: rate
+            ? `${label} is rate limited; back in ${backIn}.`
+            : `${label} is paused by its provider (quota or credit limit); back in ${backIn}.`,
+          until: new Date(pause.until).toISOString(),
+        };
         break;
       }
     }
@@ -155,48 +204,76 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
           const tomorrow = new Date(now);
           tomorrow.setUTCHours(0, 0, 0, 0);
           tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-          answer = { reason: 'daily-cap', text: `daily cap reached ($${idleMoney(spent)} of $${idleMoney(cap)})`, until: tomorrow.toISOString() };
+          answer = {
+            reason: 'daily-cap',
+            text: `${label} hit its daily spend cap ($${idleMoney(spent)} of $${idleMoney(cap)}).`,
+            until: tomorrow.toISOString(),
+          };
           break;
         }
       }
     }
     const configuredAgents = agents.filter(agent => configuredEntries.some(([name]) => name === agent));
     if (!answer && configuredAgents.length === 0) {
-      answer = { reason: 'not-set-up', text: label === 'GPU' ? 'no GPU configured' : 'not set up (no model in local config)' };
+      answer = {
+        reason: 'not-set-up',
+        text: label === 'GPU'
+          ? `${label} is not set up: no GPU configured in the local config.`
+          : `${label} is not set up: no model in the local config.`,
+      };
     }
     if (!answer) {
       for (const agent of agents) {
         const count = Number(valueObject(demand)[agent]);
-        if (count > 0) { answer = { reason: 'waiting-slot', text: `${count} job${count === 1 ? '' : 's'} waiting for a slot` }; break; }
+        if (count > 0) {
+          answer = { reason: 'waiting-slot', text: `${count} ${label} job${count === 1 ? '' : 's'} waiting for a free slot.` };
+          break;
+        }
       }
     }
     if (!answer) {
       for (const agent of agents) {
         const count = Number(valueObject(queued)[agent]);
-        if (count > 0) { answer = { reason: 'queued', text: `${count} queued, starting soon` }; break; }
+        if (count > 0) {
+          answer = { reason: 'queued', text: `${count} job${count === 1 ? '' : 's'} queued for ${label}, starting soon.` };
+          break;
+        }
       }
     }
     if (!answer && (label === 'Cursor' || label === 'Codex') && Number(valueObject(queued).auto) > 0) {
       const count = Number(valueObject(queued).auto);
-      answer = { reason: 'routing', text: `${count} auto job${count === 1 ? '' : 's'} not routed yet` };
+      answer = { reason: 'routing', text: `${count} auto job${count === 1 ? '' : 's'} not routed yet.` };
     }
     if (!answer && MODEL_LANES.has(label) && configuredAgents.length === 1 && configuredAgents[0] === 'claude') {
-      answer = { reason: 'not-routed', text: 'only for expensive tier or after 2 failures' };
+      answer = { reason: 'not-routed', text: `${label} is not in auto routing: only expensive-tier jobs or jobs after two failures on cheaper lanes.` };
     }
     if (!answer) {
       for (const agent of configuredAgents) {
         if (agent !== 'hermes' && !ROUTABLE_AGENTS.has(agent)) {
-          answer = { reason: 'not-routed', text: 'not in auto routing; only explicit jobs' };
+          answer = { reason: 'not-routed', text: `${label} is not in auto routing: only jobs that name it explicitly.` };
           break;
         }
         if (agent === 'hermes') {
-          answer = { reason: 'not-routed', text: 'research job type only' };
+          answer = { reason: 'not-routed', text: `${label} is not in auto routing: research job type only.` };
           break;
         }
       }
     }
     if (!answer) {
-      let recentLabel = null;
+      for (const agent of agents) {
+        const value = valueObject(recent)[agent];
+        if (value?.lastProviderLimitAt) {
+          answer = {
+            reason: 'provider-limit',
+            text: `${label} may be out of credits: its last job failed with a provider limit message. Refill it, or route work to another lane.`,
+          };
+          break;
+        }
+      }
+    }
+    if (!answer) {
+      let recentOther = null;
+      let recentOtherJobs = 0;
       if (label === 'Codex' || label === 'Cursor') {
         const other = label === 'Codex' ? 'Cursor' : 'Codex';
         let thisRecentJobs = 0;
@@ -209,11 +286,21 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
             if (idleLabelForAgent(agent, configured) !== other) continue;
             const jobs = Number(value?.jobs);
             const explicit = Number(value?.explicit);
-            if (jobs > 0 && explicit >= jobs / 2) { recentLabel = other; break; }
+            if (jobs > 0 && explicit >= jobs / 2) {
+              recentOther = other;
+              recentOtherJobs = jobs;
+              break;
+            }
           }
         }
       }
-      answer = { reason: 'no-ready-jobs', text: recentLabel ? `no ready jobs; recent jobs named ${recentLabel} explicitly` : 'no ready jobs' };
+      const idleBase = `${label} is idle: nothing in the queue is routed to ${label} right now.`;
+      answer = {
+        reason: 'no-ready-jobs',
+        text: recentOther
+          ? `${idleBase} The last ${recentOtherJobs} job${recentOtherJobs === 1 ? '' : 's'} went to ${recentOther} because their manifests named it.`
+          : `${idleBase}`,
+      };
     }
     out[label] = answer;
   }
@@ -244,6 +331,89 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
     } catch { /* an unreadable run is not counted here; projectSummary reports it */ }
   }
   return runs;
+}
+
+// A board project rooted at the main checkout owns the whole checkout family. A linked
+// worktree keeps its own view; scratch worktrees are included when the caller supplies the
+// scratch root (the fixture and the board both do this through SWARM_SCRATCH_ROOT).
+export async function projectFamilyRoots(root, { ownOnly = false, env = process.env, extraRoots = [] } = {}) {
+  const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
+  if (ownOnly || await mainWorktreeRoot(realRoot)) return [realRoot];
+  let members;
+  try { members = await worktreeFamily(realRoot, { all: true, env }); } catch { members = [realRoot]; }
+  const roots = new Set();
+  for (const member of members ?? []) roots.add(await fs.realpath(member).catch(() => path.resolve(member)));
+  const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
+  const scratchRoot = scratch ? await fs.realpath(scratch).catch(() => path.resolve(scratch)) : null;
+  const addScratch = candidate => {
+    if (!scratchRoot || !candidate) return;
+    const resolved = path.resolve(candidate);
+    if (resolved === scratchRoot || resolved.startsWith(`${scratchRoot}${path.sep}`)) roots.add(resolved);
+  };
+  for (const candidate of extraRoots ?? []) addScratch(candidate);
+  if (scratchRoot) {
+    try {
+      for (const name of await fs.readdir(scratchRoot)) {
+        const candidate = path.join(scratchRoot, name);
+        try { if ((await fs.stat(candidate)).isDirectory()) addScratch(candidate); } catch { /* a scratch entry can disappear during a poll */ }
+      }
+    } catch { /* an absent scratch root is normal */ }
+  }
+  return [...roots];
+}
+
+export async function readProjectRunStates(root, { ownOnly = false, env = process.env, extraRoots = [], limit = 5000, familyRoots = null } = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(root, { ownOnly, env, extraRoots });
+  const out = [];
+  for (const member of roots) {
+    const real = await fs.realpath(member).catch(() => path.resolve(member));
+    for (const record of await readRunStates(real, { limit })) out.push({ ...record, root: real });
+  }
+  return out;
+}
+
+async function lastTicketFinishedAt(roots, runs, ledgers) {
+  const doneIds = new Set();
+  for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
+  let newest = 0;
+  const add = (id, value) => {
+    const at = Date.parse(value ?? '');
+    if (id && Number.isFinite(at)) { doneIds.add(String(id)); newest = Math.max(newest, at); }
+  };
+  for (const root of roots) {
+    try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch { /* missing tickets.log */ }
+  }
+  for (const ledger of ledgers) {
+    const history = Array.isArray(ledger?.history) ? ledger.history : Array.isArray(ledger?.history?.events) ? ledger.history.events : [];
+    for (const event of history) {
+      const status = event?.status ?? event?.to ?? event?.nextStatus ?? event?.transition?.to;
+      const id = event?.ticketId ?? event?.ticket ?? event?.transition?.ticketId;
+      if (String(status).toLowerCase() === 'done') add(id, event?.at ?? event?.finishedAt ?? event?.updatedAt ?? event?.timestamp);
+    }
+  }
+  for (const record of runs) {
+    for (const job of record.state?.jobs ?? []) {
+      const ids = [job?.ticketId, job?.ticket, job?.id].filter(Boolean).map(String);
+      if (!ids.some(id => doneIds.has(id))) continue;
+      for (const id of ids) add(id, job?.finishedAt);
+    }
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+async function familyLedgers(roots) {
+  return Promise.all(roots.map(async root => await readLedger(root).catch(() => null)));
+}
+
+function finishedProgress(raw) {
+  if (!raw) return null;
+  const deployed = raw.milestones?.find(item => item.key === 'deployed');
+  const deployDone = deployed?.state === 'done' || deployed?.currentDone === true;
+  const noDeployConfigured = deployed?.state === 'unknown' || !deployed;
+  const finished = Boolean(raw.finished && (deployDone || noDeployConfigured));
+  const summary = progressSummary({ ...raw, finished });
+  if (!finished && summary) summary.current = raw.milestones?.find(item => item.state === 'current')?.label ?? 'Unknown';
+  return summary ? { ...summary, finished } : summary;
 }
 
 const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); return m ? Number(m[1]) : null; };
@@ -342,20 +512,179 @@ export function ticketsOf(ledger, scope = null) {
   return { total: tickets.filter(t => !['cancelled', 'proposed'].includes(t.status)).length, open: open.length, blocked: byStatus.blocked ?? 0, proposed: byStatus.proposed ?? 0, byStatus: plain(byStatus), stage: stageId === 'done' ? 'done' : stageDisplay(scope, stageId), stageId };
 }
 
+// A linked worktree reads its own ledger; a main checkout reads the newest approved ledger in
+// its family. Both board cards and project pages use this single ownership decision.
+export async function boardOwnOnly(root) {
+  return Boolean(await mainWorktreeRoot(root));
+}
+
+function familyRunningTickets(ledgers) {
+  const ids = new Set();
+  for (const ledger of ledgers ?? []) {
+    for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'running' && ticket.id) ids.add(String(ticket.id));
+  }
+  return ids.size;
+}
+
+function checkoutsBuildingCount(roots, runs) {
+  const liveRoots = new Set();
+  for (const run of runs ?? []) if (activeRunState(run.state)) liveRoots.add(run.root);
+  let count = 0;
+  for (const root of roots ?? []) if (liveRoots.has(root)) count += 1;
+  return count;
+}
+
+function blockedDependencyCard(ledger) {
+  const byId = new Map((ledger?.tickets ?? []).map(ticket => [ticket.id, ticket]));
+  const items = [];
+  let waitingOnTickets = 0;
+  for (const ticket of ledger?.tickets ?? []) {
+    if (ticket?.status !== 'blocked') continue;
+    const waitsOn = (ticket.dependsOn ?? []).filter(dep => byId.get(dep)?.status !== 'done');
+    if (!waitsOn.length) continue;
+    if (ticket.blockReason && ticket.blockReason !== 'deps') continue;
+    waitingOnTickets += 1;
+    const command = ticketReleaseAllowed(ticket, ledger) ? `swarm tickets ${ticket.id} --release` : null;
+    items.push({ id: ticket.id, title: txt(ticket.title, 140), waitsOn, command });
+  }
+  items.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return { waitingOnTickets, items };
+}
+
+function watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished }) {
+  if (finished) return null;
+  const tree = checkTicketTree({ scope, tickets: ledger?.tickets ?? [] });
+  const conflicts = tree.conflicts ?? [];
+  if (conflicts.length) {
+    const groups = new Map();
+    for (const conflict of conflicts) {
+      const stage = (ledger?.tickets ?? []).find(ticket => conflict.tickets?.includes(ticket.id))?.stage ?? 'unknown';
+      const key = `${stage}\0${conflict.file}`;
+      const entry = groups.get(key) ?? { stage, tickets: new Set() };
+      for (const id of conflict.tickets ?? []) entry.tickets.add(id);
+      groups.set(key, entry);
+    }
+    const worst = [...groups.values()].sort((a, b) => b.tickets.size - a.tickets.size)[0];
+    const count = worst.tickets.size;
+    const stageLabel = /^S\d+$/i.test(String(worst.stage)) ? `Stage ${worst.stage}` : `Stage ${worst.stage}`;
+    return `${stageLabel} has ${count} ticket${count === 1 ? '' : 's'} that write the same file in the same wave, so they cannot run together.`;
+  }
+  const waves = underfilledWaves(recentJobCounts, slots);
+  if (waves) return `${waves.charAt(0).toUpperCase()}${waves.slice(1)}.`;
+  return null;
+}
+
+function guardBlockedLast24h(roots, now) {
+  const since = now - DAY;
+  let count = 0;
+  for (const root of roots ?? []) {
+    for (const event of readEvents(root, { limit: 4000 })) {
+      if (event.e !== 'blocked') continue;
+      const at = Date.parse(event.at ?? '');
+      if (Number.isFinite(at) && at >= since && at <= now) count += 1;
+    }
+  }
+  return count;
+}
+
+export function watchCardSlots({ held, familyProjectIds, projectId }) {
+  const machineMax = held?.max ?? null;
+  const inUse = held?.total ?? 0;
+  const family = new Set([...(familyProjectIds ?? []), projectId].filter(Boolean));
+  let byThisProject = 0;
+  let byOtherProjects = 0;
+  for (const [key, entry] of Object.entries(held?.byProject ?? {})) {
+    const total = entry?.total ?? 0;
+    if (family.has(key)) byThisProject += total;
+    else if (key !== 'unknown') byOtherProjects += total;
+  }
+  return { machineMax, inUse, byThisProject, byOtherProjects };
+}
+
+export function enrichWatchCard(card, { held, familyProjectIds, projectId, inbox } = {}) {
+  if (!card) return card;
+  const need = needYouForProject(inbox, projectId);
+  card.blocked.needYou = need.needYou;
+  card.blocked.needYouItems = need.needYouItems;
+  card.slots = watchCardSlots({ held, familyProjectIds, projectId });
+  return card;
+}
+
+async function buildWatchCard({
+  ledger,
+  scope,
+  ledgers,
+  roots,
+  runs,
+  ticketFinishedAt,
+  progressFinished,
+  projectId,
+  now,
+  recentJobCounts,
+  slots,
+  historyFile,
+}) {
+  const readyList = ticketsReadyToRun(ledger?.tickets ?? []);
+  const blocked = blockedDependencyCard(ledger);
+  const eta = await cardEtaFromFamily({ roots, ledger, now });
+  const familyTicketIds = new Set();
+  for (const familyLedger of ledgers ?? []) {
+    for (const ticket of familyLedger?.tickets ?? []) if (ticket?.id) familyTicketIds.add(String(ticket.id));
+  }
+  const offLedger = offLedgerRuns(
+    runs.map(run => ({ runId: run.id, state: run.state })),
+    ledger,
+    null,
+    now,
+    familyTicketIds,
+    projectId,
+  );
+  const headsUp = watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished: progressFinished });
+  return {
+    now: {
+      buildingTickets: familyRunningTickets(ledgers),
+      checkoutsBuilding: checkoutsBuildingCount(roots, runs),
+      lastTicketFinishedAt: ticketFinishedAt,
+    },
+    next: {
+      ready: readyList.length,
+      items: readyList.map(ticket => ({ id: ticket.id, title: txt(ticket.title, 140), command: `swarm tickets ${ticket.id}` })),
+    },
+    blocked: {
+      waitingOnTickets: blocked.waitingOnTickets,
+      items: blocked.items,
+      needYou: 0,
+      needYouItems: [],
+    },
+    slots: { machineMax: slots ?? null, inUse: 0, byThisProject: 0, byOtherProjects: 0 },
+    eta,
+    facts: {
+      handEditsBlocked24h: guardBlockedLast24h(roots, now),
+      untrackedRuns: offLedger.count ?? 0,
+      listHref: offLedger.countHref ?? `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+      checkouts: (roots ?? []).length,
+    },
+    headsUp,
+  };
+}
+
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
-  const runs = await readRunStates(project.root);
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [], prState = undefined } = {}) {
+  const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
+  const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
+  const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
+  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
   const liveStateRuns = [];
   const liveStateByRecord = new Map();
   for (const record of liveRuns) {
     const root = await fs.realpath(record.root ?? project.root).catch(() => record.root ?? project.root);
-    const stateRun = (root === await fs.realpath(project.root).catch(() => project.root) ? runs : await readRunStates(root)).find(run => run.id === record.runId);
+    const stateRun = runs.find(run => run.root === root && run.id === record.runId);
     if (stateRun) {
       liveStateRuns.push({ ...stateRun, liveRoot: root });
       liveStateByRecord.set(record, stateRun.state);
     }
   }
-  const visibleRuns = new Map(runs.map(run => [`${project.root}|${run.id}`, run]));
+  const visibleRuns = new Map(runs.map(run => [`${run.root}|${run.id}`, run]));
   for (const run of liveStateRuns) visibleRuns.set(`${run.liveRoot}|${run.id}`, run);
   const liveRunsForAgents = [...visibleRuns.values()];
   // The caller's list is already a live snapshot. Registry-derived records carry their
@@ -368,25 +697,37 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
-  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null }).then(progressSummary, () => null);
+  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly, prState }).catch(() => null);
+  const progress = rawProgress ? { ...finishedProgress(rawProgress), overall: boardPercent(rawProgress), _rawFinished: rawProgress.finished } : null;
+  const progressFinished = progress?._rawFinished ?? false;
+  if (progress) delete progress._rawFinished;
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
-  const lastRun = runs.length ? runs[runs.length - 1].state : null;
-  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0), Date.parse(ledger?.updatedAt ?? '') || 0);
+  const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
+  const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
+  const lastActivityMs = Math.max(
+    0,
+    ...runs.map(runActivityMs),
+    ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0),
+    ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0),
+    ticketFinishedMs,
+  );
+  const familyActivityAtMs = familyActivityMs({ runs, liveRunIds: liveIds, ledgers, liveRuns, ticketFinishedMs, now });
   const recentFailure = runs.some(run => {
     const at = Math.max(Date.parse(run.state?.finishedAt ?? '') || 0, Date.parse(run.state?.startedAt ?? '') || 0);
     return ['failed', 'timeout'].includes(run.state?.status) && at > 0 && at <= now && now - at <= 7 * DAY;
   });
   const tickets = ticketsOf(ledger, scope);
   const readyTickets = tickets.byStatus.ready ?? 0;
-  const idle = activeLiveRuns.length === 0;
+  const { activity, idle } = projectActivityState({ activeLiveCount: activeLiveRuns.length, lastActivityMs: familyActivityAtMs, now });
   const split = await splitQuality({ root: project.root, now, slots }).then(result => {
     const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
     const red = metrics.filter(metric => metric?.grade === 'red');
@@ -395,10 +736,25 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   }).catch(() => null);
   const handled = await handledForProject(project.root, { now }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
+  const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0));
+  const card = await buildWatchCard({
+    ledger,
+    scope,
+    ledgers,
+    roots,
+    runs,
+    ticketFinishedAt,
+    progressFinished,
+    projectId: project.id,
+    now,
+    recentJobCounts,
+    slots,
+    historyFile,
+  });
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
-    stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
+    stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     liveCount: activeLiveRuns.length,
     agents, cost,
@@ -407,9 +763,13 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, familyBilledUsd: spend.billedUsd ?? null, capUsedUsd: capUsedUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis },
     progress,
     split,
-    recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
+    recentJobCounts,
+    card,
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+    lastTicketFinishedAt: ticketFinishedAt,
+    checkouts: roots.length,
+    activity,
     idle,
     testOrTemp: Boolean(project.testOrTemp),
     lastRunStatus: lastRun?.status ?? null,
@@ -427,7 +787,7 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined } = {}) {
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -452,9 +812,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const parentReal = parentRoot ? await realRoot(parentRoot) : null;
     parentIds.push(parentReal && parentReal !== childReal && registered.has(parentReal) ? registered.get(parentReal).id : null);
   }
-  const families = await Promise.all(inputProjects.map(async project => {
+  const linkedRows = await Promise.all(inputProjects.map(async project => Boolean(await mainWorktreeRoot(await realRoot(project.root)))));
+  const families = await Promise.all(inputProjects.map(async (project, index) => {
     const root = await realRoot(project.root);
-    try { return new Set(await Promise.all((await worktreeFamily(root, { all: true })).map(member => realRoot(member)))); } catch { return new Set([root]); }
+    try {
+      const members = linkedRows[index] ? [root] : await projectFamilyRoots(root, { env, extraRoots: inputProjects.map(item => item.root) });
+      return new Set(await Promise.all(members.map(member => realRoot(member))));
+    } catch { return new Set([root]); }
   }));
   // Keep injected/custom parent discovery useful in tests and for a registry that was written
   // before git's worktree metadata settled; the real family call above still adds unregistered
@@ -465,16 +829,27 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const parentIndex = inputProjects.findIndex(project => project.id === parentIds[i]);
     if (parentIndex >= 0) families[parentIndex].add(childRoot);
   }
+  const overviewFamilyIds = [];
   for (let i = 0; i < inputProjects.length; i += 1) {
     const project = inputProjects[i];
     const projectRoot = await realRoot(project.root);
     const family = families[i];
+    const ownFamily = linkedRows[i] ? new Set([projectRoot]) : family;
+    const familyRuns = await readProjectRunStates(projectRoot, { ownOnly: linkedRows[i], env, familyRoots: [...ownFamily] });
+    const displayName = String(project.name ?? '').trim();
+    if ((!displayName || displayName === String(project.id)) && familyRuns.length === 0) continue;
     const candidates = parentIds[i]
       ? live.filter(r => r.root === projectRoot)
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState }));
+    const familyIds = new Set([project.id]);
+    for (const root of family) {
+      const member = registered.get(root);
+      if (member?.id) familyIds.add(member.id);
+    }
+    overviewFamilyIds.push(familyIds);
   }
   for (const overview of overviews) {
     overview.parentId = null;
@@ -494,7 +869,28 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (const overview of overviews) {
     overview.worktreeIds.sort((a, b) => String(overviews.find(o => o.id === a)?.name ?? '').localeCompare(String(overviews.find(o => o.id === b)?.name ?? '')) || String(a).localeCompare(String(b)));
   }
-  for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
+  for (const overview of overviews) {
+    if (!overview.worktreeIds.length || !overview.progress?.headline) continue;
+    const count = overview.worktreeIds.length;
+    overview.progress.headline += ` (incl. ${count} worktree${count === 1 ? '' : 's'})`;
+  }
+  let heldWorkers = { total: 0, max: workers?.max ?? null, byProject: {} };
+  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: workers?.max ?? null }); } catch { /* empty lane store */ }
+  let inboxSnapshot = { items: [] };
+  try { inboxSnapshot = await boardInbox({ projects: inputProjects, now, env }); } catch { /* inbox unavailable */ }
+  for (let i = 0; i < overviews.length; i += 1) {
+    enrichWatchCard(overviews[i].card, { held: heldWorkers, familyProjectIds: overviewFamilyIds[i], projectId: overviews[i].id, inbox: inboxSnapshot });
+  }
+  for (const o of overviews) {
+    const liveWarnings = [];
+    const splitWarning = o.split?.reds > 0 || o.split?.grade === 'red' ? { code: 'split-quality-red', text: `split quality red${o.split?.worst ? `: ${o.split.worst}` : ''}` } : null;
+    const wavesWarning = underfilledWaves(o.recentJobCounts, workers?.max);
+    if (splitWarning) liveWarnings.push(splitWarning);
+    if (wavesWarning) liveWarnings.push({ code: 'waves-underfilled', text: wavesWarning });
+    const history = Array.isArray(o.history) ? o.history : [];
+    o.history = o.progress?.finished ? [...history, ...liveWarnings] : history;
+    o.warnings = o.progress?.finished ? [] : liveWarnings;
+  }
   const blocked = overview => Boolean(
     overview.idleWithReady || overview.tickets?.blocked > 0 || overview.spend?.reached ||
     overview.recentFailure || overview.needsYou || overview.progress?.needsYou || overview.progress?.blocked,
@@ -546,6 +942,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   machine.lanes = lanes ? await lanes(machine.cost.laneToday ?? {}, machine.cost.laneJobsToday ?? {}) : [];
   const queued = dict();
   const recent = dict();
+  const recentLatest = dict();
   try {
     for (const project of inputProjects) {
       const states = await readRunStates(project.root);
@@ -560,8 +957,15 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
           const entry = recent[job.agent] ??= { jobs: 0, explicit: 0 };
           entry.jobs += 1;
           if ((job.requestedAgent ?? job.agent) !== 'auto') entry.explicit += 1;
+          const latest = recentLatest[job.agent];
+          if (!latest || finished > latest.finished) recentLatest[job.agent] = { finished, job };
         }
       }
+    }
+    for (const [agent, { finished, job }] of Object.entries(recentLatest)) {
+      if (!isProviderLimitFailure(job)) continue;
+      const entry = recent[agent] ??= { jobs: 0, explicit: 0 };
+      entry.lastProviderLimitAt = finished;
     }
     const extra = typeof laneState === 'function' ? await laneState() : {};
     machine.laneIdle = laneIdleReasons({ running: machine.agents.byLane, ...valueObject(extra), todayUsd: machine.cost.laneToday ?? {}, queued, recent, now });
@@ -572,10 +976,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
-  const runs = await readRunStates(project.root, { limit: 200 });
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, env = process.env, extraRoots = [] } = {}) {
+  const ownOnly = await boardOwnOnly(project.root);
+  const roots = await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
+  const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots, limit: 200 });
+  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
   let selected;
-  try { selected = await ledgerRoot(project.root); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => { const stageId = effectiveStage(scope, t); return { id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: stageDisplay(scope, stageId), stageId, risk: txt(t.risk, 10) }; });
@@ -587,11 +994,13 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null }).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...raw, finished: finishedProgress(raw)?.finished ?? false, percent: { ...raw.percent, overall: boardPercent(raw) } } : null).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
+  const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
@@ -602,6 +1011,11 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     }),
     spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
     progress,
+    lastRunAt: lastRun?.startedAt ?? null,
+    lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+    lastTicketFinishedAt: await lastTicketFinishedAt(roots, runs, ledgers),
+    checkouts: roots.length,
+    offLedger: progress?.offLedger ?? progress?.untracked ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked work: no ledger ticket' },
     splitQuality: split,
     benchmarks,
     handled,

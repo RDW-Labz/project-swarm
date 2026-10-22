@@ -24,10 +24,6 @@
     return n;
   }
   function txt(v) { return v === null || v === undefined || v === '' ? '–' : String(v); }
-  function usd(v) {
-    if (typeof v !== 'number' || !isFinite(v)) return '–';
-    return v < 0.01 && v > 0 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
-  }
   function count(v) {
     if (Array.isArray(v)) return v.length;
     return typeof v === 'number' && isFinite(v) ? v : 0;
@@ -99,7 +95,6 @@
     meta.appendChild(kv('lane', t.lane));
     meta.appendChild(kv('review', t.review));
     meta.appendChild(kv('PR', t.pr));
-    meta.appendChild(kv('cost', usd(t.costUsd)));
     root.appendChild(section('Delivery', meta));
     var drift = el('ul', 'pl-drift');
     listOf(t.drift).forEach(function (d) { drift.appendChild(el('li', 'pill warn', String(d))); });

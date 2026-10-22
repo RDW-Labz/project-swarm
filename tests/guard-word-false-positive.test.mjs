@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { isSelfApprovalCommand, SELF_APPROVAL_REASON } from '../tools/self-approval.mjs';
+import { isSelfApprovalCommand, SELF_APPROVAL_REASON, HANDBUILD_OWNER_RULE_ID, HANDBUILD_SELF_APPROVAL_RULE_ID } from '../tools/self-approval.mjs';
 import { guardDecision } from '../tools/handbuild.mjs';
 
 const tmp = async t => {
@@ -69,6 +69,13 @@ test('guardDecision allows harmless guard wording; risky guard control still blo
   for (const cmd of blocked) {
     const d = bash(root, cmd);
     assert.equal(d.allow, false, cmd);
-    assert.equal(d.reason, SELF_APPROVAL_REASON, cmd);
+    if (cmd.includes('handbuild-guard.mjs')) {
+      assert.equal(d.ruleId, HANDBUILD_SELF_APPROVAL_RULE_ID, cmd);
+      assert.equal(d.reason, SELF_APPROVAL_REASON, cmd);
+      continue;
+    }
+    assert.equal(d.ruleId, HANDBUILD_OWNER_RULE_ID, cmd);
+    assert.match(d.reason, new RegExp(`\\[${HANDBUILD_OWNER_RULE_ID}\\]`));
   }
+  assert.match(SELF_APPROVAL_REASON, new RegExp(`\\[${HANDBUILD_SELF_APPROVAL_RULE_ID}\\]`));
 });

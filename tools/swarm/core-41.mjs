@@ -7,6 +7,7 @@ import { cursorLaunchArgs, parseCursorOutput, resolveCursorEnvelope } from '../c
 import { loadLocalConfig } from '../local-config.mjs';
 import { estimateCostFromTranscript } from '../rates.mjs';
 import { routeJob } from '../router.mjs';
+import { passRateFailuresFor } from '../lane-pass-routing.mjs';
 import { findPrivateNameHitsInText, githubRepo, loadPrivateNames, repoVisibility } from '../ship.mjs';
 import { expandRootArgv } from './checks.mjs';
 import { claudeArgs, declaresDependencies, digest, execFileAsync, extraCliResult, fail, lastFailureLines, namedTestPaths, pathContains, redactSecrets, setupFailedResult, stopChild, transcriptLastActivity } from './core-1.mjs';
@@ -461,8 +462,13 @@ export async function privateNamesDispatchGuard(root, manifest, { exec = execFil
 }
 
 function pickJobRoute(job, lanes, options = {}) {
+  const passFailures = options.passRateFailures ?? passRateFailuresFor(options.root ?? process.cwd());
+  const failures = { ...(options.failures ?? {}) };
+  for (const agent of new Set([...Object.keys(lanes ?? {}), ...Object.keys(options.failures ?? {}), ...Object.keys(passFailures ?? {})])) {
+    failures[agent] = Math.max(options.failures?.[agent] ?? 0, passFailures?.[agent] ?? 0);
+  }
   const { editInPlaceOnly = false, ...routeOptions } = options;
-  return routeJob(job, { lanes, ...routeOptions, accepts: candidate => {
+  return routeJob(job, { lanes, ...routeOptions, failures, accepts: candidate => {
     if (editInPlaceOnly && API_AGENTS.includes(candidate.agent)) return false;
     if (candidate.after && isWorktreeWriter(candidate)) return false;
     try { validateManifest({ version: 1, jobs: [withoutApiOnlyFields({ ...candidate, after: undefined })] }); return true; }

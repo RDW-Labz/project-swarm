@@ -2,7 +2,7 @@
 // Read-only build progress for one project, assembled from its ledger, scope, journal and history.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readLedger, isApproved } from './tickets.mjs';
+import { readLedger, isApproved, logPath } from './tickets.mjs';
 import { worktreeFamily } from './project-spend.mjs';
 import { parseScope } from './scope.mjs';
 import { doneTimes } from './client-report.mjs';
@@ -25,6 +25,43 @@ const pct = (done, total) => total > 0 ? Math.max(0, Math.min(100, Math.floor(do
 const text = (value, fallback = '') => value === undefined || value === null ? fallback : String(value);
 const iso = value => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const requirementIdRe = /R-\d{3,}/gi;
+
+// Board progress is the floor of done / counted tickets in the approved scope selected above.
+// Counted excludes human, cancelled, and proposed tickets; all board consumers use this basis.
+export async function cardEtaFromFamily({ roots, ledger, now = Date.now() } = {}) {
+  const tickets = (Array.isArray(ledger?.tickets) ? ledger.tickets : []).filter(COUNTED);
+  const remaining = tickets.filter(ticket => ticket.status !== 'done').length;
+  const since = now - 7 * DAY;
+  let doneLast7Days = 0;
+  for (const root of Array.isArray(roots) ? roots : []) {
+    try {
+      const content = await fs.readFile(logPath(root), 'utf8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let event;
+        try { event = JSON.parse(line); } catch { continue; }
+        const to = event.to ?? event.nextStatus ?? event.status;
+        if (String(to).toLowerCase() !== 'done') continue;
+        const at = Date.parse(event.at ?? '');
+        if (!Number.isFinite(at) || at < since || at > now) continue;
+        if (event.event === 'transition' || event.event === 'delivered' || event.event === undefined) doneLast7Days += 1;
+      }
+    } catch { /* no tickets.log */ }
+  }
+  const perDay = doneLast7Days > 0 ? Math.round((doneLast7Days / 7) * 100) / 100 : 0;
+  let days = null;
+  if (remaining === 0) days = 0;
+  else if (perDay > 0) days = Math.min(3650, Math.ceil(remaining / perDay));
+  const basis = doneLast7Days > 0
+    ? `${doneLast7Days} done in the last 7 days (family tickets.log)`
+    : 'no done transitions in family tickets.log in the last 7 days';
+  return { days, remaining, perDay, doneLast7Days, windowDays: 7, basis };
+}
+
+export function boardPercent(progress) {
+  const basis = progress?.percent?.board ?? progress?.percent?.tickets;
+  return pct(Number(basis?.done ?? 0), Number(basis?.total ?? 0));
+}
 
 function requirementIds(ticket) {
   const ids = new Set();
@@ -78,8 +115,25 @@ async function exists(file) {
   try { await fs.stat(file); return true; } catch { return false; }
 }
 
+export const OFF_LEDGER_LIST_ANCHOR_ID = 'untracked';
+
+export function offLedgerRunHref(projectId, runId) {
+  const id = text(projectId);
+  const run = text(runId);
+  if (!id || !run) return null;
+  return `/run?id=${encodeURIComponent(id)}&run=${encodeURIComponent(run)}`;
+}
+
 function emptyProgress(notes = []) {
-  const untracked = { runs: [], count: 0, jobs: 0, newest: [], warning: UNTRACKED_WARNING };
+  const untracked = {
+    runs: [],
+    count: 0,
+    jobs: 0,
+    newest: [],
+    warning: UNTRACKED_WARNING,
+    listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID,
+    countHref: `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+  };
   return {
     percent: { tickets: { done: 0, total: 0, pct: null }, requirements: null, overall: null },
     stages: [],
@@ -164,9 +218,9 @@ const dateScore = value => {
   return Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
 };
 
-export async function ledgerRoot(root, { family = worktreeFamily } = {}) {
+export async function ledgerRoot(root, { family = worktreeFamily, ownOnly = false } = {}) {
   const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
-  const members = await family(root, { all: true });
+  const members = ownOnly ? [root] : await family(root, { all: true });
   const roots = [];
   for (const member of [...(Array.isArray(members) ? members : []), root]) {
     const candidateRoot = await fs.realpath(member).catch(() => path.resolve(member));
@@ -399,7 +453,30 @@ function runCost(state) {
   try { return Math.round(Number(runTotals(state).usd || 0) * 1e6) / 1e6; } catch { return 0; }
 }
 
-function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
+const IGNORED_RUN_WORDS = /\b(?:smoke|lane-test|lane-bench|probe|doctor)\b/i;
+
+function runHasIgnoredName(state, jobs) {
+  const manifestNames = [
+    state?.manifest,
+    state?.manifest?.file,
+    state?.manifest?.fileName,
+    state?.manifest?.filename,
+    state?.manifest?.name,
+    state?.manifest?.path,
+    state?.manifestFile,
+    state?.manifestFileName,
+    state?.manifestName,
+    state?.manifestPath,
+    state?.request?.manifest,
+    state?.request?.manifestFile,
+    state?.options?.manifest,
+    state?.options?.manifestFile,
+  ];
+  if (manifestNames.some(value => typeof value === 'string' && IGNORED_RUN_WORDS.test(value))) return true;
+  return jobs.some(job => typeof job?.id === 'string' && IGNORED_RUN_WORDS.test(job.id));
+}
+
+export function offLedgerRuns(records, ledger, history, now, ticketIds = null, projectId = null) {
   const ids = ticketIds ?? new Set((ledger?.tickets ?? []).map(ticket => ticket?.id).filter(Boolean));
   const prsByRun = new Map();
   for (const event of history ?? []) {
@@ -416,6 +493,7 @@ function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
     const started = Date.parse(record.state.startedAt ?? '');
     if (Number.isFinite(started) ? (started > now || (!live && started < now - 14 * DAY)) : !live) continue;
     const jobs = Array.isArray(record.state.jobs) ? record.state.jobs : [];
+    if (record.state.nonIntegrating === true || runHasIgnoredName(record.state, jobs)) continue;
     const stateIds = stateTicketIds(record.state);
     const stateMapped = [...stateIds].some(id => ids.has(id));
     const untrackedJobs = jobs.filter(job => ![...jobTicketIds(job)].some(id => ids.has(id)));
@@ -430,12 +508,21 @@ function offLedgerRuns(records, ledger, history, now, ticketIds = null) {
       costUsd: runCost(record.state),
       prs: prsByRun.get(record.runId) ?? [],
       name: text(record.state.name ?? record.state.title ?? record.state.label, record.runId),
+      href: offLedgerRunHref(projectId, record.runId),
     });
   }
   runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt) || a.runId.localeCompare(b.runId));
   const newest = runs.slice(0, 5).map(run => ({ runId: run.runId, name: run.name, startedAt: run.startedAt, status: run.status }));
   const jobs = runs.reduce((total, run) => total + run.untrackedJobs, 0);
-  return { runs, count: runs.length, jobs, newest, warning: UNTRACKED_WARNING };
+  return {
+    runs,
+    count: runs.length,
+    jobs,
+    newest,
+    warning: UNTRACKED_WARNING,
+    listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID,
+    countHref: `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+  };
 }
 
 function buildMilestones({ ledger, tickets, history, historyKnown, runRecords = [], deploy = null, prStateProvided = false, prRecords = null }) {
@@ -548,10 +635,10 @@ function headlineFor(build, human) {
   return human.total > 0 ? `${buildText} · human ${human.done}/${human.total}` : buildText;
 }
 
-export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined } = {}) {
+export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined, ownOnly = false } = {}) {
   const notes = [];
   try {
-    const selected = await ledgerRoot(root);
+    const selected = await ledgerRoot(root, { ownOnly });
     const sourceCandidate = selected.candidates.find(candidate => candidate.root === selected.root);
     const source = { root: selected.root, approvedAt: sourceCandidate?.approvedAt ?? null, updatedAt: sourceCandidate?.updatedAt ?? null, differs: selected.differs, candidates: selected.candidates.length };
     if (selected.differs) notes.push(`ledger read from ${path.basename(selected.root)} (newest approved of ${selected.candidates.length} checkouts)`);
@@ -561,7 +648,9 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const journal = await readJournalSafe(selected.root, notes);
     const history = await readHistorySafe(projectId, historyFile, notes);
     const times = await readDoneTimes(selected.root, notes);
-    const runRoots = [...new Set([root, selected.root, ...selected.candidates.map(candidate => candidate.root)])];
+    const runRoots = ownOnly
+      ? [root]
+      : [...new Set([root, selected.root, ...selected.candidates.map(candidate => candidate.root)])];
     const runRecords = await readRunRecords(runRoots);
     const allTickets = Array.isArray(ledger?.tickets) ? ledger.tickets.filter(ticket => ticket && typeof ticket === 'object') : [];
     const tickets = allTickets.filter(COUNTED);
@@ -574,7 +663,6 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     for (const ticket of allTickets.filter(ticket => ticket.status === 'proposed')) approvals.push({ kind: 'proposal', id: text(ticket.id), title: text(ticket.title, text(ticket.id)) });
     for (const decision of journal ? openDecisions(journal) : []) approvals.push({ kind: 'decision', id: text(decision.id), title: text(decision.text ?? decision.question, text(decision.id)) });
 
-    const openTickets = tickets.filter(ticket => OPEN.has(ticket.status));
     const ownerTickets = allTickets.filter(OWNER_TICKET);
     const ownerOpenTickets = ownerTickets.filter(ticket => OPEN.has(ticket.status));
     const openByType = Object.create(null);
@@ -632,7 +720,8 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const etaFor = (count, days, basis) => {
       const unroundedRate = count / days;
       const perDay = Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.round(unroundedRate * 100) / 100 : 0;
-      const remaining = openTickets.length;
+      // The ETA must use the same selected, counted ticket set as boardPercent: done / counted.
+      const remaining = Math.max(0, tickets.length - ticketDone);
       const etaDays = remaining === 0 ? 0 : perDay > 0 ? Math.min(3650, Math.ceil(remaining / perDay)) : Number.isFinite(unroundedRate) && unroundedRate > 0 ? Math.min(3650, Math.ceil(remaining / unroundedRate)) : 3650;
       const source = usedRunFallback ? ' (from run finish times)' : usedMergeFallback ? ' (from merge history)' : usedWaveAtFallback ? ' (from wave timestamps)' : '';
       return { remaining, perDay, days: etaDays, basis: `${basis}${source}` };
@@ -666,14 +755,17 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
       build: { done: total.build.done + item.build.done, total: total.build.total + item.build.total },
       human: { done: total.human.done + item.human.done, total: total.human.total + item.human.total },
     }), { build: { done: 0, total: 0 }, human: { done: 0, total: 0 } });
+    // `percent.tickets` remains the scope-row rollup used by the existing headline/detail view.
+    // The board value is deliberately based only on the approved ledger selected above, so it
+    // cannot mix family ledgers while stages and ETA use the selected `tickets` array.
     const buildStats = scopes.length ? aggregate.build : { done: ticketDone, total: tickets.length };
     const humanStats = scopes.length ? aggregate.human : ticketStats(allTickets).human;
     const allLedgerTicketIds = new Set();
     for (const candidate of selected.candidates) for (const ticket of candidate.ledger?.tickets ?? []) if (ticket?.id) allLedgerTicketIds.add(ticket.id);
-    const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds);
-    const headline = headlineFor(buildStats, humanStats);
+    const untracked = offLedgerRuns(runRecords, ledger, history, now, allLedgerTicketIds, projectId);
+    const headline = ledger ? headlineFor(buildStats, humanStats) : 'no ledger';
     const result = {
-      percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, requirements, overall: pct(buildStats.done, buildStats.total) },
+      percent: { tickets: { done: buildStats.done, total: buildStats.total, pct: pct(buildStats.done, buildStats.total) }, board: { done: ticketDone, total: tickets.length, pct: pct(ticketDone, tickets.length) }, requirements, overall: null },
       stages: stageRows(scope, tickets),
       left: { openByType: Object.fromEntries(Object.entries(openByType).filter(([, count]) => count > 0)), human: ownerOpenTickets.filter(ticket => ticket.type === 'human').map(ticket => { const stageId = effectiveStage(scope, ticket); return { id: text(ticket.id), title: text(ticket.title, text(ticket.id)), stage: stageDisplay(scope, stageId), stageId }; }), blockers, approvals },
       milestones,
@@ -687,6 +779,7 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
       source,
       notes,
     };
+    result.percent.overall = boardPercent(result);
     return result;
   } catch (error) {
     notes.push(`build progress unavailable: ${text(error.message, 'unknown error')}`);
@@ -703,7 +796,7 @@ export function progressSummary(progress) {
   const headline = progress.headline ?? headlineFor(build, human);
   const untracked = { runs: untrackedRuns, jobs: progress.untracked?.jobs ?? 0 };
   const summary = {
-    overall: progress.percent?.overall ?? null,
+    overall: boardPercent(progress),
     ticketsPct: progress.percent?.tickets?.pct ?? null,
     current,
     eta: progress.eta?.days ?? null,

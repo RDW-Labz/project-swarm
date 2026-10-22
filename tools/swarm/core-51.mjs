@@ -578,7 +578,7 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     // Catches a worker changing an output's behavior without ever seeing the test that
     // asserts it: advisory static text matching, resolved via context or ignoreTests.
     for (const pair of findUncoveredTests(root, { ...job, context }, projectFiles)) uncovered.push({ job: job.id, ...pair });
-    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.report==='short'?{report:'short',prompt:job.prompt}:{}),...(job.type!==undefined?{type:job.type,prompt:job.prompt,timeoutMs:job.timeoutMs,typeRoute:job.typeRoute,...(job.skills!==undefined?{skills:job.skills}:{})}:{}),...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,files,contextGlobCounts});
+    jobs.push({id:job.id,agent:job.agent,model:job.model??null,...(job.report==='short'?{report:'short',prompt:job.prompt}:{}),...(job.type!==undefined?{type:job.type,prompt:job.prompt,timeoutMs:job.timeoutMs,typeRoute:job.typeRoute,...(job.skills!==undefined?{skills:job.skills}:{})}:{}),...(job.shell===true?{shell:true}:{}),tier:job.tier??null,tierReason:job.tierReason??null,contextBytes:bytes,outputs:job.outputs,...(job.ignoreTests!==undefined?{ignoreTests:job.ignoreTests}:{}),...(job.ignoreTestsReason!==undefined?{ignoreTestsReason:job.ignoreTestsReason.trim()}:{}),files,contextGlobCounts});
   }
   // Field lesson #224: reaching here means the per-job loop above never found a broken skill
   // actually attached (that would already have refused); every broken skill left is unused.

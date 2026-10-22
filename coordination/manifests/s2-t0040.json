@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0040",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/ticket-manifest.mjs",
+        "tests/ticket-manifest-owns.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/wiring.mjs",
+        "tools/tickets.mjs",
+        "tests/ticket-manifest.test.mjs"
+      ],
+      "prompt": "Ticket T-0040: make build tickets own their test files in ticket-manifest prompts. Acceptance: (1) A build ticket writes or owns the test file that proves it, so there is no build -> test -> fix chain: when tools/ticket-manifest.mjs builds a job for a build ticket whose tests field lists test files, those test files are added to the job's outputs (not just context) and the prompt tells the worker it owns and must write those tests; a test file already owned by another open ticket stays context only (no two writers). (2) The critical path of a typical scope is shorter than before on the same input: add an exported helper criticalPathLength(tickets) (longest dependsOn chain) if none exists and a test showing a fixture scope where build-owns-tests yields a shorter chain than a separate test ticket per build. Write tests in tests/ticket-manifest-owns.test.mjs. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps, no network or wall clock. Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/batch-b-eval.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/escalation-routing.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-39-integrate.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ui-check.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import tools/ticket-manifest.mjs for unrelated manifest behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

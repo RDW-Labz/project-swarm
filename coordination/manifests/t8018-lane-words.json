@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8018",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/lane-pass-routing.mjs",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/lane-pass-routing.test.mjs",
+        "tests/lane-pass-routing-wiring.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/failure-regression.mjs",
+        "tools/router.mjs",
+        "tools/watch-assets/board.js"
+      ],
+      "prompt": "Ticket T-8018 (owner bug on the live board). (1) tools/board-data.mjs laneIdleReasons (~168-260) builds 'no ready jobs; recent jobs named Cursor explicitly' for the Codex lane, which reads like a bug. Rewrite every idle reason text in plain, complete sentences naming the lane, keeping the reason codes: e.g. paused: '<Lane> is paused by its provider (quota or credit limit); back in <time>.'; rate-limited: '<Lane> is rate limited; back in <time>.'; waiting-slot: '<n> <Lane> job(s) waiting for a free slot.'; queued: '<n> job(s) queued for <Lane>, starting soon.'; routing: '<n> auto job(s) not routed yet.'; not-set-up: '<Lane> is not set up: no model in the local config.'; not-routed variants in plain words; no-ready-jobs with the explicit-name case: '<Lane> is idle: nothing in the queue is routed to <Lane> right now. The last <n> jobs went to <Other> because their manifests named it.' (use the real recent job count) and without it: '<Lane> is idle: nothing in the queue is routed to <Lane> right now.'. (2) A lane whose most recent job failed because the provider ran out of credits or quota (job agentError or error text matching /out of credits|quota|usage limit|rate limit|insufficient_quota|credit/i, see how the '#286 provider outage' handling detects it in tools/) and that has no active pause should say '<Lane> may be out of credits: its last job failed with a provider limit message. Refill it, or route work to another lane.' before the no-ready-jobs text; pass that signal into laneIdleReasons through the existing recent input (add a field such as lastProviderLimitAt per agent where recent is built in board-data.mjs). (3) tools/lane-pass-routing.mjs lanePassRates must ignore jobs that failed because of a provider outage, quota or credit limit (same detection), so they never count as lane failures for routing. Tests in tests/lane-idle-words.test.mjs: the exact old string 'recent jobs named' never appears for any input; each reason's new sentence; the out-of-credits case; lanePassRates excludes quota/credit failures (a lane with 6 credit failures and 0 real failures keeps failures 0 in routingFailures). Update tests/lane-idle.test.mjs and tests/lane-pass-routing.test.mjs tests/lane-pass-routing-wiring.test.mjs assertions that matched the old wording only. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/lane-idle-words.test.mjs tests/lane-idle.test.mjs tests/lane-pass-routing.test.mjs tests/lane-pass-routing-wiring.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data or lane-pass-routing for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

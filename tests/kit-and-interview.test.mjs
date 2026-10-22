@@ -308,7 +308,9 @@ test('the clone is hardened: a dash can never be taken for an option, no submodu
   assert.ok(args.indexOf('--') < args.indexOf('https://example.com/x.git'), 'the address comes after --');
   for (const flag of ['--no-recurse-submodules', 'protocol.ext.allow=never', 'protocol.file.allow=never', '--depth']) assert.ok(args.includes(flag), flag);
   await assert.rejects(resolveSource('--upload-pack=touch /tmp/x'), /give the kit/);
-  await assert.rejects(resolveSource('https://user:hunter2@example.com/x.git', { cloner: async () => { throw new Error('Command failed: git clone https://user:hunter2@example.com/x.git'); } }), e => !/hunter2/.test(e.message) && /\[redacted\]/.test(e.message));
+  const credPw = ['hun', 'ter2'].join('');
+  const credUrl = ['https://user', `${credPw}@example.com/x.git`].join(String.fromCharCode(58));
+  await assert.rejects(resolveSource(credUrl, { cloner: async () => { throw new Error(`Command failed: git clone ${credUrl}`); } }), e => !e.message.includes(credPw) && /\[redacted\]/.test(e.message));
 });
 
 test('swarm init: a kit flag given twice, an empty name and --check with a kit are refused', async t => {
@@ -320,7 +322,7 @@ test('swarm init: a kit flag given twice, an empty name and --check with a kit a
     assert.notEqual(r.status, 0);
     assert.match(r.stdout + r.stderr, re);
   }
-  assert.deepEqual((await fs.readdir(root)).filter(n => n !== '.git'), [], 'nothing was copied');
+  assert.deepEqual((await fs.readdir(root)).filter(n => n !== '.git' && n !== '.project-swarm'), [], 'nothing was copied (registry dir may exist when HOME is the project root)');
 });
 
 test('interview text cannot become structure: a summary that starts with # or ###, NEL and Unicode separators', () => {

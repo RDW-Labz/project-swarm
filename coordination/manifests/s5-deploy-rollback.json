@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0148-T-0149",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/deploy-rollback.mjs",
+        "tools/deploy-watch.mjs",
+        "tests/deploy-watch.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/deploy-health.mjs",
+        "tools/handoff-docs.mjs",
+        "tools/journal.mjs",
+        "tests/deploy-status.test.mjs"
+      ],
+      "prompt": "Tickets T-0148 and T-0149 (S5 deploy watch). The behavior exists in tools/deploy-watch.mjs: a 15-minute watch after a merge that deploys (WATCH_WINDOW_MS, POLL_INTERVAL_MS), ticks checking deployment status, production health (tools/deploy-health.mjs) and error logs; on failure rollbackOffer(handoff, reason) (~line 102) builds guidance from profile.handoff.rollback and a 'human' journal entry is appended (~345-356). (A) T-0148: move rollbackOffer into a new tools/deploy-rollback.mjs (export rollbackOffer and a small formatRollbackCommand(argv) that renders the argv safely for display), import it in deploy-watch.mjs and re-export it from deploy-watch.mjs so existing imports keep working; no behavior change. Acceptance: 'A failed deploy watch surfaces the profile rollback command and records the failure in the journal.' (B) T-0149: write tests/deploy-watch.test.mjs (node:test, injected deps: now, sleep, exec, fetchImpl, pullErrorsImpl, journal append or a temp project root; no real network, no real waiting) covering: mergeThatDeploys true/false from handoff config; the watch runs ticks for the full 15-minute window and passes when deploy, health and error checks stay ok (assert the number of ticks and that it records a 'passed' checkpoint); a failing health check, a failing deploy status and a new error-log spike each end the watch as failed with the reason; on failure the rollback offer contains the exact profile.handoff.rollback argv and the guidance names it, and the journal gets one 'human' entry with that guidance; with no rollback configured the guidance asks to set profile.handoff.rollback; the state file is written with the final status; rollbackOffer/formatRollbackCommand unit cases. Acceptance: 'After a merge that deploys, the swarm checks the deploy, health and error logs for 15 minutes and offers rollback on failure.' Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/deploy-watch.test.mjs tests/deploy-status.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import deploy-watch for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

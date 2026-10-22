@@ -10,6 +10,7 @@ import { validateMigrationsConfig } from './migration-gate.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sanitizeText } from './journal.mjs';
+import { readRunnerPointer } from './runner-pointer.mjs';
 
 export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
 const STATUSES = ['green', 'red', 'skipped', 'none'];
@@ -601,7 +602,7 @@ export async function checkSetup(root, deps) {
   const readText = deps.readText ?? defaultReadText;
   // exists, readJson and stat take paths relative to the project root.
   const present = await quiet(() => deps.exists('.project-swarm.json'));
-  const pointer = present ? await quiet(() => deps.readJson('.project-swarm.json')) : null;
+  const pointer = present ? await quiet(() => readRunnerPointer(root)) : null;
   const head = typeof deps.head === 'function' ? await quiet(() => deps.head(root)) : (deps.head ?? null);
   const profile = pointer?.profile ?? (deps.readProfile ? await quiet(() => deps.readProfile(root)) : null);
   const items = [

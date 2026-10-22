@@ -1,0 +1,35 @@
+{
+  "reviewer": "codex",
+  "reviews": [
+    {
+      "ticket": "T-8011",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:289-322 projectFamilyRoots/readProjectRunStates; tools/board-data.mjs:325-352 lastTicketFinishedAt; tools/board-data.mjs:511-528 lastRunAt/liveCount/familyActivityMs+projectActivityState; tests/board-accuracy-activity.test.mjs lastRunAt/checkouts/lastTicketFinishedAt/liveCount/active-today",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/watch-cli.mjs:357-364 installedVersionFor; tools/watch-cli.mjs:522-529 snapshot.machine.version at request time; test board version is read from the installed current package",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tools/board-data.mjs:619-621 hide nameless without family runs; tools/board-data.mjs:358-367 finishedProgress; tools/board-data.mjs:652-660 move live warnings to history when progress.finished; tests a nameless project with no family runs is hidden; finished and deployed projects have no live warnings",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": false,
+          "evidence": "tests/board-accuracy-activity.test.mjs expectedLastActivityAt/expectedLastTicketFinishedAt; tests/board-accuracy-percent.test.mjs countedStats from fixture ledger; test board version reads install/current/package.json",
+          "gap": "lastRunAt still asserts fixture timestamps (iso(now-100)) instead of max startedAt from readProjectRunStates; liveCount and activity building/active-today/idle assert card fields only with no registry+run-file oracle; checkouts asserts 3 without projectFamilyRoots; finished-card test does not independently recompute finished/deployed from ledger+history+deploy fixtures"
+        }
+      ]
+    }
+  ]
+}

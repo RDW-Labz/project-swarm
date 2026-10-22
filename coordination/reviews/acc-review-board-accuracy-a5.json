@@ -1,0 +1,35 @@
+{
+  "reviewer": "codex",
+  "reviews": [
+    {
+      "ticket": "T-8011",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:289-323 projectFamilyRoots/readProjectRunStates; tools/board-data.mjs:325-352 lastTicketFinishedAt; tools/board-data.mjs:511-528 activity via familyActivityMs. tests/board-accuracy-activity.test.mjs: lastRunAt; lastActivityAt (×4); live run building/active-today/idle; liveCount; lastTicketFinishedAt (worktree+scratch); checkouts — each asserts card vs disk oracles (readRunsFromDisk, readLedgersFromDisk, git worktree list, scratchRootsFromEnv, oracleLiveActivity).",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/watch-cli.mjs:353-364 installedVersionFor reads SWARM_INSTALL_DIR/current/package.json at snapshot time; tools/watch-cli.mjs:522-529 sets snapshot.machine.version. tests/board-accuracy-activity.test.mjs: board version is read from the installed current package.",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tools/board-data.mjs:619-621 hides nameless projects with no family runs; tools/board-data.mjs:652-660 moves live warnings to history when progress.finished. tests/board-accuracy-activity.test.mjs: a nameless project with no family runs is hidden while one with a run is shown; finished and deployed projects have no live warnings and retain history warnings (oracleFinishedCard).",
+          "gap": ""
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tests/board-accuracy-activity.test.mjs: per-field tests with fixture worktree/scratch runs, SWARM_INSTALL_DIR package.json, and registry project rows; oracles recompute from filesystem sources rather than board-data helpers (except shared pure predicates projectActivityState/underfilledWaves). tests/helpers/board-accuracy-fixture.mjs supplies linked worktree and scratch layout.",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

@@ -46,7 +46,8 @@ export async function readPins(source) {
     let project;
     try { project = await fs.realpath(projectDir); } catch { unreadable.push({ project: projectDir, error: 'project path missing' }); continue; }
     try {
-      const pointer = JSON.parse(await fs.readFile(path.join(project, '.project-swarm.json'), 'utf8'));
+      const { readRunnerPointer } = await import('./runner-pointer.mjs');
+      const pointer = await readRunnerPointer(project);
       if (!isPinned(pointer)) continue;
       const at = pinOf(pointer);
       if (!at) { unreadable.push({ project, error: 'pinned but no valid version' }); continue; }
@@ -159,5 +160,21 @@ export async function unpinProject(projectRoot) {
 
 export async function listPinReport(installRoot) {
   const { pins, unreadable } = await readPins(installRoot);
-  return { pins: pins.map(p => ({ project: p.project, name: path.basename(p.project), pinnedAt: p.pinnedAt })), unreadable };
+  const { versionDirFor } = await installHelpers();
+  const { runnerVersionAtRoot } = await import('./runner-version.mjs');
+  const mapped = [];
+  for (const p of pins) {
+    let runnerVersion = null;
+    try {
+      const versionDir = await versionDirFor(installRoot, p.pinnedAt);
+      if (versionDir) runnerVersion = await runnerVersionAtRoot(versionDir);
+    } catch { /* listing still shows the pointer version */ }
+    mapped.push({
+      project: p.project,
+      name: path.basename(p.project),
+      pinnedAt: p.pinnedAt,
+      runnerVersion: runnerVersion ?? p.pinnedAt,
+    });
+  }
+  return { pins: mapped, unreadable };
 }

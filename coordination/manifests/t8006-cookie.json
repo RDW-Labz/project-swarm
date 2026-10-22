@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8006-cookie",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/remote.mjs",
+        "tools/watch-assets/board-lib.js"
+      ],
+      "prompt": "Opus security review of T-8006 (medium, tools/watch-server.mjs ~line 372): the board token cookie is named swarm_watch with Path=/ on 127.0.0.1. Browsers do not scope cookies by port, so every local service on 127.0.0.1/localhost receives the board token, and the board server and each run's own watch server overwrite each other's cookie (breaking cookie-only requests: img shots, EventSource). Fix: name the cookie per server instance: swarm_watch_<port> where port is the server's own listening port (known after listen; build the name lazily), read only that name in the strict cookie parser, and on the remote HTTPS origin (remote option on) keep the same per-port name plus Secure. Nothing else changes: query token only on HTML page routes, header or this cookie elsewhere, /api/health untouched before the token gate. Update tests/watch-token-urls.test.mjs: the Set-Cookie name contains the port; a cookie named for a different port is refused; a plain swarm_watch cookie is refused; two servers on different ports do not accept each other's cookie. Also update any test among tests/watch-server.test.mjs, tests/board-page.test.mjs, tests/remote.test.mjs, tests/board-nav.test.mjs, tests/watch-ui.test.mjs that sends the old cookie name (change only the cookie name). Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/watch-token-urls.test.mjs tests/watch-server.test.mjs tests/board-page.test.mjs tests/remote.test.mjs tests/board-nav.test.mjs tests/watch-ui.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the watch server for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

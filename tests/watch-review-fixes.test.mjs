@@ -136,7 +136,7 @@ test('watch server enforces token, CSP, and the event stream limit', async () =>
 
     const streams = [];
     for (let i = 0; i < 9; i++) {
-      const s = await get(`/events?t=${token}`);
+      const s = await get('/events', { 'x-watch-token': token });
       streams.push(s);
       if (i < 8) assert.equal(s.res.statusCode, 200);
     }

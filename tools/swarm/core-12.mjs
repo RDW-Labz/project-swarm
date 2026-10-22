@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { dirtyFiles, formatDirtyListing } from '../generated-state.mjs';
 
 async function gitDirty(dir,paths){
   try{const {stdout}=await execFileAsync('git',['-C',dir,'status','--porcelain','--',...paths],{encoding:'utf8'});return stdout.trim().length>0;}
@@ -41,7 +42,10 @@ export async function cleanBranch(root, { from, exclude = [] } = {}) {
   if (!Array.isArray(exclude) || exclude.some(glob => typeof glob !== 'string' || !glob || glob.includes('\0'))) fail('--exclude requires a glob');
   const git = args => execFileAsync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: MAX_CONTEXT });
   const branch = (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
-  if ((await git(['status', '--porcelain=v1', '--untracked-files=all'])).stdout.trim()) fail('clean-branch-dirty: commit or set aside destination edits first');
+  const dirty = await dirtyFiles(root, {
+    runStatus: async () => (await git(['status', '--porcelain=v1', '--untracked-files=all'])).stdout,
+  });
+  if (dirty.length) fail(`clean-branch-dirty: commit or set aside destination edits first${formatDirtyListing(dirty)}`);
   const source = (await git(['rev-parse', '--verify', '--end-of-options', `${from}^{commit}`])).stdout.trim();
   const paths = ['--', '.', ...exclude.map(glob => `:(exclude)${glob}`)];
   const records = (await git(['diff', '--name-status', '-z', '-M', 'HEAD', source, ...paths])).stdout.split('\0');
@@ -112,10 +116,12 @@ export async function updateProjects(root,{projects,yes=false}={}){
   for(const projectDir of list){
     let project;
     try{project=await fs.realpath(projectDir);}catch{reports.push({project:projectDir,found:[],action:'missing'});continue;}
+    try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
     let pointer=null;
-    try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch{pointer=null;}
+    try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch{pointer=null;}
     if(pointer&&isPinned(pointer)){
       const at=pinOf(pointer);
+      try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
       pinned.push({project,found:[],action:'pinned',pinnedAt:at});
       continue;
     }
@@ -167,12 +173,19 @@ export async function bumpPointers(root){
     try{project=await fs.realpath(projectDir);}catch{continue;}
     if(project===root)continue;
     let pointer;
-    try{pointer=JSON.parse(await fs.readFile(path.join(project,'.project-swarm.json'),'utf8'));}catch(error){if(error.code==='ENOENT')continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
+    try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch(error){if(error.code==='ENOENT'||String(error.message).includes('no .project-swarm.json'))continue;failed.push({project,error:'the pointer file is not valid JSON; not changed'});continue;}
     if(!pointer||typeof pointer!=='object')continue;
-    if(isPinned(pointer)){skipped.push({project,pinnedAt:pinOf(pointer)});continue;}
-    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
-    try{const {ensureOrchestratorHooks}=await import('../install.mjs');const hooks=await ensureOrchestratorHooks(project,root,{refreshOnly:true});if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
-    try{const {ensureHandbuildGuard}=await import('../install.mjs');const g=await ensureHandbuildGuard(project,root,{refreshOnly:true});if(g.status==='skipped')failed.push({project,error:`hand-build guard not refreshed: ${g.reason}`});}catch(error){failed.push({project,error:`hand-build guard: ${String(error.message).slice(0,160)}`});}
+    const pinned=isPinned(pointer);
+    // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says (including pinned projects).
+    try{
+      const {refreshProjectInstallHooks}=await import('../install.mjs');
+      const refreshed=await refreshProjectInstallHooks(project,root,{refreshOnly:true});
+      const hooks=refreshed.orchestrator;
+      if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);
+      else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});
+      if(refreshed.handbuild?.status==='skipped')failed.push({project,error:`hand-build guard not refreshed: ${refreshed.handbuild.reason}`});
+    }catch(error){failed.push({project,error:`install hooks: ${String(error.message).slice(0,160)}`});}
+    if(pinned){skipped.push({project,pinnedAt:pinOf(pointer)});continue;}
     if(pointer.version===version)continue;
     try{const {writePointer}=await import('../install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}

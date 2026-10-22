@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Project Swarm contributors
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import nodeCrypto from 'node:crypto';
 import path from 'node:path';
@@ -10,9 +10,45 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { installSwarmCommand } from './swarm-bin.mjs';
-import { zshCompletion } from './completion.mjs';
 const packageRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const FOLDER_VERSION=/^(\d+\.\d+\.\d+)-/;
+
+async function writeRunnerPackageJson(runnerRoot,version){
+ const pkgPath=path.join(runnerRoot,'package.json');
+ await fs.writeFile(pkgPath,`${JSON.stringify({name:'project-swarm',version},null,2)}\n`);
+}
+
+async function repairRunnerPackageJson(runnerRoot){
+ runnerRoot=await fs.realpath(runnerRoot);
+ if(path.basename(path.dirname(runnerRoot))!=='versions')return {repaired:false};
+ const match=FOLDER_VERSION.exec(path.basename(runnerRoot));
+ const folderVersion=match?match[1]:null;
+ if(!folderVersion)return {repaired:false};
+ const pkgPath=path.join(runnerRoot,'package.json');
+ let stat;
+ try{stat=await fs.lstat(pkgPath);}catch(error){
+  if(error.code==='ENOENT'){await writeRunnerPackageJson(runnerRoot,folderVersion);return {repaired:true};}
+  throw error;
+ }
+ if(stat.isSymbolicLink()){await fs.unlink(pkgPath);await writeRunnerPackageJson(runnerRoot,folderVersion);return {repaired:true};}
+ if(stat.isFile())return {repaired:false};
+ return {repaired:false};
+}
+
+async function migrateVersionPackageJson(installRoot){
+ installRoot=await fs.realpath(installRoot);
+ const versionsDir=path.join(installRoot,'versions');
+ let entries;
+ try{entries=await fs.readdir(versionsDir,{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}
+ const repaired=[];
+ for(const entry of entries){
+  if(!entry.isDirectory())continue;
+  const runnerRoot=path.join(versionsDir,entry.name);
+  const result=await repairRunnerPackageJson(runnerRoot);
+  if(result.repaired)repaired.push(runnerRoot);
+ }
+ return repaired;
+}
 const execFileAsync=promisify(execFile);
 const AGENT_HOMES=['.claude','.codex'];
 
@@ -144,6 +180,7 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  if(!dev&&await gitDirty(source,['tools','skills']))throw Error('Refusing to install from a checkout with uncommitted changes to tools/ or skills/; commit or stash them, or pass --dev for a development checkout');
  const pkg=JSON.parse(await fs.readFile(path.join(source,'package.json'),'utf8'));
  const versionDir=await snapshotVersion(source,pkg.version);
+ await migrateVersionPackageJson(source);
  const currentPath=await repointCurrent(source,versionDir);
  const {pinnedVersions,readPins}=await import('./pins.mjs');
  const protect=new Set([...(await pinnedVersions(source)).keys()]);
@@ -170,6 +207,8 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
  }
  // A real `swarm` executable for agents and scripts (non-interactive shells never load aliases),
  // and the zsh completion file. Neither edits a shell profile; doctor says what is left to do.
+ const {installSwarmCommand}=await import('./swarm-bin.mjs');
+ const {zshCompletion}=await import('./completion.mjs');
  const swarmCommand=await installSwarmCommand({home,runner});
  const completionFile=path.join(home,'.project-swarm','completions','_swarm');
  await fs.mkdir(path.dirname(completionFile),{recursive:true});
@@ -203,7 +242,7 @@ async function writeAgentPointer(root,relative,template,installRoot){
  if(after!==before)await fs.writeFile(await safeTarget(root,relative),after);
 }
 
-async function ensureSwarmIgnore(root){
+export async function ensureSwarmIgnore(root){
  const destination=await safeTarget(root,'.gitignore');
  const before=await readOptional(destination);
  const lines=before.split(/\r?\n/).map(line=>line.trim());
@@ -253,8 +292,98 @@ export const GUARD_MATCHER='Edit|Write|MultiEdit|NotebookEdit|Bash';
 const hookCommand=(script,arg)=>`test -f ${JSON.stringify(script)} && node ${JSON.stringify(script)}${arg?` ${arg}`:''} || true`;
 const commandOf=hook=>typeof hook?.command==='string'?hook.command:'';
 export function stableInstallDir(installRoot){
- const parent=path.dirname(installRoot);
- return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
+ for(const root of [installRoot,...(installRoot?(()=>{try{return [realpathSync(installRoot)];}catch{return [];}})():[])]){
+  const parent=path.dirname(root);
+  if(path.basename(parent)==='versions')return path.join(path.dirname(parent),'current');
+ }
+ let resolved=installRoot;
+ try{resolved=realpathSync(installRoot);}catch{/* keep installRoot */}
+ const currentCandidate=path.join(resolved,'current');
+ try{
+  if(existsSync(path.join(currentCandidate,'tools','swarm.mjs')))return realpathSync(currentCandidate);
+ }catch{/* no current */}
+ return installRoot;
+}
+export const HOOK_SCRIPT_MARKERS=Object.freeze(['handbuild-guard.mjs','orchestrator-hook.mjs']);
+export function hookScriptCommand(installRoot,script,arg){
+ return hookCommand(path.join(stableInstallDir(installRoot),'tools',script),arg);
+}
+function commandReferencesOurHook(command){
+ const c=commandOf(command);
+ return HOOK_SCRIPT_MARKERS.some(marker=>c.includes(marker));
+}
+const ALL_HOOK_SPECS=()=>[{event:'PreToolUse',script:'handbuild-guard.mjs'},...ORCHESTRATOR_SPECS];
+function patchHookCommandsInSettingsText(before,settings,installRoot){
+ let text=before,changed=false;
+ for(const sp of ALL_HOOK_SPECS()){
+  const command=hookScriptCommand(installRoot,sp.script,sp.arg);
+  const list=settings.hooks[sp.event];
+  if(!Array.isArray(list))continue;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[]){
+   if(!commandOf(hook).includes(sp.script))continue;
+   const old=hook.command;
+   if(old===command)continue;
+   const oldJson=JSON.stringify(old);
+   const newJson=JSON.stringify(command);
+   if(text.includes(oldJson))text=text.replace(oldJson,newJson);
+   hook.command=command;
+   changed=true;
+  }
+ }
+ if(!changed)return {text:before,changed:false};
+ return {text:`${text.endsWith('\n')?text.slice(0,-1):text}\n`,changed:true};
+}
+export async function refreshTrackedSettingsHooks(root,installRoot){
+ const destination=path.join(root,'.claude','settings.json');
+ try{await fs.access(destination);}catch{return {status:'absent'};}
+ const before=await readOptional(destination);
+ if(!before.trim())return {status:'absent'};
+ let settings;
+ try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.json is not valid JSON'};}
+ if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.json is not an object'};
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
+ settings.hooks??={};
+ const hasOur=Object.values(settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).some(hook=>commandReferencesOurHook(hook));
+ if(!hasOur)return {status:'absent'};
+ const patched=patchHookCommandsInSettingsText(before,settings,installRoot);
+ if(!patched.changed)return {status:'unchanged'};
+ let mode=0o644;
+ try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* new */}
+ const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
+ await fs.writeFile(temp,patched.text,{flag:'wx',mode});
+ await fs.rename(temp,destination);
+ return {status:'updated',tracked:true};
+}
+export async function refreshProjectInstallHooks(root,installRoot,{refreshOnly=false}={}){
+ const orchestrator=await ensureOrchestratorHooks(root,installRoot,{refreshOnly});
+ const handbuild=await ensureHandbuildGuard(root,installRoot,{refreshOnly,honorRemoved:true});
+ const tracked=await refreshTrackedSettingsHooks(root,installRoot);
+ return {orchestrator,handbuild,tracked};
+}
+export function readGuardHookCommandFromSettings(settings){
+ if(!settings?.hooks||typeof settings.hooks!=='object')return null;
+ for(const list of Object.values(settings.hooks)){
+  if(!Array.isArray(list))continue;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[]){
+   const c=commandOf(hook);
+   if(c.includes('handbuild-guard.mjs'))return c;
+  }
+ }
+ return null;
+}
+export function guardHookScriptPathFromCommand(command){
+ const m=String(command??'').match(/node\s+((?:\\.|[^"\\])+|"[^"]*")/);
+ if(!m)return null;
+ try{return JSON.parse(m[1]);}catch{return m[1].replace(/^"|"$/g,'');}
+}
+export function guardHookPathStatus({hookCommand,installRoot}={}){
+ const stableScript=path.join(stableInstallDir(installRoot),'tools','handbuild-guard.mjs');
+ const hookScript=hookCommand?guardHookScriptPathFromCommand(hookCommand):null;
+ const stablePath=path.resolve(stableScript);
+ const hookPath=hookScript?path.resolve(hookScript):null;
+ const matches=hookPath!==null&&hookPath===stablePath;
+ const underCurrent=hookPath!==null&&/(?:^|[/\\])current(?:[/\\]|$)/.test(hookPath);
+ return {hookPath,stablePath,matches,underCurrent,warn:hookPath!==null&&(!matches||!underCurrent)};
 }
 async function readSettings(root){
  const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
@@ -290,7 +419,7 @@ async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
  let changed=false;
  for(const sp of specs){
   if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
-  const command=hookCommand(path.join(stableInstallDir(installRoot),'tools',sp.script),sp.arg);
+  const command=hookScriptCommand(installRoot,sp.script,sp.arg);
   const list=settings.hooks[sp.event]??=[];
   let found=false;
   for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`))){found=true;if(hook.command!==command){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher){entry.matcher=sp.matcher;changed=true;}}
@@ -365,25 +494,19 @@ export async function patchPointer(root,patch){
  throw Error(`no .project-swarm.json in ${root}`);
 }
 
+// Release fields (version, install path used by the runner) live in git-ignored .swarm/runner-pointer.json so `swarm update` never dirties the tracked profile file.
 export async function writePointer(root,{install,version}){
+ const {readRunnerPointer,bootstrapProjectPointer,writeReleasePointer}=await import('./runner-pointer.mjs');
  const destination=await safeTarget(root,'.project-swarm.json');
- let before=null,existing={};
+ let before=null;
  try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
- if(before!==null){
-  try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
-  if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
-  if(existing.install===install&&existing.version===version)return {changed:false,backup:null};
-  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
-  await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
-  const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(temp,`${JSON.stringify({...existing,install,version},null,2)}\n`);
-  await fs.rename(temp,destination);
-  return {changed:true,backup};
- }
- const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
- await fs.writeFile(temp,`${JSON.stringify({install,version},null,2)}\n`);
- await fs.rename(temp,destination);
- return {changed:true,backup:null};
+ if(before===null)return bootstrapProjectPointer(root,{install,version});
+ let existing;
+ try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+ if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
+ const merged=await readRunnerPointer(root);
+ if(merged.install===install&&merged.version===version)return {changed:false,backup:null};
+ return writeReleasePointer(root,{install,version});
 }
 
 // Links one project to a shared install instead of copying the runner into it. The project
@@ -452,8 +575,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
  const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
  const handbuildGuard=agentFiles&&isNew?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
+ const trackedHooks=agentFiles?await refreshTrackedSettingsHooks(root,installRoot):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,trackedHooks,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

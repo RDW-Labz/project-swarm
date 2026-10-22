@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8016-generic",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/watch-assets/run-kpis.js",
+        "tools/watch-cli.mjs",
+        "tools/watch-server.mjs",
+        "tests/board-no-money.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "Follow-up for T-8016 on this branch (main with #264 is merged in: the board token is accepted only as the x-watch-token header or the per-port swarm_watch_<port> cookie; ?t= is refused on every non-page route). Two things. (1) Regression: removing money also removed the 'NO CAP' warning from tools/watch-assets/run-kpis.js; tests/project-spend.test.mjs ('no project cap ... swarm watch says NO CAP') requires the run Watch page to say NO CAP when the project has no cap. Restore it as a plain warning with no amount (driven by a non-money boolean such as noCap; make sure stripMoney in tools/watch-cli.mjs and the watch-server payload keep a boolean noCap field: it is not money). (2) Make tests/board-no-money.test.mjs generic, as the release owner asked: export from tools/watch-server.mjs a frozen list of every GET route it serves (pages and APIs, e.g. WATCH_ROUTES) built from the same arrays the router uses, then in the test start a real server (board mode with data that HAS spend: runs with costUsd, spend files, a cap) and request EVERY route in that list with the x-watch-token header, plus an /events snapshot and one delta; fail if any JSON payload has a money-shaped key or any response body contains a dollar-shaped value (regex /\\$\\s?\\d/ ; list the allowed exceptions, if any, explicitly in the test); keep the scan of every board browser script; replace every ?t= in the test with the header. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-no-money.test.mjs tests/project-spend.test.mjs tests/watch-token-urls.test.mjs tests/watch-*.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the watch server or scripts for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

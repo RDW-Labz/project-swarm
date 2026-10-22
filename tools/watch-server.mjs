@@ -4,6 +4,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 
@@ -21,14 +22,64 @@ const SECURITY = {
 };
 
 const IDLE_FINISHED_MS = 10000;
+
+export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
+
+export function watchBoardRoutePaths({ remote = false } = {}) {
+  return Object.freeze([
+    '/board',
+    '/api/board',
+    '/api/project',
+    '/api/live',
+    '/api/history',
+    '/history.csv',
+    ...(remote ? [] : ['/open/run']),
+    '/project',
+    '/run',
+    '/api/run',
+  ]);
+}
+
+export const WATCH_NAV_PATHS = Object.freeze(['/api/nav', '/nav/board', '/nav/project']);
+
+/** Every GET path the board Watch server serves (non-remote, with nav). Built from the same arrays as the router. */
+export const WATCH_ROUTES = Object.freeze([
+  ...WATCH_CORE_PATHS,
+  ...watchBoardRoutePaths({ remote: false }),
+  ...WATCH_NAV_PATHS,
+]);
 const MAX_STREAMS = 8;
-const MAX_SLOW_WRITES = 2;
+export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_PAUSED_MS = 60000;
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
   const y = Buffer.from(String(b), 'utf8');
-  if (x.length !== y.length) return false;
-  return timingSafeEqual(x, y);
+  const size = Math.max(x.length, y.length);
+  const xx = Buffer.alloc(size);
+  const yy = Buffer.alloc(size);
+  x.copy(xx);
+  y.copy(yy);
+  return timingSafeEqual(xx, yy) && x.length === y.length;
+}
+
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const COOKIE_VALUE = /^[!#$%&'()*+\-.\/0-9:<=>?@A-Z[\\\]^_`a-z{|}~]*$/;
+
+function watchCookie(header, expectedName) {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  const pairs = [];
+  for (const raw of header.split(';')) {
+    const part = raw.trim();
+    const at = part.indexOf('=');
+    if (!part || at <= 0 || !COOKIE_NAME.test(part.slice(0, at).trim())) return null;
+    const name = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+    if (!COOKIE_VALUE.test(value)) return null;
+    pairs.push([name, value]);
+  }
+  const matches = pairs.filter(([name]) => name === expectedName);
+  return matches.length === 1 ? matches[0][1] : null;
 }
 
 function send(res, method, status, headers, body) {
@@ -48,6 +99,142 @@ function sse(event, data) {
   return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
 }
 
+export function createWatchStreamManager({ getRunSnapshot, now = Date.now, onDrop = () => {}, onClose = () => {} }) {
+  const streams = new Set();
+  let latestSnapshot = null;
+
+  function dropStream(stream, end = false) {
+    if (!streams.delete(stream)) return;
+    onDrop(stream);
+    if (end) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function writableLength(stream) {
+    return Number.isFinite(stream.res.writableLength) ? stream.res.writableLength : 0;
+  }
+
+  function shouldDrop(stream) {
+    return writableLength(stream) > MAX_STREAM_BUFFER_BYTES
+      || (stream.paused && now() - stream.pausedAt > MAX_STREAM_PAUSED_MS);
+  }
+
+  function pause(stream) {
+    if (!stream.paused) {
+      stream.paused = true;
+      stream.pausedAt = now();
+    }
+  }
+
+  function write(stream, chunk) {
+    try {
+      const ok = stream.res.write(chunk);
+      if (!ok) pause(stream);
+      return ok;
+    } catch {
+      dropStream(stream, true);
+      return false;
+    }
+  }
+
+  function open(res, run) {
+    latestSnapshot = run;
+    const stream = {
+      res,
+      prev: run,
+      paused: false,
+      pausedAt: null,
+      throttle: createThrottle(250, now),
+    };
+    streams.add(stream);
+    res.on('close', () => {
+      dropStream(stream);
+      onClose();
+    });
+    res.on('drain', () => {
+      if (!streams.has(stream) || !stream.paused) return;
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        return;
+      }
+      const next = latestSnapshot;
+      const ok = write(stream, sse('snapshot', next));
+      stream.prev = next;
+      if (ok) {
+        stream.paused = false;
+        stream.pausedAt = null;
+      }
+    });
+    try {
+      write(stream, sse('snapshot', run));
+    } catch {
+      dropStream(stream, true);
+    }
+    return stream;
+  }
+
+  function writeHeartbeats() {
+    const line = ': ping\n\n' + sse('ping', {});
+    for (const stream of [...streams]) {
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (stream.paused && writableLength(stream) >= MAX_STREAM_BUFFER_BYTES) continue;
+      write(stream, line);
+    }
+  }
+
+  async function pushUpdates() {
+    const next = (await getRunSnapshot()) ?? null;
+    latestSnapshot = next;
+    for (const stream of [...streams]) {
+      if (stream.paused) {
+        if (shouldDrop(stream)) dropStream(stream, true);
+        continue;
+      }
+      if (shouldDrop(stream)) {
+        dropStream(stream, true);
+        continue;
+      }
+      if (JSON.stringify(stream.prev) === JSON.stringify(next)) continue;
+      if (!stream.throttle.shouldSend()) continue;
+      const line = (stream.prev === null || next === null)
+        ? sse('snapshot', next)
+        : sse('delta', diffSnapshots(stream.prev, next));
+      if (write(stream, line)) {
+        stream.prev = next;
+      }
+    }
+  }
+
+  function close() {
+    for (const stream of [...streams]) {
+      try {
+        stream.res.end();
+      } catch {
+        // already closed
+      }
+    }
+    streams.clear();
+  }
+
+  return {
+    open,
+    writeHeartbeats,
+    pushUpdates,
+    close,
+    get size() {
+      return streams.size;
+    },
+  };
+}
+
 export function createWatchServer(opts) {
   const {
     root,
@@ -65,6 +252,9 @@ export function createWatchServer(opts) {
     deltaFile,
     idleMs = 1800000,
     now = Date.now,
+    heartbeatMs = 10000,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
     // A fixed port and token, for a board that stays up between restarts (swarm remote). Without them: a free port and a fresh token every start.
     port: wantedPort = 0,
     token: fixedToken,
@@ -75,11 +265,11 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const streams = new Set();
   let server = null;
   let port = 0;
   let url = null;
   let timer = null;
+  let heartbeatTimer = null;
   let ticking = false;
   let closed = false;
   let streamEverClosed = false;
@@ -87,6 +277,20 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  async function publicRunSnapshot() {
+    const snap = await getRunSnapshot();
+    return snap == null ? null : stripMoney(snap);
+  }
+
+  const streamManager = createWatchStreamManager({
+    getRunSnapshot: publicRunSnapshot,
+    now,
+    onDrop: () => { streamEverClosed = true; },
+    onClose: () => {
+      lastActivity = now();
+      if (streamManager.size === 0) noStreamSince = now();
+    },
+  });
 
   async function loadAssets() {
     assets.clear();
@@ -102,18 +306,18 @@ export function createWatchServer(opts) {
     assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
   }
 
-  function sendAsset(res, method, name) {
+  function sendAsset(res, method, name, headers = {}) {
     const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
     if (!a) return sendText(res, method, 404, 'not found');
-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length }, a.body);
+    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length, ...headers }, a.body);
   }
 
   async function payload() {
-    const run = (await getRunSnapshot()) ?? null;
-    const plan = (await getPlanSnapshot()) ?? { present: false };
+    const run = await publicRunSnapshot();
+    const plan = stripMoney((await getPlanSnapshot()) ?? { present: false });
     const gallery = (await getGallery()) ?? { schema: 1, screens: [] };
     const ctx = await contextCommands(run, plan);
-    return { run, plan, gallery, commands: commandList, contextCommands: ctx };
+    return stripMoney({ run, plan, gallery, commands: commandList, contextCommands: ctx });
   }
 
   async function sendShot(res, method, id, kind) {
@@ -123,53 +327,19 @@ export function createWatchServer(opts) {
     send(res, method, 200, { 'Content-Type': 'image/png', 'Content-Length': body.length }, body);
   }
 
-  function dropStream(s) {
-    streams.delete(s);
-    streamEverClosed = true;
-  }
-
   async function openEvents(res, method) {
     if (method === 'HEAD') {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
-    const run = (await getRunSnapshot()) ?? null;
-    if (streams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    const run = await publicRunSnapshot();
+    if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
-    res.write(sse('snapshot', run));
-    const stream = { res, prev: run, throttle: createThrottle(250, now), slow: 0 };
-    streams.add(stream);
-    res.on('close', () => {
-      dropStream(stream);
-      lastActivity = now();
-      if (streams.size === 0) noStreamSince = now();
-    });
-  }
-
-  async function pushUpdates() {
-    const next = (await getRunSnapshot()) ?? null;
-    for (const s of [...streams]) {
-      if (JSON.stringify(s.prev) === JSON.stringify(next)) continue;
-      if (!s.throttle.shouldSend()) continue;
-      try {
-        const line = (s.prev === null || next === null)
-          ? sse('snapshot', next)
-          : sse('delta', diffSnapshots(s.prev, next));
-        const ok = s.res.write(line);
-        s.prev = next;
-        s.slow = ok ? 0 : s.slow + 1;
-        if (s.slow >= MAX_SLOW_WRITES) {
-          dropStream(s);
-          try {
-            s.res.end();
-          } catch {
-            // already closed
-          }
-        }
-      } catch {
-        dropStream(s);
-      }
+    if (res.socket) {
+      res.socket.setTimeout(0);
+      res.socket.setKeepAlive(true);
     }
+    streamManager.open(res, run);
   }
 
   async function handle(req, res) {
@@ -191,6 +361,13 @@ export function createWatchServer(opts) {
     }
     const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
+    if (pathname === '/api/health') {
+      if (remote || !local) return sendText(res, method, 421, 'misdirected request');
+      const hostName = String(host ?? '').split(':')[0];
+      if (hostName !== '127.0.0.1' && hostName !== 'localhost') return sendText(res, method, 421, 'misdirected request');
+      const info = await versionInfo();
+      return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
+    }
     if (pathname.startsWith('/assets/')) {
       lastActivity = now();
       return sendAsset(res, method, pathname.slice('/assets/'.length));
@@ -200,20 +377,29 @@ export function createWatchServer(opts) {
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
+    const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
     if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
-    const q = u.searchParams.get('t');
-    const h = req.headers['x-watch-token'];
-    const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+    const isHtmlPage = pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'));
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const cookieName = `swarm_watch_${port}`;
+    const cookieToken = watchCookie(req.headers.cookie, cookieName);
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const cookieOk = typeof cookieToken === 'string' && safeEqual(cookieToken, token);
+    const queryOk = isHtmlPage && typeof queryToken === 'string' && safeEqual(queryToken, token);
+    const ok = headerOk || cookieOk || queryOk;
     if (!ok) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    if (pathname === '/') return sendAsset(res, method, indexName);
+    const pageHeaders = queryOk ? {
+      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+    } : {};
+    if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
@@ -226,14 +412,15 @@ export function createWatchServer(opts) {
     }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
-      if (pathname === '/project') return sendAsset(res, method, 'project.html');
-      if (pathname === '/run') return sendAsset(res, method, 'run.html');
-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
+      delete q.t;
+      if (pathname === '/project') return sendAsset(res, method, 'project.html', pageHeaders);
+      if (pathname === '/run') return sendAsset(res, method, 'run.html', pageHeaders);
+      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, stripMoney({ ...detail, openRun: !remote })) : sendText(res, method, 404, 'not found'); }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {
         const localOnly = q.local === '1';
-        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly })), openRun: !remote, server: await versionInfo() });
+        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() });
       }
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }
@@ -254,16 +441,11 @@ export function createWatchServer(opts) {
   async function close() {
     if (closed && !server) return;
     closed = true;
-    if (timer) clearInterval(timer);
+    if (timer) clearIntervalFn(timer);
     timer = null;
-    for (const s of [...streams]) {
-      try {
-        s.res.end();
-      } catch {
-        // already closed
-      }
-    }
-    streams.clear();
+    if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+    heartbeatTimer = null;
+    streamManager.close();
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -278,8 +460,8 @@ export function createWatchServer(opts) {
     ticking = true;
     try {
       const t = now();
-      if (streams.size > 0) {
-        await pushUpdates();
+      if (streamManager.size > 0) {
+        await streamManager.pushUpdates();
       } else {
         if (t - lastActivity >= idleMs) {
           await close();
@@ -307,6 +489,8 @@ export function createWatchServer(opts) {
         else res.end();
       });
     });
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(wantedPort, '127.0.0.1', () => resolve());
@@ -317,10 +501,12 @@ export function createWatchServer(opts) {
     streamEverClosed = false;
     lastActivity = now();
     noStreamSince = now();
-    timer = setInterval(() => {
+    timer = setIntervalFn(() => {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
+    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
+    if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     return { url, port };
   }
 

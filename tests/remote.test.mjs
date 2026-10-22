@@ -85,7 +85,7 @@ async function harness(t, mock = {}) {
     },
     kill: () => { const b = boards.pop(); if (b) { b.server.close(); b.api.close(); } return true; },
     // The tailnet hop: what tailscale serve does to a request from the phone (the tailnet name as Host, the login header).
-    reach: async (url) => { const u = new URL(url); const s = await readRemote(env); return base.get(`http://127.0.0.1:${s.port}${u.pathname}${u.search}`, { host: u.host, headers: { 'Tailscale-User-Login': LOGIN } }); },
+    reach: async (url, options = {}) => { const u = new URL(url); const s = await readRemote(env); const token = options.headers?.['x-watch-token'] ?? (u.searchParams.has('t') ? u.searchParams.get('t') : s.token); u.searchParams.delete('t'); return base.get(`http://127.0.0.1:${s.port}${u.pathname}${u.search}`, { host: u.host, headers: { 'Tailscale-User-Login': LOGIN, ...(options.headers || {}), ...(token ? { 'x-watch-token': token } : {}) } }); },
     resolve: async () => ['100.101.102.103'],
   };
   t.after(async () => { for (const b of boards) { b.server.close(); await b.api.close().catch(() => {}); } await fs.rm(dir, { recursive: true, force: true }); });
@@ -149,20 +149,20 @@ test('the board through tailscale: only your login, only with the token, read-on
       req.on('error', () => resolve(0)); req.end();
     });
   });
-  assert.equal(await via(`/api/board?t=${s.token}`), 200);
-  assert.equal(await via(`/api/board?t=${'0'.repeat(48)}`), 403);
+  assert.equal(await via('/api/board', { extra: { 'x-watch-token': s.token } }), 200);
+  assert.equal(await via('/api/board', { extra: { 'x-watch-token': '0'.repeat(48) } }), 403);
   assert.equal(await via(`/api/board`), 403);
   // Every refusal is the same 403, so the port cannot be probed for and a spoofed Host gets nothing.
-  assert.equal(await via(`/api/board?t=${s.token}`, { login: 'someone-else@example.com' }), 403);
-  assert.equal(await via(`/api/board?t=${s.token}`, { login: null }), 403);
-  assert.equal(await via(`/api/board?t=${s.token}`, { host: 'evil.example.com' }), 403);
-  assert.equal(await via(`/api/board?t=${s.token}`, { host: `127.0.0.1:${s.port}`, login: null }), 403, 'a loopback Host does not skip the login check');
-  assert.equal(await via(`/api/board?t=${s.token}`, { host: `localhost:${s.port}`, login: 'someone-else@example.com' }), 403);
-  assert.equal(await via(`/api/board?t=${s.token}`, { host: `127.0.0.1:${s.port}` }), 200, 'the owner login with the loopback Host is the self-check path');
-  assert.equal(await via(`/api/board?t=${s.token}`, { extra: { 'Tailscale-Funnel-Request': '?1' } }), 403, 'a Funnel request is refused even with a login header');
-  assert.equal(await via(`/api/board?t=${s.token}`, { method: 'POST' }), 405);
-  assert.equal(await via(`/open/run?id=x&run=y&t=${s.token}`), 404);
-  assert.equal(await via(`/nav/board?t=${s.token}`), 404);
+  assert.equal(await via('/api/board', { login: 'someone-else@example.com', extra: { 'x-watch-token': s.token } }), 403);
+  assert.equal(await via('/api/board', { login: null, extra: { 'x-watch-token': s.token } }), 403);
+  assert.equal(await via('/api/board', { host: 'evil.example.com', extra: { 'x-watch-token': s.token } }), 403);
+  assert.equal(await via('/api/board', { host: `127.0.0.1:${s.port}`, login: null, extra: { 'x-watch-token': s.token } }), 403, 'a loopback Host does not skip the login check');
+  assert.equal(await via('/api/board', { host: `localhost:${s.port}`, login: 'someone-else@example.com', extra: { 'x-watch-token': s.token } }), 403);
+  assert.equal(await via('/api/board', { host: `127.0.0.1:${s.port}`, extra: { 'x-watch-token': s.token } }), 200, 'the owner login with the loopback Host is the self-check path');
+  assert.equal(await via('/api/board', { extra: { 'Tailscale-Funnel-Request': '?1', 'x-watch-token': s.token } }), 403, 'a Funnel request is refused even with a login header');
+  assert.equal(await via('/api/board', { method: 'POST', extra: { 'x-watch-token': s.token } }), 405);
+  assert.equal(await via('/open/run?id=x&run=y', { extra: { 'x-watch-token': s.token } }), 404);
+  assert.equal(await via('/nav/board', { extra: { 'x-watch-token': s.token } }), 404);
 });
 
 test('remote on twice keeps the same token and board', async t => {
@@ -338,10 +338,10 @@ test('the real board process starts on the saved port and token, on loopback', a
   const pid = await deps.spawnServer();
   t.after(async () => { deps.kill(pid); await fs.rm(dir, { recursive: true, force: true }); });
   let status = 0;
-  for (let i = 0; i < 60 && status !== 200; i += 1) { status = (await deps.get(`http://127.0.0.1:${port}/api/board?t=${'a'.repeat(48)}`, { host: `127.0.0.1:${port}`, headers: { 'Tailscale-User-Login': LOGIN } })).status; if (status !== 200) await new Promise(r => setTimeout(r, 250)); }
+  for (let i = 0; i < 60 && status !== 200; i += 1) { status = (await deps.get(`http://127.0.0.1:${port}/api/board`, { host: `127.0.0.1:${port}`, headers: { 'Tailscale-User-Login': LOGIN, 'x-watch-token': 'a'.repeat(48) } })).status; if (status !== 200) await new Promise(r => setTimeout(r, 250)); }
   assert.equal(status, 200);
-  assert.equal((await deps.get(`http://127.0.0.1:${port}/api/board?t=nope`, { host: `127.0.0.1:${port}`, headers: { 'Tailscale-User-Login': LOGIN } })).status, 403);
-  assert.equal((await deps.get(`http://127.0.0.1:${port}/api/board?t=${'a'.repeat(48)}`, { host: `127.0.0.1:${port}` })).status, 403, 'no login, no board');
+  assert.equal((await deps.get('http://127.0.0.1:' + port + '/api/board', { host: `127.0.0.1:${port}`, headers: { 'Tailscale-User-Login': LOGIN, 'x-watch-token': 'nope' } })).status, 403);
+  assert.equal((await deps.get(`http://127.0.0.1:${port}/api/board`, { host: `127.0.0.1:${port}`, headers: { 'x-watch-token': 'a'.repeat(48) } })).status, 403, 'no login, no board');
   assert.equal((await fs.stat(path.join(dir, 'remote.log'))).mode & 0o077, 0, 'the log is private');
   await assert.rejects(fs.stat(env.SWARM_BOARD_FILE), 'the remote board does not register as the local board');
 });
@@ -448,7 +448,7 @@ test('a board that finds Funnel on for its address stops itself', async t => {
   const env = { ...h.env, SWARM_REMOTE_WATCH_MS: '100' };
   const running = serveRemote(env);
   let up = false;
-  for (let i = 0; i < 60 && !up; i += 1) { up = (await h.deps.get(`http://127.0.0.1:${state.port}/api/board?t=${state.token}`, { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': LOGIN } })).status === 200; if (!up) await new Promise(r => setTimeout(r, 100)); }
+  for (let i = 0; i < 60 && !up; i += 1) { up = (await h.deps.get(`http://127.0.0.1:${state.port}/api/board`, { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': LOGIN, 'x-watch-token': state.token } })).status === 200; if (!up) await new Promise(r => setTimeout(r, 100)); }
   assert.ok(up, 'the board came up');
   await h.setTs({ funnelPorts: [String(HTTPS_PORT)] });
   const stopped = await Promise.race([running.then(() => 'stopped'), new Promise(r => setTimeout(() => r('still running'), 8000))]);

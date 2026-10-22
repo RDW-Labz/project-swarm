@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8011-gaps-cursor",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/board-live.mjs",
+        "tests/board-accuracy-activity.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-board-accuracy-a.json",
+        "tools/project-spend.mjs"
+      ],
+      "prompt": "T-8011 acceptance gap (Codex review, coordination/reviews/acc-review-board-accuracy-a.json): 'a project that built today never says idle' is not met: a completed run from today leaves activeLiveRuns empty, so projectOverview still reports idle. Fix in tools/board-data.mjs (and tools/board-live.mjs if it computes the same state): idle is true only when there are no live runs in the family AND the family's lastActivityAt (runs, ticket transitions, ledger updates from main, linked worktrees and scratch) is before the start of the current local day (use the injected now and the machine's local time zone; export a small helper startOfLocalDay(now) for tests). Add activity: 'building' (live runs), 'active-today' (no live run, activity today), or 'idle'. Add tests to tests/board-accuracy-activity.test.mjs: a project whose only run completed earlier today (in a linked worktree) is not idle and has activity 'active-today'; one whose last activity was yesterday is idle; one with a live run is 'building'. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files, .github or the board browser scripts. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-activity.test.mjs tests/board-accuracy-percent.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data or board-live for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

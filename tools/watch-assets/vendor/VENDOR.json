@@ -1,0 +1,424 @@
+{
+  "version": 1,
+  "budget": {
+    "gzipBytesMax": 409600,
+    "note": "JS, CSS and fonts on first load; images are counted separately"
+  },
+  "entries": [
+    {
+      "name": "Motion (UMD build)",
+      "version": "14.5.0",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/motion/v/14.5.0 (file dist/motion.js)",
+      "copyright": "Copyright (c) 2024 Motion B.V.",
+      "use": "card and chip transitions, toast",
+      "notes": null,
+      "licenseFiles": [
+        "motion/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "motion/motion.js",
+          "sha256": "69c327fe2d655b3da6112e5723c6ea85c29b063e59fa5471e6ebbc96a087b39d",
+          "bytes": 172010,
+          "gzip": 57218
+        }
+      ]
+    },
+    {
+      "name": "CountUp.js (UMD build)",
+      "version": "2.10.1",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/countup.js/v/2.10.1 (file dist/countUp.umd.js)",
+      "copyright": "Copyright (c) inorganik",
+      "use": "count-up numbers",
+      "notes": null,
+      "licenseFiles": [
+        "countup/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "countup/countUp.umd.js",
+          "sha256": "2b08353ed1cd319ac41a79d74cd5508855ce33fd14d981997196b7b418cb4225",
+          "bytes": 7074,
+          "gzip": 2266
+        }
+      ]
+    },
+    {
+      "name": "ShuffleText",
+      "version": "0.6.0",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/shuffle-text/v/0.6.0 (file build/shuffle-text.min.js)",
+      "copyright": "Copyright (c) IKEDA Yasunobu / ICS",
+      "use": "ticket id decrypt effect",
+      "notes": null,
+      "licenseFiles": [
+        "shuffle-text/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "shuffle-text/shuffle-text.min.js",
+          "sha256": "13deb7a68abb8ec44506891d691818e1cb303b2e90ce564247af65303f3c77d7",
+          "bytes": 1917,
+          "gzip": 670
+        }
+      ]
+    },
+    {
+      "name": "PowerGlitch",
+      "version": "2.5.0",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/powerglitch/v/2.5.0 (file dist/powerglitch.min.js)",
+      "copyright": "Copyright (c) 2022 Benjamin Raymond",
+      "use": "one short glitch on failure",
+      "notes": null,
+      "licenseFiles": [
+        "powerglitch/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "powerglitch/powerglitch.min.js",
+          "sha256": "0b77ee9ba35bab53a0da29cf505b460669dfb11ca4ef24be90c2894a8887ee2f",
+          "bytes": 5032,
+          "gzip": 2140
+        }
+      ]
+    },
+    {
+      "name": "augmented-ui",
+      "version": "2.0.0",
+      "license": "BSD-2-Clause",
+      "source": "https://www.npmjs.com/package/augmented-ui/v/2.0.0 (file augmented-ui.min.css)",
+      "copyright": "Copyright (c) 2020 James0x57, PropJockey",
+      "use": "HUD card frames and notched chips (pure CSS)",
+      "notes": null,
+      "licenseFiles": [
+        "augmented-ui/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "augmented-ui/augmented-ui.min.css",
+          "sha256": "7c6e075febcb715c27c52be9ab7a101d50bfc9127e47c6f7b579ae6280d8a959",
+          "bytes": 167353,
+          "gzip": 17296
+        }
+      ]
+    },
+    {
+      "name": "simplex-noise (ES module)",
+      "version": "4.0.3",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/simplex-noise/v/4.0.3 (file dist/esm/simplex-noise.js)",
+      "copyright": "Copyright (c) 2018 Jonas Wagner",
+      "use": "flow field of the Hive background",
+      "notes": null,
+      "licenseFiles": [
+        "simplex-noise/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "simplex-noise/simplex-noise.js",
+          "sha256": "64e571e6d28da06fdd230110b8ce242285e76137e7258938f3b68a0fd6ff8146",
+          "bytes": 18735,
+          "gzip": 4756
+        }
+      ]
+    },
+    {
+      "name": "Oxanium Variable and Geist Mono Variable (latin woff2)",
+      "version": "5.3.0 (Fontsource, both)",
+      "license": "OFL-1.1",
+      "source": "https://www.npmjs.com/package/@fontsource-variable/oxanium/v/5.3.0 and https://www.npmjs.com/package/@fontsource-variable/geist-mono/v/5.3.0",
+      "copyright": "Oxanium: Severin Meyer; Geist Mono: Vercel (see the LICENSE files)",
+      "use": "HUD headings and tabular numbers",
+      "notes": null,
+      "licenseFiles": [
+        "fonts/LICENSE-geist-mono",
+        "fonts/LICENSE-oxanium"
+      ],
+      "files": [
+        {
+          "path": "fonts/geist-mono-latin-wght-normal.woff2",
+          "sha256": "684ad5b531f81d43c1e8c7038262d5db7cdc1f68006e04d6c7769efa8d33c8cc",
+          "bytes": 23128,
+          "gzip": 23156
+        },
+        {
+          "path": "fonts/oxanium-latin-wght-normal.woff2",
+          "sha256": "3aa555c528430aab19bb2693dc206bab557767d3082dba66400784c9cc90cfbb",
+          "bytes": 14044,
+          "gzip": 14067
+        }
+      ]
+    },
+    {
+      "name": "Radix Colors, dark scales (slate, blue, green, amber, red, violet, cyan, teal)",
+      "version": "3.0.0",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/@radix-ui/colors/v/3.0.0",
+      "copyright": "Copyright (c) 2021 Radix",
+      "use": "navy surfaces and status colours",
+      "notes": null,
+      "licenseFiles": [
+        "radix-colors/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "radix-colors/amber-dark.css",
+          "sha256": "b1f84ce5cb8336b54c926c78bb89787df56d2bbe277dcd6a453d16d074d74013",
+          "bytes": 1022,
+          "gzip": 349
+        },
+        {
+          "path": "radix-colors/blue-dark.css",
+          "sha256": "6a27324f2ad7d53649d40bddfd397db276d4fad8626945fd54d903190ba58c23",
+          "bytes": 1014,
+          "gzip": 356
+        },
+        {
+          "path": "radix-colors/cyan-dark.css",
+          "sha256": "c6def23aed3b9dfec0293788e062769ee309f9f126a8cb9ec01c4e77ad4a32c8",
+          "bytes": 1022,
+          "gzip": 365
+        },
+        {
+          "path": "radix-colors/green-dark.css",
+          "sha256": "2cebb00388fd84a41e39c51c184293b8cf2eeeb4424946e7fa6f9aba9b2b5dec",
+          "bytes": 1047,
+          "gzip": 359
+        },
+        {
+          "path": "radix-colors/red-dark.css",
+          "sha256": "c65a4340bf310a3f37473a2db1986ec0e7af35fb41541f63b10364240c7825e1",
+          "bytes": 995,
+          "gzip": 358
+        },
+        {
+          "path": "radix-colors/slate-dark.css",
+          "sha256": "a51e5cba0956c571c878a698db438209c652c5775e88eabc80f5ab6af34281bd",
+          "bytes": 1048,
+          "gzip": 358
+        },
+        {
+          "path": "radix-colors/teal-dark.css",
+          "sha256": "56a7e2e6738018c69ceae81581ac76ea65df3691b5e049a7d73ce44ed3f2b4e3",
+          "bytes": 1023,
+          "gzip": 356
+        },
+        {
+          "path": "radix-colors/violet-dark.css",
+          "sha256": "d5e78921fc90422e160cce26276485cc4aae85f86b3691ac94c00df1c631fc70",
+          "bytes": 1069,
+          "gzip": 366
+        }
+      ]
+    },
+    {
+      "name": "Lucide static icons (10 SVG files)",
+      "version": "1.61.0",
+      "license": "ISC",
+      "source": "https://unpkg.com/lucide-static@1.61.0/icons/",
+      "copyright": "Copyright (c) 2026 Lucide Icons and Contributors",
+      "use": "UI icons",
+      "notes": null,
+      "licenseFiles": [
+        "lucide/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "lucide/activity.svg",
+          "sha256": "ad2e728ce1a3bf4dee93223ce3912c7b52cd2ee061c832e08ba0a14b028f68ee",
+          "bytes": 425,
+          "gzip": 286
+        },
+        {
+          "path": "lucide/bot.svg",
+          "sha256": "b64f73b0be93e8bea62200ecf6c0840e19e7b064f9eaf9ecf89a7153cd373fe8",
+          "bytes": 454,
+          "gzip": 271
+        },
+        {
+          "path": "lucide/check.svg",
+          "sha256": "cf5d8f45a017604917c0d74ed9c49c6926b0df780c4c9ad3ad85fb7a392bf746",
+          "bytes": 315,
+          "gzip": 229
+        },
+        {
+          "path": "lucide/clock.svg",
+          "sha256": "2a50ff1030ae5591447dd5b278bdbd24e7dda3c24e2133348e7a66231fd6e787",
+          "bytes": 347,
+          "gzip": 244
+        },
+        {
+          "path": "lucide/cpu.svg",
+          "sha256": "5eb864994312ce7600b63080fc2117c9a04a9b74a8d4aa233f75d83c4bd2ab8a",
+          "bytes": 664,
+          "gzip": 295
+        },
+        {
+          "path": "lucide/git-merge.svg",
+          "sha256": "ab47ce868a4033d8dd20462b75ac81f46be13111396a10f436619cf103497db4",
+          "bytes": 393,
+          "gzip": 260
+        },
+        {
+          "path": "lucide/hand.svg",
+          "sha256": "48eb0936c9e857eec076659306886501166e8f7dec467ec39832ab2aa820aa3c",
+          "bytes": 558,
+          "gzip": 316
+        },
+        {
+          "path": "lucide/loader-circle.svg",
+          "sha256": "83789c9ed68cc3f4f290736a2fd5e0acae39ba2b8705a5b7e34d507f1f44477a",
+          "bytes": 335,
+          "gzip": 241
+        },
+        {
+          "path": "lucide/triangle-alert.svg",
+          "sha256": "563e5e851a38ddc378dc98e80ae650ee28180846c7ce14ba51d40bc2107c9362",
+          "bytes": 430,
+          "gzip": 277
+        },
+        {
+          "path": "lucide/x.svg",
+          "sha256": "a611112e8946480120e5e96f1d849651df76fa502f6190e293defaf6c4f56b07",
+          "bytes": 332,
+          "gzip": 230
+        }
+      ]
+    },
+    {
+      "name": "Material Line Icons animated (6 icons as one JSON subset)",
+      "version": "1.2.16 (@iconify-json/line-md)",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/@iconify-json/line-md/v/1.2.16",
+      "copyright": "Copyright 2020 Vjacheslav Trushkin",
+      "use": "animated draw-in check, spinner, alert",
+      "notes": null,
+      "licenseFiles": [
+        "line-md/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "line-md/icons.json",
+          "sha256": "d7e7dacb9df6127978ee317bd23be294436fda029e9451264d55f717593c0607",
+          "bytes": 9265,
+          "gzip": 1618
+        }
+      ]
+    },
+    {
+      "name": "Kenney Emotes Pack, Vector style 1 (8 PNG)",
+      "version": "opengameart release kenney_emotesPack.zip",
+      "license": "CC0-1.0",
+      "source": "https://opengameart.org/content/emotes-pack",
+      "copyright": "Kenney Vleugels (Kenney.nl), public domain dedication",
+      "use": "state bubbles over robot heads",
+      "notes": null,
+      "licenseFiles": [
+        "kenney-emotes/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "kenney-emotes/emote_alert.png",
+          "sha256": "bebdf06bb1c38cab54a4531f78651c61d531ae02c8fd464644eb87862c296b3b",
+          "bytes": 451,
+          "gzip": 474
+        },
+        {
+          "path": "kenney-emotes/emote_cross.png",
+          "sha256": "b6c87db06ce8710b2e6ddad3ee7a5f9e4bf3f613e34ca050a46c28875e0f1cfe",
+          "bytes": 374,
+          "gzip": 397
+        },
+        {
+          "path": "kenney-emotes/emote_dots3.png",
+          "sha256": "1e876e76c7f5efe9d5c734310cb66b4292c513dffc326093ea9a744050c0923d",
+          "bytes": 323,
+          "gzip": 346
+        },
+        {
+          "path": "kenney-emotes/emote_exclamation.png",
+          "sha256": "ea478d2811eadd440cf5c69b9236410d5ce0d0e12f0e19db9864ec28334bacb9",
+          "bytes": 355,
+          "gzip": 378
+        },
+        {
+          "path": "kenney-emotes/emote_idea.png",
+          "sha256": "0acfe35b80dbb5df5d243c75c179e51fd37386acb151e54ed8ff8866751a7b6b",
+          "bytes": 402,
+          "gzip": 425
+        },
+        {
+          "path": "kenney-emotes/emote_question.png",
+          "sha256": "eae4c78a1b9771c50b4ea3de11b4940d553d6b89bed4dddf5235a451dd7a31e7",
+          "bytes": 418,
+          "gzip": 441
+        },
+        {
+          "path": "kenney-emotes/emote_sleep.png",
+          "sha256": "a8152dde0e8ee81eff04ccf2a798dfbfaacd03d40c8a9ba2fa5007677cc3f43a",
+          "bytes": 377,
+          "gzip": 400
+        },
+        {
+          "path": "kenney-emotes/emote_stars.png",
+          "sha256": "cd5dd47528be06d110e6646e8622b680cb15d490c2e5b6be857b622a742c1ba9",
+          "bytes": 380,
+          "gzip": 403
+        }
+      ]
+    },
+    {
+      "name": "Microsoft Fluent Emoji Animated (6 badges)",
+      "version": "repo main as of 2026-10-21",
+      "license": "MIT",
+      "source": "https://github.com/microsoft/fluentui-emoji-animated (assets/*/animated/*.png)",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "use": "done, building, thinking, sleeping, waiting badges",
+      "notes": "Converted from the 256 px animated PNG originals (0.8 to 3 MB each) to 56 px animated WebP at 12 fps with ffmpeg (libwebp, quality 60); no other change.",
+      "licenseFiles": [
+        "fluent-emoji/LICENSE"
+      ],
+      "files": [
+        {
+          "path": "fluent-emoji/high_voltage_56.webp",
+          "sha256": "125146a05d560e9a1725e60bce508094f5957a7bece93313c41b9b8e26efc4aa",
+          "bytes": 30074,
+          "gzip": 25524
+        },
+        {
+          "path": "fluent-emoji/hourglass_not_done_56.webp",
+          "sha256": "6060f584833f126f408b39e26bc95475da79b0116eb896c8012341e59621ac0d",
+          "bytes": 34612,
+          "gzip": 31951
+        },
+        {
+          "path": "fluent-emoji/party_popper_56.webp",
+          "sha256": "e81f7c006b67d4873d9230cbdd871fd7e766620ef308f4762d3d5e2358c00794",
+          "bytes": 50854,
+          "gzip": 49889
+        },
+        {
+          "path": "fluent-emoji/robot_56.webp",
+          "sha256": "da162705734226fdbcce1af99411a2235c4011a0f1c32e1c0e44f442590cfcae",
+          "bytes": 28494,
+          "gzip": 26581
+        },
+        {
+          "path": "fluent-emoji/sleeping_face_56.webp",
+          "sha256": "b7b85e68fe061d329b0e4ede823b1c85e9cece6ad7b8b4f4fe7e27ef732b8aff",
+          "bytes": 59572,
+          "gzip": 58301
+        },
+        {
+          "path": "fluent-emoji/thinking_face_56.webp",
+          "sha256": "cdb9657574b2926c647a2e5d3734fc87da4e64fd0945f8f565fb78964dc94cc6",
+          "bytes": 59364,
+          "gzip": 58170
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0163-r2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/test-env-clean.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/e2e-data-cleanup.mjs",
+        "tools/test-db-cleanup.mjs",
+        "tools/ci-image-cache.mjs",
+        "templates/coordination/ci-docker-hub-mirror.yml",
+        "tests/e2e-data-cleanup.test.mjs",
+        "tests/test-db-cleanup.test.mjs",
+        "tests/ci-image-cache.test.mjs"
+      ],
+      "prompt": "Ticket T-0163 (type test): regression tests for e2e cleanup, the localhost guard and the CI image cache. Write ONE file, tests/test-env-clean.test.mjs, an end-to-end regression suite across the three tools (the per-tool unit tests already exist; do not duplicate them line for line). Acceptance: (1) E2e runs clean up their own local test data, including when the run throws, and the local-only cleanup tool refuses non-localhost databases (cover localhost, 127.0.0.1, ::1 allowed; a remote host, a host that only starts with 'localhost' such as localhost.evil.example, and a URL with credentials pointing elsewhere refused). (2) CI caches or mirrors images so Docker Hub rate limits do not fail runs: the template declares a cache step and a mirror pull with retry, and image references are rewritten to the mirror. Each test must fail if the behavior it names were removed. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Tests: node:test, injected deps (no wall clock, env, TTY or network); never write token-shaped literals (use obviously fake short values like 'tok-test'). Run `node --import ./tests/_isolate-config.mjs --test <your tests>` and `node tools/check-package.mjs`. If a rule cannot be met inside your outputs, return blocked. IMPORTANT (the first attempt was refused by the secret scanner): never write a database URL with a user:password@ part as a literal anywhere in the file. Build test URLs at runtime without a password (e.g. 'postgres://localhost:5432/test_db', 'postgres://' + 'db.example.invalid' + '/x'), and if a credentials case is needed construct it with new URL() and set url.username = 'u' only (no password field). The coordinator runs the secret scan on your file."
+    }
+  ]
+}

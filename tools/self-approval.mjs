@@ -2,9 +2,76 @@
 // Detect shell commands that try to record chat merge approvals or approve hand-build / guard state from an orchestrator session.
 
 import path from 'node:path';
-import { analyzeShell, tokenize } from './shell-writes.mjs';
+import {
+  analyzeShell,
+  tokenize,
+  HANDBUILD_OWNER_VERBS,
+  swarmHandbuildVerbFromPlain,
+  plainSetsHandbuildSelfApproval,
+} from './shell-writes.mjs';
 
-export const SELF_APPROVAL_REASON = 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.';
+export const HANDBUILD_OWNER_RULE_ID = 'handbuild-owner-verb';
+export const HANDBUILD_SELF_APPROVAL_RULE_ID = 'handbuild-self-approval';
+
+export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
+
+export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help']);
+
+const handbuildOwnerDenyReason = verb => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: orchestrator sessions cannot run handbuild ${verb} (owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
+
+/** Whether the shell line invokes swarm handbuild and whether the orchestrator may run that verb. */
+export function handbuildShellPolicy(commandText) {
+  const text = String(commandText ?? '');
+  if (!text) return { applies: false };
+  let verb = null;
+  let sawHandbuild = false;
+  for (const words of tokenize(text)) {
+    const plain = plainWords(words);
+    if (plainHasDecideHandbuildApprove(plain)) {
+      return {
+        applies: true,
+        allow: false,
+        verb: 'approve',
+        ruleId: HANDBUILD_OWNER_RULE_ID,
+        reason: handbuildOwnerDenyReason('approve'),
+      };
+    }
+    const hbVerb = swarmHandbuildVerbFromPlain(plain);
+    if (hbVerb !== null && HANDBUILD_OWNER_VERBS.has(hbVerb)) {
+      return {
+        applies: true,
+        allow: false,
+        verb: hbVerb,
+        ruleId: HANDBUILD_OWNER_RULE_ID,
+        reason: handbuildOwnerDenyReason(hbVerb),
+      };
+    }
+    const v = hbVerb;
+    if (v !== null) {
+      sawHandbuild = true;
+      verb = v;
+    }
+  }
+  if (!sawHandbuild) return { applies: false };
+  const sub = String(verb ?? '').toLowerCase();
+  if (!sub || sub === '--help' || sub.startsWith('-')) return { applies: true, allow: true, verb: sub || '(bare)' };
+  if (HANDBUILD_ORCHESTRATOR_VERBS.has(sub)) return { applies: true, allow: true, verb: sub };
+  if (HANDBUILD_OWNER_VERBS.has(sub)) {
+    return {
+      applies: true,
+      allow: false,
+      verb: sub,
+      ruleId: HANDBUILD_OWNER_RULE_ID,
+      reason: handbuildOwnerDenyReason(sub),
+    };
+  }
+  return { applies: true, allow: true, verb: sub };
+}
+
+export function handbuildOrchestratorCommandAllowed(commandText) {
+  const pol = handbuildShellPolicy(commandText);
+  return pol.applies && pol.allow;
+}
 
 const SHELL_CODE_RE = /\b(?:bash|sh|zsh)\s+(?:[^\s|;&]+\s+)*-(?:[A-Za-z]*c|--command)(?:=|\s+)(['"])([\s\S]*?)\1/gi;
 const EVAL_RE = /\beval\s+(['"])([\s\S]*?)\1/gi;
@@ -19,7 +86,6 @@ export function normalizeSelfApprovalCommandText(commandText) {
   return s;
 }
 
-const HAND_BUILD_SELF_ACTIONS = new Set(['approve', 'deny', 'on', 'off', 'install', 'uninstall']);
 const DATA_VALUE_FLAGS = new Set([
   '-m', '-F', '-C', '-c', '--message', '--reason', '--prompt', '--guard-text',
   '--body', '--title', '--description', '--subject', '--file',
@@ -32,6 +98,11 @@ const SAFE_SWARM = [
   /\bhandbuild\s+status\b/,
   /\bhandbuild\s+show\b/,
   /\bhandbuild\s+list\b/,
+  /\bhandbuild\s+log\b/,
+  /\bhandbuild\s+check\b/,
+  /\bhandbuild\s+help\b/,
+  /\bhandbuild\s*(--help|-h)\b/,
+  /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|help)\b/,
   /\bswarm\s+go\b/,
   /\bswarm\s+run\b/,
   /\bswarm\s+tickets\b/,
@@ -709,27 +780,7 @@ function executablePlainWords(plain) {
 }
 
 function plainHasHandbuildSelfAction(plain) {
-  const lower = executablePlainWords(plain).map(w => w.toLowerCase());
-  for (let i = 0; i < lower.length; i += 1) {
-    if (lower[i] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(lower[i + 1] ?? '')) return true;
-    if (lower[i] === 'swarm' && lower[i + 1] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(lower[i + 2] ?? '')) return true;
-  }
-  const swarmMi = lower.findIndex(w => w === 'swarm.mjs' || w.endsWith('/swarm.mjs') || w.endsWith('\\swarm.mjs'));
-  if (swarmMi !== -1) {
-    const rest = lower.slice(swarmMi + 1);
-    let ri = 0;
-    while (ri < rest.length && (rest[ri] === '--root' || rest[ri]?.startsWith('--root='))) {
-      if (rest[ri] === '--root') ri += 2;
-      else ri += 1;
-    }
-    const tail = rest.slice(ri);
-    const hi = tail.indexOf('handbuild');
-    if (hi !== -1 && HAND_BUILD_SELF_ACTIONS.has(tail[hi + 1] ?? '')) return true;
-    const di = tail.indexOf('decide');
-    if (di !== -1 && (tail[di + 2] === 'approve' || tail[di + 2] === 'deny')) return true;
-    if (tail[0] === 'swarm' && tail[1] === 'handbuild' && HAND_BUILD_SELF_ACTIONS.has(tail[2] ?? '')) return true;
-  }
-  return false;
+  return plainSetsHandbuildSelfApproval(plain);
 }
 
 function plainHasDecideHandbuildApprove(plain) {
@@ -765,6 +816,7 @@ function plainHasStaticMarker(plain) {
 
 /** Pipeline segments are tokenized separately; markers like base64 -d | sh need the joined surface. */
 function fullCommandHasStaticMarker(commandText) {
+  if (handbuildOrchestratorCommandAllowed(commandText)) return false;
   const parts = [];
   for (const words of tokenize(commandText)) {
     parts.push(executablePlainWords(plainWords(words)).join(' '));
@@ -828,6 +880,7 @@ function matchesNormalized(normalized, rawText = '', { skipSafeSwarm = false } =
 export function isSelfApprovalCommand(commandText) {
   const text = String(commandText ?? '');
   if (!text) return false;
+  if (handbuildOrchestratorCommandAllowed(text)) return false;
   if (rawHasRiskyClaudeInvocation(text, 0)) return true;
   if (heredocBodiesRisky(text, 0)) return true;
   if (commandTouchesGuardInstallScripts(text)) return true;

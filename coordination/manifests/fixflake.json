@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixflake",
+      "agent": "auto",
+      "prompt": "tests/update-pending-round2.test.mjs test (2) SIGTERM during when-idle exits 143 after cleanup is flaky under load: it sends SIGTERM after a fixed 80 ms wait and the child sometimes has not installed its signal handler yet, so the child dies by the default action (code null, signal SIGTERM) instead of exiting 143. Fix the TEST ONLY (no tool change): the child script prints one ready line to stdout right after the handlers are registered and the pending record is written, the test waits for that line (with a 10 second timeout that fails clearly) and only then sends SIGTERM; remove the fixed 80 ms wait; same for any other test in that file that signals a child after a fixed delay (SIGINT, SIGHUP). Run the file 10 times in a row under load (run two copies in parallel) and all must pass. ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/update-pending-round2.test.mjs",
+        "tools/update-pending.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/update-pending-round2.test.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

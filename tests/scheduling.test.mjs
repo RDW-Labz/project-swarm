@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 const require_readdir = dir => { try { return readdirSync(dir); } catch { return []; } };
+const liveEntries = async dir => (await fs.readdir(dir)).filter(name => name !== 'locks');
 import { runManifest, validateManifest, validateProject, integrateRun, waitRun, inspectRun, inspectResults } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
 import { registerLiveRun, unregisterLiveRun } from '../tools/board.mjs';
@@ -84,11 +85,11 @@ test('a live run registration is removed after a run completes, fails, or throws
 
   const completed = await runManifest(root, manifest(), { spawnImpl: fake(`fs.writeFileSync('input.txt','updated'); ${done}`), liveDir });
   assert.equal(completed.status, 'complete');
-  assert.deepEqual(await fs.readdir(liveDir), []);
+  assert.deepEqual(await liveEntries(liveDir), []);
 
   const failed = await runManifest(root, manifest(), { spawnImpl: fake('process.exit(3)'), liveDir });
   assert.equal(failed.status, 'failed');
-  assert.deepEqual(await fs.readdir(liveDir), []);
+  assert.deepEqual(await liveEntries(liveDir), []);
 
   // Pre-creating the claim file makes runManifestBody's own claim write throw (EEXIST) after
   // registration already happened, exercising the finally-unregister-on-throw path.
@@ -101,7 +102,7 @@ test('a live run registration is removed after a run completes, fails, or throws
     /EEXIST/
   );
   assert.equal(spawnCalls, 0);
-  assert.deepEqual(await fs.readdir(liveDir), []);
+  assert.deepEqual(await liveEntries(liveDir), []);
 });
 
 // --- `after` job chains -----------------------------------------------------------------------
@@ -292,7 +293,7 @@ test('a running run is on the board while its jobs run, and gone once it ends', 
   });
   assert.equal(state.status, 'complete');
   assert.ok(seen.includes(`${state.id}.json`), 'the run registered itself before its first state save');
-  assert.deepEqual(await fs.readdir(liveDir), []);
+  assert.deepEqual(await liveEntries(liveDir), []);
 });
 
 test('validate lets a codex job read the untracked manifest contract, and still refuses any other untracked context file', async t => {

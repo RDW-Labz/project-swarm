@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { guardDecision } from '../tools/handbuild.mjs';
-import { SELF_APPROVAL_REASON } from '../tools/self-approval.mjs';
+import { HANDBUILD_OWNER_RULE_ID } from '../tools/self-approval.mjs';
 
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
 const SWARM_SCRIPT = path.join(process.cwd(), 'tools', 'swarm.mjs');
@@ -324,12 +324,13 @@ test('read-only block table (guardDecision)', async t => {
   }
 });
 
-test('node-form handbuild owner actions use self-approval reason', async t => {
+test('node-form handbuild owner actions use owner-verb rule id', async t => {
   const { decide } = await project(t);
   for (const cmd of BLOCK_NODE_HANDBUILD) {
     const d = decide(cmd);
     assert.equal(d.allow, false, cmd);
-    assert.equal(d.reason, SELF_APPROVAL_REASON, cmd);
+    assert.equal(d.ruleId, HANDBUILD_OWNER_RULE_ID, cmd);
+    assert.match(d.reason, new RegExp(`\\[${HANDBUILD_OWNER_RULE_ID}\\]`));
   }
 });
 
@@ -351,7 +352,7 @@ for (const claudeFlag of [undefined, '1']) {
 
     const nodeDeny = runGuardHook(root, { command: BLOCK_NODE_HANDBUILD[0] }, baseEnv);
     assert.match(nodeDeny.stdout, /permissionDecision":"deny"/);
-    assert.match(nodeDeny.stdout, /owner's alone/);
+    assert.match(nodeDeny.stdout, new RegExp(`\\[${HANDBUILD_OWNER_RULE_ID}\\]`));
 
     const vercelBlock = runGuardHook(root, { command: 'vercel deploy' }, baseEnv);
     assert.match(vercelBlock.stdout, /permissionDecision":"deny"/);

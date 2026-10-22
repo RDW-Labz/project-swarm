@@ -154,20 +154,21 @@ test('the board serves the run inspector behind the token: the page, the data, c
   const { url } = await server.listen();
   t.after(() => server.close());
   const token = new URL(url).searchParams.get('t');
-  const get = p => new Promise((resolve, reject) => http.get(new URL(p, url), res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
-  const q = (run, extra = '') => `/api/run?id=${project.id}&run=${run}${extra}&t=${token}`;
-  const ok = await get(q('run-1'));
+  const get = (p, headers = {}) => new Promise((resolve, reject) => http.get(new URL(p, url), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
+  const q = (run, extra = '') => `/api/run?id=${project.id}&run=${run}${extra}`;
+  const auth = { 'x-watch-token': token };
+  const ok = await get(q('run-1'), auth);
   assert.equal(ok.status, 200);
   assert.equal(JSON.parse(ok.body).totals.jobs, 4);
   assert.match((await get(`/run?id=${project.id}&run=run-1&t=${token}`)).body, /Job graph/);
   assert.equal((await get(`/run?id=${project.id}&run=run-1`)).status, 403);
-  assert.equal((await get(q('run-1').replace(token, 'wrong'))).status, 403);
+  assert.equal((await get(`/api/run?id=${project.id}&run=run-1&t=wrong`)).status, 403);
   assert.equal((await get(`/api/run?id=${project.id}&run=run-1`)).status, 403);
-  assert.equal((await get(q('nope'))).status, 404);
-  assert.equal((await get(`/api/run?id=ffffffffffff&run=run-1&t=${token}`)).status, 404);
-  assert.equal((await get(q('..%2Frun-1'))).status, 404);
-  assert.equal((await get(q('run-1', '&compare=nope'))).status, 404);
-  assert.equal((await get(q('run-1', '&compare=run-1'))).status, 200);
+  assert.equal((await get(q('nope'), auth)).status, 404);
+  assert.equal((await get(`/api/run?id=ffffffffffff&run=run-1`, auth)).status, 404);
+  assert.equal((await get(q('..%2Frun-1'), auth)).status, 404);
+  assert.equal((await get(q('run-1', '&compare=nope'), auth)).status, 404);
+  assert.equal((await get(q('run-1', '&compare=run-1'), auth)).status, 200);
 });
 
 test('the board page helpers (unread, liveness, countdown, bays, hash, graph layout, replay) do what the page relies on', async () => {
@@ -454,18 +455,18 @@ test('every Watch link on the board resolves, locally and on the remote board; a
     api.setBoardUrl?.(url);
     t.after(() => api.close());
     const token = new URL(url).searchParams.get('t');
-    const headers = remote ? { 'tailscale-user-login': 'me@x.com' } : {};
+    const headers = { ...(remote ? { 'tailscale-user-login': 'me@x.com' } : {}), 'x-watch-token': token };
     const fetchPath = (p, base = url) => new Promise((resolve, reject) => http.get(new URL(p, base), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, location: res.headers.location, body: b })); }).on('error', reject));
-    const board = JSON.parse((await fetchPath(`/api/board?scratch=1&t=${token}`)).body);
+    const board = JSON.parse((await fetchPath('/api/board?scratch=1')).body);
     assert.equal(board.openRun, !remote);
     assert.equal(typeof board.server.version, 'string');
     assert.equal(board.server.stale, false, 'a development checkout has no install to be older than');
-    const runDetail = JSON.parse((await fetchPath(`/api/run?id=${project.id}&run=run-1&t=${token}`)).body);
+    const runDetail = JSON.parse((await fetchPath(`/api/run?id=${project.id}&run=run-1`)).body);
     assert.equal(runDetail.openRun, !remote, 'the run page knows whether it may link to the run\'s own page');
     assert.ok(Array.isArray(runDetail.orchestrator));
-    const liveTab = JSON.parse((await fetchPath(`/api/live?id=${project.id}&t=${token}`)).body);
+    const liveTab = JSON.parse((await fetchPath(`/api/live?id=${project.id}`)).body);
     assert.ok(liveTab.orchestrator && Array.isArray(liveTab.orchestrator.sessions), 'the Live tab carries the orchestrator');
-    const links = hrefs(board).map(h => h.replace('TOKEN', token));
+    const links = hrefs(board);
     assert.ok(links.length > 0, 'the fixture has a live run with a Watch link');
     for (const link of links) {
       let res = await fetchPath(link);

@@ -189,10 +189,14 @@ async function ticketForBudgetFailure(root, result, files) {
 // holds only tools/ and package.json; commands with no --root (version, update, self-hosted
 // runs) must still target the install checkout itself, never the snapshot.
 // What a person sees for a word swarm does not know: say so, say which swarm this is, and point at the likely cause (an install that has not been updated).
-export async function invalidArgumentsMessage(command,installRoot){
+export async function invalidArgumentsMessage(command,installRoot,{importMetaUrl}={}){
   const known=new Set(COMMANDS.map(c=>c.name));
   if(command&&!command.startsWith('-')&&!known.has(command)){
-    let version='unknown';try{version=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8')).version;}catch{/* version stays unknown */}
+    let version='unknown';
+    try{
+      if(importMetaUrl){const {runnerVersion}=await import('../runner-version.mjs');version=await runnerVersion(importMetaUrl);}
+      else version=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8')).version;
+    }catch{/* version stays unknown */}
     return `Unknown command "${command}". This is swarm ${version} (${installRoot}). If it is a newer command, run: swarm update. swarm --help lists the commands.`;
   }
   if(command&&command.startsWith('-'))return `Unknown option "${command}". swarm --help lists the commands and their options.`;

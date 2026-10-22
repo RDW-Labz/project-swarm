@@ -14,6 +14,8 @@ export const BUDGET_SET_LOG_REL = '.swarm/project/daily-limit-set.log';
 export const BUDGET_SET_MACHINE_LOG_BASENAME = 'daily-limit-set-machine.log';
 export const BUDGET_RAISE_APPROVAL_REL = '.swarm/project/daily-limit-raise-approval.json';
 export const BUDGET_RAISE_PENDING_REL = '.swarm/project/daily-limit-raise-pending.json';
+export const BUDGET_RAISE_PENDING_MACHINE_BASENAME = 'daily-limit-raise-pending-machine.json';
+export const BUDGET_RAISE_APPROVAL_MACHINE_BASENAME = 'daily-limit-raise-approval-machine.json';
 export const OWNER_APPROVAL_TTL_MS = 15 * 60 * 1000;
 export const DAILY_AGENT_RAISE_ALLOWANCE_USD = 5;
 
@@ -68,10 +70,11 @@ export function parseBudgetSetArgs(args) {
 
   if (cmd === 'approve-raise') {
     const yes = rest.includes('--yes');
-    const unknown = rest.filter(token => token !== 'approve-raise' && token !== '--yes');
+    const machine = rest.includes('--machine');
+    const unknown = rest.filter(token => token !== 'approve-raise' && token !== '--yes' && token !== '--machine');
     if (unknown.length) return { errors: [`unknown option: ${unknown[0]}`] };
     if (!yes) return { errors: ['budget approve-raise needs --yes'] };
-    return { command: 'approve-raise' };
+    return { command: 'approve-raise', machine };
   }
 
   if (cmd !== 'set') return { errors: [`unknown budget command: ${cmd}`] };
@@ -137,6 +140,14 @@ function projectDailyLimitPath(root) {
 
 function machineBudgetLogPath(machineConfigFile) {
   return path.join(path.dirname(machineConfigFile), BUDGET_SET_MACHINE_LOG_BASENAME);
+}
+
+function machineBudgetPendingPath(machineConfigFile) {
+  return path.join(path.dirname(machineConfigFile), BUDGET_RAISE_PENDING_MACHINE_BASENAME);
+}
+
+function machineBudgetApprovalPath(machineConfigFile) {
+  return path.join(path.dirname(machineConfigFile), BUDGET_RAISE_APPROVAL_MACHINE_BASENAME);
 }
 
 async function loadMachineLayer(fs, env, homedir) {
@@ -258,19 +269,7 @@ function approvalRequestMatches(approval, { machine, patch }) {
 }
 
 export async function readOwnerBudgetApproval(fs, root, { now = Date.now } = {}) {
-  const file = path.join(root, BUDGET_RAISE_APPROVAL_REL);
-  try {
-    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
-    const at = Date.parse(raw?.at);
-    const expiresAt = Date.parse(raw?.expiresAt);
-    const nowMs = typeof now === 'function' ? now() : now;
-    if (!Number.isFinite(at) || !Number.isFinite(expiresAt) || nowMs > expiresAt) return null;
-    if (raw?.by !== 'owner') return null;
-    return raw;
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  }
+  return readOwnerBudgetApprovalFile(fs, path.join(root, BUDGET_RAISE_APPROVAL_REL), { now });
 }
 
 export async function readBudgetRaisePending(fs, root) {
@@ -292,6 +291,67 @@ export async function writeBudgetRaisePending(fs, root, request, { now = Date.no
 export async function clearBudgetRaisePending(fs, root) {
   try {
     await fs.unlink(path.join(root, BUDGET_RAISE_PENDING_REL));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+export async function readBudgetRaisePendingMachine(fs, machineConfigFile) {
+  const file = machineBudgetPendingPath(machineConfigFile);
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function writeBudgetRaisePendingMachine(fs, machineConfigFile, request, { now = Date.now } = {}) {
+  const nowMs = typeof now === 'function' ? now() : now;
+  const file = machineBudgetPendingPath(machineConfigFile);
+  await atomicWriteJson(fs, file, { at: new Date(nowMs).toISOString(), request }, { mode: 0o600 });
+}
+
+export async function clearBudgetRaisePendingMachine(fs, machineConfigFile) {
+  try {
+    await fs.unlink(machineBudgetPendingPath(machineConfigFile));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+async function readOwnerBudgetApprovalFile(fs, file, { now = Date.now } = {}) {
+  try {
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    const at = Date.parse(raw?.at);
+    const expiresAt = Date.parse(raw?.expiresAt);
+    const nowMs = typeof now === 'function' ? now() : now;
+    if (!Number.isFinite(at) || !Number.isFinite(expiresAt) || nowMs > expiresAt) return null;
+    if (raw?.by !== 'owner') return null;
+    return raw;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export async function readOwnerBudgetApprovalMachine(fs, machineConfigFile, { now = Date.now } = {}) {
+  return readOwnerBudgetApprovalFile(fs, machineBudgetApprovalPath(machineConfigFile), { now });
+}
+
+export async function writeOwnerBudgetApprovalMachine(fs, machineConfigFile, { request, now = Date.now } = {}) {
+  const nowMs = typeof now === 'function' ? now() : now;
+  const at = new Date(nowMs).toISOString();
+  const expiresAt = new Date(nowMs + OWNER_APPROVAL_TTL_MS).toISOString();
+  const file = machineBudgetApprovalPath(machineConfigFile);
+  const payload = { at, expiresAt, by: 'owner' };
+  if (request) payload.request = request;
+  await atomicWriteJson(fs, file, payload, { mode: 0o600 });
+}
+
+export async function consumeOwnerBudgetApprovalMachine(fs, machineConfigFile) {
+  try {
+    await fs.unlink(machineBudgetApprovalPath(machineConfigFile));
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -388,8 +448,17 @@ async function applyBudgetSet({
   }
 
   if (who === 'agent-session') {
-    await consumeOwnerBudgetApproval(fs, root);
-    await clearBudgetRaisePending(fs, root);
+    if (parsed.machine) {
+      await consumeOwnerBudgetApprovalMachine(fs, machineInfo.file);
+      await clearBudgetRaisePendingMachine(fs, machineInfo.file);
+    } else {
+      await consumeOwnerBudgetApproval(fs, root);
+      await clearBudgetRaisePending(fs, root);
+    }
+  }
+
+  if (parsed.machine && who === 'owner-terminal' && raiseDeltaUsd(before, after, parsed.values) <= 0) {
+    await clearBudgetRaisePendingMachine(fs, machineInfo.file);
   }
 
   const refreshedMachine = parsed.machine
@@ -437,8 +506,15 @@ async function refuseBudgetSet({
   const projectLog = path.join(root, BUDGET_SET_LOG_REL);
   const machineLog = machineBudgetLogPath(machineInfo.file);
   await appendBudgetSetLog(fs, parsed.machine ? machineLog : projectLog, record);
-  if (!parsed.machine) {
-    await writeBudgetRaisePending(fs, root, { machine: parsed.machine, patch: parsed.values }, { now });
+  if (parsed.machine) {
+    await writeBudgetRaisePendingMachine(
+      fs,
+      machineInfo.file,
+      { machine: true, patch: parsed.values },
+      { now },
+    );
+  } else {
+    await writeBudgetRaisePending(fs, root, { machine: false, patch: parsed.values }, { now });
   }
   out.write(`${agentBudgetRaiseRefusalMessage()}\n`);
   return 1;
@@ -460,9 +536,29 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
       out.write('budget approve-raise must be run from the owner terminal (not inside an agent session)\n');
       return 1;
     }
+    const machineInfo = await loadMachineLayer(fs, env, homedirFn);
+    if (parsed.machine) {
+      const pending = await readBudgetRaisePendingMachine(fs, machineInfo.file);
+      const request = pending?.request ?? null;
+      if (!request) {
+        out.write('budget approve-raise: no pending agent raise request\n');
+        return 1;
+      }
+      await writeOwnerBudgetApprovalMachine(fs, machineInfo.file, { request, now });
+      await clearBudgetRaisePendingMachine(fs, machineInfo.file);
+      out.write('budget raise approval recorded (valid 15 minutes)\n');
+      return 0;
+    }
     const pending = await readBudgetRaisePending(fs, root);
     const request = pending?.request ?? null;
     if (!request) {
+      const machinePending = await readBudgetRaisePendingMachine(fs, machineInfo.file);
+      if (machinePending?.request) {
+        out.write(
+          'budget approve-raise: a machine-wide raise request is pending; run swarm budget approve-raise --machine --yes\n',
+        );
+        return 1;
+      }
       out.write('budget approve-raise: no pending agent raise request\n');
       return 1;
     }
@@ -498,7 +594,9 @@ export async function budgetCommand(args, { out, env, root, fs, homedir, billedT
         now,
       });
       if (needsOwnerApproval(before, after, parsed.values, raisedToday)) {
-        const approval = await readOwnerBudgetApproval(fs, root, { now });
+        const approval = parsed.machine
+          ? await readOwnerBudgetApprovalMachine(fs, machineInfo.file, { now })
+          : await readOwnerBudgetApproval(fs, root, { now });
         if (!approval || !approvalRequestMatches(approval, { machine: parsed.machine, patch: parsed.values })) {
           return await refuseBudgetSet({
             parsed,

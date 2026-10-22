@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8010",
+      "agent": "codex",
+      "model": "gpt-reserve",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tools/board-data.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-percent.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/project-spend.mjs",
+        "tools/watch-cli.mjs",
+        "tools/projects.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/fixtures/ledgers/atlas.anon.json",
+        "tests/fixtures/ledgers/parts-app-ledger.anon.json"
+      ],
+      "prompt": "Ticket T-8010 (owner-approved Swarm Watch accuracy pass). Today the same project can show 52% on its board card and 60% on its project page. Coordinator findings: the card's percent is progress.overall from buildProgress(..., ownOnly: worktree) at tools/board-data.mjs ~378 where worktree = Boolean(parentIds[i]) (true only when the main checkout is ALSO registered on the board, ~448-454/477), while the project page uses buildProgress(..., ownOnly: worktree) at ~596 with worktree = Boolean(await mainWorktreeRoot(root)) (~582, true for any linked worktree). Also tools/build-progress.mjs overall (~717-728) sums every approved family ledger's scopeRows, while stages and ETA (~639-702) use only the selected ledger, so percent and ETA can disagree.\nDO: (1) In tools/build-progress.mjs export ONE function boardPercent(progress) (or make progress.percent.overall the single value) and make overall, stages and ETA open-ticket counts come from the SAME ticket set: the tickets of the approved scope that progress selected (document the rule in a comment: done / counted tickets, where counted excludes human, cancelled and proposed, rounded down). (2) In tools/board-data.mjs make projectOverview (card + overview) and projectDetail (project page) decide ownOnly the same way through one helper (a linked worktree reads its own ledger; a main checkout reads its family), and both expose percent from that one function. (3) Write tests/helpers/board-accuracy-fixture.mjs: makeBoardFixture({ ledger: 'roadmap-ledger.json'|'atlas.anon.json'|'parts-app-ledger.anon.json', worktrees: [{ name, ledger? , runs? }], scratch: [{ runs }], runs: [...], prs: [{ number, mergedAt, title }], spend: { billedToday, listToday } }) that builds in an os.tmpdir() temp dir: a real git repo (git init, one commit) with the ledger at .swarm/project/tickets.json (copied from tests/fixtures/ledgers, scope approved as in the fixture), linked worktrees via `git worktree add`, scratch roots under a temp scratch dir, run state files .swarm/runs/<id>/state.json, a fake GitHub merged-PR list function, spend files in a temp SWARM_SPEND_DIR, a temp projects registry (SWARM_PROJECTS_FILE) and lanes dir; returns { root, worktreeRoots, scratchRoots, env, prs, cleanup }. Reuse helpers in tests/ if they exist (look at tests/board-worktree-own-stats.test.mjs and tests/build-progress-roadmap.test.mjs for how they build ledgers and worktrees). (4) tests/board-accuracy-percent.test.mjs: for each of the three fixture ledgers, and for a main checkout with one linked worktree that has its own different ledger (registered parent AND unregistered parent cases): the card percent (projectOverview / boardSnapshot), the project page percent (projectDetail) and the overview value are identical and equal the percent recomputed directly from the ledger JSON in the test (floor of done times 100 divided by counted); ETA open tickets equal counted - done of the same set. Keep existing tests passing; update an existing assertion only if it encoded the old inconsistent number, and list it in notes. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files, .github or tools/watch-assets/* (another branch is changing them). Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-percent.test.mjs tests/build-progress*.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data or build-progress for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

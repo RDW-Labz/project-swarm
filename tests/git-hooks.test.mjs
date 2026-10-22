@@ -178,6 +178,14 @@ test('install is idempotent, keeps a pre-existing hook, uninstall restores it', 
   const script = await fs.readFile(preCommit, 'utf8');
   assert.ok(script.includes(HOOK_MARKER));
   assert.ok(fsSync.existsSync(`${preCommit}.before-swarm`));
+  const commitMsg = hookPath(root, 'commit-msg');
+  const commitMsgScript = await fs.readFile(commitMsg, 'utf8');
+  assert.ok(commitMsgScript.includes(HOOK_MARKER));
+  assert.equal(
+    (await fs.readFile(commitMsg, 'utf8')).match(new RegExp(HOOK_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))?.length,
+    1,
+    'single commit-msg hook script',
+  );
 
   git(root, 'checkout', '-b', 'feat');
   await fs.writeFile(path.join(root, 'coordination/handoff.md'), '# hi\n');
@@ -189,4 +197,5 @@ test('install is idempotent, keeps a pre-existing hook, uninstall restores it', 
   const restored = await fs.readFile(preCommit, 'utf8');
   assert.match(restored, /legacy-pre/);
   assert.ok(!fsSync.existsSync(`${preCommit}.before-swarm`));
+  assert.ok(!fsSync.existsSync(commitMsg), 'commit-msg removed on uninstall');
 });

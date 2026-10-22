@@ -140,7 +140,7 @@ test('eval 40.4: a ticket that touches auth, an API route, a migration or a sens
   await reviewRun({ ticket: 'T-0001', verdict: 'pass', findings: [] });
   assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated'])).stdout, /1 ticket\(s\) marked done/);
   // The review must be the Opus job of a manifest sync wrote, for tickets it listed; a fail beats a pass for the same ticket.
-  assert.match((await reviewRun({ ticket: 'T-0001', verdict: 'pass', findings: [], model: 'haiku' })).stdout, /not opus/);
+  assert.match((await reviewRun({ ticket: 'T-0001', verdict: 'pass', findings: [], model: 'haiku' })).stdout, /reviewer unknown agent\/haiku is not accepted; accepted reviewers: claude\/opus; anthropic\/claude-opus-<version>/);
   (await reviewRun({ ticket: 'T-0001', verdict: 'pass', findings: [], extra: [{ ticket: 'T-0001', verdict: 'fail', findings: [{ severity: 'high', issue: 'x' }] }, { ticket: 'T-0002', verdict: 'pass', findings: [] }] }));
   const forged = JSON.parse(await fs.readFile(path.join(root, '.swarm/security-reviews/records.json'), 'utf8'));
   assert.equal(forged.tickets['T-0001'].verdict, 'fail');

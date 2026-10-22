@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
@@ -115,6 +115,25 @@ function longestWaveChain(tickets) {
     const candidate = chain(ticket.id);
     return candidate.length > longest.length ? candidate : longest;
   }, []);
+}
+
+function testFirstTickets(tickets) {
+  const active = (tickets ?? []).filter(ticket => ticket && ticket.status !== 'cancelled' && ticket.status !== 'proposed');
+  const ownedTests = new Map();
+  const virtualTests = [];
+  for (const ticket of active) {
+    if (ticket.type !== 'build') continue;
+    const files = [...new Set((ticket.tests ?? []).filter(looksLikeTestFile))];
+    if (!files.length) continue;
+    const ids = files.map((file, index) => `${ticket.id}:test:${index + 1}`);
+    ownedTests.set(ticket.id, ids);
+    virtualTests.push(...ids.map(id => ({ id, type: 'test', status: 'todo', dependsOn: [ticket.id] })));
+  }
+  const expanded = active.map(ticket => ({
+    ...ticket,
+    dependsOn: [...new Set((ticket.dependsOn ?? []).flatMap(dep => ownedTests.get(dep) ?? [dep]))],
+  }));
+  return [...expanded, ...virtualTests];
 }
 
 function waveSummary(sim) {
@@ -224,8 +243,46 @@ async function loadScope(root, file) {
   return { file: target, text, scope: parseScope(text), hash: scopeHash(text) };
 }
 
+const ROOT_FILE_NAME = /^[\w.-]{1,100}$/;
+const isAllowedRootFileName = name => typeof name === 'string' && ROOT_FILE_NAME.test(name) && !/^\.env/i.test(name);
+
+function addRootFileNames(target, value, source, notes) {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    notes.push(`${source}: ignored invalid value (expected an array)`);
+    return;
+  }
+  if (value.length > 50) notes.push(`${source}: ignored entries after the maximum of 50`);
+  for (const name of value.slice(0, 50)) {
+    if (isAllowedRootFileName(name)) target.add(name);
+    else notes.push(`${source}: ignored invalid entry ${JSON.stringify(name)}`);
+  }
+}
+
+function scopeHeaderRootFiles(text) {
+  const header = String(text ?? '').split(/^##\s/m, 1)[0];
+  const line = header.match(/^Root files:\s*(.*)$/im);
+  return line ? line[1].split(',').map(name => name.trim()).filter(Boolean) : undefined;
+}
+
+async function rootFilesForProject(root, { scope = null, scopeText = '', notes = [] } = {}) {
+  const allowed = new Set();
+  let pointer = null;
+  try {
+    const text = await readText(path.join(root, '.project-swarm.json'));
+    pointer = text === null ? null : JSON.parse(text);
+  } catch {
+    pointer = null;
+  }
+  addRootFileNames(allowed, pointer?.scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowed, pointer?.profile?.scopeRootFiles, 'profile.scopeRootFiles', notes);
+  addRootFileNames(allowed, scope?.rootFiles ?? scopeHeaderRootFiles(scopeText), 'scope rootFiles', notes);
+  return allowed;
+}
+
 export async function readApprovalPolicy(root) {
-  const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? '{}');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const pointer = await readRunnerPointer(root, { allowMissing: true });
   const { policy, errors } = validateApprovalPolicy(pointer?.profile?.approval);
   if (errors.length) throw fail('approval-invalid', `profile.approval: ${errors[0]}`);
   return policy;
@@ -236,7 +293,8 @@ export async function readApprovalPolicy(root) {
 // The validated profile of the project (null when there is none or it is invalid).
 export async function readProfile(root) {
   try {
-    const pointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const pointer = await readRunnerPointer(root, { allowMissing: true });
     if (!pointer?.profile) return null;
     const { profile, errors } = validateProfile(pointer.profile);
     return errors.length ? null : { ...profile, stack: pointer.stack ?? profile.stack };
@@ -549,7 +607,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
     'Each ticket object has these fields:',
     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
-    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
+    'files (the files this ticket writes: repo-relative paths WITH their folders, for example src/app/page.tsx or supabase/migrations/0001_init.sql, never a bare file name unless the file really lives at the repo root; the scope header may allow additional exact root names with `Root files: a.json, b.txt`; never a folder, never an absolute path, never a dot-env file: use env.example.txt for an env template), deletes (existing files this ticket must delete, each named exactly; omit when none), dependencies (new npm packages the ticket needs, like zod or zod@^3.23.0; the runner installs them and the change goes through the security gate; omit when none), context (files it reads), contracts (contract files it uses), tests (the test files that prove this ticket: a build ticket lists the test files owned by its test ticket and depends on that test ticket; a test ticket lists its own), screens (only on UI tickets: the ids of the design screens the ticket renders, from the profile ui screens), dependsOn (keys of other tickets in this file, or ids of existing open tickets when listed below),',
     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
     'Rules: no ticket may gate more than 8 others: shared work (shared CSS, layout, i18n keys, types) is split early into one small ticket per component or file group, so one blocked ticket cannot hold half a stage; every requirement is covered by at least one ticket; every ticket traces to a requirement; two open tickets that can run at the same time never write the same file unless one depends on the other (dependsOn);',
     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
@@ -669,12 +727,18 @@ const strings = v => (isStrings(v) ? v : []);
 const publicRoutePath = file => /(?:^|\/)app\/api\/.+\/route\.[cm]?[jt]sx?$|(?:^|\/)src\/routes\/public(?:\/|$)/i.test(String(file ?? ''));
 const writesPublicApiRoute = ticket => (ticket?.files ?? []).some(publicRoutePath);
 
-export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null } = {}) {
+export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManager = null, ledger = null, rootFiles = [], scopeRootFiles = [] } = {}) {
   const keyToId = new Map();
+  const keyErrors = new Map();
   const tickets = [];
   const errors = [];
   const notes = [];
+  const rejected = [];
   const copiedAcceptanceIds = new Set();
+  const allowedRootFiles = new Set();
+  addRootFileNames(allowedRootFiles, rootFiles, 'rootFiles', notes);
+  addRootFileNames(allowedRootFiles, scopeRootFiles, 'scopeRootFiles', notes);
+  addRootFileNames(allowedRootFiles, scope?.rootFiles, 'scope rootFiles', notes);
   const ledgerTickets = ledger?.tickets ?? [];
   const existingOpenIds = new Set(ledgerTickets.filter(isOpenFileOwner).map(t => t.id));
   const existingDoneIds = new Set(ledgerTickets.filter(t => t.status === 'done').map(t => t.id));
@@ -684,24 +748,37 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
   for (const { stage, items } of lists) for (const raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (typeof raw?.key !== 'string' || !raw.key) { errors.push(`${id}: key must be a non-empty string`); continue; }
+    if (typeof raw?.key !== 'string' || !raw.key) { keyErrors.set(id, 'key must be a non-empty string'); continue; }
     const key = `${stage}/${raw.key}`;
-    if (keyToId.has(key)) errors.push(`${id}: duplicate key ${raw.key} in ${stage}`);
+    if (keyToId.has(key)) keyErrors.set(id, `duplicate key ${raw.key} in ${stage}`);
     else keyToId.set(key, id);
   }
+  const candidates = [];
   n = startAt;
   for (const { stage, items } of lists) for (let raw of items) {
     const id = `T-${String(n).padStart(4, '0')}`;
     n += 1;
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
+    const ownErrors = keyErrors.has(id) ? [keyErrors.get(id)] : [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      const reason = 'ticket is not an object';
+      errors.push(`${stage}: ticket ${id} is not an object`);
+      rejected.push({ id, title: '', reason });
+      continue;
+    }
     const wrong = [...ARRAY_FIELDS.filter(f => raw[f] !== undefined && !isStrings(raw[f])), ...['title', 'epic'].filter(f => raw[f] !== undefined && typeof raw[f] !== 'string')];
-    if (wrong.length) { errors.push(`${id}: ${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`); continue; }
+    if (wrong.length) {
+      const reason = `${wrong.join(', ')} must be ${wrong.every(f => ARRAY_FIELDS.includes(f)) ? 'arrays of strings' : 'strings (and lists of strings)'}`;
+      errors.push(`${id}: ${reason}`);
+      rejected.push({ id, title: String(raw.title ?? ''), reason });
+      continue;
+    }
     const deps = [];
+    const localDependencyIds = [];
     const droppedKeys = [];
     const unknownIds = [];
     for (const k of strings(raw.dependsOn)) {
       const local = keyToId.get(`${stage}/${k}`);
-      if (local) { deps.push(local); continue; }
+      if (local) { deps.push(local); localDependencyIds.push(local); continue; }
       if (/^T-[0-9]{4,}$/.test(k)) {
         if (existingOpenIds.has(k)) { deps.push(k); continue; }
         if (existingDoneIds.has(k)) { notes.push(`${id}: dependsOn ${k} is done (context only); dependency dropped`); continue; }
@@ -712,7 +789,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
       if (!keyToId.has(`${stage}/${k}`)) droppedKeys.push(k);
     }
     if (droppedKeys.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${droppedKeys.join(', ')}`);
-    for (const k of unknownIds) errors.push(`${id}: unknown dependsOn ticket ${k}`);
+    for (const k of unknownIds) ownErrors.push(`unknown dependsOn ticket ${k}`);
     // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
     // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
     // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
@@ -739,19 +816,44 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
     if (strings(raw.deletes).length) t.deletes = strings(raw.deletes);
     if (strings(raw.dependencies).length) t.dependencies = strings(raw.dependencies);
     const v = validateTicket(t);
-    if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
+    if (!v.ok) ownErrors.push(v.errors[0]);
     // Format rules the dogfood run needed (contract format, real paths, env template, one package manager).
-    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) errors.push(`${id}: a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it`);
+    if (t.type === 'contract' && !(t.files.length === 1 && /^contracts\/[\w.-]+\.json$/.test(t.files[0]))) ownErrors.push('a contract ticket must write exactly one OpenAPI JSON file under contracts/ (for example contracts/api.json); put TypeScript or SQL types in build tickets that depend on it');
     for (const f of t.files) {
       const base = f.split('/').pop();
-      if (base.startsWith('.env')) errors.push(`${id}: ${f} is a reserved name; use env.example.txt for an env template`);
-      else if (!f.includes('/') && !ROOT_FILE_OK.test(f)) errors.push(`${id}: ${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
+      if (base.startsWith('.env')) ownErrors.push(`${f} is a reserved name; use env.example.txt for an env template`);
+      else if (!f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) ownErrors.push(`${f} has no folder; give it its real path (for example src/... or supabase/migrations/...)`);
     }
     const other = otherManagerLockfile(t.files, packageManager);
-    if (other) errors.push(`${id}: ${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
-    tickets.push(t);
+    if (other) ownErrors.push(`${other.file} is a ${other.manager} lockfile but the project uses ${packageManager}`);
+    for (const reason of ownErrors) errors.push(`${id}: ${reason}`);
+    candidates.push({ id, title: t.title, ticket: t, localDependencyIds, reasons: ownErrors });
   }
-  return { tickets, errors, notes, copiedAcceptanceIds };
+  const rejectedById = new Map(rejected.map(entry => [entry.id, entry]));
+  for (const candidate of candidates) {
+    if (candidate.reasons.length && !rejectedById.has(candidate.id)) {
+      const entry = { id: candidate.id, title: candidate.title, reason: candidate.reasons[0] };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+    }
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of candidates) {
+      if (rejectedById.has(candidate.id)) continue;
+      const dependency = candidate.localDependencyIds.find(dep => rejectedById.has(dep));
+      if (!dependency) continue;
+      const entry = { id: candidate.id, title: candidate.title, reason: `depends on rejected ${dependency}` };
+      rejectedById.set(candidate.id, entry);
+      rejected.push(entry);
+      errors.push(`${candidate.id}: ${entry.reason}`);
+      changed = true;
+    }
+  }
+  for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
+  rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected };
 }
 
 async function readStageFiles(root, runId) {
@@ -932,7 +1034,7 @@ async function cmdCheck(root, { rest }) {
 }
 
 async function cmdSplit(root, { rest, flags }, deps = {}) {
-  const { file, scope, hash } = await loadScope(root, rest[0]);
+  const { file, scope, hash, text } = await loadScope(root, rest[0]);
   const checked = checkScope(scope);
   if (!checked.ok) return out(`${file} has errors; run swarm scope check ${file} first`, 1);
   if (!flags.ingest) {
@@ -960,12 +1062,19 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   if (existing && !flags.merge) return out('a ticket ledger already exists; use --merge to add tickets, or delete .swarm/project/tickets.json first', 1);
   if (flags.merge && !existing) return out('no ticket ledger to merge into', 1);
   const { lists, errors, notes } = await readStageFiles(root, flags.ingest);
+  const rootFileNotes = [];
+  const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
+  notes.push(...rootFileNotes);
   const profile = await readProfile(root);
   const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
-  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing });
-  const all = [...errors, ...built.errors];
+  const built = ticketsFromStageLists(lists, scope, { startAt, packageManager: packageManagerOf(profile), ledger: existing, rootFiles: [...rootFiles] });
+  const all = [...errors];
   if (startAt + built.tickets.length > 9000) all.push('too many tickets: ids T-9000 and up are reserved for day 0 tickets');
-  if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
+  if (all.length) return out(`split refused; fix and rerun the failed stages:\n${all.slice(0, 15).map(e => `  ${e}`).join('\n')}${notes.length ? `\n${notes.map(note => `  note: ${note}`).join('\n')}` : ''}`, 1);
+  const rejectedLine = built.rejected.length
+    ? `rejected ${built.rejected.length} ticket(s): ${built.rejected.map(({ id, title, reason }) => `${id} (${title || 'untitled'}): ${reason}`).join('; ')}`
+    : null;
+  if (!built.tickets.length) return out([...notes.map(note => `note: ${note}`), rejectedLine ?? 'split refused; no valid tickets remain after validation', 'split refused; every ticket was rejected'].filter(Boolean).join('\n'), 1);
   const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], built.tickets, built.copiedAcceptanceIds);
   if (acceptanceCheck.refusals.length) {
     return out(`split refused; acceptance is not provable from this ticket's outputs:\n${acceptanceCheck.refusals.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
@@ -1015,13 +1124,16 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   // New tickets are written by a worker, so any earlier approval no longer covers the ticket set.
   const ledger = { ...createLedger({ scope: base.scope, tickets: [...base.tickets, ...tickets] }), wiring: existing ? existing.wiring === true : true, changeOrders: base.changeOrders ?? [], createdAt: base.createdAt, approved: null };
   const { tree, lines } = treeReport(scope, ledger.tickets);
+  const criticalPathLine = `critical path: ${criticalPathLength(ledger.tickets)} tickets`;
+  const ownsTests = ledger.tickets.some(ticket => ticket.type === 'build' && (ticket.tests ?? []).some(looksLikeTestFile));
+  const testFirstLine = ownsTests ? `test-first would be ${criticalPathLength(testFirstTickets(ledger.tickets))}` : null;
   const structural = tree.errors.filter(e => e.code !== 'uncovered');
   if (structural.length) return out(`split refused; the tickets are inconsistent:\n${lines.join('\n')}`, 1);
   const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(waveRefusal(waveSimulation, ledger.tickets), 1);
   await writeLedger(root, ledger);
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope split --ingest');
-  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
+  await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok, rejected: built.rejected });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
   // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
   let wireLines = [];
@@ -1035,7 +1147,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedLine, criticalPathLine, testFirstLine, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 function managerGateOutcome(result) {
@@ -1246,16 +1358,51 @@ async function readUiResultsGuarded(root) {
 export const REVIEW_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"reviews":[{"ticket":"T-0001","verdict":"pass","findings":[]}]} with one entry for every ticket listed above; verdict is pass or fail; each finding is {"severity":"high|medium|low","file":"...","line":0,"issue":"...","fix":"..."}.';
 export const ACCEPTANCE_FORMAT_REMINDER = 'FORMAT REMINDER: your last answer had no result line. Finish with exactly one JSON line and nothing after it: {"acceptance":[{"ticket":"T-0001","lines":[{"n":1,"verdict":"pass","evidence":"short reason with file and line"}]}]} with an entry for every listed line; verdict is pass or fail.';
 
-// The two review kinds share the machinery: where the manifest lives, the job id prefix, which models count, and the reminder for a second ask.
-const SEC_KIND = { dir: 'security-reviews', prefix: 'sec-review-', label: 'security review', models: /^opus$/, reminder: REVIEW_FORMAT_REMINDER, parse: parseReviewVerdicts };
-const ACC_KIND = { dir: 'acceptance-reviews', prefix: 'acc-review-', label: 'acceptance review', models: /^(sonnet|opus)$/, reminder: ACCEPTANCE_FORMAT_REMINDER, parse: parseAcceptanceVerdicts };
+// The two review kinds share the machinery: where the manifest lives, the job id prefix, which reviewers count, and the reminder for a second ask.
+const SEC_KIND = {
+  dir: 'security-reviews',
+  prefix: 'sec-review-',
+  label: 'security review',
+  reviewers: [
+    { agent: 'claude', model: /^opus$/, label: 'claude/opus' },
+    { agent: 'anthropic', model: /^claude-opus-[0-9][a-z0-9.-]*$/, label: 'anthropic/claude-opus-<version>' },
+  ],
+  reminder: REVIEW_FORMAT_REMINDER,
+  parse: parseReviewVerdicts,
+};
+const ACC_KIND = {
+  dir: 'acceptance-reviews',
+  prefix: 'acc-review-',
+  label: 'acceptance review',
+  reviewers: [
+    { agent: 'claude', model: /^(sonnet|opus)$/, label: 'claude/sonnet or claude/opus' },
+    { agent: 'anthropic', model: /^claude-(sonnet|opus)-[0-9][a-z0-9.-]*$/, label: 'anthropic/claude-sonnet-<version> or anthropic/claude-opus-<version>' },
+    { agent: 'codex', model: /.+/, label: 'codex/<non-empty model>' },
+    { agent: 'cursor', model: /.+/, label: 'cursor/<non-empty model>' },
+  ],
+  reminder: ACCEPTANCE_FORMAT_REMINDER,
+  parse: parseAcceptanceVerdicts,
+};
+
+const reviewerAllowed = (kind, job) => kind.reviewers.some(({ agent, model }) => job?.agent === agent && model.test(String(job?.model ?? '')));
+const acceptedReviewers = kind => kind.reviewers.map(({ label }) => label).join('; ');
+const reviewerLabel = job => `${job?.agent ?? 'unknown agent'}/${job?.model ?? 'unknown model'}`;
+
+// Older recorded test fixtures omitted the default manifest agent. Treat the native Claude model
+// as that manifest's implicit claude reviewer, while all explicit agents still require a pair.
+function normalizeReviewerJob(kind, job) {
+  if (job?.agent !== undefined) return job;
+  const legacy = kind.reviewers.find(reviewer => reviewer.agent === 'claude' && reviewer.model.test(String(job?.model ?? '')));
+  return legacy ? { ...job, agent: legacy.agent } : job;
+}
 
 // The response of a finished review run, checked the same way every time: right job, right model, complete.
 async function loadReviewResponse(root, runId, kind = SEC_KIND) {
   const state = await readRunState(root, runId);
-  const job = (state.jobs ?? []).find(j => typeof j.id === 'string' && j.id.startsWith(kind.prefix));
-  if (!job) return { error: `run ${runId} has no ${kind.label} job` };
-  if (!kind.models.test(String(job.model))) return { error: `the ${kind.label} job ran on ${job.model ?? 'an unknown model'}, not ${kind === SEC_KIND ? 'opus' : 'sonnet or opus'}; run the manifest that sync wrote` };
+  const rawJob = (state.jobs ?? []).find(j => typeof j.id === 'string' && j.id.startsWith(kind.prefix));
+  if (!rawJob) return { error: `run ${runId} has no ${kind.label} job` };
+  const job = normalizeReviewerJob(kind, rawJob);
+  if (!reviewerAllowed(kind, job)) return { error: `the ${kind.label} job reviewer ${reviewerLabel(job)} is not accepted; accepted reviewers: ${acceptedReviewers(kind)}; run the manifest that sync wrote` };
   if (job.status !== 'complete') return { error: `the ${kind.label} job is ${job.status}, not complete; run it again` };
   let text = '';
   try { text = await fs.readFile(path.join(root, '.swarm', 'runs', runId, job.id, 'response.txt'), 'utf8'); } catch { return { error: 'the review has no response to read' }; }
@@ -1273,7 +1420,7 @@ async function reAskReview(root, sourceRun, deps, kind = SEC_KIND) {
   // Exactly the one read-only review job sync wrote; anything else would be paid for before it could be checked.
   const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
   const only = jobs[0];
-  if (jobs.length !== 1 || only?.id !== `${kind.prefix}${sourceRun}`.slice(0, 60) || only.agent !== 'claude' || !kind.models.test(String(only.model)) || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: `the review manifest is not the single read-only ${kind === SEC_KIND ? 'Opus' : 'Sonnet or Opus'} review job sync wrote` };
+  if (jobs.length !== 1 || only?.id !== `${kind.prefix}${sourceRun}`.slice(0, 60) || !reviewerAllowed(kind, only) || only.type !== 'review' || (only.outputs ?? []).length !== 0 || typeof only.prompt !== 'string') return { asked: false, error: `the review manifest is not the single read-only review job sync wrote; accepted reviewers: ${acceptedReviewers(kind)}` };
   try { await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString() })}\n`, { flag: 'wx' }); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
@@ -1345,6 +1492,7 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
   const first = await loadReviewResponse(root, rest[0]);
   if (first.error) return out(first.error, 1);
   const job = first.job;
+  let reviewerJob = first.job;
   // The review must be of a manifest sync wrote: its ticket list and the code hashes taken then.
   const sourceRun = job.id.slice('sec-review-'.length);
   let requested;
@@ -1362,7 +1510,7 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
       const second = again.runId ? await loadReviewResponse(root, again.runId) : { error: 'the second review did not start' };
       if (second.error) notes.push(`second ask: ${second.error}`);
       else if (second.job.id.slice('sec-review-'.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
-      else { verdicts = usable(second.text); reviewRun = again.runId; }
+      else { verdicts = usable(second.text); reviewRun = again.runId; reviewerJob = second.job; }
     }
   }
   if (!verdicts) {
@@ -1380,9 +1528,9 @@ async function cmdSecurityReview(root, { rest }, deps = {}) {
   for (const v of merged.values()) {
     const t = ledger?.tickets.find(x => x.id === v.ticket);
     if (!t || !Object.hasOwn(requested, t.id)) continue;
-    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: reviewRun, at: new Date().toISOString(), filesHash: requested[t.id] };
+    records.tickets[t.id] = { verdict: v.verdict, findings: v.findings, run: reviewRun, at: new Date().toISOString(), filesHash: requested[t.id], reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } };
     lines.push(`${t.id}: ${v.verdict}${v.findings.length ? ` (${v.findings.length} finding${v.findings.length > 1 ? 's' : ''})` : ''}`);
-    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: reviewRun, by: 'owner' });
+    await appendLog(root, { event: 'security-review', id: t.id, verdict: v.verdict, findings: v.findings.length, run: reviewRun, by: 'owner', reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } });
     if (t.securityReview?.state === 'blocked') cleared.push(t.id);
   }
   await writeReviewRecords(root, records);
@@ -1401,6 +1549,7 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
   const first = await loadReviewResponse(root, rest[0], ACC_KIND);
   if (first.error) return out(first.error, 1);
   const sourceRun = first.job.id.slice(ACC_KIND.prefix.length);
+  let reviewerJob = first.job;
   let request;
   try { request = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'acceptance-reviews', `${sourceRun}.hashes.json`), 'utf8')); } catch { return out(`no acceptance review was requested for run ${sourceRun} (sync writes .swarm/acceptance-reviews/${sourceRun}.json); run that manifest first`, 1); }
   const requested = request?.tickets && typeof request.tickets === 'object' ? request.tickets : {};
@@ -1420,7 +1569,7 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
       const second = again.runId ? await loadReviewResponse(root, again.runId, ACC_KIND) : { error: 'the second review did not start' };
       if (second.error) notes.push(`second ask: ${second.error}`);
       else if (second.job.id.slice(ACC_KIND.prefix.length) !== sourceRun) notes.push('second ask: it is not the review of the same source run');
-      else { verdicts = usable(second.text); reviewRun = again.runId; }
+      else { verdicts = usable(second.text); reviewRun = again.runId; reviewerJob = second.job; }
     }
   }
   const ledger = await readLedger(root);
@@ -1457,11 +1606,11 @@ async function cmdAcceptanceReview(root, { rest }, deps = {}) {
     }
     const kept = records.tickets[t.id]?.filesHash === asked.filesHash ? (records.tickets[t.id].lines ?? []).filter(l => !byLine.has(l.n)) : [];
     // Each verdict carries the hash of the line text it judged (the text can be edited later).
-    records.tickets[t.id] = { filesHash: asked.filesHash, lines: [...kept, ...[...byLine.values()].map(l => ({ n: l.n, h: asked.lineHashes?.[l.n] ?? '', verdict: l.verdict, evidence: l.evidence }))].sort((a, b) => a.n - b.n), run: reviewRun, at: new Date().toISOString() };
+    records.tickets[t.id] = { filesHash: asked.filesHash, lines: [...kept, ...[...byLine.values()].map(l => ({ n: l.n, h: asked.lineHashes?.[l.n] ?? '', verdict: l.verdict, evidence: l.evidence }))].sort((a, b) => a.n - b.n), run: reviewRun, at: new Date().toISOString(), reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } };
     const pass = [...byLine.values()].filter(l => l.verdict === 'pass').length;
     const fail = byLine.size - pass;
     lines.push(`${t.id}: ${pass} line(s) pass${fail ? `, ${fail} fail` : ''}${asked.lines.length > byLine.size ? `, ${asked.lines.length - byLine.size} not answered` : ''}`);
-    await appendLog(root, { event: 'acceptance-review', id: t.id, pass, fail, run: reviewRun, by: 'owner' });
+    await appendLog(root, { event: 'acceptance-review', id: t.id, pass, fail, run: reviewRun, by: 'owner', reviewer: { agent: reviewerJob.agent, model: reviewerJob.model } });
     if (t.acceptanceBlocked) cleared.push(t.id);
   }
   await writeAcceptanceRecords(root, records);
@@ -1491,7 +1640,8 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
     const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
-    const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
+    const rawPointer = await readRunnerPointer(root, { allowMissing: true });
     if (rawPointer?.profile?.verify !== undefined && !profile?.verify) {
       const { errors } = validateProfile(rawPointer.profile);
       return out(`the profile has a verify block but the profile is invalid, so tests cannot be checked: ${errors[0] ?? 'unknown error'}`, 1);
@@ -1961,6 +2111,14 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const fresh = await readLedger(root);
       const ticket = fresh.tickets.find(x => x.id === rest[0]);
       if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      const rootFileNotes = [];
+      let scope = null;
+      let scopeText = '';
+      try {
+        scopeText = await readText(resolveInside(root, fresh.scope?.file ?? DEFAULT_SCOPE_FILE)) ?? '';
+        if (scopeText) scope = parseScope(scopeText);
+      } catch { /* the ticket ledger remains editable when its scope is unavailable */ }
+      const allowedRootFiles = await rootFilesForProject(root, { scope, scopeText, notes: rootFileNotes });
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
       const allowed = listsEdit ? ['proposed', 'todo', 'ready', 'blocked'] : ['proposed', 'todo', 'ready', 'blocked', 'review', 'done'];
@@ -1990,7 +2148,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       for (const key of ['files', 'deletes']) for (const f of next[key] ?? []) {
         const base = f.split('/').pop();
         if (key === 'files' && base.startsWith('.env')) problems.push(`${f} is a reserved name; use env.example.txt for an env template`);
-        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f)) problems.push(`${f} has no folder; give it its real path`);
+        else if (key === 'files' && !f.includes('/') && !ROOT_FILE_OK.test(f) && !allowedRootFiles.has(f)) problems.push(`${f} has no folder; give it its real path`);
         if ((ticket[key] ?? []).includes(f)) continue;
         const pathOwners = fresh.tickets.filter(x => x.id !== ticket.id && x.status !== 'cancelled' && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
         const blockingOwners = pathOwners.filter(isOpenFileOwner);
@@ -2029,7 +2187,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
       if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
-      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}`);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
@@ -2171,7 +2329,8 @@ async function doneReviewRefusals(root, ledger, ticket) {
       reasons.push(`Opus security review (${reviewReason}): no passing review on the current code. Run swarm go --scope or swarm scope sync RUN --integrated to queue it, then swarm scope security-review <run id>.`);
     }
   }
-  const rawPointer = JSON.parse((await readText(path.join(root, '.project-swarm.json'))) ?? 'null');
+  const { readRunnerPointer } = await import('./runner-pointer.mjs');
+  const rawPointer = await readRunnerPointer(root, { allowMissing: true });
   const profile = await readProfile(root);
   if (rawPointer?.profile && !profile) {
     const { errors } = validateProfile(rawPointer.profile);

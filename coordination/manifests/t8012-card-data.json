@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8012",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/board-inbox.mjs",
+        "tools/build-progress.mjs",
+        "tests/board-accuracy-card.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tools/tickets.mjs",
+        "tools/split-quality.mjs",
+        "tools/orchestrator-events.mjs",
+        "tools/lanes.mjs",
+        "tools/inbox.mjs",
+        "tests/board-inbox.test.mjs"
+      ],
+      "prompt": "Ticket T-8012 (owner-approved Swarm Watch card, data part; UI is T-8013 later). This branch already has T-8010 (boardPercent, tests/helpers/board-accuracy-fixture.mjs) and T-8011 (family activity, lastTicketFinishedAt, checkouts, activity state, installed version, Finished). Add to projectOverview in tools/board-data.mjs a `card` object with EXACTLY these fields (the UI codes against this shape):\ncard.now = { buildingTickets: number of tickets with status running across the family ledgers, checkoutsBuilding: number of family checkouts with a live run, lastTicketFinishedAt (from T-8011) }\ncard.next = { ready: tickets whose status is ready or todo AND every dependsOn ticket is done (use readyTickets from tools/tickets.mjs if it implements this), items: [{ id, title, command: 'swarm tickets ID' }] }\ncard.blocked = { waitingOnTickets: tickets blocked only because a dependsOn ticket is not done, items: [{ id, title, waitsOn: [ids], command: 'swarm tickets ID --release' only when the ledger rule allows release, else null }], needYou: count of need-you items, needYouItems: [{ id, title, kind, command }] from tools/board-inbox.mjs (add 'swarm tickets ID --release' to nextFor in board-inbox.mjs for blocked tickets whose block reason is a hold the owner can release) }\ncard.slots = { machineMax, inUse, byThisProject (slots held by this project's family ids), byOtherProjects } from workersHeld / lanes.json (tools/board-data.mjs ~646-671) so a UI line can say 'all 8 machine slots in use (5 by other projects)' and never contradict building\ncard.eta = { days or null, remaining: counted not-done tickets (same set as the percent), perDay: tickets done per day over the last 7 days, doneLast7Days, windowDays: 7, basis: short sentence } computed from tickets.log done transitions in the family; null days when perDay is 0 (never invent)\ncard.facts = { handEditsBlocked24h: guard refusals ('blocked' events in .swarm/orchestrator/events.ndjson) in the last 24 hours (not all time), untrackedRuns: offLedgerRuns count (smoke/lane-test/probe/nonIntegrating excluded) with listHref, checkouts }\ncard.headsUp = one plain sentence or null describing the worst current problem, e.g. 'Stage S9 has 3 tickets that write the same file in the same wave, so they cannot run together.' built from split-quality collisions or under-filled waves; null for Finished projects.\nNO money fields at all (owner rule). Tests in tests/board-accuracy-card.test.mjs using makeBoardFixture: one test per field, each expected value computed by an oracle that reads the fixture's files from disk (ledger, tickets.log, lanes.json, events.ndjson, run files), never by calling board functions; include a fixture where other projects hold slots, one with a dependency chain, one with a held ticket, one with guard events older and newer than 24 h, and one with a same-file wave collision. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files, .github or the board browser scripts. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-card.test.mjs tests/board-accuracy-*.test.mjs tests/board-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data, board-inbox or build-progress for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

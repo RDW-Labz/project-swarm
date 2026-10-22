@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
+import { integrateBlockerIdForCause, integrateCauseDigest } from './run-kind.mjs';
 
 export const KINDS = ['goal', 'plan', 'decision', 'run', 'integration', 'pr', 'blocker', 'human', 'note', 'command', 'action', 'checkpoint'];
 
@@ -143,4 +145,142 @@ export function openItems(events) {
   });
   const open = [...latest.values()].filter(({ event }) => (event.kind === 'blocker' ? event.resolved !== true : event.done !== true));
   return open.sort((a, b) => b.index - a.index).map(({ event }) => event);
+}
+
+export const INTEGRATE_BLOCKER_KINDS = Object.freeze(['integrate', 'integrate-checkout']);
+
+export function integrateBlockerKindFromId(blockerId) {
+  if (typeof blockerId !== 'string') return null;
+  if (blockerId.startsWith('integrate-checkout-')) return 'integrate-checkout';
+  if (blockerId.startsWith('integrate-')) return 'integrate';
+  return null;
+}
+
+export function integrateBlockerRunIdFromId(blockerId) {
+  const kind = integrateBlockerKindFromId(blockerId);
+  if (!kind) return null;
+  const prefix = kind === 'integrate-checkout' ? 'integrate-checkout-' : 'integrate-';
+  const rest = blockerId.slice(prefix.length);
+  const split = rest.indexOf('--');
+  return split >= 0 ? rest.slice(0, split) : rest;
+}
+
+export function integrateBlockerKey(integrateKind, runId) {
+  return `${integrateKind}:${runId}`;
+}
+
+export function integrateBlockerCauseKey(integrateKind, runId, cause) {
+  return `${integrateKind}:${runId}:${integrateCauseDigest(cause)}`;
+}
+
+/** Blocker id for an integrate failure; new causes get a distinct id suffix. */
+export function integrateBlockerId(integrateKind, runId, cause, options = {}) {
+  return integrateBlockerIdForCause(integrateKind, runId, cause, options);
+}
+
+export function integrateBlockerFields({ integrateKind, integrateRun, integrateCause }) {
+  return {
+    integrateKind,
+    integrateRun,
+    integrateCause: String(integrateCause ?? ''),
+    integrateKey: integrateBlockerKey(integrateKind, integrateRun),
+    integrateCauseKey: integrateBlockerCauseKey(integrateKind, integrateRun, integrateCause),
+  };
+}
+
+export function openBlockerIds(events) {
+  const latest = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind === 'blocker' && event.id) latest.set(event.id, event);
+  }
+  const open = new Set();
+  for (const [id, event] of latest) {
+    if (event.resolved !== true) open.add(id);
+  }
+  return open;
+}
+
+/**
+ * True when an integrate blocker must not be raised (resolved run/kind/cause or still open).
+ */
+export function integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }) {
+  const list = Array.isArray(events) ? events : [];
+  const open = openBlockerIds(list);
+  if (id && open.has(id)) return true;
+  const causeKey = integrateBlockerCauseKey(integrateKind, integrateRun, integrateCause);
+  const runKey = integrateBlockerKey(integrateKind, integrateRun);
+  for (const event of list) {
+    if (event?.kind !== 'blocker' || event.resolved !== true) continue;
+    if (event.integrateCauseKey === causeKey) return true;
+    if (event.integrateKey === runKey && event.integrateCause === String(integrateCause ?? '')) return true;
+    if (event.integrateKey === runKey && !event.integrateCause && id && event.id === id) return true;
+  }
+  return false;
+}
+
+export function integrateBlockerResolutionEvent(prior, { integrateKind, integrateRun, integrateCause, resolvedBy = null } = {}) {
+  const cause = String(integrateCause ?? prior?.integrateCause ?? '');
+  const fields = integrateBlockerFields({ integrateKind, integrateRun, integrateCause: cause });
+  return {
+    kind: 'blocker',
+    id: prior?.id ?? integrateBlockerId(integrateKind, integrateRun, cause),
+    resolved: true,
+    text: sanitizeText(prior?.text ?? ''),
+    ...fields,
+    ...(resolvedBy ? { resolvedBy } : {}),
+  };
+}
+
+const LOCK_MS = 5000;
+
+async function withJournalLock(root, name, fn) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const lock = path.join(dir, `${name}.lock`);
+  const deadline = Date.now() + LOCK_MS;
+  while (Date.now() < deadline) {
+    try {
+      const handle = await fs.open(lock, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+      try {
+        await handle.writeFile(String(process.pid));
+      } finally {
+        await handle.close();
+      }
+      try {
+        return await fn();
+      } finally {
+        await fs.unlink(lock).catch(() => {});
+      }
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await new Promise(resolve => setTimeout(resolve, 15));
+    }
+  }
+  throw new Error('journal-lock-timeout');
+}
+
+/**
+ * Append an integrate blocker only when it is still open and not suppressed (atomic under lock).
+ */
+export async function appendIntegrateBlockerIfNeeded(root, draft, { now = Date.now } = {}) {
+  if (!draft || typeof draft !== 'object') throw new Error('journal-event-invalid');
+  const integrateKind = draft.integrateKind;
+  const integrateRun = draft.integrateRun;
+  const integrateCause = draft.integrateCause;
+  if (!INTEGRATE_BLOCKER_KINDS.includes(integrateKind) || typeof integrateRun !== 'string') {
+    throw new Error('integrate-blocker-invalid');
+  }
+  return withJournalLock(root, 'integrate-blocker', async () => {
+    const events = await readJournal(root, { limit: Infinity });
+    const id = typeof draft.id === 'string' ? draft.id : integrateBlockerId(integrateKind, integrateRun, integrateCause);
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) {
+      return { appended: false, id };
+    }
+    const stored = await appendEvent(root, {
+      kind: 'blocker',
+      id,
+      text: draft.text,
+      ...integrateBlockerFields({ integrateKind, integrateRun, integrateCause }),
+    }, { now });
+    return { appended: true, id, event: stored };
+  });
 }

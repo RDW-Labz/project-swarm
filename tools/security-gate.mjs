@@ -87,6 +87,7 @@ const allowedUnparsed=(file,list)=>{const p=normPath(file);return (list||[]).som
 const parseJson=s=>{if(typeof s!=='string')return s??null;try{return JSON.parse(s);}catch{return null;}};
 const readJson=b=>{if(b==null)return {ok:true,value:{}};try{return {ok:true,value:JSON.parse(txt(b))};}catch{return {ok:false,value:undefined};}};
 const GUARDED=['security','sensitive','verify','context','ci','approval','protectedPaths'];
+const stripRelease=v=>{if(!v||typeof v!=='object'||Array.isArray(v))return v;const {version,install,...rest}=v;return rest;};
 const profileOf=v=>Object.fromEntries(GUARDED.map(k=>[k,v?.profile?.[k]]));
 const scriptsOf=b=>{const j=readJson(b);const s=j.ok?j.value?.scripts:undefined;return isObj(s)?s:{};};
 const hasList=j=>Array.isArray(j)||isObj(j?.vulnerabilities)||Array.isArray(j?.results)||Array.isArray(j?.dependencies)||isObj(j?.advisories);
@@ -217,7 +218,7 @@ const policyFiles=changes.filter(c=>normPath(c.file)===POLICY_FILE);
 if(policyFiles.length)checked.push('policy-change');
 for(const c of policyFiles){
 const prev=readJson(c.previous),next=readJson(c.bytes);
-const p=profileOf(prev.ok?prev.value:undefined),n=profileOf(next.value);
+const p=profileOf(prev.ok?stripRelease(prev.value):undefined),n=profileOf(next.ok?stripRelease(next.value):undefined);
 const differs=GUARDED.some(k=>JSON.stringify(p[k])!==JSON.stringify(n[k]));
 if(!next.ok||differs)blocks.push({check:'policy-change',severity:'critical',message:'.project-swarm.json changes the security policy, sensitivity, verify, context, ci, approval or protected paths: the owner must make this change by hand'});
 }

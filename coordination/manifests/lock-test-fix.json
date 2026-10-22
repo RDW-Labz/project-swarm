@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "lock-test-fix",
+      "agent": "auto",
+      "prompt": "The integration lock is now per target branch (tools/integration-lock.mjs acquireIntegrationLock keys the machine-wide lock by repository identity plus branch, with a per-worktree key for a detached HEAD) and shared-file writes use the short withSharedWriteLock. The existing test tests/integrate-safety.test.mjs \"worktrees share the repository lock, and a refused root lock releases the repo lock\" still asserts the OLD repo-wide behavior (a second worktree is blocked) and now fails with Missing expected rejection. This behavior change is intended by the owner (a merge in one worktree must not block another worktree on a different branch). Update that test to the new meaning without dropping its second half: (1) two worktrees on DIFFERENT branches both acquire at the same time (no rejection); (2) the same branch key is still exclusive: a second acquire with the same explicit branch option is rejected with the message naming the branch; (3) the original second claim is kept: when the per-root lock is refused (another process holds .swarm/integration.lock in that worktree) the machine-wide branch lock that was taken first is released again, so a later acquire for that branch succeeds; give the test a new title that says what it now proves (for example worktrees on different branches do not block each other, the same branch does, and a refused root lock releases the branch lock). Do not change any tool. Then list in docs/merge-guard.md under a new heading Locks the exact behavior: the long integrate lock is per target branch (and per worktree for a detached HEAD), the per-root lock is per worktree, and the shared files that use the short repo-wide lock (name each file that withSharedWriteLock protects today, found by reading every caller in tools/swarm.mjs and tools/swarm/*.mjs, and say how long it can be held and when it is considered stale). If you find a write that goes to a repo-shared file (resolved against the main worktree or the git common directory) and does NOT use withSharedWriteLock, list it in the same section under Known unprotected shared writes with its file and function (do not change code for it). Write only tests/integrate-safety.test.mjs and docs/merge-guard.md. No token-shaped literals. ignoreTests reason: only a test and a doc change.",
+      "context": [
+        "tests/integrate-safety.test.mjs",
+        "tools/integration-lock.mjs",
+        "tools/swarm.mjs",
+        "docs/merge-guard.md",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/integrate-safety.test.mjs",
+        "docs/merge-guard.md"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/merge-guard.test.mjs"
+      ]
+    }
+  ]
+}

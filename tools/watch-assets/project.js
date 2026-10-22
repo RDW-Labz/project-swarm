@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 (function () {
   'use strict';
+  var TOKEN = self.BoardLib.watchToken();
   var params = new URLSearchParams(location.search);
-  var TOKEN = params.get('t') || '';
   var ID = params.get('id') || '';
-  var T = encodeURIComponent(TOKEN);
   var $ = function (id) { return document.getElementById(id); };
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
   function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
-  function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
-  $('back').href = '/?t=' + T;
-  $('crumbBack').href = '/?t=' + T;
-  $('crumbAll').href = '/?t=' + T;
+  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId); }
+  $('back').href = '/';
+  $('crumbBack').href = '/';
+  $('crumbAll').href = '/';
 
   function progressList(title, items) {
     var box = el('div', 'progress-list');
@@ -92,18 +91,26 @@
 
     var untracked = progress.untracked || progress.offLedger;
     if (untracked && (untracked.count || untracked.jobs)) {
-      host.appendChild(el('div', 'label', 'Untracked work'));
+      var untrackedHead = el('div', 'label');
+      untrackedHead.appendChild(el('span', '', 'Untracked work · '));
+      var untrackedCount = el('a', '');
+      untrackedCount.setAttribute('href', untracked.countHref || ('#' + (untracked.listAnchorId || 'untracked')));
+      untrackedCount.textContent = String(untracked.count || 0) + ' run' + (untracked.count === 1 ? '' : 's');
+      untrackedHead.appendChild(untrackedCount);
+      host.appendChild(untrackedHead);
       host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
-      (untracked.newest || []).forEach(function (run) {
-        host.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.name + ' · ' + run.status + ' · ' + when(run.startedAt)));
+      (untracked.runs || untracked.newest || []).forEach(function (run) {
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + (run.name || run.runId) + ' · ' + run.status + ' · ' + when(run.startedAt)));
+        host.appendChild(row);
       });
     }
 
     host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
-    if (progress.spend) {
-      host.appendChild(el('div', 'board-note', usd(progress.spend.usd) + ' of ' + (progress.spend.capUsd === null ? 'no cap' : usd(progress.spend.capUsd)) + ' (cap counts: ' + (progress.spend.capBasis === 'billed' ? 'billed only' : 'billed + list value') + ')'));
-      if (progress.spend.why) { host.appendChild(el('div', 'board-note', progress.spend.why)); }
-    }
   }
 
   function renderSplit(split) {
@@ -143,7 +150,7 @@
     if (name && name.slice(-3) === '_ms') { return (value / 3600000).toFixed(1) + 'h'; }
     if (name && name.indexOf('rate') !== -1 && value >= 0 && value <= 1) { return Math.round(value * 100) + '%'; }
     if (name && name.slice(-4) === '_pct') { return value.toFixed(1) + '%'; }
-    if (name && name.indexOf('usd') !== -1) { return '$' + value.toFixed(2); }
+    if (name && name.indexOf('usd') !== -1) { return '—'; }
     return String(value);
   }
   function sparkline(weekly, label) {
@@ -196,11 +203,7 @@
 
   function renderSpend(p) {
     var s = $('spend'); s.textContent = '';
-    [['Billed today', usd(p.spend.todayUsd)], ['Billed, 7 days', usd(p.spend.weekUsd)], ['Billed, all time', usd(p.spend.billedUsd ?? p.spend.paidUsd)], ['List value, all time (not billed)', usd(p.spend.listUsd ?? p.spend.flatRateListUsd)]].forEach(function (pair) {
-      var tile = el('div', 'tile'); tile.appendChild(el('div', 'label', pair[0])); tile.appendChild(el('div', 'big num', pair[1])); s.appendChild(tile);
-    });
-    var lanes = Object.keys(p.spend.byLane).sort();
-    var byLane = el('div', 'tile'); byLane.appendChild(el('div', 'label', 'By lane (billed + list value)')); byLane.appendChild(el('div', 'sub', lanes.length ? lanes.map(function (k) { return k + ' ' + usd(p.spend.byLane[k]); }).join(', ') : 'none')); s.appendChild(byLane);
+    var section = s.closest('section'); if (section) { section.hidden = true; }
   }
 
   function renderTickets(p) {
@@ -222,18 +225,24 @@
     var r = $('runs'); r.textContent = '';
     if (!p.runs.length) { r.appendChild(el('div', 'board-empty', 'No runs yet.')); }
     p.runs.slice(0, 100).forEach(function (run) {
-      var a = el('a', 'board-run'); a.href = '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(run.runId) + '&t=' + T; a.title = 'Open the run inspector (graph, journal, compare)';
+      var a = el('a', 'board-run'); a.href = runHref(run.runId); a.title = 'Open the run inspector (graph, journal, compare)';
       a.appendChild(el('span', 'mono', run.runId)); a.appendChild(el('span', 'pill ' + (run.live ? 'good' : run.failed ? 'bad' : 'info'), run.live ? 'live' : run.status));
       a.appendChild(el('span', 'num mono', run.done + '/' + run.jobs + ' jobs' + (run.failed ? ', ' + run.failed + ' failed' : '')));
-      a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
+      a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
-    var off = p.offLedger;
+    var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
     if (off && off.count) {
-      r.appendChild(el('div', 'label', 'Off-ledger work'));
+      var listAnchor = off.listAnchorId || 'untracked';
+      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
       off.runs.forEach(function (run) {
-        var prs = run.prs && run.prs.length ? ' · ' + run.prs.join(', ') : '';
-        r.appendChild(el('div', 'board-entry', run.runId + ' · ' + run.status + ' · ' + run.done + '/' + run.jobs + ' jobs' + prs));
+        var row = el('div', 'board-entry');
+        var runLink = el('a', 'mono', run.runId);
+        runLink.setAttribute('href', run.href || runHref(run.runId));
+        runLink.setAttribute('title', 'Open the run inspector');
+        row.appendChild(runLink);
+        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
+        r.appendChild(row);
       });
     }
   }
@@ -244,10 +253,10 @@
     p.lessons.forEach(function (x) { l.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.what || ''))); });
   }
 
+  var projectEverOk = false;
   function markProjectResponse() {
     window.__swarmProjectOkAt = Date.now();
-    var dot = $('liveDot'), label = $('liveText');
-    if (dot && label) { dot.className = 'dot'; label.textContent = 'Live'; }
+    projectEverOk = true;
   }
 
   // Both project requests share the page chip. Mark successful responses before their
@@ -265,9 +274,19 @@
   }
   setInterval(function () {
     var at = Number(window.__swarmProjectOkAt) || 0;
-    var live = window.BoardLib && window.BoardLib.liveness ? window.BoardLib.liveness(at, Date.now()) : { state: at ? 'live' : 'stale', ageS: null };
+    var live = window.BoardLib && window.BoardLib.chipState
+      ? window.BoardLib.chipState({ lastOkAt: at, now: Date.now(), pollMs: 5000, everOk: projectEverOk })
+      : { state: projectEverOk ? 'live' : 'connecting', ageS: null };
     var dot = $('liveDot'), label = $('liveText');
-    if (dot && label) { dot.className = 'dot' + (live.state === 'live' ? '' : ' off'); label.textContent = live.state === 'live' ? 'Live' : at ? 'Stale (' + live.ageS + ' s)' : 'connecting'; }
+    if (dot && label) {
+      dot.className = 'dot' + (live.state === 'live' ? '' : ' off');
+      label.textContent = live.state === 'live' ? 'Live' : 'connecting';
+      if (live.state === 'connecting' && live.ageS !== null) {
+        label.setAttribute('title', 'last update ' + live.ageS + ' s ago');
+      } else {
+        label.removeAttribute('title');
+      }
+    }
   }, 250);
 
   function render(p) {
@@ -285,7 +304,7 @@
   }
 
   function load() {
-    fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } })
+    fetch('/api/project?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN } })
       .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (p) { if (p) { markProjectResponse(); render(p); } else { $('title').textContent = 'Unknown project'; } })
       .catch(function () {});

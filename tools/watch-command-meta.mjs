@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+export const FORGET_USAGE = `Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]
+       --dry-run  List what would be forgotten without changing the registry.
+       --missing  Forget every registered project whose folder no longer exists.
+       --scratch  Forget every registered scratch or test checkout.
+       --yes      Confirm bulk --missing or --scratch when more than three match.
+registry only: no project files were touched
+`;
+
 export const COMMAND_META = {
   doctor: { what: 'Checks that each model provider is set up and answering.', when: 'Before a first run, or when a provider starts failing.', example: 'swarm doctor claude --probe-local', cost: 'local', approval: false },
   validate: { what: 'Checks a job manifest for missing fields and bad values.', when: 'After writing or editing a manifest, before running it.', example: 'swarm validate jobs/fix-login.json --evidence', cost: 'free', approval: false },
@@ -12,7 +20,7 @@ export const COMMAND_META = {
   wait: { what: 'Blocks until a run finishes, then exits with its result.', when: 'In a script that needs to wait for a run before the next step.', example: 'swarm wait 20250311-login --timeout 3600', cost: 'free', approval: false },
   inspect: { what: 'Shows full details for one run, including each job and its result.', when: 'When a run finished with failures and you need the details.', example: 'swarm inspect 20250311-login --results', cost: 'free', approval: false },
   rollup: { what: 'Summarizes the results of a run in a short report.', when: 'After a run ends, to see what landed and what did not.', example: 'swarm rollup 20250311-login --text --top 5', cost: 'free', approval: false },
-  integrate: { what: 'Merges completed job outputs into the working branch, with checks.', when: 'After a run completes and you are ready to land its changes.', example: 'swarm integrate 20250311-login --queue', cost: 'local', approval: true },
+  integrate: { what: 'Merges completed job outputs into the working branch, with checks; on swarm/* branches it commits verified output (pass --no-commit to leave the tree dirty).', when: 'After a run completes and you are ready to land its changes.', example: 'swarm integrate 20250311-login --queue', cost: 'local', approval: true },
   mutants: { what: 'Runs mutation checks to see whether the tests catch planted bugs.', when: 'When you want proof that the tests would catch a real regression.', example: 'swarm mutants --mutants-file mutants.json --dry-run', cost: 'local', approval: false },
   env: { what: 'Shows the swarm environment: paths, versions and settings.', when: 'When something behaves differently on one machine.', example: 'swarm env --print', cost: 'free', approval: false },
   redcheck: { what: 'Checks whether a failing test also fails on a baseline commit.', when: 'When a test is red and you need to know if it was already broken.', example: 'swarm redcheck 20250311-login --base main --test test/login.test.js', cost: 'local', approval: false },
@@ -37,7 +45,7 @@ export const COMMAND_META = {
   'check-pins': { what: 'Checks that pinned project dependencies are current and safe.', when: 'Before a release, or when a dependency update is due.', example: 'swarm check-pins --root . --json', cost: 'local', approval: false },
   sweep: { what: 'Scans a list of goals for prior art, using a model, within a budget.', when: 'When you want to know if other projects already solved your goals.', example: 'swarm sweep --goals goals.txt --max-usd 5 --top 3', cost: 'spends', approval: true },
   version: { what: 'Shows the installed swarm version.', when: 'When you report a bug or check for updates.', example: 'swarm version --check', cost: 'free', approval: false },
-  update: { what: 'Updates the shared swarm installation and optionally the projects.', when: 'When a new release is out and you want it installed.', example: 'swarm update --projects --yes', cost: 'local', approval: false },
+  update: { what: 'Updates the shared swarm installation and optionally the projects; --when-idle waits for a wave gap instead of refusing.', when: 'When a new release is out and you want it installed.', example: 'swarm update --when-idle', cost: 'local', approval: false },
   pin: { what: 'Pins a registered project to a specific swarm release (or lists pins).', when: 'When one project must stay on an older swarm while the install updates.', example: 'swarm pin marketing 1.47.0', cost: 'local', approval: false },
   unpin: { what: 'Removes the version pin so the next update can bump the project pointer.', when: 'When a pinned project is ready to track the shared install again.', example: 'swarm unpin marketing', cost: 'local', approval: false },
   squash: { what: 'Squashes the commits of a branch into one.', when: 'Before opening a PR, to keep history clean.', example: 'swarm squash --branch feature/login --base main', cost: 'local', approval: false },
@@ -68,6 +76,7 @@ export const COMMAND_META = {
   backlog: { what: 'Queues goals to start when a run is waiting on quota or review.', when: 'When you have goals lined up and nothing is running.', example: 'swarm backlog --paths goals/ --max-usd 10', cost: 'spends', approval: true },
   autopilot: { what: 'Drives the project forward with no model, one step at a time.', when: 'When you want routine steps done while you are away.', example: 'swarm autopilot --once --max-steps 3', cost: 'local', approval: false },
   completion: { what: 'Prints the zsh completion script.', when: 'Once, when you install shell completion.', example: 'swarm completion > ~/.zfunc/_swarm', cost: 'free', approval: false },
+  forget: { what: 'Removes projects from the machine registry only; folders and pointers are untouched.', when: 'When the board lists idle scratch or gone checkouts you no longer want tracked.', example: 'swarm forget --scratch --yes', cost: 'free', approval: false },
   help: { what: 'Shows command usage.', when: 'When you forget a command or flag.', example: 'swarm help ship', cost: 'free', approval: false }
 };
 

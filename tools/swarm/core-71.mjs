@@ -196,7 +196,7 @@ export async function redcheckRun(root, id, argv, options = {}) {
   let lock;
   try {
     root = await fs.realpath(root);
-    lock = await acquireIntegrationLock(root, { runId: id, liveDir: options.liveDir, isAlive: options.isAlive });
+    lock = await acquireIntegrationLock(root, { runId: id, branch: options.branch, liveDir: options.liveDir, isAlive: options.isAlive });
     const recoveredJournal = await recoverIntegrationJournal(root);
     const result = await redcheckRunLocked(root, id, argv, options);
     if (lock.warnings.length || recoveredJournal) result.warnings = [...lock.warnings, ...(recoveredJournal ? [journalWarning(recoveredJournal)] : []), ...(result.warnings ?? [])];

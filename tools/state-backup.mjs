@@ -3,7 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 
 export const BACKUP_DIR = '.swarm/backups';
-export const BACKUP_INCLUDE = Object.freeze(['.swarm/project', '.project-swarm.json', '.swarm/ui/results.json', 'coordination/journal.ndjson']);
+export const BACKUP_INCLUDE = Object.freeze(['.swarm/project', '.project-swarm.json', '.swarm/runner-pointer.json', '.swarm/ui/results.json', 'coordination/journal.ndjson']);
 
 const ID_RE = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$/;
 const MAX_FILES = 5000;

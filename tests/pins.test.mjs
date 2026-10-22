@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { bumpPointers, updateProjects } from '../tools/swarm.mjs';
 import { pruneVersions, snapshotVersion } from '../tools/install.mjs';
+import { RUNNER_POINTER_LOCAL } from '../tools/runner-pointer.mjs';
 import {
   pinOf, isPinned, pinnedVersions, readPins, resolveRegisteredProject,
   pinProject, unpinProject,
@@ -68,7 +69,7 @@ test('bumpPointers skips pinned projects without touching files or hooks', async
   assert.equal(await fs.readFile(path.join(pinnedField, '.project-swarm.json'), 'utf8'), beforeField);
   assert.equal(await fs.readFile(path.join(pinnedVer, '.project-swarm.json'), 'utf8'), beforeVer);
   await assert.rejects(fs.access(path.join(pinnedField, '.claude/settings.local.json')));
-  assert.equal(JSON.parse(await fs.readFile(path.join(unpinned, '.project-swarm.json'), 'utf8')).version, '1.140.0');
+  assert.equal(JSON.parse(await fs.readFile(path.join(unpinned, RUNNER_POINTER_LOCAL), 'utf8')).version, '1.140.0');
 });
 
 test('pruneVersions keeps pinned old releases beyond the newest five', async t => {
