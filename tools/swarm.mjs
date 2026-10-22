@@ -47,6 +47,7 @@ import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
 import { validDependencySpec, dependencyWrites, installDependencies } from './dep-install.mjs';
 import { runSecurityGate, recordGate, formatBlocks } from './security-gate.mjs';
+import { dependencyFieldsChanged, isNpmLockfilePath } from './dependency-diff.mjs';
 import { migrationQueueCheck } from './migration-queue.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
@@ -1804,7 +1805,18 @@ async function integrateRunLocked(root, id, options = {}) {
       const plainPolicy = securityGate.policy ?? profile?.security;
       // Plain integrate has no rollback and the dependency scanners (npm audit, pip-audit, osv-scanner) read files from disk, so a change to a dependency
       // manifest or lockfile cannot be audited before it is written: it must go through the queue (which audits the written files and rolls back).
-      if (plainPolicy?.enabled !== false && writes.some(change => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json)$|(^|\/)requirements[^/]*\.txt$/i.test(change.file))) {
+      const plainIntegrateDepRefusal = change => {
+        const file = change.file;
+        if (/(^|\/)requirements[^/]*\.txt$/i.test(file)) return true;
+        if (isNpmLockfilePath(file)) return true;
+        if (/(^|\/)package\.json$/i.test(file)) {
+          const before = change.previous?.toString('utf8') ?? '';
+          const after = change.bytes?.toString('utf8') ?? '';
+          return dependencyFieldsChanged(before, after);
+        }
+        return false;
+      };
+      if (plainPolicy?.enabled !== false && writes.some(plainIntegrateDepRefusal)) {
         fail('security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.', 'security-gate-blocked');
       }
       let plainGate;

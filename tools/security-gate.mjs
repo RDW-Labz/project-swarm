@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {isSensitivePath} from './sensitive-paths.mjs';
+import {dependencyFieldsChanged,filterNewVulnerabilities} from './dependency-diff.mjs';
 import {fileURLToPath} from 'node:url';
 
 export const SEMGREP_RULES_SHA256='3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4026397ad31cc5e07da2';
@@ -100,6 +101,8 @@ if(r.exitCode==null||r.exitCode>1)return hasList(j);
 return true;
 }
 const safeParse=(fn,s,warnings)=>{try{return (typeof fn==='function'?fn(s):[])||[];}catch{warnings.push('could not parse scanner output');return [];}};
+const pkgTriggersDepAudit=c=>isPkg(c.file)&&c.bytes!=null&&dependencyFieldsChanged(txt(c.previous),txt(c.bytes));
+const triggersDepAudit=c=>{if(c.bytes==null)return false;if(isPkg(c.file))return pkgTriggersDepAudit(c);if(isReq(c.file))return true;return isDepFile(c.file);};
 
 export async function runSecurityGate({changes=[],policy,hookScripts=[],exec,fetchImpl,now=Date.now,cwd,fingerprintKey,sensitive=true,cache=new Map(),fileExists,readRules=()=>readFileSync(SEMGREP_RULES_PATH),manifestReview=null}={}){
 const pol=normalizePolicy(policy);
@@ -119,7 +122,8 @@ else if(typeof s==='string')skipped.push(s);
 else if(s)skipped.push(`${s.path||s.file}: ${s.reason}`);
 }
 
-const depChanges=changes.filter(c=>isPkg(c.file)||isReq(c.file));
+for(const c of changes.filter(c=>isPkg(c.file)&&c.bytes!=null&&!pkgTriggersDepAudit(c)))skipped.push(`${c.file}: dependency fields unchanged; audit skipped`);
+const depChanges=changes.filter(c=>(isPkg(c.file)&&pkgTriggersDepAudit(c))||isReq(c.file));
 let newNames=null;
 if(depChanges.length){
 checked.push('package-check','license-check');
@@ -138,18 +142,37 @@ else if(scan.licenseBlocked(r.license,{allowCopyleft:pol.allowCopyleft,approved:
 }
 
 // A deletion alone adds no dependency to audit (its own review is the manifest-delete rule above); only a written manifest or lockfile is scanned.
-if(changes.some(c=>c.bytes!=null&&isDepFile(c.file))){
+const lockChangedInBatch=changes.some(c=>NPM_LOCKS.includes(lbase(c.file))&&c.bytes!=null);
+const pkgDepFieldChange=changes.some(c=>pkgTriggersDepAudit(c));
+const manifestOnlyDepAudit=pkgDepFieldChange&&!lockChangedInBatch;
+if(changes.some(triggersDepAudit)){
 checked.push('vulnerability');
 const exists=typeof fileExists==='function'?fileExists:(p=>existsSync(p));
 const hasNpmLock=changes.some(c=>NPM_LOCKS.includes(lbase(c.file)))||NPM_LOCKS.some(f=>exists(path.join(cwd||'.',f)));
-const all=[];let usableCount=0;
+const all=[];let baselineVulns=[];let usableCount=0;
 const tally=(tool,r,fn)=>{
 if(!r)return;
 if(!usable(r)){blocks.push({check:'vulnerability',severity:'high',message:`could not verify: ${tool} output unusable`});return;}
 usableCount++;
 all.push(...safeParse(fn,r.stdout,warnings));
 };
-if(hasNpmLock)tally('npm',await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm'),scan.parseNpmAudit);
+if(hasNpmLock){
+tally('npm',await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm'),scan.parseNpmAudit);
+if(manifestOnlyDepAudit&&cwd){
+const pjChange=changes.find(c=>isPkg(c.file)&&c.bytes!=null);
+const prevText=pjChange?txt(pjChange.previous):null;
+if(prevText!=null){
+let baselineTmp=null;
+try{
+baselineTmp=mkdtempSync(path.join(os.tmpdir(),'swarm-audit-base-'));
+writeFileSync(path.join(baselineTmp,'package.json'),prevText);
+for(const lockName of NPM_LOCKS){const liveLock=path.join(cwd,lockName);if(existsSync(liveLock)){writeFileSync(path.join(baselineTmp,lockName),readFileSync(liveLock));break;}}
+const baselineRun=await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm',{cwd:baselineTmp});
+if(baselineRun&&usable(baselineRun))baselineVulns=safeParse(scan.parseNpmAudit,baselineRun.stdout,warnings);
+}finally{if(baselineTmp)try{rmSync(baselineTmp,{recursive:true,force:true});}catch{/* best effort */}}
+}
+}
+}
 else if(pol.requireVulnerabilityScan!==false){
 // package.json changed with no lockfile (a scaffold ticket): build a lockfile from that package.json alone in a temporary folder
 // (nothing is installed, no script runs) and audit it, so the batch is not refused with "no scanner ran".
@@ -180,9 +203,10 @@ else if(made)warnings.push('could not build a lockfile from package.json to audi
 }
 }
 for(const c of changes.filter(c=>isReq(c.file)))tally('pip-audit',await run(['pip-audit','-f','json','--no-deps','--disable-pip','-r',c.file],'pip-audit',{env:{PATH:process.env.PATH||'',HOME:os.tmpdir()}}),scan.parsePipAudit);
-tally('osv-scanner',await run(['osv-scanner','--format','json','-r','.'],'osv-scanner'),scan.parseOsv);
+if(!manifestOnlyDepAudit)tally('osv-scanner',await run(['osv-scanner','--format','json','-r','.'],'osv-scanner'),scan.parseOsv);
 if(usableCount===0&&pol.requireVulnerabilityScan!==false)blocks.push({check:'vulnerability',severity:'high',message:'could not verify vulnerabilities: no scanner ran (needs a lockfile with npm, or pip-audit, or osv-scanner)'});
-const scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
+let scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
+if(baselineVulns.length)scoped=filterNewVulnerabilities(scoped,baselineVulns);
 const today=new Date(now()).toISOString().slice(0,10);
 for(const v of scan.blockingVulns(scoped,pol.blockSeverities)||[]){
 // npm audit lists one entry per package, combining its advisories: an id-specific exception counts only when it covers every id of the
