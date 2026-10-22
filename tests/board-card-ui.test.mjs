@@ -85,6 +85,7 @@ function makeElement(tag, id) {
       const walk = n => {
         if (!n) return null;
         if (sel === '.watch-card-slots' && n.classList && n.classList.contains('watch-card-slots')) return n;
+        if (sel === '.watch-card-next' && n.classList && n.classList.contains('watch-card-next')) return n;
         if (sel === '.watch-card-blocked' && n.classList && n.classList.contains('watch-card-blocked')) return n;
         if (sel.startsWith('[aria-label="') && sel.endsWith('"]')) {
           const want = sel.slice('[aria-label="'.length, -2);
@@ -283,6 +284,16 @@ async function writeCardListFixture(fixture) {
   })}\n`);
 }
 
+async function writeReadyListFixture(fixture) {
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const todos = ledger.tickets.filter(ticket => ticket.status === 'todo' && ticket.type !== 'human');
+  assert.ok(todos.length >= 2, 'fixture needs todo tickets for ready list');
+  todos[0].dependsOn = [];
+  todos[1].dependsOn = [];
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+}
+
 function rowListItems(row) {
   const idEl = (row.children || []).find(c => c.classList && c.classList.contains('watch-card-list-id'));
   const titleEl = (row.children || []).find(c => c.classList && c.classList.contains('watch-card-list-title'));
@@ -416,18 +427,29 @@ test('watch project card need-you list opens with ids, titles, commands and copy
   await assertCopyButtonsCopyExactCommands(lists[1], p.card.blocked.needYouItems);
 });
 
-test('watch project card lists show exact commands for ready tickets', async t => {
+test('watch project card ready list opens with ids, titles, commands and copy', async t => {
   const { renderWatchProjectCard } = await loadBoardModule();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
+  await writeReadyListFixture(fixture);
   const p = await overviewForFixture(fixture);
+  assert.ok(p.card.next.items.length >= 1, 'ready items from projectOverview');
   const host = document.createElement('div');
   renderWatchProjectCard(p, host);
-  const codes = host.querySelectorAll('.watch-card-list code');
-  const commands = codes.map(c => c.textContent);
-  for (const item of p.card.next.items) {
-    if (item.command) assert.ok(commands.includes(item.command), item.command);
-  }
+  const readyBtn = host.querySelector('[aria-label="Show ready tickets"]');
+  assert.ok(readyBtn);
+  assert.equal(readyBtn.getAttribute('aria-expanded'), null);
+  const nextBlock = host.querySelector('.watch-card-next');
+  const readyList = nextBlock.querySelectorAll('.watch-card-list')[0];
+  assert.ok(readyList);
+  assert.equal(readyList.hidden, true);
+  readyBtn.click();
+  assert.equal(readyBtn.getAttribute('aria-expanded'), 'true');
+  assertCardListItems(readyList, p.card.next.items);
+  await assertCopyButtonsCopyExactCommands(readyList, p.card.next.items);
+  readyBtn.click();
+  assert.equal(readyBtn.getAttribute('aria-expanded'), 'false');
+  assert.equal(readyList.hidden, true);
 });
 
 test('finished project card is quiet without rows or heads-up', async t => {
