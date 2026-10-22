@@ -395,7 +395,7 @@ export function createWatchServer(opts) {
     const localHost = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     if (remote) {
       const login = req.headers['tailscale-user-login'];
-      const named = localHost || remote.hosts.includes(String(host).toLowerCase());
+      const named = remote.hosts.includes(String(host).toLowerCase());
       if (!named || req.headers['tailscale-funnel-request'] !== undefined || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) {
         return sendJsonStatus(res, method, 401, { error: 'not-signed-in', message: 'a Tailscale owner identity is required' });
       }

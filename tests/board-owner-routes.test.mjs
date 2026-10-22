@@ -142,6 +142,20 @@ test('owner routes are absent without remote board mode', async t => {
   assert.equal((await httpRequest(localPort, '/api/owner/audit', { headers: { 'x-watch-token': local.server.token } })).status, 404);
 });
 
+test('owner routes refuse loopback Host even with a tailnet login header', async t => {
+  const { actions } = ownerActionsFixture();
+  const { port, token } = await startServer(t, { ownerActions: actions });
+  for (const host of [`127.0.0.1:${port}`, `localhost:${port}`]) {
+    const refused = await httpRequest(port, '/api/owner/actions/scope-1/prepare', {
+      method: 'POST',
+      host,
+      headers: { 'x-watch-token': token, 'Tailscale-User-Login': LOGIN },
+    });
+    assert.equal(refused.status, 401);
+    assert.equal(refused.json?.error, 'not-signed-in');
+  }
+});
+
 test('owner routes refuse missing header token, query-only token, cookie-only POST, bad login, funnel, and local=1', async t => {
   const { actions } = ownerActionsFixture();
   const { port, token } = await startServer(t, { ownerActions: actions });

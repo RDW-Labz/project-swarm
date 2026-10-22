@@ -178,17 +178,8 @@ export function handbuildBoardSafeForOwner(item, root) {
 export function decisionBoardSafeForOwner(item) {
   if (!item || item.kind !== 'decision') return true;
   if (item.boardSafe !== true) return false;
+  // protectedTopic is computed in boardInbox on the full event before display clipping.
   if (item.protectedTopic !== false) return false;
-  const fields = [
-    item.text,
-    item.title,
-    item.summary,
-    item.id,
-    ...decisionChoiceValues(item),
-  ];
-  for (const field of fields) {
-    if (field !== undefined && field !== null && isProtectedTopic(field)) return false;
-  }
   return true;
 }
 
