@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-handbuild-check",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tools/board-owner-actions.mjs",
+        "tools/watch-server.mjs",
+        "tests/board-owner-routes.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/handbuild.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/board-action-guard.mjs",
+        "tools/board-inbox.mjs",
+        "tests/board-owner-actions-handlers.test.mjs"
+      ],
+      "prompt": "Security fix for T-0114 (Opus review t0114-sec4 medium): board approval of an item whose id starts with 'handbuild-' (or kind handbuild) calls decideRequest in tools/handbuild.mjs based only on the JOURNAL decision's boardSafe flag and text. A hand-edited journal decision 'handbuild-<id>' with boardSafe true and harmless text could therefore approve ANY hand-build request, including one whose own kind, reason or files are protected (e.g. .github, keys, migrations). Fix in the apply path (tools/watch-cli.mjs buildOwnerActions apply, and a check in tools/board-owner-actions.mjs prepare so it is refused early): before preparing or applying a hand-build answer, load the actual request from the hand-build store (listRequests / readState in tools/handbuild.mjs) by the id after 'handbuild-'; refuse (403 'handbuild-not-board-safe', audit outcome refused-handbuild-not-board-safe) unless the request exists, its status is pending (not approved, denied or expired), and isProtectedTopic (tools/board-action-guard.mjs) is false over the request's OWN kind, reason, every file path and git entries; never trust the journal text for these checks. Also the low: POST .../decision with an invalid JSON body must return 400 'invalid-body' (same as prepare), not 422. Tests in tests/board-owner-routes.test.mjs end to end on the real remote board: a hand-edited journal decision 'handbuild-<id>' marked boardSafe with harmless text, pointing at a pending hand-build request whose files include .github/workflows/x.yml, is refused with handbuild-not-board-safe on prepare and decision, and the hand-build store shows the request still pending; a pending safe request is approvable; an already-approved request is refused; decision with invalid JSON returns 400. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/board-inbox.test.mjs tests/decision-board-safe.test.mjs tests/board-action-guard-unit.test.mjs tests/watch-server.test.mjs` and report pass counts (must be 0 failures).",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the watch server, CLI or owner actions for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
