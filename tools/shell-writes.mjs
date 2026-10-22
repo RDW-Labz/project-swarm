@@ -1182,7 +1182,12 @@ const omHeadTailLinesOk = args => {
       if (!Number.isFinite(n) || n > OM_MAX_HEAD_TAIL) return false;
       continue;
     }
-    if (/^-\d+$/.test(a)) return false;
+    if (/^-\d+$/.test(a)) {
+      sawN = true;
+      const n = Number(a.slice(1));
+      if (!Number.isFinite(n) || n > OM_MAX_HEAD_TAIL) return false;
+      continue;
+    }
     if (a.startsWith('--lines=')) {
       sawN = true;
       const n = Number(a.slice(8));

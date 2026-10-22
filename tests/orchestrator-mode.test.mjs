@@ -18,6 +18,8 @@ import {
   ORCHESTRATOR_MODE_RULE_ID,
   createRequest,
   decideRequest,
+  guardTimeoutMs,
+  DEFAULT_GUARD_TIMEOUT_MS,
 } from '../tools/handbuild.mjs';
 import { orchestratorModeShellPolicy } from '../tools/self-approval.mjs';
 
@@ -96,8 +98,12 @@ test('orchestratorModeCommandAllowed: read-only gh and capped reads', () => {
     'find src -name "*.ts"',
     'jq . package.json | head -n 50',
     'git status -s | head -n 5',
+    'git status -s | head -5',
     'git log --oneline | head -n 50',
+    'git log --oneline | head -20',
     'tail -n 50 out.log',
+    'tail -5 out.log',
+    'head -5 README.md',
   ];
   for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c), true, c);
 });
@@ -390,7 +396,10 @@ test('orchestratorModeCommandAllowed: security attack surface refusals', () => {
     'ls -R /',
     'ls src pkg',
     'head -n 500 x',
+    'head -500 x',
+    'tail -500 x',
     'git diff | head -n 500',
+    'git diff | head -500',
     'gh api user',
     'gh api graphql',
   ];
@@ -415,4 +424,41 @@ test('orchestratorModeCommandAllowed: security false-positive allows', async t =
     'swarm diagnose "why"',
   ];
   for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
+});
+
+test('guard watchdog default is 15s and override is bounded', () => {
+  const prev = process.env.SWARM_GUARD_TIMEOUT_MS;
+  delete process.env.SWARM_GUARD_TIMEOUT_MS;
+  assert.equal(guardTimeoutMs(), DEFAULT_GUARD_TIMEOUT_MS);
+  assert.equal(DEFAULT_GUARD_TIMEOUT_MS, 15000);
+  process.env.SWARM_GUARD_TIMEOUT_MS = '10';
+  assert.equal(guardTimeoutMs(), 50);
+  process.env.SWARM_GUARD_TIMEOUT_MS = '999999';
+  assert.equal(guardTimeoutMs(), 60000);
+  if (prev === undefined) delete process.env.SWARM_GUARD_TIMEOUT_MS;
+  else process.env.SWARM_GUARD_TIMEOUT_MS = prev;
+});
+
+test('guardDecision latency p95 on orchestrator allowlist commands stays under 1s', async t => {
+  const { root, bash } = await swarmProject(t);
+  const commands = [
+    'git status',
+    'git log --oneline -5',
+    'swarm status',
+    'grep -rn foo src | head -n 20',
+    'gh pr list',
+    'git diff HEAD~1',
+    'wc -l package.json',
+  ];
+  const samples = [];
+  for (let run = 0; run < 20; run += 1) {
+    for (const command of commands) {
+      const t0 = performance.now();
+      bash(command);
+      samples.push(performance.now() - t0);
+    }
+  }
+  samples.sort((a, b) => a - b);
+  const p95 = samples[Math.floor(samples.length * 0.95)];
+  assert.ok(p95 < 1000, `p95 ${p95}ms`);
 });

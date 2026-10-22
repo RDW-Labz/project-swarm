@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "secrev",
+   "agent": "anthropic",
+   "model": "claude-opus-5-5",
+   "tier": "expensive",
+   "type": "review",
+   "prompt": "Security review (static, read the code; do not run anything). Orchestrator mode (tools/shell-writes.mjs orchestratorModeEnabled / orchestratorModeCommandAllowed, tools/handbuild.mjs guardDecision and applyOrchestratorMode, tools/handbuild-guard.mjs) must allow an orchestrator session's Bash call ONLY if every command is a swarm command, read-only git, read-only gh, or a capped read (head/tail -n<=200 etc), and deny everything else, including through quoting, expansion, wrappers, redirects, pipes into interpreters, path-qualified command names, env prefixes, option abbreviations, and scratch/test path or marker tricks that could turn the mode off. A previous review found real bypasses (git ls-remote --upload-pack, git grep -O, scratch-root exemption by path segment, fail-open parse error, sort -o, find -fprint0, sed w/e, rg --pre, ./git path commands, VAR= prefixes, read caps, gh --web/pr create) and the code was hardened. Find any REMAINING bypass by tracing the tokenizer and each allowlist branch: give for each finding the exact command string that would be allowed, the code line that allows it, severity (critical = arbitrary code execution or file write by an orchestrator; high = secret read or cap bypass; low = false positive), and a one-line fix. Also answer: (1) does any path before the allowlist return allow (approvals, off files, worker cwd, scratch roots, parse errors, empty command, non-Bash tools)? list every early return with its condition; (2) can an orchestrator create .swarm/orchestrator-mode/off or the handbuild off file through Write/Edit/Bash? (3) is anything in the allowlist a launcher (git/gh/swarm subcommands or flags that run external programs or write files)? Finish with one JSON line: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":[{\"file\":\"...\",\"line\":0,\"severity\":\"critical|high|medium|low\",\"detail\":\"...\",\"command\":\"...\"}]}",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs"
+   ],
+   "outputs": [],
+   "timeoutMs": 900000,
+   "tierReason": "security review of a command guard; owner policy: Opus for security reviews only"
+  }
+ ]
+}

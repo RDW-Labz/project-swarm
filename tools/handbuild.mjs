@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
+import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS, appendEvent } from './orchestrator-events.mjs';
 import { execFileSync } from 'node:child_process';
 import {
   analyzeShell,
@@ -945,7 +945,82 @@ const ghApiWrite = (command, ops) => {
 export const STATE_FILE = '.swarm/handbuild/state.json';
 export const LOG_FILE = '.swarm/handbuild/log.ndjson';
 export const OFF_FILE = '.swarm/handbuild/off';
+export const GUARD_ERRORS_FILE = '.swarm/handbuild/guard-errors.ndjson';
+export const GUARD_VERSION = 1;
+export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm diagnose "<question>" or swarm ticket ...)';
+export const DEFAULT_GUARD_TIMEOUT_MS = 15000;
 export { ORCHESTRATOR_MODE_OFF_FILE, ORCHESTRATOR_MODE_RULE_ID, ORCHESTRATOR_MODE_DENY_REASON, orchestratorModeEnabled } from './shell-writes.mjs';
+
+/** Watchdog duration for tools/handbuild-guard.mjs (override SWARM_GUARD_TIMEOUT_MS in tests only). */
+export function guardTimeoutMs() {
+  const raw = process.env.SWARM_GUARD_TIMEOUT_MS;
+  if (raw !== undefined && String(raw).trim() !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n)) return Math.min(60000, Math.max(50, Math.floor(n)));
+  }
+  return DEFAULT_GUARD_TIMEOUT_MS;
+}
+
+export function isGuardTestMode() {
+  return process.env.NODE_ENV === 'test' || process.env.SWARM_GUARD_TEST_MODE === '1';
+}
+
+/** True when `root` is under the OS temp dir (guard fault injection is limited to temp projects in test mode). */
+export function isTempProjectRoot(root) {
+  if (!root) return false;
+  try {
+    const real = fs.realpathSync.native(root);
+    const tmp = fs.realpathSync.native(os.tmpdir());
+    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
+  } catch { return false; }
+}
+
+const guardErrorDayKey = now => new Date(now).toISOString().slice(0, 10);
+
+/** Count guard crash/timeout lines in guard-errors.ndjson for the UTC calendar day of `now`. */
+export function guardErrorsToday(root, { now = Date.now } = {}) {
+  try {
+    const file = path.join(root, GUARD_ERRORS_FILE);
+    if (isLink(file)) return 0;
+    const day = guardErrorDayKey(now());
+    const text = fs.readFileSync(file, 'utf8');
+    let n = 0;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row.at === 'string' && row.at.slice(0, 10) === day) n += 1;
+      } catch { /* skip */ }
+    }
+    return n;
+  } catch { return 0; }
+}
+
+/** One JSON line per guard crash or timeout; first error of the day is also appended to orchestrator events. Never throws. */
+export function logGuardError(root, { kind, tool, error }, { now = Date.now } = {}) {
+  const at = new Date(now()).toISOString();
+  const name = cleanText(error?.name ?? 'Error', 80) || 'Error';
+  const message = cleanText(error?.message ?? 'unknown', 400) || 'unknown';
+  const row = { at, tool: cleanText(tool ?? 'unknown', 60), kind: kind === 'timeout' ? 'timeout' : 'crash', name, message, guardVersion: GUARD_VERSION };
+  let firstToday = false;
+  try {
+    const before = guardErrorsToday(root, { now });
+    firstToday = before === 0;
+    const dir = safeDir(root);
+    const fd = fs.openSync(path.join(dir, 'guard-errors.ndjson'), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+    try { fs.writeSync(fd, `${JSON.stringify(row)}\n`); } finally { fs.closeSync(fd); }
+  } catch { /* best effort */ }
+  if (firstToday) {
+    try {
+      appendEvent(root, { at, e: 'guard-error', kind: row.kind, t: row.tool, n: row.name, m: row.message, gv: GUARD_VERSION });
+    } catch { /* best effort */ }
+  }
+}
+
+const applyGuardTestFault = root => {
+  if (!isGuardTestMode() || !isTempProjectRoot(root)) return;
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'throw') throw new Error('SWARM_GUARD_TEST_THROW');
+};
 export const MAX_MINUTES = 120;
 export const DEFAULT_MINUTES = 30;
 export const MAX_FILES = 20;
@@ -1256,6 +1331,7 @@ const ORCHESTRATOR_MODE_PRESERVE_DENY = new Set([
 ]);
 
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit } = {}) {
+  applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
   const omActive = orchestratorModeEnabled(root, cwd);
