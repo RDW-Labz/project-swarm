@@ -217,6 +217,40 @@ test('prepare with invalid JSON body returns 400 invalid-body', async t => {
   assert.equal(res.json?.error, 'invalid-body');
 });
 
+test('decision with invalid JSON body returns 400 invalid-body', async t => {
+  const { actions } = ownerActionsFixture();
+  const { port, token } = await startServer(t, { ownerActions: actions });
+  const rawBody = '{not json}';
+  const res = await new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      method: 'POST',
+      path: '/api/owner/actions/scope-1/decision',
+      headers: {
+        Host: HOST,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(rawBody),
+        'Tailscale-User-Login': LOGIN,
+        'x-watch-token': token,
+      },
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* plain */ }
+        resolve({ status: response.statusCode, json });
+      });
+    });
+    req.on('error', reject);
+    req.write(rawBody);
+    req.end();
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.json?.error, 'invalid-body');
+});
+
 test('readOwnerAudit skips corrupt lines and returns valid entries', async t => {
   const env = { ...process.env };
   const auditFile = path.join(path.dirname(remoteFile(env, env.HOME)), '.swarm', 'owner', 'audit.ndjson');
@@ -685,6 +719,122 @@ test('board answers apply to journal, handbuild, tickets, and refuse scope', asy
   });
   assert.equal(scopeFail.status, 409);
   assert.equal(scopeFail.json.error, 'apply-failed');
+
+  await cleanupTestProject(root);
+});
+
+test('hand-build board answers trust the store, not a hand-edited journal decision', async t => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'owner-handbuild-sec-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const root = path.join(home, 'app');
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  await fs.mkdir(path.join(root, '.github', 'workflows'), { recursive: true });
+  await fs.writeFile(path.join(root, '.github', 'workflows', 'x.yml'), 'name: ci\n');
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'safe.ts'), 'export const ok = 1;\n');
+  const project = { id: projectId(root), name: 'app', root };
+  const env = { ...process.env, HOME: home, SWARM_PROJECTS_FILE: path.join(home, 'projects.json') };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({
+    version: 1,
+    projects: [{ ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }],
+  }));
+  const now = () => 1_700_000_000_200;
+  const protectedReq = await runHandbuildCommand(root, [
+    'request',
+    '--kind', 'tiny',
+    '--reason', 'The swarm cannot reach this workflow file today',
+    '--files', '.github/workflows/x.yml',
+    '--git', 'deploy',
+  ], { env, now });
+  assert.equal(protectedReq.exitCode, 0);
+  const protectedDecisionId = (await readJournal(root, { limit: Infinity }))
+    .find(e => e.kind === 'decision' && String(e.id).startsWith('handbuild-'))?.id;
+  assert.ok(protectedDecisionId);
+  const hbRequestId = protectedDecisionId.slice('handbuild-'.length);
+  const journalPath = path.join(root, '.swarm', 'project', 'journal.ndjson');
+  const journalText = await fs.readFile(journalPath, 'utf8');
+  const forged = journalText.split('\n').map(line => {
+    if (!line.trim()) return line;
+    try {
+      const event = JSON.parse(line);
+      if (event.kind === 'decision' && event.id === protectedDecisionId) {
+        return JSON.stringify({
+          ...event,
+          text: 'Harmless hand-build summary for the board',
+          boardSafe: true,
+        });
+      }
+    } catch { /* keep */ }
+    return line;
+  }).join('\n');
+  await fs.writeFile(journalPath, forged.endsWith('\n') ? forged : `${forged}\n`, { mode: 0o600 });
+
+  const safeReq = await runHandbuildCommand(root, [
+    'request',
+    '--kind', 'tiny',
+    '--reason', 'The swarm cannot reach this one-off file today',
+    '--files', 'src/safe.ts',
+  ], { env, now });
+  assert.equal(safeReq.exitCode, 0);
+  const safeDecisionId = (await readJournal(root, { limit: Infinity }))
+    .filter(e => e.kind === 'decision' && String(e.id).startsWith('handbuild-'))
+    .at(-1)?.id;
+  assert.ok(safeDecisionId);
+  const safeHbId = safeDecisionId.slice('handbuild-'.length);
+
+  const board = await startBoardServer({
+    env,
+    root: home,
+    now,
+    remote: { port: 0, token: 'g'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
+  });
+  t.after(async () => { await board.server.close(); await board.api.close(); });
+  const port = Number(new URL(board.url).port);
+  const headers = { 'x-watch-token': board.server.token };
+
+  const refusedPrepare = await tailnet(port, `/api/owner/actions/${protectedDecisionId}/prepare`, {
+    method: 'POST',
+    headers,
+    body: { choice: 'approve' },
+  });
+  assert.equal(refusedPrepare.status, 403);
+  assert.equal(refusedPrepare.json?.error, 'handbuild-not-board-safe');
+  assert.equal(readHandbuildState(root).requests[hbRequestId]?.status, 'pending');
+
+  const refusedDecide = await tailnet(port, `/api/owner/actions/${protectedDecisionId}/decision`, {
+    method: 'POST',
+    headers,
+    body: { decision: 'approve', confirm: 'not-a-real-token' },
+  });
+  assert.equal(refusedDecide.status, 403);
+  assert.equal(refusedDecide.json?.error, 'handbuild-not-board-safe');
+  assert.equal(readHandbuildState(root).requests[hbRequestId]?.status, 'pending');
+
+  const safePrepared = await tailnet(port, `/api/owner/actions/${safeDecisionId}/prepare`, {
+    method: 'POST',
+    headers,
+    body: { choice: 'approve' },
+  });
+  assert.equal(safePrepared.status, 200);
+  const safeDecided = await tailnet(port, `/api/owner/actions/${safeDecisionId}/decision`, {
+    method: 'POST',
+    headers,
+    body: { decision: 'approve', confirm: safePrepared.json.confirmToken },
+  });
+  assert.equal(safeDecided.status, 200);
+  assert.equal(readHandbuildState(root).requests[safeHbId]?.status, 'approved');
+
+  const refusedApproved = await tailnet(port, `/api/owner/actions/${safeDecisionId}/prepare`, {
+    method: 'POST',
+    headers,
+    body: { choice: 'deny' },
+  });
+  assert.equal(refusedApproved.status, 403);
+  assert.equal(refusedApproved.json?.error, 'handbuild-not-board-safe');
+
+  const auditGet = await tailnet(port, '/api/owner/audit', { headers });
+  assert.equal(auditGet.status, 200);
+  assert.equal(auditGet.json.some(entry => entry.outcome === 'refused-handbuild-not-board-safe'), true);
 
   await cleanupTestProject(root);
 });

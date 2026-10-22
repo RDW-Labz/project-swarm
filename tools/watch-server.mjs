@@ -427,10 +427,7 @@ export function createWatchServer(opts) {
       return sendJsonStatus(res, method, 413, { error: 'payload-too-large', message: 'request body exceeds 8 KB' });
     }
     if (bodyRead.error === 'invalid') {
-      if (ownerRoute.route === 'prepare') {
-        return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
-      }
-      return sendJsonStatus(res, method, 422, { error: 'not-owner-decidable', message: 'decision and confirm are required' });
+      return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
     }
     const out = ownerRoute.route === 'prepare'
       ? await ownerActions.prepare(ownerRoute.itemId, ownerReq, bodyRead.value)

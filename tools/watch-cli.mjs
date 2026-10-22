@@ -36,7 +36,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
-import { createOwnerActions, ownerItemsFromBoardInbox } from './board-owner-actions.mjs';
+import { createOwnerActions, ownerItemsFromBoardInbox, handbuildBoardSafeForOwner } from './board-owner-actions.mjs';
 import { guardBoardAction } from './board-action-guard.mjs';
 import { remoteFile } from './remote.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
@@ -572,6 +572,10 @@ export function boardOwnerApply(env, now = Date.now) {
     const handbuildId = String(item.id ?? '');
     if (handbuildId.startsWith('handbuild-') || kind === 'handbuild') {
       const picked = choice ?? (decision === 'approve' ? 'approve' : 'deny');
+      const handbuildSafe = handbuildBoardSafeForOwner(item, root);
+      if (!handbuildSafe.ok) {
+        return { ok: false, message: 'handbuild-not-board-safe' };
+      }
       try {
         const hbRef = handbuildId.startsWith('handbuild-') ? handbuildId.slice('handbuild-'.length) : handbuildId;
         decideRequest(root, hbRef, picked, { now: nowFn, by: 'owner', channel: 'board' });

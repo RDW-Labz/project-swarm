@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { needsHuman } from './approval-policy.mjs';
 import { isProtectedTopic } from './board-action-guard.mjs';
+import { readState } from './handbuild.mjs';
 
 // T-0114 must set req.tailnetVerified to true only after Tailscale Serve has
 // accepted the request on the loopback watch server; direct and Funnel requests
@@ -141,6 +142,37 @@ export function ownerItemsFromBoardInbox(inbox) {
     }
     return base;
   });
+}
+
+function handbuildRequestId(item) {
+  const id = String(item?.id ?? '');
+  if (id.startsWith('handbuild-')) return id.slice('handbuild-'.length);
+  if (item?.kind === 'handbuild' && id) return id;
+  return null;
+}
+
+function handbuildRequestFieldsProtected(request) {
+  if (!request || typeof request !== 'object') return true;
+  if (isProtectedTopic(request.kind)) return true;
+  if (isProtectedTopic(request.reason)) return true;
+  for (const file of request.files ?? []) {
+    if (isProtectedTopic(file)) return true;
+  }
+  for (const git of request.git ?? []) {
+    if (isProtectedTopic(git)) return true;
+  }
+  return false;
+}
+
+/** Board may answer hand-build decisions only when the live store row is pending and not topic-protected. */
+export function handbuildBoardSafeForOwner(item, root) {
+  const hbId = handbuildRequestId(item);
+  if (!hbId || !root) return { ok: true };
+  const request = readState(root).requests?.[hbId];
+  if (!request) return { ok: false };
+  if (request.status !== 'pending') return { ok: false };
+  if (handbuildRequestFieldsProtected(request)) return { ok: false };
+  return { ok: true };
 }
 
 export function decisionBoardSafeForOwner(item) {
@@ -328,6 +360,16 @@ export function createOwnerActions({
         error: response(403, 'decision-not-board-safe', 'this decision was not raised as board-safe or names a protected topic'),
         outcome: 'refused-decision-not-board-safe',
       };
+    }
+    const handbuildRoot = item.projectRoot;
+    if (handbuildRoot && handbuildRequestId(item)) {
+      const handbuildSafe = handbuildBoardSafeForOwner(item, handbuildRoot);
+      if (!handbuildSafe.ok) {
+        return {
+          error: response(403, 'handbuild-not-board-safe', 'this hand-build request is not board-safe from the store'),
+          outcome: 'refused-handbuild-not-board-safe',
+        };
+      }
     }
     return { item };
   };
