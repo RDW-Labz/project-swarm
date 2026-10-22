@@ -3,6 +3,7 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { scopeLoop } from '../tools/scope-loop.mjs';
+import { acceptanceReviewSkipWarning } from '../tools/acceptance.mjs';
 
 const ticket = (id, extra = {}) => ({
   id,
@@ -50,21 +51,26 @@ test('resume queues an acceptance review for every review ticket with no recorde
   assert.ok(starts.every(call => call.file.startsWith('.swarm/acceptance-reviews/resume-')));
 });
 
-test('a review that cannot start creates a named blocker and leaves the loop stuck', async () => {
+test('a review that cannot start is skipped with a named warning and the loop continues', async () => {
+  const reason = 'review runner rejected path lessons/swarm because it is a directory';
+  const notes = new Map();
+  const warnings = [];
   const f = reviewDeps([ticket('T-1')], {
-    blocker: async (id, text) => f.blocker = { id, text },
-    review: async () => { throw new Error('review runner rejected path lessons/swarm because it is a directory'); },
+    review: async (kind, file, context) => {
+      f.calls.push({ kind, file, context });
+      throw new Error(reason);
+    },
+    ticketNote: async (id, text) => { notes.set(id, text); },
+    log: text => { if (String(text).startsWith('acceptance-review-skipped:')) warnings.push(text); },
   });
   const out = await scopeLoop({ deps: f.deps });
   assert.equal(out.status, 'stuck');
-  assert.match(out.reason, /review-start-T-1/);
-  assert.deepEqual(f.blocker, {
-    id: 'review-start-T-1',
-    text: 'T-1: review could not start: review runner rejected path lessons/swarm because it is a directory (path lessons/swarm)',
-  });
-  assert.equal(f.journal.length, 1);
-  assert.equal(f.journal[0].id, 'review-start-T-1');
-  assert.match(f.journal[0].text, /path lessons\/swarm/);
+  assert.match(out.reason, /nothing is ready: 1 in review/);
+  assert.equal(f.current[0].status, 'review');
+  assert.match(notes.get('T-1'), /acceptance review skipped: review runner rejected path lessons\/swarm/);
+  assert.equal(warnings[0], acceptanceReviewSkipWarning('T-1', reason));
+  assert.equal(f.journal.length, 0);
+  assert.equal(f.calls.filter(call => call.kind === 'acceptance').length, 1);
 });
 
 test('a saved acceptance manifest is overwritten with the current ticket context on review start', async () => {

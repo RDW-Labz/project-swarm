@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixlockt",
+      "agent": "auto",
+      "prompt": "tests/server-restart-round2.test.mjs test (9) concurrent restarts serialize on install restart lock fails on Linux CI and in a Linux container (node:22) with maxOverlap 0 where 1 is expected: the test is racy because the first restart finishes (its status is failed because the fake replacement has no pid) before the second restart ever contends for the lock, so the injected sleep is never entered. Make the test deterministic and meaningful on every OS: the first restart must HOLD the lock until the second restart has demonstrably tried to take it: for example the first restart execFileImpl awaits a gate promise that is resolved by the second restart sleep hook (the lock wait calls sleep), then assert (a) the second restart waited (sleep was called at least once) and (b) the two critical sections never overlapped (record enter and exit events of the restart body in an array and assert they alternate) and (c) both calls resolved. Keep the product code unchanged unless you find a real bug. Verify in a Linux container with: docker run --rm -v THISDIR:/w -w /w node:22 node --import ./tests/_isolate-config.mjs --test tests/server-restart-round2.test.mjs (THISDIR is your workspace root; if docker is not available in your sandbox just reason carefully) and also run it natively. ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/server-restart-round2.test.mjs",
+        "tools/server-restart.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/server-restart-round2.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}

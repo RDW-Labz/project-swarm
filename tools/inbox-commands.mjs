@@ -12,7 +12,7 @@ const USAGE = {
   inbox: 'Usage: swarm inbox [--json] [--all]\n',
   done: 'Usage: swarm done ID\n',
   decide: 'Usage: swarm decide ID CHOICE\n',
-  resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
+  resolve: 'Usage: swarm resolve BLOCKER_ID | swarm resolve RUN_ID --handled\n',
   decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID] [--board-safe]\n',
   backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
 };
@@ -94,6 +94,22 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
     }
     if (command === 'resolve') {
+      if (args.length === 2 && args[1] === '--handled') {
+        const runId = args[0];
+        if (!runId || runId.startsWith('-') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) return bad(command);
+        const statePath = path.join(root, '.swarm', 'runs', runId, 'state.json');
+        let state;
+        try {
+          state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+        } catch {
+          return { stdout: `no run state for ${sanitizeText(runId)}\n`, exitCode: 1 };
+        }
+        state.handled = true;
+        state.handledAt = new Date(now()).toISOString();
+        await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+        await appendEvent(root, { kind: 'run', id: runId, status: state.status ?? 'failed', handled: true }, { now });
+        return { stdout: `handled: ${runId}\n`, exitCode: 0 };
+      }
       if (args.length !== 1 || args[0].startsWith('-')) return bad(command);
       const open = openItems(await readJournal(root, { limit: Infinity })).find(event => event.kind === 'blocker' && String(event.id) === args[0]);
       if (!open) return { stdout: `no open blocker ${sanitizeText(args[0])} in this project (swarm inbox lists them)\n`, exitCode: 1 };

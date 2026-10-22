@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "b7-last",
+      "agent": "auto",
+      "prompt": "Three small fixes. (1) tools/security-gate.mjs line about 69 and 259-262: the local LIFECYCLE list omits preprepare and postprepare although tools/dependency-diff.mjs lists them; a package.json that adds postprepare with a download-and-run command raises no install-script block. Remove the duplicate list: export the single lifecycle list from tools/dependency-diff.mjs (it is already shared in spirit) and import it in security-gate.mjs so both use ONE list that includes preinstall, install, postinstall, prepare, preprepare, postprepare, prepack, postpack, prepublish, prepublishOnly, preuninstall, uninstall, postuninstall. Test in tests/lifecycle-list-shared.test.mjs: each name adds an install-script block when added or changed in package.json through runSecurityGate, and the two modules export or use the same array. (2) tools/swarm/core-71.mjs about 279-286: when the final full check fails and every job is already integrated, integrationStatus becomes partial but queueIntegrationIncomplete (about 220-225) returns false because queueIntegrationComplete is true, so a run could re-enter integrate with nothing left to merge: make queueIntegrationIncomplete true whenever integrationStatus is partial or failed-check, and make the autopilot treat a partial integrate result (status partial even without integrationStatus, tools/autopilot.mjs about 615) as not complete. recordQueuePass must not throw when both mergeQueue and state.mergeQueue are undefined (treat as empty). Tests in the same new test file. (3) tests/update-when-idle.test.mjs test held launcher waits while pending exists and continues after is flaky under full-suite load (it waits a fixed 30 ms for the waiting line, then asserts it): poll for the waiting line with a 5 second deadline (check every 10 ms) before asserting and before removing the pending record; keep the intent. Run tests/lifecycle-list-shared.test.mjs tests/update-when-idle.test.mjs tests/b7-review-fixes.test.mjs tests/dependency-diff.test.mjs tests/integrate-partial-retry.test.mjs tests/autopilot-readonly-runs.test.mjs tests/autopilot-retry-duplicates.test.mjs tests/autopilot-quiet-poll.test.mjs and every test file with security-gate or queue in the name. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/dependency-diff.mjs",
+        "tools/swarm/core-71.mjs",
+        "tools/autopilot.mjs",
+        "tests/update-when-idle.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs",
+        "tools/dependency-diff.mjs",
+        "tools/swarm/core-71.mjs",
+        "tools/autopilot.mjs",
+        "tests/update-when-idle.test.mjs",
+        "tests/lifecycle-list-shared.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/autopilot-blocker-resolved.test.mjs",
+        "tests/autopilot-busy.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/autopilot-lock.test.mjs",
+        "tests/autopilot-no-outputs.test.mjs",
+        "tests/autopilot-policy-pass.test.mjs",
+        "tests/autopilot-quiet-poll.test.mjs",
+        "tests/autopilot-readonly-runs.test.mjs",
+        "tests/autopilot-retry-duplicates.test.mjs",
+        "tests/autopilot-start-ready.test.mjs",
+        "tests/autopilot.test.mjs",
+        "tests/b7-review-fixes.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/brain-commands.test.mjs",
+        "tests/dependency-diff.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/integrate-autocommit.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/no-manifest-review-refs.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/run-kind-nonintegrating.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/security-gate.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/wave-batch.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}

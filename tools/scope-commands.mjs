@@ -35,7 +35,7 @@ import { nextStep, sizeTicket } from './escalation.mjs';
 import { persistReplans } from './ticket-replan.mjs';
 import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane, ticketByteTotal } from './lane-size.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
@@ -46,14 +46,14 @@ import { isSensitiveTicket } from './sensitive-ticket.mjs';
 import { syncCheckForTicket } from './ticket-sync-checks.mjs';
 import { runManagersScopeGate } from './manager-commands.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
-import { validateTicketPaths, formatTicketPathRefusal } from './ticket-paths.mjs';
+import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, normTicketPath } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
   '       swarm scope template [--out FILE]',
   '       swarm scope check [FILE]',
-  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire] [--accept-waves]',
+  '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire] [--accept-waves] [--accept-new-path PATH[,PATH]]',
   '       swarm scope approve [FILE] [--yes] [--accept-waves]',
   '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes] [--accept-unmet T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
@@ -81,7 +81,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -198,13 +198,72 @@ async function listTrackedRepoFiles(root) {
   }
 }
 
-function ticketPathRefusalLines(tickets, repoFiles, root) {
-  const lines = [];
+function contextReachableOutputs(tickets) {
+  const byId = new Map(tickets.map(ticket => [ticket.id, ticket]));
+  const memo = new Map();
+  const reach = (ticketId, seen = new Set()) => {
+    if (memo.has(ticketId)) return memo.get(ticketId);
+    if (seen.has(ticketId)) return new Set();
+    seen.add(ticketId);
+    const ticket = byId.get(ticketId);
+    const out = new Set([...(ticket?.files ?? []), ...(ticket?.tests ?? [])]);
+    for (const dep of ticket?.dependsOn ?? []) for (const file of reach(dep, seen)) out.add(file);
+    memo.set(ticketId, out);
+    return out;
+  };
+  const allowed = new Set();
+  for (const ticket of tickets) {
+    if (ticket.type === 'human') continue;
+    for (const file of ticket.context ?? []) {
+      if (reach(ticket.id).has(file)) allowed.add(`${ticket.id}\0${file}`);
+    }
+  }
+  return allowed;
+}
+
+function parseAcceptNewPaths(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  return String(raw).split(',').map((p) => normTicketPath(p.trim())).filter(Boolean);
+}
+
+function ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths = new Set()) {
+  const refusals = [];
+  const warnings = [];
+  const usedAcceptPaths = new Set();
+  const allowedContext = contextReachableOutputs(tickets);
   for (const t of tickets) {
     const check = validateTicketPaths(t, { repoFiles, root });
-    for (const err of check.errors) lines.push(formatTicketPathRefusal(t.id, err));
+    for (const warn of check.warnings ?? []) {
+      warnings.push(formatTicketPathWarning(t.id, warn));
+    }
+    for (const err of check.errors) {
+      if (err.field === 'context' && allowedContext.has(`${t.id}\0${err.path}`)) continue;
+      const norm = normTicketPath(err.path);
+      if (acceptNewPaths.has(norm)) {
+        usedAcceptPaths.add(norm);
+        warnings.push(`accepted new path: ${formatTicketPathRefusal(t.id, err)}`);
+        continue;
+      }
+      refusals.push(formatTicketPathRefusal(t.id, err));
+    }
   }
-  return lines;
+  return { refusals, warnings, usedAcceptPaths };
+}
+
+function applySplitIngestGuards(builtTickets, existingTickets, { profile, repoFiles, notes, rejected }) {
+  let nextNum = Math.max(0, ...builtTickets.map(ticket => Number(ticket.id.slice(2))));
+  const allocId = () => {
+    nextNum += 1;
+    return `T-${String(nextNum).padStart(4, '0')}`;
+  };
+  builtTickets.push(...peelProtectedOutputs(builtTickets, profile, { notes, allocId }));
+  reconcileTicketContext([...existingTickets, ...builtTickets], repoFiles, notes);
+  return builtTickets;
+}
+
+function finalizeSplitTestStages(builtTickets, existingTickets, { notes, rejected }) {
+  let kept = alignTestTicketsWithBuildStages(builtTickets, existingTickets, { notes, rejected });
+  return cascadeRejectedDependents(kept, rejected);
 }
 const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
 const bad = message => out(`${message}\n${SCOPE_USAGE}`, 1);
@@ -1075,6 +1134,9 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     ? `rejected ${built.rejected.length} ticket(s): ${built.rejected.map(({ id, title, reason }) => `${id} (${title || 'untitled'}): ${reason}`).join('; ')}`
     : null;
   if (!built.tickets.length) return out([...notes.map(note => `note: ${note}`), rejectedLine ?? 'split refused; no valid tickets remain after validation', 'split refused; every ticket was rejected'].filter(Boolean).join('\n'), 1);
+  const repoFiles = await listTrackedRepoFiles(root);
+  built.tickets = applySplitIngestGuards(built.tickets, existing?.tickets ?? [], { profile, repoFiles, notes: built.notes, rejected: built.rejected });
+  if (!built.tickets.length) return out([...notes.map(note => `note: ${note}`), ...built.notes.map(note => `note: ${note}`), rejectedLine ?? 'split refused; no valid tickets remain after validation'].filter(Boolean).join('\n'), 1);
   const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], built.tickets, built.copiedAcceptanceIds);
   if (acceptanceCheck.refusals.length) {
     return out(`split refused; acceptance is not provable from this ticket's outputs:\n${acceptanceCheck.refusals.slice(0, 15).map(e => `  ${e}`).join('\n')}`, 1);
@@ -1090,6 +1152,11 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   }
   addWiringDeps(built.tickets, existing?.tickets ?? []);
   const orderNotes = orderTestsAfterBuild(built.tickets, existing?.tickets ?? []);
+  built.tickets = finalizeSplitTestStages(built.tickets, existing?.tickets ?? [], { notes: built.notes, rejected: built.rejected });
+  if (!built.tickets.length) return out([...notes.map(note => `note: ${note}`), ...built.notes.map(note => `note: ${note}`), rejectedLine ?? 'split refused; no valid tickets remain after validation'].filter(Boolean).join('\n'), 1);
+  const rejectedSummary = built.rejected.length
+    ? `rejected ${built.rejected.length} ticket(s): ${built.rejected.map(({ id, title, reason }) => `${id} (${title || 'untitled'}): ${reason}`).join('; ')}`
+    : null;
   chainSharedFiles(built.tickets, existing?.tickets ?? []);
   const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
   const allForWiring = [...(existing?.tickets ?? []), ...built.tickets];
@@ -1100,9 +1167,16 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   // A merge into an APPROVED ledger keeps the old refusal: it would drop the approval of a build that may be running, for tickets that cannot be built yet.
   const hardGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
   if (hardGaps.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${hardGaps.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
-  const repoFiles = await listTrackedRepoFiles(root);
-  const pathRefusals = ticketPathRefusalLines(built.tickets, repoFiles, root);
-  if (pathRefusals.length) return out(`split refused; ticket paths are not in the repo:\n${pathRefusals.map(line => `  ${line}`).join('\n')}`, 1);
+  const acceptNewPaths = new Set(parseAcceptNewPaths(flags['accept-new-path']));
+  const pathCheck = ticketPathCheckLines(built.tickets, repoFiles, root, acceptNewPaths);
+  const unusedAcceptPaths = [...acceptNewPaths].filter((p) => !pathCheck.usedAcceptPaths.has(p));
+  const pathWarningLines = [
+    ...pathCheck.warnings.map((line) => `warning: ${line}`),
+    ...unusedAcceptPaths.map((p) => `warning: --accept-new-path unused (no refusal for this path): ${p}`),
+  ];
+  if (pathCheck.refusals.length) {
+    return out(`split refused; ticket paths are not in the repo:\n${pathCheck.refusals.map(line => `  ${line}`).join('\n')}`, 1);
+  }
   const sizes = contextEnvFor(root, profile).sizes;
   const laneNotes = [];
   const laneRefusals = [];
@@ -1132,6 +1206,9 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
   const waveSimulation = simulateBeforeIngest(ledger.tickets, machineSlots(deps.machineConcurrency));
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(waveRefusal(waveSimulation, ledger.tickets), 1);
   await writeLedger(root, ledger);
+  for (const acceptedPath of pathCheck.usedAcceptPaths) {
+    await appendLog(root, { event: 'accept-new-path', path: acceptedPath, run: flags.ingest });
+  }
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope split --ingest');
   await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok, rejected: built.rejected });
   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
@@ -1147,7 +1224,7 @@ async function cmdSplit(root, { rest, flags }, deps = {}) {
     await writeLedger(root, ledger);
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedLine, criticalPathLine, testFirstLine, ...laneNotes.map(n => `lane: ${n}`), ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+  return out([`ledger written: ${tickets.length} tickets added (not approved)`, rejectedSummary, criticalPathLine, testFirstLine, ...laneNotes.map(n => `lane: ${n}`), ...pathWarningLines, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
 }
 
 function managerGateOutcome(result) {

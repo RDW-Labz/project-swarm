@@ -210,6 +210,7 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: entry?.reason ?? null,
   };
   if (typeof entry?.amountUsd === 'number') journalLine.amountUsd = entry.amountUsd;
+  if (Array.isArray(entry?.renames)) journalLine.renames = entry.renames;
   const eventsLine = {
     at,
     kind: 'auto-decision',
@@ -221,6 +222,7 @@ export async function appendAutoDecision({ root, entry, deps = {} }) {
     reason: journalLine.reason,
   };
   if (typeof entry?.amountUsd === 'number') eventsLine.amountUsd = entry.amountUsd;
+  if (Array.isArray(entry?.renames)) eventsLine.renames = entry.renames;
   await appendJournal(root, journalLine, { now });
   await appendEvents(root, eventsLine);
 }
