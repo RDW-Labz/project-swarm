@@ -7,13 +7,58 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { boardSnapshot } from '../tools/board-data.mjs';
-import { readyTickets as ticketsReadyToRun, logPath, approveLedger } from '../tools/tickets.mjs';
+import { readyTickets as ticketsReadyToRun, logPath, approveLedger, isApproved } from '../tools/tickets.mjs';
 import { doneTimes } from '../tools/client-report.mjs';
 import { checkTicketTree } from '../tools/scope-integrity.mjs';
 import { readEvents } from '../tools/orchestrator-events.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
-import { offLedgerRuns } from '../tools/build-progress.mjs';
+import { offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID } from '../tools/build-progress.mjs';
+import { collectInbox } from '../tools/inbox.mjs';
+import { inboxDeps } from '../tools/inbox-commands.mjs';
+import { machineConcurrency } from '../tools/lanes.mjs';
+import { defaultConfigPath } from '../tools/local-config.mjs';
+import { sanitizeText } from '../tools/journal.mjs';
+import { sanitizeWorkerText } from '../tools/worker-text.mjs';
+
+/** Every leaf path on projectOverview(...).card must appear here with the test that owns it. */
+export const COVERAGE = {
+  'now.buildingTickets': 'card.now.buildingTickets counts running tickets across the family',
+  'now.checkoutsBuilding': 'card.now.checkoutsBuilding counts family checkouts with a live run',
+  'now.lastTicketFinishedAt': 'card.now.lastTicketFinishedAt matches the family oracle',
+  'next.ready': 'card.next.ready matches readyTickets on disk',
+  'next.items': 'card.next.items fields match disk oracle',
+  'next.items.id': 'card.next.items fields match disk oracle',
+  'next.items.title': 'card.next.items fields match disk oracle',
+  'next.items.command': 'card.next.items fields match disk oracle',
+  'blocked.waitingOnTickets': 'card.blocked.waitingOnTickets matches dependency oracle',
+  'blocked.items': 'card.blocked.items fields match dependency oracle',
+  'blocked.items.id': 'card.blocked.items fields match dependency oracle',
+  'blocked.items.title': 'card.blocked.items fields match dependency oracle',
+  'blocked.items.waitsOn': 'card.blocked.items fields match dependency oracle',
+  'blocked.items.command': 'card.blocked.items command follows release rule read from disk',
+  'blocked.needYou': 'card.blocked.needYou matches inbox-on-disk oracle',
+  'blocked.needYouItems': 'card.blocked.needYouItems match inbox-on-disk oracle',
+  'blocked.needYouItems.id': 'card.blocked.needYouItems match inbox-on-disk oracle',
+  'blocked.needYouItems.title': 'card.blocked.needYouItems match inbox-on-disk oracle',
+  'blocked.needYouItems.kind': 'card.blocked.needYouItems match inbox-on-disk oracle',
+  'blocked.needYouItems.command': 'card.blocked.needYouItems match inbox-on-disk oracle',
+  'slots.machineMax': 'card.slots.machineMax reads local config on disk',
+  'slots.inUse': 'card.slots reports machine use including other projects',
+  'slots.byThisProject': 'card.slots reports machine use including other projects',
+  'slots.byOtherProjects': 'card.slots reports machine use including other projects',
+  'eta.days': 'card.eta.days matches seven-day tickets.log oracle',
+  'eta.remaining': 'card.eta.remaining matches seven-day tickets.log oracle',
+  'eta.perDay': 'card.eta.perDay matches seven-day tickets.log oracle',
+  'eta.doneLast7Days': 'card.eta.doneLast7Days matches seven-day tickets.log oracle',
+  'eta.windowDays': 'card.eta.windowDays matches seven-day tickets.log oracle',
+  'eta.basis': 'card.eta.basis matches seven-day tickets.log oracle',
+  'facts.handEditsBlocked24h': 'card.facts.handEditsBlocked24h counts recent guard blocked events only',
+  'facts.untrackedRuns': 'card.facts.untrackedRuns matches off-ledger run oracle across the family',
+  'facts.listHref': 'card.facts.listHref matches off-ledger anchor on disk',
+  'facts.checkouts': 'card.facts.checkouts matches git worktrees plus scratch roots',
+  'headsUp': 'card.headsUp wave collision, under-filled waves, and finished null',
+};
 
 const execFileP = promisify(execFile);
 const DAY = 86400000;
@@ -22,6 +67,58 @@ const summary = async () => ({ spendUsd: 0, billedUsd: 0, capUsd: null, reached:
 const iso = at => new Date(at).toISOString();
 const activeRunState = state => state?.status === 'running' || state?.status === 'paused';
 const COUNTED = ticket => ticket && ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status);
+
+const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
+const boardTitle = (value, max = 140) => (value === null || value === undefined ? null : sanitizeWorkerText(value, max));
+const inboxTitle = (value, max = 900) => {
+  const cleaned = sanitizeText(value).replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= max) return cleaned;
+  const cut = cleaned.slice(0, max);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:(-]+$/, '')}…`;
+};
+
+/** Restated from tools/board-inbox.mjs ticketReleaseAllowed (oracle must not call that function). */
+function releaseAllowedFromDisk(ticket, ledger) {
+  if (!ticket || ticket.type === 'human') return false;
+  if (!['blocked', 'todo', 'review'].includes(ticket.status)) return false;
+  const done = new Set((ledger?.tickets ?? []).filter(t => t.status === 'done').map(t => t.id));
+  const waiting = (ticket.dependsOn ?? []).filter(d => !done.has(d));
+  if (waiting.length) return false;
+  if (ticket.status === 'todo' && ledger && !isApproved(ledger)) return false;
+  return true;
+}
+
+function leafPaths(value, prefix = '') {
+  if (value === null || typeof value !== 'object') {
+    return prefix ? [prefix] : [];
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return prefix ? [prefix] : [];
+    const paths = [];
+    for (let index = 0; index < value.length; index += 1) {
+      paths.push(...leafPaths(value[index], `${prefix}[${index}]`));
+    }
+    return paths;
+  }
+  const paths = [];
+  for (const [key, child] of Object.entries(value)) {
+    const next = prefix ? `${prefix}.${key}` : key;
+    paths.push(...leafPaths(child, next));
+  }
+  return paths;
+}
+
+function coverageKeyForLeaf(path) {
+  return path.replace(/\[\d+\]/g, '');
+}
+
+function assertLeafCovered(card) {
+  for (const leaf of leafPaths(card)) {
+    const key = coverageKeyForLeaf(leaf);
+    assert.ok(COVERAGE[key], `missing COVERAGE entry for card leaf path ${leaf} (key ${key})`);
+  }
+}
 
 async function gitWorktreeRoots(mainRoot) {
   const { stdout } = await execFileP('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], {
@@ -130,18 +227,29 @@ async function oracleBlocked(fixture) {
     if (!waitsOn.length) continue;
     if (ticket.blockReason && ticket.blockReason !== 'deps') continue;
     waitingOnTickets += 1;
+    const command = releaseAllowedFromDisk(ticket, ledger) ? `swarm tickets ${ticket.id} --release` : null;
     items.push({
       id: ticket.id,
-      title: ticket.title,
+      title: boardTitle(ticket.title, 140),
       waitsOn,
-      command: waitsOn.length === 0 && ticket.type !== 'human' ? `swarm tickets ${ticket.id} --release` : null,
+      command,
     });
   }
   items.sort((a, b) => String(a.id).localeCompare(String(b.id)));
   return { waitingOnTickets, items };
 }
 
-async function oracleSlots(fixture, { workersMax = 8 } = {}) {
+async function oracleMachineMaxFromConfig(env, fallback = null) {
+  const configPath = env?.SWARM_CONFIG || process.env.SWARM_CONFIG || defaultConfigPath();
+  try {
+    const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+    return machineConcurrency(config) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function oracleSlots(fixture, { workersMax = null } = {}) {
   const lanes = JSON.parse(await fs.readFile(path.join(fixture.lanesDir, 'lanes.json'), 'utf8'));
   const familyId = fixture.projects[0].id;
   let inUse = 0;
@@ -155,7 +263,75 @@ async function oracleSlots(fixture, { workersMax = 8 } = {}) {
       else if (key !== 'unknown') byOtherProjects += 1;
     }
   }
-  return { machineMax: workersMax, inUse, byThisProject, byOtherProjects };
+  const machineMax = workersMax ?? await oracleMachineMaxFromConfig(fixture.env, null);
+  return { machineMax, inUse, byThisProject, byOtherProjects };
+}
+
+/** Restated from tools/board-inbox.mjs nextFor (commands shown on the board). */
+function inboxCommandOnDisk(item, root) {
+  const swarm = `swarm --root ${quote(root)}`;
+  if (item.kind === 'human') return `${swarm} done ${quote(item.id)}`;
+  if (item.kind === 'decision') {
+    const choice = String(item.default ?? item.choices?.[0] ?? 'CHOICE');
+    return `${swarm} decide ${quote(item.id)} ${quote(choice)}`;
+  }
+  if (item.kind === 'proposed-ticket') {
+    return item.filesNamed
+      ? `${swarm} tickets ${quote(item.id)} --approve --yes`
+      : `${swarm} tickets ${quote(item.id)} --files FILE[,FILE] --yes`;
+  }
+  if (item.kind === 'held-ticket') return `${swarm} tickets ${quote(item.id)} --release`;
+  if (item.kind === 'blocker') return `${swarm} resolve ${quote(item.id)}`;
+  return null;
+}
+
+async function oracleNeedYou(fixture, now = NOW) {
+  const root = fixture.root;
+  const ledger = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+  const deps = inboxDeps({ channel: 'board' });
+  const collected = await collectInbox([root], { ...deps, now: () => now });
+  const items = [];
+  for (const it of collected) {
+    items.push({
+      id: it.id,
+      title: inboxTitle(it.title),
+      kind: it.kind,
+      command: inboxCommandOnDisk({
+        kind: it.kind,
+        id: it.id,
+        default: it.default,
+        choices: it.choices,
+        filesNamed: false,
+      }, root),
+    });
+  }
+  for (const t of ledger.tickets ?? []) {
+    if (t?.status === 'proposed') {
+      const filesNamed = (t.files ?? []).length > 0;
+      items.push({
+        id: t.id,
+        title: inboxTitle(t.title),
+        kind: 'proposed-ticket',
+        command: inboxCommandOnDisk({ kind: 'proposed-ticket', id: t.id, filesNamed }, root),
+      });
+    }
+  }
+  for (const t of ledger.tickets ?? []) {
+    if (!releaseAllowedFromDisk(t, ledger)) continue;
+    if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+    items.push({
+      id: t.id,
+      title: inboxTitle(t.title),
+      kind: 'held-ticket',
+      command: inboxCommandOnDisk({ kind: 'held-ticket', id: t.id }, root),
+    });
+  }
+  items.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return { needYou: items.length, needYouItems: items };
+}
+
+async function oracleListHref() {
+  return `#${OFF_LEDGER_LIST_ANCHOR_ID}`;
 }
 
 async function oracleEta(fixture, now = NOW) {
@@ -253,6 +429,25 @@ function assertCardHasNoMoney(card) {
   visit(card);
 }
 
+function underfilledWavesFromDisk(counts, slots) {
+  if (!Array.isArray(counts) || !Number.isInteger(slots) || slots < 4) return null;
+  let streak = 0;
+  for (let i = counts.length - 1; i >= 0 && counts[i] <= 1; i -= 1) streak += 1;
+  return streak >= 3
+    ? `waves under-filled: 1 job of ${slots} slots (the last ${streak} runs each had 1 job); run the ready tickets as one wave`
+    : null;
+}
+
+async function oracleRecentJobCounts(fixture) {
+  const roots = await familyRootsFromDisk(fixture.root, fixture.env);
+  const runs = await readRunsFromDisk(roots);
+  return runs
+    .slice()
+    .sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0))
+    .slice(-6)
+    .map(record => (Array.isArray(record.state?.jobs) ? record.state.jobs.length : 0));
+}
+
 async function oracleHeadsUp(fixture, { slots = 8, finished = false } = {}) {
   if (finished) return null;
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
@@ -277,6 +472,8 @@ async function oracleHeadsUp(fixture, { slots = 8, finished = false } = {}) {
     const stageLabel = /^S\d+$/i.test(String(worst.stage)) ? `Stage ${worst.stage}` : `Stage ${worst.stage}`;
     return `${stageLabel} has ${count} ticket${count === 1 ? '' : 's'} that write the same file in the same wave, so they cannot run together.`;
   }
+  const waves = underfilledWavesFromDisk(await oracleRecentJobCounts(fixture), slots);
+  if (waves) return `${waves.charAt(0).toUpperCase()}${waves.slice(1)}.`;
   return null;
 }
 
@@ -335,17 +532,40 @@ test('card.now.lastTicketFinishedAt matches the family oracle', async t => {
   assert.equal(cardOf(snapshot, fixture).now.lastTicketFinishedAt, await oracleLastTicketFinishedAt(fixture));
 });
 
-test('card.next.ready and items follow readyTickets on the ledger', async t => {
+test('card.next.ready matches readyTickets on disk', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).next.ready, (await oracleNextReady(fixture)).length);
+});
+
+test('card.next.items fields match disk oracle', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ready = await oracleNextReady(fixture);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.equal(card.next.ready, ready.length);
   assert.deepEqual(card.next.items, ready.map(ticket => ({ id: ticket.id, title: ticket.title, command: `swarm tickets ${ticket.id}` })));
 });
 
-test('card.blocked reflects dependency waits', async t => {
+test('card.blocked.waitingOnTickets matches dependency oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const [a, b] = ledger.tickets.filter(ticket => ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status)).slice(0, 2);
+  assert.ok(a?.id && b?.id);
+  a.status = 'done';
+  b.status = 'blocked';
+  b.blockReason = 'deps';
+  b.dependsOn = [a.id];
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const expected = await oracleBlocked(fixture);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).blocked.waitingOnTickets, expected.waitingOnTickets);
+});
+
+test('card.blocked.items fields match dependency oracle', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
@@ -364,28 +584,118 @@ test('card.blocked reflects dependency waits', async t => {
   await fs.writeFile(ledgerFile, JSON.stringify(ledger));
   const expected = await oracleBlocked(fixture);
   const snapshot = await snapshotFor(fixture);
-  const card = cardOf(snapshot, fixture);
-  assert.equal(card.blocked.waitingOnTickets, expected.waitingOnTickets);
-  assert.deepEqual(card.blocked.items, expected.items);
+  assert.deepEqual(cardOf(snapshot, fixture).blocked.items, expected.items);
 });
 
-test('card.blocked.needYou counts held tickets from the inbox', async t => {
+test('card.blocked.items command follows release rule read from disk', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
   const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
-  const held = ledger.tickets.find(ticket => ticket.type !== 'human' && !['cancelled', 'proposed', 'done'].includes(ticket.status));
-  assert.ok(held?.id);
-  held.status = 'blocked';
-  held.blockReason = 'manual';
+  const build = ledger.tickets.filter(ticket => ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status));
+  const [a, b, c] = build.slice(0, 3);
+  assert.ok(a?.id && b?.id && c?.id);
+  a.status = 'done';
+  b.status = 'blocked';
+  b.blockReason = 'deps';
+  b.dependsOn = [a.id];
+  c.status = 'blocked';
+  c.blockReason = 'deps';
+  c.dependsOn = ['T-missing-dep'];
   await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const expected = await oracleBlocked(fixture);
+  assert.ok(expected.items.length >= 1);
+  for (const item of expected.items) assert.equal(item.command, null);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.ok(card.blocked.needYou >= 1);
-  const item = card.blocked.needYouItems.find(entry => entry.id === held.id);
-  assert.ok(item);
-  assert.equal(item.kind, 'held-ticket');
-  assert.match(item.command, /--release$/);
+  for (const item of card.blocked.items) {
+    const oracleItem = expected.items.find(entry => entry.id === item.id);
+    assert.ok(oracleItem);
+    assert.equal(item.command, oracleItem.command);
+  }
+  const releasable = build.find(ticket => ticket.id !== a.id && ticket.id !== b.id && ticket.id !== c.id);
+  assert.ok(releasable?.id);
+  releasable.status = 'blocked';
+  releasable.blockReason = 'manual';
+  releasable.dependsOn = [a.id];
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const releaseOracle = releaseAllowedFromDisk(releasable, ledger);
+  assert.equal(releaseOracle, true);
+  const need = await oracleNeedYou(fixture);
+  const held = need.needYouItems.find(entry => entry.id === releasable.id);
+  assert.ok(held);
+  assert.equal(held.command, `swarm --root ${quote(fixture.root)} tickets ${quote(releasable.id)} --release`);
+});
+
+test('card.blocked.needYou matches inbox-on-disk oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await writeInboxNeedYouFixture(fixture);
+  const expected = await oracleNeedYou(fixture);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).blocked.needYou, expected.needYou);
+});
+
+test('card.blocked.needYouItems match inbox-on-disk oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await writeInboxNeedYouFixture(fixture);
+  const expected = await oracleNeedYou(fixture);
+  const snapshot = await snapshotFor(fixture);
+  const card = cardOf(snapshot, fixture);
+  assert.deepEqual(
+    card.blocked.needYouItems.map(item => ({ id: item.id, title: item.title, kind: item.kind, command: item.command })).sort((a, b) => a.id.localeCompare(b.id)),
+    expected.needYouItems.sort((a, b) => a.id.localeCompare(b.id)),
+  );
+});
+
+async function writeInboxNeedYouFixture(fixture) {
+  const root = fixture.root;
+  const ledgerFile = path.join(root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const humanId = 'inbox-human-1';
+  const decisionId = 'inbox-decision-1';
+  const blockerId = 'inbox-blocker-1';
+  const proposedId = 'T-proposed-inbox';
+  ledger.tickets.push({
+    id: proposedId,
+    title: 'Proposed from oracle fixture',
+    status: 'proposed',
+    type: 'build',
+    files: ['src/proposed.ts'],
+    createdAt: iso(NOW),
+  });
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const journalFile = path.join(root, '.swarm', 'project', 'journal.ndjson');
+  await fs.mkdir(path.dirname(journalFile), { recursive: true });
+  const journal = [
+    { kind: 'human', id: humanId, title: 'Human journal task', ts: iso(NOW - 3600000) },
+    { kind: 'blocker', id: blockerId, text: 'Journal blocker needs resolve', ts: iso(NOW - 1800000) },
+    { kind: 'decision', id: decisionId, text: 'Pick a lane', confirm: true, confirmed: false, choice: 'cursor', options: ['cursor', 'codex'], ts: iso(NOW - 900000) },
+  ];
+  await fs.writeFile(journalFile, `${journal.map(line => JSON.stringify(line)).join('\n')}\n`);
+  const runId = 'inbox-human-run';
+  const runDir = path.join(root, '.swarm', 'runs', runId);
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), `${JSON.stringify({
+    id: runId,
+    status: 'running',
+    startedAt: iso(NOW - 600000),
+    jobs: [{ id: 'job-human', heldReason: 'human', status: 'held', title: 'Run human gate', heldAt: iso(NOW - 600000) }],
+  })}\n`);
+}
+
+test('card.slots.machineMax reads local config on disk', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const configPath = fixture.env.SWARM_CONFIG || process.env.SWARM_CONFIG;
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  config.machineConcurrency = 11;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const expectedMax = await oracleMachineMaxFromConfig(fixture.env, null);
+  assert.equal(expectedMax, 11);
+  const snapshot = await snapshotFor(fixture, { workersMax: expectedMax });
+  assert.equal(cardOf(snapshot, fixture).slots.machineMax, expectedMax);
 });
 
 test('card.slots reports machine use including other projects', async t => {
@@ -410,7 +720,17 @@ test('card.slots reports machine use including other projects', async t => {
   assert.deepEqual(cardOf(snapshot, fixture).slots, expected);
 });
 
-test('card.eta uses seven-day tickets.log done transitions', async t => {
+test('card.eta.days is null when perDay is zero', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const expected = await oracleEta(fixture, NOW);
+  assert.equal(expected.perDay, 0);
+  assert.equal(expected.days, null);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.days, null);
+});
+
+test('card.eta.days matches seven-day tickets.log oracle', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
@@ -421,7 +741,56 @@ test('card.eta uses seven-day tickets.log done transitions', async t => {
   await fs.writeFile(logPath(fixture.root), `${lines.join('\n')}\n`);
   const expected = await oracleEta(fixture, NOW);
   const snapshot = await snapshotFor(fixture);
-  assert.deepEqual(cardOf(snapshot, fixture).eta, expected);
+  assert.equal(cardOf(snapshot, fixture).eta.days, expected.days);
+});
+
+test('card.eta.remaining matches seven-day tickets.log oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const expected = await oracleEta(fixture, NOW);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.remaining, expected.remaining);
+});
+
+test('card.eta.perDay matches seven-day tickets.log oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
+  await fs.writeFile(logPath(fixture.root), `${JSON.stringify({ event: 'transition', id: 'T-9000', to: 'done', at: iso(NOW - DAY) })}\n`);
+  const expected = await oracleEta(fixture, NOW);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.perDay, expected.perDay);
+});
+
+test('card.eta.doneLast7Days matches seven-day tickets.log oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
+  await fs.writeFile(logPath(fixture.root), `${JSON.stringify({ event: 'transition', id: 'T-9001', to: 'done', at: iso(NOW - 2 * DAY) })}\n`);
+  const expected = await oracleEta(fixture, NOW);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.doneLast7Days, expected.doneLast7Days);
+});
+
+test('card.eta.windowDays matches seven-day tickets.log oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.windowDays, (await oracleEta(fixture, NOW)).windowDays);
+});
+
+test('card.eta.basis matches seven-day tickets.log oracle', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
+  const lines = [];
+  for (let i = 0; i < 5; i += 1) {
+    lines.push(JSON.stringify({ event: 'transition', id: `T-900${i}`, to: 'done', at: iso(NOW - (i + 1) * DAY) }));
+  }
+  await fs.writeFile(logPath(fixture.root), `${lines.join('\n')}\n`);
+  const expected = await oracleEta(fixture, NOW);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).eta.basis, expected.basis);
 });
 
 test('card.facts.handEditsBlocked24h counts recent guard blocked events only', async t => {
@@ -466,6 +835,13 @@ test('card.facts.untrackedRuns matches off-ledger run oracle across the family',
   const snapshot = await snapshotFor(fixture);
   const facts = cardOf(snapshot, fixture).facts;
   assert.equal(facts.untrackedRuns, await oracleUntrackedRuns(fixture, NOW));
+});
+
+test('card.facts.listHref matches off-ledger anchor on disk', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).facts.listHref, await oracleListHref());
 });
 
 test('card.facts.checkouts matches git worktrees plus scratch roots', async t => {
@@ -517,7 +893,7 @@ test('card JSON omits money-shaped keys and dollar values', async t => {
   assertCardHasNoMoney(cardOf(snapshot, fixture));
 });
 
-test('card.headsUp names same-file wave collisions', async t => {
+test('card.headsUp wave collision, under-filled waves, and finished null', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
@@ -531,6 +907,80 @@ test('card.headsUp names same-file wave collisions', async t => {
     ticket.files = ['src/shared/collision.ts'];
   }
   await fs.writeFile(ledgerFile, JSON.stringify(approveLedger(ledger, { now: iso(NOW) })));
-  const snapshot = await snapshotFor(fixture);
-  assert.equal(cardOf(snapshot, fixture).headsUp, await oracleHeadsUp(fixture));
+  const collisionSnapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(collisionSnapshot, fixture).headsUp, await oracleHeadsUp(fixture));
 });
+
+test('card.headsUp warns when recent runs under-fill machine slots', async t => {
+  const slots = 8;
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    runs: [
+      { id: 'wave-1', status: 'complete', startedAt: iso(NOW - 5 * DAY), jobs: [{ id: 'j1', status: 'complete' }] },
+      { id: 'wave-2', status: 'complete', startedAt: iso(NOW - 4 * DAY), jobs: [{ id: 'j2', status: 'complete' }] },
+      { id: 'wave-3', status: 'complete', startedAt: iso(NOW - 3 * DAY), jobs: [{ id: 'j3', status: 'complete' }] },
+      { id: 'wave-4', status: 'complete', startedAt: iso(NOW - 2 * DAY), jobs: [{ id: 'j4', status: 'complete' }] },
+    ],
+  });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture, { workersMax: slots });
+  assert.equal(cardOf(snapshot, fixture).headsUp, await oracleHeadsUp(fixture, { slots }));
+});
+
+test('card.headsUp is null when the project is finished', async t => {
+  const mergedPrs = [{ state: 'MERGED', number: 99, headRefName: 'swarm/finished', mergedAt: iso(NOW) }];
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json', prs: mergedPrs });
+  t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  let ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  for (const ticket of ledger.tickets ?? []) {
+    if (ticket.type === 'human' || ['cancelled', 'proposed'].includes(ticket.status)) continue;
+    ticket.status = 'done';
+  }
+  ledger = approveLedger(ledger, { now: iso(NOW) });
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const snapshot = await boardSnapshot({
+    projects: [fixture.projects[0]],
+    liveRuns: [],
+    now: NOW,
+    env: fixture.env,
+    summary,
+    workers: { max: 8 },
+    prState: async () => mergedPrs,
+  });
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.headsUp, null);
+  assert.equal(await oracleHeadsUp(fixture, { finished: true }), null);
+});
+
+test('card COVERAGE lists every leaf field on a populated card', async t => {
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'wt-live', status: 'running', startedAt: iso(NOW), jobs: [] }] }],
+    scratch: [{ runs: [] }],
+  });
+  t.after(fixture.cleanup);
+  await writeInboxNeedYouFixture(fixture);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const buildTickets = ledger.tickets.filter(ticket => ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status));
+  const [depA, depB] = buildTickets.slice(0, 2);
+  assert.ok(depA?.id && depB?.id, 'coverage fixture needs two build tickets');
+  depA.status = 'done';
+  depB.status = 'blocked';
+  depB.blockReason = 'deps';
+  depB.dependsOn = [depA.id];
+  const ready = ledger.tickets.find(ticket => ticket.type !== 'human' && !['cancelled', 'proposed', 'done', 'blocked'].includes(ticket.status));
+  if (ready?.id) {
+    ready.status = 'ready';
+    ready.dependsOn = [];
+    delete ready.blockReason;
+  }
+  await fs.writeFile(ledgerFile, JSON.stringify(approveLedger(ledger, { now: iso(NOW) })));
+  const liveRuns = [{ runId: 'wt-live', root: fixture.worktreeRoots[0] }];
+  const snapshot = await snapshotFor(fixture, { liveRuns });
+  const card = cardOf(snapshot, fixture);
+  assert.ok(card);
+  assertLeafCovered(card);
+});
+
