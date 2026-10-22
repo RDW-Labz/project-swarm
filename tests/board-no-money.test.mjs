@@ -166,6 +166,85 @@ function boardRoutePath(routePath, projectId, runId) {
   }
 }
 
+test('board HTML assets and shell pages ship no literal dollar figures', async t => {
+  const htmlFiles = (await fs.readdir(assetDir)).filter(n => n.endsWith('.html')).sort();
+  assert.ok(htmlFiles.length > 0, 'watch-assets HTML pages exist');
+  for (const name of htmlFiles) {
+    const body = await fs.readFile(path.join(assetDir, name), 'utf8');
+    assertBodyNoDollars(body, `watch-assets/${name}`);
+  }
+
+  const fx = await fixture(t);
+  const NOW = Date.parse('2026-10-21T12:00:00.000Z');
+  const state = JSON.parse(await fs.readFile(path.join(fx.root, '.swarm/runs/run-paid/state.json'), 'utf8'));
+  let runSnapshot = buildRunSnapshot(state, { now: NOW });
+  runSnapshot.project = { noCap: true };
+
+  const runWatch = createWatchServer({
+    root: fx.home,
+    assetDir,
+    deltaFile,
+    idleMs: 600000,
+    getRunSnapshot: async () => runSnapshot,
+    getPlanSnapshot: async () => ({ present: false }),
+    getGallery: async () => ({ schema: 1, screens: [] }),
+    getBoard: async () => ({ runs: [] }),
+    indexName: 'index.html',
+    commandList: [],
+    contextCommands: () => [],
+  });
+  await runWatch.listen();
+  const runPort = Number(new URL(runWatch.url).port);
+  const runAuth = { 'x-watch-token': runWatch.token };
+  t.after(async () => { await runWatch.close(); });
+
+  const runHome = await httpGet(runPort, '/', runAuth);
+  assert.notEqual(runHome.status, 403, 'run Watch / must accept x-watch-token');
+  assertBodyNoDollars(runHome.body, 'run Watch GET /');
+
+  const api = createBoardApi({
+    env: fx.env,
+    now: () => NOW,
+    live: async () => [{ runId: 'run-paid', root: fx.root, startedAt: '2026-10-21T12:00:00.000Z' }],
+    cacheMs: 0,
+    runServer: () => ({
+      listen: async () => ({ url: 'http://127.0.0.1:9/?t=deadbeef', port: 9 }),
+      close: async () => {},
+      done: Promise.resolve(),
+      token: 'deadbeef',
+    }),
+  });
+  t.after(() => api.close());
+  const boardWatch = createWatchServer({
+    root: fx.home,
+    assetDir,
+    deltaFile,
+    idleMs: 600000,
+    getRunSnapshot: async () => null,
+    getPlanSnapshot: async () => ({ present: false }),
+    getGallery: async () => ({ schema: 1, screens: [] }),
+    getBoard: async () => ({ runs: [] }),
+    board: api,
+    nav: { project: { id: fx.project.id, name: fx.project.name }, runId: 'run-paid', openBoard: async () => 'http://127.0.0.1:9/' },
+    indexName: 'board.html',
+    commandList: [],
+    contextCommands: () => [],
+  });
+  await boardWatch.listen();
+  const boardPort = Number(new URL(boardWatch.url).port);
+  const boardAuth = { 'x-watch-token': boardWatch.token };
+  t.after(async () => { await boardWatch.close(); await api.close(); });
+
+  for (const pathname of [
+    `/project?id=${encodeURIComponent(fx.project.id)}&run=${encodeURIComponent('run-paid')}`,
+    `/run?id=${encodeURIComponent(fx.project.id)}&run=${encodeURIComponent('run-paid')}`,
+  ]) {
+    const res = await httpGet(boardPort, pathname, boardAuth);
+    assert.notEqual(res.status, 403, `${pathname} must accept x-watch-token`);
+    assertBodyNoDollars(res.body, `board Watch GET ${pathname}`);
+  }
+});
+
 test('every board Watch route returns no money-shaped JSON or dollar figures', async t => {
   const fx = await fixture(t);
   const NOW = Date.parse('2026-10-21T12:00:00.000Z');

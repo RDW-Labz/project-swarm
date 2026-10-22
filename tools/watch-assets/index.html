@@ -50,8 +50,7 @@
     </div>
     <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#60a5fa" stroke-width="2"/></svg></div></div>
     <div class="kpi"><span class="label">First-try pass</span><div class="v num" id="kPass">–</div><div class="sub" id="kPassSub">retries 0 · failed 0</div></div>
-    <div class="kpi"><span class="label">Spend</span><div class="v num" id="kSpend">$0.00<small>/ $5</small></div><div class="bar"><span id="kSpendBar" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><div class="sub" id="kForecast">forecast –</div></div>
-    <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div></div>
+    <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div><div class="sub" id="kForecast"></div></div>
     <div class="kpi"><span class="label">Merged</span><div class="v num" id="kMerged">0</div><div class="sub" id="kMergeSub">queue 0 · conflicts 0</div></div>
   </section>
 
@@ -91,7 +90,7 @@
   <section class="grid-bottom">
     <div class="card">
       <div class="card-head"><h2>Leads</h2><span class="label">each lead owns one area of the repo</span></div>
-      <div class="tablewrap"><table><thead><tr><th>Lead</th><th>Progress</th><th>Running</th><th>Retries</th><th>Spend</th><th>State</th></tr></thead><tbody id="leads"></tbody></table></div>
+      <div class="tablewrap"><table><thead><tr><th>Lead</th><th>Progress</th><th>Running</th><th>Retries</th><th>State</th></tr></thead><tbody id="leads"></tbody></table></div>
     </div>
     <div class="card">
       <div class="card-head"><h2>Merge queue</h2><span class="label">batches of 10 · bisect on red</span></div>

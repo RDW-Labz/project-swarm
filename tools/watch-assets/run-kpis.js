@@ -111,11 +111,6 @@
     if (sparkPath) sparkPath.setAttribute('d', linePath(sp, mx, 78, 1, 2, 20));
     setText('kPass', k.firstTryPassRate == null ? '–' : (k.firstTryPassRate * 100).toFixed(1) + '%');
     passSub(k);
-    var spendKpi = $('kSpend');
-    if (spendKpi) {
-      var spendCard = spendKpi.closest('.kpi');
-      if (spendCard) spendCard.hidden = true;
-    }
     var pj = run.project;
     var capNote = '';
     if (pj) {
