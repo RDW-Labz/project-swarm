@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The hand-build guard: an orchestrator session may not build by hand. All build work goes through the swarm (a ticket); the only exceptions are a hand-build the owner approved, for
-// a valid reason, for named files, for a short time. This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
+// a valid reason, for named files, for a short time. Orchestrator mode (shell allowlist) is on by default at the project root; the owner disables it with `.swarm/orchestrator-mode/off`.
+// This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
 // command, and tools/handbuild-commands.mjs is `swarm handbuild request | approve | deny | status | log`.
 //   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout, and swarm worker
 //   workspaces. Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
@@ -1271,6 +1272,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       return decision;
     }
     if (decision.reason === GH_PR_MERGE_BLOCKED || decision.reason === MERGE_BLOCKED_REASON) return decision;
+    if (decision.reason?.includes(DENY_ADVICE)) return decision;
     if (!orchestratorModeCommandAllowed(ti.command, { root, cwd })) return omDeny(decision.files ?? []);
     return decision;
   };
@@ -1454,7 +1456,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const out = standingMergeAllow ? { ...result, standing: 'merge-swarm-pr' } : result;
       return finishBash(out);
     };
-    if (!writesAnything(a)) return finishAllow({ allow: true });
+    if (!writesAnything(a)) {
+      const gitCover = policyGitOps.length ? covers([], policyGitOps) : null;
+      return finishAllow(gitCover?.ok && gitCover.approval ? { allow: true, approval: gitCover.approval } : { allow: true });
+    }
     if (a.dynamic || a.inline || a.unknown) {
       const need = [a.dynamic ? 'a dynamic shell command' : null, a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
       return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` });

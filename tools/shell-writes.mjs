@@ -7,17 +7,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ORCHESTRATOR_OWN, insideProject, realOf, isWorkerCwd } from './orchestrator-events.mjs';
+import { isScratchRoot } from './scratch-roots.mjs';
 
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
 export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm diagnose "<question>" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.';
 
-/** Orchestrator mode is on by default for orchestrator sessions in a swarm project unless the owner added the off file. */
+/** Orchestrator mode is on by default at a project root unless the owner added `.swarm/orchestrator-mode/off`. Worker workspaces, scratch/test roots, and worktrees are exempt. Requires `CLAUDE_PROJECT_DIR` to match `root` (orchestrator sessions only). */
 export function orchestratorModeEnabled(root, cwd = root) {
   if (!root || isWorkerCwd(cwd)) return false;
+  if (isScratchRoot(root) || isScratchRoot(cwd)) return false;
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  if (!fromEnv) return false;
   try {
-    const modeDir = path.join(root, '.swarm', 'orchestrator-mode');
-    if (!fs.existsSync(modeDir)) return false;
+    if (fs.realpathSync.native(fromEnv) !== fs.realpathSync.native(root)) return false;
     return !fs.existsSync(path.join(root, ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
 }
@@ -1114,6 +1117,11 @@ const omHeadTailLinesOk = args => {
       if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
       continue;
     }
+    if (/^-\d+$/.test(a)) {
+      const n = Number(a.slice(1));
+      if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
+      continue;
+    }
     if (a.startsWith('--lines=')) {
       const n = Number(a.slice(8));
       if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
@@ -1133,6 +1141,29 @@ const omGhPrMerge = args => {
   for (let i = 0; i < args.length - 1; i += 1) {
     if (args[i] === 'pr' && args[i + 1] === 'merge') return true;
   }
+  return false;
+};
+
+const OM_VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
+const OM_VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
+const OM_VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
+
+const omVercelReadOnly = args => {
+  const flags = args.filter(a => a.startsWith('-'));
+  const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+  if (flags.some(f => f === '--token' || f.startsWith('--token='))) return false;
+  if (flags.includes('--prod')) return false;
+  if (args.some(a => a === '--scope' || a === '--token' || a.startsWith('--scope=') || a.startsWith('--token='))) return false;
+  const onlyVersion = (args.includes('--version') || args.includes('-v')) && pos.length === 0;
+  const sub = onlyVersion ? '--version' : (args.includes('--prod') || pos.length === 0 || args.every(a => a.startsWith('-')) ? 'deploy' : pos[0]);
+  if (sub === 'deploy') {
+    if (pos.length > 0) return false;
+    if (flags.length === 0) return false;
+    return flags.every(f => OM_VERCEL_INFO_FLAGS.has(f));
+  }
+  if (OM_VERCEL_TOP_FREE.has(sub)) return true;
+  if (sub === 'inspect') return true;
+  if (OM_VERCEL_LIST_PARENTS.has(sub) && pos.length >= 2 && ['ls', 'list', 'inspect'].includes(pos[1])) return true;
   return false;
 };
 
@@ -1249,6 +1280,7 @@ const omSimpleCommandAllowed = (words, commandText) => {
   }
   if (cmd === 'git') return omGitInvocationAllowed(args);
   if (cmd === 'gh') return omGhReadOnly(args, commandText);
+  if (cmd === 'vercel') return omVercelReadOnly(args);
   if (omSwarmInvocation(cmd, args)) return true;
   if (OM_READ_FILTERS.has(cmd)) {
     if (cmd === 'find') return omFindReadOnly(args);

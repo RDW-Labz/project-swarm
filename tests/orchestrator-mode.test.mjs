@@ -33,16 +33,25 @@ const tmp = async t => {
 async function swarmProject(t) {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.git'));
-  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
+  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
-  const bash = (command, cwd = root, extra = {}) => guardDecision({
-    tool: 'Bash',
-    toolInput: { command },
-    root,
-    cwd,
-    now: () => T0,
-    ...extra,
-  });
+  const bash = (command, cwd = root, extra = {}) => {
+    const prev = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = root;
+    try {
+      return guardDecision({
+        tool: 'Bash',
+        toolInput: { command },
+        root,
+        cwd,
+        now: () => T0,
+        ...extra,
+      });
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = prev;
+    }
+  };
   return { root, bash };
 }
 
@@ -148,18 +157,33 @@ test('worker cwd is not subject to orchestrator mode', async t => {
 
 test('orchestrator-mode off file disables enforcement', async t => {
   const { root, bash } = await swarmProject(t);
+  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
   await fs.writeFile(path.join(root, ORCHESTRATOR_MODE_OFF_FILE), '');
-  assert.equal(orchestratorModeEnabled(root, root), false);
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  try {
+    assert.equal(orchestratorModeEnabled(root, root), false);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+  }
   assert.equal(bash('npm test').allow, true);
 });
 
-test('project without orchestrator-mode dir: orchestrator mode inactive', async t => {
+test('orchestrator mode on by default without orchestrator-mode marker dir', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.git'));
   await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
-  const d = guardDecision({ tool: 'Bash', toolInput: { command: 'npm test' }, root, cwd: root, now: () => T0 });
-  assert.equal(orchestratorModeEnabled(root, root), false);
-  assert.notEqual(d.reason, ORCHESTRATOR_MODE_DENY_REASON);
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  try {
+    const d = guardDecision({ tool: 'Bash', toolInput: { command: 'npm test' }, root, cwd: root, now: () => T0 });
+    assert.equal(orchestratorModeEnabled(root, root), true);
+    assert.ok(omReason(d));
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+  }
 });
 
 test('hand-build approval bypasses orchestrator mode for named writes', async t => {
@@ -177,16 +201,27 @@ test('hand-build approval bypasses orchestrator mode for named writes', async t 
 
 test('orchestratorModeShellPolicy wrapper', async t => {
   const { root } = await swarmProject(t);
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  try {
   assert.equal(orchestratorModeShellPolicy('git diff', { root, cwd: root }).allow, true);
   const pol = orchestratorModeShellPolicy('npm test', { root, cwd: root });
   assert.equal(pol.applies, true);
   assert.equal(pol.allow, false);
   assert.equal(pol.reason, ORCHESTRATOR_MODE_DENY_REASON);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+  }
 });
 
 test('guard hook logs orchestrator-mode refusals', async t => {
   const { root } = await swarmProject(t);
-  const run = input => spawnSync(process.execPath, [GUARD], { input: JSON.stringify(input), encoding: 'utf8' });
+  const run = input => spawnSync(process.execPath, [GUARD], {
+    input: JSON.stringify(input),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+  });
   run({ session_id: 's', cwd: root, tool_name: 'Bash', tool_input: { command: 'npm test' } });
   const log = (await fs.readFile(path.join(root, '.swarm/handbuild/log.ndjson'), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
   const blocked = log.find(e => e.event === 'blocked');
