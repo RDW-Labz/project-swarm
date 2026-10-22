@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "restart-any",
+      "agent": "auto",
+      "prompt": "Owner request: swarm update must restart ANY running board (and swarm remote serve), including servers started before the record fixes, whose record has version null or no record at all, and ones started from a terminal. Today swarm update only restarts servers found through the registry record file (tools/server-restart.mjs restartRegisteredServers, wired in tools/swarm/core-52.mjs) and reports board server record skipped: missing version in board server record; a board with no record is never found. Implement discovery by process: new function discoverRunningServers({ execFileImpl, installRoot, platform }) in tools/server-restart.mjs (or a new tools/server-discovery.mjs) that lists processes with ps -axo pid=,ppid=,etime=,args= (argument array, no shell; macOS and Linux), keeps those whose argument tokens contain a swarm runner path (any tools/swarm.mjs under the install base: current, versions/*, or a test temp install passed as installRoot) AND the subcommand watch (with or without --all, any other flags) or remote serve, excludes our own pid and parent chain, and for each finds the working directory (lsof -a -p PID -d cwd -Fn on macOS, readlink /proc/PID/cwd on Linux) and the listening loopback port (lsof -nP -a -p PID -iTCP -sTCP:LISTEN -Fn, or /proc/PID/net via ss when lsof is missing; if several, the one that answers /api/health with the same pid; if none can be found the port is unknown). Merge them with the record-based servers (dedupe by pid): a recorded server wins, a discovered server uses argv taken from the process arguments with --open removed. For every server found: stop it with SIGTERM only (never SIGKILL), wait for the port to free (bounded as today), start the replacement with the same argv and cwd from the NEW current runner, detached with output to a log file under the install state folder, wait for /api/health to report the new version (the board picks a random port when port 0: find the new port from the rewritten board record or by probing the listening port of the new pid), write a proper record with the runner version, and print the new board URL line (the board URL contains its access token: print it only to the terminal of the update command, never into logs or journal). A server started from a terminal (it has a controlling tty) is restarted too but the output says that its terminal session ended and prints the new URL. Identity checks stay strict: a process is only touched when its command line matches the runner and subcommand tokens; unknown or unreadable details mean skip with a one-line reason, never kill. Keep all existing restart behavior, locks and the --no-restart flag. Tests in tests/restart-any-server.test.mjs, hermetic: spawn a real dummy node process whose argv looks like a swarm.mjs watch --all from a temp install (it listens on a loopback port, answers /api/health with version old and pid), with no record file at all: restartRegisteredServers (or the new combined entry) discovers it, stops it with SIGTERM, starts the injected replacement and reports success; a record with version null is restarted; a process that merely contains the word watch in another program is ignored; a tty-attached case is reported in the output; no SIGKILL is ever sent (injected kill spy); discovery works with an injected ps and lsof output for macOS format and Linux /proc format. Run natively and in a Linux container (docker run --rm -v THISDIR:/w -w /w node:22 node --import ./tests/_isolate-config.mjs --test tests/restart-any-server.test.mjs) 10 times each, 0 failures; plus every test file with server-restart, update-pending or watch-cli in the name. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/server-restart.mjs",
+        "tools/swarm/core-52.mjs",
+        "tools/watch-cli.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/server-restart.mjs",
+        "tools/swarm/core-52.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-discovery.mjs",
+        "tests/restart-any-server.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/gallery-tickets.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/update-pending-round2.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/update-pending-round4.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
