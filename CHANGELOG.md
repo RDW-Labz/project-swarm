@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.167.1
+
+Held tickets no longer flood the owner's Needs you.
+- **Board:** a ticket an orchestrator deliberately held (blocked, not waiting on dependencies) is never a Needs-you item unless it carries a specific question (swarm tickets ID --set blocked --question TEXT); the orchestrator that held it owns releasing it.
+
 ## 1.167.0
 
 Self-correcting splits, local disk cleanup, structured review verdicts and restart-any-board.
