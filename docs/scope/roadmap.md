@@ -173,6 +173,7 @@ Acceptance:
 - Approve and Deny buttons appear for requests the policy leaves to the owner, tailnet only, with sign-in, a confirm step and an audit log.
 - Merge, deploy and cap actions are refused from the phone or board server-side.
 - Each orchestrator card has an "Open chat" link to its Remote Control session.
+- A ticket an orchestrator holds (blocked for a reason other than its own dependencies) does not appear in the owner's Needs you by default: the orchestrator that held it owns releasing it. It appears only when the orchestrator attaches a specific question to the hold, and then the board shows that question, not a generic "held" line. A test covers both cases (a plain hold stays out of Needs you; a hold with a question appears with that question's text).
 
 ## S5 Operations
 ### R-030 Orchestrators hand off before their context gets expensive.

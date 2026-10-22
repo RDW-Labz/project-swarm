@@ -470,9 +470,10 @@ async function oracleNeedYou(fixture, now = NOW) {
   for (const t of ledger.tickets ?? []) {
     if (!(await releaseAllowedFromDisk(t, ledger))) continue;
     if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+    if (t.status === 'blocked' && t.blockReason !== 'deps' && !t.holdQuestion) continue;
     items.push({
       id: t.id,
-      title: await inboxTitle(t.title),
+      title: await inboxTitle(t.holdQuestion ?? t.title),
       kind: 'held-ticket',
       command: inboxCommandOnDisk({ kind: 'held-ticket', id: t.id }, root),
     });
@@ -813,6 +814,7 @@ test('card.blocked.items command follows release rule read from disk', async t =
   assert.ok(releasable?.id);
   releasable.status = 'blocked';
   releasable.blockReason = 'manual';
+  releasable.holdQuestion = 'Release when manual hold is cleared';
   releasable.dependsOn = [a.id];
   await fs.writeFile(ledgerFile, JSON.stringify(ledger));
   const releaseOracle = await releaseAllowedFromDisk(releasable, ledger);
