@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { boardSnapshot } from '../tools/board-data.mjs';
+import { boardSnapshot, startOfLocalDay } from '../tools/board-data.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { approveLedger } from '../tools/tickets.mjs';
@@ -51,6 +51,52 @@ test('lastActivityAt includes finished activity from every family member', async
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
   assert.ok(Date.parse(card.lastActivityAt) >= Date.parse(finished));
+});
+
+test('a project with a live run is building and not idle', async t => {
+  const now = Date.now();
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'linked-live', status: 'running', startedAt: iso(now), jobs: [{ id: 'T-live', status: 'running' }] }] }],
+  });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture, { liveRuns: [{ runId: 'linked-live', root: fixture.worktreeRoots[0] }], now });
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.activity, 'building');
+  assert.equal(card.idle, false);
+  assert.equal(card.liveCount, 1);
+});
+
+test('a project that completed a run earlier today in a linked worktree is active-today, not idle', async t => {
+  const now = Date.now();
+  const finished = iso(now - 60_000);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'today-done', status: 'complete', startedAt: iso(now - 120_000), finishedAt: finished, jobs: [] }] }],
+  });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture, { now });
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.activity, 'active-today');
+  assert.equal(card.idle, false);
+});
+
+test('a project whose last activity was yesterday is idle', async t => {
+  const now = Date.now();
+  const yesterday = iso(startOfLocalDay(now) - 60_000);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    runs: [{ id: 'old-run', status: 'complete', startedAt: yesterday, finishedAt: yesterday, jobs: [] }],
+  });
+  t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  ledger.updatedAt = yesterday;
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const snapshot = await snapshotFor(fixture, { now });
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.activity, 'idle');
+  assert.equal(card.idle, true);
 });
 
 test('liveCount includes a running linked-worktree run', async t => {

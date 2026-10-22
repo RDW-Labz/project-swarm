@@ -24,6 +24,42 @@ import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
+
+/** Start of the calendar day containing `now`, in the machine's local time zone (for tests and board activity). */
+export function startOfLocalDay(now = Date.now()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function projectActivityState({ activeLiveCount, lastActivityMs, now = Date.now() } = {}) {
+  const live = Number(activeLiveCount) > 0;
+  if (live) return { activity: 'building', idle: false };
+  const start = startOfLocalDay(now);
+  const at = Number(lastActivityMs);
+  const activeToday = at >= start && at > 0 && at <= now;
+  return activeToday ? { activity: 'active-today', idle: false } : { activity: 'idle', idle: true };
+}
+
+function familyActivityMs({ runs, liveRunIds, ledgers, liveRuns, ticketFinishedMs, now }) {
+  const liveIds = liveRunIds instanceof Set ? liveRunIds : new Set(liveRunIds ?? []);
+  const capped = ms => {
+    const value = Number(ms);
+    return Number.isFinite(value) && value > 0 && value <= now ? value : 0;
+  };
+  let newest = 0;
+  for (const run of runs) {
+    if (activeRunState(run.state)) {
+      if (liveIds.has(run.id)) newest = Math.max(newest, capped(runActivityMs(run)));
+      continue;
+    }
+    newest = Math.max(newest, capped(runActivityMs(run)));
+  }
+  for (const record of liveRuns ?? []) newest = Math.max(newest, capped(Date.parse(record.startedAt ?? '')));
+  for (const ledger of ledgers ?? []) newest = Math.max(newest, capped(Date.parse(ledger?.updatedAt ?? '')));
+  newest = Math.max(newest, capped(ticketFinishedMs));
+  return newest;
+}
 const FLAT_RATE = new Set(['codex', 'cursor', 'claude', 'hermes', 'qwen']);   // subscription lanes: not billed per use
 const ESTIMATED = new Set(['estimated-from-tokens', 'reservation']);
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -473,15 +509,23 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
-  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
+  const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
+  const lastActivityMs = Math.max(
+    0,
+    ...runs.map(runActivityMs),
+    ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0),
+    ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0),
+    ticketFinishedMs,
+  );
+  const familyActivityAtMs = familyActivityMs({ runs, liveRunIds: liveIds, ledgers, liveRuns, ticketFinishedMs, now });
   const recentFailure = runs.some(run => {
     const at = Math.max(Date.parse(run.state?.finishedAt ?? '') || 0, Date.parse(run.state?.startedAt ?? '') || 0);
     return ['failed', 'timeout'].includes(run.state?.status) && at > 0 && at <= now && now - at <= 7 * DAY;
   });
   const tickets = ticketsOf(ledger, scope);
   const readyTickets = tickets.byStatus.ready ?? 0;
-  const idle = activeLiveRuns.length === 0;
+  const { activity, idle } = projectActivityState({ activeLiveCount: activeLiveRuns.length, lastActivityMs: familyActivityAtMs, now });
   const split = await splitQuality({ root: project.root, now, slots }).then(result => {
     const metrics = Array.isArray(result?.metrics) ? result.metrics : [];
     const red = metrics.filter(metric => metric?.grade === 'red');
@@ -493,7 +537,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
-    stage: tickets.stage, tickets, readyTickets, idleWithReady: idle && readyTickets > 0,
+    stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     liveCount: activeLiveRuns.length,
     agents, cost,
@@ -507,6 +551,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
     checkouts: roots.length,
+    activity,
     idle,
     testOrTemp: Boolean(project.testOrTemp),
     lastRunStatus: lastRun?.status ?? null,
