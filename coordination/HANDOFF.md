@@ -5,14 +5,13 @@
 ```text
 Project Swarm brief
 Goal: none
-Done:
-  - run 1792698535205-db6f73ec integrated, 0 files
+Done: none
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm "describe the goal in one sentence"
-  2. swarm status
-  3. swarm board
+  1. swarm integrate 1792415686129-b359f989 --queue
+  2. swarm "describe the goal in one sentence"
+  3. swarm status
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -20,19 +19,3 @@ Rules:
   - Workers run on the installed runner; update the runner only after the owner merges.
   - Record decisions with swarm note "<text>".
 ```
-
-Pending approvals:
-- blocker integrate-checkout-1792618361836-41e05e85 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618530141-575f4d93 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618530141-0aa96f6b 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618723546-ed0c23b2 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618943558-b1eacc9e 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792635375937-7fdc332b 4h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792512306432-a442393e 4h branch (no branch) /Users/bean/project-swarm
-- blocker integrate-checkout-1792512823839-cdd9c279 4h branch (no branch) /Users/bean/project-swarm
-- blocker integrate-checkout-1792513494498-3e4b9f9f 4h branch (no branch) /Users/bean/project-swarm
-- blocker integrate-checkout-1792521804420-d09bfb71 4h branch (no branch) /Users/bean/project-swarm
-- blocker integrate-checkout-1792548393651-28032016 4h branch (no branch) /Users/bean/project-swarm
-- blocker security-1792687365474-0f0a07d2-locallane 5h branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
-
-Generated at: 2026-10-22T23:40:27.784Z
