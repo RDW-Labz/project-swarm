@@ -1,0 +1,22 @@
+not ok 12 - production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules
+  ---
+  duration_ms: 218.208708
+  location: '/private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:466:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    prepare safe-accent
+    
+    404 !== 200
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 200
+  actual: 404
+  operator: 'strictEqual'
+  stack: |-
+    approveItem (file:///private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:518:12)
+    process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    async TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-prime-Documents-repos-projects-project-swarm-1/9f988fe4-8451-4ec8-b97f-f2a94b672954/scratchpad/sor/tests/board-owner-routes.test.mjs:534:3)
+    async Test.run (node:internal/test_runner/test:797:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:526:7)
+  ...
