@@ -63,12 +63,70 @@ export async function securityReviewManifest(root, runId, items, tickets = []) {
   return { version: 1, jobs: [{ id: `sec-review-${runId}`.slice(0, 60), type: 'review', agent: 'claude', model: 'opus', tier: 'expensive', tierReason: 'Automatic security review of tickets that touch auth, API routes, migrations, policies or sensitive paths.', prompt, context, outputs: [], timeoutMs: 900000 }] };
 }
 
-// The last {"reviews":[...]} object in a review's response.
-export function parseReviewVerdicts(text) {
-  // Only the last line that is not the worker's status line counts: an object quoted from the reviewed code can never win.
-  const last = verdictLine(text);
-  {
-    try { const parsed = JSON.parse(last); if (Array.isArray(parsed.reviews)) return parsed.reviews.filter(r => r && /^T-[0-9]{4,}$/.test(r.ticket)).map(r => ({ ticket: r.ticket, verdict: r.verdict === 'pass' && !(r.findings ?? []).some(f => ['high', 'medium'].includes(String(f?.severity).toLowerCase())) ? 'pass' : 'fail', findings: (Array.isArray(r.findings) ? r.findings : []).slice(0, 10).map(f => ({ file: String(f?.file ?? '').slice(0, 200), line: Number.isFinite(f?.line) ? f.line : null, severity: String(f?.severity ?? 'medium').slice(0, 10), issue: String(f?.issue ?? '').slice(0, 300), fix: String(f?.fix ?? '').slice(0, 300) })) })); } catch { /* try an earlier object */ }
+function normalizeReviewEntries(reviews) {
+  if (!Array.isArray(reviews)) return null;
+  const out = reviews.filter(r => r && /^T-[0-9]{4,}$/.test(r.ticket)).map(r => ({
+    ticket: r.ticket,
+    verdict: r.verdict === 'pass' && !(r.findings ?? []).some(f => ['high', 'medium'].includes(String(f?.severity).toLowerCase())) ? 'pass' : 'fail',
+    findings: (Array.isArray(r.findings) ? r.findings : []).slice(0, 10).map(f => ({
+      file: String(f?.file ?? '').slice(0, 200),
+      line: Number.isFinite(f?.line) ? f.line : null,
+      severity: String(f?.severity ?? 'medium').slice(0, 10),
+      issue: String(f?.issue ?? '').slice(0, 300),
+      fix: String(f?.fix ?? '').slice(0, 300),
+    })),
+  }));
+  return out.length ? out : null;
+}
+
+function reviewsFromJson(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (Array.isArray(value.reviews)) return normalizeReviewEntries(value.reviews);
+  if (value.result && Array.isArray(value.result.reviews)) return normalizeReviewEntries(value.result.reviews);
+  return null;
+}
+
+export function reviewNotes(text) {
+  const raw = String(text ?? '');
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      if (typeof parsed.summary === 'string' && parsed.summary.trim()) return parsed.summary.trim();
+      if (parsed.result && typeof parsed.result.notes === 'string' && parsed.result.notes.trim()) return parsed.result.notes.trim();
+    }
+  } catch { /* prose or summary plus verdict line */ }
+  const verdict = verdictLine(raw);
+  if (verdict) {
+    const at = raw.lastIndexOf(verdict);
+    if (at > 0) return raw.slice(0, at).trim();
   }
+  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+  const withoutVerdict = lines.filter(line => {
+    try {
+      const parsed = JSON.parse(line);
+      return !Array.isArray(parsed?.reviews);
+    } catch {
+      return true;
+    }
+  });
+  return withoutVerdict.join('\n').trim();
+}
+
+// Structured verdict from the envelope or the final {"reviews":[...]} line; prose alone never counts.
+export function parseReviewVerdicts(text) {
+  const trimmed = String(text ?? '').trim();
+  if (trimmed) {
+    try {
+      const whole = reviewsFromJson(JSON.parse(trimmed));
+      if (whole) return whole;
+    } catch { /* not a whole-json envelope */ }
+  }
+  const last = verdictLine(text);
+  try {
+    const parsed = JSON.parse(last);
+    return reviewsFromJson(parsed);
+  } catch { /* no verdict line */ }
   return null;
 }
