@@ -118,11 +118,14 @@ export function orderTestsAfterBuild(added, existing = []) {
     return (from.dependsOn ?? []).some(d => d === target || reaches(byId(d), target, seen));
   };
   const newIds = new Set(added.map(t => t.id));
+  // A test waits for modules in this split, or open existing ones — not older builds already done (the code exists).
+  const testWaitsOnModule = m => newIds.has(m.id) || m.status !== 'done';
   for (const t of added) {
     if (t.type !== 'test' || t.status === 'cancelled') continue;
     // The modules a test checks: build tickets (not integration) and migrations of its requirements.
     const prerequisites = req => [...moduleTickets(all, req), ...all.filter(x => x.type === 'migration' && x.status !== 'cancelled' && (x.scopeRefs ?? []).includes(req))];
     const modules = [...new Set((t.scopeRefs ?? []).flatMap(prerequisites))].filter(m => m.id !== t.id);
+    const waitOn = modules.filter(testWaitsOnModule);
     const flipped = [], waits = [];
     for (const m of modules) if ((m.dependsOn ?? []).includes(t.id)) {
       m.dependsOn = m.dependsOn.filter(d => d !== t.id);
@@ -135,7 +138,7 @@ export function orderTestsAfterBuild(added, existing = []) {
       }
     }
     const indirect = [];
-    for (const m of modules) {
+    for (const m of waitOn) {
       if (reaches(m, t.id)) { indirect.push(m.id); continue; }
       if (!(t.dependsOn ?? []).includes(m.id)) { t.dependsOn = [...(t.dependsOn ?? []), m.id]; waits.push(m.id); }
     }
@@ -184,6 +187,11 @@ export function alignTestTicketsWithBuildStages(added, existing = [], { notes = 
     if (stageRank(test.stage) > stageRank(targetStage)) {
       test.stage = targetStage;
       notes.push(`moved ${test.id} into stage ${targetStage} with the code it tests`);
+    }
+    const newIds = new Set(added.map(ticket => ticket.id));
+    const waitable = modules.filter(m => m.id !== test.id && (newIds.has(m.id) || m.status !== 'done'));
+    for (const module of waitable) {
+      if (!(test.dependsOn ?? []).includes(module.id)) test.dependsOn = [...(test.dependsOn ?? []), module.id];
     }
   }
   return added.filter(ticket => !rejectedIds.has(ticket.id));
