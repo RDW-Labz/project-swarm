@@ -3,12 +3,15 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import { buildProgress, offLedgerRunHref, OFF_LEDGER_LIST_ANCHOR_ID } from '../tools/build-progress.mjs';
+import { projectDetail } from '../tools/board-data.mjs';
+import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
 
-const projectJsPath = new URL('../tools/watch-assets/project.js', import.meta.url);
+const assets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
 
 const NOW = Date.UTC(2026, 9, 21, 12, 0, 0);
 
@@ -57,9 +60,94 @@ test('off-ledger counts exclude smoke, probe, lane tests, and non-integrating ru
   }
 });
 
-test('project.js links untracked count to the off-ledger list anchor', () => {
-  const source = readFileSync(projectJsPath, 'utf8');
-  assert.match(source, /untrackedCount\.setAttribute\('href',\s*untracked\.countHref/);
-  assert.match(source, /offTitle\.id\s*=\s*listAnchor/);
-  assert.match(source, /runLink\.setAttribute\('href',\s*run\.href/);
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...c) => c.forEach(x => set.add(x)),
+    contains: c => set.has(c),
+    toString: () => [...set].join(' '),
+  };
+}
+
+function makeElement(tag, cls) {
+  const classList = makeClassList();
+  const listeners = {};
+  const node = {
+    tagName: String(tag).toUpperCase(),
+    className: cls || '',
+    classList,
+    children: [],
+    childNodes: [],
+    style: {},
+    href: '',
+    textContent: '',
+    title: '',
+    parentNode: null,
+    setAttribute() {},
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    appendChild(child) {
+      this.children.push(child);
+      this.childNodes = this.children.slice();
+      child.parentNode = this;
+      return child;
+    },
+    querySelector(sel) {
+      const walk = n => {
+        if (!n) return null;
+        if (sel === 'a.watch-card-fact-link' && n.tagName === 'A' && n.classList.contains('watch-card-fact-link')) return n;
+        for (const c of n.children || []) {
+          const hit = walk(c);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return walk(this);
+    },
+  };
+  Object.defineProperty(node, 'className', {
+    get() { return classList.toString(); },
+    set(v) { classList.add(...String(v).split(/\s+/).filter(Boolean)); },
+  });
+  return node;
+}
+
+async function loadBoardLib() {
+  const doc = makeElement('body');
+  doc.createElement = tag => makeElement(tag);
+  const win = {
+    document: doc,
+    location: { search: '', pathname: '/', hash: '' },
+    navigator: { clipboard: { writeText: async () => {} } },
+    sessionStorage: { getItem: () => null, setItem: () => {} },
+    history: { replaceState: () => {} },
+  };
+  const libSrc = await fs.readFile(path.join(assets, 'board-lib.js'), 'utf8');
+  const box = { self: win, document: doc };
+  vm.runInNewContext(libSrc, box);
+  return box.self.BoardLib;
+}
+
+test('project page links the untracked runs count to the untracked list', async t => {
+  const recent = new Date(NOW - 1000).toISOString();
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    runs: [{ id: 'manifest-run', status: 'complete', startedAt: recent, manifest: 'release.json', jobs: [{ id: 'off-ledger-job', status: 'complete' }] }],
+  });
+  t.after(fixture.cleanup);
+  const detail = await projectDetail(fixture.projects[0], {
+    now: NOW,
+    liveRunIds: new Set(),
+    env: fixture.env,
+    summary: async () => ({ spendUsd: 0, billedUsd: 0, capUsd: null, reached: false }),
+    extraRoots: fixture.projects.map(p => p.root),
+  });
+  assert.ok(detail.card?.facts?.untrackedRuns > 0, 'fixture should surface untracked runs on the card');
+  const listHrefOracle = `#${OFF_LEDGER_LIST_ANCHOR_ID}`;
+  assert.equal(detail.card.facts.listHref, listHrefOracle);
+  const BoardLib = await loadBoardLib();
+  const host = makeElement('div');
+  BoardLib.renderWatchProjectCard(detail, host, { pageMode: true });
+  const link = host.querySelector('a.watch-card-fact-link');
+  assert.ok(link, 'untracked runs count should be a link on the project page card');
+  assert.equal(link.href, listHrefOracle);
 });
