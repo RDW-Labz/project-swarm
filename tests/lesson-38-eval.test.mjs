@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { runScopeCommand } from '../tools/scope-commands.mjs';
 import { readLedger, writeLedger, createLedger, approveLedger, isApproved } from '../tools/tickets.mjs';
 import { ticketOutcome, isOwnFailure } from '../tools/ticket-manifest.mjs';
+import { looksLikeTestFile } from '../tools/wiring.mjs';
+import { readJournal } from '../tools/journal.mjs';
 
 const exec = promisify(execFile);
 const swarm = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/swarm.mjs');
@@ -68,6 +70,39 @@ test('eval 39.1 (S6 top priority): a failing check keeps every ticket in the bat
   await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', { runId: 'r9' }), tk('T-0002', { runId: 'r9' })] }));
   await writeState(root, { id: 'r9', integratedAt: 'now', integratedFiles: ['src/T-0001.ts', 'src/T-0002.ts'], jobs, checks: [{ name: 'tests', status: 'passed' }, { name: 'log-lint', status: 'passed' }] });
   assert.match((await runScopeCommand(root, 'scope', ['sync', 'r9', '--integrated'])).stdout, /2 ticket\(s\) marked done/);
+});
+
+test('eval 38.1: the route-level test of an integration ticket must be a real test file', async t => {
+  const root = await tmp(t, 'l38-route-');
+  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
+  const SCOPE = ['# Scope: Demo', 'Version: 1', '', '## Overview', 'Demo.', '', '## Stages', '- S1: Core', '', '## S1 Core', '### R-001 A user can create a request.', 'Acceptance:', '- Returns 201.', '', '## Protected', '- .env', ''].join('\n');
+  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
+  const item = (key, extra) => ({ key, title: key, type: 'build', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${key}.mjs`], size: 'S', risk: 'low', ...extra });
+  const mount = (key, extra) => item(key, { integration: true, files: ['src/routes/m.mjs'], tests: ['tests/m.test.mjs'], ...extra });
+  const ws = '.swarm/workspaces/r1/split-S1';
+  await fs.mkdir(path.join(root, ws, 'docs/scope/split'), { recursive: true });
+  await fs.writeFile(path.join(root, ws, 'docs/scope/split/S1.json'), JSON.stringify([
+    item('mod'),
+    mount('wire', { tests: ['src/app/page.tsx'] }),
+  ]));
+  await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', jobs: [{ id: 'split-S1', status: 'complete', workspace: ws }] }));
+  const parked = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1', '--max-repairs', '0']);
+  assert.equal(parked.exitCode, 0, parked.stdout);
+  assert.match(parked.stdout, /route-level test.*not a test file|not a test file \(src\/app\/page\.tsx\)/);
+  const blockers = await readJournal(root, { kinds: ['blocker'] });
+  assert.ok(blockers.some(event => /route-level test|not a test file/i.test(event.text ?? '')), 'parked blocker names the bad route-level test');
+  for (const ok of ['tests/routes.test.mjs', 'src/a.spec.ts']) assert.equal(looksLikeTestFile(ok), true, ok);
+  for (const bad of ['src/app/page.tsx', 'src/routes/list.mjs']) assert.equal(looksLikeTestFile(bad), false, bad);
+  const goodRoot = await tmp(t, 'l38-route-ok-');
+  await fs.mkdir(path.join(goodRoot, 'docs/scope'), { recursive: true });
+  await fs.writeFile(path.join(goodRoot, 'docs/scope/scope.md'), SCOPE);
+  const goodWs = '.swarm/workspaces/r1/split-S1';
+  await fs.mkdir(path.join(goodRoot, goodWs, 'docs/scope/split'), { recursive: true });
+  await fs.writeFile(path.join(goodRoot, goodWs, 'docs/scope/split/S1.json'), JSON.stringify([item('mod'), mount('wire')]));
+  await fs.mkdir(path.join(goodRoot, '.swarm/runs/r1'), { recursive: true });
+  await fs.writeFile(path.join(goodRoot, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', jobs: [{ id: 'split-S1', status: 'complete', workspace: goodWs }] }));
+  assert.equal((await runScopeCommand(goodRoot, 'scope', ['split', '--ingest', 'r1'])).exitCode, 0);
 });
 
 test('eval 38.1: dependency keys the worker invented are dropped with a note, the split is not refused', async t => {

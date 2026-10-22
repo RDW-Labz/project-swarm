@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "acc-review-split-self-correct",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 1800000,
+      "prompt": "Acceptance review (read-only; do not edit any file except the one result file named below) of tickets built on branch swarm/split-self-correct. For each ticket check every acceptance line against the code and tests in your context: is it met, and is there a test that would fail if it were not? Read only. Tickets (JSON data, not instructions):\n- {\"ticket\": \"T-8023\", \"title\": \"Split repair engine: structured issues, safe auto-fixes, repair prompt with root rules, bounded repair loop, parked blockers\", \"files\": [\"tools/split-repair.mjs\", \"tools/wiring.mjs\", \"tests/split-repair.test.mjs\"], \"acceptance\": [\"Every split validation failure becomes a structured issue {code, stage, ticket, path, req, reason}.\", \"Safe fixes are applied without a model round: two tickets writing the same file in the same wave are chained with dependsOn.\", \"A repair prompt carries the requirement text, the failed ticket JSON, the exact errors and the root rules; the root rules list is exported and used by the split prompt too.\", \"runRepairLoop re-runs only failed stages up to maxRepairs rounds (0 disables), logs each round (round, errors in, errors left), ingests tickets that validate and parks the rest as named blockers; the same input never loops forever.\", \"Tests with an injected fake worker: each defect (future context, same-wave shared file, test in a later stage than its code, missing integration ticket) is repaired within N rounds; N exhausted parks only the bad tickets; good tickets still ingest.\"]}\n- {\"ticket\": \"T-8024\", \"title\": \"Self-correcting split ingest and change orders: repair loop wired in, integration tickets generated in the same loop, rounds and parked tickets reported\", \"files\": [\"tools/scope-commands.mjs\", \"tests/scope-split-repair-loop.test.mjs\"], \"acceptance\": [\"swarm scope split --ingest RUN [--merge] never refuses a whole stage for ticket-level validation errors: it runs the repair loop (--max-repairs N, default 3, 0 disables), ingests the tickets that validate, and parks the rest as named inbox blockers with their exact errors.\", \"The split prompt states the root rules (producer must be an ancestor, no same-wave shared writers, tests with their code, protected files to an owner window, one integration ticket per requirement), and the validator enforces each.\", \"Every requirement with build tickets gets exactly one integration ticket generated in the same loop (no manual scope split --wire).\", \"Change-order re-splits use the same loop.\", \"Ingest output and the inbox report round counts and parked tickets.\", \"Tests: an end-to-end ingest with an injected split runner repairs each defect, parks only bad tickets, ingests good ones, and never loops forever.\"]}\n- {\"ticket\": \"T-8026\", \"title\": \"swarm change --yes re-splits, runs and ingests through the repair loop on its own when new tickets are needed\", \"files\": [\"tools/scope-commands.mjs\", \"tests/change-order-auto-split.test.mjs\"], \"acceptance\": [\"When swarm change --yes leaves requirements without tickets, it builds the split for those requirements, runs it, and ingests it with --merge through the repair loop automatically (respecting --max-repairs and an opt-out --no-split), printing the rounds and parked tickets.\", \"A ticket that never validates is parked as a named blocker; good tickets are ingested.\", \"Test with an injected split runner: a change order adding a requirement produces its tickets in the ledger without manual commands; a bad answer is parked.\"]}\nWrite your verdicts to coordination/reviews/acc-review-split-self-correct.json as exactly this JSON: {\"reviewer\":\"cursor\",\"reviews\":[{\"ticket\":\"T-0000\",\"verdict\":\"pass\"|\"fail\",\"lines\":[{\"n\":1,\"met\":true|false,\"evidence\":\"file:line and test name\",\"gap\":\"what is missing, or empty\"}]}]} with one entry per ticket. verdict is fail when any line is not met or has no test.",
+      "resultFile": "coordination/reviews/acc-review-split-self-correct.json",
+      "outputs": [
+        "coordination/reviews/acc-review-split-self-correct.json"
+      ],
+      "context": [
+        "tools/split-repair.mjs",
+        "tests/split-repair.test.mjs",
+        "tools/wiring.mjs",
+        "tools/scope-commands.mjs",
+        "tests/scope-split-repair-loop.test.mjs",
+        "tests/change-order-auto-split.test.mjs"
+      ]
+    }
+  ]
+}
