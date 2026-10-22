@@ -18,7 +18,7 @@ export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
 const GIT_COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--message', '--author', '--date']);
 
-/** Orchestrator mode is on by default at a project root unless the owner added `.swarm/orchestrator-mode/off`. Worker workspaces, scratch/test roots, and worktrees are exempt. Requires `CLAUDE_PROJECT_DIR` to match `root` (orchestrator sessions only). */
+/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless the owner added `.swarm/orchestrator-mode/off`. Worker workspaces, scratch/test roots, and worktrees are exempt. Requires `CLAUDE_PROJECT_DIR` to match `root` (orchestrator sessions only). */
 export function orchestratorModeEnabled(root, cwd = root) {
   if (!root || isWorkerCwd(cwd)) return false;
   const scratchOpts = { strict: true, home: os.homedir() };
@@ -27,6 +27,7 @@ export function orchestratorModeEnabled(root, cwd = root) {
   if (!fromEnv) return false;
   try {
     if (fs.realpathSync.native(fromEnv) !== fs.realpathSync.native(root)) return false;
+    if (!fs.existsSync(path.join(root, '.swarm'))) return false;
     return !fs.existsSync(path.join(root, ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
 }
@@ -1291,27 +1292,6 @@ const omGhPrMerge = args => {
   return false;
 };
 
-const omGhPrCreateFreeText = args => {
-  if (omGhPrMerge(args) || omGhWebFlag(args, '')) return false;
-  let i = 0;
-  while (i < args.length && args[i].startsWith('-')) {
-    if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
-    else i += 1;
-  }
-  if (args[i] !== 'pr' || args[i + 1] !== 'create') return false;
-  i += 2;
-  const valueFlags = new Set(['--title', '-t', '--body', '-b', '--body-file', '-F', '-f', '--base', '--head', '--reviewer', '--assignee', '--label', '-l']);
-  for (; i < args.length; i += 1) {
-    const a = args[i];
-    if (a === '--web' || a === '-w') return false;
-    const eq = a.indexOf('=');
-    const name = eq === -1 ? a : a.slice(0, eq);
-    if (name.startsWith('-') && !valueFlags.has(name) && !['--draft'].includes(name)) return false;
-    if (eq === -1 && valueFlags.has(name) && args[i + 1] !== undefined) i += 1;
-  }
-  return true;
-};
-
 const OM_VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
 const OM_VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
 const OM_VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
@@ -1367,7 +1347,7 @@ const omGhReadOnly = (args, commandText, piped) => {
   }
   const pos = args.slice(i).filter(a => !a.startsWith('-'));
   if (pos[0] === 'api') return piped ? omGhApiArgsOk(pos.slice(1)) : false;
-  if (pos[0] === 'pr' && pos[1] === 'create') return omGhPrCreateFreeText(args);
+  if (pos[0] === 'pr' && pos[1] === 'create') return false;
   const sub = pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
   if (sub === 'run watch') return false;
   if ((args.includes('--version') || args.includes('-v')) && pos.length === 0) return true;
@@ -1441,23 +1421,6 @@ const omGitInvocationAllowed = args => {
   return omGitSubAllowed(args[0], args.slice(1));
 };
 
-const omGitCommitMessageOnly = args => {
-  const sub = args.find(a => a !== '' && !a.startsWith('-'));
-  if (sub !== 'commit') return false;
-  const rest = args.slice(args.indexOf('commit') + 1);
-  for (let j = 0; j < rest.length; j += 1) {
-    const a = rest[j];
-    if (a === '--') break;
-    const al = a.toLowerCase();
-    if (GIT_COMMIT_MSG_OPTS.has(al) || al.startsWith('--message=')) {
-      if (!al.includes('=') && rest[j + 1] !== undefined) j += 1;
-      continue;
-    }
-    if (a.startsWith('-')) return false;
-  }
-  return true;
-};
-
 const omNodeRunsInstallSwarm = args => {
   const install = omSwarmMjsRealpath();
   if (!install) return false;
@@ -1498,10 +1461,6 @@ const omSwarmFreeTextHeredoc = words => {
   const { plain } = omPlainWords(words);
   let k = 0;
   while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) k += 1;
-  if (k < plain.length && path.basename(plain[k]) === 'gh') {
-    const args = plain.slice(k + 1);
-    if (omGhPrCreateFreeText(args)) return true;
-  }
   if (k >= plain.length || path.basename(plain[k]) !== 'swarm') return false;
   const sub = (plain[k + 1] ?? '').toLowerCase();
   if (sub === 'msg' && (plain[k + 2] ?? '').toLowerCase() === 'send') return true;
@@ -1643,7 +1602,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   if (words.piped) {
     if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args);
-    if (cmd === 'git') return omGitCommitMessageOnly(args) || omGitInvocationAllowed(args);
+    if (cmd === 'git') return omGitInvocationAllowed(args);
     if (cmd === 'gh') return omGhReadOnly(args, commandText, true);
     if (OM_PIPE_FILTERS.has(cmd)) {
       if (cmd === 'sed') return omSedReadOnly(args, true);
@@ -1659,7 +1618,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
     if (cmd === 'swarm' || cmd === 'vercel') return false;
     return false;
   }
-  if (cmd === 'git') return omGitCommitMessageOnly(args) || omGitInvocationAllowed(args);
+  if (cmd === 'git') return omGitInvocationAllowed(args);
   if (cmd === 'gh') return omGhReadOnly(args, commandText, words.piped || words.sepAfter === '|');
   if (cmd === 'vercel') return omVercelReadOnly(args);
   if (omSwarmInvocation(cmd, args)) return true;
