@@ -11,9 +11,10 @@ import {
 import {
   acceptanceReviewSkipNote,
   acceptanceReviewSkipWarning,
-  loadReviewManifest,
   prepareAcceptanceReviewFile,
+  readReviewManifest,
 } from './acceptance.mjs';
+import { validateManifest } from './swarm/core-31.mjs';
 import { effectiveTargetWorktree, resolveTargetWorktree } from './tickets.mjs';
 // `swarm go --scope` as a loop: wave after wave until the ledger is finished or something needs the owner.
 // Each wave does what the owner used to do by hand: build the wave, run it, integrate and commit it (go), move the tickets (scope sync),
@@ -50,11 +51,17 @@ const reviewStartText = (ticketId, error) => {
 
 const reviewStartReason = error => String(error?.message ?? error).split('\n')[0].slice(0, 400);
 
+const isAcceptanceMetWithoutReview = error => error?.code === 'acceptance-review-skip'
+  || reviewStartReason(error).includes('acceptance review has nothing to review');
+
+const isEmptyAcceptanceManifest = error => reviewStartReason(error).includes('acceptance review manifest has zero jobs')
+  || reviewStartReason(error).includes('Manifest has zero jobs');
+
 const isRetryableReviewStartFailure = error => {
+  if (isAcceptanceMetWithoutReview(error) || isEmptyAcceptanceManifest(error)) return false;
   const text = reviewStartReason(error);
   return error?.code === 'review-manifest'
-    || text.includes('review manifest ')
-    || /Manifest requires version:\s*1 and 1–5000 jobs/.test(text);
+    || text.includes('review manifest ');
 };
 
 const projectRootForReview = (mainRoot, rootOptions) => mainRoot ?? rootOptions?.root ?? null;
@@ -261,6 +268,17 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
     return { parked: false, retry: false };
   };
 
+  const markAcceptanceMetWithoutReview = async ticket => {
+    const live = await liveTicket(ticket.id) ?? ticket;
+    live.status = 'done';
+    reviewRecord.add(ticket.id);
+    if (typeof deps.setTicketField === 'function') {
+      await deps.setTicketField(ticket.id, 'status', 'done');
+    } else if (typeof deps.parkTicket === 'function') {
+      await deps.parkTicket(ticket.id, { status: 'done' });
+    }
+  };
+
   const skipAcceptanceReview = async (ticket, error, wave) => {
     const reason = String(error?.message ?? error).split('\n')[0].slice(0, 400);
     const note = acceptanceReviewSkipNote(reason);
@@ -329,6 +347,13 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
         ? file
         : `.swarm/acceptance-reviews/${waveId}-${safeReviewId(ticket.id)}.json`;
       const projectRoot = projectRootForReview(mainRoot, groupOptions);
+      if (projectRoot && ticketFile && typeof deps.prepareAcceptanceReview !== 'function') {
+        const existing = await readReviewManifest(projectRoot, ticketFile).catch(() => null);
+        if (existing && !existing.jobs?.length) {
+          await skipAcceptanceReview(ticket, new Error('acceptance review manifest has zero jobs'), wave);
+          continue;
+        }
+      }
       try {
         if (typeof deps.prepareAcceptanceReview === 'function') {
           await deps.prepareAcceptanceReview({
@@ -348,17 +373,54 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
           });
         }
       } catch (error) {
+        if (isAcceptanceMetWithoutReview(error)) {
+          await skipAcceptanceReview(ticket, error, wave);
+          await markAcceptanceMetWithoutReview(ticket);
+          continue;
+        }
         await skipAcceptanceReview(ticket, error, wave);
         continue;
+      }
+      if (projectRoot && ticketFile && typeof deps.prepareAcceptanceReview !== 'function') {
+        try {
+          const raw = await readReviewManifest(projectRoot, ticketFile);
+          if (!raw.jobs?.length) {
+            await skipAcceptanceReview(ticket, new Error('acceptance review manifest has zero jobs'), wave);
+            continue;
+          }
+          validateManifest(raw);
+        } catch (error) {
+          if (isAcceptanceMetWithoutReview(error)) {
+            await skipAcceptanceReview(ticket, error, wave);
+            await markAcceptanceMetWithoutReview(ticket);
+            continue;
+          }
+          if (isEmptyAcceptanceManifest(error)) {
+            await skipAcceptanceReview(ticket, error, wave);
+            continue;
+          }
+          if (error?.code === 'review-manifest') {
+            await skipAcceptanceReview(ticket, error, wave);
+            continue;
+          }
+          await skipAcceptanceReview(ticket, error, wave);
+          continue;
+        }
       }
       const context = reviewContext([ticket], source, waveId, groupOptions);
       let review;
       try {
-        if (projectRoot && typeof deps.prepareAcceptanceReview !== 'function') {
-          await loadReviewManifest(projectRoot, ticketFile);
-        }
         review = await deps.review('acceptance', ticketFile, context, groupOptions ?? undefined);
       } catch (error) {
+        if (isAcceptanceMetWithoutReview(error)) {
+          await skipAcceptanceReview(ticket, error, wave);
+          await markAcceptanceMetWithoutReview(ticket);
+          continue;
+        }
+        if (isEmptyAcceptanceManifest(error)) {
+          await skipAcceptanceReview(ticket, error, wave);
+          continue;
+        }
         const stop = stepStop(error);
         if (stop.status !== 'failed') return { stop };
         const handled = await handleAcceptanceReviewStartFailure(ticket, error, wave, source, waveId);

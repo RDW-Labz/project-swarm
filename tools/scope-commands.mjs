@@ -3234,7 +3234,7 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     }
     const humans = ready.filter(t => t.type === 'human').length;
     const profile = await readProfile(root);
-    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
+    const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: true, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels: (() => { try { return loadLocalConfig().lanes; } catch { return undefined; } })() });
     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
     let ids = manifest.jobs.map(j => j.id);
     if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ready tickets');
