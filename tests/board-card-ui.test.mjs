@@ -129,10 +129,11 @@ function makeElement(tag, id) {
 }
 
 let savedGlobalNavigatorDescriptor;
+let navigatorDescriptorCaptured = false;
 let stubNavigator;
 
 function applyGlobalNavigatorStub() {
-  if (!stubNavigator || savedGlobalNavigatorDescriptor === undefined) return;
+  if (!stubNavigator || !navigatorDescriptorCaptured) return;
   Object.defineProperty(globalThis, 'navigator', {
     value: stubNavigator,
     configurable: true,
@@ -141,11 +142,11 @@ function applyGlobalNavigatorStub() {
 }
 
 function restoreGlobalNavigator() {
-  if (savedGlobalNavigatorDescriptor === undefined) return;
-  if (savedGlobalNavigatorDescriptor) {
-    Object.defineProperty(globalThis, 'navigator', savedGlobalNavigatorDescriptor);
-  } else {
+  if (!navigatorDescriptorCaptured) return;
+  if (savedGlobalNavigatorDescriptor === undefined) {
     delete globalThis.navigator;
+  } else {
+    Object.defineProperty(globalThis, 'navigator', savedGlobalNavigatorDescriptor);
   }
 }
 
@@ -188,8 +189,9 @@ async function installBoardDom() {
     return origWrite(text);
   };
   stubNavigator = win.navigator;
-  if (savedGlobalNavigatorDescriptor === undefined) {
+  if (!navigatorDescriptorCaptured) {
     savedGlobalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    navigatorDescriptorCaptured = true;
   }
   applyGlobalNavigatorStub();
   win.fetch = async () => ({ ok: false });
