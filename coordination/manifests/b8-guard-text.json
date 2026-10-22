@@ -22,8 +22,40 @@
       ],
       "timeoutMs": 3000000,
       "ignoreTests": [
-        "tests/fixtures/ledgers/roadmap-ledger.json"
-      ]
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/git-hooks.test.mjs",
+        "tests/guard-readonly-forms.test.mjs",
+        "tests/guard-word-false-positive.test.mjs",
+        "tests/handbuild-accidents.test.mjs",
+        "tests/handbuild-allowlist.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hardening.test.mjs",
+        "tests/handbuild-hardening2.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/handbuild-switch.test.mjs",
+        "tests/handbuild-vercel-merge.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/policy-commit-window.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/self-approval-claude-word.test.mjs",
+        "tests/self-approval-hardening.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-produced-hash.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
     }
   ]
 }
