@@ -106,9 +106,9 @@ test('the board serves it read-only behind the token: /api/board carries inbox, 
   t.after(() => server.close());
   const token = new URL(url).searchParams.get('t');
   const get = (p, headers = {}) => new Promise((resolve, reject) => http.get(new URL(p, url), { headers }, res => { let b = ''; res.on('data', d => { b += d; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }).on('error', reject));
-  const hiddenByDefault = await get(`/api/board?t=${token}`);
+  const hiddenByDefault = await get('/api/board', { 'x-watch-token': token });
   assert.deepEqual([JSON.parse(hiddenByDefault.body).projects.length, JSON.parse(hiddenByDefault.body).inbox.total], [0, 0], 'these projects live in the temp directory: hidden unless asked for');
-  const board = await get(`/api/board?t=${token}&scratch=1`);
+  const board = await get('/api/board?scratch=1', { 'x-watch-token': token });
   assert.equal(board.status, 200);
   const data = JSON.parse(board.body);
   assert.equal(data.inbox.total, 5);
@@ -117,10 +117,10 @@ test('the board serves it read-only behind the token: /api/board carries inbox, 
   const html = await get(`/?t=${token}`);
   assert.match(html.body, /id="needs"/);
   assert.match(html.body, /id="needsChip"/);
-  const js = await get(`/assets/board.js?t=${token}`);
+  const js = await get('/assets/board.js');
   assert.doesNotMatch(js.body, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.match(js.body, /Read-only: the board never answers anything/);
-  const post = await new Promise((resolve, reject) => { const r = http.request(new URL(`/api/board?t=${token}`, url), { method: 'POST' }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); r.on('error', reject); r.end(); });
+  const post = await new Promise((resolve, reject) => { const r = http.request(new URL('/api/board', url), { method: 'POST', headers: { 'x-watch-token': token } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); }); r.on('error', reject); r.end(); });
   assert.ok(post >= 400, 'no write method');
 });
 

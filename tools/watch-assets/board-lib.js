@@ -4,9 +4,56 @@
   if (typeof module === 'object' && module.exports) { module.exports = factory(); } else { root.BoardLib = factory(); }
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
+  var host = typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : {});
   var LANE_COLORS = { Orchestrator: '#c084fc', Haiku: '#34d399', Sonnet: '#60a5fa', Opus: '#fbbf24', Codex: '#f472b6', Cursor: '#a3e635', GPU: '#fb923c', Claude: '#94a3b8' };
   var KNOWN_LANES = ['Haiku', 'Sonnet', 'Opus', 'Codex', 'Cursor', 'GPU'];
   var LIVE_MS = 6000;
+  var TOKEN_KEY = 'swarm-watch-token';
+  var tokenRead = false;
+  var tokenValue = '';
+
+  function watchToken() {
+    if (tokenRead) { return tokenValue; }
+    tokenRead = true;
+    var params = null;
+    var hasQueryToken = false;
+    var queryToken = '';
+    var cleanSearch = '';
+    try {
+      params = new URLSearchParams((host.location && host.location.search) || '');
+      hasQueryToken = params.has('t');
+      queryToken = params.get('t') || '';
+      params.delete('t');
+      cleanSearch = params.toString();
+    } catch (e) {
+      var raw = String((host.location && host.location.search) || '').replace(/^\?/, '');
+      var kept = [];
+      raw.split('&').forEach(function (part) {
+        if (!part) { return; }
+        var pieces = part.split('='), key = pieces.shift().replace(/\+/g, ' '), value = pieces.join('=').replace(/\+/g, ' ');
+        try { key = decodeURIComponent(key); value = decodeURIComponent(value); } catch (ignore) { return; }
+        if (key === 't') { if (!hasQueryToken) { queryToken = value; } hasQueryToken = true; }
+        else { kept.push(part); }
+      });
+      cleanSearch = kept.join('&');
+    }
+    var stored = '';
+    try {
+      if (hasQueryToken) { host.sessionStorage.setItem(TOKEN_KEY, queryToken); }
+      stored = host.sessionStorage.getItem(TOKEN_KEY) || '';
+    } catch (e) { /* private browsing can disable session storage */ }
+    tokenValue = stored || queryToken;
+    if (hasQueryToken && params && host.history && typeof host.history.replaceState === 'function') {
+      try {
+        host.history.replaceState(host.history.state, '', (host.location.pathname || '/') + (cleanSearch ? '?' + cleanSearch : '') + (host.location.hash || ''));
+      } catch (e) { /* the token remains in the current address only if history is unavailable */ }
+    } else if (hasQueryToken && host.history && typeof host.history.replaceState === 'function') {
+      try {
+        host.history.replaceState(host.history.state, '', (host.location.pathname || '/') + (cleanSearch ? '?' + cleanSearch : '') + (host.location.hash || ''));
+      } catch (e) { /* the token remains in the current address only if history is unavailable */ }
+    }
+    return tokenValue;
+  }
 
   function laneColor(label) { return Object.prototype.hasOwnProperty.call(LANE_COLORS, label) ? LANE_COLORS[label] : '#94a3b8'; }
   // Did anything the page shows change? (A page that rebuilds itself on every poll loses the keyboard focus of whatever was focused.)
@@ -139,5 +186,5 @@
   function agentCounts(m) { var held = m.workers && isFinite(m.workers.total) ? m.workers.total : 0; return { live: m.agents.total, held: held, unshown: Math.max(0, held - m.agents.total) }; }
   function slotsText(m) { var c = agentCounts(m); return c.unshown ? c.unshown + ' worker slot' + (c.unshown === 1 ? ' is' : 's are') + ' held (' + c.held + ' held, ' + c.live + ' agent' + (c.live === 1 ? '' : 's') + ' running): a run is between jobs or has not reported its running job yet.' : ''; }
 
-  return { agentCounts: agentCounts, slotsText: slotsText, signature: signature, laneColor: laneColor, itemKey: itemKey, unread: unread, remember: remember, liveness: liveness, chipState: chipState, streamState: streamState, countdown: countdown, duration: duration, bays: bays, parseHash: parseHash, layoutGraph: layoutGraph, replay: replay, KNOWN_LANES: KNOWN_LANES, TABS: TABS, LIVE_MS: LIVE_MS };
+  return { agentCounts: agentCounts, slotsText: slotsText, signature: signature, laneColor: laneColor, itemKey: itemKey, unread: unread, remember: remember, liveness: liveness, chipState: chipState, streamState: streamState, countdown: countdown, duration: duration, bays: bays, parseHash: parseHash, layoutGraph: layoutGraph, replay: replay, watchToken: watchToken, KNOWN_LANES: KNOWN_LANES, TABS: TABS, LIVE_MS: LIVE_MS };
 }));

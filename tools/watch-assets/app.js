@@ -2,15 +2,53 @@
 (function () {
   'use strict';
 
-  var params = new URLSearchParams(location.search);
-  var TOKEN = params.get('t') || '';
-  try {
-    if (TOKEN && window.history && history.replaceState) {
-      history.replaceState(history.state, '', location.pathname + location.hash);
+  var tokenRead = false;
+  var tokenValue = '';
+  function watchToken() {
+    if (tokenRead) { return tokenValue; }
+    tokenRead = true;
+    var params = null;
+    var hasQueryToken = false;
+    var queryToken = '';
+    var cleanSearch = '';
+    try {
+      params = new URLSearchParams((window.location && window.location.search) || '');
+      hasQueryToken = params.has('t');
+      queryToken = params.get('t') || '';
+      params.delete('t');
+      cleanSearch = params.toString();
+    } catch (e) {
+      var raw = String((window.location && window.location.search) || '').replace(/^\?/, '');
+      var kept = [];
+      raw.split('&').forEach(function (part) {
+        if (!part) { return; }
+        var pieces = part.split('='), key = pieces.shift().replace(/\+/g, ' '), value = pieces.join('=').replace(/\+/g, ' ');
+        try { key = decodeURIComponent(key); value = decodeURIComponent(value); } catch (ignore) { return; }
+        if (key === 't') { if (!hasQueryToken) { queryToken = value; } hasQueryToken = true; }
+        else { kept.push(part); }
+      });
+      cleanSearch = kept.join('&');
     }
-  } catch (e) {
-    if (window.console) console.error('could not clean address bar', e);
+    var stored = '';
+    try {
+      if (hasQueryToken) { window.sessionStorage.setItem('swarm-watch-token', queryToken); }
+      stored = window.sessionStorage.getItem('swarm-watch-token') || '';
+    } catch (e) { /* private browsing can disable session storage */ }
+    tokenValue = stored || queryToken;
+    if (hasQueryToken && params && window.history && typeof window.history.replaceState === 'function') {
+      try {
+        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
+      } catch (e) { /* leave the address alone if history is unavailable */ }
+    } else if (hasQueryToken && window.history && typeof window.history.replaceState === 'function') {
+      try {
+        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
+      } catch (e) { /* leave the address alone if history is unavailable */ }
+    }
+    return tokenValue;
   }
+  window.BoardLib = window.BoardLib || {};
+  window.BoardLib.watchToken = watchToken;
+  var TOKEN = watchToken();
   var TAB_NAMES = ['run', 'plan', 'commands', 'gallery'];
   var MAX_PENDING = 50;
   var registry = {};
@@ -33,12 +71,8 @@
   var drawer = document.getElementById('drawer');
   var lastFocus = null;
 
-  function withToken(path) {
-    return path + (path.indexOf('?') < 0 ? '?' : '&') + 't=' + encodeURIComponent(TOKEN);
-  }
-
   function fetchJson(path) {
-    return fetch(withToken(path), { cache: 'no-store' }).then(function (res) {
+    return fetch(path, { cache: 'no-store', headers: { 'x-watch-token': TOKEN } }).then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     });
@@ -184,7 +218,7 @@
       setConnection('connecting');
       return;
     }
-    var es = new EventSource(withToken('/events'));
+    var es = new EventSource('/events');
     es.addEventListener('snapshot', function (ev) {
       noteStreamMessage();
       var run = parseEvent(ev);
