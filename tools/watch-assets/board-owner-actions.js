@@ -56,9 +56,15 @@ function isAllowedOwnerKind(value) {
   return !isRefusedOwnerKind(value);
 }
 
+function decisionBoardSafeOnClient(item) {
+  if (!item || String(item.kind) !== 'decision') { return true; }
+  return item.boardSafe === true;
+}
+
 export function ownerActionAvailable(item, options) {
   if (!options || !options.signedIn) { return false; }
   if (!item || item.needsOwner !== true) { return false; }
+  if (!decisionBoardSafeOnClient(item)) { return false; }
   return isAllowedOwnerKind(item.kind ? String(item.kind) : '');
 }
 

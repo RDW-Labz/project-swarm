@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { needsHuman } from './approval-policy.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 
 // T-0114 must set req.tailnetVerified to true only after Tailscale Serve has
 // accepted the request on the loopback watch server; direct and Funnel requests
@@ -65,6 +66,42 @@ function hasKindMismatch(item) {
 
 function summaryOf(item) {
   return String(item?.summary ?? item?.title ?? item?.text ?? item?.id ?? '');
+}
+
+function decisionChoiceValues(item) {
+  const values = [];
+  if (Array.isArray(item?.options)) values.push(...item.options);
+  if (Array.isArray(item?.choices)) values.push(...item.choices);
+  return values;
+}
+
+export function ownerItemsFromBoardInbox(inbox) {
+  return (inbox?.items ?? []).map(item => ({
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    text: item.text ?? item.title,
+    summary: item.title,
+    projectId: item.projectId,
+    ...(item.boardSafe === true ? { boardSafe: true } : {}),
+    ...(Array.isArray(item.choices) ? { choices: item.choices } : {}),
+  }));
+}
+
+export function decisionBoardSafeForOwner(item) {
+  if (!item || item.kind !== 'decision') return true;
+  if (item.boardSafe !== true) return false;
+  const fields = [
+    item.text,
+    item.title,
+    item.summary,
+    item.id,
+    ...decisionChoiceValues(item),
+  ];
+  for (const field of fields) {
+    if (field !== undefined && field !== null && isProtectedTopic(field)) return false;
+  }
+  return true;
 }
 
 function safeIdentity(identity) {
@@ -155,6 +192,12 @@ export function createOwnerActions({
     }
     if (!needsHuman(approvalPolicy(item), approvalEvent(item, kind))) {
       return { error: response(422, 'not-owner-decidable', 'the item is not currently decidable by the owner') };
+    }
+    if (!decisionBoardSafeForOwner(item)) {
+      return {
+        error: response(403, 'decision-not-board-safe', 'this decision was not raised as board-safe or names a protected topic'),
+        outcome: 'refused-decision-not-board-safe',
+      };
     }
     return { item };
   };

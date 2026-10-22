@@ -3,6 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { appendEvent, readJournal, sanitizeText, openItems, integrateBlockerKindFromId, integrateBlockerResolutionEvent, integrateBlockerRunIdFromId } from './journal.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
 import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
 import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
@@ -12,7 +13,7 @@ const USAGE = {
   done: 'Usage: swarm done ID\n',
   decide: 'Usage: swarm decide ID CHOICE\n',
   resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
-  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID]\n',
+  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID] [--board-safe]\n',
   backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
 };
 const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
@@ -110,7 +111,9 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       return { stdout: `resolved: ${open.id}\n`, exitCode: 0 };
     }
     if (command === 'decision') {
-      const choice = flagValues(args, '--choice');
+      const boardSafe = args.includes('--board-safe');
+      const positional = args.filter(arg => arg !== '--board-safe');
+      const choice = flagValues(positional, '--choice');
       if (!choice || choice.values.length !== 1) return bad(command);
       const options = flagValues(choice.rest, '--option');
       const ids = options && flagValues(options.rest, '--id');
@@ -122,7 +125,21 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       choice.values[0] = sanitizeText(choice.values[0]);
       options.values = options.values.map(value => sanitizeText(value));
       const pool = [...new Set([choice.values[0], ...options.values])];
-      await appendEvent(root, { kind: 'decision', id, text, choice: choice.values[0], ...(options.values.length ? { options: pool } : {}), confirm: true }, { now });
+      if (boardSafe) {
+        const protectedFields = [text, id, choice.values[0], ...pool];
+        if (protectedFields.some(field => isProtectedTopic(field))) {
+          return { stdout: 'a decision about merge, deploy, spend, caps, keys or migrations can never be answered from the board; drop --board-safe\n', exitCode: 1 };
+        }
+      }
+      await appendEvent(root, {
+        kind: 'decision',
+        id,
+        text,
+        choice: choice.values[0],
+        ...(options.values.length ? { options: pool } : {}),
+        confirm: true,
+        ...(boardSafe ? { boardSafe: true } : {}),
+      }, { now });
       return { stdout: `decision recorded: ${id}; confirm with: swarm decide ${id} ${choice.values[0]}\n`, exitCode: 0 };
     }
     if (command === 'backlog') {

@@ -119,7 +119,20 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
       const mine = [];
       for (const it of await collect([project.root], deps)) {
         const phone = asked.get(`${project.root}|${it.kind}|${it.id}`);
-        mine.push({ kind: it.kind, id: txt(it.id, 80), title: txt(it.title, TITLE_MAX), since: it.since ?? null, unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0, steps: (it.steps ?? []).length, choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null, ...stepsOf(nextFor(it, project.root)), fyi: isFyi(it), phone: phoneOf(phone, now) });
+        mine.push({
+          kind: it.kind,
+          id: txt(it.id, 80),
+          title: txt(it.title, TITLE_MAX),
+          text: txt(it.text ?? it.title, TITLE_MAX),
+          ...(it.boardSafe === true ? { boardSafe: true } : {}),
+          since: it.since ?? null,
+          unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
+          steps: (it.steps ?? []).length,
+          choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null,
+          ...stepsOf(nextFor(it, project.root)),
+          fyi: isFyi(it),
+          phone: phoneOf(phone, now),
+        });
       }
       const ledger = await ledgerOf(project.root).catch(() => null);
       for (const t of ledger?.tickets ?? []) {

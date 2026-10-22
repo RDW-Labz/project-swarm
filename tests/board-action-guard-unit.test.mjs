@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { guardBoardAction, REFUSED_KINDS, ALLOWED_KINDS } from '../tools/board-action-guard.mjs';
+import { guardBoardAction, isProtectedTopic, REFUSED_KINDS, ALLOWED_KINDS } from '../tools/board-action-guard.mjs';
 
 const contractUrl = new URL('../contracts/watch-s4-ops.json', import.meta.url);
 const contract = JSON.parse(await readFile(contractUrl, 'utf8'));
@@ -116,6 +116,27 @@ test('refuses unknown sources', () => {
       allowed: false,
       reason: 'source-refused',
     });
+  }
+});
+
+test('isProtectedTopic flags merge, deploy, spend, caps, keys, migrations, and fail-closed non-strings', () => {
+  const protectedSamples = [
+    'please merge this',
+    'deploy now',
+    'spend limit',
+    'raise cap',
+    'capRaise',
+    'rotate keys',
+    'run migration',
+    'pull request merge',
+    null,
+    7,
+  ];
+  for (const sample of protectedSamples) {
+    assert.equal(isProtectedTopic(sample), true, String(sample));
+  }
+  for (const sample of ['pick the default theme', 'use pnpm']) {
+    assert.equal(isProtectedTopic(sample), false, sample);
   }
 });
 

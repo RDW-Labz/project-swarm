@@ -69,6 +69,7 @@ function ownerItem(overrides = {}) {
     id: 'dec-1',
     kind: 'decision',
     needsOwner: true,
+    boardSafe: true,
     title: 'Pick a lane',
     ...overrides,
   };
@@ -102,6 +103,19 @@ describe('board owner actions UI', () => {
     assert.equal(ownerActionAvailable(item, { signedIn: false }), false);
     assert.equal(ownerActionAvailable(item, { signedIn: true }), true);
     assert.equal(ownerActionAvailable({ ...item, needsOwner: false }, { signedIn: true }), false);
+  });
+
+  it('hides controls for a decision without boardSafe', () => {
+    const doc = makeDoc();
+    const container = doc.createElement('div');
+    assert.equal(ownerActionAvailable(ownerItem({ boardSafe: undefined }), { signedIn: true }), false);
+    renderOwnerActions(container, ownerItem({ boardSafe: undefined }), {
+      fetchImpl: () => {},
+      token: BOARD_HDR,
+      signedIn: true,
+      doc,
+    });
+    assert.equal(container.childNodes.length, 0);
   });
 
   it('hides controls when not signed in or not owner-policy', () => {

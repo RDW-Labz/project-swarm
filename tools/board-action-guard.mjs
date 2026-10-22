@@ -35,14 +35,53 @@ const REFUSED_WORDS = new Set([
   'rollback-prod',
 ]);
 
-function kindWords(value) {
+export function kindWords(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return [];
   const spaced = trimmed
     .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[^\w\s-]+/g, ' ');
   return spaced.toLowerCase().split(/[-_.: \t]+/).filter(Boolean);
+}
+
+const PROTECTED_TOPIC_WORDS = new Set([
+  'merge',
+  'merged',
+  'merging',
+  'deploy',
+  'deployed',
+  'deployment',
+  'spend',
+  'spending',
+  'cap',
+  'caps',
+  'budget',
+  'key',
+  'keys',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'migration',
+  'migrations',
+  'migrate',
+  'rollback-prod',
+]);
+
+/** True when decision text must not be marked board-safe or answered from the board. */
+export function isProtectedTopic(text) {
+  if (typeof text !== 'string') return true;
+  const words = kindWords(text);
+  if (words === null) return true;
+  if (words.length === 0) return false;
+  const lower = text.toLowerCase();
+  if (lower.includes('pull request') && words.includes('merge')) return true;
+  for (const word of words) {
+    if (PROTECTED_TOPIC_WORDS.has(word)) return true;
+  }
+  return false;
 }
 
 export function isRefusedActionKind(value) {
