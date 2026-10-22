@@ -3,9 +3,9 @@
   "concurrency": 1,
   "jobs": [
     {
-      "id": "T-8016-r2",
-      "agent": "codex",
-      "model": "gpt-reserve",
+      "id": "T-8016-r2-cursor",
+      "agent": "cursor",
+      "model": "composer-2.5",
       "tier": "mid",
       "timeoutMs": 3600000,
       "outputs": [
