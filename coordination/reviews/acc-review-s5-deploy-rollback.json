@@ -1,0 +1,29 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-0148",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/deploy-rollback.mjs:18-24 (rollbackOffer/formatRollbackCommand); tools/deploy-watch.mjs:344-354 (rollbackOffer on tick failure, human journal); tests \"rollbackOffer with rollback argv and without\", \"failing health check ends watch with rollback guidance and journal human entry\" (tests/deploy-watch.test.mjs)",
+          "gap": ""
+        }
+      ]
+    },
+    {
+      "ticket": "T-0149",
+      "verdict": "pass",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/deploy-watch.mjs:17-18 (WATCH_WINDOW_MS), 257-271 (pollDeployWatchTick: deploy/health/errors), 344-355 (rollback on failure), 150-180 (kickoff after merged); tests \"full watch window passes after fifteen ticks when deploy, health and errors stay ok\", \"failing deploy status ends watch as failed\", \"new production error log spike ends watch as failed\", \"failing health check ends watch with rollback guidance and journal human entry\", \"startDeployWatch skips when merge does not deploy\" (tests/deploy-watch.test.mjs)",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}
