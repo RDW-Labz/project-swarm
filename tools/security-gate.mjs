@@ -203,7 +203,8 @@ else if(made)warnings.push('could not build a lockfile from package.json to audi
 }
 }
 for(const c of changes.filter(c=>isReq(c.file)))tally('pip-audit',await run(['pip-audit','-f','json','--no-deps','--disable-pip','-r',c.file],'pip-audit',{env:{PATH:process.env.PATH||'',HOME:os.tmpdir()}}),scan.parsePipAudit);
-if(!manifestOnlyDepAudit)tally('osv-scanner',await run(['osv-scanner','--format','json','-r','.'],'osv-scanner'),scan.parseOsv);
+// manifest-only npm audits use a baseline diff; if npm did not return usable output, fall back to osv-scanner so the batch is not blocked spuriously.
+if(!manifestOnlyDepAudit||usableCount===0)tally('osv-scanner',await run(['osv-scanner','--format','json','-r','.'],'osv-scanner'),scan.parseOsv);
 if(usableCount===0&&pol.requireVulnerabilityScan!==false)blocks.push({check:'vulnerability',severity:'high',message:'could not verify vulnerabilities: no scanner ran (needs a lockfile with npm, or pip-audit, or osv-scanner)'});
 let scoped=newNames&&newNames.size>0?all.filter(v=>newNames.has(v.name)):all;
 if(baselineVulns.length)scoped=filterNewVulnerabilities(scoped,baselineVulns);
