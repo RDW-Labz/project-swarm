@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scrubText } from './errors.mjs';
 import { safeWritableDir } from './journal.mjs';
+import { isNonIntegratingRun } from './run-kind.mjs';
 
 export const FAILURE_STATUSES = new Set(['failed', 'timed-out', 'timedout', 'timeout', 'blocked']);
 const SUMMARY_MAX = 120;
@@ -181,7 +182,54 @@ export async function recordCauses(root, causes) {
   return merged;
 }
 
-// tools/swarm.mjs wiring is owned by the other seat; this is the single-call conversion hook.
+/** True when the project opted in via profile or SWARM_CONFIG (`failureRegression: true`, default false). */
+export function failureRegressionOptIn(profile, config) {
+  return profile?.failureRegression === true || config?.failureRegression === true;
+}
+
+/**
+ * Run-end hook: capture new failure causes once per finished integrating run (never throws).
+ * Logs one Events journal line with the number of regression stubs written.
+ */
+export async function runEndFailureRegression(root, state, manifest, deps = {}) {
+  const {
+    appendEvent,
+    projectProfile,
+    loadLocalConfig,
+    env = {},
+    now = Date.now,
+    captureNewFailureCauses: capture = captureNewFailureCauses,
+    isNonIntegrating = isNonIntegratingRun,
+  } = deps;
+  try {
+    if (isNonIntegrating(state, manifest)) return { skipped: true, reason: 'non-integrating' };
+    let profile = deps.profile;
+    if (profile === undefined && projectProfile) profile = await projectProfile(root);
+    let config = deps.config;
+    if (config === undefined && loadLocalConfig) config = loadLocalConfig({ env });
+    if (!failureRegressionOptIn(profile, config)) return { skipped: true, reason: 'disabled' };
+    const runStates = { [state.id]: state };
+    const captureDeps = deps.captureDeps ?? (deps.writeFile && deps.mkdir && deps.stat ? deps : undefined);
+    const { written } = await capture(root, runStates, captureDeps);
+    const count = Array.isArray(written) ? written.length : 0;
+    if (typeof appendEvent === 'function') {
+      await appendEvent(
+        root,
+        {
+          kind: 'note',
+          id: `failure-regression-${state.id}`,
+          text: `failure-regression: wrote ${count} regression stub${count === 1 ? '' : 's'}`,
+          runId: state.id,
+        },
+        { now: () => now },
+      );
+    }
+    return { stubsWritten: count };
+  } catch {
+    return { error: true };
+  }
+}
+
 export async function captureNewFailureCauses(root, runStates, deps = {}) {
   const readKnown = deps.knownCauses ?? knownCauses;
   const materialize = deps.materializeRegressionStubs ?? materializeRegressionStubs;

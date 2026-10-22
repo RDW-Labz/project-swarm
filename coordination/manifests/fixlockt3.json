@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixlockt3",
+      "agent": "auto",
+      "prompt": "tests/server-restart-round2.test.mjs test (9) concurrent restarts serialize on install restart lock still fails about 4 times in 15 in a Linux container: the test assumes the run numbered 1 (the first to START) is the one that wins the lock, but either restart can win it (each first awaits its own ps identity read). When run 2 wins, run 1 waits and calls sleep while the gate flag (set only for callId 1) is false, so lockWaitSleepCalls stays 0. Fix the TEST only: decide the gate holder dynamically as the FIRST execFileImpl call whose ps arguments name the fake old pid (args include String(fakeOldPid)): that call marks its run as holder, sets holdingLockBody true, awaits the release promise; the OTHER run (not the holder) must call the injected sleep while contending, and that sleep call (only when holdingLockBody is true and the caller is not the holder) increments the counter and releases the holder. Track holder by a per-run id captured in the closure. Remove every assumption about callId 1 or 2. Keep the final assertions (sleep called at least once, enter and exit events alternate for the two runs, both promises resolved). Run it 40 times in a row inside the Linux container (docker run --rm -v THISDIR:/w -w /w node:22 sh -c loop, count failures, must be 0 of 40) and 20 times natively. If docker is not available in your sandbox, run 40 times natively with CPU load in parallel (start two extra copies of the test at the same time). ignoreTests reason: only this test file changes.",
+      "context": [
+        "tests/server-restart-round2.test.mjs",
+        "tools/server-restart.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/server-restart-round2.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}

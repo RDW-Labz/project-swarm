@@ -10,6 +10,8 @@ import { digest, setupFailedResult, venvUnresolvableResult } from './core-1.mjs'
 import { safePath } from './core-21.mjs';
 import { bytesAt, jobWorktreePath, saveDroppedWrite, write } from './core-31.mjs';
 import { droppedBytesAt, execute, outputsChanged, recoverIntegrationJournal } from './core-41.mjs';
+import { jsonWrite } from './core-31.mjs';
+import { applyQueuePlans as applyQueuePlansBase } from './core-61.mjs';
 import { prepareJobEnvironment } from './core-51.mjs';
 import { reaskWorkerReport } from './core-61.mjs';
 import { redcheckRunLocked } from './core-62.mjs';
@@ -190,6 +192,109 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     }
     if (added && !keepWorktree) await gitImpl(root, ['worktree', 'remove', '--force', worktree]);
   }
+}
+
+export function queueManifestJobs(manifest) {
+  return (manifest.jobs ?? []).filter(job => job.type !== 'lead');
+}
+
+export function jobIntegrationStatus(state, jobId) {
+  return state.jobIntegration?.[jobId]?.status ?? null;
+}
+
+export function isJobIntegrated(state, jobId) {
+  return jobIntegrationStatus(state, jobId) === 'integrated';
+}
+
+export function queueIntegrationComplete(state, manifest) {
+  const jobs = queueManifestJobs(manifest);
+  if (!jobs.length) return false;
+  if (state.jobIntegration && typeof state.jobIntegration === 'object' && !Array.isArray(state.jobIntegration)) {
+    return jobs.every(job => state.jobIntegration[job.id]?.status === 'integrated');
+  }
+  const integrated = new Set(state.mergeQueue?.integrated ?? []);
+  return jobs.every(job => integrated.has(job.id));
+}
+
+/** True when some manifest jobs are not integrated yet but an earlier pass already wrote files. */
+export function queueIntegrationIncomplete(state, manifest) {
+  if (!state.integratedAt) return false;
+  if (state.integrationStatus === 'complete') return false;
+  if (state.integrationStatus === 'partial' || state.integrationStatus === 'failed-check') return true;
+  if (state.integrationStatus === 'queued') return !queueIntegrationComplete(state, manifest);
+  return false;
+}
+
+export function captureQueueIntegrationPrior(state) {
+  return {
+    integratedFiles: [...(state.integratedFiles ?? [])],
+    integratedNewFiles: [...(state.integratedNewFiles ?? [])],
+    integratedHashes: state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes)
+      ? { ...state.integratedHashes } : {},
+    jobIntegration: state.jobIntegration && typeof state.jobIntegration === 'object' && !Array.isArray(state.jobIntegration)
+      ? { ...state.jobIntegration } : {},
+    integrationPasses: Array.isArray(state.integrationPasses) ? [...state.integrationPasses] : [],
+  };
+}
+
+export function recordQueuePass(state, manifest, mergeQueue, { prior, at }) {
+  const mq = mergeQueue ?? {};
+  const jobs = queueManifestJobs(manifest);
+  state.jobIntegration = { ...prior.jobIntegration };
+  const pass = { at, integrated: [], blocked: [], skipped: [], conflicts: [] };
+  for (const jobId of mq.integrated ?? []) {
+    if (isJobIntegrated(state, jobId)) continue;
+    state.jobIntegration[jobId] = { status: 'integrated', at, pass: prior.integrationPasses.length + 1 };
+    pass.integrated.push(jobId);
+  }
+  for (const blocked of mq.securityBlocked ?? []) {
+    if (prior.jobIntegration[blocked.job]?.status === 'integrated' || isJobIntegrated(state, blocked.job)) continue;
+    state.jobIntegration[blocked.job] = { status: 'blocked', at, reason: 'security-gate', blocks: blocked.blocks };
+    pass.blocked.push({ job: blocked.job, kind: 'security-gate' });
+  }
+  for (const conflict of mq.conflicts ?? []) {
+    if (prior.jobIntegration[conflict.job]?.status === 'integrated' || isJobIntegrated(state, conflict.job)) continue;
+    state.jobIntegration[conflict.job] = { status: 'blocked', at, reason: conflict.reason ?? 'conflict', files: conflict.files };
+    pass.conflicts.push(conflict);
+  }
+  for (const entry of mq.skipped ?? []) {
+    const job = entry.job ?? entry;
+    const jobStatus = entry.status ?? 'skipped';
+    if (!state.jobIntegration[job]) state.jobIntegration[job] = { status: 'skipped', at, jobStatus };
+    pass.skipped.push(entry);
+  }
+  for (const failed of mq.checkFailed ?? []) {
+    if (!failed.job || failed.job === '(final full check)') continue;
+    if (prior.jobIntegration[failed.job]?.status === 'integrated' || isJobIntegrated(state, failed.job)) continue;
+    state.jobIntegration[failed.job] = { status: 'blocked', at, reason: 'checks-failed', checks: failed.checks, ...(failed.tail ? { tail: failed.tail } : {}) };
+    pass.blocked.push({ job: failed.job, kind: 'checks-failed' });
+  }
+  state.integrationPasses = [...prior.integrationPasses, pass];
+  state.integratedFiles = [...new Set([...prior.integratedFiles, ...(state.integratedFiles ?? [])])];
+  state.integratedNewFiles = [...new Set([...prior.integratedNewFiles, ...(state.integratedNewFiles ?? [])])];
+  state.integratedHashes = {
+    ...prior.integratedHashes,
+    ...(state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes)
+      ? state.integratedHashes
+      : {}),
+  };
+  const finalCheckFailed = (mq.checkFailed ?? []).some(f => f.job === '(final full check)');
+  const allIntegrated = jobs.every(job => state.jobIntegration[job.id]?.status === 'integrated');
+  const complete = allIntegrated && !finalCheckFailed;
+  if (complete) state.integrationStatus = 'complete';
+  else if (finalCheckFailed || (mq.securityBlocked ?? []).length) state.integrationStatus = 'partial';
+  else state.integrationStatus = 'queued';
+  return complete;
+}
+
+export async function applyQueuePlans(root, id, state, manifest, plans, options) {
+  const prior = captureQueueIntegrationPrior(state);
+  const result = await applyQueuePlansBase(root, id, state, manifest, plans, options);
+  const mergeQueue = result.mergeQueue ?? state.mergeQueue;
+  const complete = recordQueuePass(state, manifest, mergeQueue, { prior, at: new Date().toISOString() });
+  await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
+  const status = complete ? 'integrated' : 'partial';
+  return { ...result, status, integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles };
 }
 
 export async function redcheckRun(root, id, argv, options = {}) {

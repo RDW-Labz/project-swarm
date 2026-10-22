@@ -105,7 +105,10 @@ test('held launcher waits while pending exists and continues after', async t => 
     write: text => lines.push(text),
     sleep: async () => { polls += 1; },
   });
-  await new Promise(resolve => setTimeout(resolve, 30));
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !lines.some(line => line.includes('waiting for swarm update'))) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   assert.ok(lines.some(line => line.includes('waiting for swarm update')));
   await removePendingRecord(installRoot);
   await waiter;
@@ -273,24 +276,26 @@ test('read-only status is not held while an update is pending', async t => {
 
 test('update --when-idle waits for a busy marker then runs performUpdate', async t => {
   const installRoot = await tempDir(t);
-  const busyDir = await tempDir(t);
-  const root = await tempDir(t);
-  const holderPid = await holdingPid(t);
-  const { liveBusyMarkers } = await import('../tools/busy-marker.mjs');
-  const remove = await writeBusyMarker({ command: 'node tools/swarm.mjs go --scope x', root, pid: holderPid, dir: busyDir });
   let polls = 0;
   let performed = false;
-  setTimeout(() => { remove().catch(() => {}); }, 60);
   const outcome = await runWhenIdleUpdate({
     installRoot,
     timeoutMinutes: 1,
     performUpdate: async () => { performed = true; return { dry: true }; },
-    describeBusy: async ({ excludePids = [] } = {}) => {
+    describeBusy: async () => {
       polls += 1;
-      const markers = (await liveBusyMarkers({ dir: busyDir })).filter(marker => !excludePids.includes(marker.pid));
-      return { busy: markers.length > 0, liveRuns: [], processes: [], markers };
+      if (polls < 4) {
+        return {
+          busy: true,
+          liveRuns: [],
+          processes: [],
+          markers: [{ pid: 42, command: 'node tools/swarm.mjs go --scope x', root: '/tmp' }],
+        };
+      }
+      return { busy: false, liveRuns: [], processes: [], markers: [] };
     },
-    sleep: async () => { await new Promise(resolve => setTimeout(resolve, 20)); },
+    sleep: async () => {},
+    env: { SWARM_UPDATE_PENDING_POLL_MS: '1', SWARM_UPDATE_PENDING_STATUS_MS: '1' },
   });
   assert.equal(outcome.status, 'updated');
   assert.equal(performed, true);
@@ -313,17 +318,24 @@ test('pending file is mode 0600', async t => {
 test('held launcher is released when pending expires even if update pid is dead', async t => {
   const installRoot = await tempDir(t);
   const holderPid = await holdingPid(t);
+  const realDateNow = Date.now;
+  let clock = realDateNow();
+  Date.now = () => clock;
+  t.after(() => { Date.now = realDateNow; });
+  const pollMs = 10;
+  const startedAt = clock;
+  const expiresAt = clock + pollMs * 3;
   await writePendingRecord(installRoot, {
     pid: holderPid,
-    startedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 80).toISOString(),
+    startedAt: new Date(startedAt).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
     heldPids: [],
   });
   const lines = [];
   const waiter = waitBeforeLaunchingWork(installRoot, {
     write: text => lines.push(text),
-    sleep: async ms => { await new Promise(resolve => setTimeout(resolve, ms)); },
-    env: { SWARM_UPDATE_PENDING_POLL_MS: '10' },
+    sleep: async ms => { clock += ms; },
+    env: { SWARM_UPDATE_PENDING_POLL_MS: String(pollMs) },
   });
   await waiter;
   assert.ok(lines.some(line => line.includes('waiting for swarm update')));

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
@@ -7,7 +9,8 @@ import { resolveDailyLimit } from './daily-limit.mjs';
 import { filterGeneratedStatus } from './generated-state.mjs';
 import { underfilledWaves } from './board-data.mjs';
 import { planWaveBatch } from './wave-batch.mjs';
-import { isNonIntegratingRun } from './run-kind.mjs';
+import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
+import { noteAutopilotStep } from './orchestrator-context.mjs';
 import {
   appendIntegrateBlockerIfNeeded,
   integrateBlockerFields,
@@ -217,9 +220,55 @@ export function autopilotRunFromState(state, directoryName) {
     counts: state.summary?.counts ?? null,
     costUsd: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null,
     pause: state.pause ?? null,
-    integrated: Boolean(state.integratedFiles?.length) || state.integrated === true,
+    integrated: runIntegratedFromState(state),
+    integratedAt: state.integratedAt ?? null,
+    integrationStatus: state.integrationStatus ?? null,
+    handled: state.handled === true,
     integrable: integrableFromJobs(state.jobs),
   };
+}
+
+function runCountsAsIntegrated(run) {
+  if (!run || typeof run !== 'object') return false;
+  if (run.integrationStatus === 'partial' || run.integrationStatus === 'queued') return false;
+  return run.integrated === true;
+}
+
+function retryFailedCounted(events, runId) {
+  return actionEvents(events, 'retry-failed', runId).some(event => !failedResult(event));
+}
+
+function retryRunInFlight(events, runId) {
+  return events.some(e => e && e.kind === 'run' && e.retryOf === runId && e.status === 'running');
+}
+
+function runIsHandled(run, events) {
+  if (run?.handled === true) return true;
+  const id = run?.id;
+  if (!id) return false;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind === 'run' && event.id === id && event.handled === true) return true;
+  }
+  return false;
+}
+
+/** Another run already completed the same manifest work (hand rerun / integrated sibling). */
+export function supersedingSuccessfulRun(run, { runs, events, manifest } = {}) {
+  const fp = manifest && typeof manifest === 'object' ? manifestWorkFingerprint(manifest) : null;
+  if (!fp?.jobIds?.length) return false;
+  const list = Array.isArray(runs) ? runs : [];
+  for (const other of list) {
+    if (!other || other.id === run.id) continue;
+    const done = other.status === 'complete' || other.status === 'integrated' || other.integrated === true;
+    if (!done) continue;
+    const otherManifest = runManifest(other, events);
+    if (!otherManifest) continue;
+    const otherFp = manifestWorkFingerprint(otherManifest);
+    if (fingerprintsMatch(fp, otherFp)) return true;
+    if (fp.outputsHash === otherFp.outputsHash && fp.jobIds.length === otherFp.jobIds.length) return true;
+  }
+  return false;
 }
 
 function integrateBlockerRunId(blockerId) {
@@ -235,9 +284,13 @@ function runManifest(run, events) {
 
 export function runSkipsIntegrateAttention(run, events) {
   if (!run || typeof run !== 'object') return true;
-  if (run.integrated === true) return true;
+  if (runCountsAsIntegrated(run)) return true;
   if (['cancelled', 'abandoned'].includes(run.status)) return true;
-  return isNonIntegratingRun(run, runManifest(run, events));
+  const manifest = runManifest(run, events);
+  if (isAskRun(run, manifest) && runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
+  if (run.integrable === false) return true;
+  if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
+  return isNonIntegratingRun(run, manifest);
 }
 
 function runJobCount(run) {
@@ -340,7 +393,8 @@ export function decide(run, ctx) {
   const reasons = Array.isArray(pause?.reasons) ? pause.reasons.map(String) : [];
   const failedCount = Number(run.counts?.failed) || 0;
 
-  if (run.status === 'complete' && !run.integrated) {
+  if (run.status === 'complete' && !runCountsAsIntegrated(run)) {
+    if (runIsHandled(run, events)) return null;
     if (run.integrable === false) return null;
     if (runSkipsIntegrateAttention(run, events)) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
@@ -381,9 +435,13 @@ export function decide(run, ctx) {
   }
 
   if (run.status === 'failed') {
-    const retried = actionEvents(events, 'retry-failed', id).length > 0;
+    const manifest = c.manifest ?? runManifest(run, events);
+    if (runIsHandled(run, events)) return null;
+    if (supersedingSuccessfulRun(run, { runs: c.runs, events, manifest })) return null;
+    const retried = retryFailedCounted(events, id);
     const isRetry = events.some(e => e && e.kind === 'run' && e.id === id && e.retryOf);
     if (retried) {
+      if (retryRunInFlight(events, id)) return { action: 'wait', run: id, reason: 'retry run in flight' };
       // The retry is a new run linked by retryOf. If it finished, this original run is handled.
       if (events.some(e => e && e.kind === 'run' && e.retryOf === id && e.status === 'complete')) return null;
       return { action: 'block', run: id, id: `failed-${id}`, text: `Run ${id} still has failed jobs after one retry: swarm inspect ${id} --results` };
@@ -437,6 +495,39 @@ export function integrationBlocker(checkout) {
 export async function autopilotStep(root, deps, { now = Date.now, memory = new Set(), legacyPlan = false } = {}) {
   const nowFn = typeof now === 'function' ? now : () => nowValue(now);
   const nowMs = nowFn();
+  const mem = memory && typeof memory === 'object' ? memory : {};
+  let pollObserveContext = null;
+  let pollDigestBefore = null;
+  try {
+    if (typeof deps.readyTickets === 'function') {
+      const observeRuns = (await safe(() => deps.loadRuns(root), [])).slice(0, MAX_RUNS);
+      let live = [];
+      let busy = [];
+      let observeDepError = false;
+      if (typeof deps.liveRuns === 'function') {
+        try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { observeDepError = true; live = []; }
+      }
+      if (typeof deps.busyMarkers === 'function') {
+        try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { observeDepError = true; busy = []; }
+      }
+      pollObserveContext = { live, busy, runs: observeRuns, depError: observeDepError };
+      if (!observeDepError) noteStartReadyLive(mem, nowMs, pollObserveContext);
+    }
+    const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+      now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+    });
+    pollDigestBefore = pollSnapshot?.digest ?? null;
+    const storedDigest = pollDigestBefore ? await readAutopilotPollDigest(root) : null;
+    if (pollSnapshot?.idle && pollDigestBefore && storedDigest !== null && storedDigest === pollDigestBefore) {
+      return {
+        actions: [],
+        blocked: [],
+        idle: true,
+        stepWroteJournal: false,
+        pollUnchanged: true,
+      };
+    }
+  } catch { /* digest must never block autopilot */ }
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
   catch (error) { return { actions: [], blocked: [], idle: true, error: `journal-unreadable: ${String(error?.message ?? error).slice(0, 200)}` }; }
@@ -448,6 +539,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   const actions = [];
   const blocked = [];
   const perRun = new Map();
+  let stepWroteJournal = false;
   // Tickets that were only waiting on dependencies become ready again, whatever else happens this pass.
   if (typeof deps.unlockTickets === 'function') {
     const unlocked = await safe(() => deps.unlockTickets(root), []);
@@ -458,13 +550,16 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
-  async function write(event) {
+  async function write(event, { incidental = false } = {}) {
+    if (!incidental) stepWroteJournal = true;
     try { await deps.appendEvent(root, event); }
     catch (error) { journalBroken ??= `journal-unwritable: ${String(error?.message ?? error).slice(0, 200)}`; }
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
   }
 
-  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null } = {}) {
+  async function resolveIntegrateBlockersForRun(runId, { resolvedBy, integrateCause = null, allowPartial = false, force = false } = {}) {
+    const runRecord = runs.find(r => r.id === runId);
+    if (!force && !allowPartial && runRecord && !runCountsAsIntegrated(runRecord)) return;
     for (const integrateKind of ['integrate', 'integrate-checkout']) {
       const candidates = events.filter(event => event?.kind === 'blocker' && event.resolved !== true
         && (event.integrateRun === runId || integrateBlockerRunIdFromId(event.id) === runId)
@@ -517,8 +612,15 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     try {
       if (decision.action === 'integrate') {
         const out = await deps.integrate(root, runId);
-        await write({ kind: 'integration', run: runId, status: 'complete', ...(Number.isFinite(out?.files) ? { files: out.files } : {}) });
-        await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate' });
+        const integrationIncomplete = out?.status === 'partial' || out?.integrationStatus === 'partial' || out?.integrationStatus === 'queued' || out?.integrationStatus === 'failed-check';
+        const integrationComplete = !integrationIncomplete;
+        await write({
+          kind: 'integration',
+          run: runId,
+          status: integrationComplete ? 'complete' : 'partial',
+          ...(Number.isFinite(out?.files) ? { files: out.files } : {}),
+        });
+        if (integrationComplete) await resolveIntegrateBlockersForRun(runId, { resolvedBy: 'integrate', force: true });
       } else if (decision.action === 'resume') await deps.resume(root, runId);
       else if (decision.action === 'retry-failed') {
         const out = await deps.retryFailed(root, runId);
@@ -541,9 +643,11 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (last?.status === run.status) continue;
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
-    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) });
-    if (run.integrated === true || ['cancelled', 'abandoned'].includes(run.status)) {
-      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : run.integrated ? 'integrate' : 'abandoned' });
+    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) }, { incidental: true });
+    if (runCountsAsIntegrated(run)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: 'integrate' });
+    } else if (['cancelled', 'abandoned'].includes(run.status)) {
+      await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : 'abandoned', allowPartial: true });
     }
   }
 
@@ -570,7 +674,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (runSkipsIntegrateAttention(run, events)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
-    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events) });
+    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events), runs });
     if (!decision || decision.action === 'wait') continue;
     if (decision.action === 'block') {
       if (decision.integrateKind) {
@@ -588,6 +692,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       continue;
     }
     if (decision.action === 'integrate') {
+      if (runSkipsIntegrateAttention(run, events) || run.integrable === false) continue;
       let checkout = null;
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
       const why = integrationBlocker(checkout);
@@ -735,13 +840,17 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     let live = [];
     let busy = [];
     let capRoom = true;
-    if (!depError && typeof deps.liveRuns === 'function') {
+    if (pollObserveContext?.depError) depError = true;
+    if (!depError && pollObserveContext) {
+      live = Array.isArray(pollObserveContext.live) ? pollObserveContext.live : [];
+      busy = Array.isArray(pollObserveContext.busy) ? pollObserveContext.busy : [];
+    } else if (!depError && typeof deps.liveRuns === 'function') {
       try {
         live = await deps.liveRuns(root);
         if (!Array.isArray(live)) live = [];
       } catch { depError = true; live = []; }
     }
-    if (!depError && typeof deps.busyMarkers === 'function') {
+    if (!depError && !pollObserveContext && typeof deps.busyMarkers === 'function') {
       try {
         busy = await deps.busyMarkers();
         if (!Array.isArray(busy)) busy = [];
@@ -750,7 +859,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (!depError && typeof deps.capRoom === 'function') {
       try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
     }
-    if (!depError) noteStartReadyLive(memory, nowMs, { live, busy, runs });
+    if (!depError) noteStartReadyLive(mem, nowMs, { live, busy, runs });
 
     const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
     const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
@@ -810,7 +919,22 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
 
-  return { actions, blocked, idle: actions.length === 0 && blocked.length === 0, ...(journalBroken ? { error: journalBroken } : {}) };
+  if (!journalBroken) {
+    try {
+      const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+        now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+      });
+      if (pollSnapshot?.digest) await writeAutopilotPollDigest(root, pollSnapshot.digest);
+    } catch { /* digest file is best effort */ }
+  }
+
+  return {
+    actions,
+    blocked,
+    idle: actions.length === 0 && blocked.length === 0,
+    ...(stepWroteJournal ? { stepWroteJournal } : {}),
+    ...(journalBroken ? { error: journalBroken } : {}),
+  };
 }
 
 async function defaultSleep(ms, signal) {
@@ -821,6 +945,211 @@ async function defaultSleep(ms, signal) {
 }
 
 export const MIN_INTERVAL_MS = 5000;
+
+const AUTOPILOT_POLL_DIGEST_FILE = path.join('.swarm', 'autopilot', 'last-poll-digest');
+
+function stableDigest(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function autopilotPollSnapshotIdle(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.wave) return false;
+  for (const run of Array.isArray(payload.runs) ? payload.runs : []) {
+    if ((run.journalStatus ?? null) !== (run.status ?? null)) return false;
+    const action = run.decision?.action;
+    if (action && action !== 'wait') return false;
+  }
+  const startReady = payload.startReady;
+  if (startReady && !startReady.depError && startReady.startable > 0
+    && startReady.cooldownOpen && !startReady.hasLiveRun && !startReady.hasBusy && startReady.capRoom) {
+    return false;
+  }
+  return true;
+}
+
+function journalEventFinger(events) {
+  const list = Array.isArray(events) ? events : [];
+  return list.map(event => {
+    if (!event || typeof event !== 'object') return null;
+    const out = { kind: event.kind };
+    if (event.id !== undefined) out.id = event.id;
+    if (event.status !== undefined) out.status = event.status;
+    if (event.action !== undefined) out.action = event.action;
+    if (event.run !== undefined) out.run = event.run;
+    if (event.resolved !== undefined) out.resolved = event.resolved;
+    if (event.wave !== undefined) out.wave = event.wave;
+    if (event.integrateKind !== undefined) out.integrateKind = event.integrateKind;
+    if (event.integrateRun !== undefined) out.integrateRun = event.integrateRun;
+    return out;
+  });
+}
+
+export async function readAutopilotPollDigest(root) {
+  try {
+    const text = await fs.readFile(path.join(root, AUTOPILOT_POLL_DIGEST_FILE), 'utf8');
+    const digest = text.trim();
+    return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    return null;
+  }
+}
+
+export async function writeAutopilotPollDigest(root, digest) {
+  if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) return;
+  const dir = path.join(root, '.swarm', 'autopilot');
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(root, AUTOPILOT_POLL_DIGEST_FILE);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, `${digest}\n`, { encoding: 'utf8', mode: 0o600 });
+  await fs.rename(tmp, file);
+}
+
+/** Stable digest of autopilot inputs and pending decisions (no side effects). */
+export async function buildAutopilotPollDigest(root, deps, { now = Date.now, legacyPlan = false, memory = null, observeContext = null } = {}) {
+  const nowMs = typeof now === 'function' ? now() : nowValue(now);
+  let events = [];
+  try { events = await deps.readJournal(root); } catch { return null; }
+  const eventList = Array.isArray(events) ? events : [];
+  const loadedRuns = await safe(() => deps.loadRuns(root), []);
+  const runs = (Array.isArray(loadedRuns) ? loadedRuns : []).slice(0, MAX_RUNS);
+  const plan = await safe(() => deps.readPlan(root), null);
+  const open = openIds(eventList);
+  const runParts = [];
+  for (const run of runs) {
+    const history = eventList.filter(e => e && e.kind === 'run' && e.id === run.id);
+    const last = history[history.length - 1];
+    const decision = decide(run, {
+      now: nowMs,
+      events: eventList,
+      plan,
+      manifest: runManifest(run, eventList),
+      runs,
+    });
+    runParts.push({
+      id: run.id,
+      status: run.status ?? null,
+      integrated: run.integrated === true,
+      integrable: run.integrable,
+      counts: run.counts ?? null,
+      pause: run.pause ?? null,
+      journalStatus: last?.status ?? null,
+      decision: decision
+        ? {
+          action: decision.action,
+          run: decision.run ?? null,
+          id: decision.id ?? null,
+          integrateKind: decision.integrateKind ?? null,
+        }
+        : null,
+    });
+  }
+  let startReady = null;
+  if (typeof deps.readyTickets === 'function') {
+    let ticketList = [];
+    let approvalList = [];
+    let depError = false;
+    try { ticketList = await deps.readyTickets(root); } catch { depError = true; ticketList = []; }
+    if (!depError && typeof deps.pendingApprovals === 'function') {
+      try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
+    }
+    const { startable, held } = pickReadyTickets({
+      tickets: Array.isArray(ticketList) ? ticketList : [],
+      approvals: Array.isArray(approvalList) ? approvalList : [],
+    });
+    let live = [];
+    let busy = [];
+    let capRoom = true;
+    const observed = observeContext && typeof observeContext === 'object' ? observeContext : null;
+    if (observed?.depError) depError = true;
+    if (!depError && observed && Array.isArray(observed.live)) {
+      live = observed.live;
+    } else if (!depError && typeof deps.liveRuns === 'function') {
+      try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { depError = true; }
+    }
+    if (!depError && observed && Array.isArray(observed.busy)) {
+      busy = observed.busy;
+    } else if (!depError && typeof deps.busyMarkers === 'function') {
+      try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { depError = true; }
+    }
+    if (!depError && typeof deps.capRoom === 'function') {
+      try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
+    }
+    const mem = memory && typeof memory === 'object' ? memory : {};
+    const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+    const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+    startReady = {
+      depError,
+      startable: startable.length,
+      held: (held ?? []).length,
+      hasLiveRun,
+      hasBusy,
+      capRoom: capRoom !== false,
+      cooldownOpen: startReadyCooldownOpen(mem, nowMs),
+      lastAt: mem.startReadyLastAt ?? null,
+      lastLiveAt: mem.startReadyLastLiveAt ?? null,
+    };
+  }
+  const wave = legacyPlan ? nextWave(eventList, plan) : null;
+  let unlockTickets = null;
+  if (typeof deps.readTickets === 'function') {
+    const tickets = await safe(() => deps.readTickets(root), []);
+    unlockTickets = stableDigest(
+      (Array.isArray(tickets) ? tickets : []).map(t => ({
+        id: t?.id ?? null,
+        status: t?.status ?? null,
+        blockedBy: t?.blockedBy ?? null,
+        dependsOn: t?.dependsOn ?? t?.deps ?? null,
+      })).sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    );
+  }
+  let policyPass = null;
+  const policyCfg = deps.policyPass;
+  if (policyCfg && typeof policyCfg === 'object' && typeof policyCfg.loadRules === 'function') {
+    const rules = await safe(() => policyCfg.loadRules(root), null);
+    if (rules != null) {
+      const listOpen = policyCfg.openRequests ?? policyCfg.listOpenRequests;
+      if (typeof listOpen === 'function') {
+        const items = await safe(() => listOpen(root), []);
+        policyPass = stableDigest(
+          filterPolicyPassItems(items).map(item => ({ kind: item.kind, id: item.id ?? null })).sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`)),
+        );
+      }
+    }
+  }
+  let notify = null;
+  if (typeof deps.pendingNotifications === 'function') {
+    const pending = await safe(() => deps.pendingNotifications(root), []);
+    notify = stableDigest(Array.isArray(pending) ? pending : []);
+  } else {
+    notify = stableDigest(
+      runs.map(r => ({ id: r.id, status: r.status ?? null, unblocks: r.unblocks ?? null })),
+    );
+  }
+  const triage = stableDigest({
+    failed: runs.filter(r => r.status === 'failed').map(r => ({
+      id: r.id,
+      counts: r.counts ?? null,
+      handled: r.handled === true,
+    })),
+    openTriageBlockers: [...open].filter(id => id.startsWith('triage-')).sort(),
+  });
+  const payload = {
+    v: 1,
+    legacyPlan: Boolean(legacyPlan),
+    events: journalEventFinger(eventList),
+    openBlockers: [...open].sort(),
+    runs: runParts,
+    wave: wave?.id ?? null,
+    startReady,
+    unlockTickets,
+    policyPass,
+    notify,
+    triage,
+  };
+  return { digest: stableDigest(payload), idle: autopilotPollSnapshotIdle(payload), payload };
+}
 
 export async function runAutopilot(root, deps, { intervalMs = 30000, once = false, maxSteps = Infinity, signal, sleep = defaultSleep, now = Date.now, legacyPlan = false } = {}) {
   const results = [];
@@ -836,6 +1165,8 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
     } finally {
       try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
     }
+    if (once && step && !step.stepWroteJournal) step.stepWroteJournal = false;
+    noteAutopilotStep(root, step, { once });
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.
     if (step.error) break;

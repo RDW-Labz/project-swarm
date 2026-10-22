@@ -538,12 +538,13 @@ export function createDescribeUpdateBusy({
   installDirs,
   selfPid = process.pid,
 }) {
-  return ({ excludePids = [] } = {}) => machineBusySnapshot({
+  return ({ excludePids = [], heldPids = [] } = {}) => machineBusySnapshot({
     boardSummary,
     runningSwarmCommands,
     liveBusyMarkers,
     installDirs,
     excludePids,
+    heldPids,
     selfPid,
     parentOf: parentOfPid,
   });

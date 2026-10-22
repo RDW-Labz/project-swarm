@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "b7r-fixes",
+      "agent": "auto",
+      "prompt": "Fix the HIGH and MEDIUM findings of the security review of batch 7 that concern the partial-run retry, the run kind logic, autopilot and the dependency diff. Findings as data from the reviewer:  1. High – tools/dependency-diff.mjs. Install-time inputs outside the snapshot change silently, and the audit is skipped (security-gate.mjs).  - Scenario: postinstall: \"npm run build\" stays unchanged while scripts.build becomes hostile. Nothing flags it. The same applies to prepare. - Fix: when any lifecycle script exists, snapshot the whole scripts object, or follow npm run X references. 2. Medium – dependency-diff.mjs. Missing keys: - bundleDependencies, the canonical npm spelling (only bundledDependencies is listed) - peerDependenciesMeta (npm 7+ auto-installs peers) - dependenciesMeta - pnpm and yarn sections (pnpm.overrides, onlyBuiltDependencies, patchedDependencies) (c) autopilot and run-kind 15. High – run-kind.mjs and autopilot.mjs. integratedFiles.length or integratedAt marks a run integrated after the first partial pass. integrationStatus is partial or queued at that point, and core-71 says so. - Scenario: one job integrates and another is blocked. Autopilot stops attending to the run and resolveIntegrateBlockersForRun resolves the blocker, hiding the unmerged job. - Fix: require integrationStatus to be complete or absent. 16. Medium – run-kind.mjs. A job whose state has no outputs array counts as read-only, so a run whose state omits outputs is marked integrated. Require an explicit empty array on every job. 17. Medium – autopilot.mjs. A retry-failed action that threw, or a retry run that is still running, counts as \"retried\". The blocker \"still has failed jobs after one retry\" is raised while the retry is in flight or never started. The failed-ID blocker is never resolved when the retry later completes. 18. Medium – autopilot.mjs. handled is only checked in the failed branch. A handled complete, non-integrated run still gets integrated. 19. Medium – autopilot.mjs. The quiet-poll digest omits the inputs of unlockTickets, policyPass, notify and triage. - Scenario: tickets marked done by hand, or new open hand-build requests, with no journal change. The step is skipped until something else changes. 20. Low – run-kind.mjs and autopilot.mjs. Any job id starting with ask- makes a run with real outputs non-integrating. (d) Partial-run retry (core-71.mjs) 21. Medium – core-71.mjs. prior.integratedHashes is captured but never merged back, while the file lists are. A retry pass can drop the hashes of earlier integrated files. 22. Medium – core-71.mjs. Entries for jobs that are already integrated can overwrite them with blocked. A re-included job conflicts with its own earlier writes. Whether the plans are filtered to only the remaining jobs happens in core-61 or swarm.mjs, which I could not read. Guard here: skip any job already integrated in prior. 23. Medium – core-71.mjs. A (final full check) failure is ignored. If every job is integrated, integrationStatus is complete and the status is integrated despite the failed check. Gates and checks for the retried job are only recorded, not enforced, here. Concretely: (1) tools/dependency-diff.mjs: invert the check: any change in package.json outside an allow-list of inert keys (name, version, description, license, keywords, author, homepage, repository, bugs, funding, private, main, module, types, exports, files, sideEffects) counts as a dependency or install change; scripts: if any lifecycle script exists (preinstall, install, postinstall, prepare, prepack, preprepare, postprepare, prepublish, prepublishOnly, preuninstall, postuninstall) compare the whole scripts object, otherwise scripts changes are inert; include bundleDependencies and bundledDependencies, peerDependenciesMeta, dependenciesMeta, overrides, resolutions, pnpm, yarn, workspaces, packageManager, config, bin, os, cpu, engines? (engines is inert); make the gate and the diff use ONE shared lifecycle list; a deleted package.json is reviewed. (2) tools/run-kind.mjs and tools/autopilot.mjs: a run counts as integrated only when integrationStatus is complete or absent AND (integratedFiles has entries or integratedAt is set or every job has an explicit empty outputs array); a state with partial or queued status is NOT integrated; a job whose state has no outputs array is NOT read-only; a job id starting with ask- only makes a run non-integrating when the run has no outputs; the handled flag is honored for complete non-integrated runs too; a retry that threw or is still running is not counted as retried; resolveIntegrateBlockersForRun must not resolve the blocker for a partial run. (3) tools/swarm/core-71.mjs: merge prior.integratedHashes back with the new ones; never overwrite an already integrated job with blocked; skip jobs already integrated; a failed final full check must keep the status partial or failed and never integrated. New tests in tests/b7-review-fixes.test.mjs covering each point. Keep every existing test passing. Add a test per fixed finding in the new test file named. Hermetic tests (no ambient environment, no network). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change; the fixture ledger is a frozen data copy.",
+      "context": [
+        "tools/dependency-diff.mjs",
+        "tools/security-gate.mjs",
+        "tools/run-kind.mjs",
+        "tools/autopilot.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/dependency-diff.mjs",
+        "tools/run-kind.mjs",
+        "tools/autopilot.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/b7-review-fixes.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/autopilot-blocker-resolved.test.mjs",
+        "tests/autopilot-busy.test.mjs",
+        "tests/autopilot-ledger-only.test.mjs",
+        "tests/autopilot-lock.test.mjs",
+        "tests/autopilot-no-outputs.test.mjs",
+        "tests/autopilot-policy-pass.test.mjs",
+        "tests/autopilot-quiet-poll.test.mjs",
+        "tests/autopilot-readonly-runs.test.mjs",
+        "tests/autopilot-retry-duplicates.test.mjs",
+        "tests/autopilot-start-ready.test.mjs",
+        "tests/autopilot.test.mjs",
+        "tests/brain-commands.test.mjs",
+        "tests/dependency-diff.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/integrate-autocommit.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/run-kind-nonintegrating.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/wave-batch.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
