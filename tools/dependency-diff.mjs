@@ -63,6 +63,8 @@ export function dependencyRelevantSnapshot(pkg) {
  * Unparsable before or after is treated as changed (do not skip the gate).
  */
 export function dependencyFieldsChanged(beforeText, afterText) {
+  // A new package.json (no prior content) must always be audited like a dependency-field change.
+  if (beforeText == null || beforeText === '') return true;
   const before = parsePkg(beforeText);
   const after = parsePkg(afterText);
   if (!before.ok || !after.ok) return true;

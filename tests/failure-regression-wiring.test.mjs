@@ -27,6 +27,7 @@ function failedRunState(id, errorText) {
         lane: 'codex',
         status: 'failed',
         error: errorText,
+        outputs: ['src/out.ts'],
         finishedAt: new Date(NOW).toISOString(),
       },
     ],
@@ -38,7 +39,7 @@ function completeRunState(id) {
     id,
     status: 'complete',
     finishedAt: new Date(NOW).toISOString(),
-    jobs: [{ id: 'job-a', agent: 'codex', status: 'complete', finishedAt: new Date(NOW).toISOString() }],
+    jobs: [{ id: 'job-a', agent: 'codex', status: 'complete', outputs: ['src/out.ts'], finishedAt: new Date(NOW).toISOString() }],
   };
 }
 
@@ -53,7 +54,7 @@ test('failed run writes stubs once; second finish writes none', async () => {
   const root = await fs.mkdtemp(path.join(tmpBase(), 'fr-wire-'));
   const errorText = 'build failed with exit code 2';
   const state = failedRunState('run-fail-once', errorText);
-  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: [] }] };
+  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: ['src/out.ts'] }] };
   const events = [];
   const deps = {
     config: { failureRegression: true },
@@ -81,7 +82,7 @@ test('failed run writes stubs once; second finish writes none', async () => {
 test('successful run writes no stubs', async () => {
   const root = await fs.mkdtemp(path.join(tmpBase(), 'fr-wire-'));
   const state = completeRunState('run-ok');
-  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: [] }] };
+  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: ['src/out.ts'] }] };
   const events = [];
   const result = await runEndFailureRegression(root, state, manifest, {
     config: { failureRegression: true },
@@ -99,7 +100,7 @@ test('successful run writes no stubs', async () => {
 test('hook error does not throw', async () => {
   const root = await fs.mkdtemp(path.join(tmpBase(), 'fr-wire-'));
   const state = failedRunState('run-hook-err', 'something broke');
-  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: [] }] };
+  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: ['src/out.ts'] }] };
   const result = await runEndFailureRegression(root, state, manifest, {
     config: { failureRegression: true },
     captureNewFailureCauses: async () => {
@@ -115,7 +116,7 @@ test('nonIntegrating smoke run writes no stubs', async () => {
     ...failedRunState('doctor-smoke-abc', 'probe failed'),
     nonIntegrating: true,
   };
-  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: [] }] };
+  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: ['src/out.ts'] }] };
   const events = [];
   const result = await runEndFailureRegression(root, state, manifest, {
     config: { failureRegression: true },
@@ -132,7 +133,7 @@ test('nonIntegrating smoke run writes no stubs', async () => {
 test('with failureRegression off nothing is written', async () => {
   const root = await fs.mkdtemp(path.join(tmpBase(), 'fr-wire-'));
   const state = failedRunState('run-opt-out', 'still failing');
-  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: [] }] };
+  const manifest = { version: 1, jobs: [{ id: 'job-a', agent: 'codex', outputs: ['src/out.ts'] }] };
   const events = [];
   const result = await runEndFailureRegression(root, state, manifest, {
     config: { failureRegression: false },
