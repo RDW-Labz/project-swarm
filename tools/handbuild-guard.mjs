@@ -5,7 +5,7 @@
 // If it breaks, it lets the call through (and says nothing): a bug in the guard must never lock the owner out of their own project.
 import { projectRootOf, buildEvent, appendEvent } from './orchestrator-events.mjs';
 import { analyzeShell } from './shell-writes.mjs';
-import { guardDecision, logAction, OFF_FILE } from './handbuild.mjs';
+import { guardDecision, logAction, OFF_FILE, ORCHESTRATOR_MODE_RULE_ID } from './handbuild.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -34,7 +34,13 @@ process.stdin.on('end', () => {
       if (decision.approval) logAction(root, { event: 'allowed', id: decision.approval, tool, files: decision.files });
       process.exit(0);
     }
-    logAction(root, { event: 'blocked', by: 'guard', tool, files: decision.files, reason: decision.reason.slice(0, 200) });
+    logAction(root, {
+      event: 'blocked',
+      by: 'guard',
+      tool,
+      files: decision.files,
+      reason: decision.ruleId === ORCHESTRATOR_MODE_RULE_ID ? `orchestrator-mode: ${decision.reason.slice(0, 180)}` : decision.reason.slice(0, 200),
+    });
     const event = buildEvent('blocked', input, { root, analyze: analyzeShell });
     if (event) appendEvent(root, event);
     const hookOut = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: decision.reason };

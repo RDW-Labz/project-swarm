@@ -6,7 +6,21 @@
 // subshells, here-documents (their text is data, not commands) and `cd DIR && ...`.
 import fs from 'node:fs';
 import path from 'node:path';
-import { ORCHESTRATOR_OWN, insideProject, realOf } from './orchestrator-events.mjs';
+import { ORCHESTRATOR_OWN, insideProject, realOf, isWorkerCwd } from './orchestrator-events.mjs';
+
+export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
+export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
+export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm diagnose "<question>" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.';
+
+/** Orchestrator mode is on by default for orchestrator sessions in a swarm project unless the owner added the off file. */
+export function orchestratorModeEnabled(root, cwd = root) {
+  if (!root || isWorkerCwd(cwd)) return false;
+  try {
+    const modeDir = path.join(root, '.swarm', 'orchestrator-mode');
+    if (!fs.existsSync(modeDir)) return false;
+    return !fs.existsSync(path.join(root, ORCHESTRATOR_MODE_OFF_FILE));
+  } catch { return false; }
+}
 
 // Build output and installed packages are written by tools, not by hand.
 export const TOOL_DIRS = Object.freeze(['node_modules/', '.next/', 'dist/', 'build/', 'coverage/', '.turbo/', '.cache/']);
@@ -1071,3 +1085,197 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
 
 /** True when a command writes anything the guard cares about. */
 export const writesAnything = a => a.writes.length > 0 || a.git.length > 0 || a.inline || a.unknown || a.protectedOutside.length > 0 || (a.outsideDeletes?.length > 0) || a.selfApproval;
+
+const OM_MAX_HEAD_TAIL = 200;
+const OM_READ_FILTERS = new Set(['head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'ls', 'cat', 'cut', 'sort', 'uniq', 'jq', 'find', 'sed']);
+const OM_GH_ALLOWED = new Set([
+  'pr create', 'pr view', 'pr list', 'pr checks', 'pr diff', 'pr status',
+  'issue view', 'issue list', 'issue status',
+  'run list', 'run watch', 'run view', 'run status',
+  'release list', 'release view',
+  'workflow list', 'workflow view',
+  'repo view',
+  'search', 'auth status',
+]);
+const OM_GIT_EXPLICIT = new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'merge-base', 'fetch', 'describe', 'blame', 'grep', 'shortlog', 'cat-file', 'rev-list', 'for-each-ref', 'name-rev', 'show-ref', 'whatchanged', 'diff-tree', 'diff-index', 'check-ignore', 'ls-remote', 'var', 'version', 'help']);
+const OM_WRAPPERS = new Set(['sudo', 'command', 'time', 'nohup', 'exec', 'env', 'nice', 'builtin', 'xargs', 'stdbuf', 'timeout', 'doas']);
+const OM_WRAPPER_VALUE_OPTS = { sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'], doas: ['-u', '-C'], env: ['-u', '-C'], nice: ['-n'], stdbuf: ['-i', '-o', '-e'], timeout: ['-s', '-k', '--signal', '--kill-after'], xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'] };
+
+const omHeadTailLinesOk = args => {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '-n' || a === '--lines') {
+      const n = Number(args[i + 1]);
+      if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
+      continue;
+    }
+    if (/^-n\d+$/.test(a)) {
+      const n = Number(a.slice(2));
+      if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
+      continue;
+    }
+    if (a.startsWith('--lines=')) {
+      const n = Number(a.slice(8));
+      if (Number.isFinite(n) && n > OM_MAX_HEAD_TAIL) return false;
+    }
+  }
+  return true;
+};
+
+const omFindReadOnly = args => !args.some(a => ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf', '-fls'].includes(a));
+
+const omSedReadOnly = args => {
+  if (args.some(a => /^-[A-Za-z]*i/.test(a) || a === '--in-place' || a.startsWith('--in-place='))) return false;
+  return args.some(a => a === '-n' || (/^-[A-Za-z]*n/.test(a) && !/^-[A-Za-z]*i/.test(a)));
+};
+
+const omGhPrMerge = args => {
+  for (let i = 0; i < args.length - 1; i += 1) {
+    if (args[i] === 'pr' && args[i + 1] === 'merge') return true;
+  }
+  return false;
+};
+
+const omGhReadOnly = (args, commandText) => {
+  if (omGhPrMerge(args)) return false;
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-')) {
+    if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
+    else i += 1;
+  }
+  const pos = args.slice(i).filter(a => !a.startsWith('-'));
+  if (pos[0] === 'api') return false;
+  const sub = pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
+  if (sub === 'pr view' && /(?:^|\s)--web(?:\s|$)/.test(String(commandText ?? ''))) return false;
+  if ((args.includes('--version') || args.includes('-v')) && pos.length === 0) return true;
+  return sub !== null && OM_GH_ALLOWED.has(sub);
+};
+
+const omGitReadOnly = (sub, rest) => {
+  if (!sub) return true;
+  if (sub === 'worktree') {
+    const verb = rest.find(a => a !== '' && !a.startsWith('-'));
+    return verb === 'list' || !verb;
+  }
+  if (sub === 'tag') {
+    const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
+    if (pos.length === 0) return true;
+    return rest.some(a => a === '-l' || a === '--list');
+  }
+  if (sub === 'remote') {
+    return rest.every(a => a === '-v' || a === '-vv' || a.startsWith('-')) || rest.some(a => a === 'show' || a === 'get-url');
+  }
+  if (sub === 'branch') {
+    return rest.some(a => a === '-l' || a === '--list' || a === '-a' || a === '-r') || rest.filter(a => a !== '' && !a.startsWith('-')).length === 0;
+  }
+  if (OM_GIT_EXPLICIT.has(sub)) return true;
+  return isReadOnlyGitSub(sub, rest);
+};
+
+const omSwarmInvocation = (cmd, args) => {
+  if (cmd === 'swarm') return true;
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt === -1) return false;
+    const base = path.basename(args[scriptAt]).toLowerCase();
+    return base === 'swarm.mjs' || args[scriptAt].toLowerCase().endsWith('/swarm.mjs') || args[scriptAt].toLowerCase().endsWith('\\swarm.mjs');
+  }
+  return false;
+};
+
+const omPlainWords = words => {
+  const plain = [];
+  const expands = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>', '<', '<<<', '<<'].includes(words[i])) {
+      if (words[i] !== '<<') i += 1;
+      continue;
+    }
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
+    expands.push(words.expands?.[i] ?? false);
+  }
+  return { plain, expands };
+};
+
+const omGitInvocationAllowed = args => {
+  if (args.some(a => /^GIT_[A-Z_]+=/.test(a))) return false;
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
+    const g = args[i];
+    if (g === '-c' || g === '--config-env' || g.startsWith('--config=') || g === '--output' || g.startsWith('--output=')) return false;
+    if (['-C', '--git-dir', '--work-tree', '--namespace'].includes(g) || g.startsWith('--work-tree=') || g.startsWith('--git-dir=')) {
+      i += g.includes('=') ? 1 : 2;
+      continue;
+    }
+    i += 1;
+  }
+  const sub = i < args.length && !args[i].startsWith('-') ? args[i] : null;
+  const rest = sub ? args.slice(i + 1) : [];
+  if (rest.some(a => a === '--output' || a.startsWith('--output='))) return false;
+  return omGitReadOnly(sub, rest);
+};
+
+const omSimpleCommandAllowed = (words, commandText) => {
+  if (words.some(w => ['>', '>>', '>|', '>&', '&>'].includes(w))) return false;
+  const { plain, expands } = omPlainWords(words);
+  let k = 0;
+  let wrapperName = null;
+  for (;;) {
+    if (k >= plain.length) return true;
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (OM_WRAPPERS.has(plain[k])) { wrapperName = plain[k]; k += 1; continue; }
+    if (wrapperName === 'env' && (plain[k] === '-S' || plain[k] === '--split-string') && plain[k + 1] !== undefined) {
+      return orchestratorModeCommandAllowed(plain[k + 1], {});
+    }
+    if (wrapperName && plain[k]?.startsWith('-')) {
+      const takes = (OM_WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
+    break;
+  }
+  if (k >= plain.length) return true;
+  if (expands[k] || /^\$/.test(plain[k])) return false;
+  const cmd = path.basename(plain[k]);
+  const args = plain.slice(k + 1);
+  if (words.piped) {
+    if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args);
+    if (['grep', 'egrep', 'fgrep', 'rg', 'cut', 'sort', 'uniq', 'wc', 'jq'].includes(cmd)) return true;
+    if (cmd === 'sed') return omSedReadOnly(args);
+    return false;
+  }
+  if (cmd === 'git') return omGitInvocationAllowed(args);
+  if (cmd === 'gh') return omGhReadOnly(args, commandText);
+  if (omSwarmInvocation(cmd, args)) return true;
+  if (OM_READ_FILTERS.has(cmd)) {
+    if (cmd === 'find') return omFindReadOnly(args);
+    if (cmd === 'sed') return omSedReadOnly(args);
+    if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args);
+    return true;
+  }
+  if (cmd === 'true' || cmd === 'false' || cmd === ':') return true;
+  return false;
+};
+
+/** Orchestrator sessions may only run swarm, read-only git/gh, and capped read filters (fail closed). */
+export function orchestratorModeCommandAllowed(command, _ctx = {}) {
+  const text = String(command ?? '');
+  if (!text.trim()) return true;
+  if (/<\(|>\(/.test(text)) return false;
+  try {
+    for (const sub of substitutions(text)) {
+      if (!orchestratorModeCommandAllowed(sub, _ctx)) return false;
+    }
+    const tokenized = tokenize(text);
+    if (tokenized.unclosedQuote) return false;
+    for (const words of tokenized) {
+      if (!omSimpleCommandAllowed(words, text)) return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
