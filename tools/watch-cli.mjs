@@ -3,6 +3,7 @@
 // (state, plan, delta, server, tui, gallery) are separate modules; this only wires them.
 
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { openSync, closeSync, constants as fsConstants } from 'node:fs';
@@ -362,6 +363,13 @@ async function installedVersionFor(env, versionState = {}) {
   }
   return versionState?.installedVersion ?? null;
 }
+
+function runnerFieldsForRegistry(entry = path.join(here, 'swarm.mjs')) {
+  const runner = entry;
+  let runnerRealpath = runner;
+  try { runnerRealpath = realpathSync(runner); } catch { /* keep literal path */ }
+  return { runner, runnerRealpath };
+}
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
 const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -682,12 +690,14 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   api.setBoardUrl(remote ? null : url);
   const version = await readPackageVersion();
   const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
+  const swarmEntry = path.join(here, 'swarm.mjs');
   const baseRegistry = {
     version,
     argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
     cwd: process.cwd(),
     port,
     env: safeEnvSubset(env),
+    ...runnerFieldsForRegistry(swarmEntry),
     ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
     ...(registry && typeof registry === 'object' ? registry : {}),
   };
