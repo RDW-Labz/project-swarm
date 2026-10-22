@@ -220,7 +220,8 @@ export function queueIntegrationComplete(state, manifest) {
 export function queueIntegrationIncomplete(state, manifest) {
   if (!state.integratedAt) return false;
   if (state.integrationStatus === 'complete') return false;
-  if (state.integrationStatus === 'partial' || state.integrationStatus === 'queued') return !queueIntegrationComplete(state, manifest);
+  if (state.integrationStatus === 'partial' || state.integrationStatus === 'failed-check') return true;
+  if (state.integrationStatus === 'queued') return !queueIntegrationComplete(state, manifest);
   return false;
 }
 
@@ -237,31 +238,32 @@ export function captureQueueIntegrationPrior(state) {
 }
 
 export function recordQueuePass(state, manifest, mergeQueue, { prior, at }) {
+  const mq = mergeQueue ?? {};
   const jobs = queueManifestJobs(manifest);
   state.jobIntegration = { ...prior.jobIntegration };
   const pass = { at, integrated: [], blocked: [], skipped: [], conflicts: [] };
-  for (const jobId of mergeQueue.integrated ?? []) {
+  for (const jobId of mq.integrated ?? []) {
     if (isJobIntegrated(state, jobId)) continue;
     state.jobIntegration[jobId] = { status: 'integrated', at, pass: prior.integrationPasses.length + 1 };
     pass.integrated.push(jobId);
   }
-  for (const blocked of mergeQueue.securityBlocked ?? []) {
+  for (const blocked of mq.securityBlocked ?? []) {
     if (prior.jobIntegration[blocked.job]?.status === 'integrated' || isJobIntegrated(state, blocked.job)) continue;
     state.jobIntegration[blocked.job] = { status: 'blocked', at, reason: 'security-gate', blocks: blocked.blocks };
     pass.blocked.push({ job: blocked.job, kind: 'security-gate' });
   }
-  for (const conflict of mergeQueue.conflicts ?? []) {
+  for (const conflict of mq.conflicts ?? []) {
     if (prior.jobIntegration[conflict.job]?.status === 'integrated' || isJobIntegrated(state, conflict.job)) continue;
     state.jobIntegration[conflict.job] = { status: 'blocked', at, reason: conflict.reason ?? 'conflict', files: conflict.files };
     pass.conflicts.push(conflict);
   }
-  for (const entry of mergeQueue.skipped ?? []) {
+  for (const entry of mq.skipped ?? []) {
     const job = entry.job ?? entry;
     const jobStatus = entry.status ?? 'skipped';
     if (!state.jobIntegration[job]) state.jobIntegration[job] = { status: 'skipped', at, jobStatus };
     pass.skipped.push(entry);
   }
-  for (const failed of mergeQueue.checkFailed ?? []) {
+  for (const failed of mq.checkFailed ?? []) {
     if (!failed.job || failed.job === '(final full check)') continue;
     if (prior.jobIntegration[failed.job]?.status === 'integrated' || isJobIntegrated(state, failed.job)) continue;
     state.jobIntegration[failed.job] = { status: 'blocked', at, reason: 'checks-failed', checks: failed.checks, ...(failed.tail ? { tail: failed.tail } : {}) };
@@ -276,11 +278,11 @@ export function recordQueuePass(state, manifest, mergeQueue, { prior, at }) {
       ? state.integratedHashes
       : {}),
   };
-  const finalCheckFailed = (mergeQueue.checkFailed ?? []).some(f => f.job === '(final full check)');
+  const finalCheckFailed = (mq.checkFailed ?? []).some(f => f.job === '(final full check)');
   const allIntegrated = jobs.every(job => state.jobIntegration[job.id]?.status === 'integrated');
   const complete = allIntegrated && !finalCheckFailed;
   if (complete) state.integrationStatus = 'complete';
-  else if (finalCheckFailed || (mergeQueue.securityBlocked ?? []).length) state.integrationStatus = 'partial';
+  else if (finalCheckFailed || (mq.securityBlocked ?? []).length) state.integrationStatus = 'partial';
   else state.integrationStatus = 'queued';
   return complete;
 }

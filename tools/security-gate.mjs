@@ -7,7 +7,7 @@ import {createHash} from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {isSensitivePath} from './sensitive-paths.mjs';
-import {dependencyFieldsChanged,filterNewVulnerabilities} from './dependency-diff.mjs';
+import {dependencyFieldsChanged,filterNewVulnerabilities,INSTALL_LIFECYCLE_SCRIPT_KEYS} from './dependency-diff.mjs';
 import {fileURLToPath} from 'node:url';
 
 export const SEMGREP_RULES_SHA256='3ad961b22a3ac752a1ba8815a4ea234feb8b605ede0a4026397ad31cc5e07da2';
@@ -65,8 +65,6 @@ keep[k]=j[k];
 }
 return keep;
 }
-
-const LIFECYCLE=['preinstall','install','postinstall','prepare','prepublish','prepublishOnly','prepack','postpack','preuninstall','uninstall','postuninstall'];
 
 export function unparsedEcosystem(file){
 const lp=normPath(file);
@@ -258,7 +256,7 @@ for(const k of hookScripts)if(JSON.stringify(before[k])!==JSON.stringify(after[k
 }
 for(const c of pkgChanges){
 const before=scriptsOf(c.previous),after=scriptsOf(c.bytes);
-for(const k of LIFECYCLE){const nv=after[k];if(nv==null)continue;if(JSON.stringify(nv)!==JSON.stringify(before[k]))blocks.push({check:'install-script',severity:'high',message:`${c.file}: lifecycle script ${k} changed; the owner must review it`});}
+for(const k of INSTALL_LIFECYCLE_SCRIPT_KEYS){const nv=after[k];if(nv==null)continue;if(JSON.stringify(nv)!==JSON.stringify(before[k]))blocks.push({check:'install-script',severity:'high',message:`${c.file}: lifecycle script ${k} changed; the owner must review it`});}
 }
 
 const textTotal=live.filter(c=>isText(c.bytes)).length;

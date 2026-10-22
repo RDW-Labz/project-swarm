@@ -612,7 +612,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     try {
       if (decision.action === 'integrate') {
         const out = await deps.integrate(root, runId);
-        const integrationIncomplete = out?.integrationStatus === 'partial' || out?.integrationStatus === 'queued';
+        const integrationIncomplete = out?.status === 'partial' || out?.integrationStatus === 'partial' || out?.integrationStatus === 'queued' || out?.integrationStatus === 'failed-check';
         const integrationComplete = !integrationIncomplete;
         await write({
           kind: 'integration',

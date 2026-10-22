@@ -50,12 +50,14 @@ export const INSTALL_LIFECYCLE_SCRIPT_KEYS = Object.freeze([
   'install',
   'postinstall',
   'prepare',
-  'prepack',
   'preprepare',
   'postprepare',
+  'prepack',
+  'postpack',
   'prepublish',
   'prepublishOnly',
   'preuninstall',
+  'uninstall',
   'postuninstall',
 ]);
 

@@ -105,7 +105,10 @@ test('held launcher waits while pending exists and continues after', async t => 
     write: text => lines.push(text),
     sleep: async () => { polls += 1; },
   });
-  await new Promise(resolve => setTimeout(resolve, 30));
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !lines.some(line => line.includes('waiting for swarm update'))) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   assert.ok(lines.some(line => line.includes('waiting for swarm update')));
   await removePendingRecord(installRoot);
   await waiter;
