@@ -529,9 +529,9 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
   const login = typeof remoteLogin === 'string' ? remoteLogin : '';
   return createOwnerActions({
     listItems: async () => {
-      const opts = boardProjectOpts(env);
-      // Owner routes read every registered project (including scratch worktrees), not the board's hidden-from-default view.
-      const projects = await listProjects({ file: projectsFile(env), pruneGone: true, ...opts });
+      const all = await listProjects({ file: projectsFile(env) });
+      const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
+      const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
       const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
       return ownerItemsFromBoardInbox(inbox);
     },

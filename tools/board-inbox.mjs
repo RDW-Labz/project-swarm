@@ -114,8 +114,6 @@ function nextFor(item, root) {
 function filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts } = {}) {
   const all = projects ?? [];
   if (ownerInbox === false || forOwner === false) return all;
-  // Remote owner actions only see registry rows; scratch worktrees stay (strict scratch filtering is for the default board panel).
-  if (ownerInbox === true) return all.filter(p => p?.root);
   return all.filter(p => p?.root && !isScratchRoot(p.root, { strict: true, ...scratchOpts }));
 }
 
