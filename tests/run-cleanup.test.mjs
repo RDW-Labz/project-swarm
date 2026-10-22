@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { git } from '../tools/codex-adapter.mjs';
 import { readJournal } from '../tools/journal.mjs';
-import { cleanupRunWorkspaces, jobsEligibleForCleanup, resolveKeepWorkspaces } from '../tools/gc.mjs';
+import { cleanupRunAfterTerminal, cleanupRunWorkspaces, jobsEligibleForCleanup, resolveKeepWorkspaces } from '../tools/gc.mjs';
 import { expectedWorkspaceFor } from '../tools/swarm/core-11.mjs';
 import { jsonWrite } from '../tools/swarm/core-31.mjs';
 
@@ -133,6 +133,65 @@ test('keepWorkspaces retains paths', async t => {
   assert.equal(result.kept, true);
   await fs.access(worktreePath);
   assert.equal(resolveKeepWorkspaces({ keepWorkspaces: true }, {}), true);
+});
+
+const terminalFailureStatuses = [
+  { runStatus: 'failed', jobStatus: 'failed' },
+  { runStatus: 'failed', jobStatus: 'timeout' },
+  { runStatus: 'cancelled', jobStatus: 'cancelled' },
+  { runStatus: 'failed', jobStatus: 'missing-output' },
+  { runStatus: 'failed', jobStatus: 'launch-error' },
+];
+
+for (const { runStatus, jobStatus } of terminalFailureStatuses) {
+  test(`terminal ${jobStatus} run keeps workspaces at run end`, async t => {
+    const { root, worktreesDir, env } = await repoFixture(t);
+    const id = `run-${jobStatus}`;
+    const worktreePath = path.join(worktreesDir, id, 'job');
+    await addWorktree(root, worktreePath);
+    const workspaceRel = expectedWorkspaceFor(id, 'job', { workspaceAttempt: 1 });
+    const workspaceAbs = path.join(root, workspaceRel);
+    await fs.mkdir(workspaceAbs, { recursive: true });
+    await fs.writeFile(path.join(workspaceAbs, 'evidence.txt'), 'x');
+    const state = {
+      id,
+      root,
+      status: runStatus,
+      finishedAt: new Date().toISOString(),
+      worktreesBase: worktreesDir,
+      jobs: [{ id: 'job', status: jobStatus, worktreePath, workspace: workspaceRel }],
+    };
+    const ws = await cleanupRunWorkspaces(root, id, state, { env });
+    assert.deepEqual(ws.removed, []);
+    const after = await cleanupRunAfterTerminal(root, id, state, { env });
+    assert.deepEqual(after.removed, []);
+    await fs.access(worktreePath);
+    await fs.access(workspaceAbs);
+    assert.deepEqual(jobsEligibleForCleanup(state), []);
+    assert.ok(jobsEligibleForCleanup(state, { forGc: true }).length);
+  });
+}
+
+test('keptWorkspace job is never eligible for cleanup', async t => {
+  const { root, worktreesDir, env } = await repoFixture(t);
+  const id = 'run-kept-job';
+  const worktreePath = path.join(worktreesDir, id, 'job');
+  await addWorktree(root, worktreePath);
+  const workspaceRel = expectedWorkspaceFor(id, 'job', { workspaceAttempt: 1 });
+  const workspaceAbs = path.join(root, workspaceRel);
+  await fs.mkdir(workspaceAbs, { recursive: true });
+  const state = {
+    id,
+    root,
+    status: 'failed',
+    finishedAt: new Date().toISOString(),
+    worktreesBase: worktreesDir,
+    jobs: [{ id: 'job', status: 'failed', worktreePath, workspace: workspaceRel, keptWorkspace: workspaceAbs }],
+  };
+  assert.deepEqual(jobsEligibleForCleanup(state, { forGc: true }), []);
+  await cleanupRunWorkspaces(root, id, state, { env });
+  await fs.access(worktreePath);
+  await fs.access(workspaceAbs);
 });
 
 test('paths outside bases are never removed', async t => {

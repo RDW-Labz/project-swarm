@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { git } from './codex-adapter.mjs';
 import { scratchRootDir } from './claude-shell.mjs';
-import { appendEvent } from './journal.mjs';
+import { appendEvent, integrateBlockerRunIdFromId } from './journal.mjs';
 import { loadLocalConfig } from './local-config.mjs';
 import { listProjects } from './projects.mjs';
 import { expectedWorkspaceFor, worktreesBaseFor } from './swarm/core-11.mjs';
@@ -35,11 +35,33 @@ export function resolveKeepWorkspaces(config = {}, options = {}) {
   return false;
 }
 
+export function resolveKeepFailedDays(config = {}, env = process.env) {
+  const raw = env.SWARM_KEEP_FAILED_DAYS;
+  if (raw !== undefined && raw !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  if (typeof config.keepFailedDays === 'number' && config.keepFailedDays >= 0) return config.keepFailedDays;
+  if (typeof config.profile?.keepFailedDays === 'number' && config.profile.keepFailedDays >= 0) {
+    return config.profile.keepFailedDays;
+  }
+  return 7;
+}
+
+const FAILURE_RUN_STATUSES = new Set(['failed', 'cancelled', 'timeout', 'missing-output', 'launch-error']);
+const CLOSED_TICKET_STATUSES = new Set(['done', 'delivered']);
+
 function isRunningJob(record) {
   return record?.status === 'running' || record?.status === 'queued';
 }
 
-export function jobsEligibleForCleanup(state) {
+export function runFailedOrAbandoned(state) {
+  if (!state) return false;
+  if (FAILURE_RUN_STATUSES.has(state.status)) return true;
+  return (state.jobs ?? []).some(job => FAILURE_RUN_STATUSES.has(job.status));
+}
+
+export function jobsEligibleForCleanup(state, { forGc = false } = {}) {
   if (!state || !Array.isArray(state.jobs)) return [];
   if (state.status === 'running') return [];
   if (state.jobs.some(isRunningJob)) return [];
@@ -49,10 +71,90 @@ export function jobsEligibleForCleanup(state) {
   if (state.integratedAt && state.integrationStatus !== 'partial') {
     return state.jobs.filter(job => !job.keptWorkspace);
   }
-  if (['cancelled', 'failed'].includes(state.status)) {
+  if (forGc && runFailedOrAbandoned(state)) {
     return state.jobs.filter(job => !job.keptWorkspace);
   }
   return [];
+}
+
+async function readJsonFile(file) {
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function ticketList(ledger) {
+  if (!ledger) return [];
+  if (Array.isArray(ledger)) return ledger;
+  if (Array.isArray(ledger.tickets)) return ledger.tickets;
+  return [];
+}
+
+function addPath(set, root, candidate) {
+  if (typeof candidate !== 'string' || !candidate.trim()) return;
+  const abs = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(root, candidate);
+  set.add(abs);
+}
+
+async function workspacePathsForRun(root, runId) {
+  const paths = new Set();
+  let state;
+  try { state = await readState(root, runId); } catch { return paths; }
+  for (const job of state.jobs ?? []) {
+    if (job.keptWorkspace) addPath(paths, root, job.keptWorkspace);
+    if (job.workspace) addPath(paths, root, job.workspace);
+    if (job.worktreePath) addPath(paths, root, job.worktreePath);
+    else if (state.worktreesBase) addPath(paths, root, resolveWorktree(state, job));
+  }
+  return paths;
+}
+
+export async function collectProtectedWorkspacePaths(root) {
+  const protectedPaths = new Set();
+  const runIds = new Set();
+  const ledger = await readJsonFile(path.join(root, '.swarm', 'project', 'tickets.json'));
+  for (const ticket of ticketList(ledger)) {
+    const status = ticket?.status;
+    if (status && CLOSED_TICKET_STATUSES.has(status)) continue;
+    if (ticket.workspace) addPath(protectedPaths, root, ticket.workspace);
+    if (ticket.worktreePath) addPath(protectedPaths, root, ticket.worktreePath);
+    if (ticket.keptWorkspace) addPath(protectedPaths, root, ticket.keptWorkspace);
+    if (ticket.runId) runIds.add(ticket.runId);
+    if (ticket.run) runIds.add(ticket.run);
+  }
+  try {
+    const text = await fs.readFile(path.join(root, '.swarm', 'project', 'journal.ndjson'), 'utf8');
+    const latest = new Map();
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (event?.kind === 'blocker' && event.id) latest.set(event.id, event);
+    }
+    for (const event of latest.values()) {
+      if (event.resolved === true) continue;
+      if (event.runId) runIds.add(event.runId);
+      const blockerRun = integrateBlockerRunIdFromId(event.id);
+      if (blockerRun) runIds.add(blockerRun);
+      if (event.workspace) addPath(protectedPaths, root, event.workspace);
+      if (event.worktreePath) addPath(protectedPaths, root, event.worktreePath);
+    }
+  } catch { /* no journal */ }
+  for (const runId of runIds) {
+    for (const p of await workspacePathsForRun(root, runId)) protectedPaths.add(p);
+  }
+  return protectedPaths;
+}
+
+function pathProtected(absPath, protectedPaths) {
+  const resolved = path.resolve(absPath);
+  for (const p of protectedPaths) {
+    if (resolved === p || resolved.startsWith(`${p}${path.sep}`)) return true;
+    if (p.startsWith(`${resolved}${path.sep}`)) return true;
+  }
+  return false;
 }
 
 async function pathBytes(target, { duImpl, now = Date.now, deadline } = {}) {
@@ -131,10 +233,12 @@ async function removePath(root, absPath, bases, { gitImpl, duImpl, runId, dryRun
   return { path: absPath, bytesFreed: bytes };
 }
 
-export async function pathsForJobCleanup(root, state, job) {
+export async function pathsForJobCleanup(root, state, job, { includeWorkspace = true } = {}) {
   const paths = new Set();
-  const workspaceRel = typeof job.workspace === 'string' ? job.workspace : expectedWorkspaceFor(state.id, job.id, job);
-  paths.add(path.join(root, workspaceRel));
+  if (includeWorkspace) {
+    const workspaceRel = typeof job.workspace === 'string' ? job.workspace : expectedWorkspaceFor(state.id, job.id, job);
+    paths.add(path.join(root, workspaceRel));
+  }
   if (job.worktreePath) paths.add(job.worktreePath);
   else if (state.worktreesBase) paths.add(resolveWorktree(state, job));
   return [...paths];
@@ -148,17 +252,18 @@ export async function cleanupRunWorkspaces(root, id, state, options = {}) {
   if (state.status === 'running' || (state.jobs ?? []).some(isRunningJob)) {
     return { skipped: true, reason: 'run-active', removed: [], bytesFreed: 0 };
   }
-  const jobs = jobsEligibleForCleanup(state);
+  const jobs = jobsEligibleForCleanup(state, { forGc: options.forGc === true });
   if (!jobs.length) return { removed: [], bytesFreed: 0 };
   root = await fs.realpath(root);
   const worktreesBase = state.worktreesBase ?? await worktreesBaseFor(root, config, { env: options.env ?? process.env });
   const bases = [path.join(root, '.swarm', 'workspaces'), worktreesBase];
   const dryRun = options.dryRun === true;
+  const includeWorkspace = options.removeWorkspaceCopies !== false;
   const removed = [];
   let bytesFreed = 0;
   const seen = new Set();
   for (const job of jobs) {
-    for (const p of await pathsForJobCleanup(root, state, job)) {
+    for (const p of await pathsForJobCleanup(root, state, job, { includeWorkspace })) {
       const abs = path.resolve(p);
       if (seen.has(abs)) continue;
       seen.add(abs);
@@ -180,7 +285,9 @@ export async function cleanupRunWorkspaces(root, id, state, options = {}) {
 }
 
 export async function cleanupRunAfterTerminal(root, id, state, options = {}) {
-  if (!state.integratedAt && state.status === 'complete') return { removed: [], bytesFreed: 0 };
+  if (!state.integratedAt || state.integrationStatus === 'partial') {
+    return { removed: [], bytesFreed: 0 };
+  }
   return cleanupRunWorkspaces(root, id, state, options);
 }
 
@@ -208,11 +315,14 @@ async function collectRunWorktreePaths(root, state) {
   return out;
 }
 
-function runTerminalForGc(state, olderThanMs, nowMs) {
+function runTerminalForGc(state, olderThanMs, nowMs, keepFailedMs) {
   const end = state.finishedAt ?? state.cancelledAt ?? state.integratedAt;
   const endMs = end ? Date.parse(end) : nowMs;
   if (state.integratedAt) return nowMs - endMs >= olderThanMs;
-  if (['cancelled', 'failed'].includes(state.status)) return nowMs - endMs >= olderThanMs;
+  if (runFailedOrAbandoned(state)) {
+    const retentionMs = Math.max(olderThanMs, keepFailedMs);
+    return nowMs - endMs >= retentionMs;
+  }
   if (state.status === 'complete' && !state.integratedAt) return false;
   return false;
 }
@@ -337,8 +447,10 @@ export async function collectProjectGcPlan(root, opts = {}) {
   const olderThanMs = olderThanDays * 86400000;
   root = await fs.realpath(root);
   const config = loadLocalConfig({ env });
+  const keepFailedMs = resolveKeepFailedDays(config, env) * 86400000;
   const worktreesBase = await worktreesBaseFor(root, config, { env });
   const bases = [path.join(root, '.swarm', 'workspaces'), worktreesBase];
+  const protectedPaths = await collectProtectedWorkspacePaths(root);
   const categories = { finishedRuns: [], orphans: [], oldRunFolders: [], scratch: [] };
   let totalBytes = 0;
 
@@ -350,14 +462,16 @@ export async function collectProjectGcPlan(root, opts = {}) {
     let state;
     try { state = await readState(root, id); } catch { continue; }
     for (const p of await collectRunWorktreePaths(root, state)) referencedWt.add(path.resolve(p));
-    if (!runTerminalForGc(state, olderThanMs, nowMs)) continue;
+    if (!runTerminalForGc(state, olderThanMs, nowMs, keepFailedMs)) continue;
     if (state.status === 'running') continue;
-    for (const job of jobsEligibleForCleanup(state)) {
+    for (const job of jobsEligibleForCleanup(state, { forGc: true })) {
       for (const p of await pathsForJobCleanup(root, state, job)) {
         const abs = path.resolve(p);
+        if (pathProtected(abs, protectedPaths)) continue;
         if (!(await assertUnderBases(abs, bases))) continue;
         const mtime = await runMtime(abs);
-        if (mtime && nowMs - mtime < olderThanMs) continue;
+        const ageMs = runFailedOrAbandoned(state) ? Math.max(olderThanMs, keepFailedMs) : olderThanMs;
+        if (mtime && nowMs - mtime < ageMs) continue;
         const bytes = await pathBytes(abs, { duImpl }) ?? 0;
         categories.finishedRuns.push({ path: abs, bytes, runId: id });
         totalBytes += bytes;
@@ -381,7 +495,9 @@ export async function collectProjectGcPlan(root, opts = {}) {
       for (const jobDir of jobDirs) {
         if (!jobDir.isDirectory()) continue;
         const candidate = path.join(runPath, jobDir.name);
-        if (referencedWt.has(path.resolve(candidate))) continue;
+        const candidateAbs = path.resolve(candidate);
+        if (referencedWt.has(candidateAbs)) continue;
+        if (pathProtected(candidateAbs, protectedPaths)) continue;
         const mtime = await runMtime(candidate);
         if (nowMs - mtime < olderThanMs) continue;
         const bytes = await pathBytes(candidate, { duImpl }) ?? 0;

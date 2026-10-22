@@ -6,7 +6,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { git } from '../tools/codex-adapter.mjs';
 import { COMMANDS } from '../tools/completion.mjs';
-import { collectProjectGcPlan, computeDiskUsage, runGc } from '../tools/gc.mjs';
+import { collectProjectGcPlan, computeDiskUsage, resolveKeepFailedDays, runGc } from '../tools/gc.mjs';
+import { expectedWorkspaceFor } from '../tools/swarm/core-11.mjs';
 import { worktreesBaseFor } from '../tools/swarm/core-11.mjs';
 
 async function project(t) {
@@ -119,4 +120,101 @@ test('symlink escape under worktrees base is refused', async t => {
 
 test('completion lists gc command', () => {
   assert.ok(COMMANDS.some(c => c.name === 'gc'));
+});
+
+test('failed run workspaces younger than retention are kept; older ones removed by gc apply', async t => {
+  const { root, worktreesBase, env } = await project(t);
+  const id = 'failed-old';
+  const jobId = 'writer';
+  const worktreePath = path.join(worktreesBase, id, jobId);
+  await fs.mkdir(worktreePath, { recursive: true });
+  await fs.writeFile(path.join(worktreePath, 'x'), 'x');
+  const workspaceRel = expectedWorkspaceFor(id, jobId, { workspaceAttempt: 1 });
+  const workspaceAbs = path.join(root, workspaceRel);
+  await fs.mkdir(workspaceAbs, { recursive: true });
+  await fs.writeFile(path.join(workspaceAbs, 'y'), 'y');
+  const old = new Date('2020-01-01T00:00:00.000Z');
+  await fs.utimes(worktreePath, old, old);
+  await fs.utimes(workspaceAbs, old, old);
+  const runDir = path.join(root, '.swarm', 'runs', id);
+  await fs.mkdir(path.join(runDir, 'jobs'), { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+    id,
+    status: 'failed',
+    finishedAt: '2020-01-01T00:00:00.000Z',
+    worktreesBase,
+    jobs: [{ id: jobId, status: 'failed', worktreePath, workspace: workspaceRel }],
+  }));
+  await fs.utimes(runDir, old, old);
+  const recent = await collectProjectGcPlan(root, { env, olderThanDays: 1, nowMs: Date.parse('2020-01-05T00:00:00.000Z') });
+  assert.equal(recent.categories.finishedRuns.length, 0);
+  await runGc(['--apply', '--root', root, '--older-than', '1'], { env, defaultRoot: () => root, now: () => Date.parse('2020-01-10T00:00:00.000Z') });
+  await assert.rejects(() => fs.access(worktreePath));
+  await assert.rejects(() => fs.access(workspaceAbs));
+});
+
+test('SWARM_KEEP_FAILED_DAYS extends retention for failed runs', async t => {
+  const { root, worktreesBase, env: baseEnv } = await project(t);
+  const env = { ...baseEnv, SWARM_KEEP_FAILED_DAYS: '30' };
+  assert.equal(resolveKeepFailedDays({}, env), 30);
+  const id = 'failed-recent';
+  const jobId = 'writer';
+  const worktreePath = path.join(worktreesBase, id, jobId);
+  await fs.mkdir(worktreePath, { recursive: true });
+  await fs.writeFile(path.join(worktreePath, 'x'), 'x');
+  const old = new Date('2020-01-01T00:00:00.000Z');
+  await fs.utimes(worktreePath, old, old);
+  const runDir = path.join(root, '.swarm', 'runs', id);
+  await fs.mkdir(path.join(runDir, 'jobs'), { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+    id,
+    status: 'failed',
+    finishedAt: '2020-01-15T00:00:00.000Z',
+    worktreesBase,
+    jobs: [{ id: jobId, status: 'failed', worktreePath }],
+  }));
+  await fs.utimes(runDir, old, old);
+  const plan = await collectProjectGcPlan(root, { env, olderThanDays: 1, nowMs: Date.parse('2020-01-20T00:00:00.000Z') });
+  assert.equal(plan.categories.finishedRuns.length, 0);
+  await fs.access(worktreePath);
+});
+
+test('gc apply skips workspaces referenced by open tickets or blockers', async t => {
+  const { root, worktreesBase, env } = await project(t);
+  const id = 'ticket-run';
+  const jobId = 'writer';
+  const worktreePath = path.join(worktreesBase, id, jobId);
+  await fs.mkdir(worktreePath, { recursive: true });
+  await fs.writeFile(path.join(worktreePath, 'x'), 'x');
+  const workspaceRel = expectedWorkspaceFor(id, jobId, { workspaceAttempt: 1 });
+  const workspaceAbs = path.join(root, workspaceRel);
+  await fs.mkdir(workspaceAbs, { recursive: true });
+  const old = new Date('2020-01-01T00:00:00.000Z');
+  await fs.utimes(worktreePath, old, old);
+  await fs.utimes(workspaceAbs, old, old);
+  const runDir = path.join(root, '.swarm', 'runs', id);
+  await fs.mkdir(path.join(runDir, 'jobs'), { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+    id,
+    status: 'failed',
+    finishedAt: '2020-01-01T00:00:00.000Z',
+    worktreesBase,
+    jobs: [{ id: jobId, status: 'failed', worktreePath, workspace: workspaceRel }],
+  }));
+  await fs.utimes(runDir, old, old);
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'project', 'tickets.json'), JSON.stringify({
+    tickets: [{ id: 'T-1', status: 'running', runId: id }],
+  }));
+  await runGc(['--apply', '--root', root, '--older-than', '1'], { env, defaultRoot: () => root, now: () => Date.parse('2020-02-01T00:00:00.000Z') });
+  await fs.access(worktreePath);
+  await fs.access(workspaceAbs);
+  await fs.writeFile(path.join(root, '.swarm', 'project', 'journal.ndjson'), `${JSON.stringify({ kind: 'blocker', id: `integrate-${id}`, resolved: false, runId: id })}\n`);
+  const orphan = path.join(worktreesBase, 'orphan-only', 'job');
+  await fs.mkdir(orphan, { recursive: true });
+  await fs.writeFile(path.join(orphan, 'z'), 'z');
+  await fs.utimes(orphan, old, old);
+  await runGc(['--apply', '--root', root, '--older-than', '1'], { env, defaultRoot: () => root, now: () => Date.parse('2020-02-01T00:00:00.000Z') });
+  await fs.access(worktreePath);
+  await assert.rejects(() => fs.access(orphan));
 });

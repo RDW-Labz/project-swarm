@@ -124,7 +124,7 @@ import { runStats } from './swarm/core-53.mjs';
 import { executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
 import { planDeps, redcheckRunLocked } from './swarm/core-62.mjs';
 import { applyQueuePlans, executeCodexJob, isJobIntegrated, redcheckRun } from './swarm/core-71.mjs';
-import { cleanupRunAfterTerminal, cleanupRunWorkspaces, GC_USAGE, runGc } from './gc.mjs';
+import { cleanupRunWorkspaces, GC_USAGE, runGc } from './gc.mjs';
 
 
 
@@ -1291,9 +1291,6 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
   state.finishedAt = new Date(now()).toISOString();
   updateRunPause(state, now);
   await withSharedWriteLock(root, manifest.ledger?.path ?? '.swarm/usage-ledger.md', () => appendRunLedger(root, state, manifest, { persist: false }), { liveDir: liveDir });
-  if (!state.keepWorkspaces && ['cancelled', 'failed'].includes(state.status)) {
-    try { await cleanupRunAfterTerminal(root, state.id, state, { env, config: worktreeConfig }); } catch { /* best-effort */ }
-  }
   await queueSave();
   return state;
 }
@@ -1459,7 +1456,7 @@ export async function integrateQueue(root, id, { batchSize = 10, maxRequeues = 2
   state.mergeQueue.summary = summary;
   await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
   if (summary.status === 'integrated' && !options.keepWorkspaces) {
-    try { await cleanupRunWorkspaces(root, id, state, { env: options.env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+    try { await cleanupRunWorkspaces(root, id, state, { env: options.env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
   }
   return summary;
 }
@@ -1802,14 +1799,14 @@ async function integrateRunLocked(root, id, options = {}) {
       if (state.mergeQueue?.state === 'done') {
         if (merged.status === 'partial' || state.integrationStatus === 'partial') {
           if (!options.keepWorkspaces) {
-            try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+            try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
           }
           return merged;
         }
         const { env: swarmEnv } = await loadSwarmEnv(root);
         const finalized = await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv);
         if (!options.keepWorkspaces) {
-          try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+          try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
         }
         return finalized;
       }
@@ -1978,7 +1975,7 @@ async function integrateRunLocked(root, id, options = {}) {
     const baseReturn = { id, status: 'integrated', ...(children.length ? { children } : {}), integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
     const finalized = await finalizeIntegrationCommit(root, id, state, manifest, baseReturn, options, swarmEnv);
     if (!options.keepWorkspaces) {
-      try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+      try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
     }
     return finalized;
   } finally { /* The caller owns both integration locks. */ }
