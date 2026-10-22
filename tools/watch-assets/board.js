@@ -498,7 +498,7 @@ function renderNeeds(inbox) {
   fyi.forEach(function (n) { var r = el('div', 'fyi-row'); r.appendChild(el('div', 'mono sub', n.project + ' | ' + ago(n.since))); r.appendChild(el('div', 'need-title', n.title || '')); fl.appendChild(r); });
   if (inbox && inbox.hidden) { box.appendChild(el('div', 'note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
   var ph = inbox && inbox.phone;
-  $('needsNote').textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
+  $('needsNote').textContent = 'Signed-in tailnet owners can approve or deny board-safe items here. Read-only: the board never answers anything except those owner actions. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
 }
 
 // ---- cost ----------------------------------------------------------------------------------------------------------------------------------------

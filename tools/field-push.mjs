@@ -140,7 +140,9 @@ export async function remoteFieldBundleTransport({ env = process.env, deps = rea
 }
 
 export async function pushFieldBundle(root, { bundlePath, bundle, scan, send, env, deps } = {}) {
-  const resolved = bundle ?? await readFieldBundleFile(bundlePath, { scan });
+  const resolved = bundle != null
+    ? await assertScannedCleanBundle(bundle, { scan })
+    : await readFieldBundleFile(bundlePath, { scan });
   const deliver = send ?? await remoteFieldBundleTransport({ env, deps });
   await deliver(resolved);
   return resolved;

@@ -43,6 +43,30 @@ test('refuses to push bundles that field export did not mark scanned-clean', asy
   );
 });
 
+test('refuses directly supplied bundle without scanned-clean marker and does not deliver', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  let delivered = false;
+  await assert.rejects(
+    () => pushFieldBundle(root, { bundle: data, send: async () => { delivered = true; } }),
+    error => error.code === 'field-push-not-scanned-clean',
+  );
+  assert.equal(delivered, false);
+});
+
+test('refuses directly supplied bundle that fakes scanned-clean but fails re-scan', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  bundle.probe = ['reach', '@', 'example', '.', 'test'].join('');
+  let delivered = false;
+  await assert.rejects(
+    () => pushFieldBundle(root, { bundle, send: async () => { delivered = true; } }),
+    error => error.code === 'field-push-unsafe' && error.findings.includes('email'),
+  );
+  assert.equal(delivered, false);
+});
+
 test('pushes a scanned-clean export bundle to another machine inbox', async () => {
   const source = await fixture();
   const dest = await fs.mkdtemp(path.join(os.tmpdir(), 'field-ops-dest-'));
