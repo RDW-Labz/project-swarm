@@ -4,15 +4,79 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { boardSnapshot, startOfLocalDay } from '../tools/board-data.mjs';
+import { boardSnapshot, projectFamilyRoots, readProjectRunStates, startOfLocalDay } from '../tools/board-data.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { projectId } from '../tools/projects.mjs';
-import { approveLedger } from '../tools/tickets.mjs';
+import { approveLedger, logPath, readLedger } from '../tools/tickets.mjs';
+import { doneTimes } from '../tools/client-report.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
 
 const summary = async () => ({ spendUsd: 0, billedUsd: 0, capUsd: null, reached: false });
 const cardOf = (snapshot, fixture) => snapshot.projects.find(project => project.id === fixture.projects[0].id);
 const iso = at => new Date(at).toISOString();
+
+const runActivityMs = ({ state, mtimeMs } = {}) => Math.max(
+  Number.isFinite(mtimeMs) ? mtimeMs : 0,
+  Date.parse(state?.startedAt ?? '') || 0,
+  Date.parse(state?.finishedAt ?? '') || 0,
+  ...((state?.jobs ?? []).map(job => Date.parse(job?.finishedAt ?? '') || 0)),
+);
+
+async function expectedLastTicketFinishedAt(fixture) {
+  const roots = await projectFamilyRoots(fixture.root, { env: fixture.env });
+  const runs = await readProjectRunStates(fixture.root, { env: fixture.env, familyRoots: roots });
+  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
+  const doneIds = new Set();
+  for (const ledger of ledgers) {
+    for (const ticket of ledger?.tickets ?? []) {
+      if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
+    }
+  }
+  let newest = 0;
+  const add = (id, value) => {
+    const at = Date.parse(value ?? '');
+    if (id && Number.isFinite(at)) {
+      doneIds.add(String(id));
+      newest = Math.max(newest, at);
+    }
+  };
+  for (const root of roots) {
+    try {
+      for (const [id, at] of await doneTimes(root)) add(id, at);
+    } catch { /* missing tickets.log */ }
+  }
+  for (const ledger of ledgers) {
+    const history = Array.isArray(ledger?.history) ? ledger.history : Array.isArray(ledger?.history?.events) ? ledger.history.events : [];
+    for (const event of history) {
+      const status = event?.status ?? event?.to ?? event?.nextStatus ?? event?.transition?.to;
+      const id = event?.ticketId ?? event?.ticket ?? event?.transition?.ticketId;
+      if (String(status).toLowerCase() === 'done') add(id, event?.at ?? event?.finishedAt ?? event?.updatedAt ?? event?.timestamp);
+    }
+  }
+  for (const record of runs) {
+    for (const job of record.state?.jobs ?? []) {
+      const ids = [job?.ticketId, job?.ticket, job?.id].filter(Boolean).map(String);
+      if (!ids.some(id => doneIds.has(id))) continue;
+      for (const id of ids) add(id, job?.finishedAt);
+    }
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+async function expectedLastActivityAt(fixture, { liveRuns = [] } = {}) {
+  const roots = await projectFamilyRoots(fixture.root, { env: fixture.env });
+  const runs = await readProjectRunStates(fixture.root, { env: fixture.env, familyRoots: roots });
+  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
+  const ticketFinishedMs = Date.parse(await expectedLastTicketFinishedAt(fixture) ?? '') || 0;
+  const lastActivityMs = Math.max(
+    0,
+    ...runs.map(runActivityMs),
+    ...liveRuns.map(record => Date.parse(record.startedAt ?? '') || 0),
+    ...ledgers.map(ledger => Date.parse(ledger?.updatedAt ?? '') || 0),
+    ticketFinishedMs,
+  );
+  return lastActivityMs ? new Date(lastActivityMs).toISOString() : null;
+}
 
 async function snapshotFor(fixture, options = {}) {
   return boardSnapshot({
@@ -38,7 +102,7 @@ test('lastRunAt is the newest startedAt across main, linked worktree, and scratc
   assert.equal(cardOf(snapshot, fixture).lastRunAt, iso(now - 100));
 });
 
-test('lastActivityAt includes finished activity from every family member', async t => {
+test('lastActivityAt equals the family max when the linked worktree has the newest run finish', async t => {
   const now = Date.now();
   const finished = iso(now - 50);
   const fixture = await makeBoardFixture({
@@ -50,7 +114,61 @@ test('lastActivityAt includes finished activity from every family member', async
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.ok(Date.parse(card.lastActivityAt) >= Date.parse(finished));
+  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+});
+
+test('lastActivityAt equals the family max when main has the newest job finish', async t => {
+  const now = Date.now();
+  const jobFinished = iso(now - 40);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'linked-run', status: 'complete', startedAt: iso(now - 4000), finishedAt: iso(now - 200), jobs: [] }] }],
+    runs: [{ id: 'main-run', status: 'complete', startedAt: iso(now - 5000), finishedAt: iso(now - 300), jobs: [{ id: 'T-main', status: 'complete', finishedAt: jobFinished }] }],
+    scratch: [{ runs: [{ id: 'scratch-run', status: 'complete', startedAt: iso(now - 3000), finishedAt: iso(now - 100), jobs: [] }] }],
+  });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+});
+
+test('lastActivityAt equals the family max when scratch has the newest run finish', async t => {
+  const now = Date.now();
+  const scratchFinished = iso(now - 30);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'linked-run', status: 'complete', startedAt: iso(now - 4000), finishedAt: iso(now - 200), jobs: [] }] }],
+    runs: [{ id: 'main-run', status: 'complete', startedAt: iso(now - 5000), finishedAt: iso(now - 300), jobs: [] }],
+    scratch: [{ runs: [{ id: 'scratch-run', status: 'complete', startedAt: iso(now - 3000), finishedAt: scratchFinished, jobs: [] }] }],
+  });
+  t.after(fixture.cleanup);
+  const snapshot = await snapshotFor(fixture);
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
+});
+
+test('lastActivityAt equals the family max when ledger updatedAt and tickets.log are included', async t => {
+  const now = Date.now();
+  const ledgerAt = iso(now - 20);
+  const logAt = iso(now - 10);
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [{ id: 'linked-run', status: 'complete', startedAt: iso(now - 4000), finishedAt: iso(now - 500), jobs: [] }] }],
+    runs: [{ id: 'main-run', status: 'complete', startedAt: iso(now - 5000), finishedAt: iso(now - 400), jobs: [] }],
+    scratch: [{ runs: [{ id: 'scratch-run', status: 'complete', startedAt: iso(now - 3000), finishedAt: iso(now - 300), jobs: [] }] }],
+  });
+  t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const done = ledger.tickets.find(ticket => ticket.status === 'done');
+  assert.ok(done?.id);
+  ledger.updatedAt = ledgerAt;
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
+  await fs.writeFile(logPath(fixture.root), `${JSON.stringify({ event: 'transition', id: done.id, to: 'done', at: logAt })}\n`);
+  const snapshot = await snapshotFor(fixture);
+  const card = cardOf(snapshot, fixture);
+  assert.equal(card.lastActivityAt, await expectedLastActivityAt(fixture));
 });
 
 test('a project with a live run is building and not idle', async t => {
@@ -126,6 +244,32 @@ test('lastTicketFinishedAt falls back to the newest finished job for a done ledg
   await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({ id: 'ticket-finished', status: 'complete', startedAt: iso(now - 1000), jobs: [{ id: done.id, status: 'complete', finishedAt }] }));
   const snapshot = await snapshotFor(fixture);
   assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, finishedAt);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, await expectedLastTicketFinishedAt(fixture));
+});
+
+test('lastTicketFinishedAt uses a scratch-dir run when that is the only finish source', async t => {
+  const now = Date.now();
+  const fixture = await makeBoardFixture({
+    ledger: 'roadmap-ledger.json',
+    worktrees: [{ name: 'linked', runs: [] }],
+    scratch: [{ runs: [] }],
+  });
+  t.after(fixture.cleanup);
+  const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+  const done = ledger.tickets.find(ticket => ticket.status === 'done');
+  assert.ok(done?.id);
+  const finishedAt = iso(now - 18);
+  const runDir = path.join(fixture.scratchRoots[0], '.swarm', 'runs', 'scratch-only-finish');
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), JSON.stringify({
+    id: 'scratch-only-finish',
+    status: 'complete',
+    startedAt: iso(now - 1000),
+    jobs: [{ id: done.id, status: 'complete', finishedAt }],
+  }));
+  const snapshot = await snapshotFor(fixture);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, finishedAt);
+  assert.equal(cardOf(snapshot, fixture).lastTicketFinishedAt, await expectedLastTicketFinishedAt(fixture));
 });
 
 test('checkouts is the family size', async t => {
@@ -184,6 +328,11 @@ test('finished and deployed projects have no live warnings and retain history wa
   const snapshot = await snapshotFor(fixture, { workers: { max: 4 }, historyFile: fixture.historyFile, deployStatus: () => ({ lastSuccess: { at: new Date().toISOString(), environment: 'fixture' } }) });
   const card = cardOf(snapshot, fixture);
   assert.equal(card.progress.finished, true);
+  assert.equal(card.progress.current, 'Finished');
   assert.deepEqual(card.warnings, []);
   assert.ok(Array.isArray(card.history));
+  const warningCodes = card.history.filter(item => item?.code).map(item => item.code);
+  assert.ok(warningCodes.includes('waves-underfilled'), `history warnings: ${warningCodes.join(', ')}`);
+  assert.ok(warningCodes.includes('split-quality-red'), `history warnings: ${warningCodes.join(', ')}`);
+  assert.ok(!warningCodes.some(code => card.warnings.some(w => w.code === code)));
 });
