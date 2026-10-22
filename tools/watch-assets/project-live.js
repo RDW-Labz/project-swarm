@@ -11,7 +11,6 @@ var ID = params.get('id') || '';
 var T = encodeURIComponent(TOKEN);
 var $ = function (id) { return document.getElementById(id); };
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
-function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function pct(v) { return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) + '%' : '-'; }
 function ago(iso) { var t = Date.parse(iso || ''); if (!isFinite(t)) { return 'never'; } var s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
 var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be off */ } } };
@@ -75,10 +74,6 @@ function renderKpis(d) {
   var h = d.header;
   box.appendChild(tile('Jobs', h.jobs.running + ' running', h.jobs.queued + ' queued, ' + h.jobs.blocked + ' blocked'));
   box.appendChild(tile('Runs live now', String(h.runsLive), h.runsLive ? 'ETA ' + (h.etaMs === null ? 'unknown yet' : h.etaMs === 0 ? 'nothing left' : L.duration(h.etaMs)) + ' (the slowest run)' : 'nothing running'));
-  box.appendChild(tile('Spend today', usd(h.spendTodayUsd), 'billed lanes; flat-rate lanes are not billed'));
-  var hasCap = typeof h.capUsd === 'number' && h.capUsd > 0;
-  var capText = hasCap ? 'of ' + usd(h.capUsd) + ' cap' : h.capInvalid ? 'CAP INVALID' : 'NO CAP';
-  box.appendChild(tile('Project spend', usd(h.spendUsd), capText, hasCap ? meter(100 * h.spendUsd / h.capUsd, h.spendUsd / h.capUsd > 0.75) : null));
 }
 
 function headKey(a) { return a.run + '|' + a.job; }
@@ -166,7 +161,7 @@ function renderRuns(d) {
     var name = r.tickets.length ? r.tickets.join(', ') + (r.ticketCount > r.tickets.length ? ' +' + (r.ticketCount - r.tickets.length) : '') : (r.goal || 'Run ' + r.short);
     who.appendChild(el('b', '', name));
     var meta = el('div', 'meta');
-    [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', usd(r.spendUsd), 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
+    [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
       if (t === 'ELAPSED') { var e = el('span', 'mono elapsed', elapsedText(r.startedAt)); e.setAttribute('data-started', r.startedAt || ''); meta.appendChild(e); }
       else if (t) { meta.appendChild(el('span', 'mono', t)); }
     });
@@ -181,7 +176,7 @@ function renderRuns(d) {
   d.recent.forEach(function (r) {
     var row = el('div', 'runrow recent'); var who = el('div', 'who');
     var top = el('div', 'meta'); top.appendChild(el('span', 'pill ' + (r.status === 'complete' ? 'good' : 'bad'), r.status === 'complete' ? 'complete' : (r.result || r.status)));
-    [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, usd(r.costUsd), ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
+    [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
     who.appendChild(top);
     who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'board-link sub', 'Open in the inspector'));
     row.appendChild(who); rec.appendChild(row);
@@ -197,7 +192,7 @@ function renderEmpty(d) {
   if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId) + '&t=' + T, 'btn', 'Last run: ' + d.recent[0].short)); }
   links.appendChild(linkTo('/?t=' + T, 'btn', 'All projects'));
   box.appendChild(links);
-  if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
+  if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + '.')); }
 }
 
 function renderOrch(d) {
