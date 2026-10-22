@@ -72,6 +72,14 @@ async function fixture(t) {
     SWARM_SPEND_DIR: path.join(home, 'spend'),
   };
   await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({ version: 1, projects: [project] }));
+  const historyAt = '2026-10-21T12:00:00.000Z';
+  const historyLines = [
+    { at: historyAt, project: project.name, projectId: project.id, kind: 'spend', key: 'spend:fixture', title: 'Spent $9.99 on run', run: 'run-paid', usd: 9.99 },
+    { at: historyAt, project: project.name, projectId: project.id, kind: 'run', key: 'run:fixture', title: 'Run complete', run: 'run-paid', usd: 2.5 },
+    { at: historyAt, project: project.name, projectId: project.id, kind: 'merge', key: 'merge:fixture', title: 'Merged #1', ref: '#1', usd: 0.01 },
+    { at: historyAt, project: project.name, projectId: project.id, kind: 'stage', key: 'stage:fixture', title: 'Stage S1 done', ref: 'S1', usd: 100 },
+  ].map(line => `${JSON.stringify(line)}\n`).join('');
+  await fs.writeFile(env.SWARM_HISTORY_FILE, historyLines);
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   return { home, root, project, env };
 }
@@ -323,6 +331,53 @@ test('a project cap still refuses a new run after spend is recorded', async t =>
   const decision = await checkProjectCap(fx.root, { env: fx.env });
   assert.ok(decision, 'the cap refuses the run');
   assert.match(decision.message, /project-cap/);
+});
+
+test('board history JSON and CSV drop spend events and strip money fields', async t => {
+  const fx = await fixture(t);
+  const NOW = Date.parse('2026-10-21T12:00:00.000Z');
+  const api = createBoardApi({
+    env: fx.env,
+    now: () => NOW,
+    live: async () => [],
+    cacheMs: 0,
+    runServer: () => ({
+      listen: async () => ({ url: 'http://127.0.0.1:9/?t=deadbeef', port: 9 }),
+      close: async () => {},
+      done: Promise.resolve(),
+      token: 'deadbeef',
+    }),
+  });
+  t.after(() => api.close());
+  const server = createWatchServer({
+    root: fx.home,
+    assetDir,
+    deltaFile,
+    idleMs: 600000,
+    getRunSnapshot: async () => null,
+    getPlanSnapshot: async () => ({ present: false }),
+    getGallery: async () => ({ schema: 1, screens: [] }),
+    getBoard: async () => ({ runs: [] }),
+    board: api,
+    indexName: 'board.html',
+    commandList: [],
+    contextCommands: () => [],
+  });
+  await server.listen();
+  const auth = { 'x-watch-token': server.token };
+  const port = Number(new URL(server.url).port);
+  t.after(async () => { await server.close(); await api.close(); });
+
+  const history = JSON.parse((await httpGet(port, '/api/history?scratch=1', auth)).body);
+  assert.ok(history.events.length > 0, 'non-spend history events remain');
+  assert.equal(history.events.some(e => e.kind === 'spend'), false, 'spend rows are omitted');
+  assertNoMoney(history, '/api/history');
+
+  const csv = await httpGet(port, '/history.csv?scratch=1', auth);
+  assertBodyNoDollars(csv.body, '/history.csv');
+  assert.doesNotMatch(csv.body.split('\n')[0], /usd/i, 'CSV header has no money column');
+  assert.equal(csv.body.split('\n').some(line => /,spend,/.test(line)), false, 'CSV has no spend rows');
+  assert.doesNotMatch(csv.body, /\b9\.99\b/, 'CSV has no dollar amounts from the fixture');
 });
 
 test('every board browser script avoids money output patterns', async () => {
