@@ -18,7 +18,18 @@ import { readGallery, approveScreens, addComment } from './watch-gallery.mjs';
 import { ticketComments } from './gallery-tickets.mjs';
 import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
 import { COMMANDS } from './completion.mjs';
-import { readLedger } from './tickets.mjs';
+import {
+  readLedger,
+  writeLedger,
+  validateTicket,
+  approveLedger,
+  isApproved,
+  transition,
+  appendLog,
+} from './tickets.mjs';
+import { decide } from './inbox.mjs';
+import { inboxDeps } from './inbox-commands.mjs';
+import { decideRequest } from './handbuild.mjs';
 import { boardSummary, listLiveRuns } from './board.mjs';
 import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
 import { isBoardTempRoot } from './scratch-roots.mjs';
@@ -26,6 +37,9 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
+import { createOwnerActions, ownerItemsFromBoardInbox, handbuildBoardSafeForOwner } from './board-owner-actions.mjs';
+import { guardBoardAction } from './board-action-guard.mjs';
+import { remoteFile } from './remote.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
 import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, readProjectRunStates, projectFamilyRoots, isTestOrTempProject } from './board-data.mjs';
 import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
@@ -510,7 +524,143 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
   return { total: filtered.length, events: filtered.slice(offset, offset + limit) };
 }
 
-export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
+function ownerAuditPath(env) {
+  const home = env.HOME ?? os.homedir();
+  return path.join(path.dirname(remoteFile(env, home)), '.swarm', 'owner', 'audit.ndjson');
+}
+
+export async function readOwnerAudit(env = process.env) {
+  const auditFile = ownerAuditPath(env);
+  let text = '';
+  try {
+    text = await fs.readFile(auditFile, 'utf8');
+  } catch {
+    return { entries: [], skipped: 0 };
+  }
+  const entries = [];
+  let skipped = 0;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { entries, skipped };
+}
+
+export async function approveProposedTicketOnBoard(root, ticketId, { now: nowFn }) {
+  const fresh = await readLedger(root);
+  if (!fresh) return { ok: false, message: 'no ticket ledger; run swarm scope split first' };
+  const ticket = fresh.tickets.find(x => x.id === ticketId);
+  if (!ticket) return { ok: false, message: `no ticket ${ticketId}` };
+  if (ticket.status !== 'proposed') return { ok: false, message: `${ticket.id} is ${ticket.status}, not proposed` };
+  if (!(ticket.files ?? []).length) return { ok: false, message: `${ticket.id} names no files yet` };
+  const clash = [];
+  for (const f of ticket.files) {
+    const owners = fresh.tickets.filter(x => x.id !== ticket.id && ['todo', 'ready', 'running', 'review', 'blocked'].includes(x.status) && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
+    if (owners.length) clash.push(`${f} (${owners.map(o => o.id).join(', ')})`);
+  }
+  if (clash.length) return { ok: false, message: `${ticket.id} writes files that open tickets also write` };
+  const next = { ...ticket, status: 'todo', approvedBy: 'owner' };
+  const v = validateTicket(next);
+  if (!v.ok) return { ok: false, message: v.errors[0] };
+  const wasApproved = isApproved(fresh);
+  fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
+  const prev = fresh.approved;
+  const saved = wasApproved
+    ? { ...fresh, approved: { ...prev, ...approveLedger(fresh, { by: 'owner', now: nowFn() }).approved, at: prev.at, ...(prev.ciTickets ? { ciTickets: prev.ciTickets } : {}) } }
+    : fresh;
+  saved.updatedAt = new Date(nowFn()).toISOString();
+  await writeLedger(root, saved);
+  await appendLog(root, { event: 'proposed-approved', id: ticket.id, by: 'owner', note: 'board' });
+  return { ok: true };
+}
+
+export function boardOwnerApply(env, now = Date.now) {
+  const inboxApplyDeps = inboxDeps({ channel: 'board', now });
+  return async (item, answer, { identity, now: nowFn }) => {
+    const root = item?.projectRoot;
+    if (!root) return { ok: false, message: 'the action could not be applied' };
+    const kind = item.kind;
+    const decision = answer?.decision;
+    const choice = answer?.choice ?? null;
+    if (kind === 'scope') {
+      return { ok: false, message: 'scope approval runs its gate in the terminal: swarm scope approve' };
+    }
+    const handbuildId = String(item.id ?? '');
+    if (handbuildId.startsWith('handbuild-') || kind === 'handbuild') {
+      const picked = choice ?? (decision === 'approve' ? 'approve' : 'deny');
+      const handbuildSafe = handbuildBoardSafeForOwner(item, root);
+      if (!handbuildSafe.ok) {
+        return { ok: false, message: 'handbuild-not-board-safe' };
+      }
+      try {
+        const hbRef = handbuildId.startsWith('handbuild-') ? handbuildId.slice('handbuild-'.length) : handbuildId;
+        decideRequest(root, hbRef, picked, { now: nowFn, by: 'owner', channel: 'board' });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    if (kind === 'decision') {
+      const picked = choice;
+      try {
+        await decide(root, item.id, picked, { ...inboxApplyDeps, now: nowFn, channel: 'board' });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    if (kind === 'proposed-ticket') {
+      if (decision === 'approve') {
+        return approveProposedTicketOnBoard(root, item.id, { now: nowFn });
+      }
+      try {
+        await transition(root, item.id, 'cancelled', {
+          by: 'owner',
+          note: `denied on the board by ${identity}`,
+          now: nowFn(),
+        });
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
+      }
+    }
+    return { ok: false, message: 'the action could not be applied' };
+  };
+}
+
+// watch-server handleOwner reads prepare POST JSON and passes choice into ownerActions.prepare.
+function buildOwnerActions({ env, now, live, remoteLogin }) {
+  const auditFile = ownerAuditPath(env);
+  const appendAudit = async entry => {
+    await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
+    await fs.appendFile(auditFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  };
+  const readAudit = async () => (await readOwnerAudit(env)).entries;
+  const login = typeof remoteLogin === 'string' ? remoteLogin : '';
+  const apply = boardOwnerApply(env, now);
+  return createOwnerActions({
+    listItems: async () => {
+      const opts = boardProjectOpts(env);
+      const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
+      const inbox = await boardInbox({ projects, env, forOwner: true, now: now() }).catch(() => null);
+      return ownerItemsFromBoardInbox(inbox ?? { items: [] });
+    },
+    appendAudit,
+    readAudit,
+    guard: guardBoardAction,
+    apply,
+    now,
+    randomId: () => randomBytes(16).toString('hex'),
+    ownerIdentities: login ? [login] : [],
+    verifyIdentity: (req, identity) => req.tailnetVerified === true && identity === login,
+  });
+}
+
+export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools, remote = null } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   const deployTracker = createDeployTracker({ env });
   const peersCache = peerCache ?? createPeerCache({
@@ -675,14 +825,15 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
     async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
   };
+  if (remote) api.ownerActions = buildOwnerActions({ env, now, live, remoteLogin: remote.login });
   return api;
 }
 
 // Starts the board server in this process and records its address for run pages that want to go back to it.
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
-export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
-  const api = createBoardApi({ env });
+export async function startBoardServer({ env = process.env, root, remote, registry = null, now = Date.now } = {}) {
+  const api = createBoardApi({ env, remote, now });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
     root,
@@ -696,7 +847,13 @@ export async function startBoardServer({ env = process.env, root, remote, regist
     contextCommands,
     assetDir: path.join(here, 'watch-assets'),
     deltaFile: path.join(here, 'watch-delta.mjs'),
-    ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
+    ...(remote ? {
+      port: remote.port,
+      token: remote.token,
+      remote: { hosts: remote.hosts, login: remote.login },
+      idleMs: Infinity,
+      ownerActions: api.ownerActions,
+    } : {}),
   });
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);

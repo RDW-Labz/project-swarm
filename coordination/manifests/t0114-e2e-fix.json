@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-e2e-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tools/board-inbox.mjs",
+        "tools/board-owner-actions.mjs",
+        "tests/board-owner-routes.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/inbox.mjs",
+        "tools/watch-server.mjs",
+        "tools/board-data.mjs",
+        "tools/projects.mjs",
+        "tests/board-inbox.test.mjs"
+      ],
+      "prompt": "The new end-to-end test in tests/board-owner-routes.test.mjs 'production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules' fails deterministically on this machine (Node 20): `prepare safe-accent` returns 404 instead of 200, i.e. the decision is NOT found by the production listItems (tools/watch-cli.mjs ~line 531) even though it is in the project journal. The failure output is in the evidence block. Find the real cause (for example: listItems reads the inbox for a different root or only registered/unscratched projects, the temp project is filtered as a scratch/test project by the board, the item id differs between the journal event and the owner item, or boardInbox needs the project in the registry) and fix the PRODUCTION code so a board-safe decision raised in the project journal is found and can be prepared and approved through the real remote board; only change the test if its setup is genuinely unlike how a real project is registered, and say exactly why. Keep the refusals (unmarked, long-text merge) refused. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-inbox.test.mjs tests/board-owner-actions-handlers.test.mjs` and report the pass count.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use watch-cli or board-inbox for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-answers",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/board-owner-actions.mjs",
+        "tools/watch-cli.mjs",
+        "tools/board-inbox.mjs",
+        "tools/watch-assets/board-owner-actions.js",
+        "contracts/watch-s4-ops.json",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/watch-s4-contract.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/inbox.mjs",
+        "tools/handbuild.mjs",
+        "tools/tickets.mjs",
+        "tools/board-action-guard.mjs",
+        "tools/watch-server.mjs",
+        "tests/decision-board-safe.test.mjs"
+      ],
+      "prompt": "T-0114: make board answers TAKE EFFECT, and answer decisions by OPTION (owner design). The previous review found decide only writes an audit entry; nothing is applied.\nA. DECISIONS (owner rule): never map Approve to the default choice. A decision item exposes options: [{ label: <the option's own text, exact>, recommended: true only for the decision's recorded default choice }] built from the journal event's choice + options (deduplicated, order: recorded order with the default first). It is a YES/NO decision only when its option set, case-insensitively, is exactly {approve, deny} or {yes, no}; only then does the UI show Approve/Deny, mapping to those exact option strings. Otherwise: one button per option, labeled with the option text and a 'recommended' tag on the default, and the confirm step names the exact option ('Answer \"<option>\"?' with Confirm/Cancel). API: POST /api/owner/actions/{itemId}/prepare takes an optional JSON body { choice } (required for decisions; must equal one of the item's option labels EXACTLY, else 422 'unknown-choice'); the confirm id is bound to itemId + identity + choice; POST .../decision for a decision takes { choice, confirm } (choice must equal the bound choice, else 409 confirm-conflict; 'decision' approve/deny stays for non-decision kinds and is accepted for yes/no decisions only as an alias for their exact yes/no option). The guard still sees approve/deny: pass kind 'approve' for any chosen option except an explicit deny/no option, which passes 'deny'. Update contracts/watch-s4-ops.json (prepare request body, decision request oneOf {decision, confirm} | {choice, confirm}, owner item options with recommended, 422 unknown-choice).\nB. APPLY (all kinds), injected as apply(item, answer, { identity, now }) into createOwnerActions; the 'answered'/'approved'/'denied' audit entry (with kind and the exact choice) is written only AFTER apply succeeds; on failure 409 { error: 'apply-failed', message } (no internals), audit outcome 'apply-failed', confirm consumed either way. tools/watch-cli.mjs buildOwnerActions provides apply using the item's projectRoot: decision -> decide(root, item.id, <exact chosen option>) from tools/inbox.mjs; hand-build request decisions (id prefixed 'handbuild-' or kind handbuild) -> decideRequest(root, requestId, 'approve'|'deny', { by: 'owner', channel: 'board' }) from tools/handbuild.mjs; proposed-ticket -> approve: the function `swarm tickets ID --approve` uses; deny: set it cancelled with a note 'denied on the board by <identity>'; scope -> apply-failed 'scope approval runs its gate in the terminal: swarm scope approve' (stays a terminal action).\nC. UI tools/watch-assets/board-owner-actions.js: render per the rules in A (createElement/textContent only; token in the header only; the confirm step names the exact option; buttons disabled while a request is in flight).\nTESTS: tests/board-owner-actions-handlers.test.mjs: a 3-option decision ('pick a theme' with default 'dark', options 'light', 'system') prepared and answered with 'light' calls apply with exactly 'light' and audits choice 'light'; unknown choice 422; choice differing from the bound confirm 409; audit only after apply; apply failure 409 apply-failed with no answered entry. tests/board-owner-routes.test.mjs end to end on the real remote board: the 3-option decision answered 'system' records choice 'system' in the project journal (read it back; it must not be the default 'dark'); a yes/no hand-build request approved changes its status in the hand-build store; a proposed ticket approved is approved in the ledger, a denied one is cancelled; scope returns apply-failed. tests/board-owner-actions-ui.test.mjs: the 3-option decision renders three buttons labeled 'dark (recommended)', 'light', 'system'; clicking 'light' shows a confirm naming 'light' and posts { choice: 'light' } to prepare and decision; a yes/no decision renders Approve/Deny. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/board-inbox.test.mjs tests/decision-board-safe.test.mjs tests/watch-s4-contract.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-action-guard-unit.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the owner actions, watch-cli or the contract for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

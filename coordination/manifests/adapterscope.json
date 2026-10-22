@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "adapterscope",
+   "agent": "auto",
+   "type": "docs",
+   "prompt": "Write a swarm scope document docs/scope/open-adapters.md in EXACTLY the format of docs/scope/roadmap.md (read it first: '# Scope: <title>', 'Version: 1', '## Overview', 'Out of scope:', '## Stages' list, then per stage '## S11 <name>' and per requirement '### R-NNN <sentence>.' with 'Acceptance:' bullets that are each provable by a test or a command; plain short sentences). Title: 'Open adapters: any orchestrator, worker, model or tool'. One stage: 'S11 Open adapters'. Requirement ids start at R-081 and run in order. The owner's request, to be turned into requirements (keep every point; split into 14-20 requirements, each small enough for one ticket; mark the security ones clearly): (1) ONE ADAPTER INTERFACE, two kinds. Orchestrator adapters (Claude Code, opencode, Codex CLI, Cursor agent, Aider, Goose, custom): detect sessions, status, model, tokens and cost, chat link, heartbeat. Worker/lane adapters (any CLI agent, any OpenAI- or Anthropic-compatible endpoint, local models, rented GPUs): run a ticket, report result, tokens, cost, health, slots. (2) PLUGIN FOLDER + MANIFEST: ~/.project-swarm/adapters/<name>/adapter.json plus a small JS module; commands `swarm adapter add|list|remove|test`; the built-in agents and orchestrator detection become adapters too, with no special cases left in the core. (3) GENERIC FALLBACK WITH NO CODE: `swarm orchestrator register --tool NAME --model MODEL` plus heartbeat, and `swarm lane add --openai-compatible URL`, so anything shows up on day one (note: a first small version of orchestrator register/heartbeat/list and an opencode session reader is already being built under feat/external-orchestrators; this scope's opencode adapter reuses it). (4) BOARD: everything renders from adapter data (cards, robot heads, lane colours, Open chat links); a user adds a tool and it appears on the board with no board code change. (5) GUARD AND RULES FOR ALL: an orchestrator-agnostic guard (git hooks plus swarm-side command checks plus one shared guard entry point that opencode and Codex hooks call) and an AGENTS.md orchestrator section, so non-Claude orchestrators get the same safety. (6) SECURITY: an adapter runs with a declared permission list in its manifest (network hosts, files, commands) enforced by the host; secrets only through Keychain references, never in the manifest or logs; an adapter can NEVER approve, merge, deploy, spend past a cap, or raise a cap on its own; a project marked sensitive refuses adapters that send code to a third-party endpoint unless the owner allows that adapter for that project; every adapter call is logged. (7) DOCS AND TESTS: a 'write an adapter in 15 minutes' guide with three worked examples (opencode, Codex CLI, an OpenAI-compatible endpoint); tests for each built-in adapter and ONE contract test suite that any adapter must pass (a test helper `swarm adapter test NAME` runs it). Also: ship opencode first as the proof because it is already running on parts-request-app. Overview must say why (the owner runs non-Claude orchestrators and lanes; the swarm must not have special cases). 'Out of scope': building a marketplace or remote registry, running adapters from untrusted URLs automatically, any change to the spend caps. Add a final section '## Build order' listing requirement ids in the order they should be built (interface and manifest first, opencode proof second, security gates before any third-party adapter is enabled).",
+   "context": [
+    "docs/scope/roadmap.md"
+   ],
+   "outputs": [
+    "docs/scope/open-adapters.md"
+   ],
+   "timeoutMs": 1200000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json"
+   ]
+  }
+ ]
+}

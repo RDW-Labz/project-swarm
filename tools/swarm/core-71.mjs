@@ -17,6 +17,7 @@ import { reaskWorkerReport } from './core-61.mjs';
 import { redcheckRunLocked } from './core-62.mjs';
 import { journalWarning } from './warnings.mjs';
 import { prepareWorktreeLocation, worktreeDiskLowResult, worktreeStatusMap } from './workspace.mjs';
+import { cleanupRunWorkspaces } from '../gc.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -294,6 +295,9 @@ export async function applyQueuePlans(root, id, state, manifest, plans, options)
   const complete = recordQueuePass(state, manifest, mergeQueue, { prior, at: new Date().toISOString() });
   await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
   const status = complete ? 'integrated' : 'partial';
+  if (!options.keepWorkspaces) {
+    try { await cleanupRunWorkspaces(root, id, state, { env: options.env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+  }
   return { ...result, status, integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles };
 }
 

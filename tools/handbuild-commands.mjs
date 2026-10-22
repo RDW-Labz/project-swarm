@@ -5,6 +5,7 @@ import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { appendEvent, sanitizeText } from './journal.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 import { createRequest, createScratchDeniedHandbuildRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE, SCRATCH_DENY_REASON } from './handbuild.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
@@ -67,8 +68,20 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
         );
       }
       const id = `handbuild-${r.id}`;
+      const decisionText = sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`);
+      const handbuildProtected = isProtectedTopic(r.kind)
+        || isProtectedTopic(r.reason)
+        || (r.files ?? []).some(file => isProtectedTopic(file));
       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.
-      await appendEvent(root, { kind: 'decision', id, confirm: true, choice: 'deny', options: ['approve', 'deny'], text: sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`) }, { now });
+      await appendEvent(root, {
+        kind: 'decision',
+        id,
+        confirm: true,
+        choice: 'deny',
+        options: ['approve', 'deny'],
+        text: decisionText,
+        ...(handbuildProtected ? {} : { boardSafe: true }),
+      }, { now });
       return out(`hand-build request ${r.id} is waiting for the owner (it shows in Needs you on the board and the phone).\nThe owner approves with: swarm handbuild approve ${r.id}   (or: swarm decide ${id} approve)\nUntil then every edit of ${r.files.join(', ')} stays blocked.`);
     }
     if (sub === 'approve' || sub === 'deny') {

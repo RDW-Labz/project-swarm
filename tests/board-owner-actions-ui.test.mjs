@@ -69,7 +69,12 @@ function ownerItem(overrides = {}) {
     id: 'dec-1',
     kind: 'decision',
     needsOwner: true,
+    boardSafe: true,
     title: 'Pick a lane',
+    options: [
+      { label: 'approve', recommended: true },
+      { label: 'deny' },
+    ],
     ...overrides,
   };
 }
@@ -104,6 +109,19 @@ describe('board owner actions UI', () => {
     assert.equal(ownerActionAvailable({ ...item, needsOwner: false }, { signedIn: true }), false);
   });
 
+  it('hides controls for a decision without boardSafe', () => {
+    const doc = makeDoc();
+    const container = doc.createElement('div');
+    assert.equal(ownerActionAvailable(ownerItem({ boardSafe: undefined }), { signedIn: true }), false);
+    renderOwnerActions(container, ownerItem({ boardSafe: undefined }), {
+      fetchImpl: () => {},
+      token: BOARD_HDR,
+      signedIn: true,
+      doc,
+    });
+    assert.equal(container.childNodes.length, 0);
+  });
+
   it('hides controls when not signed in or not owner-policy', () => {
     const doc = makeDoc();
     const container = doc.createElement('div');
@@ -118,10 +136,14 @@ describe('board owner actions UI', () => {
     assert.equal(container.childNodes.length, 0);
   });
 
-  it('never renders controls for refused kinds', () => {
+  it('never renders controls for non-allowlisted or refused kinds', () => {
     const doc = makeDoc();
     const container = doc.createElement('div');
-    for (const kind of ['merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration', ' Deploy', 'MERGE-request']) {
+    for (const kind of [
+      'human', 'limit-up', 'blocker', 'held-ticket',
+      'merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration', ' Deploy', 'MERGE-request',
+      'cap', 'capRaise', 'cap-increase', 'budget', 'limit-raise', 'spend-limit', 'keys', 'rollback-prod',
+    ]) {
       container.textContent = '';
       assert.equal(ownerActionAvailable(ownerItem({ kind }), { signedIn: true }), false);
       renderOwnerActions(container, ownerItem({ kind }), {
@@ -170,6 +192,7 @@ describe('board owner actions UI', () => {
     assert.equal(calls.length, 2);
     assert.equal(calls[0].url, '/api/owner/actions/dec-1/prepare');
     assert.equal(calls[1].url, '/api/owner/actions/dec-1/decision');
+    assert.equal(calls[0].init.body, JSON.stringify({ choice: 'approve' }));
     for (const c of calls) {
       assert.equal(c.init.headers['x-watch-token'], BOARD_HDR);
       assert.equal(String(c.url).includes('tok'), false);
@@ -213,5 +236,49 @@ describe('board owner actions UI', () => {
     assert.ok(buttons.some((b) => b.disabled));
     resolvePrepare();
     await flushAsync();
+  });
+
+  it('renders one button per multi-option decision and confirms the exact choice', async () => {
+    const doc = makeDoc();
+    const container = doc.createElement('div');
+    const calls = [];
+    const fetchImpl = (url, init) => {
+      calls.push({ url, init });
+      if (url.endsWith('/prepare')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ confirmToken: 'cfm-theme', expiresAt: '2099-01-01T00:00:00.000Z' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ itemId: 'theme-pick', choice: 'light', result: 'answered' }),
+      });
+    };
+    renderOwnerActions(container, ownerItem({
+      id: 'theme-pick',
+      title: 'pick a theme',
+      options: [
+        { label: 'dark', recommended: true },
+        { label: 'light' },
+        { label: 'system' },
+      ],
+    }), { fetchImpl, token: BOARD_HDR, signedIn: true, doc });
+    assert.deepEqual(buttonTexts(container), ['dark (recommended)', 'light', 'system']);
+    doc.nodes.find((n) => n.textContent === 'light').click();
+    assert.ok(doc.nodes.some((n) => n.textContent === 'Answer "light"?'));
+    doc.nodes.find((n) => n.textContent === 'Answer "light"?').click();
+    await flushAsync();
+    assert.equal(JSON.parse(calls[0].init.body).choice, 'light');
+    assert.equal(JSON.parse(calls[1].init.body).choice, 'light');
+  });
+
+  it('renders Approve and Deny for yes/no decisions', () => {
+    const doc = makeDoc();
+    const container = doc.createElement('div');
+    renderOwnerActions(container, ownerItem({
+      options: [{ label: 'yes', recommended: true }, { label: 'no' }],
+    }), { fetchImpl: () => {}, token: BOARD_HDR, signedIn: true, doc });
+    assert.deepEqual(buttonTexts(container), ['Approve', 'Deny']);
   });
 });

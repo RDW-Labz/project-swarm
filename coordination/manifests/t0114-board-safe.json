@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-board-safe",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/inbox-commands.mjs",
+        "tools/completion.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/board-action-guard.mjs",
+        "tools/inbox.mjs",
+        "tools/board-inbox.mjs",
+        "tools/board-owner-actions.mjs",
+        "tools/watch-assets/board-owner-actions.js",
+        "contracts/watch-s4-ops.json",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-action-guard-unit.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs",
+        "tests/decision-board-safe.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/journal.mjs",
+        "tools/watch-cli.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "tests/watch-s4-contract.test.mjs"
+      ],
+      "prompt": "Owner rule: the board may answer a DECISION only if the decision itself was marked board-safe when it was raised (default: not safe), and decisions about merge, deploy, spend, caps, keys or migrations are NEVER board-safe.\n(1) Raising: tools/inbox-commands.mjs `swarm decision \"TEXT\" --choice C [--option O]... [--id ID]` gets a `--board-safe` flag that records boardSafe: true on the decision journal event; without it the event has no boardSafe (not safe). If --board-safe is given and the decision's text, id, choice or options mention a protected topic, refuse to record it (exit 1, plain message 'a decision about merge, deploy, spend, caps, keys or migrations can never be answered from the board; drop --board-safe'). Add '--board-safe' to the decision entry in tools/completion.mjs. tools/handbuild-commands.mjs: the hand-build REQUEST decision (~line 71) is recorded with boardSafe: true (the owner allow-listed hand-build approvals) unless its kind, reason or files hit a protected topic.\n(2) Protected topics: export isProtectedTopic(text) from tools/board-action-guard.mjs: true when the text, split into words like kindWords (camelCase and separators, plus spaces and punctuation), contains merge, merged, merging, deploy, deployed, deployment, spend, spending, cap, caps, budget, key, keys, secret, secrets, token, tokens, migration, migrations, migrate, rollback-prod, or the phrase 'pull request' together with merge; non-strings are protected (fail closed).\n(3) Carry the flag: tools/inbox.mjs collectInbox and tools/board-inbox.mjs must pass boardSafe (true only when the event has boardSafe === true) and the decision text/options onto decision items, so listItems in the owner actions sees them.\n(4) Enforce on the server: tools/board-owner-actions.mjs, for items whose kind is 'decision', refuse prepare and decide unless item.boardSafe === true AND !isProtectedTopic(item.text/title) AND !isProtectedTopic(item.id) AND none of item.options/choices is protected; refusal status 403 with error 'decision-not-board-safe' and an audit entry outcome 'refused-decision-not-board-safe'. Hand-build items keep working through the same check.\n(5) Client: tools/watch-assets/board-owner-actions.js shows Approve/Deny for a decision only when item.boardSafe === true (the server still decides).\n(6) Contract contracts/watch-s4-ops.json: describe boardSafe on owner items (boolean, default false, set only when the decision is raised; decisions about merge, deploy, spend, caps, keys or migrations are never board-safe) and the 403 decision-not-board-safe response on prepare and decision.\nTESTS: tests/board-owner-routes.test.mjs end to end: a decision raised WITHOUT --board-safe is refused; a decision 'Merge PR 12 into main?' marked boardSafe: true directly in the journal (bypassing the CLI) is still refused with decision-not-board-safe and no approved audit entry; a safe decision raised with --board-safe is approved end to end; a hand-build request decision is answerable; tests/board-action-guard-unit.test.mjs: isProtectedTopic cases (merge, deploy, 'spend limit', 'raise cap', capRaise, 'rotate keys', migration, 'pull request merge', non-strings) true, and ordinary decisions ('pick the default theme', 'use pnpm') false; a new tests/decision-board-safe.test.mjs for the CLI: --board-safe records boardSafe, absent flag records none, --board-safe with a merge decision exits 1 and writes nothing; tests/board-owner-actions-ui.test.mjs: no buttons for a decision without boardSafe. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-action-guard-unit.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/decision-board-safe.test.mjs tests/board-inbox.test.mjs tests/watch-s4-contract.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/autopilot-blocker-resolved.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/completion.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/forget.test.mjs",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/inbox.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/model-watch.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import inbox, completion, handbuild or the guard for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
