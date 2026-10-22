@@ -115,7 +115,12 @@ function shouldRecordChatMerge(input, projectRoot) {
   return true;
 }
 
-const kind = process.argv[2];
+const RECORD_WORKER = '--orchestrator-record';
+const RECORD_TIMEOUT_MS = 2000;
+const hookScriptPathForSpawn = hookScriptPath;
+
+const kind = process.argv[2] === RECORD_WORKER ? process.argv[3] : process.argv[2];
+
 function claudeProcess() {
   try {
     const p = process.ppid;
@@ -133,18 +138,15 @@ function claudeProcess() {
   } catch { return null; }
 }
 
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; });
-process.stdin.on('end', () => {
+function runRecordBody(raw, recordKind) {
   try {
     const input = JSON.parse(raw);
     const root = projectRootOf(input.cwd);
     if (root) {
-      const proc = ['prompt', 'stop', 'end'].includes(kind) ? claudeProcess() : undefined;
-      const event = buildEvent(kind, input, { root, analyze: analyzeShell, proc });
+      const proc = ['prompt', 'stop', 'end'].includes(recordKind) ? claudeProcess() : undefined;
+      const event = buildEvent(recordKind, input, { root, analyze: analyzeShell, proc });
       if (event) appendEvent(root, event);
-      if (kind === 'prompt' && input.hook_event_name === 'UserPromptSubmit' && shouldRecordChatMerge(input, root)) {
+      if (recordKind === 'prompt' && input.hook_event_name === 'UserPromptSubmit' && shouldRecordChatMerge(input, root)) {
         try {
           const prompt = typeof input.prompt === 'string' ? input.prompt : (typeof input.user_prompt === 'string' ? input.user_prompt : '');
           const trimmed = prompt.trim();
@@ -167,7 +169,31 @@ process.stdin.on('end', () => {
       }
     }
   } catch { /* an unreadable input is dropped */ }
+}
+
+if (process.argv[2] === RECORD_WORKER) {
+  try {
+    const raw = fs.readFileSync(0, 'utf8');
+    if (process.env.SWARM_ORCH_HOOK_TEST_FAULT === 'spin') {
+      for (;;) { /* test-only */ }
+    }
+    runRecordBody(raw, kind);
+  } catch { /* unreadable */ }
   process.exit(0);
-});
-process.stdin.on('error', () => process.exit(0));
-setTimeout(() => process.exit(0), 4000).unref();
+} else {
+  let raw = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; });
+  process.stdin.on('end', () => {
+    child_process.spawnSync(process.execPath, [hookScriptPathForSpawn, RECORD_WORKER, kind], {
+      input: raw,
+      env: { ...process.env },
+      encoding: 'utf8',
+      timeout: RECORD_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    process.exit(0);
+  });
+  process.stdin.on('error', () => process.exit(0));
+}

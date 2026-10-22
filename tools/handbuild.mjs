@@ -21,6 +21,8 @@ import {
   ORCHESTRATOR_MODE_OFF_FILE,
   ORCHESTRATOR_MODE_RULE_ID,
   ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+  orchestratorCommandTooLong,
 } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
@@ -949,7 +951,13 @@ export const GUARD_ERRORS_FILE = '.swarm/handbuild/guard-errors.ndjson';
 export const GUARD_VERSION = 1;
 export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm diagnose "<question>" or swarm ticket ...)';
 export const DEFAULT_GUARD_TIMEOUT_MS = 15000;
-export { ORCHESTRATOR_MODE_OFF_FILE, ORCHESTRATOR_MODE_RULE_ID, ORCHESTRATOR_MODE_DENY_REASON, orchestratorModeEnabled } from './shell-writes.mjs';
+export {
+  ORCHESTRATOR_MODE_OFF_FILE,
+  ORCHESTRATOR_MODE_RULE_ID,
+  ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+  orchestratorModeEnabled,
+} from './shell-writes.mjs';
 
 /** Watchdog duration for tools/handbuild-guard.mjs (override SWARM_GUARD_TIMEOUT_MS in tests only). */
 export function guardTimeoutMs() {
@@ -1020,7 +1028,18 @@ export function logGuardError(root, { kind, tool, error }, { now = Date.now } = 
 const applyGuardTestFault = root => {
   if (!isGuardTestMode() || !isTempProjectRoot(root)) return;
   if (process.env.SWARM_GUARD_TEST_FAULT === 'throw') throw new Error('SWARM_GUARD_TEST_THROW');
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'spin') {
+    for (;;) { /* test-only CPU hang */ }
+  }
+  if (process.env.SWARM_GUARD_TEST_FAULT === 'crash') process.exit(2);
 };
+
+/** Run guard decision for a parsed hook payload (used by handbuild-guard child). */
+export function runGuardDecisionForHook(input, { root, cwd } = {}) {
+  const tool = input.tool_name;
+  const decision = guardDecision({ tool, toolInput: input.tool_input, root, cwd: cwd ?? input.cwd });
+  return { tool, decision, input };
+}
 export const MAX_MINUTES = 120;
 export const DEFAULT_MINUTES = 30;
 export const MAX_FILES = 20;
@@ -1338,6 +1357,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const omDeny = (files = []) => ({ allow: false, files, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID });
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;
+    if (decision.reason === ORCHESTRATOR_COMMAND_TOO_LONG_REASON) return decision;
     if (decision.allow) {
       if (decision.approval) return decision;
       if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
@@ -1398,6 +1418,14 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   }
   if (tool === 'Bash') {
     const finishBash = decision => applyOrchestratorMode(decision);
+    if (omActive && orchestratorCommandTooLong(ti.command)) {
+      return finishBash({
+        allow: false,
+        files: [],
+        reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+        ruleId: ORCHESTRATOR_MODE_RULE_ID,
+      });
+    }
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);

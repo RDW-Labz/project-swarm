@@ -13,6 +13,10 @@ import { isScratchRoot } from './scratch-roots.mjs';
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
 export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm diagnose "<question>" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.';
+export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
+export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
+export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
+const GIT_COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--message', '--author', '--date']);
 
 /** Orchestrator mode is on by default at a project root unless the owner added `.swarm/orchestrator-mode/off`. Worker workspaces, scratch/test roots, and worktrees are exempt. Requires `CLAUDE_PROJECT_DIR` to match `root` (orchestrator sessions only). */
 export function orchestratorModeEnabled(root, cwd = root) {
@@ -43,9 +47,10 @@ const codeFlagFor = cmd => SHELLS.has(cmd) ? (a => /^-[A-Za-z]*c$/.test(a) || a 
 const WRITERS = new Set(['rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'mv', 'cp', 'install', 'ln', 'tee', 'dd', 'sed', 'perl', 'patch', 'rsync', 'curl', 'wget', 'tar', 'unzip', 'git', 'ed', 'ex']);
 
 /** Splits a command line into simple commands (lists of words, quotes removed, redirection operators kept as words). Here-document bodies are skipped. `(`, `)` and a leading `{` separate commands. */
-export function tokenize(command) {
+export function tokenize(command, { countSteps } = {}) {
   const commands = [];
   let words = [], expands = [], word = '', quote = null, hasWord = false, wordExpands = false;
+  const step = () => { if (countSteps) countSteps.n += 1; };
   const markExpand = () => { if (quote !== "'" && quote !== 'ansi-c') wordExpands = true; };
   const endWord = () => {
     if (hasWord) {
@@ -61,7 +66,9 @@ export function tokenize(command) {
   const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
   const text = String(command ?? '');
   const heredocs = [];
+  let heredocHead = 0;
   for (let i = 0; i < text.length; i += 1) {
+    step();
     const c = text[i], next = text[i + 1];
     if (quote) {
       if (quote === 'ansi-c') {
@@ -82,15 +89,18 @@ export function tokenize(command) {
     if (c === '\n') {
       endCommand();
       // a here-document body (up to its delimiter line) is data
-      while (heredocs.length) {
-        const d = heredocs.shift();
+      while (heredocHead < heredocs.length) {
+        const d = heredocs[heredocHead];
+        heredocHead += 1;
         let j = i + 1;
-        for (; j <= text.length; j += 1) {
+        while (j < text.length) {
+          step();
           const end = text.indexOf('\n', j);
-          const line = text.slice(j, end === -1 ? text.length : end);
+          const lineEnd = end === -1 ? text.length : end;
+          const line = text.slice(j, lineEnd);
           if ((d.strip ? line.replace(/^\t+/, '') : line) === d.word) { i = end === -1 ? text.length : end; break; }
           if (end === -1) { i = text.length; break; }
-          j = end;
+          j = end + 1;
         }
       }
       continue;
@@ -446,10 +456,15 @@ const skipSwarmGlobalOpts = (plain, i) => {
 /** After `swarm SUB`, drop free-text operands (note body, ticket --note, lesson fields, …). */
 const skipSwarmSubcommandTail = (plain, subLow, i) => {
   if (['note', 'decision', 'change', 'handoff'].includes(subLow)) return plain.length;
-  if (subLow === 'ask') {
+  if (subLow === 'ask') return plain.length;
+  if (subLow === 'msg') {
     let k = i;
-    while (k < plain.length && plain[k].startsWith('-')) k = skipFlagValue(plain, k);
-    if (k < plain.length) k += 1;
+    if (k < plain.length && plain[k].toLowerCase() === 'send') k += 1;
+    while (k < plain.length) {
+      const low = plain[k].toLowerCase();
+      if (!low.startsWith('-')) { k += 1; continue; }
+      k = skipFlagValue(plain, k);
+    }
     return k;
   }
   if (subLow === 'tickets') {
@@ -463,7 +478,7 @@ const skipSwarmSubcommandTail = (plain, subLow, i) => {
     }
     while (k < plain.length) {
       const low = plain[k].toLowerCase();
-      if (!low.startsWith('-')) break;
+      if (!low.startsWith('-')) { k += 1; continue; }
       k = skipFlagValue(plain, k);
     }
     return k;
@@ -553,10 +568,44 @@ export function executablePlainWordsForHandbuild(plain) {
       i += 1;
       continue;
     }
+    if (low === 'git') {
+      out.push(w);
+      i += 1;
+      if (i < plain.length && plain[i].toLowerCase() === 'commit') {
+        out.push(plain[i]);
+        i += 1;
+        while (i < plain.length) {
+          const a = plain[i];
+          const al = a.toLowerCase();
+          if (GIT_COMMIT_MSG_OPTS.has(al) || al.startsWith('--message=')) {
+            i = skipFlagValue(plain, i);
+            continue;
+          }
+          if (al.startsWith('-')) { i += 1; continue; }
+          break;
+        }
+      }
+      continue;
+    }
     out.push(w);
     i += 1;
   }
   return out;
+}
+
+/** Orchestrator-mode input cap (orchestrator sessions only; callers skip for workers). */
+export function orchestratorCommandTooLong(command) {
+  const text = String(command ?? '');
+  if (text.length > ORCHESTRATOR_COMMAND_MAX_BYTES) return true;
+  const segments = tokenize(text);
+  return segments.length > ORCHESTRATOR_COMMAND_MAX_SEGMENTS;
+}
+
+/** Character steps in `tokenize` (for linearity tests). */
+export function tokenizeStepCount(command) {
+  const countSteps = { n: 0 };
+  tokenize(command, { countSteps });
+  return countSteps.n;
 }
 
 /** Structural owner-only handbuild match in executable words, or null when absent. */
@@ -1242,6 +1291,27 @@ const omGhPrMerge = args => {
   return false;
 };
 
+const omGhPrCreateFreeText = args => {
+  if (omGhPrMerge(args) || omGhWebFlag(args, '')) return false;
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-')) {
+    if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
+    else i += 1;
+  }
+  if (args[i] !== 'pr' || args[i + 1] !== 'create') return false;
+  i += 2;
+  const valueFlags = new Set(['--title', '-t', '--body', '-b', '--body-file', '-F', '-f', '--base', '--head', '--reviewer', '--assignee', '--label', '-l']);
+  for (; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--web' || a === '-w') return false;
+    const eq = a.indexOf('=');
+    const name = eq === -1 ? a : a.slice(0, eq);
+    if (name.startsWith('-') && !valueFlags.has(name) && !['--draft'].includes(name)) return false;
+    if (eq === -1 && valueFlags.has(name) && args[i + 1] !== undefined) i += 1;
+  }
+  return true;
+};
+
 const OM_VERCEL_TOP_FREE = new Set(['ls', 'list', 'inspect', 'logs', 'whoami', '--version', 'help']);
 const OM_VERCEL_LIST_PARENTS = new Set(['env', 'domains', 'projects', 'project', 'teams', 'team', 'dns', 'certs', 'certificates', 'alias', 'secrets', 'integration', 'redirects', 'rolling-release']);
 const OM_VERCEL_INFO_FLAGS = new Set(['--help', '-h', '--version', '-v']);
@@ -1297,7 +1367,7 @@ const omGhReadOnly = (args, commandText, piped) => {
   }
   const pos = args.slice(i).filter(a => !a.startsWith('-'));
   if (pos[0] === 'api') return piped ? omGhApiArgsOk(pos.slice(1)) : false;
-  if (pos[0] === 'pr' && pos[1] === 'create') return false;
+  if (pos[0] === 'pr' && pos[1] === 'create') return omGhPrCreateFreeText(args);
   const sub = pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
   if (sub === 'run watch') return false;
   if ((args.includes('--version') || args.includes('-v')) && pos.length === 0) return true;
@@ -1371,6 +1441,23 @@ const omGitInvocationAllowed = args => {
   return omGitSubAllowed(args[0], args.slice(1));
 };
 
+const omGitCommitMessageOnly = args => {
+  const sub = args.find(a => a !== '' && !a.startsWith('-'));
+  if (sub !== 'commit') return false;
+  const rest = args.slice(args.indexOf('commit') + 1);
+  for (let j = 0; j < rest.length; j += 1) {
+    const a = rest[j];
+    if (a === '--') break;
+    const al = a.toLowerCase();
+    if (GIT_COMMIT_MSG_OPTS.has(al) || al.startsWith('--message=')) {
+      if (!al.includes('=') && rest[j + 1] !== undefined) j += 1;
+      continue;
+    }
+    if (a.startsWith('-')) return false;
+  }
+  return true;
+};
+
 const omNodeRunsInstallSwarm = args => {
   const install = omSwarmMjsRealpath();
   if (!install) return false;
@@ -1405,16 +1492,35 @@ const omPlainWords = words => {
   return { plain, expands };
 };
 
+const OM_SWARM_FREE_TEXT_SUBS = new Set(['note', 'ask', 'tickets', 'msg', 'lesson', 'handbuild', 'ticket', 'diagnose']);
+
+const omSwarmFreeTextHeredoc = words => {
+  const { plain } = omPlainWords(words);
+  let k = 0;
+  while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) k += 1;
+  if (k < plain.length && path.basename(plain[k]) === 'gh') {
+    const args = plain.slice(k + 1);
+    if (omGhPrCreateFreeText(args)) return true;
+  }
+  if (k >= plain.length || path.basename(plain[k]) !== 'swarm') return false;
+  const sub = (plain[k + 1] ?? '').toLowerCase();
+  if (sub === 'msg' && (plain[k + 2] ?? '').toLowerCase() === 'send') return true;
+  return OM_SWARM_FREE_TEXT_SUBS.has(sub);
+};
+
 const omRedirectsForbidden = words => {
+  let heredocOnly = false;
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === '2>&1') continue;
     if (w === '2>' && words[i + 1] === '/dev/null') { i += 1; continue; }
     if (/^\d+$/.test(w) && words[i + 1] === '>&' && words[i + 2] === '1') { i += 2; continue; }
     if (/^\d+$/.test(w) && words[i + 1] === '>' && words[i + 2] === '/dev/null') { i += 2; continue; }
-    if (['>', '>>', '>|', '&>', '<<<', '<<', '<'].includes(w)) return true;
+    if (w === '<<') { heredocOnly = true; continue; }
+    if (['>', '>>', '>|', '&>', '<<<', '<'].includes(w)) return true;
     if (/^\d+$/.test(w) && ['>', '>>', '>&'].includes(words[i + 1])) return true;
   }
+  if (heredocOnly) return !omSwarmFreeTextHeredoc(words);
   return false;
 };
 
@@ -1537,7 +1643,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   if (words.piped) {
     if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args);
-    if (cmd === 'git') return omGitInvocationAllowed(args);
+    if (cmd === 'git') return omGitCommitMessageOnly(args) || omGitInvocationAllowed(args);
     if (cmd === 'gh') return omGhReadOnly(args, commandText, true);
     if (OM_PIPE_FILTERS.has(cmd)) {
       if (cmd === 'sed') return omSedReadOnly(args, true);
@@ -1553,7 +1659,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
     if (cmd === 'swarm' || cmd === 'vercel') return false;
     return false;
   }
-  if (cmd === 'git') return omGitInvocationAllowed(args);
+  if (cmd === 'git') return omGitCommitMessageOnly(args) || omGitInvocationAllowed(args);
   if (cmd === 'gh') return omGhReadOnly(args, commandText, words.piped || words.sepAfter === '|');
   if (cmd === 'vercel') return omVercelReadOnly(args);
   if (omSwarmInvocation(cmd, args)) return true;
@@ -1642,6 +1748,7 @@ const omValidateTokenized = (tokenized, ctx) => {
 export function orchestratorModeCommandAllowed(command, ctx = {}) {
   const text = String(command ?? '');
   if (!text.trim()) return true;
+  if (orchestratorCommandTooLong(text)) return false;
   if (/<\(|>\(/.test(text)) return false;
   try {
     for (const sub of substitutions(text)) {
@@ -1649,11 +1756,7 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
     }
     const tokenized = tokenize(text);
     if (tokenized.unclosedQuote) return false;
-    if (!omValidateTokenized(tokenized, ctx)) return false;
-    for (const words of tokenized) {
-      if (!omSimpleCommandAllowed(words, text, { ...ctx, cwd: ctx.cwd ?? ctx.root })) return false;
-    }
-    return true;
+    return omValidateTokenized(tokenized, ctx);
   } catch {
     return false;
   }
