@@ -7,6 +7,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendEvent, safeWritableDir } from './journal.mjs';
+import { rollbackOffer } from './deploy-rollback.mjs';
 import { previewBase, realGet, validateHandoffConfig } from './handoff-docs.mjs';
 import { pullErrors, validateErrorsConfig } from './errors.mjs';
 
@@ -56,15 +57,19 @@ export function watchEndsAtIso(startedAtMs) {
   return new Date(startedAtMs + WATCH_WINDOW_MS).toISOString();
 }
 
-export function watchRemainingMs(state, now = defaultNow()) {
+function watchNowMs(nowArg = defaultNow) {
+  return typeof nowArg === 'function' ? nowArg() : nowArg;
+}
+
+export function watchRemainingMs(state, nowArg = defaultNow) {
   if (!isObj(state) || typeof state.endsAt !== 'string') return 0;
   const end = Date.parse(state.endsAt);
   if (!Number.isFinite(end)) return 0;
-  return Math.max(0, end - now());
+  return Math.max(0, end - watchNowMs(nowArg));
 }
 
-export function isWatchWindowOpen(state, now = defaultNow()) {
-  return isObj(state) && state.status === 'active' && watchRemainingMs(state, now) > 0;
+export function isWatchWindowOpen(state, nowArg = defaultNow) {
+  return isObj(state) && state.status === 'active' && watchRemainingMs(state, nowArg) > 0;
 }
 
 export function buildWatchState({ pr, repo, sha, startedAtMs = defaultNow() }) {
@@ -99,14 +104,7 @@ export async function writeDeployWatchState(root, state) {
   return state;
 }
 
-export function rollbackOffer(handoffConfig, reason) {
-  const argv = handoffConfig?.rollback;
-  const offered = Array.isArray(argv) && argv.length > 0;
-  const guidance = offered
-    ? `Deploy watch failed (${reason}). Roll back from the project folder: ${argv.join(' ')}`
-    : `Deploy watch failed (${reason}). Set profile.handoff.rollback with the command that rolls production back.`;
-  return { offered, argv: offered ? [...argv] : null, reason, guidance };
-}
+export { rollbackOffer } from './deploy-rollback.mjs';
 
 export async function readProjectProfile(root, deps = {}) {
   if (deps.profile !== undefined && deps.profile !== null) return deps.profile;

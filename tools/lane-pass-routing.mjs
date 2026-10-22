@@ -8,6 +8,23 @@ import { FAILURE_STATUSES } from './failure-regression.mjs';
 
 const PASS_STATUS = 'complete';
 const IGNORED_STATUSES = new Set(['cancelled', 'held']);
+const PROVIDER_LIMIT_RE = /out of credits|quota|usage limit|rate limit|insufficient_quota|credit/i;
+
+function jobFailureText(job) {
+  if (typeof job?.agentError === 'string' && job.agentError.trim()) return job.agentError;
+  const raw = job?.error;
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') return String(raw.message ?? raw.reason ?? raw.code ?? '');
+  if (typeof job?.reason === 'string') return job.reason;
+  return '';
+}
+
+export function isProviderLimitFailure(job) {
+  const status = typeof job?.status === 'string' ? job.status.trim() : '';
+  if (status !== PASS_STATUS && !FAILURE_STATUSES.has(status)) return false;
+  if (status === PASS_STATUS) return false;
+  return PROVIDER_LIMIT_RE.test(jobFailureText(job));
+}
 
 export function lanePassRates(runStates) {
   const rates = {};
@@ -20,6 +37,7 @@ export function lanePassRates(runStates) {
       const status = typeof job?.status === 'string' ? job.status.trim() : '';
       if (!agent || IGNORED_STATUSES.has(status)) continue;
       if (status !== PASS_STATUS && !FAILURE_STATUSES.has(status)) continue;
+      if (status !== PASS_STATUS && isProviderLimitFailure(job)) continue;
 
       const rate = rates[agent] ?? { passed: 0, failed: 0, total: 0, rate: 0 };
       if (status === PASS_STATUS) rate.passed += 1;
