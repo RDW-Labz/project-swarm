@@ -14,6 +14,7 @@ export const JOB_TYPES = Object.freeze({
   test: preset('tests', CHEAPEST_FIRST, 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
   review: preset('none', ['codex'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
   research: preset('none', ['hermes'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
+  diagnose: preset('none', ['hermes', 'cursor'], 900000, null, 'Do not edit files. Finish with exactly ONE JSON line: {"status":"complete","summary":"..."} where summary is at most 1200 characters (about 5 short lines) naming the likely cause, the evidence (file:line or command output), and one next step.'),
   docs: preset('docs', CHEAPEST_FIRST, 900000, null, 'Edit documentation only. Plain, short sentences.'),
   merge: preset('any', ['codex'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
   lead: preset('manifest', ['codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),

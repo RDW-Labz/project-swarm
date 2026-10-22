@@ -17,7 +17,65 @@ export function otherManagerLockfile(files,manager){
   for(const f of files||[]){const b=String(f).split('/').pop();for(const [m,list] of Object.entries(LOCKFILES))if(m!==manager&&list.includes(b)&&!mine.has(b))return {file:f,manager:m};}
   return null;
 }
-const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs',design:'docs'};
+const TYPE_MAP={build:'build',migration:'build',contract:'build',test:'test',docs:'docs',design:'docs',diagnose:'diagnose'};
+export const DIAGNOSE_SUMMARY_MAX=1200;
+
+export function truncateDiagnoseSummary(text){
+  const s=String(text??'').trim();
+  return s.length<=DIAGNOSE_SUMMARY_MAX?s:s.slice(0,DIAGNOSE_SUMMARY_MAX);
+}
+
+export function parseDiagnoseResultLine(text){
+  const rows=String(text??'').split('\n').map(l=>l.trim()).filter(Boolean);
+  for(let i=rows.length-1;i>=0;i--){
+    try{
+      const v=JSON.parse(rows[i]);
+      if(v&&typeof v==='object'&&!Array.isArray(v)&&v.status==='complete'&&typeof v.summary==='string'){
+        return {status:'complete',summary:truncateDiagnoseSummary(v.summary)};
+      }
+    }catch{/* not JSON */}
+  }
+  return null;
+}
+
+export function diagnoseSummaryFromJob(job){
+  if(!job||typeof job!=='object')return null;
+  if(typeof job.response==='string'&&job.response.trim()){
+    const parsed=parseDiagnoseResultLine(job.response);
+    if(parsed?.summary)return parsed.summary;
+    return truncateDiagnoseSummary(job.response);
+  }
+  for(const field of ['stdout','stderr']){
+    if(typeof job[field]==='string'){
+      const parsed=parseDiagnoseResultLine(job[field]);
+      if(parsed?.summary)return parsed.summary;
+    }
+  }
+  if(job.result&&typeof job.result==='object'&&typeof job.result.summary==='string'){
+    return truncateDiagnoseSummary(job.result.summary);
+  }
+  return null;
+}
+
+/** Scope sync --integrated: record the worker diagnose summary on the ticket for the orchestrator. */
+export function diagnoseLedgerFieldsOnIntegrate(ticket,jobState){
+  if(ticket?.type!=='diagnose')return null;
+  const summary=diagnoseSummaryFromJob(jobState);
+  return summary?{evidence:summary}:null;
+}
+
+/** After ticketOutcome moves (review), attach capped evidence on diagnose tickets in memory. */
+export function applyDiagnoseEvidenceFromRunSync(ledger,moves,stateJobs){
+  const jobs=Array.isArray(stateJobs)?stateJobs:Object.entries(stateJobs||{}).map(([id,s])=>({id,...(typeof s==='object'&&s?s:{status:s})}));
+  const byId=new Map(jobs.map(j=>[j.id,j]));
+  for(const m of moves||[]){
+    if(m.to!=='review')continue;
+    const ticket=(ledger?.tickets||[]).find(t=>t.id===m.id);
+    if(!ticket||ticket.type!=='diagnose')continue;
+    const summary=m.evidence??diagnoseSummaryFromJob(byId.get(m.id));
+    if(summary)ticket.evidence=truncateDiagnoseSummary(summary);
+  }
+}
 const RULE='Work only on the files you own; report the ticket id.';
 
 function byIdMap(list){return new Map(list.map(t=>[t.id,t]));}
@@ -260,7 +318,16 @@ export function ticketOutcome(state,ledger){
     if(!known.has(id))continue;
     const st=typeof s==='string'?s:(s?.status??s?.state);
     const error=s?.error;
-    if(st==='complete')moves.push({id,to:'review',note:'run complete'});
+    if(st==='complete'){
+      const ticket=(ledger?.tickets||[]).find(x=>x.id===id);
+      const move={id,to:'review',note:'run complete'};
+      if(ticket?.type==='diagnose'){
+        const jobState=typeof s==='object'&&s?s:null;
+        const summary=diagnoseSummaryFromJob(jobState);
+        if(summary)move.evidence=summary;
+      }
+      moves.push(move);
+    }
     else if(st==='failed'||st==='timeout')moves.push(isOwnFailure(error)?{id,to:'blocked',note:String(error||st)}:{id,to:'ready',note:String(error||st),infra:true});
     // A job skipped because one it waits on failed is blocked by dependencies (it unlocks by itself); a cancelled run just frees the ticket.
     else if(st==='skipped'){
