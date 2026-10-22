@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-answers-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/board-owner-actions.mjs",
+        "tools/watch-cli.mjs",
+        "tools/board-inbox.mjs",
+        "tests/board-owner-routes.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/inbox.mjs",
+        "tools/handbuild.mjs",
+        "tools/tickets.mjs",
+        "tools/board-action-guard.mjs",
+        "tools/watch-server.mjs",
+        "contracts/watch-s4-ops.json",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs"
+      ],
+      "prompt": "The option-answer change for T-0114 is integrated on this branch (decisions answered by exact option via { choice } on prepare and decision; Approve/Deny only for yes/no decisions; answers applied through CLI code paths before auditing), but four end-to-end tests in tests/board-owner-routes.test.mjs now fail with 422 instead of 200 (evidence block). Find the cause and fix it correctly: if the tests prepare a decision without a choice, update them to send the exact option the test intends (for yes/no decisions such as hand-build requests, approve/deny remain accepted as an alias for the exact yes/no option, so check that alias works through prepare as well as decision); if production rejects a valid choice (for example option labels built differently from the journal options, the default not included, or the alias not applied in prepare), fix production. The required behaviors stay: a 3-option decision answers exactly the clicked option (journal read back shows that option, not the default); unknown choice 422; bound-choice mismatch 409; audit only after apply; hand-build approve changes the hand-build store; proposed ticket approve/deny; scope apply-failed. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/board-inbox.test.mjs tests/decision-board-safe.test.mjs tests/watch-s4-contract.test.mjs` and report pass counts (must be 0 failures).",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the owner actions or watch-cli for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
