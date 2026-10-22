@@ -1,0 +1,375 @@
+diff --git a/tools/board-inbox.mjs b/tools/board-inbox.mjs
+index 1e1e30e..a5991b8 100644
+--- a/tools/board-inbox.mjs
++++ b/tools/board-inbox.mjs
+@@ -112,21 +112,34 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
+   const asked = new Map();
+   for (const rec of Object.values(state.issues)) if (rec && (rec.status === 'open' || rec.status === 'confirming')) asked.set(rec.key, rec);
+   const problems = [];
+   // Every project is read at the same time with its own time limit: one that hangs is named and does not hold up the rest.
+   const perProject = await Promise.all(ownerProjects.map(async project => {
+     const read = async () => {
+       const mine = [];
+       for (const it of await collect([project.root], deps)) {
+         const phone = asked.get(`${project.root}|${it.kind}|${it.id}`);
+-        mine.push({ kind: it.kind, id: txt(it.id, 80), title: txt(it.title, TITLE_MAX), since: it.since ?? null, unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0, steps: (it.steps ?? []).length, choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null, ...stepsOf(nextFor(it, project.root)), fyi: isFyi(it), phone: phoneOf(phone, now) });
++        mine.push({
++          kind: it.kind,
++          id: txt(it.id, 80),
++          title: txt(it.title, TITLE_MAX),
++          text: txt(it.text ?? it.title, TITLE_MAX),
++          ...(it.boardSafe === true ? { boardSafe: true } : {}),
++          since: it.since ?? null,
++          unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
++          steps: (it.steps ?? []).length,
++          choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null,
++          ...stepsOf(nextFor(it, project.root)),
++          fyi: isFyi(it),
++          phone: phoneOf(phone, now),
++        });
+       }
+       const ledger = await ledgerOf(project.root).catch(() => null);
+       for (const t of ledger?.tickets ?? []) {
+         if (t?.status !== 'proposed') continue;
+         const phone = asked.get(`${project.root}|ticket|${t.id}`);
+         mine.push({ kind: 'proposed-ticket', id: txt(t.id, 20), title: txt(t.title, TITLE_MAX), since: t.createdAt ?? ledger.updatedAt ?? null, unblocks: 0, steps: 0, choices: null, origin: txt(t.origin, 20), filesNamed: (t.files ?? []).length > 0, ...stepsOf(nextFor({ kind: 'proposed-ticket', id: t.id, files: (t.files ?? []).length > 0 }, project.root)), fyi: false, phone: phoneOf(phone, now) });
+       }
+       for (const t of ledger?.tickets ?? []) {
+         if (!ticketReleaseAllowed(t, ledger)) continue;
+         if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+diff --git a/tools/handbuild-commands.mjs b/tools/handbuild-commands.mjs
+index d8b3f87..90d0362 100644
+--- a/tools/handbuild-commands.mjs
++++ b/tools/handbuild-commands.mjs
+@@ -1,17 +1,18 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // `swarm handbuild request | approve | deny | status | log | install | uninstall | off | on`: the hand-build guard's commands (see tools/handbuild.mjs and docs/handbuild-guard.md).
+ import fs from 'node:fs';
+ import fsPromises from 'node:fs/promises';
+ import os from 'node:os';
+ import path from 'node:path';
+ import { appendEvent, sanitizeText } from './journal.mjs';
++import { isProtectedTopic } from './board-action-guard.mjs';
+ import { createRequest, createScratchDeniedHandbuildRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE, SCRATCH_DENY_REASON } from './handbuild.mjs';
+ import { isScratchRoot } from './scratch-roots.mjs';
+ import { listProjects, projectsFile } from './projects.mjs';
+ 
+ async function registeredScratchHandbuildRoot(root, installRoot, env = process.env) {
+   const home = env.HOME ?? os.homedir();
+   const file = projectsFile(env, home);
+   const projects = await listProjects({
+     file,
+     forOwner: false,
+@@ -60,22 +61,34 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
+       const r = (await registeredScratchHandbuildRoot(root, installRoot, env))
+         ? createScratchDeniedHandbuildRequest(root, fields, { now })
+         : createRequest(root, fields, { now });
+       if (r.status === 'denied' && r.denyReason === SCRATCH_DENY_REASON) {
+         return out(
+           `Hand-build request auto-denied: ${r.id} (${SCRATCH_DENY_REASON}). Move the project out of the scratch base or remove the .swarm-scratch marker.`,
+           1,
+         );
+       }
+       const id = `handbuild-${r.id}`;
++      const decisionText = sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`);
++      const handbuildProtected = isProtectedTopic(r.kind)
++        || isProtectedTopic(r.reason)
++        || (r.files ?? []).some(file => isProtectedTopic(file));
+       // It shows up in Needs you (the board and the phone) as a decision with approve and deny.
+-      await appendEvent(root, { kind: 'decision', id, confirm: true, choice: 'deny', options: ['approve', 'deny'], text: sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`) }, { now });
++      await appendEvent(root, {
++        kind: 'decision',
++        id,
++        confirm: true,
++        choice: 'deny',
++        options: ['approve', 'deny'],
++        text: decisionText,
++        ...(handbuildProtected ? {} : { boardSafe: true }),
++      }, { now });
+       return out(`hand-build request ${r.id} is waiting for the owner (it shows in Needs you on the board and the phone).\nThe owner approves with: swarm handbuild approve ${r.id}   (or: swarm decide ${id} approve)\nUntil then every edit of ${r.files.join(', ')} stays blocked.`);
+     }
+     if (sub === 'approve' || sub === 'deny') {
+       if (rest.length !== 1) return out(HANDBUILD_USAGE, 1);
+       const r = decideRequest(root, rest[0], sub, { now, by: 'owner' });
+       await appendEvent(root, { kind: 'decision', id: `handbuild-${r.id}`, confirmed: true, choice: sub, text: sanitizeText(`Hand-build request ${r.id}: ${sub}`) }, { now }).catch(() => {});
+       return out(sub === 'approve' ? `approved ${r.id}: ${r.files.join(', ')}${r.git.length ? ` and git ${r.git.join(', ')}` : ''} until ${r.expiresAt}; then it expires` : `denied ${r.id}`);
+     }
+     if (sub === 'status') {
+       const all = listRequests(root);
+diff --git a/tools/inbox-commands.mjs b/tools/inbox-commands.mjs
+index df11064..8d87da8 100644
+--- a/tools/inbox-commands.mjs
++++ b/tools/inbox-commands.mjs
+@@ -1,25 +1,26 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // `swarm inbox | done | decide | decision | backlog`: the owner's side of Phase 10c. Plain commands, no model.
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { appendEvent, readJournal, sanitizeText, openItems, integrateBlockerKindFromId, integrateBlockerResolutionEvent, integrateBlockerRunIdFromId } from './journal.mjs';
++import { isProtectedTopic } from './board-action-guard.mjs';
+ import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
+ import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
+ import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
+ 
+ const USAGE = {
+   inbox: 'Usage: swarm inbox [--json] [--all]\n',
+   done: 'Usage: swarm done ID\n',
+   decide: 'Usage: swarm decide ID CHOICE\n',
+   resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
+-  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID]\n',
++  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID] [--board-safe]\n',
+   backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
+ };
+ const bad = command => ({ stdout: USAGE[command], exitCode: 1 });
+ 
+ // Owner at the computer: interactive TTY and not inside a Claude Code or swarm agent session.
+ // The guard (another module) blocks `swarm decide` / hand-build approval command text inside agent sessions; the owner's own terminal is outside that guard.
+ export function decideChannelFromEnvironment(env = process.env) {
+   if (!process.stdin.isTTY || !process.stdout.isTTY) return 'agent';
+   if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return 'agent';
+   if (env.SWARM_AGENT_SESSION) return 'agent';
+@@ -103,33 +104,49 @@ export async function runInboxCommand(root, command, args, { installRoot, now =
+           integrateKind,
+           integrateRun,
+           integrateCause: open.integrateCause ?? open.text,
+           resolvedBy: 'owner',
+         })
+         : { kind: 'blocker', id: open.id, resolved: true, text: sanitizeText(open.text ?? '') };
+       await appendEvent(root, resolution, { now });
+       return { stdout: `resolved: ${open.id}\n`, exitCode: 0 };
+     }
+     if (command === 'decision') {
+-      const choice = flagValues(args, '--choice');
++      const boardSafe = args.includes('--board-safe');
++      const positional = args.filter(arg => arg !== '--board-safe');
++      const choice = flagValues(positional, '--choice');
+       if (!choice || choice.values.length !== 1) return bad(command);
+       const options = flagValues(choice.rest, '--option');
+       const ids = options && flagValues(options.rest, '--id');
+       if (!ids || ids.values.length > 1 || ids.rest.length !== 1 || ids.rest[0].startsWith('--')) return bad(command);
+       const text = sanitizeText(ids.rest[0]);
+       const id = ids.values[0] ?? `d-${Math.floor(now() / 1000).toString(36)}`;
+       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) return bad(command);
+       if ((await readJournal(root, { limit: Infinity })).some(event => event.kind === 'decision' && String(event.id) === id)) return { stdout: `decision id already used: ${id}\n`, exitCode: 1 };
+       choice.values[0] = sanitizeText(choice.values[0]);
+       options.values = options.values.map(value => sanitizeText(value));
+       const pool = [...new Set([choice.values[0], ...options.values])];
+-      await appendEvent(root, { kind: 'decision', id, text, choice: choice.values[0], ...(options.values.length ? { options: pool } : {}), confirm: true }, { now });
++      if (boardSafe) {
++        const protectedFields = [text, id, choice.values[0], ...pool];
++        if (protectedFields.some(field => isProtectedTopic(field))) {
++          return { stdout: 'a decision about merge, deploy, spend, caps, keys or migrations can never be answered from the board; drop --board-safe\n', exitCode: 1 };
++        }
++      }
++      await appendEvent(root, {
++        kind: 'decision',
++        id,
++        text,
++        choice: choice.values[0],
++        ...(options.values.length ? { options: pool } : {}),
++        confirm: true,
++        ...(boardSafe ? { boardSafe: true } : {}),
++      }, { now });
+       return { stdout: `decision recorded: ${id}; confirm with: swarm decide ${id} ${choice.values[0]}\n`, exitCode: 0 };
+     }
+     if (command === 'backlog') {
+       const [verb, ...rest] = args;
+       if (verb === undefined) {
+         const { items } = await readBacklog(root);
+         return { stdout: items.length ? `${items.map(item => `${item.id} [${item.status}] ${item.goal}${item.paths?.length ? ` (paths: ${item.paths.join(', ')})` : ''}`).join('\n')}\n` : 'Backlog is empty.\n', exitCode: 0 };
+       }
+       if (verb === 'remove' && rest.length === 1) { await removeGoal(root, rest[0]); return { stdout: `removed: ${rest[0]}\n`, exitCode: 0 }; }
+       if (verb === 'add') {
+diff --git a/tools/inbox.mjs b/tools/inbox.mjs
+index e633ebe..06da5d9 100644
+--- a/tools/inbox.mjs
++++ b/tools/inbox.mjs
+@@ -110,24 +110,26 @@ function journalItems(root, events, ms) {
+         since,
+       });
+     }
+   }
+   for (const event of openDecisions(events)) {
+     const item = {
+       id: String(event.id),
+       kind: 'decision',
+       project: root,
+       title: sanitizeText(event.text ?? String(event.id)),
++      text: sanitizeText(event.text ?? String(event.id)),
+       steps: [],
+       unblocks: 0,
+       since: event.ts ?? new Date(ms).toISOString(),
+     };
++    if (event.boardSafe === true) item.boardSafe = true;
+     if (Array.isArray(event.options)) item.choices = event.options.map(option => String(option));
+     if (event.choice !== undefined) item.default = String(event.choice);
+     items.push(item);
+   }
+   return items;
+ }
+ 
+ export async function collectInbox(roots, deps) {
+   const { listRuns, readState, readJournal, now, onNote } = deps;
+   const ms = nowOf(now);
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index b283f96..7604e03 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -18,20 +18,23 @@ import { ticketComments } from './gallery-tickets.mjs';
+ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
+ import { COMMANDS } from './completion.mjs';
+ import { readLedger } from './tickets.mjs';
+ import { boardSummary, listLiveRuns } from './board.mjs';
+ import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
+ import { isBoardTempRoot } from './scratch-roots.mjs';
+ import os from 'node:os';
+ import { randomBytes } from 'node:crypto';
+ import { readHistory, historyFile } from './history.mjs';
+ import { boardInbox, inboxText } from './board-inbox.mjs';
++import { createOwnerActions } from './board-owner-actions.mjs';
++import { guardBoardAction } from './board-action-guard.mjs';
++import { remoteFile } from './remote.mjs';
+ import { runDetail, compareRuns } from './board-run.mjs';
+ import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, readProjectRunStates, projectFamilyRoots, isTestOrTempProject } from './board-data.mjs';
+ import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
+ import { versionInfo } from './server-version.mjs';
+ import { boardPools } from './pools-board.mjs';
+ import { resolveBudget, spendDir } from './spend.mjs';
+ import { lanesDir, machineConcurrency } from './lanes.mjs';
+ import { loadLocalConfig } from './local-config.mjs';
+ import { backfillHistory } from './board-commands.mjs';
+ import { projectSummary } from './project-spend.mjs';
+@@ -483,21 +486,79 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
+     fold: true,
+     exclude: showsScratch ? undefined : scratchIds,
+   };
+   const { events: all } = await readHistory({ ...base, limit: 1e6, cap: 1e6 });
+   const filtered = all.filter(event => event.kind !== 'spend');
+   const offset = Number(q.offset) || 0;
+   const limit = Math.min(Math.max(1, Number(q.limit) || 100), 1000);
+   return { total: filtered.length, events: filtered.slice(offset, offset + limit) };
+ }
+ 
+-export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
++function ownerAuditPath(env) {
++  const home = env.HOME ?? os.homedir();
++  return path.join(path.dirname(remoteFile(env, home)), '.swarm', 'owner', 'audit.ndjson');
++}
++
++export async function readOwnerAudit(env = process.env) {
++  const auditFile = ownerAuditPath(env);
++  let text = '';
++  try {
++    text = await fs.readFile(auditFile, 'utf8');
++  } catch {
++    return { entries: [], skipped: 0 };
++  }
++  const entries = [];
++  let skipped = 0;
++  for (const line of text.split('\n')) {
++    if (!line.trim()) continue;
++    try {
++      entries.push(JSON.parse(line));
++    } catch {
++      skipped += 1;
++    }
++  }
++  return { entries, skipped };
++}
++
++function buildOwnerActions({ env, now, live, remoteLogin }) {
++  const auditFile = ownerAuditPath(env);
++  const appendAudit = async entry => {
++    await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
++    await fs.appendFile(auditFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
++  };
++  const readAudit = async () => (await readOwnerAudit(env)).entries;
++  const login = typeof remoteLogin === 'string' ? remoteLogin : '';
++  return createOwnerActions({
++    listItems: async () => {
++      const all = await listProjects({ file: projectsFile(env) });
++      const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
++      const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
++      const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
++      return (inbox.items ?? []).map(item => ({
++        id: item.id,
++        kind: item.kind,
++        title: item.title,
++        summary: item.title,
++        projectId: item.projectId,
++      }));
++    },
++    appendAudit,
++    readAudit,
++    guard: guardBoardAction,
++    now,
++    randomId: () => randomBytes(16).toString('hex'),
++    ownerIdentities: login ? [login] : [],
++    verifyIdentity: (req, identity) => req.tailnetVerified === true && identity === login,
++  });
++}
++
++export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools, remote = null } = {}) {
+   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
+   const deployTracker = createDeployTracker({ env });
+   const peersCache = peerCache ?? createPeerCache({
+     fetchImpl: (request, init) => {
+       const url = new URL(request instanceof URL ? request : request?.url ?? request);
+       url.searchParams.set('local', '1');
+       return fetchImpl(url, init);
+     },
+   });
+   let boardUrl = null;
+@@ -648,42 +709,49 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+       })();
+       watchers.set(key, entry);
+       entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
+       return entry.pending;
+     },
+     // The board tells the api its own address once it is listening: the run pages it opens link back to it.
+     setBoardUrl(url) { boardUrl = url; },
+     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
+     async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
+   };
++  if (remote) api.ownerActions = buildOwnerActions({ env, now, live, remoteLogin: remote.login });
+   return api;
+ }
+ 
+ // Starts the board server in this process and records its address for run pages that want to go back to it.
+ // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
+ // and it does not stop when idle.
+ export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
+-  const api = createBoardApi({ env });
++  const api = createBoardApi({ env, remote });
+   backfillHistory({ env }).catch(() => {});
+   const server = createWatchServer({
+     root,
+     getRunSnapshot: async () => null,
+     getPlanSnapshot: async () => ({ present: false }),
+     getGallery: async () => ({ schema: 1, screens: [] }),
+     getBoard: () => safeBoard(),
+     board: api,
+     indexName: 'board.html',
+     commandList: buildCommandList(COMMANDS),
+     contextCommands,
+     assetDir: path.join(here, 'watch-assets'),
+     deltaFile: path.join(here, 'watch-delta.mjs'),
+-    ...(remote ? { port: remote.port, token: remote.token, remote: { hosts: remote.hosts, login: remote.login }, idleMs: Infinity } : {}),
++    ...(remote ? {
++      port: remote.port,
++      token: remote.token,
++      remote: { hosts: remote.hosts, login: remote.login },
++      idleMs: Infinity,
++      ownerActions: api.ownerActions,
++    } : {}),
+   });
+   const { url, port } = await server.listen();
+   api.setBoardUrl(remote ? null : url);
+   const version = await readPackageVersion();
+   const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
+   const baseRegistry = {
+     version,
+     argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
+     cwd: process.cwd(),
+     port,
