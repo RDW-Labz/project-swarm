@@ -321,6 +321,12 @@ async function oracleCheckoutsBuilding(fixture, { liveRuns = [] } = {}) {
   return roots.filter(root => liveRoots.has(root)).length;
 }
 
+function ticketDoneAtMsFromDisk(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const at = Date.parse(value ?? '');
+  return Number.isFinite(at) ? at : NaN;
+}
+
 async function oracleLastTicketFinishedAt(fixture) {
   const { doneTimes } = await tools();
   const roots = await familyRootsFromDisk(fixture.root, fixture.env);
@@ -330,11 +336,19 @@ async function oracleLastTicketFinishedAt(fixture) {
   for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
   let newest = 0;
   const add = (id, value) => {
-    const at = Date.parse(value ?? '');
+    const at = ticketDoneAtMsFromDisk(value);
     if (id && Number.isFinite(at)) { doneIds.add(String(id)); newest = Math.max(newest, at); }
   };
   for (const root of roots) {
     try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch { /* no log */ }
+  }
+  for (const ledger of ledgers) {
+    const history = Array.isArray(ledger?.history) ? ledger.history : Array.isArray(ledger?.history?.events) ? ledger.history.events : [];
+    for (const event of history) {
+      const status = event?.status ?? event?.to ?? event?.nextStatus ?? event?.transition?.to;
+      const id = event?.ticketId ?? event?.ticket ?? event?.transition?.ticketId;
+      if (String(status).toLowerCase() === 'done') add(id, event?.at ?? event?.finishedAt ?? event?.updatedAt ?? event?.timestamp);
+    }
   }
   for (const record of runs) {
     for (const job of record.state?.jobs ?? []) {

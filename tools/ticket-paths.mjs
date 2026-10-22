@@ -166,15 +166,23 @@ export function formatTicketPathRefusal(ticketId, err) {
   return line;
 }
 
+export function formatTicketPathWarning(ticketId, warn) {
+  if (warn.code === 'similar-new-file') {
+    return `${ticketId}: ${warn.path} similar-new-file (near ${warn.suggestion})`;
+  }
+  return `${ticketId}: ${warn.path} ${warn.message ?? warn.code ?? 'warning'}`;
+}
+
 /**
  * @param {object} ticket
  * @param {{ repoFiles?: string[], exists?: (path: string) => boolean, root?: string|null, priorTicket?: object|null }} options
  *   priorTicket: on edits, only paths newly added to each list are validated
- * @returns {{ ok: boolean, errors: { field: string, path: string, suggestion: string|null, reason?: string, message: string }[] }}
+ * @returns {{ ok: boolean, errors: object[], warnings: object[] }}
  */
 export function validateTicketPaths(ticket, { repoFiles = [], exists, root = null, priorTicket = null } = {}) {
   const repoSet = new Set(trackedFiles(repoFiles));
   const errors = [];
+  const warnings = [];
   for (const { field, path: ticketPath } of listTicketPaths(ticket)) {
     if (!shouldValidatePath(field, ticketPath, priorTicket)) continue;
 
@@ -210,13 +218,26 @@ export function validateTicketPaths(ticket, { repoFiles = [], exists, root = nul
     if (kind === 'write') {
       const suggestion = likelyTypo(ticketPath, repoFiles);
       if (suggestion) {
-        errors.push({
+        const dist = levenshteinDistance(
+          normTicketPath(ticketPath).toLowerCase(),
+          normTicketPath(suggestion).toLowerCase(),
+        );
+        const limit = typoDistanceLimit(ticketPath);
+        const payload = {
           field,
           path: ticketPath,
           suggestion,
-          reason: 'likely typo',
           message: `${field} path not in repo: ${ticketPath} (did you mean ${suggestion}?)`,
-        });
+        };
+        if (dist >= limit) {
+          warnings.push({
+            code: 'similar-new-file',
+            ...payload,
+            message: `${field} path not in repo: ${ticketPath} (similar to existing ${suggestion})`,
+          });
+        } else {
+          errors.push({ ...payload, reason: 'likely typo' });
+        }
       }
       continue;
     }
@@ -233,5 +254,5 @@ export function validateTicketPaths(ticket, { repoFiles = [], exists, root = nul
         : `${field} path not in repo: ${ticketPath}`,
     });
   }
-  return { ok: errors.length === 0, errors };
+  return { ok: errors.length === 0, errors, warnings };
 }
