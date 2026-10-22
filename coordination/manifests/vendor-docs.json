@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "vendor-docs",
+      "agent": "auto",
+      "prompt": "Two deliverables for the vendored Swarm Watch kit under tools/watch-assets/vendor (already committed, with tools/watch-assets/vendor/VENDOR.json listing every entry: name, version, license, source, copyright, use, notes, licenseFiles and files with sha256, bytes, gzip). (1) Add one row per VENDOR.json entry to the table in docs/third-party.md, in exactly the existing row format of that table (name and what it is used for, source, version, licence with copyright, where it lives and where its licence text is), under the existing rows for the MIT entries, and a new section titled Code and assets under other licences (same table columns) for the ISC, BSD-2-Clause, OFL-1.1 and CC0-1.0 entries; mention the Fluent badge conversion from the notes field; change nothing else in the file. (2) Add tests/watch-vendor.test.mjs: for every entry and file in VENDOR.json the file exists and its sha256 and byte length match; every entry has at least one licence file that exists and is not empty; every vendored file under tools/watch-assets/vendor (except VENDOR.json and the LICENSE files) is listed in VENDOR.json (no unlisted file); every entry name appears in docs/third-party.md; the licences are all on an allow-list (MIT, ISC, BSD-2-Clause, OFL-1.1, CC0-1.0); the total gzip of the js, css and woff2 files is at most the budget gzipBytesMax in VENDOR.json (400 KB); no file in the vendor folder is loaded from the network (grep the board html and js files under tools/watch-assets for http urls to cdn hosts: none). Hermetic; read-only. Do not touch the vendored files themselves. ignoreTests reason: only docs/third-party.md and a new test file change.",
+      "context": [
+        "docs/third-party.md",
+        "tools/watch-assets/vendor/VENDOR.json",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "docs/third-party.md",
+        "tests/watch-vendor.test.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
