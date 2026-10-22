@@ -29,8 +29,31 @@ const MAX_STREAM_PAUSED_MS = 60000;
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
   const y = Buffer.from(String(b), 'utf8');
-  if (x.length !== y.length) return false;
-  return timingSafeEqual(x, y);
+  const size = Math.max(x.length, y.length);
+  const xx = Buffer.alloc(size);
+  const yy = Buffer.alloc(size);
+  x.copy(xx);
+  y.copy(yy);
+  return timingSafeEqual(xx, yy) && x.length === y.length;
+}
+
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const COOKIE_VALUE = /^[!#$%&'()*+\-.\/0-9:<=>?@A-Z[\\\]^_`a-z{|}~]*$/;
+
+function watchCookie(header, expectedName) {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  const pairs = [];
+  for (const raw of header.split(';')) {
+    const part = raw.trim();
+    const at = part.indexOf('=');
+    if (!part || at <= 0 || !COOKIE_NAME.test(part.slice(0, at).trim())) return null;
+    const name = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+    if (!COOKIE_VALUE.test(value)) return null;
+    pairs.push([name, value]);
+  }
+  const matches = pairs.filter(([name]) => name === expectedName);
+  return matches.length === 1 ? matches[0][1] : null;
 }
 
 function send(res, method, status, headers, body) {
@@ -257,10 +280,10 @@ export function createWatchServer(opts) {
     assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
   }
 
-  function sendAsset(res, method, name) {
+  function sendAsset(res, method, name, headers = {}) {
     const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
     if (!a) return sendText(res, method, 404, 'not found');
-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length }, a.body);
+    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length, ...headers }, a.body);
   }
 
   async function payload() {
@@ -315,9 +338,7 @@ export function createWatchServer(opts) {
     if (pathname === '/api/health') {
       if (remote || !local) return sendText(res, method, 421, 'misdirected request');
       const hostName = String(host ?? '').split(':')[0];
-      if (hostName !== '127.0.0.1' && hostName !== 'localhost') {
-        return sendText(res, method, 421, 'misdirected request');
-      }
+      if (hostName !== '127.0.0.1' && hostName !== 'localhost') return sendText(res, method, 421, 'misdirected request');
       const info = await versionInfo();
       return sendJson(res, method, { ok: true, version: info.version, pid: process.pid });
     }
@@ -336,14 +357,23 @@ export function createWatchServer(opts) {
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
     if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
-    const q = u.searchParams.get('t');
-    const h = req.headers['x-watch-token'];
-    const ok = (typeof q === 'string' && safeEqual(q, token)) || (typeof h === 'string' && safeEqual(h, token));
+    const isHtmlPage = pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'));
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const cookieName = `swarm_watch_${port}`;
+    const cookieToken = watchCookie(req.headers.cookie, cookieName);
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const cookieOk = typeof cookieToken === 'string' && safeEqual(cookieToken, token);
+    const queryOk = isHtmlPage && typeof queryToken === 'string' && safeEqual(queryToken, token);
+    const ok = headerOk || cookieOk || queryOk;
     if (!ok) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    if (pathname === '/') return sendAsset(res, method, indexName);
+    const pageHeaders = queryOk ? {
+      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+    } : {};
+    if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
@@ -356,8 +386,9 @@ export function createWatchServer(opts) {
     }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
-      if (pathname === '/project') return sendAsset(res, method, 'project.html');
-      if (pathname === '/run') return sendAsset(res, method, 'run.html');
+      delete q.t;
+      if (pathname === '/project') return sendAsset(res, method, 'project.html', pageHeaders);
+      if (pathname === '/run') return sendAsset(res, method, 'run.html', pageHeaders);
       if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, stripMoney({ ...detail, openRun: !remote })) : sendText(res, method, 404, 'not found'); }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).

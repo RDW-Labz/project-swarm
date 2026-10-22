@@ -1,0 +1,758 @@
+diff --git a/tools/remote.mjs b/tools/remote.mjs
+index 77ad38e..850048a 100644
+--- a/tools/remote.mjs
++++ b/tools/remote.mjs
+@@ -105,43 +105,43 @@ export function realDeps(env = process.env) {
+       const child = spawn(process.execPath, [SWARM, 'remote', 'serve'], { detached: true, stdio: ['ignore', fd.fd, fd.fd], env });
+       child.unref();
+       await fd.close();
+       return child.pid;
+     },
+     kill: pid => { try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; } },
+     // One GET with a Host header and optional tailnet-login header: how the self-check talks to the loopback port and, in tests, how a proxied request is imitated.
+     get: (url, { host, headers = {} } = {}) => new Promise(resolve => {
+       const u = new URL(url);
+       const req = http.request({ hostname: u.hostname, port: u.port, path: `${u.pathname}${u.search}`, method: 'GET', agent: false, headers: { ...(host ? { Host: host } : {}), ...headers }, timeout: 4000 }, res => { res.resume(); let body = ''; res.setEncoding('utf8'); res.on('data', d => { body += d; }); res.on('end', () => resolve({ status: res.statusCode, body })); });
+       req.on('timeout', () => { req.destroy(); resolve({ status: 0, body: '' }); });
+       req.on('error', () => resolve({ status: 0, body: '' }));
+       req.end();
+     }),
+     // The board's tailnet address, fetched the way the phone would: HTTPS to the tailnet name.
+-    reach: async (url) => { try { const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
++    reach: async (url, { headers = {} } = {}) => { try { const res = await fetch(url, { redirect: 'manual', headers, signal: AbortSignal.timeout(8000) }); return { status: res.status, body: res.status === 200 ? await res.text() : '' }; } catch (error) { return { status: 0, body: '', error: String(error?.cause?.code ?? error?.message ?? error) }; } },
+     resolve: async name => { try { return (await dns.lookup(name, { all: true })).map(a => a.address); } catch { return []; } },
+     sleep: ms => new Promise(r => setTimeout(r, ms)),
+     now: Date.now,
+   };
+ }
+ 
+ const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
+ const boardUrl = (state, withToken = true) => `https://${state.dns}:${state.httpsPort}/${withToken ? `?t=${state.token}` : ''}`;
+-const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}?t=${state.token}`;
++const localUrl = (state, pathname = '/api/board') => `http://127.0.0.1:${state.port}${pathname}`;
+ 
+ async function boardUp(deps, state) {
+-  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login } });
++  const res = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'Tailscale-User-Login': state.login, 'x-watch-token': state.token } });
+   if (res.status !== 200) return false;
+   try { const b = JSON.parse(res.body); return Array.isArray(b.projects); } catch { return false; }
+ }
+ async function waitForBoard(deps, state, tries = 40) {
+   for (let i = 0; i < tries; i += 1) { if (await boardUp(deps, state)) return true; await deps.sleep(250); }
+   return false;
+ }
+ 
+ // Take everything down: the serve entry (only one that points at one of our ports), the board process, the token file. `clean` is false when the Tailscale entry could not be
+ // confirmed gone or the board could not be stopped: then the state file stays, so `swarm remote off` can be run again. `force`: the process was started by this very call.
+ async function takeDown(deps, state, { force = false } = {}) {
+   const lines = [];
+   let clean = true;
+   if (state?.dns) {
+     const key = hostPort(state.dns, state.httpsPort);
+@@ -169,35 +169,35 @@ async function takeDown(deps, state, { force = false } = {}) {
+   } else lines.push('the board was not running');
+   if (clean) { await fs.rm(remoteFile(deps.env), { force: true }); lines.push('deleted the board token'); }
+   else lines.push('kept the saved settings so swarm remote off can be run again');
+   return { lines, clean };
+ }
+ 
+ // The checks run from this computer. The name is looked up by this computer's own resolver (Tailscale's, which always answers with tailnet addresses), so it cannot show how the
+ // internet sees the name: that is why Funnel is read from Tailscale's own settings, before and after. The request without your login is the lock the proxy relies on.
+ async function selfCheck(deps, state) {
+   const checks = [];
+   const base = `https://${state.dns}:${state.httpsPort}`;
+   const ips = await deps.resolve(state.dns);
+   const publicIps = ips.filter(ip => !isTailnetAddress(ip));
+   checks.push({ name: `${state.dns} resolves to tailnet addresses on this computer (${ips.join(', ') || 'no answer'})`, ok: ips.length > 0 && publicIps.length === 0, exposed: publicIps.length > 0 });
+   if (publicIps.length) return checks;   // decided before any token is sent
+-  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}` });
++  const noLogin = await deps.get(localUrl(state), { host: `127.0.0.1:${state.port}`, headers: { 'x-watch-token': state.token } });
+   checks.push({ name: 'a request without your Tailscale login is refused, even with the token and a loopback Host (403)', ok: noLogin.status === 403 });
+-  const good = await deps.reach(`${base}/api/board?t=${state.token}`);
++  const good = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': state.token } });
+   checks.push({ name: `the board answers over the tailnet at ${base}`, ok: good.status === 200 });
+-  const bad = await deps.reach(`${base}/api/board?t=wrong`);
++  const bad = await deps.reach(`${base}/api/board`, { headers: { 'x-watch-token': 'wrong' } });
+   checks.push({ name: 'a wrong token is refused (403)', ok: bad.status === 403 });
+   return checks;
+ }
+ 
+ const phoneSteps = state => [
+   'On your phone:',
+   '  1. Install the Tailscale app and sign in with the same account as this computer. Switch it on.',
+   '  2. Point the camera at the QR code above (or open the address in the browser).',
+   `  3. The board opens read-only. Add it to the Home Screen if you like. The link has the board token in it: keep it private (swarm remote rotate makes a new one).`,
+   '  Answers still go through your swarm-inbox issues (swarm phone), not through this board.',
+   `The address: ${boardUrl(state)}`,
+ ].join('\n');
+ 
+ function qrBlock(state, tty) { try { return `\n${qrText(boardUrl(state), { color: tty })}\n`; } catch { return '\n(the address is too long for a QR code; open it by hand)\n'; } }
+ 
+diff --git a/tools/watch-assets/app.js b/tools/watch-assets/app.js
+index dca65d1..fe1f809 100644
+--- a/tools/watch-assets/app.js
++++ b/tools/watch-assets/app.js
+@@ -1,56 +1,90 @@
+ // SPDX-License-Identifier: Apache-2.0
+ (function () {
+   'use strict';
+ 
+-  var params = new URLSearchParams(location.search);
+-  var TOKEN = params.get('t') || '';
+-  try {
+-    if (TOKEN && window.history && history.replaceState) {
+-      history.replaceState(history.state, '', location.pathname + location.hash);
++  var tokenRead = false;
++  var tokenValue = '';
++  function watchToken() {
++    if (tokenRead) { return tokenValue; }
++    tokenRead = true;
++    var params = null;
++    var hasQueryToken = false;
++    var queryToken = '';
++    var cleanSearch = '';
++    try {
++      params = new URLSearchParams((window.location && window.location.search) || '');
++      hasQueryToken = params.has('t');
++      queryToken = params.get('t') || '';
++      params.delete('t');
++      cleanSearch = params.toString();
++    } catch (e) {
++      var raw = String((window.location && window.location.search) || '').replace(/^\?/, '');
++      var kept = [];
++      raw.split('&').forEach(function (part) {
++        if (!part) { return; }
++        var pieces = part.split('='), key = pieces.shift().replace(/\+/g, ' '), value = pieces.join('=').replace(/\+/g, ' ');
++        try { key = decodeURIComponent(key); value = decodeURIComponent(value); } catch (ignore) { return; }
++        if (key === 't') { if (!hasQueryToken) { queryToken = value; } hasQueryToken = true; }
++        else { kept.push(part); }
++      });
++      cleanSearch = kept.join('&');
+     }
+-  } catch (e) {
+-    if (window.console) console.error('could not clean address bar', e);
++    var stored = '';
++    try {
++      if (hasQueryToken) { window.sessionStorage.setItem('swarm-watch-token', queryToken); }
++      stored = window.sessionStorage.getItem('swarm-watch-token') || '';
++    } catch (e) { /* private browsing can disable session storage */ }
++    tokenValue = stored || queryToken;
++    if (hasQueryToken && params && window.history && typeof window.history.replaceState === 'function') {
++      try {
++        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
++      } catch (e) { /* leave the address alone if history is unavailable */ }
++    } else if (hasQueryToken && window.history && typeof window.history.replaceState === 'function') {
++      try {
++        window.history.replaceState(window.history.state, '', window.location.pathname + (cleanSearch ? '?' + cleanSearch : '') + window.location.hash);
++      } catch (e) { /* leave the address alone if history is unavailable */ }
++    }
++    return tokenValue;
+   }
++  window.BoardLib = window.BoardLib || {};
++  window.BoardLib.watchToken = watchToken;
++  var TOKEN = watchToken();
+   var TAB_NAMES = ['run', 'plan', 'commands', 'gallery'];
+   var MAX_PENDING = 50;
+   var registry = {};
+   var ready = false;
+   var data = {
+     run: null,
+     plan: { present: false },
+     gallery: null,
+     commands: [],
+     contextCommands: []
+   };
+   var lastSlice = {};
+   var applyDeltaFn = null;
+   var importFailed = false;
+   var needRunFetch = false;
+   var streamSnapshotSeen = false;
+   var streamLastMessageAt = 0;
+   var STREAM_HEARTBEAT_MS = 10000;
+   var pendingDeltas = [];
+   var drawer = document.getElementById('drawer');
+   var lastFocus = null;
+ 
+-  function withToken(path) {
+-    return path + (path.indexOf('?') < 0 ? '?' : '&') + 't=' + encodeURIComponent(TOKEN);
+-  }
+-
+   function fetchJson(path) {
+-    return fetch(withToken(path), { cache: 'no-store' }).then(function (res) {
++    return fetch(path, { cache: 'no-store', headers: { 'x-watch-token': TOKEN } }).then(function (res) {
+       if (!res.ok) throw new Error('HTTP ' + res.status);
+       return res.json();
+     });
+   }
+ 
+   function parseEvent(ev) {
+     try {
+       return JSON.parse(ev.data);
+     } catch (e) {
+       return undefined;
+     }
+   }
+ 
+   function callFn(name, fn) {
+     try {
+@@ -172,31 +206,31 @@
+       return;
+     }
+     if (!applyDeltaFn) {
+       queueDelta(d);
+       return;
+     }
+     data.run = applyDeltaFn(data.run, d);
+     renderAll();
+   }
+ 
+   function openStream() {
+     if (!window.EventSource) {
+       setConnection('connecting');
+       return;
+     }
+-    var es = new EventSource(withToken('/events'));
++    var es = new EventSource('/events');
+     es.addEventListener('snapshot', function (ev) {
+       noteStreamMessage();
+       var run = parseEvent(ev);
+       if (run === undefined) return;
+       streamSnapshotSeen = true;
+       data.run = run;
+       renderAll();
+     });
+     es.addEventListener('delta', function (ev) {
+       noteStreamMessage();
+       applyDeltaEvent(parseEvent(ev));
+     });
+     es.addEventListener('ping', function () {
+       noteStreamMessage();
+     });
+diff --git a/tools/watch-assets/board.js b/tools/watch-assets/board.js
+index 6b6954b..bdaeccd 100644
+--- a/tools/watch-assets/board.js
++++ b/tools/watch-assets/board.js
+@@ -1,45 +1,44 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // The board (swarm watch --all): Overview, Cost, Agents, Events. Read-only; every number and every agent state comes from /api/board and /api/history.
+ // Text is always set with textContent (never as HTML). Nothing here invents progress: an empty list says so.
+ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
+ import { renderOrchestrator, buildMixText, doingText } from './orchestrator-view.js';
+ 
+ var L = self.BoardLib;
+-var TOKEN = new URLSearchParams(location.search).get('t') || '';
+-var T = encodeURIComponent(TOKEN);
++var TOKEN = L.watchToken();
+ var $ = function (id) { return document.getElementById(id); };
+ var store = {
+   get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+   set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* kept for this visit only */ } }
+ };
+ 
+ var state = { data: null, lastOk: 0, tab: 'overview', scratch: store.get('swarm-scratch') === '1', seen: [], rendered: null, firstRender: true, readTimer: null };
+ try { state.seen = JSON.parse(store.get('swarm-seen') || '[]'); if (!Array.isArray(state.seen)) { state.seen = []; } } catch (e) { state.seen = []; }
+ 
+ function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
+ function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+ function ago(iso) {
+   var t = Date.parse(iso);
+   if (!isFinite(t)) { return 'never'; }
+   var m = Math.max(0, Math.round((Date.now() - t) / 60000));
+   return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
+ }
+ function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour12: false }); }
+-function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
+-function watchHref(projectId, runId) { if (state.data && state.data.openRun === false) { return runHref(projectId, runId); } return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
+-function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
++function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId); }
++function watchHref(projectId, runId) { if (state.data && state.data.openRun === false) { return runHref(projectId, runId); } return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId); }
++function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId); }
+ function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
+ function pill(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
+ function meter(pct, hot) { var m = el('div', 'meter' + (hot ? ' hot' : '')); var i = el('i'); i.style.width = Math.max(0, Math.min(100, pct)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', Math.round(pct) + ' percent'); return m; }
+ function dot(cls) { return el('span', 'dot' + (cls ? ' ' + cls : '')); }
+ function th(cells) { var tr = el('tr'); cells.forEach(function (c) { var h = el('th', '', c); h.scope = 'col'; tr.appendChild(h); }); var head = el('thead'); head.appendChild(tr); return head; }
+ function td(child, cls) { var c = el('td', cls || ''); if (typeof child === 'string') { c.textContent = child; } else if (child) { c.appendChild(child); } return c; }
+ 
+ // ---- tabs, hash, keyboard ----------------------------------------------------------------------------------------------------------------------
+ 
+ // Tabs are plain hash links (#tab=cost): the Back button moves between them and nothing else is needed. A click or key changes the hash; the hashchange
+ // handler does the switch, so there is one path.
+ function go(tab) { if (location.hash === '#tab=' + tab) { setTab(tab); } else { location.hash = 'tab=' + tab; } }
+ function setTab(tab) {
+   if (L.TABS.indexOf(tab) === -1) { tab = 'overview'; }
+   state.tab = tab;
+@@ -606,32 +605,32 @@ function entryNode(e, projects) {
+     });
+     if ((e.jobCount || e.jobs.length) > 4) { box.appendChild(el('span', 'sub', ' +' + ((e.jobCount || e.jobs.length) - 4) + ' more')); }
+     parts.push(box);
+   }
+   var known = projects.some(function (p) { return p.id === e.projectId; });
+   var node;
+   if (e.run && known && (e.kind === 'run' || e.kind === 'spend')) { node = link(runHref(e.projectId, e.run), 'entry', parts); }
+   else if (e.url && (e.kind === 'pr' || e.kind === 'merge')) { node = link(e.url, 'entry', parts); node.rel = 'noopener noreferrer'; node.target = '_blank'; }
+   else if (known) { node = link(projectHref(e.projectId), 'entry', parts); }
+   else { node = el('div', 'entry'); parts.forEach(function (p) { node.appendChild(p); }); }
+   return node;
+ }
+ function loadHistory() {
+   if (state.tab !== 'events' || !state.data) { return; }
+   var q = query();
+-  var csv = new URLSearchParams(q); csv.set('t', TOKEN);
+-  var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100');
++  var csv = new URLSearchParams(q);
++  var api = new URLSearchParams(q); api.set('limit', '100');
+   if (state.scratch) { api.set('scratch', '1'); csv.set('scratch', '1'); }
+   $('csv').href = '/history.csv?' + csv.toString();
+   fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
+     .then(function (r) { return r.ok ? r.json() : null; })
+     .then(function (data) {
+       if (!data) { return; }
+       var box = $('history'); box.textContent = '';
+       if (!data.events.length) { box.appendChild(el('div', 'empty', 'Nothing matches.')); }
+       data.events.forEach(function (e) { box.appendChild(entryNode(e, state.data.projects)); });
+       $('historyNote').textContent = 'Showing ' + data.events.length + ' of ' + data.total + ' event(s), newest first. A pull request and its merge are one row. The log is append-only and kept on disk.';
+     }).catch(function () {});
+ }
+ var debounce = null;
+ $('filters').addEventListener('input', function () { clearTimeout(debounce); debounce = setTimeout(loadHistory, 300); });
+ $('filters').addEventListener('submit', function (e) { e.preventDefault(); loadHistory(); });
+@@ -658,31 +657,31 @@ function renderBoard(data) {
+   var banner = $('staleBanner');
+   if (data.server && data.server.stale) { banner.hidden = false; banner.textContent = 'restart needed: installed ' + data.server.installedVersion + ' (this board is still swarm ' + data.server.version + '). Stop it and start it again (Ctrl-C then swarm watch --all, or swarm remote off then swarm remote on).'; } else { banner.hidden = true; banner.textContent = ''; }
+   renderTab();
+   state.firstRender = false;
+   if (state.tab === 'events' && !state.eventsLoaded) { state.eventsLoaded = true; loadHistory(); }
+   var sel = $('fproject'); var keep = sel.value;
+   if (sel.options.length - 1 !== data.projects.length) {
+     while (sel.options.length > 1) { sel.remove(1); }
+     data.projects.forEach(function (p) { var o = el('option', '', p.name); o.value = p.id; sel.appendChild(o); });
+     sel.value = keep;
+   }
+ }
+ function poll() {
+   if (state.polling) { return; }   // one request at a time: a slow answer is not overtaken by the next poll
+   state.polling = true;
+-  fetch('/api/board?t=' + T + (state.scratch ? '&scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
++  fetch('/api/board' + (state.scratch ? '?scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
+     .then(function (r) { return r.ok ? r.json() : null; })
+     .then(function (data) { if (data) { renderBoard(data); } })
+     .catch(function () {})
+     .then(function () { state.polling = false; });
+ }
+ $('scratch').addEventListener('change', function () {
+   state.scratch = $('scratch').checked;
+   store.set('swarm-scratch', state.scratch ? '1' : '0');
+   poll(); loadHistory();
+ });
+ 
+ applyHash();
+ poll();
+ setInterval(poll, 2000);
+ setInterval(loadHistory, 10000);
+diff --git a/tools/watch-assets/gallery-tab.js b/tools/watch-assets/gallery-tab.js
+index d57da72..abe4524 100644
+--- a/tools/watch-assets/gallery-tab.js
++++ b/tools/watch-assets/gallery-tab.js
+@@ -42,31 +42,31 @@ function copyText(text, button) {
+ function copyButton(text) {
+   var b = el('button', 'btn gl-copy', 'Copy');
+   b.type = 'button';
+   b.addEventListener('click', function () { copyText(text, b); });
+   return b;
+ }
+ 
+ function commandRow(text) {
+   var row = el('div', 'gl-cmd');
+   row.appendChild(el('code', 'gl-cmd-text mono', text));
+   row.appendChild(copyButton(text));
+   return row;
+ }
+ 
+ function shotUrl(id, kind) {
+-  return '/shot/' + encodeURIComponent(id) + '/' + kind + '?t=' + encodeURIComponent(SW.token || '');
++  return '/shot/' + encodeURIComponent(id) + '/' + kind;
+ }
+ 
+ function shotFigure(screen, kind, label, has) {
+   var fig = el('figure', 'gl-shot');
+   fig.appendChild(el('figcaption', 'label', label));
+   if (has) {
+     var btn = el('button', 'gl-shot-btn');
+     btn.type = 'button';
+     btn.setAttribute('aria-label', label + ' of ' + screen.id + ', open large');
+     var img = el('img', 'gl-img');
+     img.setAttribute('src', shotUrl(screen.id, kind));
+     img.setAttribute('alt', label + ' of ' + screen.id);
+     img.setAttribute('loading', 'lazy');
+     btn.appendChild(img);
+     btn.addEventListener('click', function () {
+diff --git a/tools/watch-assets/nav.js b/tools/watch-assets/nav.js
+index 6989329..1a51383 100644
+--- a/tools/watch-assets/nav.js
++++ b/tools/watch-assets/nav.js
+@@ -1,32 +1,31 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // Navigation on a run page: "← All projects" and the breadcrumb All projects > project > run. The links are plain addresses on this page's own server
+ // (with this page's token); that server finds the board, or starts one, and sends the browser there, so the Back button keeps working.
+ (function () {
+   'use strict';
+-  var TOKEN = new URLSearchParams(location.search).get('t') || '';
+-  var T = encodeURIComponent(TOKEN);
++  var TOKEN = self.BoardLib.watchToken();
+   var box = document.getElementById('crumbs');
+   if (!box) { return; }
+ 
+   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
+   function link(href, cls, text) { var a = el('a', cls, text); a.href = href; return a; }
+ 
+-  fetch('/api/nav?t=' + T, { headers: { 'x-watch-token': TOKEN } })
++  fetch('/api/nav', { headers: { 'x-watch-token': TOKEN } })
+     .then(function (r) { return r.ok ? r.json() : null; })
+     .then(function (nav) {
+       if (!nav) { return; }
+       box.textContent = '';
+-      box.appendChild(link('/nav/board?t=' + T, 'back', '← All projects'));
+-      box.appendChild(link('/nav/board?t=' + T, '', 'All projects'));
++      box.appendChild(link('/nav/board', 'back', '← All projects'));
++      box.appendChild(link('/nav/board', '', 'All projects'));
+       if (nav.project) {
+         box.appendChild(el('span', 'sep', '›'));
+-        box.appendChild(link('/nav/project?t=' + T, '', nav.project.name));
++        box.appendChild(link('/nav/project', '', nav.project.name));
+       }
+       if (nav.run) {
+         box.appendChild(el('span', 'sep', '›'));
+         box.appendChild(el('span', 'here mono', nav.run));
+       }
+       box.hidden = false;
+     })
+     .catch(function () {});
+ })();
+diff --git a/tools/watch-assets/project-live.js b/tools/watch-assets/project-live.js
+index 023283d..6476a92 100644
+--- a/tools/watch-assets/project-live.js
++++ b/tools/watch-assets/project-live.js
+@@ -1,26 +1,25 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // The project page's Live tab: every run that is alive in this project, combined (data: /api/live, the same run files the run pages read).
+ // Every state shown is one a run recorded: nothing is animated for show, a sleeping head means no agent is running in that lane.
+ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
+ import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
+ 
+ var L = self.BoardLib;
++var TOKEN = L.watchToken();
+ var params = new URLSearchParams(location.search);
+-var TOKEN = params.get('t') || '';
+ var ID = params.get('id') || '';
+-var T = encodeURIComponent(TOKEN);
+ var $ = function (id) { return document.getElementById(id); };
+ function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
+ function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+ function pct(v) { return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) + '%' : '-'; }
+ function ago(iso) { var t = Date.parse(iso || ''); if (!isFinite(t)) { return 'never'; } var s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
+ var store = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage may be off */ } } };
+ 
+ var RUN_COLORS = ['#60a5fa', '#f472b6', '#fbbf24', '#a78bfa', '#34d399', '#fb923c'];
+ var STATE_COLORS = { queued: '#3f3f4a', running: '#60a5fa', complete: '#34d399', failed: '#fb7185', timeout: '#fb7185', held: '#fbbf24', blocked: '#fbbf24', cancelled: '#4a4a56' };
+ var runColor = function (idx) { return RUN_COLORS[idx % RUN_COLORS.length]; };
+ 
+ // ---- tabs (hash: #live, #overview) ----------------------------------------------------------------------------------------------------------
+ 
+ function go(name) {
+   if (name !== 'live' && name !== 'overview') { name = 'live'; }
+@@ -160,54 +159,54 @@ function renderRuns(d) {
+   var live = d.runs.filter(function (r) { return r.status === 'live' || r.status === 'paused'; });
+   if (!live.length) { box.appendChild(el('p', 'sub', 'None.')); }
+   live.forEach(function (r) {
+     var row = el('div', 'runrow'); row.style.setProperty('--run', runColor(r.idx));
+     row.appendChild(ring(r.done, r.total, runColor(r.idx)));
+     var who = el('div', 'who');
+     var name = r.tickets.length ? r.tickets.join(', ') + (r.ticketCount > r.tickets.length ? ' +' + (r.ticketCount - r.tickets.length) : '') : (r.goal || 'Run ' + r.short);
+     who.appendChild(el('b', '', name));
+     var meta = el('div', 'meta');
+     [r.tickets.length || r.goal ? r.short : null, r.status === 'paused' ? 'paused' : null, r.done + '/' + r.total + ' jobs', usd(r.spendUsd), 'ELAPSED', r.failed ? r.failed + ' failed' : null].forEach(function (t) {
+       if (t === 'ELAPSED') { var e = el('span', 'mono elapsed', elapsedText(r.startedAt)); e.setAttribute('data-started', r.startedAt || ''); meta.appendChild(e); }
+       else if (t) { meta.appendChild(el('span', 'mono', t)); }
+     });
+     who.appendChild(meta);
+     var acts = el('div', 'acts');
+-    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn primary', 'Open run page', 'The run\'s own live page'));
+-    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn', 'Inspector', 'Graph, journal, compare'));
++    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn primary', 'Open run page', 'The run\'s own live page'));
++    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn', 'Inspector', 'Graph, journal, compare'));
+     who.appendChild(acts); row.appendChild(who); box.appendChild(row);
+   });
+   var rec = $('liveRecent'); rec.textContent = '';
+   if (!d.recent.length) { rec.appendChild(el('p', 'sub', 'No run finished today.')); }
+   d.recent.forEach(function (r) {
+     var row = el('div', 'runrow recent'); var who = el('div', 'who');
+     var top = el('div', 'meta'); top.appendChild(el('span', 'pill ' + (r.status === 'complete' ? 'good' : 'bad'), r.status === 'complete' ? 'complete' : (r.result || r.status)));
+     [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, usd(r.costUsd), ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
+     who.appendChild(top);
+-    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'board-link sub', 'Open in the inspector'));
++    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'board-link sub', 'Open in the inspector'));
+     row.appendChild(who); rec.appendChild(row);
+   });
+ }
+ 
+ function renderEmpty(d) {
+   var box = $('liveEmpty'); box.textContent = '';
+   box.appendChild(el('h2', '', 'No live runs'));
+   box.appendChild(el('div', 'sub', 'Last activity in this project: ' + (d.empty.lastActivityAt ? ago(d.empty.lastActivityAt) : 'none yet') + '.'));
+   var links = el('div', 'links');
+   var ov = el('button', 'btn primary', 'Overview'); ov.type = 'button'; ov.addEventListener('click', function () { go('overview'); }); links.appendChild(ov);
+-  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId) + '&t=' + T, 'btn', 'Last run: ' + d.recent[0].short)); }
+-  links.appendChild(linkTo('/?t=' + T, 'btn', 'All projects'));
++  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId), 'btn', 'Last run: ' + d.recent[0].short)); }
++  links.appendChild(linkTo('/', 'btn', 'All projects'));
+   box.appendChild(links);
+   if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + (d.finishedCount === d.recent.length ? ', ' + usd(d.recent.reduce(function (n, r) { return n + (r.costUsd || 0); }, 0)) : ' (the latest ' + d.recent.length + ' are listed)') + '.')); }
+ }
+ 
+ function renderOrch(d) {
+   var o = d.orchestrator || { sessions: [] };
+   $('orchCount').textContent = String(o.sessions.filter(function (x) { return x.state !== 'idle'; }).length);
+   renderOrchestrator($('orchBay'), o.sessions, { now: Date.now() });
+   $('orchNote').textContent = buildMixText(o) || '';
+ }
+ function render(d) {
+   renderOrch(d);
+   var empty = Boolean(d.empty);
+   $('liveEmpty').hidden = !empty; $('liveBody').hidden = empty;
+   if (empty) { renderEmpty(d); }
+@@ -221,31 +220,31 @@ function render(d) {
+ var inflight = false, lastOkAt = 0, lastSig = '', lastAnnounce = '', rendered = false;
+ // What changes just because time passes (elapsed time, estimates, when an agent started) does not redraw the tab: elapsed time is kept current in the page.
+ var VOLATILE = { now: 1, elapsedMs: 1, etaMs: 1, since: 1 };
+ function chip() {
+   document.querySelectorAll('.elapsed[data-started]').forEach(function (n) { n.textContent = elapsedText(n.getAttribute('data-started')); });
+ }
+ function problem(text) {
+   if (rendered) { return; }   // data is on the screen: the chip says Stale, the data stays
+   $('liveBody').hidden = true; $('liveEmpty').hidden = false;
+   var box = $('liveEmpty'); box.textContent = ''; box.appendChild(el('h2', '', text)); box.appendChild(el('div', 'sub', 'Reload the page, or open the board again from swarm watch --all.'));
+ }
+ function load() {
+   if (inflight || document.hidden || $('pane-live').hidden) { return; }
+   inflight = true;
+   var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 10000);
+-  fetch('/api/live?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
++  fetch('/api/live?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
+     .then(function (res) {
+       if (res.ok) { return res.json(); }
+       problem(res.status === 404 ? 'Project not found' : res.status === 403 ? 'This page\'s link has expired' : 'Could not load (' + res.status + ')');
+       return null;
+     })
+     .then(function (d) {
+       if (!d) { return; }
+       var sig = JSON.stringify(d, function (k, v) { return VOLATILE[k] ? undefined : v; });
+       if (sig !== lastSig) {
+         render(d); rendered = true; lastSig = sig;
+         var say = d.header.runsLive + ' live run' + (d.header.runsLive === 1 ? '' : 's') + ', ' + d.header.jobs.running + ' jobs running';
+         if (say !== lastAnnounce) { lastAnnounce = say; $('announce').textContent = say; }
+       }
+       lastOkAt = Date.now();
+     })
+diff --git a/tools/watch-assets/project.js b/tools/watch-assets/project.js
+index 35644c0..5599b1a 100644
+--- a/tools/watch-assets/project.js
++++ b/tools/watch-assets/project.js
+@@ -1,31 +1,30 @@
+ // SPDX-License-Identifier: Apache-2.0
+ (function () {
+   'use strict';
++  var TOKEN = self.BoardLib.watchToken();
+   var params = new URLSearchParams(location.search);
+-  var TOKEN = params.get('t') || '';
+   var ID = params.get('id') || '';
+-  var T = encodeURIComponent(TOKEN);
+   var $ = function (id) { return document.getElementById(id); };
+   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
+   function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
+   function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
+-  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
+-  $('back').href = '/?t=' + T;
+-  $('crumbBack').href = '/?t=' + T;
+-  $('crumbAll').href = '/?t=' + T;
++  function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId); }
++  $('back').href = '/';
++  $('crumbBack').href = '/';
++  $('crumbAll').href = '/';
+ 
+   function progressList(title, items) {
+     var box = el('div', 'progress-list');
+     box.appendChild(el('div', 'label', title));
+     var list = el('ul', 'board-list');
+     if (!items.length) { list.appendChild(el('li', 'board-entry sub', 'none')); }
+     items.forEach(function (item) { list.appendChild(el('li', 'board-entry', item)); });
+     box.appendChild(list);
+     return box;
+   }
+ 
+   var panelErrors = Object.create(null);
+   function failedPanel(id, error) {
+     var host = $(id); host.textContent = ''; host.appendChild(el('div', 'board-empty', 'This panel failed to render.'));
+     if (!panelErrors[id]) { panelErrors[id] = true; console.error('Swarm Watch panel failed to render:', id, error); }
+@@ -223,31 +222,31 @@
+     ['blocked', 'running', 'review', 'ready', 'todo', 'proposed', 'done'].forEach(function (status) {
+       var list = p.tickets.filter(function (x) { return x.status === status; });
+       if (!list.length) { return; }
+       var d = el('details', 'board-lane'); d.open = status !== 'done';
+       d.appendChild(el('summary', '', status + ' (' + list.length + ')'));
+       var body = el('div', 'lane-body');
+       list.slice(0, 200).forEach(function (x) { body.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.risk || '') + '  ' + x.title)); });
+       d.appendChild(body); t.appendChild(d);
+     });
+   }
+ 
+   function renderRuns(p) {
+     var r = $('runs'); r.textContent = '';
+     if (!p.runs.length) { r.appendChild(el('div', 'board-empty', 'No runs yet.')); }
+     p.runs.slice(0, 100).forEach(function (run) {
+-      var a = el('a', 'board-run'); a.href = '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(run.runId) + '&t=' + T; a.title = 'Open the run inspector (graph, journal, compare)';
++      var a = el('a', 'board-run'); a.href = runHref(run.runId); a.title = 'Open the run inspector (graph, journal, compare)';
+       a.appendChild(el('span', 'mono', run.runId)); a.appendChild(el('span', 'pill ' + (run.live ? 'good' : run.failed ? 'bad' : 'info'), run.live ? 'live' : run.status));
+       a.appendChild(el('span', 'num mono', run.done + '/' + run.jobs + ' jobs' + (run.failed ? ', ' + run.failed + ' failed' : '')));
+       a.appendChild(el('span', 'num mono', usd(run.costUsd))); a.appendChild(el('span', 'mono', when(run.startedAt)));
+       r.appendChild(a);
+     });
+     var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
+     if (off && off.count) {
+       var listAnchor = off.listAnchorId || 'untracked';
+       var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
+       off.runs.forEach(function (run) {
+         var row = el('div', 'board-entry');
+         var runLink = el('a', 'mono', run.runId);
+         runLink.setAttribute('href', run.href || runHref(run.runId));
+         runLink.setAttribute('title', 'Open the run inspector');
+         row.appendChild(runLink);
+@@ -302,23 +301,23 @@
+   function render(p) {
+     $('title').textContent = p.name;
+     $('crumbProject').textContent = p.name;
+     $('root').textContent = p.root;
+     panel('spend', function () { renderSpend(p); });
+     panel('progressBody', function () { renderProgress(p.progress); });
+     panel('splitBody', function () { renderSplit(p.splitQuality); });
+     panel('benchBody', function () { renderBench(p.benchmarks); });
+     panel('handledBody', function () { renderHandled(p.handled); });
+     panel('tickets', function () { renderTickets(p); });
+     panel('runs', function () { renderRuns(p); });
+     panel('lessons', function () { renderLessons(p); });
+   }
+ 
+   function load() {
+-    fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } })
++    fetch('/api/project?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN } })
+       .then(function (res) { return res.ok ? res.json() : null; })
+       .then(function (p) { if (p) { markProjectResponse(); render(p); } else { $('title').textContent = 'Unknown project'; } })
+       .catch(function () {});
+   }
+   load();
+   setInterval(load, 5000);
+ })();
+diff --git a/tools/watch-assets/run-drawer.js b/tools/watch-assets/run-drawer.js
+index 52179cd..94f040a 100644
+--- a/tools/watch-assets/run-drawer.js
++++ b/tools/watch-assets/run-drawer.js
+@@ -111,31 +111,31 @@
+   function listBlock(title, items) {
+     if (!items || !items.length) { return null; }
+     var wrap = el('div', 'report-list');
+     wrap.style.marginTop = '8px';
+     wrap.appendChild(el('div', 'label', title));
+     items.forEach(function (item) {
+       var line = el('div', 'mono', '- ' + item);
+       line.style.overflowWrap = 'anywhere';
+       wrap.appendChild(line);
+     });
+     return wrap;
+   }
+ 
+   function loadReport(id, body) {
+     var token = SW.token || '';
+-    fetch('/job/' + encodeURIComponent(id) + '?t=' + encodeURIComponent(token), { headers: { 'x-watch-token': token } })
++    fetch('/job/' + encodeURIComponent(id), { headers: { 'x-watch-token': token } })
+       .then(function (r) { return r.ok ? r.json() : null; })
+       .then(function (data) {
+         body.textContent = '';
+         if (!data) { body.textContent = 'No report for this job yet.'; return; }
+         var warn = el('div', 'label', txt(data.label));
+         warn.style.marginBottom = '6px';
+         body.appendChild(warn);
+         if (data.summary) { body.appendChild(el('div', '', data.summary)); }
+         else if (data.error) { body.appendChild(el('div', '', data.error)); }
+         else { body.appendChild(el('div', '', 'The worker left no summary.')); }
+         if (data.checksDeferred) { body.appendChild(el('div', 'label', 'Its checks could not run in the worker; the swarm runs them centrally at integrate.')); }
+         [listBlock('Files', data.files), listBlock('Risks', data.risks), listBlock('Follow-ups', data.followups)].forEach(function (block) { if (block) { body.appendChild(block); } });
+       })
+       .catch(function () { body.textContent = 'The report could not be loaded.'; });
+   }
+diff --git a/tools/watch-assets/run.js b/tools/watch-assets/run.js
+index 2656470..f096c72 100644
+--- a/tools/watch-assets/run.js
++++ b/tools/watch-assets/run.js
+@@ -1,35 +1,34 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // Run inspector: one run's job graph, a replayable journal with the cost of each job, and a side-by-side compare. Read-only; all data from /api/run.
+ import { renderOrchestrator } from './orchestrator-view.js';
+ 
+ var L = self.BoardLib;
++var TOKEN = L.watchToken();
+ var params = new URLSearchParams(location.search);
+-var TOKEN = params.get('t') || '';
+ var ID = params.get('id') || '';
+ var RUN = params.get('run') || '';
+-var T = encodeURIComponent(TOKEN);
+ var $ = function (id) { return document.getElementById(id); };
+ var NS = 'http://www.w3.org/2000/svg';
+ function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
+ function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
+ function when(iso) { return iso ? String(iso).slice(11, 19) : '-'; }
+-function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || '') + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
++function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || ''), { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
+ 
+-$('backAll').href = '/?t=' + T;
+-$('crumbProject').href = '/project?id=' + encodeURIComponent(ID) + '&t=' + T;
+-$('watchLink').href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + '&t=' + T;
++$('backAll').href = '/';
++$('crumbProject').href = '/project?id=' + encodeURIComponent(ID);
++$('watchLink').href = '/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN);
+ $('crumbRun').textContent = RUN;
+ 
+ var run = null, pos = 0, timer = null;
+ 
+ function tile(title, big, sub) { var t = el('div', 'card kpi'); t.appendChild(el('div', 'l', title)); t.appendChild(el('div', 'v num', big)); t.appendChild(el('div', 's', sub)); return t; }
+ function renderSummary(r) {
+   $('title').textContent = 'Run ' + r.runId;
+   $('subtitle').textContent = r.project + ' | started ' + (r.startedAt ? r.startedAt.slice(0, 16).replace('T', ' ') : '-');
+   $('crumbProject').textContent = r.project;
+   document.title = 'Run ' + r.runId + ' | Swarm Watch';
+   var k = $('kpis'); k.textContent = '';
+   k.appendChild(tile('Status', r.status || '-', L.duration(r.durationMs)));
+   var st = Object.keys(r.totals.byStatus).sort().map(function (s) { return s + ' ' + r.totals.byStatus[s]; }).join(', ');
+   k.appendChild(tile('Jobs', String(r.totals.jobs), st || 'none recorded'));
+   k.appendChild(tile('Cost', usd(r.totals.usd), r.budgetUsd ? 'run cap ' + usd(r.budgetUsd) : 'no run cap recorded'));
+@@ -137,19 +136,19 @@ $('other').addEventListener('change', function () {
+   var v = $('other').value;
+   if (!v) { renderCompare(null); return; }
+   api('&compare=' + encodeURIComponent(v)).then(function (d) { renderCompare(d && d.compare); });
+ });
+ 
+ api().then(function (r) {
+   if (!r) { $('title').textContent = 'Run not found'; $('subtitle').textContent = 'No run ' + RUN + ' in this project.'; return; }
+   run = r;
+   renderSummary(r); renderGraph(r);
+   var orch = r.orchestrator || []; $('orchCard').hidden = !orch.length; if (orch.length) { renderOrchestrator($('orchBay'), orch, { now: Date.now() }); }
+   // The remote board never starts a run's own page on the computer: no link to it there.
+   $('watchLink').hidden = r.openRun === false;
+   $('scrub').max = String(r.journal.length);
+   setPos(r.journal.length);
+ });
+-fetch('/api/project?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
++fetch('/api/project?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (p) {
+   if (!p) { return; }
+   p.runs.filter(function (x) { return x.runId !== RUN; }).slice(0, 60).forEach(function (x) { var o = el('option', '', x.runId + '  ' + x.status + '  ' + x.done + '/' + x.jobs + ' jobs'); o.value = x.runId; $('other').appendChild(o); });
+ }).catch(function () {});

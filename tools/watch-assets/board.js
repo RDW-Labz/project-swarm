@@ -5,8 +5,7 @@ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } fr
 import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
-var TOKEN = new URLSearchParams(location.search).get('t') || '';
-var T = encodeURIComponent(TOKEN);
+var TOKEN = L.watchToken();
 var $ = function (id) { return document.getElementById(id); };
 var store = {
   get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -24,9 +23,9 @@ function ago(iso) {
   return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago';
 }
 function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour12: false }); }
-function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
-function watchHref(projectId, runId) { if (state.data && state.data.openRun === false) { return runHref(projectId, runId); } return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId) + '&t=' + T; }
-function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId) + '&t=' + T; }
+function runHref(projectId, runId) { return '/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId); }
+function watchHref(projectId, runId) { if (state.data && state.data.openRun === false) { return runHref(projectId, runId); } return '/open/run?id=' + encodeURIComponent(projectId) + '&run=' + encodeURIComponent(runId); }
+function projectHref(projectId) { return '/project?id=' + encodeURIComponent(projectId); }
 function link(href, cls, parts) { var a = el('a', cls); a.href = href; parts.forEach(function (p) { a.appendChild(p); }); return a; }
 function pill(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
 function meter(pct, hot) { var m = el('div', 'meter' + (hot ? ' hot' : '')); var i = el('i'); i.style.width = Math.max(0, Math.min(100, pct)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', Math.round(pct) + ' percent'); return m; }
@@ -555,8 +554,8 @@ function entryNode(e, projects) {
 function loadHistory() {
   if (state.tab !== 'events' || !state.data) { return; }
   var q = query();
-  var csv = new URLSearchParams(q); csv.set('t', TOKEN);
-  var api = new URLSearchParams(q); api.set('t', TOKEN); api.set('limit', '100');
+  var csv = new URLSearchParams(q);
+  var api = new URLSearchParams(q); api.set('limit', '100');
   if (state.scratch) { api.set('scratch', '1'); csv.set('scratch', '1'); }
   $('csv').href = '/history.csv?' + csv.toString();
   fetch('/api/history?' + api.toString(), { headers: { 'x-watch-token': TOKEN } })
@@ -607,7 +606,7 @@ function renderBoard(data) {
 function poll() {
   if (state.polling) { return; }   // one request at a time: a slow answer is not overtaken by the next poll
   state.polling = true;
-  fetch('/api/board?t=' + T + (state.scratch ? '&scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
+  fetch('/api/board' + (state.scratch ? '?scratch=1' : ''), { headers: { 'x-watch-token': TOKEN } })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) { if (data) { renderBoard(data); } })
     .catch(function () {})

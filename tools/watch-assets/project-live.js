@@ -5,10 +5,9 @@ import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } fr
 import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
+var TOKEN = L.watchToken();
 var params = new URLSearchParams(location.search);
-var TOKEN = params.get('t') || '';
 var ID = params.get('id') || '';
-var T = encodeURIComponent(TOKEN);
 var $ = function (id) { return document.getElementById(id); };
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
 function pct(v) { return typeof v === 'number' && isFinite(v) ? Math.round(v * 100) + '%' : '-'; }
@@ -167,8 +166,8 @@ function renderRuns(d) {
     });
     who.appendChild(meta);
     var acts = el('div', 'acts');
-    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn primary', 'Open run page', 'The run\'s own live page'));
-    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'btn', 'Inspector', 'Graph, journal, compare'));
+    acts.appendChild(linkTo('/open/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn primary', 'Open run page', 'The run\'s own live page'));
+    acts.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'btn', 'Inspector', 'Graph, journal, compare'));
     who.appendChild(acts); row.appendChild(who); box.appendChild(row);
   });
   var rec = $('liveRecent'); rec.textContent = '';
@@ -178,7 +177,7 @@ function renderRuns(d) {
     var top = el('div', 'meta'); top.appendChild(el('span', 'pill ' + (r.status === 'complete' ? 'good' : 'bad'), r.status === 'complete' ? 'complete' : (r.result || r.status)));
     [r.short, r.done + '/' + r.total + ' jobs', r.failed ? r.failed + ' failed' : null, ago(r.finishedAt)].forEach(function (t) { if (t) { top.appendChild(el('span', 'mono', t)); } });
     who.appendChild(top);
-    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId) + '&t=' + T, 'board-link sub', 'Open in the inspector'));
+    who.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(r.runId), 'board-link sub', 'Open in the inspector'));
     row.appendChild(who); rec.appendChild(row);
   });
 }
@@ -189,8 +188,8 @@ function renderEmpty(d) {
   box.appendChild(el('div', 'sub', 'Last activity in this project: ' + (d.empty.lastActivityAt ? ago(d.empty.lastActivityAt) : 'none yet') + '.'));
   var links = el('div', 'links');
   var ov = el('button', 'btn primary', 'Overview'); ov.type = 'button'; ov.addEventListener('click', function () { go('overview'); }); links.appendChild(ov);
-  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId) + '&t=' + T, 'btn', 'Last run: ' + d.recent[0].short)); }
-  links.appendChild(linkTo('/?t=' + T, 'btn', 'All projects'));
+  if (d.recent[0]) { links.appendChild(linkTo('/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(d.recent[0].runId), 'btn', 'Last run: ' + d.recent[0].short)); }
+  links.appendChild(linkTo('/', 'btn', 'All projects'));
   box.appendChild(links);
   if (d.finishedCount) { box.appendChild(el('div', 'sub', 'Finished today: ' + d.finishedCount + (d.finishedCount === 1 ? ' run' : ' runs') + '.')); }
 }
@@ -228,7 +227,7 @@ function load() {
   if (inflight || document.hidden || $('pane-live').hidden) { return; }
   inflight = true;
   var ctl = new AbortController(), timer = setTimeout(function () { ctl.abort(); }, 10000);
-  fetch('/api/live?id=' + encodeURIComponent(ID) + '&t=' + T, { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
+  fetch('/api/live?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN }, signal: ctl.signal })
     .then(function (res) {
       if (res.ok) { return res.json(); }
       problem(res.status === 404 ? 'Project not found' : res.status === 403 ? 'This page\'s link has expired' : 'Could not load (' + res.status + ')');
