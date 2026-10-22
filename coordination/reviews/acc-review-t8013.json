@@ -1,0 +1,29 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8013",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/watch-assets/board.js:332-505 renderWatchProjectCard (name/machine/swarm version, percent+meter, Now/Next/Blocked rows, slotsSentence at 304-322, ETA at 427-437, facts at 471-491, heads-up at 497-504); tools/watch-assets/swarm-ui.css:257-292 watch card styles. tests/board-card-ui.test.mjs: watch project card shows data from projectOverview.card; slotsSentence never claims free slots when all are in use.",
+          "gap": "No test asserts project name, machine, installed version, or heads-up sentence text when card.headsUp is set."
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tools/watch-assets/board.js:412-468 ready/waiting/need-you toggles + cardItemList (284-302); tests/board-card-ui.test.mjs: watch project card lists show exact commands for ready tickets only.",
+          "gap": "No test opens the waiting-on-tickets or need-you toggles or asserts each listed item.command matches fixture/API data (ready path covered only)."
+        },
+        {
+          "n": 3,
+          "met": true,
+          "evidence": "tests/board-card-ui.test.mjs: watch project card shows data from projectOverview.card (fixture via makeBoardFixture + boardSnapshot, numeric fields vs p.card, assertNumberElements for label+title on every .watch-num and toggle).",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}
