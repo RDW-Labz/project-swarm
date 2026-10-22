@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "extfix2",
+   "agent": "auto",
+   "tier": "cheap",
+   "prompt": "tests/completion.test.mjs still fails: in tools/completion.mjs the 'orchestrator' command entry uses the arg kind 'subcommand', but the test only allows run, manifest, provider, goal or none (assert on entry.args). Fix the entry so the test passes without weakening the test: use arg kind 'none' for it (list the subcommands register, heartbeat, list in the summary text), and check that the completion generator (bash/zsh/fish output) still completes `swarm orchestrator <tab>` sensibly or at least does not break. Run tests/completion.test.mjs, tests/watch-command-meta.test.mjs and tests/external-orchestrators.test.mjs; all must pass. Change nothing else.",
+   "context": [
+    "tools/completion.mjs",
+    "tests/completion.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/completion.mjs"
+   ],
+   "timeoutMs": 900000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/watch-command-meta.test.mjs",
+    "tests/forget.test.mjs",
+    "tests/gc.test.mjs",
+    "tests/installed-swarm.test.mjs",
+    "tests/pins.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}
