@@ -41,6 +41,7 @@ function makeClassList() {
 
 function makeElement(tag, id) {
   const classList = makeClassList();
+  const listeners = {};
   const node = {
     tagName: String(tag).toUpperCase(),
     id: id || '',
@@ -68,7 +69,12 @@ function makeElement(tag, id) {
       child.parentNode = this;
       return child;
     },
-    addEventListener() {},
+    addEventListener(type, fn) {
+      (listeners[type] ||= []).push(fn);
+    },
+    click() {
+      for (const fn of listeners.click || []) fn({ target: this, preventDefault() {} });
+    },
     removeChild(child) {
       const i = this.children.indexOf(child);
       if (i >= 0) this.children.splice(i, 1);
@@ -79,7 +85,11 @@ function makeElement(tag, id) {
       const walk = n => {
         if (!n) return null;
         if (sel === '.watch-card-slots' && n.classList && n.classList.contains('watch-card-slots')) return n;
-        if (sel === '.watch-card-rows' && n.classList && n.classList.contains('watch-card-rows')) return null;
+        if (sel === '.watch-card-blocked' && n.classList && n.classList.contains('watch-card-blocked')) return n;
+        if (sel.startsWith('[aria-label="') && sel.endsWith('"]')) {
+          const want = sel.slice('[aria-label="'.length, -2);
+          if (n.getAttribute && n.getAttribute('aria-label') === want) return n;
+        }
         for (const c of n.children || []) {
           const hit = walk(c);
           if (hit) return hit;
@@ -94,8 +104,11 @@ function makeElement(tag, id) {
         if (!n) return;
         if (sel === '.watch-num' && n.classList && n.classList.contains('watch-num')) out.push(n);
         if (sel === '.watch-card-toggle' && n.classList && n.classList.contains('watch-card-toggle')) out.push(n);
+        if (sel === '.watch-card-list' && n.classList && n.classList.contains('watch-card-list')) out.push(n);
+        if (sel === '.watch-card-list-item' && n.classList && n.classList.contains('watch-card-list-item')) out.push(n);
         if (sel === '.watch-card-list code' && n.tagName === 'CODE') out.push(n);
         if (sel === '.watch-card-row' && n.classList && n.classList.contains('watch-card-row')) out.push(n);
+        if (sel === 'button.copy' && n.tagName === 'BUTTON' && n.classList && n.classList.contains('copy')) out.push(n);
         for (const c of n.children || []) walk(c);
       };
       walk(this);
@@ -143,6 +156,22 @@ async function installBoardDom() {
   globalThis.localStorage = storage;
   globalThis.sessionStorage = storage;
   win.navigator = { clipboard: { writeText: async () => {} } };
+  win.navigator.clipboard._writes = [];
+  const origWrite = win.navigator.clipboard.writeText.bind(win.navigator.clipboard);
+  win.navigator.clipboard.writeText = async text => {
+    win.navigator.clipboard._writes.push(text);
+    return origWrite(text);
+  };
+  if (globalThis.navigator && globalThis.navigator !== win.navigator) {
+    try {
+      Object.defineProperty(globalThis.navigator, 'clipboard', {
+        value: win.navigator.clipboard,
+        configurable: true,
+      });
+    } catch {
+      /* Node may expose a read-only navigator */
+    }
+  }
   win.fetch = async () => ({ ok: false });
   win.innerHeight = 800;
   const libSrc = await fs.readFile(path.join(assets, 'board-lib.js'), 'utf8');
@@ -203,6 +232,99 @@ function assertNumberElements(host) {
   }
 }
 
+async function writeCardListFixture(fixture) {
+  const root = fixture.root;
+  const ledgerFile = path.join(root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const build = ledger.tickets.filter(ticket => ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status));
+  const [a, b, c] = build.slice(0, 3);
+  assert.ok(a?.id && b?.id && c?.id, 'fixture needs build tickets for blocked chain');
+  a.status = 'done';
+  b.status = 'blocked';
+  b.blockReason = 'deps';
+  b.dependsOn = [a.id];
+  c.status = 'blocked';
+  c.blockReason = 'deps';
+  c.dependsOn = ['T-missing-dep'];
+  const releasable = build.find(ticket => ticket.id !== a.id && ticket.id !== b.id && ticket.id !== c.id);
+  assert.ok(releasable?.id, 'fixture needs ticket for releasable held item');
+  releasable.status = 'blocked';
+  releasable.blockReason = 'manual';
+  releasable.dependsOn = [a.id];
+  const proposedId = 'T-proposed-inbox';
+  ledger.tickets.push({
+    id: proposedId,
+    title: 'Proposed from UI fixture',
+    status: 'proposed',
+    type: 'build',
+    files: ['src/proposed.ts'],
+    createdAt: iso(NOW),
+  });
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger));
+  const journalFile = path.join(root, '.swarm', 'project', 'journal.ndjson');
+  await fs.mkdir(path.dirname(journalFile), { recursive: true });
+  const humanId = 'inbox-human-1';
+  const decisionId = 'inbox-decision-1';
+  const blockerId = 'inbox-blocker-1';
+  const journal = [
+    { kind: 'human', id: humanId, title: 'Human journal task', ts: iso(NOW - 3600000) },
+    { kind: 'blocker', id: blockerId, text: 'Journal blocker needs resolve', ts: iso(NOW - 1800000) },
+    { kind: 'decision', id: decisionId, text: 'Pick a lane', confirm: true, confirmed: false, choice: 'cursor', options: ['cursor', 'codex'], ts: iso(NOW - 900000) },
+  ];
+  await fs.writeFile(journalFile, `${journal.map(line => JSON.stringify(line)).join('\n')}\n`);
+  const runId = 'inbox-human-run';
+  const runDir = path.join(root, '.swarm', 'runs', runId);
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), `${JSON.stringify({
+    id: runId,
+    status: 'running',
+    startedAt: iso(NOW - 600000),
+    jobs: [{ id: 'job-human', heldReason: 'human', status: 'held', title: 'Run human gate', heldAt: iso(NOW - 600000) }],
+  })}\n`);
+}
+
+function rowListItems(row) {
+  const idEl = (row.children || []).find(c => c.classList && c.classList.contains('watch-card-list-id'));
+  const titleEl = (row.children || []).find(c => c.classList && c.classList.contains('watch-card-list-title'));
+  const codeEl = (row.children || []).flatMap(c => (c.children || []).filter(ch => ch.tagName === 'CODE'));
+  const copyBtn = (row.children || []).flatMap(c => (c.children || []).filter(ch => ch.tagName === 'BUTTON' && ch.classList.contains('copy')))[0];
+  return { idEl, titleEl, codeEl: codeEl[0] || null, copyBtn };
+}
+
+function assertCardListItems(listEl, items) {
+  assert.equal(listEl.hidden, false, 'list should be open');
+  const rows = listEl.querySelectorAll('.watch-card-list-item');
+  assert.equal(rows.length, items.length, 'list row count');
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const { idEl, titleEl, codeEl, copyBtn } = rowListItems(rows[i]);
+    assert.equal(idEl?.textContent, item.id, `item[${i}].id`);
+    assert.equal(titleEl?.textContent, item.title, `item[${i}].title`);
+    if (item.command) {
+      assert.ok(codeEl, `item[${i}] should have code`);
+      assert.equal(codeEl.textContent, item.command, `item[${i}].command in code`);
+      assert.ok(copyBtn, `item[${i}] should have copy button`);
+    } else {
+      assert.equal(codeEl, null, `item[${i}] should have no code element`);
+    }
+  }
+}
+
+async function assertCopyButtonsCopyExactCommands(listEl, items) {
+  const rows = listEl.querySelectorAll('.watch-card-list-item');
+  const clipboard = window.navigator.clipboard;
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (!item.command) continue;
+    const { copyBtn } = rowListItems(rows[i]);
+    const before = clipboard._writes.length;
+    copyBtn.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(clipboard._writes.length, before + 1, `copy click for ${item.id}`);
+    assert.equal(clipboard._writes[clipboard._writes.length - 1], item.command, `clipboard for ${item.id}`);
+  }
+}
+
 function overviewForFixture(fixture, options = {}) {
   return boardSnapshot({
     projects: [fixture.projects[0]],
@@ -251,6 +373,47 @@ test('watch project card shows data from projectOverview.card', async t => {
     assert.match(slot.textContent, /Waiting for a free slot/);
     assert.doesNotMatch(slot.textContent, /slots free/);
   }
+});
+
+test('watch project card waiting list opens with ids, titles, commands and copy', async t => {
+  const { renderWatchProjectCard } = await loadBoardModule();
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await writeCardListFixture(fixture);
+  const p = await overviewForFixture(fixture);
+  assert.ok(p.card.blocked.items.length >= 1, 'waiting items from projectOverview');
+  const host = document.createElement('div');
+  renderWatchProjectCard(p, host);
+  const waitBtn = host.querySelector('[aria-label="Show tickets waiting on dependencies"]');
+  assert.ok(waitBtn);
+  assert.equal(waitBtn.getAttribute('aria-expanded'), null);
+  const blocked = host.querySelector('.watch-card-blocked');
+  const listsBefore = blocked.querySelectorAll('.watch-card-list');
+  assert.equal(listsBefore[0].hidden, true);
+  waitBtn.click();
+  assert.equal(waitBtn.getAttribute('aria-expanded'), 'true');
+  assertCardListItems(listsBefore[0], p.card.blocked.items);
+  await assertCopyButtonsCopyExactCommands(listsBefore[0], p.card.blocked.items);
+});
+
+test('watch project card need-you list opens with ids, titles, commands and copy', async t => {
+  const { renderWatchProjectCard } = await loadBoardModule();
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  await writeCardListFixture(fixture);
+  const p = await overviewForFixture(fixture);
+  assert.ok(p.card.blocked.needYouItems.length >= 1, 'need-you items from projectOverview');
+  const host = document.createElement('div');
+  renderWatchProjectCard(p, host);
+  const needBtn = host.querySelector('[aria-label="Show need-you items"]');
+  assert.ok(needBtn);
+  const blocked = host.querySelector('.watch-card-blocked');
+  const lists = blocked.querySelectorAll('.watch-card-list');
+  assert.equal(lists[1].hidden, true);
+  needBtn.click();
+  assert.equal(needBtn.getAttribute('aria-expanded'), 'true');
+  assertCardListItems(lists[1], p.card.blocked.needYouItems);
+  await assertCopyButtonsCopyExactCommands(lists[1], p.card.blocked.needYouItems);
 });
 
 test('watch project card lists show exact commands for ready tickets', async t => {
