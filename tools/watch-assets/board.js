@@ -2,7 +2,7 @@
 // The board (swarm watch --all): Overview, Cost, Agents, Events. Read-only; every number and every agent state comes from /api/board and /api/history.
 // Text is always set with textContent (never as HTML). Nothing here invents progress: an empty list says so.
 import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
-import { renderOrchestrator, buildMixText, doingText } from './orchestrator-view.js';
+import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
 var L = self.BoardLib;
 var TOKEN = L.watchToken();
@@ -16,7 +16,6 @@ var state = { data: null, lastOk: 0, tab: 'overview', scratch: store.get('swarm-
 try { state.seen = JSON.parse(store.get('swarm-seen') || '[]'); if (!Array.isArray(state.seen)) { state.seen = []; } } catch (e) { state.seen = []; }
 
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
-function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function ago(iso) {
   var t = Date.parse(iso);
   if (!isFinite(t)) { return 'never'; }
@@ -150,14 +149,9 @@ function tile(title, big, sub, extra) {
 }
 function renderKpis(m) {
   var box = $('kpis'); box.textContent = '';
-  var c = m.cost;
   var seg = el('div', 'seg');
   Object.keys(m.agents.byLane).forEach(function (lane) { if (m.agents.byLane[lane]) { var i = el('i'); i.style.flex = String(m.agents.byLane[lane]); i.style.background = L.laneColor(lane); seg.appendChild(i); } });
   box.appendChild(tile('Live agents', String(m.agents.total), m.liveRuns + ' live run' + (m.liveRuns === 1 ? '' : 's') + (L.agentCounts(m).unshown ? ', ' + L.agentCounts(m).held + ' worker slots held' : ''), m.agents.total ? seg : null));
-  box.appendChild(tile('Billed today', usd(c.todayUsd), 'last 7 days billed ' + usd(c.weekUsd)));
-  box.appendChild(tile('List value today', usd(c.flatRateTodayUsd), 'flat-rate lanes, not billed; 7 days ' + usd(c.flatRateWeekUsd)));
-  box.appendChild(tile('Billed, all time', usd(c.paidUsd), 'of which estimated ' + usd(c.paidEstimatedUsd)));
-  box.appendChild(tile('List value, all time', usd(c.flatRateListUsd), 'not billed'));
   var w = m.workers;
   if (w) {
     var limit = w.invalid ? 'LIMIT INVALID' : w.max ? w.total + ' / ' + w.max : String(w.total);
@@ -203,27 +197,6 @@ function renderBays(m) {
     if (more > 0) { if (!extra) { extra = el('span', 'sub more'); hit.heads.appendChild(extra); } extra.textContent = '+' + more; } else if (extra) { extra.remove(); }
     host.appendChild(hit.node);
   });
-}
-function capCell(p) {
-  var s = p.spend, box = el('div');
-  function breakdown() {
-    box.appendChild(el('div', 'sub', 'billed ' + usd(s.billedUsd) + ' · list value ' + usd(s.listUsd) + ' (not billed)'));
-    box.appendChild(el('div', 'sub', 'cap counts: ' + (s.capBasis === 'billed' ? 'billed only' : 'billed + list value')));
-  }
-  if (s.capUsd) {
-    var used = typeof s.capUsedUsd === 'number' ? s.capUsedUsd : (s.sharedTrees > 1 && typeof s.familyUsd === 'number' ? s.familyUsd : s.usd);
-    box.appendChild(meter(100 * used / s.capUsd, used / s.capUsd > 0.75));
-    box.appendChild(el('span', 'mono sub', usd(used) + ' of ' + usd(s.capUsd)));
-    breakdown();
-    if (s.sharedTrees > 1) { box.appendChild(el('div', 'sub', 'shared by ' + s.sharedTrees + ' trees (this one ' + usd(s.capBasis === 'billed' ? s.billedUsd : s.usd) + ')')); }
-    if (s.capInherited) { box.appendChild(el('div', 'sub', 'cap inherited from ' + String(s.inheritedFrom || '').split(/[\\/]/).pop())); }
-  } else {
-    var r = el('div', 'livebar'); r.appendChild(pill(s.capInvalid ? 'CAP INVALID' : 'NO CAP', s.capInvalid ? 'bad' : 'warn')); box.appendChild(r);
-    breakdown();
-  }
-  if (s.reached) { box.appendChild(pill('CAP REACHED', 'bad')); }
-  if (s.why) { box.appendChild(el('div', 'sub why', 'Why capped: ' + s.why)); }
-  return box;
 }
 function liveCell(p) {
   var box = el('div');
@@ -329,7 +302,7 @@ function renderProjects(projects) {
   var table = $('projTable'); table.textContent = '';
   var cards = $('projCards'); cards.textContent = '';
   if (!sorted.length) { var none = 'No projects yet. Run a swarm command inside a project, or swarm projects add PATH.'; $('projTable').appendChild(el('caption', 'empty', none)); cards.appendChild(el('div', 'empty', none)); cards.classList.add('show'); }
-  else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Spend and cap', 'Lanes', 'Last activity'])); }
+  else { cards.classList.remove('show'); table.appendChild(th(['Project', 'Live runs', 'Jobs', 'Tickets', 'Lanes', 'Last activity'])); }
   var machines = state.data && Array.isArray(state.data.machines) ? state.data.machines : [];
   var machinesNote = $('machinesNote'); machinesNote.textContent = '';
   var machineText = machines.map(function (m) { return m.name + ' (v' + (m.version || '-') + (m.ok === false ? ', unreachable' : '') + ')'; }).join(' · ');
@@ -348,7 +321,7 @@ function renderProjects(projects) {
     tr.appendChild(td(name)); tr.appendChild(td(liveCell(p), 'wrap'));
     tr.appendChild(td(p.agents.jobs.running + ' run, ' + p.agents.jobs.queued + ' q, ' + p.agents.jobs.blocked + ' blk', 'mono'));
     tr.appendChild(td(p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''), 'mono'));
-    tr.appendChild(td(capCell(p))); tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
+    tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
     var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); if (p.testOrTemp) { head.appendChild(el('span', '', ' ')); head.appendChild(pill('test', 'warn')); } appendPinnedBadge(head, p); c.appendChild(head); c.appendChild(machineLine(p));
@@ -360,7 +333,6 @@ function renderProjects(projects) {
     if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }
     c.appendChild(liveCell(p));
     var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
-    c.appendChild(capCell(p));
     cards.appendChild(c);
   });
   table.appendChild(body);
@@ -453,67 +425,33 @@ function renderNeeds(inbox) {
 // ---- cost ----------------------------------------------------------------------------------------------------------------------------------------
 
 function renderCost(data) {
-  var csig = L.signature({ m: data.machine, p: data.projects }, Math.floor(Date.now() / 60000));
+  var csig = L.signature({ lanes: data.machine.lanes }, Math.floor(Date.now() / 60000));
   if (csig === state.costSig) { return; }
   state.costSig = csig;
-  var c = data.machine.cost;
   var k = $('costKpis'); k.textContent = '';
-  k.appendChild(tile('Billed today', usd(c.todayUsd), 'billed lanes and rented GPUs'));
-  k.appendChild(tile('Billed, 7 days', usd(c.weekUsd), 'billed lanes and rented GPUs'));
-  k.appendChild(tile('Billed, all time', usd(c.paidUsd), 'estimated part ' + usd(c.paidEstimatedUsd)));
-  k.appendChild(tile('Flat-rate list value', usd(c.flatRateListUsd), 'Codex, Cursor, Claude subscription: not billed'));
-  var oc = data.machine.orchestrator || { todayListUsd: 0, allListUsd: 0 };
-  k.appendChild(tile('Orchestrator, list value', usd(oc.todayListUsd), 'today; ' + usd(oc.allListUsd) + ' all time. Subscription: not billed, not in the totals above'));
-  k.appendChild(tile('Estimated full cost', usd(c.paidUsd + c.flatRateListUsd), 'billed plus list value: what the work would cost at list prices'));
   var ot = $('orchTable'); ot.textContent = '';
-  var os = (data.machine.orchestrator && data.machine.orchestrator.sessions) || [];
-  if (!os.length) { ot.appendChild(el('caption', 'empty', 'No orchestrator session has been seen yet.')); }
-  else {
-    ot.appendChild(th(['Project', 'Session', 'State', 'Tokens today', 'List value today', 'List value all time', 'Hand-built edits']));
-    var obody = el('tbody');
-    os.forEach(function (x) {
-      var tr = el('tr');
-      tr.appendChild(td(x.project)); tr.appendChild(td(x.id, 'mono')); tr.appendChild(td(doingText(x, Date.now()), 'mono'));
-      tr.appendChild(td(typeof x.tokensToday === 'number' ? String(x.tokensToday) : '-', 'mono'));
-      tr.appendChild(td(usd(x.listUsdToday) + ' (list value)', 'mono')); tr.appendChild(td(usd(x.listUsdAll) + ' (list value)', 'mono')); tr.appendChild(td(String(x.handBuilt || 0), 'mono'));
-      obody.appendChild(tr);
-    });
-    ot.appendChild(obody);
-  }
+  var orchSection = ot.closest('section'); if (orchSection) { orchSection.hidden = true; }
   var t = $('laneTable'); t.textContent = '';
   var lanes = data.machine.lanes || [];
   if (!lanes.length) { t.appendChild(el('caption', 'empty', 'No lane is configured and none ran a job today.')); }
   else {
-    t.appendChild(th(['Lane', 'Kind', 'Jobs today', 'List value / cost today', 'Daily cap', 'Status']));
+    t.appendChild(th(['Lane', 'Kind', 'Jobs today', 'Status']));
     var body = el('tbody');
     lanes.forEach(function (l) {
       var tr = el('tr');
       var nameCell = el('div', 'livebar'); var sw = el('i'); sw.style.cssText = 'width:10px;height:10px;border-radius:3px;display:block;background:' + L.laneColor(l.label); nameCell.appendChild(sw); nameCell.appendChild(el('span', 'name', l.label));
-      tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind === 'billed' ? pill('billed', 'good') : pill('flat-rate, list value', 'info')));
+      tr.appendChild(td(nameCell)); tr.appendChild(td(l.kind || '-'));
       tr.appendChild(td(String(l.jobsToday || 0), 'mono'));
-      tr.appendChild(td(l.todayUsd ? usd(l.todayUsd) + (l.kind === 'billed' ? ' billed' : ' list value') : (l.kind === 'flat-rate' && l.jobsToday ? 'not reported list value' : usd(0) + (l.kind === 'billed' ? ' billed' : ' list value')), 'mono'));
-      var cap = el('div');
-      if (l.dailyCapUsd) { cap.appendChild(meter(100 * l.todayUsd / l.dailyCapUsd, l.todayUsd / l.dailyCapUsd > 0.75)); cap.appendChild(el('span', 'mono sub', usd(l.todayUsd) + ' of ' + usd(l.dailyCapUsd))); } else { cap.appendChild(el('span', 'sub', 'no daily cap')); }
-      tr.appendChild(td(cap));
       var st = el('div');
       if (l.limited) { var p = pill('paused (' + l.limited.state + ')', 'warn'); st.appendChild(p); var cd = el('span', 'mono sub', ' resets ' + L.countdown(l.limited.until, Date.now())); cd.dataset.until = l.limited.until; cd.dataset.prefix = ' resets '; st.appendChild(cd); }
-      else if (l.dailyCapUsd) { var rs = el('span', 'mono sub', 'cap resets ' + L.countdown(l.capResetsAt, Date.now()) + ' (UTC midnight)'); rs.dataset.until = l.capResetsAt; rs.dataset.prefix = 'cap resets '; rs.dataset.suffix = ' (UTC midnight)'; st.appendChild(rs); }
       else { st.appendChild(el('span', 'sub', 'ok')); }
       tr.appendChild(td(st)); body.appendChild(tr);
     });
     t.appendChild(body);
   }
-  $('laneNote').textContent = 'Billed lanes count what they were charged today; flat-rate lanes show what the work is worth at list price. A pause comes from a real rate-limit or quota event recorded by the lane scheduler.';
-  var s = $('spendTable'); s.textContent = '';
-  s.appendChild(th(['Project', 'Billed today', 'Billed, 7 days', 'Billed, all time', 'List value, all time', 'Spend and cap']));
-  var sb = el('tbody');
-  data.projects.forEach(function (p) {
-    var bp = data.machine.cost.byProject[p.id] || {};
-    var tr = el('tr');
-    tr.appendChild(td(link(projectHref(p.id), 'name board-link', [el('span', '', p.name)]))); tr.appendChild(td(usd(bp.todayUsd), 'mono')); tr.appendChild(td(usd(bp.weekUsd), 'mono')); tr.appendChild(td(usd(bp.paidUsd), 'mono')); tr.appendChild(td(usd(bp.flatRateListUsd), 'mono')); tr.appendChild(td(capCell(p)));
-    sb.appendChild(tr);
-  });
-  s.appendChild(sb);
+  $('laneNote').textContent = 'Lane kind, today\'s job count and current scheduler status.';
+  var spendSection = $('spendTable').closest('section'); if (spendSection) { spendSection.hidden = true; }
+  var costButton = $('tab-cost-btn'); if (costButton && costButton.firstChild) { costButton.firstChild.textContent = 'Lanes '; }
 }
 function tickCountdowns() {
   document.querySelectorAll('[data-until]').forEach(function (n) { n.textContent = (n.dataset.prefix || '') + L.countdown(n.dataset.until, Date.now()) + (n.dataset.suffix || ''); });
@@ -592,7 +530,6 @@ function query() {
 }
 function entryNode(e, projects) {
   var parts = [el('span', 'when mono', e.at.slice(0, 16).replace('T', ' ')), el('span', 'kind', e.kind), el('span', 'what', e.project + ': ' + e.title)];
-  if (typeof e.usd === 'number') { parts.push(el('span', 'num mono', usd(e.usd))); }
   if (e.kind === 'run' && e.jobs && e.jobs.length) {
     var box = el('span', 'runjobs');
     e.jobs.slice(0, 4).forEach(function (j) {
