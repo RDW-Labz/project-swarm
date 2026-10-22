@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "bump-1-165-2",
+      "agent": "auto",
+      "prompt": "Bump the version from 1.165.1 to 1.165.2. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.165.1 to 1.165.2. In README.md change every 1.165.1 pin (kickoff text, tag name) to 1.165.2. In these tests replace the 1.165.1 pin with 1.165.2 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.165.2 above the 1.165.1 entry (keep it unchanged) with the lead-in line: No money figure is left on Swarm Watch. And these bullets with a bold lead word like the 1.165.1 entry: Board: the orchestrator panel, run pages, plan views, API responses, event stream, history and CSV carry no money figures; NO CAP shows as a plain warning; a test requests every route and scans every board script and page for money. | Board: one percent function everywhere, activity counted across every checkout and scratch folder, installed version shown, nameless projects hidden, finished projects as a quiet card. Change nothing else. Run the six listed test files; all must pass. ignoreTests reason: only version pins and the changelog change; the fixture ledger is a frozen data copy.",
+      "context": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        "CHANGELOG.md",
+        "tests/t101-release.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs"
+      ],
+      "timeoutMs": 600000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/make-practice-project.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/leads.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/repo-map.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/router.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/swarm-produced-hash.test.mjs",
+        "tests/ticket-context.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
