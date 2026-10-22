@@ -26,6 +26,7 @@ export const COMMANDS = [
   command('ship', 'Ship a run or branch.', 'run', '--wait-required-only --repo --pr --require-section --no-merge --merge-method --timeout --poll --tag-timeout --no-flake-check --accept-pre-existing --preflight --checks-from-ci --rerun-flaky --rerun-flaky-ci --per-test-timeout --exempt --private-names --branch --check'),
   command('think', 'Ask the local brain for a short top-3 with reasons.', 'none', '--rounds --json'),
   command('digest', 'Condense a log, diff, test output or run to 15 lines.', 'none', '--kind --json'),
+  command('diagnose', 'One-shot read-only diagnose with a capped summary.', 'goal', '--files --lane --json'),
   command('draft', 'Draft docs, PR text or a plan locally, then polish.', 'none', '--context --out --json'),
   command('brain', 'Local brain status, stats or a test call.', 'none', '--json --markdown'),
   command('budget', 'Project daily spend limit: set, show, and approve-raise.', 'none', '--daily --mode --ceiling --machine --json --yes'),
