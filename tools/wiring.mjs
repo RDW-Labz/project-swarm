@@ -76,10 +76,10 @@ export function chainSharedFiles(added, existing = []) {
     seen.add(from.id);
     return (from.dependsOn ?? []).some(d => d === target || reaches(all.find(x => x.id === d) ?? { id: d }, target, seen));
   };
-  const integ = all.filter(t => buildOf(t) && t.integration === true).sort((a, b) => (a.id < b.id ? -1 : 1));
+  const writers = all.filter(t => buildOf(t)).sort((a, b) => (a.id < b.id ? -1 : 1));
   const newIds = new Set(added.map(t => t.id));
-  for (let i = 0; i < integ.length; i += 1) for (let j = 0; j < i; j += 1) {
-    const early = integ[j], late = integ[i];
+  for (let i = 0; i < writers.length; i += 1) for (let j = 0; j < i; j += 1) {
+    const early = writers[j], late = writers[i];
     if (!newIds.has(late.id)) continue;
     if (!(late.files ?? []).some(f => (early.files ?? []).includes(f))) continue;
     if (reaches(late, early.id) || reaches(early, late.id)) continue;
