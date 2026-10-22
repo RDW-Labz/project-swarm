@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { git } from '../tools/codex-adapter.mjs';
 import { readJournal } from '../tools/journal.mjs';
-import { cleanupRunAfterTerminal, cleanupRunWorkspaces, jobsEligibleForCleanup, resolveKeepWorkspaces } from '../tools/gc.mjs';
+import { cleanupRunAfterTerminal, cleanupRunWorkspaces, integrateQueueStillNeedsRunWorkspaces, jobsEligibleForCleanup, resolveKeepWorkspaces } from '../tools/gc.mjs';
 import { expectedWorkspaceFor } from '../tools/swarm/core-11.mjs';
 import { jsonWrite } from '../tools/swarm/core-31.mjs';
 
@@ -60,6 +60,41 @@ test('integrated run removes worktrees and logs journal entries', async t => {
   await assert.rejects(() => fs.access(workspaceAbs));
   const events = await readJournal(root, { limit: 50 });
   assert.ok(events.some(e => e.kind === 'note' && String(e.text).includes('workspace-cleanup') && String(e.text).includes(id)));
+});
+
+test('merge-queue conflicts before integrateQueue summary keep workspaces for merge prompt', async t => {
+  const { root, worktreesDir, env } = await repoFixture(t);
+  const id = 'run-merge-queue';
+  const jobId = 'job-0';
+  const worktreePath = path.join(worktreesDir, id, jobId);
+  await addWorktree(root, worktreePath);
+  const workspaceRel = expectedWorkspaceFor(id, jobId, { workspaceAttempt: 1 });
+  const workspaceAbs = path.join(root, workspaceRel);
+  await fs.mkdir(path.join(workspaceAbs, 'out'), { recursive: true });
+  await fs.writeFile(path.join(workspaceAbs, 'out', '0.txt'), 'earlier proposal\n');
+  const state = {
+    id,
+    root,
+    status: 'complete',
+    worktreesBase: worktreesDir,
+    integratedAt: new Date().toISOString(),
+    integrationStatus: 'complete',
+    mergeQueue: {
+      state: 'done',
+      conflicts: [{ job: jobId, files: ['out/0.txt'], reason: 'content changed since worker snapshot' }],
+      integrated: [],
+    },
+    jobs: [{ id: jobId, status: 'complete', worktreePath, workspace: workspaceRel }],
+  };
+  assert.equal(integrateQueueStillNeedsRunWorkspaces(state), true);
+  assert.deepEqual(jobsEligibleForCleanup(state), []);
+  const result = await cleanupRunWorkspaces(root, id, state, { env });
+  assert.deepEqual(result.removed, []);
+  await fs.access(worktreePath);
+  await fs.access(workspaceAbs);
+  state.mergeQueue.summary = { status: 'partial', flagged: [{ job: jobId, reason: 'merge-conflict' }] };
+  assert.equal(integrateQueueStillNeedsRunWorkspaces(state), false);
+  assert.ok(jobsEligibleForCleanup(state).length);
 });
 
 test('partial integration keeps all job workspaces until the run is complete', async t => {

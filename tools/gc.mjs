@@ -61,10 +61,21 @@ export function runFailedOrAbandoned(state) {
   return (state.jobs ?? []).some(job => FAILURE_RUN_STATUSES.has(job.status));
 }
 
+/** Workspaces must stay until integrateQueue finishes (merge/requeue reads job output copies). */
+export function integrateQueueStillNeedsRunWorkspaces(state) {
+  const mq = state?.mergeQueue;
+  if (!mq) return false;
+  if (mq.state === 'running') return true;
+  if (state.integrationStatus === 'queued') return true;
+  if (Array.isArray(mq.conflicts) && mq.conflicts.length > 0 && !mq.summary) return true;
+  return false;
+}
+
 export function jobsEligibleForCleanup(state, { forGc = false } = {}) {
   if (!state || !Array.isArray(state.jobs)) return [];
   if (state.status === 'running') return [];
   if (state.jobs.some(isRunningJob)) return [];
+  if (integrateQueueStillNeedsRunWorkspaces(state)) return [];
   if (state.integrationStatus === 'partial' && state.integratedAt) {
     return [];
   }
