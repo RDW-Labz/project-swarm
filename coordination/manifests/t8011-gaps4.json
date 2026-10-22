@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8011-gaps4",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/board-accuracy-activity.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-board-accuracy-a4.json",
+        "tools/build-progress.mjs",
+        "tools/board-data.mjs"
+      ],
+      "prompt": "Last T-8011 gap (coordination/reviews/acc-review-board-accuracy-a4.json): in tests/board-accuracy-activity.test.mjs, oracleFinishedCard (~lines 233-244) computes the expected finished state with buildProgress, a board function. Replace it with an oracle that reads only the fixture files: finished = every counted ticket in the ledger file is done (counted = not human, not cancelled, not proposed) AND the history file has a merge (or pr merged) event for the project AND the deploy fixture reports deployed (or no deploy configured, matching the board's documented rule: read that rule from tools/build-progress.mjs and restate it in the oracle); expected label = 'Finished' when finished. Assert the card's progress.finished and progress.current equal the oracle. Change only the test file. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-activity.test.mjs`."
+    }
+  ]
+}
