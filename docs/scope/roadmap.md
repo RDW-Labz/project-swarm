@@ -18,6 +18,7 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S7: Swarm v2 stage 1 (internal, about one month)
 - S8: Swarm v2 later stages
 - S9: Cluster (N devices, one ledger, autonomous node-to-node work)
+- S10: Swarm Watch Command Center (Hive overview, project cockpit, command palette, tools hub)
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -394,3 +395,95 @@ Acceptance:
 - Idle node-minutes while ready tickets exist stay under 1 percent of total node-minutes in the three-node harness.
 - Owner relays and double-claims remain 0 for the three-node scenario.
 - Shared merge queue and board views stay consistent while the third node joins and departs.
+
+## S10 Swarm Watch Command Center
+### R-066 Command Center views read one shared data layer with real labelled numbers only.
+Acceptance:
+- Hive and Project Cockpit import the same board data module; a unit test asserts both views resolve identical values for projects, agents live, and needs-you counts.
+- Every number rendered in Command Center views has a visible label and a hover explanation citing its source field; numbers without a trusted source are omitted from the DOM.
+- Board accuracy tests from S4 extend to Hive stat strip and Cockpit counters; CI fails with exit non-zero when a displayed figure disagrees with the ledger by more than one ticket or $0.01 spend.
+
+### R-067 Everything Swarm Watch has today stays.
+Acceptance:
+- Current Swarm Watch views move under a Classic tab; no existing route is removed from the router.
+- A Playwright test requests each pre-upgrade Swarm Watch path and asserts HTTP 200 and a non-empty main landmark.
+- Build progress, deploy tracking, and owner action panels from S4 still render under Classic with the same data contracts.
+
+### R-068 The Hive overview shows the swarm at a glance.
+Acceptance:
+- A central brain entity sits in the layout with one node per project around it showing status colour, percent done, tickets building, needs-you count, and machine label from real data.
+- A top stat strip shows projects, agents live, tickets done today, and needs you with labelled figures only.
+- A category legend (building, blocked, needs you, done) uses consistent colours across nodes and the legend chips.
+- Bottom panels show a plain-word live event log, lanes and who is working, what the swarm saved (relays avoided, retries, time), and a throughput chart fed from the event store.
+
+### R-069 Particle streams flow from each project node into the core.
+Acceptance:
+- Canvas draws streams from each project node toward the brain; particle density equals active agents on that project and speed scales with tickets per hour.
+- The stream loop runs at 30 fps when the tab is visible and pauses when `document.hidden` is true.
+- A performance test samples frame times and reports at least 30 fps average over 5 seconds with four active projects.
+
+### R-070 The brain entity is an original animated centerpiece.
+Acceptance:
+- The brain asset is an original design (not copied reference art); it breathes with total swarm activity and glows with lane colours currently in use.
+- A merge event triggers a visible pulse; a failure triggers an amber flicker; idle shows a calm rest state.
+- With `prefers-reduced-motion: reduce`, the brain shows one still frame and no breathing animation.
+
+### R-071 Clicking a project zooms into the Project Cockpit with navigation back to the Hive.
+Acceptance:
+- Clicking a project node runs a smooth zoom transition into Project Cockpit for that project id.
+- A breadcrumb control returns to the Hive overview in one action.
+- Deep links `/command-center` and `/command-center/project/<id>` load the correct view; keyboard focus order reaches the breadcrumb and back action.
+
+### R-072 The Project Cockpit shows orchestrator, stages, and ticket flow.
+Acceptance:
+- The orchestrator appears as an animated character using the robot-heads style and reflects real state: thinking, dispatching, waiting on you, or reviewing.
+- Stages and waves render as rings with progress from the ledger.
+- Tickets appear as nodes moving through ready, building, review, and done; each building ticket shows the head of its lane.
+
+### R-073 Cockpit sides and bottom expose lists and the live run stream.
+Acceptance:
+- Ticket lists for building, ready, blocked, and done support search and list the same ticket ids as `swarm queue list` within one id.
+- A live run stream shows what each worker is doing with progress, pace, ETA, PR refs, and deploy status from real run records.
+- Empty states say why there is no data instead of showing placeholder numbers.
+
+### R-074 Real robot heads are used everywhere an agent appears.
+Acceptance:
+- UI mounts `tools/watch-assets/robot-*.js` for every agent avatar; lane colours and states (working, thinking, sleeping, error, idle) match the All Projects page mapping.
+- Kenney emote bubbles and Fluent animated badges layer on robot heads; no stand-in SVG silhouettes ship in production bundles.
+- A snapshot test compares lane colour tokens on Command Center robot heads to the All Projects baseline file.
+
+### R-075 Signature glitch style uses PowerGlitch within strict limits.
+Acceptance:
+- Glitch-in on first load and on Hive→Cockpit switches; brain flickers on event bursts; hover glitch on project names, ticket ids, and robot heads; CountUp updates get a brief glitch; needs-you chips glitch once then stay still; failures and rate limits use stronger red or amber glitch; section headings glitch reveal on scroll into view.
+- Each burst lasts under 400 ms, never loops continuously, never runs on text actively updating, and at most 3 glitches run at once; all effects disable when `prefers-reduced-motion` is set.
+- `npm test -- tests/command-center-glitch-limits.test.mjs` exits 0 and asserts burst duration, concurrency cap, and reduced-motion off state.
+
+### R-076 A command palette jumps to projects, tickets, runs, PRs, docs, and commands.
+Acceptance:
+- Cmd-K on macOS and Ctrl-K elsewhere opens the palette with fuzzy search across projects, tickets, runs, PRs, docs, and swarm commands.
+- Arrow keys move selection and Enter navigates; recent items appear at the top after use.
+- Choosing a project opens Project Cockpit; choosing a doc opens the Resources hub entry.
+
+### R-077 A first-visit guided tour explains the Command Center.
+Acceptance:
+- On first visit a skippable tour highlights the Hive, Project Cockpit, colour legend, and command palette in plain language.
+- Help menu includes Replay tour, which restarts the tour without clearing completion for other users.
+- Tour steps are reachable by keyboard and dismiss with Escape.
+
+### R-078 A Resources and Tools hub is searchable and plugin-extensible.
+Acceptance:
+- The hub lists searchable docs, runbooks, every swarm command with a copy button, links to repos, PRs, deploys, lane setup guides, and the asset library with licences.
+- Dropping a validated JSON or Markdown entry into `tools/watch-hub/entries/` surfaces a new resource without code changes.
+- `npm test -- tests/watch-hub-schema.test.mjs` exits 0 against the entry JSON Schema.
+
+### R-079 The phone layout stacks the Hive and tabs the Cockpit without horizontal scroll.
+Acceptance:
+- At 390 px width the Hive layout is a vertical stack with no horizontal scroll in Playwright.
+- Project Cockpit uses tabs for orchestrator, tickets, and run stream at phone width.
+- Interactive targets measure at least 44 px in both dimensions on phone layout tests.
+
+### R-080 Performance, accessibility, and review gates pass for every Command Center stage.
+Acceptance:
+- Idle CPU stays under 3 percent in a 60-second trace; ambient canvas targets 30 fps and pauses when the tab is hidden; reduced motion shows still frames; keyboard access covers primary actions; body text contrast is at least 4.5:1.
+- Each CC stage completes the self-review loop in `docs/design/review-rubric.md` with every rubric item scored 4 or better within 5 rounds; artifacts live under `docs/design/review/CCn/roundN/` with screenshots and `scores.json`.
+- Every new vendored asset includes `VENDOR.json` beside the files and an entry in `docs/third-party.md`; licence check test exits 0.
