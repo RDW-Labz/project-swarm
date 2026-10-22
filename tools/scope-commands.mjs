@@ -70,7 +70,7 @@ export const SCOPE_USAGE = [
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
   '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
-  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT]     (hand status change: previews the move; --yes or --force applies; reviews for done are never skipped)',
+  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
   '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -89,7 +89,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -2843,7 +2843,7 @@ async function releaseTickets(root, ids, flags) {
         if (t.status === 'todo' && !isApproved(ledger)) { refused.push(`${id}: the ledger is not approved, so a todo ticket cannot be released`); continue; }
         const from = t.status;
         t.status = 'ready';
-        for (const key of ['blockReason', 'attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete t[key];
+        for (const key of ['blockReason', 'holdQuestion', 'attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete t[key];
         released.push(id);
         logs.push({ event: 'release', by: 'owner', tickets: [id], from, note: flags.note ?? null });
         if (from === 'review') reviewed.push(id);
@@ -3032,10 +3032,17 @@ async function setTicketStatus(root, rest, flags) {
   if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
+  let holdQuestion;
+  if (to === 'blocked' && flags.question !== undefined) {
+    const text = String(flags.question).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim();
+    if (text.length < 1 || text.length > 300) return out('--question must be 1 to 300 characters when blocking', 1);
+    holdQuestion = text;
+  }
   try {
     const t = await lockedTransition(root, rest[0], to, {
       by: 'owner',
       note: flags.note,
+      ...(holdQuestion !== undefined ? { holdQuestion } : {}),
       actor: ticketActor(),
       source: 'tickets-set',
       confirmation,

@@ -170,11 +170,13 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
       for (const t of ledger?.tickets ?? []) {
         if (!ticketReleaseAllowed(t, ledger)) continue;
         if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+        if (t.status === 'blocked' && t.blockReason !== 'deps' && !t.holdQuestion) continue;
         mine.push({
           kind: 'held-ticket',
           id: txt(t.id, 20),
           title: txt(t.title, TITLE_MAX),
-          since: ledger.updatedAt ?? new Date(ms).toISOString(),
+          text: txt(t.holdQuestion ?? t.title, TITLE_MAX),
+          since: ledger.updatedAt ?? new Date(now).toISOString(),
           unblocks: 0,
           steps: 0,
           choices: null,

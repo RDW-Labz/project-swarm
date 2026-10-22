@@ -286,6 +286,28 @@ test('feedback 4: a pull request and its merge are one row (the merge); an unmer
   assert.deepEqual((await readHistory({ file, fold: true, exclude: new Set(['p2']) })).events.map(e => e.key).sort(), ['merge:p1:172', 'pr:p1:173']);
 });
 
+test('held tickets: a manual block without a hold question stays off Needs you; with a hold question the item shows that text; dependency blocks stay excluded', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  const question = 'Should we ship the migration before the API freeze?';
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0200', 'blocked', { blockReason: 'manual' }),
+      tk('T-0201', 'blocked', { blockReason: 'manual', holdQuestion: question }),
+      tk('T-0199', 'done'),
+      tk('T-0202', 'blocked', { blockReason: 'deps', dependsOn: ['T-0199'] }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0201']);
+  assert.equal(held[0].text, question);
+  assert.equal(held[0].command, `swarm --root ${A.root} tickets T-0201 --release`);
+});
+
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {
   const { isScratchRoot } = await import('../tools/projects.mjs');
   const { isBoardTempRoot } = await import('../tools/scratch-roots.mjs');
