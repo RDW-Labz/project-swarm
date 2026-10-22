@@ -1,0 +1,35 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8012",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:567-622 buildWatchCard + tools/board-data.mjs:558-565 enrichWatchCard; tools/board-data.mjs:694-721 projectOverview.card. tests: card.now.buildingTickets, card.now.checkoutsBuilding, card.now.lastTicketFinishedAt, card.next.ready and items, card.blocked reflects dependency waits, card.blocked.needYou, card.slots, card.eta, card.facts.handEditsBlocked24h, card.facts.untrackedRuns, card.facts.checkouts, card.headsUp names same-file wave collisions.",
+          "gap": "card.blocked.needYou / needYouItems are not compared to an inbox-on-disk oracle (only >=1 and --release suffix on one held ticket). No test for headsUp from underfilledWaves (tools/board-data.mjs:526-527)."
+        },
+        {
+          "n": 2,
+          "met": false,
+          "evidence": "tools/board-data.mjs:501-502,608; tools/board-inbox.mjs:69-91. tests/board-accuracy-card.test.mjs: card.next.ready and items (exact `swarm tickets ID`); card.blocked reflects dependency waits (items without release command); card.blocked.needYou (/--release$/ only).",
+          "gap": "No test asserts blocked.items[].command from ticketReleaseAllowed when `swarm tickets ID --release` applies. No test for need-you blocker command `swarm resolve ID` (or human `swarm done ID`) read from inbox fixtures on disk."
+        },
+        {
+          "n": 3,
+          "met": false,
+          "evidence": "Disk oracles in tests/board-accuracy-card.test.mjs: oracleBuildingTickets, oracleCheckoutsBuilding, oracleLastTicketFinishedAt, oracleNextReady, oracleBlocked, oracleSlots, oracleEta, oracleFacts, oracleUntrackedRuns, oracleFactsCheckouts, oracleHeadsUp; card ignores fixture merged PR list; assertCardHasNoMoney.",
+          "gap": "Missing per-field disk oracle tests for card.blocked.needYou, card.blocked.needYouItems (full list/commands), card.facts.listHref, and headsUp underfilled-waves branch. Blocked-item command oracle (oracleBlocked:122-141) does not use ticketReleaseAllowed from tools/board-inbox.mjs."
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tools/board-data.mjs:597-622 card shape has no spend/usd fields. tests/board-accuracy-card.test.mjs: card JSON omits money-shaped keys and dollar values (assertCardHasNoMoney).",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}
