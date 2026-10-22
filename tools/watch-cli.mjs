@@ -432,6 +432,26 @@ export function runNav({ root, runId, env = process.env, openBoard }) {
 const MAX_WATCHERS = 6;
 const BOARD_RUN_IDLE_MS = 10 * 60 * 1000;
 
+// Watch responses deliberately contain no money until a real billing source exists. These key
+// fragments cover currency, cost, billing, list pricing, spend and budget fields; whole spend,
+// cost and cap objects are also removed because their remaining shape can still imply money.
+const MONEY_KEY_RE = /usd|Usd|USD|cost|Cost|billed|Billed|listValue|flatRate|price|Price|spend|Spend|budget|Budget/;
+const hasNumber = value => Array.isArray(value)
+  ? value.some(hasNumber)
+  : value && typeof value === 'object'
+    ? Object.values(value).some(hasNumber)
+    : typeof value === 'number';
+export function stripMoney(value) {
+  if (Array.isArray(value)) return value.map(stripMoney);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (MONEY_KEY_RE.test(key) || key === 'spend' || key === 'cost' || key === 'cap' || key === 'caps' || (key === 'capBasis' && hasNumber(child))) continue;
+    out[key] = stripMoney(child);
+  }
+  return out;
+}
+
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
   const watchers = new Map();                // `${projectId}/${runId}` -> { server, url, closed }
   const deployTracker = createDeployTracker({ env });
@@ -445,6 +465,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
+  const hasResponseToken = q => Boolean(q?.t || q?.get?.('t'));
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
@@ -522,7 +543,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         snapshot.scratch = { shown: scratch, hidden: scratch ? 0 : scratchProjects.length, total: scratchProjects.length };
         const idleHidden = flagged.filter(p => p.idleHidden).length;
         if (idleHidden) snapshot.scratch.idleHidden = idleHidden;
-        return snapshot;
+        // Direct internal snapshot callers still receive the full model; only the token-authenticated
+        // board response is public and redacted. The HTTP board route always supplies its token.
+        return hasResponseToken(q) ? stripMoney(snapshot) : snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
       promise.catch(() => { if (cachedBy.get(cacheKey)?.promise === promise) cachedBy.delete(cacheKey); });
@@ -535,7 +558,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const liveRuns = (await live()).filter(r => familyRoots.includes(path.resolve(String(r.root ?? project.root))));
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root), deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) });
+      return stripMoney(await projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root), deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) }));
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
@@ -544,7 +567,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const allProjects = await listProjects({ file: projectsFile(env) });
       const familyRoots = await projectFamilyRoots(project.root, { env, extraRoots: allProjects.map(item => item.root) });
       const liveRuns = (await live()).filter(r => familyRoots.includes(path.resolve(String(r.root ?? project.root))));
-      return liveOverview(project, liveRuns, { now: now(), env, familyRoots, extraRoots: allProjects.map(item => item.root) });
+      return stripMoney(await liveOverview(project, liveRuns, { now: now(), env, familyRoots, extraRoots: allProjects.map(item => item.root) }));
     },
     // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
     async run(id, runId, compare = null) {
