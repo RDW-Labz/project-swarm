@@ -1,11 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // Approve / deny controls for owner-decidable Needs-you items (tailnet sign-in + board token header only).
-var REFUSED_OWNER_KINDS = ['merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration'];
-var REFUSED_OWNER_KIND_RE = /^(?:merge|deploy|cap-raise|spend|key|migration)(?:$|[^a-z0-9])/;
+var REFUSED_OWNER_WORDS = ['merge', 'deploy', 'cap', 'budget', 'spend', 'key', 'keys', 'secret', 'migration', 'migrate', 'rollback-prod'];
+
+function refusedOwnerKindWords(value) {
+  if (typeof value !== 'string') { return null; }
+  var trimmed = value.trim();
+  if (!trimmed) { return []; }
+  var spaced = trimmed
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return spaced.toLowerCase().split(/[-_.: \t]+/).filter(Boolean);
+}
 
 function isRefusedOwnerKind(value) {
-  var normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return REFUSED_OWNER_KIND_RE.test(normalized);
+  var words = refusedOwnerKindWords(value);
+  if (words === null) { return true; }
+  if (words.length === 0) { return true; }
+  if (words.indexOf('limit') !== -1 && words.indexOf('raise') !== -1) { return true; }
+  if (REFUSED_OWNER_WORDS.indexOf(words.join('-')) !== -1) { return true; }
+  for (var i = 0; i < words.length; i += 1) {
+    if (REFUSED_OWNER_WORDS.indexOf(words[i]) !== -1) { return true; }
+  }
+  return false;
 }
 
 function el(doc, tag, cls, text) {

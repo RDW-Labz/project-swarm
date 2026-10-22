@@ -498,20 +498,34 @@ function ownerAuditPath(env) {
   return path.join(path.dirname(remoteFile(env, home)), '.swarm', 'owner', 'audit.ndjson');
 }
 
+export async function readOwnerAudit(env = process.env) {
+  const auditFile = ownerAuditPath(env);
+  let text = '';
+  try {
+    text = await fs.readFile(auditFile, 'utf8');
+  } catch {
+    return { entries: [], skipped: 0 };
+  }
+  const entries = [];
+  let skipped = 0;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { entries, skipped };
+}
+
 function buildOwnerActions({ env, now, live, remoteLogin }) {
   const auditFile = ownerAuditPath(env);
   const appendAudit = async entry => {
     await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
     await fs.appendFile(auditFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   };
-  const readAudit = async () => {
-    try {
-      const text = await fs.readFile(auditFile, 'utf8');
-      return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
-    } catch {
-      return [];
-    }
-  };
+  const readAudit = async () => (await readOwnerAudit(env)).entries;
   const login = typeof remoteLogin === 'string' ? remoteLogin : '';
   return createOwnerActions({
     listItems: async () => {

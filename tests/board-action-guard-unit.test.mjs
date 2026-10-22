@@ -83,3 +83,30 @@ test('allows only approve and deny decisions on non-protected items', () => {
     }
   }
 });
+
+test('refuses cap, budget, spend-limit, and related owner-action kind variants', () => {
+  const refusedItemKinds = [
+    'cap',
+    'cap-increase',
+    'cap_raise',
+    'capRaise',
+    'raise cap',
+    'budget',
+    'limit-raise',
+    'spend-limit',
+    'keys',
+    'api-secret',
+    'migrate-db',
+    'rollback-prod',
+    'MERGE',
+    'deployNow',
+  ];
+  for (const source of sources) {
+    for (const itemKind of refusedItemKinds) {
+      assert.equal(guardBoardAction({ source, kind: 'approve', itemKind }).allowed, false);
+      assert.equal(guardBoardAction({ source, kind: 'deny', itemKind }).allowed, false);
+    }
+    assert.equal(guardBoardAction({ source, kind: 'approve', itemKind: 'question' }).allowed, true);
+    assert.equal(guardBoardAction({ source, kind: 'deny', itemKind: 'question' }).allowed, true);
+  }
+});

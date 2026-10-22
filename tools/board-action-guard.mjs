@@ -12,18 +12,44 @@ export const REFUSED_KINDS = Object.freeze([
 const SOURCES = new Set(['board', 'phone']);
 const ALLOWED_DECISIONS = new Set(['approve', 'deny']);
 
-// A refused kind is an exact token after trimming and case-folding, or a refused
-// token followed by a separator. Separators are any characters outside ASCII
-// letters and digits, so `merge-request` is refused while `merger` is not.
-const REFUSED_KIND_RE = /^(?:merge|deploy|cap-raise|spend|key|migration)(?:$|[^a-z0-9])/i;
+const REFUSED_WORDS = new Set([
+  'merge',
+  'deploy',
+  'cap',
+  'budget',
+  'spend',
+  'key',
+  'keys',
+  'secret',
+  'migration',
+  'migrate',
+  'rollback-prod',
+]);
+
+function kindWords(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const spaced = trimmed
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return spaced.toLowerCase().split(/[-_.: \t]+/).filter(Boolean);
+}
+
+export function isRefusedActionKind(value) {
+  const words = kindWords(value);
+  if (words === null) return true;
+  if (words.length === 0) return true;
+  if (words.includes('limit') && words.includes('raise')) return true;
+  if (REFUSED_WORDS.has(words.join('-'))) return true;
+  for (const word of words) {
+    if (REFUSED_WORDS.has(word)) return true;
+  }
+  return false;
+}
 
 function normalizedString(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : null;
-}
-
-function isRefusedKind(value) {
-  const normalized = normalizedString(value);
-  return normalized !== null && REFUSED_KIND_RE.test(normalized);
 }
 
 export function guardBoardAction({ kind, source, itemKind } = {}) {
@@ -32,12 +58,12 @@ export function guardBoardAction({ kind, source, itemKind } = {}) {
   }
 
   const normalizedKind = normalizedString(kind);
-  if (normalizedKind === null || !ALLOWED_DECISIONS.has(normalizedKind) || isRefusedKind(normalizedKind)) {
+  if (normalizedKind === null || !ALLOWED_DECISIONS.has(normalizedKind) || isRefusedActionKind(normalizedKind)) {
     return { allowed: false, reason: 'kind-refused' };
   }
 
   const normalizedItemKind = normalizedString(itemKind);
-  if (normalizedItemKind === null || normalizedItemKind === '' || isRefusedKind(normalizedItemKind)) {
+  if (normalizedItemKind === null || normalizedItemKind === '' || isRefusedActionKind(itemKind)) {
     return { allowed: false, reason: 'item-kind-refused' };
   }
 

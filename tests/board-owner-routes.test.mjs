@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { createWatchServer } from '../tools/watch-server.mjs';
 import { createOwnerActions } from '../tools/board-owner-actions.mjs';
 import { guardBoardAction } from '../tools/board-action-guard.mjs';
-import { startBoardServer } from '../tools/watch-cli.mjs';
+import { startBoardServer, readOwnerAudit } from '../tools/watch-cli.mjs';
+import { remoteFile } from '../tools/remote.mjs';
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
 const DNS = 'board.tail1234.ts.net';
@@ -116,8 +117,15 @@ const tailnet = (port, reqPath, opts = {}) => httpRequest(port, reqPath, {
 });
 
 test('owner routes are absent without remote board mode', async t => {
-  const { port, token } = await startServer(t, { remote: false, ownerActions: undefined });
+  const { actions } = ownerActionsFixture();
+  const { port, token } = await startServer(t, { remote: false, ownerActions: actions });
   assert.equal((await httpRequest(port, '/api/owner/audit', { headers: { 'x-watch-token': token } })).status, 404);
+  assert.equal((await httpRequest(port, '/api/owner/actions/scope-1/prepare', {
+    method: 'POST',
+    headers: { 'x-watch-token': token },
+  })).status, 404);
+  const { port: port2, token: token2 } = await startServer(t, { remote: false, ownerActions: undefined });
+  assert.equal((await httpRequest(port2, '/api/owner/audit', { headers: { 'x-watch-token': token2 } })).status, 404);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'owner-local-board-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const local = await startBoardServer({ env: process.env, root });
@@ -160,6 +168,58 @@ test('owner routes refuse missing header token, query-only token, cookie-only PO
     headers: { Cookie: `swarm_watch_${port}=${token}` },
     body: { decision: 'approve', confirm: 'x' },
   })).status, 403);
+  assert.equal((await tailnet(port, '/api/owner/audit', {
+    headers: { Cookie: `swarm_watch_${port}=${token}` },
+  })).status, 403);
+  assert.equal((await tailnet(port, `/api/owner/audit?t=${token}`)).status, 401);
+});
+
+test('readOwnerAudit skips corrupt lines and returns valid entries', async t => {
+  const env = { ...process.env };
+  const auditFile = path.join(path.dirname(remoteFile(env, env.HOME)), '.swarm', 'owner', 'audit.ndjson');
+  await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
+  const good = JSON.stringify({
+    at: '2020-01-01T00:00:00.000Z',
+    itemId: 'scope-1',
+    decision: 'approve',
+    identity: LOGIN,
+    outcome: 'approved',
+  });
+  await fs.writeFile(auditFile, `{not json}\n${good}\n`, { mode: 0o600 });
+  t.after(() => fs.rm(path.dirname(auditFile), { recursive: true, force: true }));
+  const parsed = await readOwnerAudit(env);
+  assert.equal(parsed.skipped, 1);
+  assert.equal(parsed.entries.length, 1);
+  assert.equal(parsed.entries[0].itemId, 'scope-1');
+});
+
+test('owner audit HTTP returns parsed entries when the audit file has a corrupt line', async t => {
+  const env = { ...process.env };
+  const auditFile = path.join(path.dirname(remoteFile(env, env.HOME)), '.swarm', 'owner', 'audit.ndjson');
+  await fs.mkdir(path.dirname(auditFile), { recursive: true, mode: 0o700 });
+  const good = JSON.stringify({
+    at: '2020-01-02T00:00:00.000Z',
+    itemId: 'scope-9',
+    decision: 'deny',
+    identity: LOGIN,
+    outcome: 'denied',
+  });
+  await fs.writeFile(auditFile, `broken line\n${good}\n`, { mode: 0o600 });
+  t.after(() => fs.rm(path.dirname(auditFile), { recursive: true, force: true }));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'owner-audit-board-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const board = await startBoardServer({
+    env,
+    root,
+    remote: { port: 0, token: 'd'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
+  });
+  t.after(async () => { await board.server.close(); await board.api.close(); });
+  const port = Number(new URL(board.url).port);
+  const auditGet = await tailnet(port, '/api/owner/audit', { headers: { 'x-watch-token': board.server.token } });
+  assert.equal(auditGet.status, 200);
+  assert.equal(auditGet.json.length, 1);
+  assert.equal(auditGet.json[0].itemId, 'scope-9');
+  assert.equal(auditGet.json[0].outcome, 'denied');
 });
 
 test('owner prepare, decide, and audit work over the tailnet path', async t => {

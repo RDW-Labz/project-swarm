@@ -390,6 +390,7 @@ export function createWatchServer(opts) {
   }
 
   async function handleOwner(req, res, method, u, ownerRoute) {
+    if (!remote) return sendText(res, method, 404, 'not found');
     const host = req.headers.host;
     const localHost = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     if (remote) {
@@ -401,12 +402,8 @@ export function createWatchServer(opts) {
     }
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
-    const cookieName = `swarm_watch_${port}`;
-    const cookieToken = watchCookie(req.headers.cookie, cookieName);
     const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
-    const cookieOk = typeof cookieToken === 'string' && safeEqual(cookieToken, token);
-    const postRoute = ownerRoute.route === 'prepare' || ownerRoute.route === 'decision';
-    const tokenOk = postRoute ? headerOk : (headerOk || cookieOk);
+    const tokenOk = headerOk;
     const ownerReq = {
       tokenOk,
       tokenInQuery: typeof queryToken === 'string',

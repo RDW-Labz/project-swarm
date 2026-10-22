@@ -121,7 +121,10 @@ describe('board owner actions UI', () => {
   it('never renders controls for refused kinds', () => {
     const doc = makeDoc();
     const container = doc.createElement('div');
-    for (const kind of ['merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration', ' Deploy', 'MERGE-request']) {
+    for (const kind of [
+      'merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration', ' Deploy', 'MERGE-request',
+      'cap', 'capRaise', 'cap-increase', 'budget', 'limit-raise', 'spend-limit', 'keys', 'rollback-prod',
+    ]) {
       container.textContent = '';
       assert.equal(ownerActionAvailable(ownerItem({ kind }), { signedIn: true }), false);
       renderOwnerActions(container, ownerItem({ kind }), {
