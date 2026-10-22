@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8017",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/pins-cycle.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/install.mjs"
+      ],
+      "prompt": "Ticket T-8017: tests/pins-cycle.test.mjs ('node tools/install.mjs --user completes without install/pins circular import') fails intermittently in CI with ENOTEMPTY: directory not empty, rmdir '<tmp>/pins-cycle-install-XXXX/install/.git/objects/pack', because its temp-dir cleanup races a background git process (git gc/maintenance or a still-running child). Fix only the test: (1) make every git child it spawns run with GIT_CONFIG_NOSYSTEM=1, `-c gc.auto=0 -c maintenance.auto=false` (or env GIT_AUTO_GC equivalents) so no background gc starts, and await every child process it starts before cleanup; (2) remove the temp folder with fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) in a t.after/finally. Do not change tools/. Add a stress check you run locally (not committed as a slow test): run the test 20 times in a row with `for i in $(seq 20); do node --import ./tests/_isolate-config.mjs --test tests/pins-cycle.test.mjs || break; done` and report the pass count in your notes. Run `node --import ./tests/_isolate-config.mjs --test tests/pins-cycle.test.mjs`."
+    }
+  ]
+}
