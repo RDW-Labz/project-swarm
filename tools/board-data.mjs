@@ -15,6 +15,7 @@ import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
 import { boardPercent, buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
 import { effectiveStage, stageDisplay } from './build-progress.mjs';
+import { doneTimes } from './client-report.mjs';
 import { parseScope } from './scope.mjs';
 import { ROUTE_ORDER } from './router.mjs';
 import { splitQuality } from './split-quality.mjs';
@@ -246,6 +247,89 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
   return runs;
 }
 
+// A board project rooted at the main checkout owns the whole checkout family. A linked
+// worktree keeps its own view; scratch worktrees are included when the caller supplies the
+// scratch root (the fixture and the board both do this through SWARM_SCRATCH_ROOT).
+export async function projectFamilyRoots(root, { ownOnly = false, env = process.env, extraRoots = [] } = {}) {
+  const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
+  if (ownOnly || await mainWorktreeRoot(realRoot)) return [realRoot];
+  let members;
+  try { members = await worktreeFamily(realRoot, { all: true, env }); } catch { members = [realRoot]; }
+  const roots = new Set();
+  for (const member of members ?? []) roots.add(await fs.realpath(member).catch(() => path.resolve(member)));
+  const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
+  const scratchRoot = scratch ? await fs.realpath(scratch).catch(() => path.resolve(scratch)) : null;
+  const addScratch = candidate => {
+    if (!scratchRoot || !candidate) return;
+    const resolved = path.resolve(candidate);
+    if (resolved === scratchRoot || resolved.startsWith(`${scratchRoot}${path.sep}`)) roots.add(resolved);
+  };
+  for (const candidate of extraRoots ?? []) addScratch(candidate);
+  if (scratchRoot) {
+    try {
+      for (const name of await fs.readdir(scratchRoot)) {
+        const candidate = path.join(scratchRoot, name);
+        try { if ((await fs.stat(candidate)).isDirectory()) addScratch(candidate); } catch { /* a scratch entry can disappear during a poll */ }
+      }
+    } catch { /* an absent scratch root is normal */ }
+  }
+  return [...roots];
+}
+
+export async function readProjectRunStates(root, { ownOnly = false, env = process.env, extraRoots = [], limit = 5000, familyRoots = null } = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(root, { ownOnly, env, extraRoots });
+  const out = [];
+  for (const member of roots) {
+    const real = await fs.realpath(member).catch(() => path.resolve(member));
+    for (const record of await readRunStates(real, { limit })) out.push({ ...record, root: real });
+  }
+  return out;
+}
+
+async function lastTicketFinishedAt(roots, runs, ledgers) {
+  const doneIds = new Set();
+  for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
+  let newest = 0;
+  const add = (id, value) => {
+    const at = Date.parse(value ?? '');
+    if (id && Number.isFinite(at)) { doneIds.add(String(id)); newest = Math.max(newest, at); }
+  };
+  for (const root of roots) {
+    try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch { /* missing tickets.log */ }
+  }
+  for (const ledger of ledgers) {
+    const history = Array.isArray(ledger?.history) ? ledger.history : Array.isArray(ledger?.history?.events) ? ledger.history.events : [];
+    for (const event of history) {
+      const status = event?.status ?? event?.to ?? event?.nextStatus ?? event?.transition?.to;
+      const id = event?.ticketId ?? event?.ticket ?? event?.transition?.ticketId;
+      if (String(status).toLowerCase() === 'done') add(id, event?.at ?? event?.finishedAt ?? event?.updatedAt ?? event?.timestamp);
+    }
+  }
+  for (const record of runs) {
+    for (const job of record.state?.jobs ?? []) {
+      const ids = [job?.ticketId, job?.ticket, job?.id].filter(Boolean).map(String);
+      if (!ids.some(id => doneIds.has(id))) continue;
+      for (const id of ids) add(id, job?.finishedAt);
+    }
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+async function familyLedgers(roots) {
+  return Promise.all(roots.map(async root => await readLedger(root).catch(() => null)));
+}
+
+function finishedProgress(raw) {
+  if (!raw) return null;
+  const deployed = raw.milestones?.find(item => item.key === 'deployed');
+  const deployDone = deployed?.state === 'done' || deployed?.currentDone === true;
+  const noDeployConfigured = deployed?.state === 'unknown' || !deployed;
+  const finished = Boolean(raw.finished && (deployDone || noDeployConfigured));
+  const summary = progressSummary({ ...raw, finished });
+  if (!finished && summary) summary.current = raw.milestones?.find(item => item.state === 'current')?.label ?? 'Unknown';
+  return summary ? { ...summary, finished } : summary;
+}
+
 const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); return m ? Number(m[1]) : null; };
 
 // Money for one project: the total is exactly what runTotals gives for every run (the number the project cap uses); today and the last 7 days
@@ -349,19 +433,22 @@ export async function boardOwnOnly(root) {
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
-  const runs = await readRunStates(project.root);
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [] } = {}) {
+  const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
+  const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
+  const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
+  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
   const liveStateRuns = [];
   const liveStateByRecord = new Map();
   for (const record of liveRuns) {
     const root = await fs.realpath(record.root ?? project.root).catch(() => record.root ?? project.root);
-    const stateRun = (root === await fs.realpath(project.root).catch(() => project.root) ? runs : await readRunStates(root)).find(run => run.id === record.runId);
+    const stateRun = runs.find(run => run.root === root && run.id === record.runId);
     if (stateRun) {
       liveStateRuns.push({ ...stateRun, liveRoot: root });
       liveStateByRecord.set(record, stateRun.state);
     }
   }
-  const visibleRuns = new Map(runs.map(run => [`${project.root}|${run.id}`, run]));
+  const visibleRuns = new Map(runs.map(run => [`${run.root}|${run.id}`, run]));
   for (const run of liveStateRuns) visibleRuns.set(`${run.liveRoot}|${run.id}`, run);
   const liveRunsForAgents = [...visibleRuns.values()];
   // The caller's list is already a live snapshot. Registry-derived records carry their
@@ -374,7 +461,6 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
-  const ownOnly = await boardOwnOnly(project.root);
   try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
@@ -382,11 +468,13 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...progressSummary(raw), overall: boardPercent(raw) } : null, () => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...finishedProgress(raw), overall: boardPercent(raw), _rawFinished: raw.finished } : null, () => null);
+  if (progress) delete progress._rawFinished;
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
-  const lastRun = runs.length ? runs[runs.length - 1].state : null;
-  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0), Date.parse(ledger?.updatedAt ?? '') || 0);
+  const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...liveRuns.map(r => Date.parse(r.startedAt ?? '') || 0), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
+  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
   const recentFailure = runs.some(run => {
     const at = Math.max(Date.parse(run.state?.finishedAt ?? '') || 0, Date.parse(run.state?.startedAt ?? '') || 0);
     return ['failed', 'timeout'].includes(run.state?.status) && at > 0 && at <= now && now - at <= 7 * DAY;
@@ -414,9 +502,11 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, familyBilledUsd: spend.billedUsd ?? null, capUsedUsd: capUsedUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis },
     progress,
     split,
-    recentJobCounts: runs.slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
+    recentJobCounts: runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+    lastTicketFinishedAt: ticketFinishedAt,
+    checkouts: roots.length,
     idle,
     testOrTemp: Boolean(project.testOrTemp),
     lastRunStatus: lastRun?.status ?? null,
@@ -434,7 +524,7 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env } = {}) {
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -459,9 +549,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const parentReal = parentRoot ? await realRoot(parentRoot) : null;
     parentIds.push(parentReal && parentReal !== childReal && registered.has(parentReal) ? registered.get(parentReal).id : null);
   }
-  const families = await Promise.all(inputProjects.map(async project => {
+  const linkedRows = await Promise.all(inputProjects.map(async project => Boolean(await mainWorktreeRoot(await realRoot(project.root)))));
+  const families = await Promise.all(inputProjects.map(async (project, index) => {
     const root = await realRoot(project.root);
-    try { return new Set(await Promise.all((await worktreeFamily(root, { all: true })).map(member => realRoot(member)))); } catch { return new Set([root]); }
+    try {
+      const members = linkedRows[index] ? [root] : await projectFamilyRoots(root, { env, extraRoots: inputProjects.map(item => item.root) });
+      return new Set(await Promise.all(members.map(member => realRoot(member))));
+    } catch { return new Set([root]); }
   }));
   // Keep injected/custom parent discovery useful in tests and for a registry that was written
   // before git's worktree metadata settled; the real family call above still adds unregistered
@@ -476,12 +570,16 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const project = inputProjects[i];
     const projectRoot = await realRoot(project.root);
     const family = families[i];
+    const ownFamily = linkedRows[i] ? new Set([projectRoot]) : family;
+    const familyRuns = await readProjectRunStates(projectRoot, { ownOnly: linkedRows[i], env, familyRoots: [...ownFamily] });
+    const displayName = String(project.name ?? '').trim();
+    if ((!displayName || displayName === String(project.id)) && familyRuns.length === 0) continue;
     const candidates = parentIds[i]
       ? live.filter(r => r.root === projectRoot)
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i]) }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root) }));
   }
   for (const overview of overviews) {
     overview.parentId = null;
@@ -506,7 +604,16 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const count = overview.worktreeIds.length;
     overview.progress.headline += ` (incl. ${count} worktree${count === 1 ? '' : 's'})`;
   }
-  for (const o of overviews) { const warn = underfilledWaves(o.recentJobCounts, workers?.max); o.warnings = warn ? [{ code: 'waves-underfilled', text: warn }] : []; }
+  for (const o of overviews) {
+    const liveWarnings = [];
+    const splitWarning = o.split?.reds > 0 || o.split?.grade === 'red' ? { code: 'split-quality-red', text: `split quality red${o.split?.worst ? `: ${o.split.worst}` : ''}` } : null;
+    const wavesWarning = underfilledWaves(o.recentJobCounts, workers?.max);
+    if (splitWarning) liveWarnings.push(splitWarning);
+    if (wavesWarning) liveWarnings.push({ code: 'waves-underfilled', text: wavesWarning });
+    const history = Array.isArray(o.history) ? o.history : [];
+    o.history = o.progress?.finished ? [...history, ...liveWarnings] : history;
+    o.warnings = o.progress?.finished ? [] : liveWarnings;
+  }
   const blocked = overview => Boolean(
     overview.idleWithReady || overview.tickets?.blocked > 0 || overview.spend?.reached ||
     overview.recentFailure || overview.needsYou || overview.progress?.needsYou || overview.progress?.blocked,
@@ -584,9 +691,11 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
 }
 
 // One project's page: its tickets by status, its run history, its spend by lane and its lessons. Reads only under project.root.
-export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null } = {}) {
-  const runs = await readRunStates(project.root, { limit: 200 });
+export async function projectDetail(project, { now = Date.now(), liveRunIds = new Set(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, env = process.env, extraRoots = [] } = {}) {
   const ownOnly = await boardOwnOnly(project.root);
+  const roots = await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
+  const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots, limit: 200 });
+  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
   let selected;
   try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
   const ledger = selected.ledger;
@@ -600,11 +709,13 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...raw, percent: { ...raw.percent, overall: boardPercent(raw) } } : null).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...raw, finished: finishedProgress(raw)?.finished ?? false, percent: { ...raw.percent, overall: boardPercent(raw) } } : null).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
+  const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
+  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
@@ -615,6 +726,10 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     }),
     spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
     progress,
+    lastRunAt: lastRun?.startedAt ?? null,
+    lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
+    lastTicketFinishedAt: await lastTicketFinishedAt(roots, runs, ledgers),
+    checkouts: roots.length,
     offLedger: progress?.offLedger ?? progress?.untracked ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked work: no ledger ticket' },
     splitQuality: split,
     benchmarks,

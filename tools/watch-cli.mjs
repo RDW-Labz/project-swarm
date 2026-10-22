@@ -26,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import { readHistory, historyCsv, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
-import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, isTestOrTempProject } from './board-data.mjs';
+import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, readProjectRunStates, projectFamilyRoots, isTestOrTempProject } from './board-data.mjs';
 import { createPeerCache, listPeers, mergeMachines, publicPeers } from './board-peers.mjs';
 import { versionInfo } from './server-version.mjs';
 import { boardPools } from './pools-board.mjs';
@@ -57,7 +57,8 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
   const root = await fs.realpath(project.root).catch(() => path.resolve(project.root));
   const pointer = await readJson(path.join(root, '.project-swarm.json'));
   const ledger = await readLedger(root).catch(() => null);
-  const runs = await readRunStates(root);
+  const familyRoots = await projectFamilyRoots(root, { env });
+  const runs = await readProjectRunStates(root, { env, familyRoots });
   const scopeFile = await Promise.any([
     fs.stat(path.join(root, 'docs', 'scope', 'roadmap.md')),
     fs.stat(path.join(root, 'docs', 'scope', 'scope.md')),
@@ -82,13 +83,15 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
   }).catch(() => ({ events: [] }));
   const recentInHistory = (historyPage.events ?? []).some(event => HISTORY_RECENT_KINDS.has(event.kind));
   const live = liveRuns.some(record => {
-    const recordRoot = path.resolve(String(record.root ?? ''));
-    return recordRoot === root && activeState(runs.find(run => run.id === record.runId)?.state);
+    const recordRoot = path.resolve(String(record.root ?? root));
+    return familyRoots.includes(recordRoot) && activeState(runs.find(run => run.root === recordRoot && run.id === record.runId)?.state);
   });
   const spend = await projectSummary(root, { env, ttlMs: 0 }).catch(() => ({}));
   // History revives a real registered project, but never changes a path-based scratch
   // classification. This keeps the scratch toggle/counts independent of old log entries.
   const recentRun = recentOnDisk || (recentInHistory && !pathScratch);
+  const displayName = String(project.name ?? '').trim();
+  const namelessNoRuns = (!displayName || displayName === String(project.id)) && runs.length === 0;
   const idleHidden = !pathScratch && !pointer?.scratch && !pointer?.profile?.scratch
     && !marker && !scopeFile && !ledger?.scope && !approvedLedger && !openTickets
     && !recentRun && !live && !project.pinned
@@ -108,10 +111,12 @@ async function projectTestFacts(project, { now, liveRuns = [], env = process.env
     idleHidden,
     live,
     spendUsd: Number(spend.spendUsd ?? spend.billedUsd ?? spend.usd ?? 0),
+    namelessNoRuns,
   };
 }
 
 function projectHiddenFromBoard(project, { scratch, env }) {
+  if (project.namelessNoRuns) return true;
   if (!scratch) {
     if (project.idleHidden) return true;
     if (project.testOrTemp) return true;
@@ -348,6 +353,15 @@ export function registryModeFields(mode, { stdin = process.stdin, stdout = proce
 async function readPackageVersion(root = here) {
   try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
 }
+
+async function installedVersionFor(env, versionState = {}) {
+  const install = env?.SWARM_INSTALL_DIR;
+  if (install) {
+    const direct = await readPackageVersion(path.join(install, 'current'));
+    if (direct) return direct;
+  }
+  return versionState?.installedVersion ?? null;
+}
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
 const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -468,7 +482,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
           return { configured: configuredModels, pauses: store?.pauses && typeof store.pauses === 'object' ? store.pauses : {}, demand, caps };
         };
         const workers = await workersHeld({ dir: lanesDir(env), max, invalid });
-        const snapshot = await boardSnapshot({ projects, liveRuns, now: snapshotNow, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
+        const snapshot = await boardSnapshot({ projects, liveRuns, now: snapshotNow, env, laneState, workers, lanes: (laneToday, jobsToday) => laneUsage({ laneToday, jobsToday, configured, spendDirectory: spendDir(env), lanesDirectory: lanesDir(env), caps, now: snapshotNow }), deployStatus: root => isScratchRoot(root) ? null : deployTracker.get(root) });
         let peers = [];
         let remoteResults = [];
         if (!localOnly) {
@@ -484,10 +498,15 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
             orchestrators: (Array.isArray(remote.orchestrators) ? remote.orchestrators : []).filter(card => !card?.machine || card.machine === machine),
           };
         });
-        const localVersion = (await versionInfoFn()).version;
+        const versionState = await versionInfoFn();
+        const runningVersion = versionState?.runningVersion ?? versionState?.version ?? null;
+        const installedVersion = await installedVersionFor(env, versionState);
+        const localVersion = installedVersion ?? runningVersion;
         const merged = mergeMachines({ name: os.hostname(), version: localVersion, projects: snapshot.projects, orchestrators: snapshot.machine.orchestrator.sessions }, filteredResults);
         snapshot.projects = merged.projects;
         snapshot.machine.orchestrator.sessions = merged.orchestrators;
+        snapshot.machine.version = localVersion;
+        snapshot.machine.runningVersion = runningVersion;
         snapshot.machines = merged.machines;
         snapshot.drift = merged.drift;
         snapshot.peers = publicPeers(peers);
@@ -512,17 +531,20 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     async project(id) {
       const project = await find(id);
       if (!project) return null;
-      const liveRuns = (await live()).filter(r => r.root === project.root);
+      const familyRoots = await projectFamilyRoots(project.root, { env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root) });
+      const liveRuns = (await live()).filter(r => familyRoots.includes(path.resolve(String(r.root ?? project.root))));
       let max = null;
       try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
-      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) });
+      return projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root), deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) });
     },
     // Every run alive in one project, combined (the Live tab of the project page).
     async live(id) {
       const project = await find(id);
       if (!project) return null;
-      const liveRuns = (await live()).filter(r => r.root === project.root);
-      return liveOverview(project, liveRuns, { now: now() });
+      const allProjects = await listProjects({ file: projectsFile(env) });
+      const familyRoots = await projectFamilyRoots(project.root, { env, extraRoots: allProjects.map(item => item.root) });
+      const liveRuns = (await live()).filter(r => familyRoots.includes(path.resolve(String(r.root ?? project.root))));
+      return liveOverview(project, liveRuns, { now: now(), env, familyRoots, extraRoots: allProjects.map(item => item.root) });
     },
     // One run's jobs, graph and journal; with `compare`, that run beside another run of the same project.
     async run(id, runId, compare = null) {
