@@ -4,6 +4,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 
@@ -21,6 +22,32 @@ const SECURITY = {
 };
 
 const IDLE_FINISHED_MS = 10000;
+
+export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
+
+export function watchBoardRoutePaths({ remote = false } = {}) {
+  return Object.freeze([
+    '/board',
+    '/api/board',
+    '/api/project',
+    '/api/live',
+    '/api/history',
+    '/history.csv',
+    ...(remote ? [] : ['/open/run']),
+    '/project',
+    '/run',
+    '/api/run',
+  ]);
+}
+
+export const WATCH_NAV_PATHS = Object.freeze(['/api/nav', '/nav/board', '/nav/project']);
+
+/** Every GET path the board Watch server serves (non-remote, with nav). Built from the same arrays as the router. */
+export const WATCH_ROUTES = Object.freeze([
+  ...WATCH_CORE_PATHS,
+  ...watchBoardRoutePaths({ remote: false }),
+  ...WATCH_NAV_PATHS,
+]);
 const MAX_STREAMS = 8;
 export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
 const MAX_STREAM_PAUSED_MS = 60000;
@@ -250,8 +277,13 @@ export function createWatchServer(opts) {
   const done = new Promise((resolve) => { resolveDone = resolve; });
   let lastActivity = now();
   let noStreamSince = now();
+  async function publicRunSnapshot() {
+    const snap = await getRunSnapshot();
+    return snap == null ? null : stripMoney(snap);
+  }
+
   const streamManager = createWatchStreamManager({
-    getRunSnapshot,
+    getRunSnapshot: publicRunSnapshot,
     now,
     onDrop: () => { streamEverClosed = true; },
     onClose: () => {
@@ -281,11 +313,11 @@ export function createWatchServer(opts) {
   }
 
   async function payload() {
-    const run = (await getRunSnapshot()) ?? null;
-    const plan = (await getPlanSnapshot()) ?? { present: false };
+    const run = await publicRunSnapshot();
+    const plan = stripMoney((await getPlanSnapshot()) ?? { present: false });
     const gallery = (await getGallery()) ?? { schema: 1, screens: [] };
     const ctx = await contextCommands(run, plan);
-    return { run, plan, gallery, commands: commandList, contextCommands: ctx };
+    return stripMoney({ run, plan, gallery, commands: commandList, contextCommands: ctx });
   }
 
   async function sendShot(res, method, id, kind) {
@@ -300,7 +332,7 @@ export function createWatchServer(opts) {
       return send(res, method, 200, { 'Content-Type': 'text/event-stream; charset=utf-8' }, '');
     }
     if (closed) return sendText(res, method, 503, 'shutting down');
-    const run = (await getRunSnapshot()) ?? null;
+    const run = await publicRunSnapshot();
     if (streamManager.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
     res.writeHead(200, { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8' });
     if (res.socket) {
@@ -345,7 +377,7 @@ export function createWatchServer(opts) {
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
+    const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
@@ -383,12 +415,12 @@ export function createWatchServer(opts) {
       delete q.t;
       if (pathname === '/project') return sendAsset(res, method, 'project.html', pageHeaders);
       if (pathname === '/run') return sendAsset(res, method, 'run.html', pageHeaders);
-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, { ...detail, openRun: !remote }) : sendText(res, method, 404, 'not found'); }
+      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, stripMoney({ ...detail, openRun: !remote })) : sendText(res, method, 404, 'not found'); }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {
         const localOnly = q.local === '1';
-        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly })), openRun: !remote, server: await versionInfo() });
+        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() });
       }
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }

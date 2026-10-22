@@ -31,12 +31,6 @@
     return isNum(v) ? Number(v).toLocaleString('en-US') : '\u2013';
   }
 
-  function usd(v) {
-    if (!isNum(v)) return '\u2013';
-    v = Number(v);
-    return v > 0 && v < 0.01 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
-  }
-
   function pct(v) {
     return isNum(v) ? Math.round(Number(v) * 100) + '%' : '\u2013';
   }
@@ -106,7 +100,6 @@
       if (isNum(ln.rateLimits) && Number(ln.rateLimits) > 0) {
         meta.appendChild(pill('warn', '429s ' + num(ln.rateLimits)));
       }
-      meta.appendChild(pill(isNum(ln.costUsd) && Number(ln.costUsd) > 0 ? 'info' : 'good', usd(ln.costUsd)));
       row.appendChild(meta);
       box.appendChild(row);
     });
@@ -194,7 +187,7 @@
 
       tr.appendChild(el('td', 'num mono', num(L.running)));
       tr.appendChild(el('td', 'num mono', num(L.retries)));
-      tr.appendChild(el('td', 'num mono', usd(L.spendUsd)));
+      tr.appendChild(el('td', 'num mono', '\u2013'));
 
       var td6 = el('td');
       var st = String(L.state || 'queued');

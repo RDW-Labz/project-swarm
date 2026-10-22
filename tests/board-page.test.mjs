@@ -429,7 +429,7 @@ test('the board: history search, filters and CSV over HTTP, and history survives
   const csv = await get(first.port, '/history.csv?scratch=1&kind=stage', { headers: { 'x-watch-token': first.token } });
   assert.match(csv.headers['content-type'], /text\/csv/);
   assert.match(csv.headers['content-disposition'], /attachment/);
-  assert.match(csv.body, /^at,project,kind,title,ref,run,usd,url\n/);
+  assert.match(csv.body, /^at,project,kind,title,ref,run,url\n/);
   assert.match(csv.body, /Stage S1 done/);
   // restart: a new server over the same files shows the same history
   await first.server.close(); await first.api.close();

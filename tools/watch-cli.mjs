@@ -23,7 +23,7 @@ import { listProjects, projectsFile, projectId, isScratchRoot } from './projects
 import { isBoardTempRoot } from './scratch-roots.mjs';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { readHistory, historyCsv, historyFile } from './history.mjs';
+import { readHistory, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
 import { boardSnapshot, projectDetail, workersHeld, laneUsage, enrichRunEvents, readRunStates, isTestOrTempProject } from './board-data.mjs';
@@ -432,10 +432,48 @@ export function stripMoney(value) {
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {
+    if (key === 'noCap') {
+      out[key] = child === true;
+      continue;
+    }
     if (MONEY_KEY_RE.test(key) || key === 'spend' || key === 'cost' || key === 'cap' || key === 'caps' || (key === 'capBasis' && hasNumber(child))) continue;
     out[key] = stripMoney(child);
   }
   return out;
+}
+
+const historyCsvCell = value => {
+  let text = value === null || value === undefined ? '' : String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+function publicHistoryCsv(events) {
+  const head = ['at', 'project', 'kind', 'title', 'ref', 'run', 'url'];
+  const rows = events
+    .filter(event => event?.kind !== 'spend')
+    .map(event => stripMoney(event))
+    .map(event => [event.at, event.project, event.kind, event.title, event.ref, event.run, event.url].map(historyCsvCell).join(','));
+  return `${[head.join(','), ...rows].join('\n')}\n`;
+}
+
+async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
+  if (q.kind === 'spend') return { total: 0, events: [] };
+  const base = {
+    file: historyFile(env),
+    project: q.project || undefined,
+    kind: q.kind || undefined,
+    q: q.q || undefined,
+    from: q.from || undefined,
+    to: q.to || undefined,
+    fold: true,
+    exclude: showsScratch ? undefined : scratchIds,
+  };
+  const { events: all } = await readHistory({ ...base, limit: 1e6, cap: 1e6 });
+  const filtered = all.filter(event => event.kind !== 'spend');
+  const offset = Number(q.offset) || 0;
+  const limit = Math.min(Math.max(1, Number(q.limit) || 100), 1000);
+  return { total: filtered.length, events: filtered.slice(offset, offset + limit) };
 }
 
 export function createBoardApi({ env = process.env, now = Date.now, live = () => listLiveRuns(), runServer = makeRunServer, cacheMs = 1000, listPeers: listPeersFn = listPeers, peerCache = null, fetchImpl = fetch, versionInfo: versionInfoFn = versionInfo, boardPools: boardPoolsFn = boardPools } = {}) {
@@ -451,7 +489,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
-  const hasResponseToken = q => Boolean(q?.t || q?.get?.('t'));
+  const shouldRedact = q => Boolean(q?.redact || q?.t || q?.get?.('t'));
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
@@ -526,7 +564,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         if (idleHidden) snapshot.scratch.idleHidden = idleHidden;
         // Direct internal snapshot callers still receive the full model; only the token-authenticated
         // board response is public and redacted. The HTTP board route always supplies its token.
-        return hasResponseToken(q) ? stripMoney(snapshot) : snapshot;
+        return shouldRedact(q) ? stripMoney(snapshot) : snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
       promise.catch(() => { if (cachedBy.get(cacheKey)?.promise === promise) cachedBy.delete(cacheKey); });
@@ -553,18 +591,20 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       if (!project) return null;
       const a = await runDetail(project, runId);
       if (!a) return null;
-      if (!compare) return a;
+      if (!compare) return stripMoney(a);
       const b = await runDetail(project, compare);
-      return b ? { run: a, compare: compareRuns(a, b) } : null;
+      return b ? stripMoney({ run: a, compare: compareRuns(a, b) }) : null;
     },
     async history(q = {}) {
-      const page = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: Number(q.limit) || 100, offset: Number(q.offset) || 0, fold: true, exclude: showsScratch(q) ? undefined : await scratchIds() });
+      const exclude = showsScratch(q) ? undefined : await scratchIds();
+      const page = await boardHistoryQuery(q, env, showsScratch(q), exclude);
       if (page && Array.isArray(page.events)) page.events = await enrichRunEvents(page.events, await listProjects({ file: projectsFile(env) }).catch(() => []));
-      return page;
+      return stripMoney(page);
     },
     async historyCsv(q = {}) {
-      const { events } = await readHistory({ file: historyFile(env), project: q.project || undefined, kind: q.kind || undefined, q: q.q || undefined, from: q.from || undefined, to: q.to || undefined, limit: 1e6, cap: 1e6, exclude: showsScratch(q) ? undefined : await scratchIds() });
-      return historyCsv(events);
+      const exclude = showsScratch(q) ? undefined : await scratchIds();
+      const page = await boardHistoryQuery({ ...q, limit: 1e6, offset: 0 }, env, showsScratch(q), exclude);
+      return publicHistoryCsv(page.events);
     },
     // Starts the run's own Watch server (or reuses the one already up) and returns its address, with that server's token. Null for anything not a run of a listed project.
     async openRun(id, runId) {

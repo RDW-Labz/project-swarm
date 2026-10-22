@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Run inspector: one run's job graph, a replayable journal with the cost of each job, and a side-by-side compare. Read-only; all data from /api/run.
+// Run inspector: one run's job graph, a replayable journal, and a side-by-side compare. Read-only; all data from /api/run.
 import { renderOrchestrator } from './orchestrator-view.js';
 
 var L = self.BoardLib;
@@ -10,8 +10,11 @@ var RUN = params.get('run') || '';
 var $ = function (id) { return document.getElementById(id); };
 var NS = 'http://www.w3.org/2000/svg';
 function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined && text !== null) { n.textContent = text; } return n; }
-function usd(v) { return typeof v === 'number' && isFinite(v) ? '$' + (v > 0 && v < 0.01 ? v.toFixed(4) : v.toFixed(2)) : '-'; }
 function when(iso) { return iso ? String(iso).slice(11, 19) : '-'; }
+function tokensOf(j) {
+  var u = j && j.usage && typeof j.usage.total_tokens === 'number' ? j.usage.total_tokens : null;
+  return u == null ? '' : u + ' tokens';
+}
 function api(extra) { return fetch('/api/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(RUN) + (extra || ''), { headers: { 'x-watch-token': TOKEN } }).then(function (r) { return r.ok ? r.json() : null; }); }
 
 $('backAll').href = '/';
@@ -31,9 +34,9 @@ function renderSummary(r) {
   k.appendChild(tile('Status', r.status || '-', L.duration(r.durationMs)));
   var st = Object.keys(r.totals.byStatus).sort().map(function (s) { return s + ' ' + r.totals.byStatus[s]; }).join(', ');
   k.appendChild(tile('Jobs', String(r.totals.jobs), st || 'none recorded'));
-  k.appendChild(tile('Cost', usd(r.totals.usd), r.budgetUsd ? 'run cap ' + usd(r.budgetUsd) : 'no run cap recorded'));
+  k.appendChild(tile('Duration', L.duration(r.durationMs), 'wall time for this run'));
   k.appendChild(tile('Tried more than once', String(r.totals.rerun), r.totals.rerun ? 'jobs with 2 or more attempts' : 'every job ran once'));
-  var lanes = Object.keys(r.lanes).sort().map(function (l) { return l + ' ' + r.lanes[l].jobs + ' (' + usd(r.lanes[l].usd) + ')'; }).join(' | ');
+  var lanes = Object.keys(r.lanes).sort().map(function (l) { return l + ' ' + r.lanes[l].jobs + ' jobs'; }).join(' | ');
   k.appendChild(tile('Lanes', String(Object.keys(r.lanes).length), lanes || 'none'));
 }
 
@@ -62,7 +65,8 @@ function renderGraph(r) {
     var rect = document.createElementNS(NS, 'rect'); rect.setAttribute('width', p.w); rect.setAttribute('height', p.h); n.appendChild(rect);
     var bar = document.createElementNS(NS, 'rect'); bar.setAttribute('width', 5); bar.setAttribute('height', p.h); bar.setAttribute('rx', 2); bar.style.fill = L.laneColor(j.lane); bar.style.stroke = 'none'; n.appendChild(bar);
     var t1 = document.createElementNS(NS, 'text'); t1.setAttribute('x', 14); t1.setAttribute('y', 18); t1.textContent = j.id.length > 18 ? j.id.slice(0, 17) + '…' : j.id; n.appendChild(t1);
-    var t2 = document.createElementNS(NS, 'text'); t2.setAttribute('x', 14); t2.setAttribute('y', 33); t2.setAttribute('class', 't2'); t2.textContent = j.lane + ' | ' + j.status + (j.costUsd ? ' | ' + usd(j.costUsd) : '') + (j.rerun ? ' | x' + j.attempts.length : ''); n.appendChild(t2);
+    var tok = tokensOf(j);
+    var t2 = document.createElementNS(NS, 'text'); t2.setAttribute('x', 14); t2.setAttribute('y', 33); t2.setAttribute('class', 't2'); t2.textContent = j.lane + ' | ' + j.status + (tok ? ' | ' + tok : '') + (j.durationMs ? ' | ' + L.duration(j.durationMs) : '') + (j.rerun ? ' | x' + j.attempts.length : ''); n.appendChild(t2);
     var show = function () { showDetail(j); };
     n.addEventListener('click', show); n.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { show(); e.preventDefault(); } });
     svg.appendChild(n);
@@ -70,7 +74,7 @@ function renderGraph(r) {
   box.appendChild(svg);
 }
 function showDetail(j) {
-  var lines = [j.id + ': ' + j.lane + (j.model ? ' (' + j.model + ')' : '') + ', ' + j.status + ', ' + L.duration(j.durationMs) + ', ' + usd(j.costUsd) + (j.costSource ? ' (' + j.costSource + ')' : '')];
+  var lines = [j.id + ': ' + j.lane + (j.model ? ' (' + j.model + ')' : '') + ', ' + j.status + ', ' + L.duration(j.durationMs) + (tokensOf(j) ? ', ' + tokensOf(j) : '')];
   if (j.attempts.length > 1) { lines.push('Attempts: ' + j.attempts.map(function (a, i) { return (i + 1) + '. ' + a.lane + ' ' + a.status + (a.error ? ' (' + a.error + ')' : ''); }).join('; ')); }
   if (j.after.length) { lines.push('Waited for: ' + j.after.join(', ')); }
   if (j.error) { lines.push('Error: ' + j.error); }
@@ -81,14 +85,14 @@ function renderJournal() {
   var r = run, box = $('journal');
   var st = L.replay(r.journal, pos);
   $('replayStat').textContent = '';
-  [['Step', pos + ' of ' + r.journal.length], ['Running', String(st.running)], ['Ended', String(st.ended)], ['Spent so far', usd(st.spentUsd)]].forEach(function (p) { var s = el('span', 'mono'); s.textContent = p[0] + ': ' + p[1]; $('replayStat').appendChild(s); });
+  [['Step', pos + ' of ' + r.journal.length], ['Running', String(st.running)], ['Ended', String(st.ended)]].forEach(function (p) { var s = el('span', 'mono'); s.textContent = p[0] + ': ' + p[1]; $('replayStat').appendChild(s); });
   if (!box.childNodes.length) {
     if (!r.journal.length) { box.appendChild(el('div', 'empty', 'The run recorded no times.')); }
     r.journal.forEach(function (e, i) {
       var row = el('div', 'jrow');
       row.appendChild(el('span', 'mono sub', when(e.at))); row.appendChild(el('span', 'lane sub', e.lane));
       row.appendChild(el('span', 'mono', e.job + ' ' + e.event + (e.rerun ? ' (after more than one attempt)' : '') + (e.error ? ': ' + e.error : '')));
-      row.appendChild(el('span', 'mono sub', typeof e.usd === 'number' && e.usd ? usd(e.usd) : ''));
+      row.appendChild(el('span', 'mono sub', e.durationMs ? L.duration(e.durationMs) : ''));
       row.dataset.i = String(i); box.appendChild(row);
     });
   }
@@ -126,9 +130,9 @@ function renderCompare(c) {
   row('Status', el('span', 'mono', A.status || '-'), el('span', 'mono', B.status || '-'));
   row('Duration', el('span', 'mono', L.duration(A.durationMs)), diff(A.durationMs, B.durationMs, L.duration, true));
   row('Jobs', el('span', 'mono', String(A.totals.jobs)), diff(A.totals.jobs, B.totals.jobs, String, true));
-  row('Cost', el('span', 'mono', usd(A.totals.usd)), diff(A.totals.usd, B.totals.usd, usd, true));
+  row('Duration', el('span', 'mono', L.duration(A.durationMs)), diff(A.durationMs, B.durationMs, L.duration, true));
   row('Tried more than once', el('span', 'mono', String(A.totals.rerun)), diff(A.totals.rerun, B.totals.rerun, String, true));
-  c.lanes.forEach(function (l) { row('Lane ' + l.lane, el('span', 'mono', l.a ? l.a.jobs + ' jobs, ' + usd(l.a.usd) : '-'), el('span', 'mono', l.b ? l.b.jobs + ' jobs, ' + usd(l.b.usd) : '-')); });
+  c.lanes.forEach(function (l) { row('Lane ' + l.lane, el('span', 'mono', l.a ? l.a.jobs + ' jobs' : '-'), el('span', 'mono', l.b ? l.b.jobs + ' jobs' : '-')); });
   var changed = c.shared.filter(function (s) { return s.a.status !== s.b.status || s.a.rerun !== s.b.rerun; });
   $('compareNote').textContent = c.shared.length + ' job id' + (c.shared.length === 1 ? '' : 's') + ' appear in both runs' + (changed.length ? ' (' + changed.length + ' with a different outcome: ' + changed.slice(0, 6).map(function (s) { return s.id + ' ' + s.a.status + ' to ' + s.b.status; }).join(', ') + ')' : '') + '; only in this run: ' + c.onlyA + ', only in the other: ' + c.onlyB + '. Red means more than this run, green means less.';
 }
