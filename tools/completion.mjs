@@ -12,6 +12,7 @@ export const COMMANDS = [
   command('preflight', 'Check a manifest before running.', 'manifest'),
   command('board', 'Show active project runs.'),
   command('orphans', 'List scratch directories without run state.'),
+  command('gc', 'Reclaim disk from finished runs and orphan worktrees.', 'none', '--apply --all-projects --root --older-than --keep-runs --include-scratch --force-unsafe --json --usage'),
   command('run', 'Run a job manifest.', 'manifest', '--jobs --sync --evidence --accept-red-base --reason'),
   command('status', 'Show run status.', 'run'),
   command('monitor', 'Monitor a run.', 'run', '--view --watch'),

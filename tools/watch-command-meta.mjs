@@ -14,6 +14,7 @@ export const COMMAND_META = {
   preflight: { what: 'Dry-checks a manifest and reports cost and risks before any run.', when: 'Right before running a manifest you have not run yet.', example: 'swarm preflight jobs/fix-login.json', cost: 'local', approval: false },
   board: { what: 'Shows the active project runs in one table.', when: 'When you want to see what is running right now.', example: 'swarm board', cost: 'free', approval: false },
   orphans: { what: 'Lists scratch directories that have no run state behind them.', when: 'When disk use grows or after a crashed run.', example: 'swarm orphans', cost: 'free', approval: false },
+  gc: { what: 'Dry-run or remove finished run worktrees, orphan dirs, and old run folders.', when: 'When disk use grows or after many swarm runs.', example: 'swarm gc --older-than 7', cost: 'free', approval: false },
   run: { what: 'Runs a job manifest, starting the model jobs it lists.', when: 'When a validated manifest is ready and you accept the cost.', example: 'swarm run jobs/fix-login.json --jobs 4 --evidence', cost: 'spends', approval: true },
   status: { what: 'Shows the status of one run: jobs done, running and failed.', when: 'To check progress on a run you started.', example: 'swarm status 20250311-login', cost: 'free', approval: false },
   monitor: { what: 'Follows a run live in the terminal or the monitor view.', when: 'While a run is in progress and you want live updates.', example: 'swarm monitor 20250311-login --view', cost: 'free', approval: false },
