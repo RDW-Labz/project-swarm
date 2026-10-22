@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "held9",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Read-only triage of held tickets. Input: coordination/review/held-input-9.json (tickets: T-0109, T-0110, T-0121, T-0122, T-0166, T-0207). For EACH ticket decide from the CURRENT repo code and git log (git log --oneline --all, git log -S, grep for the feature by meaning, not only the file name: the ticket's named file may not exist because the feature was built under another file name, e.g. board federation in tools/board-peers.mjs, split quality metrics and tests/split-quality.test.mjs, the machine and version-drift badge in tools/watch-assets/board.js, manager tests under tests/managers/) one verdict: 'delivered' (the acceptance lines are already met on main; cite a commit hash and PR number #N from git log and one file:line), 'release' (not built; a worker could do it now), or 'cancel' (obsolete or superseded; say what replaced it). Be strict: only 'delivered' with real evidence. Write ONE file coordination/review/held-verdict-9.json: [{\"id\":\"T-xxxx\",\"verdict\":\"delivered|release|cancel\",\"evidence\":\"<=160 chars\"}]. Do not edit any other file.",
+   "context": [
+    "coordination/review/held-input-9.json",
+    "tools/board-peers.mjs"
+   ],
+   "outputs": [
+    "coordination/review/held-verdict-9.json"
+   ],
+   "timeoutMs": 1200000
+  }
+ ]
+}

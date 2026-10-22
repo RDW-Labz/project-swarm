@@ -1,0 +1,111 @@
+[
+ {
+  "id": "T-0109",
+  "title": "Compute split quality metrics per project for the quality panel",
+  "acceptance": [
+   "A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red."
+  ],
+  "files": [
+   "tools/board-split-quality.mjs"
+  ],
+  "tests": [
+   "tests/board-split-quality.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0102"
+  ]
+ },
+ {
+  "id": "T-0110",
+  "title": "Merge board snapshots from multiple machines into one federated board feed",
+  "acceptance": [
+   "Projects and orchestrators from the MacBook and the Mac mini appear on one board."
+  ],
+  "files": [
+   "tools/board-federation.mjs"
+  ],
+  "tests": [
+   "tests/board-federation.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0102"
+  ]
+ },
+ {
+  "id": "T-0121",
+  "title": "Render the Split quality panel with green, amber and red metrics per project",
+  "acceptance": [
+   "A Split quality panel per project shows overhead ratio, first-try pass rate, critical path, wave fill, collisions, review $ per ticket and ticket sizes, each green, amber or red."
+  ],
+  "files": [
+   "tools/watch-assets/split-quality-panel.js"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0102"
+  ]
+ },
+ {
+  "id": "T-0122",
+  "title": "Show machine and swarm version on cards and flag version drift",
+  "acceptance": [
+   "Each card shows its machine and swarm version, and version drift is flagged."
+  ],
+  "files": [
+   "tools/watch-assets/machine-badge.js"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0102"
+  ]
+ },
+ {
+  "id": "T-0166",
+  "title": "Push scanned field exports between swarm machines",
+  "acceptance": [
+   "Field push transfers only metadata bundles that passed secret and PII scanning."
+  ],
+  "files": [
+   "tools/field-push.mjs"
+  ],
+  "tests": [
+   "tests/field-ops.test.mjs"
+  ],
+  "dependsOn": [
+   "T-0165"
+  ]
+ },
+ {
+  "id": "T-0207",
+  "title": "Replay tests for ticket manager scope gate and unblocker replan report",
+  "acceptance": [
+   "The Ticket Manager keeps at least 5 ready tickets per active project.",
+   "The Unblocker re-plans blocked tickets (R-013) and reports what it changed.",
+   "The re-plan is logged with its reason."
+  ],
+  "files": [
+   "tests/managers/r036-ticket-unblocker.test.mjs"
+  ],
+  "tests": [],
+  "dependsOn": [
+   "T-0199",
+   "T-0200",
+   "T-0204",
+   "T-0206",
+   "T-0174",
+   "T-0175",
+   "T-0176",
+   "T-0177",
+   "T-0178",
+   "T-0180",
+   "T-0183",
+   "T-0184",
+   "T-0189",
+   "T-0201",
+   "T-0202",
+   "T-0203",
+   "T-0205",
+   "T-0051"
+  ]
+ }
+]
