@@ -128,6 +128,35 @@ function makeElement(tag, id) {
   return node;
 }
 
+let savedGlobalNavigatorDescriptor;
+let stubNavigator;
+let navigatorHooksRegistered = false;
+
+function applyGlobalNavigatorStub() {
+  if (!stubNavigator || savedGlobalNavigatorDescriptor === undefined) return;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: stubNavigator,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function restoreGlobalNavigator() {
+  if (savedGlobalNavigatorDescriptor === undefined) return;
+  if (savedGlobalNavigatorDescriptor) {
+    Object.defineProperty(globalThis, 'navigator', savedGlobalNavigatorDescriptor);
+  } else {
+    delete globalThis.navigator;
+  }
+}
+
+function registerNavigatorHooks() {
+  if (navigatorHooksRegistered) return;
+  navigatorHooksRegistered = true;
+  test.before(applyGlobalNavigatorStub);
+  test.after(restoreGlobalNavigator);
+}
+
 async function installBoardDom() {
   const byId = new Map();
   const body = makeElement('body');
@@ -163,16 +192,12 @@ async function installBoardDom() {
     win.navigator.clipboard._writes.push(text);
     return origWrite(text);
   };
-  if (globalThis.navigator && globalThis.navigator !== win.navigator) {
-    try {
-      Object.defineProperty(globalThis.navigator, 'clipboard', {
-        value: win.navigator.clipboard,
-        configurable: true,
-      });
-    } catch {
-      /* Node may expose a read-only navigator */
-    }
+  stubNavigator = win.navigator;
+  if (savedGlobalNavigatorDescriptor === undefined) {
+    savedGlobalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   }
+  applyGlobalNavigatorStub();
+  registerNavigatorHooks();
   win.fetch = async () => ({ ok: false });
   win.innerHeight = 800;
   const libSrc = await fs.readFile(path.join(assets, 'board-lib.js'), 'utf8');
@@ -188,7 +213,10 @@ async function installBoardDom() {
 
 let boardModule;
 async function loadBoardModule() {
-  if (boardModule) return boardModule;
+  if (boardModule) {
+    applyGlobalNavigatorStub();
+    return boardModule;
+  }
   await installBoardDom();
   process.env.SWARM_BOARD_CARD_TEST = '1';
   await import(boardPath);
@@ -322,6 +350,7 @@ function assertCardListItems(listEl, items) {
 }
 
 async function assertCopyButtonsCopyExactCommands(listEl, items) {
+  applyGlobalNavigatorStub();
   const rows = listEl.querySelectorAll('.watch-card-list-item');
   const clipboard = window.navigator.clipboard;
   for (let i = 0; i < items.length; i += 1) {
