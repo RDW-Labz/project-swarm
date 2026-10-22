@@ -2954,6 +2954,17 @@ async function mainInner() {
   if(args[0]==='status'&&args[1]==='--all'&&args.length===2)args.splice(0,2,'watch','--all','--text');
   if(args[0]==='watch'||args[0]==='gallery'){
     root=await fs.realpath(root);
+    if(args[0]==='watch'){
+      const watchArgs=args.slice(1);
+      const boardAll=watchArgs.includes('--all')&&!watchArgs.some(flag=>['--text','--json','--tui'].includes(flag));
+      if(boardAll){
+        const {runBoardWatchAll}=await import('./autopilot-supervisor.mjs');
+        const res=await runBoardWatchAll(root,watchArgs,{supervisorOptions:{autopilotDeps}});
+        process.stdout.write(res.stdout);
+        if(res.exitCode)process.exitCode=res.exitCode;
+        return;
+      }
+    }
     const {runWatchCommand,runGalleryCommand}=await import('./watch-cli.mjs');
     const res=await(args[0]==='watch'?runWatchCommand:runGalleryCommand)(root,args.slice(1));
     process.stdout.write(res.stdout);
@@ -2995,6 +3006,13 @@ async function mainInner() {
   }
   if(args[0]==='autopilot'){
     root=await fs.realpath(root);
+    if(['off','on','status'].includes(args[1])){
+      const {runAutopilotPrefCommand}=await import('./autopilot-supervisor.mjs');
+      const res=await runAutopilotPrefCommand(root,args.slice(1));
+      process.stdout.write(res.stdout);
+      if(res.exitCode)process.exitCode=res.exitCode;
+      return;
+    }
     let once=false,intervalMs=30000,maxSteps=Infinity,legacyPlan=false;
     for(let index=1;index<args.length;index++){
       const flag=args[index];
@@ -3006,7 +3024,7 @@ async function mainInner() {
         if(flag==='--interval')intervalMs=value*1000;else maxSteps=value;
         continue;
       }
-      fail('Usage: swarm autopilot [--once] [--interval SECONDS] [--max-steps N] [--legacy-plan]');
+      fail('Usage: swarm autopilot off|on|status | swarm autopilot [--once] [--interval SECONDS] [--max-steps N] [--legacy-plan]');
     }
     const controller=new AbortController();
     const abort=()=>controller.abort();
@@ -3030,8 +3048,35 @@ async function mainInner() {
     };
     const deadline=(promise,label)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(Error(`${label} timed out after 5 seconds`)),5000).unref())]);
     const status=await projectStatus(root,{doctorAll:()=>deadline(doctorAll({root,probeLocal:true,skipRemote:true}),'the lane check'),spendToday:()=>deadline(spendToday(),'the spend read')});
+    const {autopilotStatusForRoot,computeIdleWithReady,countReadyTickets}=await import('./autopilot.mjs');
+    status.autopilot=await autopilotStatusForRoot(root);
+    try{
+      const {readLedger}=await import('./tickets.mjs');
+      const ledger=await readLedger(root);
+      const readyTickets=countReadyTickets(ledger);
+      const liveForRoot=(await listLiveRuns({dir:liveDir(process.env)})).filter(r=>path.resolve(String(r.root??''))===path.resolve(root));
+      const liveRunCount=liveForRoot.length;
+      let freeMachineSlots=null;
+      try{
+        const {workersHeld}=await import('./board-data.mjs');
+        const {lanesDir}=await import('./lanes.mjs');
+        const {machineConcurrency}=await import('./lanes.mjs');
+        const {loadLocalConfig}=await import('./local-config.mjs');
+        const max=machineConcurrency(loadLocalConfig({env:process.env})??{});
+        const held=await workersHeld({dir:lanesDir(process.env),max});
+        freeMachineSlots=held.free;
+      }catch{/* slots unknown */}
+      status.idleWithReady=computeIdleWithReady({liveRunCount,readyTickets,freeMachineSlots});
+      status.readyTickets=readyTickets;
+    }catch{/* ledger optional */}
     // A probe that is still running must not keep the process alive: print, then leave.
-    process.stdout.write(args[0]==='--json'?`${JSON.stringify(status)}\n`:`${formatStatus(status)}\n`,()=>process.exit(process.exitCode??0));
+    if(args[0]==='--json'){
+      process.stdout.write(`${JSON.stringify(status)}\n`,()=>process.exit(process.exitCode??0));
+    }else{
+      const lines=[formatStatus(status),`autopilot: ${status.autopilot}`];
+      if(status.idleWithReady)lines.push(`idle with ready work: ${status.readyTickets} ticket(s) with free machine slots`);
+      process.stdout.write(`${lines.join('\n')}\n`,()=>process.exit(process.exitCode??0));
+    }
     return;
   }
   if(args[0]==='completion'){
