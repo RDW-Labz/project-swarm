@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   CHECKPOINT_HOOK,
+  ensureOrchestratorHooks,
   hookScriptCommand,
   refreshProjectInstallHooks,
   ORCHESTRATOR_HOOK_EVENTS,
@@ -160,6 +161,26 @@ test('bumpPointers refresh re-points hooks for pinned projects without installin
   const localAfter = await fs.readFile(localFile, 'utf8');
   assertAllCurrent(localAfter, install);
   assert.equal(await fs.readFile(path.join(project, '.swarm', 'runner-pointer.json'), 'utf8'), pointerBefore);
+});
+
+test('refresh-only update adds missing orchestrator hooks when checkpoint is present', async () => {
+  const install = await tmp();
+  const project = await tmp();
+  await seedInstallBase(install);
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  await writeJson(localFile, {
+    hooks: {
+      Stop: [{ hooks: [{ type: 'command', command: CHECKPOINT_HOOK }] }],
+    },
+  });
+  const result = await ensureOrchestratorHooks(project, install, { refreshOnly: true });
+  assert.equal(result.status, 'updated');
+  const localAfter = await fs.readFile(localFile, 'utf8');
+  for (const arg of Object.values(ORCHESTRATOR_HOOK_EVENTS)) {
+    const cmd = hookScriptCommand(install, 'orchestrator-hook.mjs', arg);
+    assert.ok(localAfter.includes(JSON.stringify(cmd)), `missing orchestrator ${arg}`);
+  }
+  assert.ok(localAfter.includes(JSON.stringify(CHECKPOINT_HOOK)));
 });
 
 test('refreshProjectInstallHooks leaves projects without swarm hooks untouched', async () => {

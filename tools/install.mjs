@@ -475,11 +475,11 @@ async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
  for(const sp of specs){
   if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
   const command=hookScriptCommand(installRoot,sp.script,sp.arg);
-  const list=settings.hooks[sp.event]??=[];
+  if(!Array.isArray(settings.hooks[sp.event]))settings.hooks[sp.event]=[];
+  const list=settings.hooks[sp.event];
   let found=false;
   for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`)||commandOf(hook).endsWith(` ${sp.arg}`))){found=true;if(hookCommandNeedsRepoint(hook,installRoot,sp.script,sp.arg)){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher&&!refreshOnly){entry.matcher=sp.matcher;changed=true;structuralChange=true;}}
   if(!found){
-   if(refreshOnly)continue;
    list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;structuralChange=true;
   }
  }
