@@ -2698,6 +2698,14 @@ async function mainInner() {
     if(res.exitCode)process.exitCode=res.exitCode;
     return;
   }
+  if(args[0]==='orchestrator'){
+    root=await fs.realpath(root);
+    const {runOrchestratorCommand}=await import('./external-orchestrators.mjs');
+    const res=await runOrchestratorCommand(root,args.slice(1),{env:process.env,home:os.homedir()});
+    process.stdout.write(res.stdout);
+    if(res.exitCode)process.exitCode=res.exitCode;
+    return;
+  }
   if(args[0]==='projects'||args[0]==='history'){
     root=await fs.realpath(root);
     const {runBoardCommand}=await import('./board-commands.mjs');

@@ -78,6 +78,7 @@ export const COMMAND_META = {
   autopilot: { what: 'Drives the project forward with no model, one step at a time.', when: 'When you want routine steps done while you are away.', example: 'swarm autopilot --once --max-steps 3', cost: 'local', approval: false },
   completion: { what: 'Prints the zsh completion script.', when: 'Once, when you install shell completion.', example: 'swarm completion > ~/.zfunc/_swarm', cost: 'free', approval: false },
   forget: { what: 'Removes projects from the machine registry only; folders and pointers are untouched.', when: 'When the board lists idle scratch or gone checkouts you no longer want tracked.', example: 'swarm forget --scratch --yes', cost: 'free', approval: false },
+  orchestrator: { what: 'Registers or heartbeats a non-Claude CLI session so Swarm Watch can show its model, tokens and reported cost.', when: 'While driving a project from Codex, opencode or another CLI that is not hooked into orchestrator events.', example: 'swarm orchestrator register --tool codex --model gpt-5', cost: 'free', approval: false },
   help: { what: 'Shows command usage.', when: 'When you forget a command or flag.', example: 'swarm help ship', cost: 'free', approval: false }
 };
 
