@@ -4,29 +4,157 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { boardSnapshot } from '../tools/board-data.mjs';
-import { readyTickets as ticketsReadyToRun, logPath, approveLedger, isApproved } from '../tools/tickets.mjs';
-import { doneTimes } from '../tools/client-report.mjs';
-import { checkTicketTree } from '../tools/scope-integrity.mjs';
-import { readEvents } from '../tools/orchestrator-events.mjs';
-import { projectId } from '../tools/projects.mjs';
 import { makeBoardFixture } from './helpers/board-accuracy-fixture.mjs';
-import { offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID } from '../tools/build-progress.mjs';
-import { collectInbox } from '../tools/inbox.mjs';
-import { inboxDeps } from '../tools/inbox-commands.mjs';
-import { machineConcurrency } from '../tools/lanes.mjs';
-import { defaultConfigPath } from '../tools/local-config.mjs';
-import { sanitizeText } from '../tools/journal.mjs';
-import { sanitizeWorkerText } from '../tools/worker-text.mjs';
+
+const testTools = (async () => {
+  const [
+    tickets,
+    clientReport,
+    scopeIntegrity,
+    orchestratorEvents,
+    projects,
+    inbox,
+    inboxCommands,
+    lanes,
+    localConfig,
+    journal,
+    workerText,
+  ] = await Promise.all([
+    import('../tools/tickets.mjs'),
+    import('../tools/client-report.mjs'),
+    import('../tools/scope-integrity.mjs'),
+    import('../tools/orchestrator-events.mjs'),
+    import('../tools/projects.mjs'),
+    import('../tools/inbox.mjs'),
+    import('../tools/inbox-commands.mjs'),
+    import('../tools/lanes.mjs'),
+    import('../tools/local-config.mjs'),
+    import('../tools/journal.mjs'),
+    import('../tools/worker-text.mjs'),
+  ]);
+  return {
+    logPath: tickets.logPath,
+    approveLedger: tickets.approveLedger,
+    isApproved: tickets.isApproved,
+    doneTimes: clientReport.doneTimes,
+    checkTicketTree: scopeIntegrity.checkTicketTree,
+    readEvents: orchestratorEvents.readEvents,
+    projectId: projects.projectId,
+    collectInbox: inbox.collectInbox,
+    inboxDeps: inboxCommands.inboxDeps,
+    machineConcurrency: lanes.machineConcurrency,
+    defaultConfigPath: localConfig.defaultConfigPath,
+    sanitizeText: journal.sanitizeText,
+    sanitizeWorkerText: workerText.sanitizeWorkerText,
+  };
+})();
+
+async function tools() {
+  return testTools;
+}
+
+/** Same anchor as tools/build-progress.mjs OFF_LEDGER_LIST_ANCHOR_ID (oracle must not import build-progress). */
+const OFF_LEDGER_LIST_ANCHOR_ID = 'untracked';
+const LIVE_RUN = new Set(['queued', 'pending', 'running', 'active', 'in_progress', 'in-progress', 'live']);
+const IGNORED_RUN_WORDS = /\b(?:smoke|lane-test|lane-bench|probe|doctor)\b/i;
+const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
+const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
+
+/** Restated from ledger JSON: ready/todo, deps done, exclude human/cancelled/proposed (and unapproved proposals). */
+function readyTicketsFromLedgerJson(tickets) {
+  const done = new Set((tickets ?? []).filter(t => t.status === 'done').map(t => t.id));
+  return (tickets ?? [])
+    .filter(t =>
+      t.type !== 'human' &&
+      !['cancelled', 'proposed'].includes(t.status) &&
+      (t.status === 'todo' || t.status === 'ready') &&
+      !unapprovedProposal(t) &&
+      (t.dependsOn ?? []).every(d => done.has(d)))
+    .sort(byId);
+}
+
+function runIsLive(state) {
+  return state?.live === true || LIVE_RUN.has(String(state?.status ?? '').toLowerCase());
+}
+
+function stateTicketIds(state) {
+  const ids = new Set();
+  const visit = value => {
+    if (typeof value === 'string') ids.add(value);
+    else if (Array.isArray(value)) for (const item of value) visit(item);
+    else if (value && typeof value === 'object') {
+      visit(value.id);
+      visit(value.ticket);
+      visit(value.ticketId);
+    }
+  };
+  visit(state?.ticketIds);
+  visit(state?.tickets);
+  return ids;
+}
+
+function jobTicketIds(job) {
+  const ids = new Set();
+  for (const key of ['id', 'ticket', 'ticketId', 'name']) if (typeof job?.[key] === 'string') ids.add(job[key]);
+  return ids;
+}
+
+function runHasIgnoredName(state, jobs) {
+  const manifestNames = [
+    state?.manifest,
+    state?.manifest?.file,
+    state?.manifest?.fileName,
+    state?.manifest?.filename,
+    state?.manifest?.name,
+    state?.manifest?.path,
+    state?.manifestFile,
+    state?.manifestFileName,
+    state?.manifestName,
+    state?.manifestPath,
+    state?.request?.manifest,
+    state?.request?.manifestFile,
+    state?.options?.manifest,
+    state?.options?.manifestFile,
+  ];
+  if (manifestNames.some(value => typeof value === 'string' && IGNORED_RUN_WORDS.test(value))) return true;
+  return jobs.some(job => typeof job?.id === 'string' && IGNORED_RUN_WORDS.test(job.id));
+}
+
+/**
+ * Restated from build-progress untracked-run rules: 14-day window (or live runs), skip nonIntegrating
+ * and run/job/manifest names matching smoke, lane-test, lane-bench, probe, doctor; count a run when any
+ * job id is not a ticket id in any family ledger (or the run has no jobs and no state-level ticket mapping).
+ */
+function countUntrackedRunsFromDisk(records, familyTicketIds, now) {
+  const ids = familyTicketIds;
+  let count = 0;
+  for (const record of records) {
+    const state = record.state;
+    const live = runIsLive(state);
+    const started = Date.parse(state?.startedAt ?? '');
+    if (Number.isFinite(started) ? (started > now || (!live && started < now - 14 * DAY)) : !live) continue;
+    const jobs = Array.isArray(state?.jobs) ? state.jobs : [];
+    if (state?.nonIntegrating === true || runHasIgnoredName(state, jobs)) continue;
+    const stateIds = stateTicketIds(state);
+    const stateMapped = [...stateIds].some(id => ids.has(id));
+    const untrackedJobs = jobs.filter(job => ![...jobTicketIds(job)].some(id => ids.has(id)));
+    if (!untrackedJobs.length && !(!jobs.length && !stateMapped)) continue;
+    count += 1;
+  }
+  return count;
+}
 
 /** Every leaf path on projectOverview(...).card must appear here with the test that owns it. */
 export const COVERAGE = {
   'now.buildingTickets': 'card.now.buildingTickets counts running tickets across the family',
   'now.checkoutsBuilding': 'card.now.checkoutsBuilding counts family checkouts with a live run',
   'now.lastTicketFinishedAt': 'card.now.lastTicketFinishedAt matches the family oracle',
-  'next.ready': 'card.next.ready matches readyTickets on disk',
+  'next.ready': 'card.next.ready matches ready-on-disk oracle',
   'next.items': 'card.next.items fields match disk oracle',
   'next.items.id': 'card.next.items fields match disk oracle',
   'next.items.title': 'card.next.items fields match disk oracle',
@@ -69,8 +197,13 @@ const activeRunState = state => state?.status === 'running' || state?.status ===
 const COUNTED = ticket => ticket && ticket.type !== 'human' && !['cancelled', 'proposed'].includes(ticket.status);
 
 const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
-const boardTitle = (value, max = 140) => (value === null || value === undefined ? null : sanitizeWorkerText(value, max));
-const inboxTitle = (value, max = 900) => {
+async function boardTitle(value, max = 140) {
+  const { sanitizeWorkerText } = await tools();
+  return value === null || value === undefined ? null : sanitizeWorkerText(value, max);
+}
+
+async function inboxTitle(value, max = 900) {
+  const { sanitizeText } = await tools();
   const cleaned = sanitizeText(value).replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= max) return cleaned;
   const cut = cleaned.slice(0, max);
@@ -79,7 +212,8 @@ const inboxTitle = (value, max = 900) => {
 };
 
 /** Restated from tools/board-inbox.mjs ticketReleaseAllowed (oracle must not call that function). */
-function releaseAllowedFromDisk(ticket, ledger) {
+async function releaseAllowedFromDisk(ticket, ledger) {
+  const { isApproved } = await tools();
   if (!ticket || ticket.type === 'human') return false;
   if (!['blocked', 'todo', 'review'].includes(ticket.status)) return false;
   const done = new Set((ledger?.tickets ?? []).filter(t => t.status === 'done').map(t => t.id));
@@ -188,6 +322,7 @@ async function oracleCheckoutsBuilding(fixture, { liveRuns = [] } = {}) {
 }
 
 async function oracleLastTicketFinishedAt(fixture) {
+  const { doneTimes } = await tools();
   const roots = await familyRootsFromDisk(fixture.root, fixture.env);
   const runs = await readRunsFromDisk(roots);
   const ledgers = await readLedgersFromDisk(roots);
@@ -213,7 +348,7 @@ async function oracleLastTicketFinishedAt(fixture) {
 
 async function oracleNextReady(fixture) {
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
-  return ticketsReadyToRun(ledger.tickets ?? []);
+  return readyTicketsFromLedgerJson(ledger.tickets ?? []);
 }
 
 async function oracleBlocked(fixture) {
@@ -227,10 +362,10 @@ async function oracleBlocked(fixture) {
     if (!waitsOn.length) continue;
     if (ticket.blockReason && ticket.blockReason !== 'deps') continue;
     waitingOnTickets += 1;
-    const command = releaseAllowedFromDisk(ticket, ledger) ? `swarm tickets ${ticket.id} --release` : null;
+    const command = (await releaseAllowedFromDisk(ticket, ledger)) ? `swarm tickets ${ticket.id} --release` : null;
     items.push({
       id: ticket.id,
-      title: boardTitle(ticket.title, 140),
+      title: await boardTitle(ticket.title, 140),
       waitsOn,
       command,
     });
@@ -240,6 +375,7 @@ async function oracleBlocked(fixture) {
 }
 
 async function oracleMachineMaxFromConfig(env, fallback = null) {
+  const { defaultConfigPath, machineConcurrency } = await tools();
   const configPath = env?.SWARM_CONFIG || process.env.SWARM_CONFIG || defaultConfigPath();
   try {
     const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
@@ -286,6 +422,7 @@ function inboxCommandOnDisk(item, root) {
 }
 
 async function oracleNeedYou(fixture, now = NOW) {
+  const { inboxDeps, collectInbox } = await tools();
   const root = fixture.root;
   const ledger = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'tickets.json'), 'utf8'));
   const deps = inboxDeps({ channel: 'board' });
@@ -294,7 +431,7 @@ async function oracleNeedYou(fixture, now = NOW) {
   for (const it of collected) {
     items.push({
       id: it.id,
-      title: inboxTitle(it.title),
+      title: await inboxTitle(it.title),
       kind: it.kind,
       command: inboxCommandOnDisk({
         kind: it.kind,
@@ -310,18 +447,18 @@ async function oracleNeedYou(fixture, now = NOW) {
       const filesNamed = (t.files ?? []).length > 0;
       items.push({
         id: t.id,
-        title: inboxTitle(t.title),
+        title: await inboxTitle(t.title),
         kind: 'proposed-ticket',
         command: inboxCommandOnDisk({ kind: 'proposed-ticket', id: t.id, filesNamed }, root),
       });
     }
   }
   for (const t of ledger.tickets ?? []) {
-    if (!releaseAllowedFromDisk(t, ledger)) continue;
+    if (!(await releaseAllowedFromDisk(t, ledger))) continue;
     if (t.status === 'blocked' && t.blockReason === 'deps') continue;
     items.push({
       id: t.id,
-      title: inboxTitle(t.title),
+      title: await inboxTitle(t.title),
       kind: 'held-ticket',
       command: inboxCommandOnDisk({ kind: 'held-ticket', id: t.id }, root),
     });
@@ -335,6 +472,7 @@ async function oracleListHref() {
 }
 
 async function oracleEta(fixture, now = NOW) {
+  const { logPath } = await tools();
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
   const tickets = (ledger.tickets ?? []).filter(COUNTED);
   const remaining = tickets.filter(ticket => ticket.status !== 'done').length;
@@ -366,6 +504,7 @@ async function oracleEta(fixture, now = NOW) {
 }
 
 async function oracleFacts(fixture, now = NOW) {
+  const { readEvents } = await tools();
   const roots = await familyRootsFromDisk(fixture.root, fixture.env);
   const since = now - DAY;
   let handEditsBlocked24h = 0;
@@ -391,15 +530,7 @@ async function oracleUntrackedRuns(fixture, now = NOW) {
   const roots = await familyRootsFromDisk(fixture.root, fixture.env);
   const runs = await readRunsFromDisk(roots);
   const ticketIds = await familyTicketIdsFromDisk(fixture);
-  const off = offLedgerRuns(
-    runs.map(record => ({ runId: record.id, state: record.state })),
-    null,
-    null,
-    now,
-    ticketIds,
-    fixture.projects[0].id,
-  );
-  return off.count;
+  return countUntrackedRunsFromDisk(runs, ticketIds, now);
 }
 
 async function oracleFactsCheckouts(fixture) {
@@ -450,6 +581,7 @@ async function oracleRecentJobCounts(fixture) {
 
 async function oracleHeadsUp(fixture, { slots = 8, finished = false } = {}) {
   if (finished) return null;
+  const { checkTicketTree } = await tools();
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
   const scopeFile = path.join(fixture.root, ledger.scope?.file ?? 'docs/scope/scope.md');
   let scope = null;
@@ -521,6 +653,7 @@ test('card.now.checkoutsBuilding counts family checkouts with a live run', async
 });
 
 test('card.now.lastTicketFinishedAt matches the family oracle', async t => {
+  const { logPath } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ledger = JSON.parse(await fs.readFile(path.join(fixture.root, '.swarm', 'project', 'tickets.json'), 'utf8'));
@@ -532,7 +665,34 @@ test('card.now.lastTicketFinishedAt matches the family oracle', async t => {
   assert.equal(cardOf(snapshot, fixture).now.lastTicketFinishedAt, await oracleLastTicketFinishedAt(fixture));
 });
 
-test('card.next.ready matches readyTickets on disk', async t => {
+test('board-accuracy test file avoids forbidden tools imports for disk oracles', async () => {
+  const src = await fs.readFile(fileURLToPath(import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /from\s+['"]\.\.\/tools\/build-progress\.mjs['"]/, 'must not import build-progress (untracked oracle restates rules from disk)');
+  assert.doesNotMatch(src, /\breadyTickets\s+as\s+ticketsReadyToRun\b/);
+  assert.doesNotMatch(src, /\boffLedgerRuns\s*\(/);
+  assert.doesNotMatch(src, /\bticketsReadyToRun\s*\(/);
+  assert.doesNotMatch(src, /import\s*\(\s*['"]\.\.\/tools\/build-progress\.mjs['"]\s*\)/);
+  const allowedBoardData = new Set(['boardSnapshot', 'projectOverview']);
+  const importRe = /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"](\.\.\/tools\/[^'"]+)['"]/g;
+  for (const match of src.matchAll(importRe)) {
+    const spec = match[3];
+    if (spec !== '../tools/board-data.mjs') {
+      assert.fail(`forbidden import from ${spec}: only ../tools/board-data.mjs (boardSnapshot/projectOverview) and ./helpers/board-accuracy-fixture.mjs are allowed`);
+    }
+    const named = match[1];
+    if (named) {
+      for (const part of named.split(',')) {
+        const binding = part.trim().split(/\s+as\s+/).pop().trim();
+        assert.ok(allowedBoardData.has(binding), `board-data import "${binding}" is not a function under test`);
+      }
+    } else {
+      const binding = match[2];
+      assert.ok(allowedBoardData.has(binding), `board-data import "${binding}" is not a function under test`);
+    }
+  }
+});
+
+test('card.next.ready matches ready-on-disk oracle', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const snapshot = await snapshotFor(fixture);
@@ -540,12 +700,34 @@ test('card.next.ready matches readyTickets on disk', async t => {
 });
 
 test('card.next.items fields match disk oracle', async t => {
+  const { approveLedger } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const messyRaw = '  Trim\u200b and   collapse   whitespace for next card  ';
+  const messyTicket = (ledger.tickets ?? []).find(
+    ticket => ticket.type !== 'human' && !['cancelled', 'proposed', 'done'].includes(ticket.status),
+  );
+  assert.ok(messyTicket?.id);
+  messyTicket.status = 'ready';
+  messyTicket.dependsOn = [];
+  messyTicket.title = messyRaw;
+  await fs.writeFile(ledgerFile, JSON.stringify(approveLedger(ledger, { now: iso(NOW) })));
+  const cleaned = await boardTitle(messyRaw, 140);
+  assert.notEqual(cleaned, messyRaw, 'fixture title must change under boardTitle/sanitizeWorkerText cleanup');
   const ready = await oracleNextReady(fixture);
   const snapshot = await snapshotFor(fixture);
   const card = cardOf(snapshot, fixture);
-  assert.deepEqual(card.next.items, ready.map(ticket => ({ id: ticket.id, title: ticket.title, command: `swarm tickets ${ticket.id}` })));
+  const expectedItems = await Promise.all(ready.map(async ticket => ({
+    id: ticket.id,
+    title: await boardTitle(ticket.title, 140),
+    command: `swarm tickets ${ticket.id}`,
+  })));
+  assert.deepEqual(card.next.items, expectedItems);
+  const cardMessy = card.next.items.find(item => item.id === messyTicket.id);
+  assert.ok(cardMessy);
+  assert.equal(cardMessy.title, cleaned);
 });
 
 test('card.blocked.waitingOnTickets matches dependency oracle', async t => {
@@ -619,7 +801,7 @@ test('card.blocked.items command follows release rule read from disk', async t =
   releasable.blockReason = 'manual';
   releasable.dependsOn = [a.id];
   await fs.writeFile(ledgerFile, JSON.stringify(ledger));
-  const releaseOracle = releaseAllowedFromDisk(releasable, ledger);
+  const releaseOracle = await releaseAllowedFromDisk(releasable, ledger);
   assert.equal(releaseOracle, true);
   const need = await oracleNeedYou(fixture);
   const held = need.needYouItems.find(entry => entry.id === releasable.id);
@@ -699,6 +881,7 @@ test('card.slots.machineMax reads local config on disk', async t => {
 });
 
 test('card.slots reports machine use including other projects', async t => {
+  const { projectId } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const otherId = projectId(path.join(path.dirname(fixture.root), 'foreign'));
@@ -731,6 +914,7 @@ test('card.eta.days is null when perDay is zero', async t => {
 });
 
 test('card.eta.days matches seven-day tickets.log oracle', async t => {
+  const { logPath } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
@@ -753,6 +937,7 @@ test('card.eta.remaining matches seven-day tickets.log oracle', async t => {
 });
 
 test('card.eta.perDay matches seven-day tickets.log oracle', async t => {
+  const { logPath } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
@@ -763,6 +948,7 @@ test('card.eta.perDay matches seven-day tickets.log oracle', async t => {
 });
 
 test('card.eta.doneLast7Days matches seven-day tickets.log oracle', async t => {
+  const { logPath } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
@@ -780,6 +966,7 @@ test('card.eta.windowDays matches seven-day tickets.log oracle', async t => {
 });
 
 test('card.eta.basis matches seven-day tickets.log oracle', async t => {
+  const { logPath } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   await fs.mkdir(path.dirname(logPath(fixture.root)), { recursive: true });
@@ -894,6 +1081,7 @@ test('card JSON omits money-shaped keys and dollar values', async t => {
 });
 
 test('card.headsUp wave collision, under-filled waves, and finished null', async t => {
+  const { approveLedger } = await tools();
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
   const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
@@ -928,6 +1116,7 @@ test('card.headsUp warns when recent runs under-fill machine slots', async t => 
 });
 
 test('card.headsUp is null when the project is finished', async t => {
+  const { approveLedger } = await tools();
   const mergedPrs = [{ state: 'MERGED', number: 99, headRefName: 'swarm/finished', mergedAt: iso(NOW) }];
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json', prs: mergedPrs });
   t.after(fixture.cleanup);
@@ -954,6 +1143,7 @@ test('card.headsUp is null when the project is finished', async t => {
 });
 
 test('card COVERAGE lists every leaf field on a populated card', async t => {
+  const { approveLedger } = await tools();
   const fixture = await makeBoardFixture({
     ledger: 'roadmap-ledger.json',
     worktrees: [{ name: 'linked', runs: [{ id: 'wt-live', status: 'running', startedAt: iso(NOW), jobs: [] }] }],
