@@ -5,10 +5,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
+import { validateLocalLaneBlock, localLaneConcurrency, LOCAL_MODEL_PREFIX, localSlotRoom, attachLocalSlotMeta } from './local-lane.mjs';
 import path from 'node:path';
 
 export const LANE_AGENTS = Object.freeze([
-  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented',
+  'hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented', 'local',
 ]);
 export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(agent => [agent, Object.freeze({
   concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 64 })[agent] ?? 32,
@@ -23,6 +24,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
 
 // The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
 const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
+const LOCAL_LANE_FIELDS = Object.freeze(['endpoints', 'agencyConcurrency']);
 function invalid(agent, field, reason) {
   return Object.assign(new Error(`lanes-invalid: ${agent}.${field} ${reason}`), { code: 'lanes-invalid' });
 }
@@ -68,7 +70,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
       if (!LANE_AGENTS.includes(agent)) throw invalid(agent, 'agent', 'is unknown');
       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
       for (const [field, value] of Object.entries(override)) {
-        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
+        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field)) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
         if (field === 'backoff') {
           if (!object(value)) throw invalid(agent, field, 'must be an object');
           for (const [key, entry] of Object.entries(value)) {
@@ -88,6 +90,17 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
     if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };
+  }
+  const localBlock = validateLocalLaneBlock(config?.lanes?.local);
+  if (config?.lanes?.local !== undefined || localBlock.endpoints.length > 0) {
+    lanes.local.endpoints = localBlock.endpoints;
+    lanes.local.agencyConcurrency = localBlock.agencyConcurrency;
+  }
+  if (localBlock.endpoints.length) {
+    lanes.local.concurrency = localLaneConcurrency(localBlock.endpoints);
+    lanes.local.model = `${LOCAL_MODEL_PREFIX}${localBlock.endpoints[0].name}`;
+  } else {
+    lanes.local.model = null;
   }
   for (const agent of LANE_AGENTS) validate(agent, lanes[agent]);
   return lanes;
@@ -307,7 +320,7 @@ export function machineAllowance({ store, project, count, max, isAlive, time = D
 
 // One lock grants every slot this run can take. A per-job lock on a slow disk spaces
 // state writes past the coalesce window.
-export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', machine = null, now = Date.now, isAlive } = {}) {
+export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', machine = null, now = Date.now, isAlive, local = null } = {}) {
   return withLaneStore(store => {
     const slots = store.slots[agent] ?? [];
     const pause = store.pauses[agent];
@@ -331,7 +344,17 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
     if (take === 0) return { granted: [], reason: machineLimited ? 'machine-full' : 'full', inFlight: slots.length };
     const granted = [];
     for (let n = 0; n < take; n += 1) {
-      const slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
+      if (agent === 'local' && local?.endpoint) {
+        const room = localSlotRoom(store, {
+          endpoint: local.endpoint,
+          slotsLimit: local.slotsLimit ?? concurrency,
+          agency: Boolean(local.agency),
+          agencyConcurrency: local.agencyConcurrency ?? 1,
+        });
+        if (room < 1) break;
+      }
+      let slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
+      if (agent === 'local' && local?.endpoint) slot = attachLocalSlotMeta(slot, { endpoint: local.endpoint, agency: Boolean(local.agency) });
       slots.push(slot);
       granted.push(slot.id);
     }
@@ -461,12 +484,12 @@ export class LaneScheduler {
     }
   }
 
-  acquire(agent, { signal } = {}) {
+  acquire(agent, { signal, local = null } = {}) {
     const lane = this.lane(agent);
     if (this.closed || signal?.aborted) return Promise.reject(abortError());
     lane.used = true;
     return new Promise((resolve, reject) => {
-      const waiter = { resolve, reject, signal, abort: null, arrival: this.nextArrival++ };
+      const waiter = { resolve, reject, signal, abort: null, arrival: this.nextArrival++, local };
       waiter.abort = () => {
         const index = lane.queue.indexOf(waiter);
         if (index < 0) return;
@@ -581,7 +604,8 @@ export class LaneScheduler {
       }
       if (!waiters.length) break;
       let claim;
-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive }); }
+      const localWaiter = waiters.find(waiter => waiter.local);
+      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive, local: localWaiter?.local ?? null }); }
       catch (error) {
         for (const waiter of waiters) {
           const index = lane.queue.indexOf(waiter);

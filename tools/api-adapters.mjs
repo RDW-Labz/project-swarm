@@ -7,10 +7,13 @@ import { bestOfCount, selectBest } from './best-of.mjs';
 import { loadRentedConfig, readRentedKey, balancedFetch } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
+import {
+  loadLocalLaneConfig, resolveLocalEndpoint, readLocalCredential, mapLocalUsage, doctorLocal,
+} from './local-lane.mjs';
 // The job's contract and acceptance tests, added to the task text when the manifest gives them (the rented lane requires both).
 const contractBlock = job => `${Array.isArray(job.acceptance) && job.acceptance.length ? `\n\nAcceptance tests (your files must make these pass):\n${job.acceptance.map(item => `- ${item}`).join('\n')}` : ''}`;
 
-export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented'];
+export const API_AGENTS = ['openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented', 'local'];
 const MAX_RESPONSE = 16 * 1024 * 1024;
 const MAX_EDITS = 200;
 // The same rule is given to every tool-free worker (API lanes and Hermes/Qwen), so each one knows it may
@@ -24,7 +27,7 @@ const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 
-export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey } = {}) {
+export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, model = null } = {}) {
   if (!API_AGENTS.includes(agent)) fail('Unsupported API adapter');
   let endpoint, key, keyName, selfHosted = false;
   // OpenRouter (decisions #226-#228): key from env, else the keychain, read by this parent only.
@@ -51,6 +54,32 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     key = readRentedKey(env, rented.keyItem);
     return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model, bestOf: rented.bestOf };
   }
+  if (agent === 'local') {
+    const { endpoints } = loadLocalLaneConfig(env);
+    if (!endpoints.length) {
+      return {
+        endpoint: 'https://local.invalid/v1/chat/completions',
+        key: null,
+        keyName: 'lanes.local.endpoints in machine config and Keychain project-swarm/local.<name>',
+        selfHosted: true,
+        configured: false,
+        endpoints: [],
+      };
+    }
+    const endpoint = resolveLocalEndpoint({ endpoints, model: model ?? `${endpoints[0].routableModel}` });
+    const credential = readLocalCredential(endpoint, env, { readKey: readLocal });
+    return {
+      endpoint: endpoint.chatUrl,
+      endpoints,
+      endpointName: endpoint.name,
+      upstreamModel: endpoint.model,
+      key: credential || null,
+      keyName: `Keychain ${endpoint.keychain.service}/${endpoint.keychain.account}${endpoint.linuxEnv ? ` or ${endpoint.linuxEnv}` : ''}`,
+      selfHosted: true,
+      configured: Boolean(credential),
+      slots: endpoint.slots,
+    };
+  }
   if (agent === 'lambda') {
     // Hosted Lambda Inference by default; SWARM_LAMBDA_URL selects an operator-owned OpenAI-compatible origin.
     let url;
@@ -66,6 +95,33 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
 }
 
 export function apiDoctor(agent, env = process.env) {
+  if (agent === 'local') {
+    const { endpoints, agencyConcurrency } = loadLocalLaneConfig(env);
+    if (!endpoints.length) {
+      return {
+        agent: 'local',
+        status: 'unconfigured',
+        configured: false,
+        liveVerified: false,
+        reachable: null,
+        authentication: 'Configure lanes.local.endpoints; Keychain: security add-generic-password -s project-swarm -a local.<name> -w',
+        endpoints: [],
+        agencyConcurrency,
+        note: 'No endpoints configured by default.',
+      };
+    }
+    return {
+      agent: 'local',
+      status: 'configured',
+      configured: true,
+      liveVerified: false,
+      reachable: null,
+      authentication: 'Bearer from Keychain or linuxEnv; never stored in config',
+      endpoints: endpoints.map(ep => ({ name: ep.name, model: ep.model, slots: ep.slots })),
+      agencyConcurrency,
+      note: 'Run swarm doctor local --probe-local to GET /v1/models (5s timeout).',
+    };
+  }
   const config = apiConfiguration(agent, env);
   // A public repo names no product keychain service: the item named here is the one config
   // `keychain.service` actually points at (default project-swarm), never a hard-coded product name.
@@ -77,6 +133,7 @@ export function apiDoctor(agent, env = process.env) {
 // Remote HTTPS origins and cloud keys remain configuration-only, even with opt-in.
 export async function probeLocalProvider(agent,env=process.env,{timeoutMs=1500,fetchImpl=fetch}={}){
  const report=apiDoctor(agent,env),url=new URL(report.endpoint);
+ if(agent==='local')return doctorLocal(env,{fetchImpl,timeoutMs:Math.min(Math.max(timeoutMs,1),5000)});
  if(!['ollama','lambda'].includes(agent)||!['127.0.0.1','[::1]','localhost'].includes(url.hostname))return report;
  url.pathname=agent==='ollama'?'/api/tags':'/v1/models';
  const controller=new AbortController();
@@ -433,7 +490,12 @@ function extract(agent, body, bestOfN = 1) {
     const choice = body.choices[0];
     return { text: choice.message.content, actualModel: modelName(body.model), usage: numericUsage(body.usage), provider: typeof body.provider === 'string' && /^[A-Za-z0-9 ._-]{1,60}$/.test(body.provider) ? body.provider : null };
   }
-  if (agent === 'lambda' || agent === 'rented') {
+  if (agent === 'local' || agent === 'lambda' || agent === 'rented') {
+    if (agent === 'local') {
+      const choice = body.choices?.[0];
+      if (body.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.tool_calls?.length || choice.message?.refusal || typeof choice.message?.content !== 'string') fail('Local server response incomplete, refused, truncated, or unexpected');
+      return { text: choice.message.content, actualModel: modelName(body.model), usage: mapLocalUsage(body.usage) };
+    }
     if (agent === 'rented' && bestOfN > 1 && Array.isArray(body.choices) && body.choices.length >= 1 && body.choices.length <= bestOfN) {
       const texts = body.choices.filter(item => item?.finish_reason === 'stop' && !item.message?.tool_calls?.length && !item.message?.refusal && typeof item.message?.content === 'string').map(item => item.message.content);
       if (!texts.length) fail('Rented server response incomplete, refused, truncated, or unexpected');
@@ -463,7 +525,7 @@ export function inlineContext(context, { byteCap = CONTEXT_BYTE_CAP } = {}) {
   return { inlined, contextInlined };
 }
 
-export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null } = {}) {
+export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null } = {}) {
   const controller = new AbortController(); let reason = null, finishReason = null, anthropicBilled = () => null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
   const onAbort = () => abort('cancelled');
@@ -477,7 +539,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     poll = setInterval(() => { Promise.resolve(cancelled()).then(value => { if (value) abort('cancelled'); }).catch(() => abort('Cancellation check failed')); }, 100);
     if (job.agent === 'openrouter') { assertBookkeepingOnly(job); emptyOutputsContentRefusal(job); }
     if (job.agent === 'anthropic') assertAnthropicModel(job);
-    const config = apiConfiguration(job.agent, env, { readKey, readAnthropic });
+    const config = apiConfiguration(job.agent, env, { readKey, readAnthropic, readLocal, model: job.model });
     // Last line of defence behind the router and validation: a rented server never sees a job that is not explicitly sensitive: false.
     if (job.agent === 'rented' && job.sensitive !== false) fail('sensitive-provider: the rented lane only runs jobs marked sensitive: false');
     if (!config.configured) {
@@ -488,6 +550,8 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       const detail = job.agent === 'anthropic' ? `${config.keyName} not set; keychain item ${ANTHROPIC_KEY_ITEM.service}/${ANTHROPIC_KEY_ITEM.account} not found; config read from ${configPath}`
         : job.agent === 'openrouter'
         ? (() => { const item = openRouterKeyItem(loadLocalConfig({ env })); return `${config.keyName} not set; keychain item ${item.service}/${item.account} not found; config read from ${configPath}`; })()
+        : job.agent === 'local'
+        ? `${config.keyName} not set; config read from ${configPath}`
         : `${config.keyName} is required`;
       fail(`api-key-missing: ${detail}`);
     }
@@ -527,6 +591,17 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
         : input;
       body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
     }
+    else if (job.agent === 'local') {
+      headers.authorization = `Bearer ${config.key}`;
+      body = {
+        model: config.upstreamModel,
+        messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }],
+        stream: false,
+        temperature: 0.2,
+        max_tokens: limit,
+        response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } },
+      };
+    }
     else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(config.selfHosted && env.SWARM_LAMBDA_THINKING !== 'on' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }
     let spend = null, pricing = null;
@@ -550,7 +625,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       if (job.batch === true) appendAnthropicLedger(ledger, { ts: stamp.toISOString(), jobId: job.id, model: job.model, costUsd: worstUsd, estimated: true, kind: 'batch-reservation' });
       spend = { ledger, worstUsd, stamp };
     }
-    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV, ANTHROPIC_KEY_ENV, 'SWARM_RENTED_API_KEY'].map(key => env[key]), ['openrouter', 'anthropic', 'rented'].includes(job.agent) ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
+    const credentials = [...['OPENAI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OLLAMA_API_KEY', 'LAMBDA_API_KEY', OPENROUTER_KEY_ENV, ANTHROPIC_KEY_ENV, 'SWARM_RENTED_API_KEY'].map(key => env[key]), ['openrouter', 'anthropic', 'rented', 'local'].includes(job.agent) ? config.key : null].filter(value => typeof value === 'string' && value.length > 0);
     const recordFinishReason = async bodyJson => {
       const next = responseFinishReason(bodyJson);
       // Metadata is retained before content validation, so apply the same credential guard here.
@@ -659,7 +734,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const responseText = isReadOnlyReviewJob(job)
       ? `${envelope.summary}\n${JSON.stringify({ reviews: envelope.result.reviews })}\n`
       : (envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary);
-    return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, firstCallUsage ? sumUsage(firstCallUsage, anthropicUsage) : result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
+    return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'local' ? 0 : job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, firstCallUsage ? sumUsage(firstCallUsage, anthropicUsage) : result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.
