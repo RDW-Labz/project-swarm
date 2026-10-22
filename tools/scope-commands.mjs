@@ -1065,6 +1065,9 @@ function evaluateSplitIngest({
   const touched = [...new Set(tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
   const allForWiring = [...(existing?.tickets ?? []), ...tickets];
   const unwired = wiringGaps(allForWiring, touched);
+  // Soft miss (modules, no integration): wire manifest after ingest. Hard gaps and approved-ledger merges still refuse.
+  const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
+  const hardWiringGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
 
   const pathCheck = ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths);
   const laneRefusals = [];
@@ -1096,7 +1099,7 @@ function evaluateSplitIngest({
     errors: readErrors,
     rejected,
     acceptanceRefusals: [],
-    wiringGaps: unwired,
+    wiringGaps: hardWiringGaps,
     pathRefusals: pathCheck.refusals.map(line => ({ reason: line, ticket: /^T-\d+/.exec(line)?.[0] })),
     laneRefusals: laneRefusals.map(row => (typeof row === 'string' ? row : row.reason)),
     treeErrors: structural,
@@ -1717,6 +1720,10 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
   }
   const exitCode = loopResult.parked.length && !loopResult.tickets.length ? 1 : 0;
+  const mergedIngestNotes = [...new Set([...ingestGuardNotes, ...built.notes, ...orderNotes])];
+  const ingestNoteOverflow = mergedIngestNotes.length > 12
+    ? [`note: ...and ${mergedIngestNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`]
+    : [];
   return out([
     `ledger written: ${loopResult.tickets.length} tickets added (not approved)`,
     ...repairLines,
@@ -1727,7 +1734,8 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     ...laneNotes.map(n => `lane: ${n}`),
     ...pathWarningLines,
     ...notes.map(n => `note: ${n}`),
-    ...[...new Set([...ingestGuardNotes, ...built.notes, ...orderNotes])].slice(0, 12).map(n => `note: ${n}`),
+    ...mergedIngestNotes.slice(0, 12).map(n => `note: ${n}`),
+    ...ingestNoteOverflow,
     ...lines,
     ...await toolConfigWarnings(root, ledger.tickets),
     ...gaps,

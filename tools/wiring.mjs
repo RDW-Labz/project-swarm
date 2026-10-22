@@ -76,15 +76,20 @@ export function chainSharedFiles(added, existing = []) {
     seen.add(from.id);
     return (from.dependsOn ?? []).some(d => d === target || reaches(all.find(x => x.id === d) ?? { id: d }, target, seen));
   };
-  const writers = all.filter(t => buildOf(t)).sort((a, b) => (a.id < b.id ? -1 : 1));
   const newIds = new Set(added.map(t => t.id));
-  for (let i = 0; i < writers.length; i += 1) for (let j = 0; j < i; j += 1) {
-    const early = writers[j], late = writers[i];
-    if (!newIds.has(late.id)) continue;
-    if (!(late.files ?? []).some(f => (early.files ?? []).includes(f))) continue;
-    if (reaches(late, early.id) || reaches(early, late.id)) continue;
-    late.dependsOn = [...new Set([...(late.dependsOn ?? []), early.id])];
-  }
+  const chainGroup = writers => {
+    const sorted = writers.sort((a, b) => (a.id < b.id ? -1 : 1));
+    for (let i = 0; i < sorted.length; i += 1) for (let j = 0; j < i; j += 1) {
+      const early = sorted[j], late = sorted[i];
+      if (!newIds.has(late.id)) continue;
+      if (!(late.files ?? []).some(f => (early.files ?? []).includes(f))) continue;
+      if (reaches(late, early.id) || reaches(early, late.id)) continue;
+      late.dependsOn = [...new Set([...(late.dependsOn ?? []), early.id])];
+    }
+  };
+  // Integration tickets first (routers/pages); module tickets that share an output file are chained separately.
+  chainGroup(all.filter(t => buildOf(t) && t.integration === true));
+  chainGroup(all.filter(t => buildOf(t) && t.integration !== true));
   return added;
 }
 
