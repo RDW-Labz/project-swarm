@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "hooks-all",
+      "agent": "auto",
+      "prompt": "Owner bug: swarm handbuild install re-points ONLY the hand-build guard hook. The orchestrator event hooks (orchestrator-hook.mjs for PreToolUse, PostToolUse, Stop, UserPromptSubmit, SessionEnd) and the checkpoint hook in .claude/settings.local.json (and a tracked .claude/settings.json) stay pinned to an old versions/1.165.2-HASH path, so they silently stop (the command is wrapped in test -f ... || true) as soon as an update prunes that version. tools/handbuild-commands.mjs (install around line 116) calls ensureHandbuildGuard and refreshTrackedSettingsHooks only; tools/install.mjs already has refreshProjectInstallHooks(root, installRoot, {refreshOnly}) that covers the orchestrator hooks, the guard and the tracked file. Required: (1) swarm handbuild install and swarm init and swarm update (updateProjects and bumpPointers in tools/swarm/core-12.mjs, for every linked project including pinned ones: the pin stops only the version pointer move) ALL re-point EVERY swarm hook command (any hook whose command references a tools/*.mjs script of ours: orchestrator-hook.mjs, handbuild-guard.mjs, the checkpoint hook script, githook-check.mjs in the git hooks) at <install base>/current/tools/<script>, never at a versions/ path; hooks that are not installed yet stay uninstalled when refreshOnly (handbuild install installs the guard as today and only re-points the others that exist). (2) A command that points at a versions/X path or at a path that does not exist is rewritten to the current path; everything else in the settings files stays byte for byte; a tracked settings.json change is reported as hooks-path-fixed-tracked and never committed. (3) swarm handbuild status prints every swarm hook found with its path and whether it equals the stable path, and warns on any pinned or missing one (extend the existing status line). (4) Tests in tests/hooks-repoint-all.test.mjs (hermetic temp project and temp install base with versions/1.165.2-abc and current): settings.local.json with an old orchestrator hook set plus a checkpoint hook plus the guard, all pinned to versions/1.165.2-abc: after handbuild install every one points to current; after bumpPointers-style update likewise for a pinned project; absent hooks stay absent; unrelated hook entries and other settings keys are untouched byte for byte; tracked settings.json repointed and reported; git hook check script path repointed. Keep every existing hook, install and handbuild test passing (run those test files). Never import install.mjs statically from new modules. ignoreTests reason: only the named files and their tests change.",
+      "context": [
+        "tools/handbuild-commands.mjs",
+        "tools/install.mjs",
+        "tools/swarm/core-12.mjs",
+        "tools/git-hooks.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/handbuild-commands.mjs",
+        "tools/install.mjs",
+        "tools/swarm/core-12.mjs",
+        "tools/git-hooks.mjs",
+        "tests/hooks-repoint-all.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/commit-msg-review.test.mjs",
+        "tests/commit-msg-round2.test.mjs",
+        "tests/commit-msg-round3.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/handbuild-guard-verbs.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/install.test.mjs",
+        "tests/installed-swarm.test.mjs",
+        "tests/link.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-init.test.mjs",
+        "tests/pins-cycle.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/t101-vendored-skills.test.mjs",
+        "tests/update.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+    }
+  ]
+}
