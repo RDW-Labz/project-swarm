@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.167.0
+
+Self-correcting splits, local disk cleanup, structured review verdicts and restart-any-board.
+- **Splitter:** a split that fails validation is re-split with the exact errors fed back up to 3 rounds (--max-repairs); change orders re-split automatically; unresolved ones become parked blockers naming the tickets and file; guards for tests with code, no references to files another ticket creates, and protected files.
+- **Disk:** a run's worktrees are removed after integrate or abandon, failed and cancelled run workspaces are kept 7 days (SWARM_KEEP_FAILED_DAYS) and never removed while an open ticket references them, and swarm gc (dry run by default, --apply, --all-projects, --json --usage) cleans old runs and stale scratch.
+- **Review:** review jobs use a strict response schema and the verdict is recorded from the structured result, with prose kept as notes.
+- **Update:** swarm update restarts any running board or remote server found by process, with or without a record.
+- **Resume:** a ticket in review without a review run now writes its acceptance-review manifest first, a missing manifest gives a clear error, and a start failure repeated twice parks the ticket.
+- **Board:** federated snapshot and owner Approve/Deny routes on the watch server (tailnet only; merge, deploy and cap actions refused).
+- **Hooks:** every swarm hook points at current; swarm change previews are allowed; acceptance reviews skip tickets in other worktrees with a note.
+
 ## 1.166.0
 
 Safer restarts, partial-run retry and fixes from the parts-app field report.
