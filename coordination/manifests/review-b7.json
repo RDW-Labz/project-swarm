@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "rev7-manifest",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "security: self-approval and policy auto-approval of workflow and dependency files",
+      "type": "review",
+      "prompt": "Security review of the autonomous manifest approval: tools/manifest-review.mjs (checkManifestRules and the reviewer flow), the manifest-reviewed standing rule in tools/policy.mjs and tools/policy-run.mjs, the self-approval refusal of --approve-manifest for agent sessions, and the hook in tools/security-gate.mjs. Intent from the owner: the orchestrator that produced a file can never self-approve; an independent review of the exact sha256 against a safe-rules list (no secrets beyond GITHUB_TOKEN, no deploy, no push to protected branches, no pull_request_target or self-hosted runners, actions pinned to exact versions or commit shas, dependency changes patch or minor only from the default registry with no install scripts) must pass; a pass makes the policy auto-approve THAT hash and log rule id, reviewer run and hash; any change after review needs a new review; anything outside the safe list goes to the owner. Check: (1) can the producing agent session approve its own file by any path (flag, env var, policy request, decide command, calling the function, writing the review record itself, a reviewer function injected by environment); (2) is the review record bound to the exact bytes and run at integrate time (TOCTOU between review and integrate, symlinks, different file with the same name, the file edited in the workspace after review); (3) can a hostile file fool checkManifestRules (yaml anchors and aliases, flow-style yaml, multi-document files, uses with tabs or quotes or expressions, actions referenced through reusable workflows, secrets via env indirection, secrets.GITHUB_TOKEN look-alikes such as secrets.GITHUB_TOKEN_X, a deploy step hidden in a composite action or script file, run steps that download and execute, permissions widening, workflow_run, pull_request from forks, dependency changes via overrides or resolutions or workspaces or package aliases, npm scripts added that run on install, lockfile-only changes); (4) the model reviewer answer parsing: can prompt injection inside the reviewed file make it answer pass, and is a non-JSON or partial answer a fail; (5) policy engine: with no policy file is nothing auto-approved, is the log written before the approval is applied; (6) the owner inbox path for failures. Say what you could not open. Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator and normal bugs, plus a worker that writes a hostile file: list adversarial-only issues separately as low. Do not write files. Be brief.",
+      "context": [
+        "tools/manifest-review.mjs",
+        "tools/policy.mjs",
+        "tools/policy-run.mjs",
+        "tools/security-gate.mjs",
+        "tools/self-approval.mjs",
+        "tests/manifest-review.test.mjs",
+        "tests/manifest-approval-policy.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "rev7-flow",
+      "agent": "claude",
+      "model": "sonnet",
+      "tier": "mid",
+      "tierReason": "integrate flow, guard matcher, dependency gate",
+      "type": "review",
+      "prompt": "Review: (a) tools/dependency-diff.mjs and its use in tools/security-gate.mjs and tools/swarm.mjs: a package.json change that touches no dependency field and no install lifecycle script skips the audit; check every way a dependency or install-time behavior can change while the check says unchanged (fields not listed: workspaces, overrides, resolutions, pnpm and yarn sections, publishConfig, bundledDependencies, engines, packageManager, config, scripts such as prepare, prepack, preinstall, install, postinstall, prepublish, and lifecycle hooks run by npm ci), a new package.json, a deleted one, unparsable JSON, duplicate keys, key order tricks; (b) the guard free-text matcher in tools/handbuild.mjs, tools/self-approval.mjs, tools/shell-writes.mjs: it must match only the structural handbuild approve, deny, on, off, install or uninstall command, and decide handbuild-ID approve or deny: check for false negatives that let an orchestrator approve its own request (quote tricks, line continuations, env prefixes, subshells, eval, bash -c, xargs, aliases, command substitution, here-documents, base64 piped to sh, node -e that spawns swarm, absolute runner paths, npx) and the rule id and token printed in refusals; (c) tools/autopilot.mjs and tools/run-kind.mjs: the read-only run rule must not mark a run integrated that has outputs, the handled flag, the duplicate-retry skip, and quiet polls; (d) the partial-run retry in tools/swarm.mjs and tools/swarm/core-71.mjs: a retry must integrate only the remaining jobs, never rewrite integrated files, and must still run the gates and checks for the retried job. Answer with a list of findings, each with file, line, concrete scenario and severity (high, medium, low), then one line PASS or FAIL. The threat model is an honest but fallible orchestrator and normal bugs, plus a worker that writes a hostile file: list adversarial-only issues separately as low. Do not write files. Be brief.",
+      "context": [
+        "tools/dependency-diff.mjs",
+        "tools/security-gate.mjs",
+        "tools/handbuild.mjs",
+        "tools/self-approval.mjs",
+        "tools/shell-writes.mjs",
+        "tools/autopilot.mjs",
+        "tools/run-kind.mjs",
+        "tools/swarm/core-71.mjs",
+        "tests/dependency-diff.test.mjs",
+        "tests/guard-free-text.test.mjs",
+        "tests/integrate-partial-retry.test.mjs"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

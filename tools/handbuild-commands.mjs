@@ -29,7 +29,7 @@ async function registeredScratchHandbuildRoot(root, installRoot, env = process.e
     registeredRoots: projects.map(p => p.root),
   });
 }
-import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir, refreshTrackedSettingsHooks, readGuardHookCommandFromSettings, guardHookPathStatus } from './install.mjs';
+import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir, refreshProjectInstallHooks, readGuardHookCommandFromSettings, guardHookPathStatus, collectSwarmHookStatuses } from './install.mjs';
 import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
 
 export const HANDBUILD_USAGE = [
@@ -86,12 +86,14 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
       } catch { /* no local settings */ }
       const hookCommand = readGuardHookCommandFromSettings(hookSettings);
       const hookInfo = installRoot ? guardHookPathStatus({ hookCommand, installRoot }) : null;
+      const swarmHooks = installRoot ? collectSwarmHookStatuses(hookSettings, installRoot) : [];
       if (flags.json) {
         return out(JSON.stringify({
           requests: all,
           active: live.map(r => r.id),
           off: fs.existsSync(path.join(root, OFF_FILE)),
           guardHook: hookInfo,
+          swarmHooks,
         }));
       }
       const hookLines = [];
@@ -99,6 +101,13 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
         hookLines.push(`guard hook: ${hookInfo.hookPath}`);
         hookLines.push(`guard hook stable: ${hookInfo.matches ? 'yes' : 'no'}`);
         if (hookInfo.warn) hookLines.push('warning: guard hook path is not under the install current/ release; run swarm update or swarm handbuild install');
+      }
+      for (const row of swarmHooks) {
+        if (row.label.startsWith('hand-build guard')) continue;
+        const pathLine = row.hookPath ?? row.command;
+        hookLines.push(`${row.label}: ${pathLine}`);
+        hookLines.push(`${row.label} stable: ${row.matches ? 'yes' : 'no'}`);
+        if (row.warn) hookLines.push(`warning: ${row.label} is not on the install current/ release or is missing; run swarm update or swarm handbuild install`);
       }
       return out([
         `guard: ${fs.existsSync(path.join(root, OFF_FILE)) ? 'OFF (.swarm/handbuild/off exists)' : 'on where the hook is installed (swarm handbuild install)'}`,
@@ -113,13 +122,14 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
       return out(flags.json ? `[${lines.join(',')}]` : lines.map(l => { try { const e = JSON.parse(l); return `${e.at}  ${e.event}${e.id ? ` ${e.id}` : ''}${e.tool ? ` ${e.tool}` : ''}${e.files?.length ? ` ${e.files.join(', ')}` : ''}${e.reason ? `  ${e.reason}` : ''}`; } catch { return l; } }).join('\n') || 'nothing logged yet');
     }
     if (sub === 'install') {
-      const r = await ensureHandbuildGuard(root, installRoot);
+      const refreshed = await refreshProjectInstallHooks(root, installRoot, { refreshOnly: true });
+      let r = refreshed.handbuild;
+      if (r.status === 'absent' || r.status === 'removed-by-owner') r = await ensureHandbuildGuard(root, installRoot);
       if (r.status === 'skipped') return out(`not installed: ${r.reason}`, 1);
-      const tracked = await refreshTrackedSettingsHooks(root, installRoot);
       const install = stableInstallDir(installRoot);
       const hooks = installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
       const hookNote = hooks?.status === 'skipped' ? `git hooks not installed (${hooks.reason})` : 'git hooks installed';
-      const trackedNote = tracked.status === 'updated' ? '\nhooks-path-fixed-tracked: .claude/settings.json (commit this file if your project tracks it)' : '';
+      const trackedNote = refreshed.tracked?.status === 'updated' ? '\nhooks-path-fixed-tracked: .claude/settings.json (commit this file if your project tracks it)' : '';
       return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)${trackedNote}\n${hookNote}`);
     }
     if (sub === 'uninstall') {

@@ -304,7 +304,7 @@ export function stableInstallDir(installRoot){
  }catch{/* no current */}
  return installRoot;
 }
-export const HOOK_SCRIPT_MARKERS=Object.freeze(['handbuild-guard.mjs','orchestrator-hook.mjs']);
+export const HOOK_SCRIPT_MARKERS=Object.freeze(['handbuild-guard.mjs','orchestrator-hook.mjs','githook-check.mjs']);
 export function hookScriptCommand(installRoot,script,arg){
  return hookCommand(path.join(stableInstallDir(installRoot),'tools',script),arg);
 }
@@ -312,17 +312,30 @@ function commandReferencesOurHook(command){
  const c=commandOf(command);
  return HOOK_SCRIPT_MARKERS.some(marker=>c.includes(marker));
 }
-const ALL_HOOK_SPECS=()=>[{event:'PreToolUse',script:'handbuild-guard.mjs'},...ORCHESTRATOR_SPECS];
-function patchHookCommandsInSettingsText(before,settings,installRoot){
+function hookCommandNeedsRepoint(command,installRoot,script,arg){
+ const expected=hookScriptCommand(installRoot,script,arg);
+ const old=commandOf(command);
+ if(old===expected)return false;
+ if(!old.includes(script))return false;
+ if(/\/versions\//.test(old))return true;
+ const scriptPath=guardHookScriptPathFromCommand(old);
+ if(!scriptPath)return true;
+ try{if(!existsSync(scriptPath))return true;}catch{return true;}
+ return old!==expected;
+}
+const GUARD_HOOK_SPEC={event:'PreToolUse',matcher:GUARD_MATCHER,script:'handbuild-guard.mjs'};
+const ALL_HOOK_SPECS=()=>[GUARD_HOOK_SPEC,...ORCHESTRATOR_SPECS];
+function patchHookCommandsInSettingsText(before,settings,installRoot,specs=ALL_HOOK_SPECS()){
  let text=before,changed=false;
- for(const sp of ALL_HOOK_SPECS()){
+ for(const sp of specs){
   const command=hookScriptCommand(installRoot,sp.script,sp.arg);
   const list=settings.hooks[sp.event];
   if(!Array.isArray(list))continue;
   for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[]){
-   if(!commandOf(hook).includes(sp.script))continue;
-   const old=hook.command;
-   if(old===command)continue;
+   const old=commandOf(hook);
+   if(!old.includes(sp.script))continue;
+   if(sp.arg&&!old.includes(` ${sp.arg}`)&&!old.endsWith(` ${sp.arg}`))continue;
+   if(!hookCommandNeedsRepoint(hook,installRoot,sp.script,sp.arg))continue;
    const oldJson=JSON.stringify(old);
    const newJson=JSON.stringify(command);
    if(text.includes(oldJson))text=text.replace(oldJson,newJson);
@@ -332,6 +345,40 @@ function patchHookCommandsInSettingsText(before,settings,installRoot){
  }
  if(!changed)return {text:before,changed:false};
  return {text:`${text.endsWith('\n')?text.slice(0,-1):text}\n`,changed:true};
+}
+export function collectSwarmHookStatuses(settings,installRoot){
+ const rows=[];
+ if(!settings?.hooks||typeof settings.hooks!=='object')return rows;
+ const add=(label,command,{stableCommand=null}={})=>{
+  const c=commandOf(command);
+  if(!c)return;
+  if(stableCommand!==null){
+   const matches=c===stableCommand;
+   rows.push({label,command:c,hookPath:null,stablePath:null,matches,warn:!matches});
+   return;
+  }
+  const hookPath=guardHookScriptPathFromCommand(c);
+  const script=hookPath?path.basename(hookPath):null;
+  const stableScript=script?path.join(stableInstallDir(installRoot),'tools',script):null;
+  const stablePath=stableScript?path.resolve(stableScript):null;
+  const resolved=hookPath?path.resolve(hookPath):null;
+  const matches=resolved!==null&&stablePath!==null&&resolved===stablePath;
+  const pinned=/\/versions\//.test(c);
+  let missing=false;
+  if(hookPath){try{missing=!existsSync(hookPath);}catch{missing=true;}}
+  rows.push({label,command:c,hookPath:resolved,stablePath,matches,warn:resolved!==null&&(!matches||pinned||missing)});
+ };
+ for(const [event,list] of Object.entries(settings.hooks)){
+  if(!Array.isArray(list))continue;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[]){
+   const c=commandOf(hook);
+   if(c===CHECKPOINT_HOOK){add(`checkpoint (${event})`,c,{stableCommand:CHECKPOINT_HOOK});continue;}
+   if(c.includes('handbuild-guard.mjs'))add(`hand-build guard (${event})`,c);
+   else if(c.includes('orchestrator-hook.mjs'))add(`orchestrator (${event})`,c);
+   else if(c.includes('githook-check.mjs'))add(`git hook check (${event})`,c);
+  }
+ }
+ return rows;
 }
 export async function refreshTrackedSettingsHooks(root,installRoot){
  const destination=path.join(root,'.claude','settings.json');
@@ -358,7 +405,15 @@ export async function refreshProjectInstallHooks(root,installRoot,{refreshOnly=f
  const orchestrator=await ensureOrchestratorHooks(root,installRoot,{refreshOnly});
  const handbuild=await ensureHandbuildGuard(root,installRoot,{refreshOnly,honorRemoved:true});
  const tracked=await refreshTrackedSettingsHooks(root,installRoot);
- return {orchestrator,handbuild,tracked};
+ let git={status:'skipped',reason:'no install root'};
+ if(installRoot){
+  try{
+   const {refreshGitHooksCheckScript}=await import('./git-hooks.mjs');
+   const install=stableInstallDir(installRoot);
+   git=refreshGitHooksCheckScript(root,path.join(install,'tools','githook-check.mjs'));
+  }catch(error){git={status:'skipped',reason:String(error.message).slice(0,120)};}
+ }
+ return {orchestrator,handbuild,tracked,git};
 }
 export function readGuardHookCommandFromSettings(settings){
  if(!settings?.hooks||typeof settings.hooks!=='object')return null;
@@ -416,16 +471,31 @@ async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
   const commands=Object.values(settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(commandOf);
   if(!commands.some(c=>c.includes(CHECKPOINT_HOOK)||specs.some(sp=>c.includes(sp.script))))return {status:'absent'};
  }
- let changed=false;
+ let changed=false,structuralChange=false;
  for(const sp of specs){
   if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
   const command=hookScriptCommand(installRoot,sp.script,sp.arg);
-  const list=settings.hooks[sp.event]??=[];
+  if(!Array.isArray(settings.hooks[sp.event]))settings.hooks[sp.event]=[];
+  const list=settings.hooks[sp.event];
   let found=false;
-  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`))){found=true;if(hook.command!==command){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher){entry.matcher=sp.matcher;changed=true;}}
-  if(!found){list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;}
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`)||commandOf(hook).endsWith(` ${sp.arg}`))){found=true;if(hookCommandNeedsRepoint(hook,installRoot,sp.script,sp.arg)){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher&&!refreshOnly){entry.matcher=sp.matcher;changed=true;structuralChange=true;}}
+  if(!found){
+   list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;structuralChange=true;
+  }
  }
  if(!changed)return {status:'unchanged'};
+ if(!structuralChange){
+  const patched=patchHookCommandsInSettingsText(before,settings,installRoot,specs);
+  if(patched.changed){
+   let mode=0o600;
+   try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* new */}
+   const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
+   await fs.writeFile(temp,patched.text,{flag:'wx',mode});
+   await fs.rename(temp,destination);
+   await ensureLocalSettingsIgnored(root);
+   return {status:before.trim()?'updated':'created'};
+  }
+ }
  return writeSettings(root,destination,settings,before);
 }
 const ORCHESTRATOR_SPECS=Object.entries(ORCHESTRATOR_HOOK_EVENTS).map(([event,arg])=>({event,matcher:event==='PreToolUse'||event==='PostToolUse'?'*':undefined,script:'orchestrator-hook.mjs',arg}));
@@ -446,7 +516,7 @@ export async function ensureHandbuildGuard(root,installRoot,{refreshOnly=false,h
   const has=Object.values(read.settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).some(hook=>commandOf(hook).includes('handbuild-guard.mjs'));
   if(!has)return {status:'absent'};
  }
- return ensureHookSpecs(root,installRoot,[{event:'PreToolUse',matcher:GUARD_MATCHER,script:'handbuild-guard.mjs'}],{refreshOnly:false});
+ return ensureHookSpecs(root,installRoot,[GUARD_HOOK_SPEC],{refreshOnly});
 }
 export async function removeHandbuildGuard(root){
  const read=await readSettings(root);
@@ -576,8 +646,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
  const handbuildGuard=agentFiles&&isNew?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
  const trackedHooks=agentFiles?await refreshTrackedSettingsHooks(root,installRoot):null;
+ const hookRefresh=agentFiles?await refreshProjectInstallHooks(root,installRoot,{refreshOnly:true}):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,trackedHooks,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,trackedHooks,hookRefresh,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

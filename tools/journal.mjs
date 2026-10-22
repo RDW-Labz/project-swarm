@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { integrateBlockerIdForCause, integrateCauseDigest } from './run-kind.mjs';
+import { finishPostAutopilotPollWriteSuppression, shouldSuppressPostAutopilotPollWrites } from './orchestrator-context.mjs';
 
 export const KINDS = ['goal', 'plan', 'decision', 'run', 'integration', 'pr', 'blocker', 'human', 'note', 'command', 'action', 'checkpoint'];
 
@@ -54,6 +55,10 @@ function clean(value, depth = 0) {
 }
 
 export async function appendEvent(root, event, { now = Date.now, best = false } = {}) {
+  if (shouldSuppressPostAutopilotPollWrites(root)) {
+    const { ts: _ignored, ...rest } = event && typeof event === 'object' && !Array.isArray(event) ? event : {};
+    return { ts: new Date(now()).toISOString(), ...rest };
+  }
   if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('journal-event-invalid');
   if (!KINDS.includes(event.kind)) throw new Error(`journal-kind-invalid: ${event.kind}`);
   if (Object.keys(event).length > MAX_KEYS) throw new Error('journal-too-many-keys');
@@ -92,6 +97,12 @@ export async function appendEvent(root, event, { now = Date.now, best = false } 
 // path stays inside the real root. A repository that plants a symlink at .swarm or coordination can then
 // never make a swarm command write, append to or delete files outside the project.
 export async function safeWritableDir(root, parts) {
+  if (shouldSuppressPostAutopilotPollWrites(root)) {
+    finishPostAutopilotPollWriteSuppression(root);
+    const error = new Error('journal-quiet-autopilot-poll');
+    error.code = 'AUTOPILOT_QUIET_POLL';
+    throw error;
+  }
   const realRoot = await fs.realpath(root);
   let current = realRoot;
   for (const part of parts) {

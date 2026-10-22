@@ -370,13 +370,13 @@ export async function waitForMachineIdleWhilePending(installRoot, {
       const fresh = await readLivePending(installRoot, { now: current });
       const held = new Set(fresh?.heldPids ?? pendingRecord.heldPids ?? []);
       if (fresh?.pid) held.add(fresh.pid);
-      return { timedOut: true, snapshot: await describeBusy({ excludePids: [...held] }) };
+      return { timedOut: true, snapshot: await describeBusy({ excludePids: [...held], heldPids: [...held] }) };
     }
     const fresh = await readLivePending(installRoot, { now: current });
     if (!fresh) return { timedOut: false, snapshot: { busy: false, liveRuns: [], processes: [], markers: [] } };
     const held = new Set(fresh.heldPids ?? []);
     held.add(fresh.pid);
-    const snapshot = await describeBusy({ excludePids: [...held] });
+    const snapshot = await describeBusy({ excludePids: [...held], heldPids: [...held] });
     if (!snapshot.busy) return { timedOut: false, snapshot };
 
     if (!lastStatus || current - lastStatus >= statusMs) {

@@ -3,6 +3,7 @@
 // (state, plan, delta, server, tui, gallery) are separate modules; this only wires them.
 
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { openSync, closeSync, constants as fsConstants } from 'node:fs';
@@ -36,6 +37,7 @@ import { loadLocalConfig } from './local-config.mjs';
 import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { createDeployTracker } from './deploy-status.mjs';
+import { runnerVersion } from './runner-version.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -354,6 +356,17 @@ async function readPackageVersion(root = here) {
   try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
 }
 
+/** Version stamped on board/remote server records: the runner executing this code, not SWARM_INSTALL_DIR. */
+export async function serverRecordVersion(importMetaUrl = import.meta.url) {
+  try {
+    const fromRunner = await runnerVersion(importMetaUrl);
+    if (fromRunner) return fromRunner;
+  } catch { /* fall through */ }
+  const fromPkg = await readPackageVersion();
+  if (fromPkg) return fromPkg;
+  throw new Error('could not determine swarm runner version for server record');
+}
+
 async function installedVersionFor(env, versionState = {}) {
   const install = env?.SWARM_INSTALL_DIR;
   if (install) {
@@ -361,6 +374,13 @@ async function installedVersionFor(env, versionState = {}) {
     if (direct) return direct;
   }
   return versionState?.installedVersion ?? null;
+}
+
+function runnerFieldsForRegistry(entry = path.join(here, 'swarm.mjs')) {
+  const runner = entry;
+  let runnerRealpath = runner;
+  try { runnerRealpath = realpathSync(runner); } catch { /* keep literal path */ }
+  return { runner, runnerRealpath };
 }
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
 const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -680,14 +700,16 @@ export async function startBoardServer({ env = process.env, root, remote, regist
   });
   const { url, port } = await server.listen();
   api.setBoardUrl(remote ? null : url);
-  const version = await readPackageVersion();
+  const version = await serverRecordVersion();
   const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
+  const swarmEntry = path.join(here, 'swarm.mjs');
   const baseRegistry = {
     version,
     argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
     cwd: process.cwd(),
     port,
     env: safeEnvSubset(env),
+    ...runnerFieldsForRegistry(swarmEntry),
     ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
     ...(registry && typeof registry === 'object' ? registry : {}),
   };

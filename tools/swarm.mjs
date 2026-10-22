@@ -47,6 +47,7 @@ import { parseUncovered, ignoreUncovered } from './uncovered-tests.mjs';
 import { createTestChecker } from './best-of.mjs';
 import { validDependencySpec, dependencyWrites, installDependencies } from './dep-install.mjs';
 import { runSecurityGate, recordGate, formatBlocks } from './security-gate.mjs';
+import { dependencyFieldsChanged, isNpmLockfilePath } from './dependency-diff.mjs';
 import { migrationQueueCheck } from './migration-queue.mjs';
 import { runBrainCommand, createProjectBrain, triageRun, preflightManifest, brainStats, brainSettings } from './brain-commands.mjs';
 import { readBacklog, nextStartable, markStarted as markBacklogStarted } from './backlog.mjs';
@@ -120,9 +121,9 @@ import { doctorAll, packagingChangesSince } from './swarm/core-42.mjs';
 import { appendRunLedger, cancelInactiveRun, cancelRun, checkWorkerReport, collectMutants, idleRun, listOrphanWorktrees, prepareJobEnvironment, redcheckCommitRun, runBaseChecks, runChecksForRun, startIntegrationJournal, todaySpendUsd, unroutableJobs, validateProject, waitRun } from './swarm/core-51.mjs';
 import { inspectResults, inspectRun, monitorView, onboardReport, planLaneInfo, shipBranch, shipRun, updateInstall } from './swarm/core-52.mjs';
 import { runStats } from './swarm/core-53.mjs';
-import { applyQueuePlans, executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
+import { executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
 import { planDeps, redcheckRunLocked } from './swarm/core-62.mjs';
-import { executeCodexJob, redcheckRun } from './swarm/core-71.mjs';
+import { applyQueuePlans, executeCodexJob, isJobIntegrated, redcheckRun } from './swarm/core-71.mjs';
 
 
 
@@ -1647,7 +1648,7 @@ async function integrateRunLocked(root, id, options = {}) {
         const output = await bytesAt(readRoot, file);
         if (queue) {
           snapshots.push({ file, bytes: current, mode: currentMode });
-          const alreadyApplied = state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output));
+          const alreadyApplied = isJobIntegrated(state, declared.id) || (state.mergeQueue?.state === 'running' && (output === null ? current === null : currentHash === digest(output)));
           if (!alreadyApplied) {
             if (current !== null && job.baseModes?.[file] !== undefined && currentMode !== job.baseModes[file]) conflict(file, 'permissions changed since worker snapshot');
             if (currentHash !== job.baseHashes[file]) conflict(file, 'changed since worker snapshot');
@@ -1731,7 +1732,7 @@ async function integrateRunLocked(root, id, options = {}) {
         const hits = [...workFolderReferenceHits(plannedWrites), ...inSourceTestHits(plannedWrites)];
         if (hits.length) fail(hits.map(hit => hit.message).join('\n'), hits[0].code === 'in-source-test' ? 'in-source-test' : 'work-folder-reference');
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
-        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: state.mergeQueue?.state === 'running' && !plannedWrites.length });
+        else queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied: !plannedWrites.length && (isJobIntegrated(state, job.id) || state.mergeQueue?.state === 'running') });
       }
     }
     // Packages the integrated tickets declare: the runner builds the new package.json and lockfile (no scripts), and they go through the gate like any manifest change.
@@ -1791,6 +1792,7 @@ async function integrateRunLocked(root, id, options = {}) {
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, adaptive, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       const merged = { ...result, ...(children.length ? { children } : {}) };
       if (state.mergeQueue?.state === 'done') {
+        if (merged.status === 'partial' || state.integrationStatus === 'partial') return merged;
         const { env: swarmEnv } = await loadSwarmEnv(root);
         return await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv);
       }
@@ -1803,7 +1805,18 @@ async function integrateRunLocked(root, id, options = {}) {
       const plainPolicy = securityGate.policy ?? profile?.security;
       // Plain integrate has no rollback and the dependency scanners (npm audit, pip-audit, osv-scanner) read files from disk, so a change to a dependency
       // manifest or lockfile cannot be audited before it is written: it must go through the queue (which audits the written files and rolls back).
-      if (plainPolicy?.enabled !== false && writes.some(change => /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json)$|(^|\/)requirements[^/]*\.txt$/i.test(change.file))) {
+      const plainIntegrateDepRefusal = change => {
+        const file = change.file;
+        if (/(^|\/)requirements[^/]*\.txt$/i.test(file)) return true;
+        if (isNpmLockfilePath(file)) return true;
+        if (/(^|\/)package\.json$/i.test(file)) {
+          const before = change.previous?.toString('utf8') ?? '';
+          const after = change.bytes?.toString('utf8') ?? '';
+          return dependencyFieldsChanged(before, after);
+        }
+        return false;
+      };
+      if (plainPolicy?.enabled !== false && writes.some(plainIntegrateDepRefusal)) {
         fail('security-gate-blocked: a dependency manifest or lockfile changed; plain integrate cannot audit it before writing it. Nothing was written. Use integrate --queue.', 'security-gate-blocked');
       }
       let plainGate;
@@ -3622,6 +3635,7 @@ async function mainInner() {
       // was saved the moment it was detected.
       if(flag==='--accept-dropped'){acceptDropped=true;continue;}
       // Lesson 14: the owner reviewed a dependency or workflow file by hand and lets the security gate pass it for this run only.
+      // Security: approval by the producing agent session is not yet blocked (tracked for a redesign).
       if(flag==='--approve-manifest'){const file=flags[++index];if(typeof file!=='string'||file.length>200||!/^[A-Za-z0-9_@+.\/-]+$/.test(file)||file.startsWith('-')||file.startsWith('/')||file.startsWith('./')||file.endsWith('/')||file.includes('//')||file.split('/').includes('..')||file.split('/').includes('.'))fail('--approve-manifest needs one exact repo-relative file path (letters, digits, . _ - @ + and /; no glob, no spaces, no ..)');approveManifests.push(file);continue;}
       if(flag==='--salvage-dropped'){salvageDropped=true;continue;}
       rest.push(flag);
