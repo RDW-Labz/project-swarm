@@ -7,7 +7,8 @@ import { resolveDailyLimit } from './daily-limit.mjs';
 import { filterGeneratedStatus } from './generated-state.mjs';
 import { underfilledWaves } from './board-data.mjs';
 import { planWaveBatch } from './wave-batch.mjs';
-import { isNonIntegratingRun } from './run-kind.mjs';
+import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
+import { noteAutopilotStep } from './orchestrator-context.mjs';
 import {
   appendIntegrateBlockerIfNeeded,
   integrateBlockerFields,
@@ -217,9 +218,47 @@ export function autopilotRunFromState(state, directoryName) {
     counts: state.summary?.counts ?? null,
     costUsd: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null,
     pause: state.pause ?? null,
-    integrated: Boolean(state.integratedFiles?.length) || state.integrated === true,
+    integrated: runIntegratedFromState(state),
+    integratedAt: state.integratedAt ?? null,
+    handled: state.handled === true,
     integrable: integrableFromJobs(state.jobs),
   };
+}
+
+function runCountsAsIntegrated(run) {
+  if (!run || typeof run !== 'object') return false;
+  if (run.integrated === true) return true;
+  if (run.integratedAt) return true;
+  return false;
+}
+
+function runIsHandled(run, events) {
+  if (run?.handled === true) return true;
+  const id = run?.id;
+  if (!id) return false;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind === 'run' && event.id === id && event.handled === true) return true;
+  }
+  return false;
+}
+
+/** Another run already completed the same manifest work (hand rerun / integrated sibling). */
+export function supersedingSuccessfulRun(run, { runs, events, manifest } = {}) {
+  const fp = manifest && typeof manifest === 'object' ? manifestWorkFingerprint(manifest) : null;
+  if (!fp?.jobIds?.length) return false;
+  const list = Array.isArray(runs) ? runs : [];
+  for (const other of list) {
+    if (!other || other.id === run.id) continue;
+    const done = other.status === 'complete' || other.status === 'integrated' || other.integrated === true;
+    if (!done) continue;
+    const otherManifest = runManifest(other, events);
+    if (!otherManifest) continue;
+    const otherFp = manifestWorkFingerprint(otherManifest);
+    if (fingerprintsMatch(fp, otherFp)) return true;
+    if (fp.outputsHash === otherFp.outputsHash && fp.jobIds.length === otherFp.jobIds.length) return true;
+  }
+  return false;
 }
 
 function integrateBlockerRunId(blockerId) {
@@ -235,9 +274,13 @@ function runManifest(run, events) {
 
 export function runSkipsIntegrateAttention(run, events) {
   if (!run || typeof run !== 'object') return true;
-  if (run.integrated === true) return true;
+  if (runCountsAsIntegrated(run)) return true;
   if (['cancelled', 'abandoned'].includes(run.status)) return true;
-  return isNonIntegratingRun(run, runManifest(run, events));
+  const manifest = runManifest(run, events);
+  if (isAskRun(run, manifest)) return true;
+  if (run.integrable === false) return true;
+  if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
+  return isNonIntegratingRun(run, manifest);
 }
 
 function runJobCount(run) {
@@ -340,7 +383,7 @@ export function decide(run, ctx) {
   const reasons = Array.isArray(pause?.reasons) ? pause.reasons.map(String) : [];
   const failedCount = Number(run.counts?.failed) || 0;
 
-  if (run.status === 'complete' && !run.integrated) {
+  if (run.status === 'complete' && !runCountsAsIntegrated(run)) {
     if (run.integrable === false) return null;
     if (runSkipsIntegrateAttention(run, events)) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
@@ -381,6 +424,9 @@ export function decide(run, ctx) {
   }
 
   if (run.status === 'failed') {
+    const manifest = c.manifest ?? runManifest(run, events);
+    if (runIsHandled(run, events)) return null;
+    if (supersedingSuccessfulRun(run, { runs: c.runs, events, manifest })) return null;
     const retried = actionEvents(events, 'retry-failed', id).length > 0;
     const isRetry = events.some(e => e && e.kind === 'run' && e.id === id && e.retryOf);
     if (retried) {
@@ -448,6 +494,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   const actions = [];
   const blocked = [];
   const perRun = new Map();
+  let stepWroteJournal = false;
   // Tickets that were only waiting on dependencies become ready again, whatever else happens this pass.
   if (typeof deps.unlockTickets === 'function') {
     const unlocked = await safe(() => deps.unlockTickets(root), []);
@@ -459,6 +506,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   }
 
   async function write(event) {
+    stepWroteJournal = true;
     try { await deps.appendEvent(root, event); }
     catch (error) { journalBroken ??= `journal-unwritable: ${String(error?.message ?? error).slice(0, 200)}`; }
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
@@ -570,7 +618,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (runSkipsIntegrateAttention(run, events)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
-    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events) });
+    const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events), runs });
     if (!decision || decision.action === 'wait') continue;
     if (decision.action === 'block') {
       if (decision.integrateKind) {
@@ -588,6 +636,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       continue;
     }
     if (decision.action === 'integrate') {
+      if (runSkipsIntegrateAttention(run, events) || run.integrable === false) continue;
       let checkout = null;
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
       const why = integrationBlocker(checkout);
@@ -810,7 +859,13 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
 
-  return { actions, blocked, idle: actions.length === 0 && blocked.length === 0, ...(journalBroken ? { error: journalBroken } : {}) };
+  return {
+    actions,
+    blocked,
+    idle: actions.length === 0 && blocked.length === 0,
+    stepWroteJournal,
+    ...(journalBroken ? { error: journalBroken } : {}),
+  };
 }
 
 async function defaultSleep(ms, signal) {
@@ -836,6 +891,7 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
     } finally {
       try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
     }
+    noteAutopilotStep(root, step, { once });
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.
     if (step.error) break;
