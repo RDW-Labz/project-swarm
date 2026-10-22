@@ -432,6 +432,10 @@ export function stripMoney(value) {
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {
+    if (key === 'noCap') {
+      out[key] = child === true;
+      continue;
+    }
     if (MONEY_KEY_RE.test(key) || key === 'spend' || key === 'cost' || key === 'cap' || key === 'caps' || (key === 'capBasis' && hasNumber(child))) continue;
     out[key] = stripMoney(child);
   }
@@ -451,7 +455,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
   let boardUrl = null;
   const cachedBy = new Map();                // by whether test/temp projects and peers are shown
   const showsScratch = q => q?.scratch === '1' || q?.scratch === true;
-  const hasResponseToken = q => Boolean(q?.t || q?.get?.('t'));
+  const shouldRedact = q => Boolean(q?.redact || q?.t || q?.get?.('t'));
   const scratchIds = async () => {
     const all = await listProjects({ file: projectsFile(env) });
     const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
@@ -526,7 +530,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
         if (idleHidden) snapshot.scratch.idleHidden = idleHidden;
         // Direct internal snapshot callers still receive the full model; only the token-authenticated
         // board response is public and redacted. The HTTP board route always supplies its token.
-        return hasResponseToken(q) ? stripMoney(snapshot) : snapshot;
+        return shouldRedact(q) ? stripMoney(snapshot) : snapshot;
       })();
       cachedBy.set(cacheKey, { at: now(), promise });
       promise.catch(() => { if (cachedBy.get(cacheKey)?.promise === promise) cachedBy.delete(cacheKey); });

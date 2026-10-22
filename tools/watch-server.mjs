@@ -22,6 +22,32 @@ const SECURITY = {
 };
 
 const IDLE_FINISHED_MS = 10000;
+
+export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
+
+export function watchBoardRoutePaths({ remote = false } = {}) {
+  return Object.freeze([
+    '/board',
+    '/api/board',
+    '/api/project',
+    '/api/live',
+    '/api/history',
+    '/history.csv',
+    ...(remote ? [] : ['/open/run']),
+    '/project',
+    '/run',
+    '/api/run',
+  ]);
+}
+
+export const WATCH_NAV_PATHS = Object.freeze(['/api/nav', '/nav/board', '/nav/project']);
+
+/** Every GET path the board Watch server serves (non-remote, with nav). Built from the same arrays as the router. */
+export const WATCH_ROUTES = Object.freeze([
+  ...WATCH_CORE_PATHS,
+  ...watchBoardRoutePaths({ remote: false }),
+  ...WATCH_NAV_PATHS,
+]);
 const MAX_STREAMS = 8;
 export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
 const MAX_STREAM_PAUSED_MS = 60000;
@@ -351,7 +377,7 @@ export function createWatchServer(opts) {
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
-    const boardRoutes = board ? ['/api/board', '/api/project', '/api/live', '/api/history', '/history.csv', ...(remote ? [] : ['/open/run']), '/project', '/run', '/api/run'] : [];
+    const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
     const isBoardRoute = boardRoutes.includes(pathname);
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
@@ -394,7 +420,7 @@ export function createWatchServer(opts) {
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {
         const localOnly = q.local === '1';
-        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly })), openRun: !remote, server: await versionInfo() });
+        return sendJson(res, method, { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() });
       }
       if (pathname === '/api/project') { const detail = await board.project(String(q.id ?? '')); return detail ? sendJson(res, method, detail) : sendText(res, method, 404, 'not found'); }
       if (pathname === '/api/live') { const live = await board.live(String(q.id ?? '')); return live ? sendJson(res, method, live) : sendText(res, method, 404, 'not found'); }

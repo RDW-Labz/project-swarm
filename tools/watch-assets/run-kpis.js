@@ -116,7 +116,15 @@
       var spendCard = spendKpi.closest('.kpi');
       if (spendCard) spendCard.hidden = true;
     }
-    setText('kForecast', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
+    var pj = run.project;
+    var capNote = '';
+    if (pj) {
+      if (pj.capError) capNote = 'CAP INVALID';
+      else if (pj.reached) capNote = 'CAP REACHED';
+      else if (pj.noCap) capNote = 'NO CAP';
+    }
+    var forecast = (k.jobsPerSec || 0).toFixed(1) + ' jobs/s';
+    setText('kForecast', capNote ? capNote + ' · ' + forecast : forecast);
     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
     var mq = run.mergeQueue;
