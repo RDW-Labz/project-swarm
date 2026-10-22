@@ -252,6 +252,44 @@ test('no-progress repair parks and reports rounds', async t => {
   assert.ok(!ledger.tickets.some(ticket => ticket.integration === true));
 });
 
+test('ingest appendLog records a split-repair event for each repair round', async t => {
+  const root = await project(t);
+  await fakeRun(root, 'r1', { S1: [build({ files: ['src/mod.mjs'] })] });
+  const repair = repairRunSplit({
+    S1: [build({ files: ['src/mod.mjs'] }), integration({ files: ['src/routes/mod.mjs'], tests: ['tests/routes/mod.test.mjs'] })],
+  });
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1'], { runSplit: repair.runSplit });
+  assert.equal(result.exitCode, 0, result.stdout);
+  assert.match(result.stdout, /repair rounds: 1/);
+  const log = await fs.readFile(path.join(root, '.swarm/project/tickets.log'), 'utf8');
+  const events = log.trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'split-repair');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].round, 0);
+  assert.ok(events[0].errorsIn >= 1);
+  assert.equal(events[0].errorsLeft, 0);
+});
+
+test('a ticket writing coordination/checks.json is routed to an owner-window human ticket on ingest', async t => {
+  const root = await project(t);
+  await fakeRun(root, 'r1', {
+    S1: [
+      build({ key: 'checks', title: 'Register project checks', files: ['coordination/checks.json'] }),
+      integration(),
+    ],
+  });
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 0, result.stdout);
+  const ledger = await readLedger(root);
+  const human = ledger.tickets.find(ticket => ticket.type === 'human');
+  assert.ok(human, 'owner-window human ticket');
+  assert.deepEqual(human.files, ['coordination/checks.json']);
+  assert.match(human.title, /Owner commit window: edit coordination\/checks\.json/);
+  const worker = ledger.tickets.find(ticket => ticket.title === 'Register project checks');
+  assert.ok(worker);
+  assert.ok(worker.dependsOn?.includes(human.id));
+  assert.ok(!(worker.files ?? []).includes('coordination/checks.json'));
+});
+
 test('change-order merge with a stray ticket is repaired or parked, not refused', async t => {
   const root = await project(t);
   await fakeRun(root, 'r1', {

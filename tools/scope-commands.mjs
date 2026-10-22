@@ -43,7 +43,7 @@ import { nextStep, sizeTicket } from './escalation.mjs';
 import { persistReplans } from './ticket-replan.mjs';
 import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane, ticketByteTotal } from './lane-size.mjs';
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
+import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, integrationTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
 import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
@@ -1116,6 +1116,14 @@ function evaluateSplitIngest({
     });
   }
   for (const issue of issues) {
+    if (issue.code === 'invalid-integration-test' && issue.req) {
+      const integ = integrationTickets(allForWiring, issue.req)[0];
+      if (integ) {
+        issue.stage = integ.stage;
+        issue.ticket = integ.id;
+      }
+      continue;
+    }
     if (issue.code === 'missing-integration' && issue.req) {
       const mod = moduleTickets(allForWiring, issue.req)[0];
       if (mod) {
@@ -1138,7 +1146,7 @@ function evaluateSplitIngest({
   const badIds = new Set(rejected.map(entry => entry.id));
   for (const issue of issues) {
     if (!issue.ticket) continue;
-    if (issue.code === 'missing-integration') continue;
+    if (issue.code === 'missing-integration' && /no integration ticket that mounts/i.test(String(issue.reason ?? ''))) continue;
     badIds.add(issue.ticket);
   }
   for (const msg of acceptanceCheck.refusals) {
@@ -1219,7 +1227,7 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
   }
 
   const shouldRepair = issueList => issueList.some(issue => issue.fixable)
-    || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration'));
+    || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration' || issue.code === 'invalid-integration-test'));
 
   if (!shouldRepair(issues)) {
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });

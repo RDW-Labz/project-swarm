@@ -15,6 +15,8 @@ import {
   runRepairLoop,
 } from '../tools/split-repair.mjs';
 import { chainSharedFiles } from '../tools/wiring.mjs';
+import { buildSplitManifest } from '../tools/scope-commands.mjs';
+import { parseScope } from '../tools/scope.mjs';
 
 const SCOPE = [
   '# Scope: Repair loop',
@@ -71,6 +73,37 @@ function validateTickets(tickets, { existing = [], repoFiles: repo = repoFiles, 
   const valid = tickets.filter(t => !badIds.has(t.id));
   return { tickets: valid, issues, stageIssues: [] };
 }
+
+test('buildSplitManifest embeds every ROOT_RULES line verbatim in splitPrompt', () => {
+  const scope = parseScope(SCOPE);
+  const prompt = buildSplitManifest(scope, {}).jobs[0].prompt;
+  assert.match(prompt, /Root rules \(follow exactly/);
+  for (const rule of ROOT_RULES) assert.ok(prompt.includes(rule), `missing rule: ${rule.slice(0, 48)}`);
+});
+
+test('runRepairLoop records per-round history with errorsIn and errorsLeft', () => {
+  const bad = assignIds([
+    { key: 'mod', type: 'build', stage: 'S1', scopeRefs: ['R-001'], files: ['src/mod.mjs'], acceptance: ['ok'], size: 'S' },
+  ]);
+  const fixed = assignIds([
+    { key: 'mod', type: 'build', stage: 'S1', scopeRefs: ['R-001'], files: ['src/mod.mjs'], acceptance: ['ok'], size: 'S' },
+    { key: 'wire', type: 'build', stage: 'S1', scopeRefs: ['R-001'], integration: true, files: ['src/routes/mod.mjs'], tests: ['tests/routes/mod.test.mjs'], acceptance: ['route'], size: 'S' },
+  ]);
+  let stageTickets = bad;
+  const historyLog = [];
+  const result = runRepairLoop({
+    maxRepairs: 3,
+    validate: () => {
+      const v = validateTickets(stageTickets, { repoFiles });
+      return { ...v, allTickets: stageTickets, repoFiles, setTickets: next => { stageTickets = next; } };
+    },
+    rerun: () => { stageTickets = fixed; },
+    log: entry => { historyLog.push(entry); },
+  });
+  assert.equal(result.rounds, 1);
+  assert.deepEqual(result.history, historyLog);
+  assert.ok(result.history.some(entry => entry.round === 0 && entry.errorsIn >= 1 && typeof entry.errorsLeft === 'number'));
+});
 
 test('ROOT_RULES lists five root split rules', () => {
   assert.equal(ROOT_RULES.length, 5);

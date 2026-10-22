@@ -82,9 +82,7 @@ export function collectSplitIssues(sources = {}) {
   }
 
   for (const gap of sources.wiringGaps ?? wiringGaps(sources.tickets ?? [], sources.touchedReqs)) {
-    const reason = gap.reason ?? '';
-    const code = /no integration ticket/i.test(reason) ? 'missing-integration' : 'missing-integration';
-    issues.push(issueFromPartial({ code, req: gap.req, reason, fixable: false }));
+    issues.push(wiringGapIssue(gap));
   }
 
   for (const req of sources.unwiredRequirements ?? unwiredRequirements(sources.tickets ?? [])) {
@@ -431,18 +429,38 @@ export function detectTestAfterCodeIssues(tickets, existing = []) {
   return issues;
 }
 
+function wiringGapIssue(gap) {
+  const reason = gap.reason ?? '';
+  if (/not a test file|no route-level test/i.test(reason)) {
+    return issueFromPartial({
+      code: 'invalid-integration-test',
+      req: gap.req,
+      reason,
+      fixable: true,
+    });
+  }
+  return issueFromPartial({
+    code: 'missing-integration',
+    req: gap.req,
+    reason,
+    fixable: false,
+  });
+}
+
 export function detectMissingIntegrationIssues(tickets, touchedReqs) {
   const gaps = wiringGaps(tickets, touchedReqs);
   return gaps.map(g => {
+    const issue = wiringGapIssue(g);
     const modules = moduleTickets(tickets, g.req);
-    return issueFromPartial({
-      code: 'missing-integration',
-      req: g.req,
-      ticket: modules[0]?.id ?? modules[0]?.key ?? null,
-      stage: modules[0]?.stage ?? null,
-      reason: g.reason,
-      fixable: false,
-    });
+    const integ = (tickets ?? []).filter(t => t.type === 'build' && t.integration === true && (t.scopeRefs ?? []).includes(g.req));
+    if (issue.code === 'invalid-integration-test') {
+      issue.ticket = integ[0]?.id ?? integ[0]?.key ?? null;
+      issue.stage = integ[0]?.stage ?? null;
+    } else {
+      issue.ticket = modules[0]?.id ?? modules[0]?.key ?? null;
+      issue.stage = modules[0]?.stage ?? null;
+    }
+    return issue;
   });
 }
 
