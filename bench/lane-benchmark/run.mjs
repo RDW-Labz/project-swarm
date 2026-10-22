@@ -99,6 +99,20 @@ const median = values => { const sorted = values.filter(Number.isFinite).sort((a
 const p90 = values => { const sorted = values.filter(Number.isFinite).sort((a, b) => a - b); return sorted.length ? sorted[Math.ceil(sorted.length * 0.9) - 1] : null; };
 const usd = value => (value === null ? 'n/a' : value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`);
 
+function summarizeFailureReasons(results) {
+  const counts = new Map();
+  for (const r of results) {
+    if (r.pass) continue;
+    const key = r.reason ?? r.detail?.slice(0, 80) ?? 'unknown';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  if (!counts.size) return 'no failures';
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, n]) => `${reason} (${n})`)
+    .join('; ');
+}
+
 export function renderReplayReport(entries) {
   const tableFor = data => {
     const results = data.results ?? [];
@@ -109,14 +123,24 @@ export function renderReplayReport(entries) {
     return {
       label,
       row: `| ${label} | ${passed}/${results.length} | ${((passed / Math.max(1, results.length)) * 100).toFixed(0)}% | ${median(walls)?.toFixed(1) ?? 'n/a'} | ${p90(walls)?.toFixed(1) ?? 'n/a'} | ${median(tps)?.toFixed(1) ?? 'n/a'} | ${data.slots ?? 'n/a'} |`,
+      results,
+      failureSummary: summarizeFailureReasons(results),
     };
   };
   const tables = entries.map(tableFor);
+  const perTaskSections = tables.map(t => {
+    const lines = t.results.map(r => `- ${r.taskId}: ${r.reason ?? (r.pass ? 'passed' : r.detail?.slice(0, 120) ?? 'failed')}`);
+    return `### ${t.label}\n\nFailure reasons: ${t.failureSummary}\n\n${lines.join('\n')}`;
+  });
   return `# Replay benchmark
 
 | Model | Pass | Rate | Median s | p90 s | tok/s | Slots |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 ${tables.map(t => t.row).join('\n')}
+
+## Per task
+
+${perTaskSections.join('\n\n')}
 `;
 }
 
@@ -222,6 +246,10 @@ async function endpoint() {
   const baseUrl = flag('base-url') ?? fail('--base-url required');
   const model = flag('model') ?? fail('--model required');
   const slots = Number(flag('slots') ?? 4);
+  const maxTokens = Number(flag('max-tokens') ?? 16000);
+  const promptTokens = Number(flag('prompt-tokens') ?? 24000);
+  const thinking = flag('thinking') ?? 'auto';
+  if (!['auto', 'off'].includes(thinking)) fail('--thinking must be auto or off');
   const srcRepo = path.resolve(flag('src') ?? path.join(benchDir, '../..'));
   const tasks = activeTasks();
   const verify = (baseDir, task, outputs) => verifyOutputs(baseDir, task, outputs, { readAtMerge: (c, f) => gitShow(srcRepo, c, f) });
@@ -231,10 +259,19 @@ async function endpoint() {
     srcRepo,
     verifyOutputs: verify,
     readContextAtBase: (commit, file) => gitShow(srcRepo, commit, file),
-    api: prompt => chatCompletion({ baseUrl, model, apiKey, prompt }),
+    promptTokenBudget: promptTokens,
+    api: prompt => chatCompletion({ baseUrl, model, apiKey, prompt, maxTokens, thinking }),
     log,
   });
-  const out = { ...result, model, baseUrl, wallMs: result.results.reduce((s, r) => s + (r.wallSec ?? 0) * 1000, 0) };
+  const out = {
+    ...result,
+    model,
+    baseUrl,
+    maxTokens,
+    promptTokens,
+    thinking,
+    wallMs: result.results.reduce((s, r) => s + (r.wallSec ?? 0) * 1000, 0),
+  };
   const outPath = flag('out') ?? 'results-endpoint.json';
   const serialized = JSON.stringify(out, null, 1);
   if (serialized.includes(apiKey)) fail('api key leaked into results');

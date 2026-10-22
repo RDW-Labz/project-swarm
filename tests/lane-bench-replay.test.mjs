@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
   deliveryByTicket,
@@ -11,7 +12,13 @@ import {
   ticketQualifies,
   selectFromLedgers,
 } from '../bench/lane-benchmark/replay-select.mjs';
-import { parseFilesEnvelope } from '../bench/lane-benchmark/endpoint.mjs';
+import {
+  parseFilesEnvelope,
+  buildPromptWithBudget,
+  estimateTokens,
+  chatCompletion,
+  runEndpointTask,
+} from '../bench/lane-benchmark/endpoint.mjs';
 import { TOOLCALL_CHECKS } from '../bench/lane-benchmark/toolcalls.mjs';
 import { renderReplayReport, scrubSecret } from '../bench/lane-benchmark/run.mjs';
 import { verifyOutputs } from '../bench/lane-benchmark/lib.mjs';
@@ -126,6 +133,98 @@ describe('parseFilesEnvelope', () => {
     const arr = parseFilesEnvelope('{"files":[{"path":"b.mjs","content":"x"}]}');
     assert.equal(arr['b.mjs'], 'x');
   });
+
+  it('accepts markdown fenced JSON and ignores reasoning-only paths', () => {
+    const fenced = parseFilesEnvelope('Here is the answer:\n```json\n{"files":{"c.mjs":"ok"}}\n```');
+    assert.equal(fenced['c.mjs'], 'ok');
+  });
+});
+
+describe('buildPromptWithBudget', () => {
+  it('excludes context that exceeds budget and excerpts huge files', () => {
+    const task = {
+      prompt: 'Fix the bug',
+      outputs: ['owned.mjs'],
+      context: ['owned.mjs', 'small.mjs', 'tests/big.test.mjs', 'huge.mjs'],
+    };
+    const files = [
+      { path: 'owned.mjs', content: 'export const owned = 1;\n' },
+      { path: 'small.mjs', content: 'small\n' },
+      { path: 'tests/big.test.mjs', content: 'test file\n' },
+      { path: 'huge.mjs', content: `${'x'.repeat(20000)}\n` },
+    ];
+    const { prompt, excluded, excerpted } = buildPromptWithBudget(task, files, { promptTokenBudget: 500 });
+    assert.match(prompt, /owned\.mjs/);
+    assert.match(prompt, /Fix the bug/);
+    assert.ok(excerpted.some(e => e.path === 'huge.mjs'));
+    assert.ok(excluded.length >= 0);
+    assert.ok(estimateTokens(prompt) <= 600);
+  });
+});
+
+describe('chatCompletion thinking mode', () => {
+  it('sends enable_thinking false and system message when thinking is off', async () => {
+    let captured;
+    const fetchImpl = async (_url, init) => {
+      captured = JSON.parse(init.body);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '{}' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      };
+    };
+    await chatCompletion({
+      baseUrl: 'http://localhost/v1',
+      model: 'm',
+      apiKey: 'k',
+      prompt: 'hi',
+      thinking: 'off',
+      fetchImpl,
+    });
+    assert.equal(captured.chat_template_kwargs.enable_thinking, false);
+    assert.equal(captured.messages[0].role, 'system');
+    assert.match(captured.messages[0].content, /step-by-step/i);
+    assert.equal(captured.messages[1].role, 'user');
+  });
+});
+
+describe('runEndpointTask recording', () => {
+  it('records empty content when reasoning consumed the completion budget', async () => {
+    const srcRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const { spawnSync } = await import('node:child_process');
+    const baseCommit = spawnSync('git', ['-C', srcRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const task = {
+      id: 'T-rec',
+      type: 'fix',
+      baseCommit,
+      prompt: 'do thing',
+      context: [],
+      outputs: ['out.mjs'],
+      verify: { argv: ['node', '-e', 'process.exit(0)'] },
+    };
+    const result = await runEndpointTask(task, {
+      srcRepo,
+      verifyOutputs: () => ({ pass: true, detail: 'tests pass' }),
+      readContextAtBase: () => '',
+      api: async () => ({
+        content: '',
+        finishReason: 'length',
+        reasoningChars: 12000,
+        completionChars: 0,
+        promptChars: 10,
+        completionTokens: 8000,
+        promptTokens: 100,
+        usage: { completion_tokens: 8000 },
+      }),
+    });
+    assert.equal(result.reason, 'empty content (finish=length, reasoning 12000 chars)');
+    assert.equal(result.finishReason, 'length');
+    assert.equal(result.reasoningChars, 12000);
+    assert.equal(result.completionChars, 0);
+    assert.ok(Number.isFinite(result.completionTokensPerSec));
+  });
 });
 
 describe('verifyOutputs merge tests', () => {
@@ -183,11 +282,20 @@ describe('toolcall validators', () => {
 describe('renderReplayReport', () => {
   it('renders side-by-side table for multiple models', () => {
     const md = renderReplayReport([
-      { model: 'model-a', slots: 4, results: [{ pass: true, wallSec: 10, completionTokensPerSec: 50 }, { pass: false, wallSec: 20, completionTokensPerSec: 40 }] },
-      { model: 'model-b', slots: 8, results: [{ pass: true, wallSec: 8, completionTokensPerSec: 60 }] },
+      {
+        model: 'model-a',
+        slots: 4,
+        results: [
+          { taskId: 'T-1', pass: true, wallSec: 10, completionTokensPerSec: 50, reason: 'passed' },
+          { taskId: 'T-2', pass: false, wallSec: 20, completionTokensPerSec: 40, reason: 'empty content (finish=length, reasoning 9000 chars)' },
+        ],
+      },
+      { model: 'model-b', slots: 8, results: [{ taskId: 'T-1', pass: true, wallSec: 8, completionTokensPerSec: 60, reason: 'passed' }] },
     ]);
     assert.match(md, /model-a/);
     assert.match(md, /model-b/);
     assert.match(md, /50%/);
+    assert.match(md, /Failure reasons:/);
+    assert.match(md, /empty content/);
   });
 });

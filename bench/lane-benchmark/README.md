@@ -26,8 +26,16 @@ This writes `bench/lane-benchmark/replay-selected.json`. If fewer than twenty ti
 OpenAI-compatible **endpoint** lane (single chat completion per task, temperature 0.2, hidden tests from the merge commit at verify time only):
 
 ```
-node bench/lane-benchmark/run.mjs endpoint --set replay --base-url http://127.0.0.1:18000/v1 --model NAME --key-env BENCH_API_KEY --slots 4 --out results.json
+node bench/lane-benchmark/run.mjs endpoint --set replay --base-url http://127.0.0.1:18000/v1 --model NAME --key-env BENCH_API_KEY --slots 4 --max-tokens 16000 --prompt-tokens 24000 --thinking auto --out results.json
 ```
+
+Flags:
+
+- `--max-tokens` (default `16000`) — completion budget per task.
+- `--prompt-tokens` (default `24000`) — estimated prompt token budget (~1 token per 3.5 characters). The ticket text and owned output files are always included in full; additional context files are added smallest-first (tests/fixtures last). Files over 20% of the budget are head/tail excerpted; paths that do not fit are listed in each result as `promptExcluded` / `promptExcerpted`.
+- `--thinking` — `auto` (default, no extra request fields) or `off` (sends `chat_template_kwargs.enable_thinking: false` and a system line asking for no step-by-step reasoning). Use `off` for models that spend the completion budget in `reasoning_content` and return empty `content`.
+
+Each task result records `reason` (`passed`, `tests failed`, `no envelope`, `empty content (finish=…, reasoning N chars)`, `request refused: …`), token/character counts, `finishReason`, and timing. The replay report includes per-task reasons and a failure-reason summary.
 
 The API key is read only from the named environment variable; it is never printed or written to results.
 
