@@ -124,10 +124,7 @@ const REVIEW_RESULT_SCHEMA = {
 
 export function isReadOnlyReviewJob(job) {
   if (!object(job)) return false;
-  if (job.type === 'review') return true;
-  if (!Array.isArray(job.outputs) || job.outputs.length !== 0) return false;
-  const id = String(job.id ?? '');
-  return id.startsWith('sec-review-') || id.startsWith('acc-review-') || id.startsWith('review-');
+  return job.type === 'review';
 }
 
 export function outputSchema(outputs, attachedSkills = [], job = {}) {
@@ -202,9 +199,21 @@ export function anthropicSchema(schema) {
   return walk(schema);
 }
 
+// anthropicSchema drops maxLength/maxItems before the API sees the contract, so models may return
+// strings longer than our limits. Structural mistakes still fail the envelope; over-long text is
+// truncated to the same caps as security-review normalization and bad line values become null.
+function limitUtf8String(value, maxBytes) {
+  const text = String(value ?? '');
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  let end = text.length;
+  while (end > 0 && Buffer.byteLength(text.slice(0, end)) > maxBytes) end -= 1;
+  return text.slice(0, end);
+}
+
 function validateReviewResult(result) {
   if (!object(result) || !exact(result, ['reviews', 'notes'])) fail('Invalid structured output envelope: result must contain reviews and notes for a review job');
-  if (typeof result.notes !== 'string' || Buffer.byteLength(result.notes) > 4000) fail('Invalid structured output envelope: result.notes must be a string up to 4000 characters');
+  if (typeof result.notes !== 'string') fail('Invalid structured output envelope: result.notes must be a string');
+  result.notes = limitUtf8String(result.notes, 4000);
   if (!Array.isArray(result.reviews) || result.reviews.length < 1) fail('Invalid structured output envelope: result.reviews must be a non-empty array');
   for (const entry of result.reviews) {
     if (!object(entry) || !exact(entry, ['ticket', 'verdict', 'findings'])) fail('Invalid structured output envelope: each review entry must have ticket, verdict, and findings');
@@ -214,10 +223,14 @@ function validateReviewResult(result) {
     for (const finding of entry.findings) {
       if (!object(finding) || !exact(finding, ['file', 'line', 'severity', 'issue', 'fix'])) fail('Invalid structured output envelope: each finding must have file, line, severity, issue, and fix');
       if (typeof finding.file !== 'string') fail('Invalid structured output envelope: finding file must be a string');
-      if (!(finding.line === null || (Number.isInteger(finding.line) && finding.line >= 0))) fail('Invalid structured output envelope: finding line must be an integer or null');
+      if (!(finding.line === null || Number.isInteger(finding.line))) finding.line = null;
+      else if (finding.line < 0) finding.line = null;
       if (!['high', 'medium', 'low'].includes(finding.severity)) fail('Invalid structured output envelope: finding severity must be high, medium, or low');
-      if (typeof finding.issue !== 'string' || Buffer.byteLength(finding.issue) > 300) fail('Invalid structured output envelope: finding issue must be a string up to 300 characters');
-      if (typeof finding.fix !== 'string' || Buffer.byteLength(finding.fix) > 300) fail('Invalid structured output envelope: finding fix must be a string up to 300 characters');
+      if (typeof finding.issue !== 'string') fail('Invalid structured output envelope: finding issue must be a string');
+      if (typeof finding.fix !== 'string') fail('Invalid structured output envelope: finding fix must be a string');
+      finding.file = limitUtf8String(finding.file, 200);
+      finding.issue = limitUtf8String(finding.issue, 300);
+      finding.fix = limitUtf8String(finding.fix, 300);
     }
   }
 }
@@ -242,7 +255,11 @@ export function validateEnvelope(value, outputs, job = {}) {
   if (!Array.isArray(value.files)) fail('Invalid structured output envelope: files must be an array');
   if (usesEdits && !Array.isArray(value.edits)) fail(`Invalid structured output envelope: edits must be an array, not ${typeof value.edits === 'string' ? 'a string' : typeof value.edits}`);
   if ((hasResult || review) && (!object(value.result))) fail('Invalid structured output envelope: result must be an object');
-  if (review) validateReviewResult(value.result);
+  if (review) {
+    if (value.files.length > 0) fail('Invalid structured output envelope: a review job must not return files');
+    if (Array.isArray(value.edits) && value.edits.length > 0) fail('Invalid structured output envelope: a review job must not return edits');
+    validateReviewResult(value.result);
+  }
   // A path a worker lists both whole (files) and as edits: the whole file wins and the edits for it are dropped, noted in
   // value.normalized (not enumerable, so the envelope keys stay the same). Anything else still fails below.
   const wholePaths = new Set(value.files.map(file => file?.path).filter(path => typeof path === 'string' && outputs.includes(path)));
