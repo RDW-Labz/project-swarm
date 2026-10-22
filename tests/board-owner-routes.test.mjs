@@ -465,30 +465,35 @@ test('a hand-build request decision is answerable from the board', async t => {
 
 test('production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules', async t => {
   const suiteHome = await fs.mkdtemp(path.join(process.env.HOME, 'owner-remote-e2e-'));
-  const root = path.join(fileURLToPath(new URL('../evals', import.meta.url)), `owner-e2e-${Date.now()}`);
-  t.after(async () => {
-    await fs.rm(suiteHome, { recursive: true, force: true });
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  const root = path.join(suiteHome, 'repos', 'owner-e2e-app');
+  const scratchRoot = path.join(suiteHome, '.project-swarm-scratch', 'worktrees', 'owner-e2e-scratch');
+  t.after(() => fs.rm(suiteHome, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
   await fs.mkdir(path.join(root, 'docs', 'scope'), { recursive: true });
   await fs.writeFile(path.join(root, 'docs', 'scope', 'roadmap.md'), '# roadmap\n');
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, 'src', 'fix.ts'), 'export const x = 1;\n');
+  await fs.mkdir(path.join(scratchRoot, '.swarm', 'project'), { recursive: true, mode: 0o700 });
   const project = { id: projectId(root), name: 'owner-e2e-app', root };
+  const scratchProject = { id: projectId(scratchRoot), name: 'scratch-e2e', root: scratchRoot };
   const env = {
     ...process.env,
+    HOME: suiteHome,
     SWARM_PROJECTS_FILE: path.join(suiteHome, 'projects.json'),
     SWARM_PHONE_DIR: path.join(suiteHome, 'no-phone'),
     SWARM_LANES_DIR: path.join(suiteHome, 'lanes'),
   };
   await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({
     version: 1,
-    projects: [{ ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }],
+    projects: [
+      { ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() },
+      { ...scratchProject, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() },
+    ],
   }));
   const now = () => 1_700_000_000_000;
   await runInboxCommand(root, 'decision', ['Pick the accent color?', '--choice', 'blue', '--id', 'safe-accent', '--board-safe'], { now });
   await runInboxCommand(root, 'decision', ['Pick the default theme?', '--choice', 'light', '--id', 'theme-default'], { now });
+  await runInboxCommand(scratchRoot, 'decision', ['Scratch-only choice?', '--choice', 'yes', '--id', 'scratch-only', '--board-safe'], { now, env });
   const harmlessLong = `${'alpha '.repeat(50).slice(0, 300).trimEnd()} merge to main`;
   await appendEvent(root, {
     kind: 'decision',
@@ -506,7 +511,7 @@ test('production remote board lists inbox decisions through ownerItemsFromBoardI
 
   const board = await startBoardServer({
     env,
-    root: process.env.HOME,
+    root: suiteHome,
     remote: { port: 0, token: 'e'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
   });
   t.after(async () => { await board.server.close(); await board.api.close(); });
@@ -535,6 +540,7 @@ test('production remote board lists inbox decisions through ownerItemsFromBoardI
   await approveItem(handbuildId);
   await refuseItem('theme-default');
   await refuseItem('long-merge-tail');
+  assert.equal((await tailnet(port, '/api/owner/actions/scratch-only/prepare', { method: 'POST', headers })).status, 404);
 
   const auditGet = await tailnet(port, '/api/owner/audit', { headers });
   assert.equal(auditGet.status, 200);

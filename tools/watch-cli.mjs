@@ -529,11 +529,10 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
   const login = typeof remoteLogin === 'string' ? remoteLogin : '';
   return createOwnerActions({
     listItems: async () => {
-      const all = await listProjects({ file: projectsFile(env) });
-      const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
-      const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
-      const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
-      return ownerItemsFromBoardInbox(inbox);
+      const opts = boardProjectOpts(env);
+      const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
+      const inbox = await boardInbox({ projects, env, forOwner: true, now: now() }).catch(() => null);
+      return ownerItemsFromBoardInbox(inbox ?? { items: [] });
     },
     appendAudit,
     readAudit,
