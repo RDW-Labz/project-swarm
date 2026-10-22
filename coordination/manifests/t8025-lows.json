@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8025-lows",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tools/api-adapters.mjs",
+        "tools/security-review.mjs",
+        "tests/review-structured-verdict.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/anthropic-lane.test.mjs"
+      ],
+      "prompt": "Fix the three low findings from the Opus review of T-8025: (1) tools/api-adapters.mjs: the decoded-string credential scan (retainedStrings) covers summary, files and edits but not envelope.result; add every string from envelope.result (reviews[].ticket, findings file/issue/fix, and notes, and any other result keys) to retainedStrings BEFORE the credential check, so a JSON-escaped echo of a key in review text is caught the same way as in files. (2) tools/api-adapters.mjs limitUtf8String: truncate at a code-point boundary in one pass (iterate code points summing their UTF-8 byte lengths, or Buffer slicing backed off to a boundary), never leaving a lone surrogate, linear time. (3) tools/security-review.mjs normalizeReviewEntries / parseReviewVerdicts: deduplicate entries by ticket with fail winning over pass (findings merged, capped at 10) and drop entries whose ticket id is not in the reviewed list when that list is provided (add an optional allowedTickets parameter; existing callers keep working). Tests in tests/review-structured-verdict.test.mjs: a review result whose finding contains a credential-shaped string (build it at runtime, never as a literal in the source) is caught by the credential scan; limitUtf8String on a string with emoji at the cut point leaves no lone surrogate and stays within the byte limit; duplicate pass/fail entries for one ticket resolve to fail; an unknown ticket id is dropped when allowedTickets is given. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/review-structured-verdict.test.mjs tests/review-retry.test.mjs tests/review-recorder-lanes.test.mjs tests/anthropic-lane.test.mjs tests/lesson-40-eval.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/adapters.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gpu-lineup.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import the adapters or the security-review helpers for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
