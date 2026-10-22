@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013-gaps2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "timeoutMs": 1800000,
+      "outputs": [
+        "tests/board-card-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-t8013-2.json",
+        "tools/watch-assets/board.js"
+      ],
+      "prompt": "T-8013 review gap (coordination/reviews/acc-review-t8013-2.json): in tests/board-card-ui.test.mjs, add for the READY count exactly what the waiting and need-you tests already do: click the ready toggle on a rendered card, assert the list opens and shows every item of card.next.items in order with id and title, each <code> equals the item's command exactly, the copy button copies that command (stubbed clipboard), and a second click closes it. Change only the test file. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs`."
+    }
+  ]
+}
