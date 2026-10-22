@@ -4,6 +4,7 @@
 import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
 import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
 
+var __boardAutoBoot = typeof process === 'undefined' || !process.env.SWARM_BOARD_CARD_TEST;
 var L = self.BoardLib;
 var TOKEN = L.watchToken();
 var $ = function (id) { return document.getElementById(id); };
@@ -238,14 +239,269 @@ function progressLine(p) {
   line.appendChild(el('span', '', headline + ' · ' + (progress.current || 'Unknown') + eta));
   if (untrackedRuns > 0) {
     line.appendChild(el('span', '', ' · '));
-    line.appendChild(link(projectHref(p.id) + '#untracked', 'warn', [el('span', '', 'untracked work: ' + untrackedRuns + ' run' + (untrackedRuns === 1 ? '' : 's'))]));
+    line.appendChild(link(projectHref(p.id) + '#untracked', 'warn', [el('span', '', String(untrackedRuns) + ' untracked run' + (untrackedRuns === 1 ? '' : 's'))]));
   }
   return line;
 }
+function headsUpLine(p) {
+  var sentence = p.card && p.card.headsUp;
+  if (!sentence) { return null; }
+  return el('div', 'sub watch-headsup', sentence);
+}
 function splitLine(p) {
-  if (!p.split || p.split.grade === 'unknown') { return null; }
-  var text = 'Split ' + p.split.grade + (p.split.reds ? ' · ' + p.split.reds + ' red' : '') + (p.split.worst ? ' · ' + p.split.worst : '');
-  return el('div', 'sub split-' + p.split.grade, text);
+  return headsUpLine(p);
+}
+function watchNum(value, label, title) {
+  var wrap = el('span', 'watch-num-wrap');
+  wrap.appendChild(el('span', 'watch-num-label', label));
+  var n = el('span', 'watch-num', String(value));
+  n.title = title;
+  wrap.appendChild(n);
+  return wrap;
+}
+function copyCommandButton(cmd) {
+  var btn = el('button', 'copy', 'Copy');
+  btn.type = 'button';
+  btn.addEventListener('click', function () {
+    function done() { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cmd).then(done, function () { btn.textContent = 'Select it'; });
+      } else { btn.textContent = 'Select it'; }
+    } catch (e) { btn.textContent = 'Select it'; }
+  });
+  return btn;
+}
+function toggleCardList(btn, list) {
+  var open = false;
+  btn.addEventListener('click', function () {
+    open = !open;
+    list.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
+function cardItemList(items, kind) {
+  var list = el('div', 'watch-card-list');
+  list.hidden = true;
+  (items || []).forEach(function (item) {
+    var row = el('div', 'watch-card-list-item');
+    row.appendChild(el('span', 'mono watch-card-list-id', item.id || ''));
+    row.appendChild(el('span', 'watch-card-list-title', item.title || ''));
+    if (item.command) {
+      var cmdRow = el('div', 'watch-card-list-cmd');
+      cmdRow.appendChild(el('code', 'mono', item.command));
+      cmdRow.appendChild(copyCommandButton(item.command));
+      row.appendChild(cmdRow);
+    } else {
+      row.appendChild(el('span', 'sub', 'none'));
+    }
+    list.appendChild(row);
+  });
+  if (!list.childNodes.length) { list.appendChild(el('div', 'sub', 'none')); }
+  return list;
+}
+function slotsSentence(card) {
+  var slots = card && card.slots ? card.slots : {};
+  var max = slots.machineMax;
+  var inUse = slots.inUse || 0;
+  if (max === null || max === undefined) { return { text: 'Machine slots unknown.', title: 'No machine concurrency limit is configured.' }; }
+  var free = Math.max(0, max - inUse);
+  var other = slots.byOtherProjects || 0;
+  if (free === 0) {
+    return {
+      text: 'Waiting for a free slot: all ' + max + ' machine slots are in use (' + other + ' by other projects).',
+      title: 'Every machine slot is claimed. ' + other + ' slot' + (other === 1 ? '' : 's') + ' belong to other projects.',
+      full: true,
+    };
+  }
+  return {
+    text: free + ' of ' + max + ' machine slots free.',
+    title: free + ' free machine slot' + (free === 1 ? '' : 's') + ' out of ' + max + ' (' + inUse + ' in use).',
+    full: false,
+  };
+}
+function percentBoard(p) {
+  var progress = p.progress || {};
+  var board = progress.percent && progress.percent.board ? progress.percent.board : {};
+  var done = typeof board.done === 'number' ? board.done : null;
+  var total = typeof board.total === 'number' ? board.total : null;
+  var pct = typeof progress.overall === 'number' ? progress.overall : (typeof board.pct === 'number' ? board.pct : 0);
+  return { pct: pct, done: done, total: total };
+}
+function renderWatchProjectCard(p, host, options) {
+  var opts = options || {};
+  var card = p.card || {};
+  var finished = Boolean(p.progress && p.progress.finished);
+  host.className = 'pcard watch-project-card' + (finished ? ' watch-project-card-finished' : '') + (opts.worktree ? ' watch-project-card-wt' : '');
+  host.textContent = '';
+  var head = el('div', 'watch-card-head');
+  var titleRow = el('div', 'watch-card-title-row');
+  titleRow.appendChild(projectName(p, (opts.worktree ? '↳ ' : '') + p.name));
+  if (p.testOrTemp) { titleRow.appendChild(el('span', '', ' ')); titleRow.appendChild(pill('test', 'warn')); }
+  appendPinnedBadge(titleRow, p);
+  head.appendChild(titleRow);
+  var machine = el('span', 'watch-card-machine', p.machine || '-');
+  machine.title = 'The machine that hosts this project checkout.';
+  head.appendChild(machine);
+  var ver = el('span', 'watch-card-version', 'swarm ' + (p.version || '-'));
+  ver.title = 'The swarm version installed on this machine right now.';
+  head.appendChild(ver);
+  if (p.activity) {
+    var act = el('span', 'watch-card-activity watch-card-activity-' + p.activity, p.activity);
+    act.title = 'Project activity: ' + p.activity.replace('-', ' ');
+    head.appendChild(act);
+  }
+  host.appendChild(head);
+  if (finished) {
+    host.appendChild(el('div', 'watch-card-finished-label', 'Finished'));
+    if (p.progress && p.progress.headline) {
+      var fin = el('div', 'watch-card-finished-detail', p.progress.headline);
+      fin.title = 'Last release or merge milestone for this project.';
+      host.appendChild(fin);
+    }
+    return host;
+  }
+  var boardPct = percentBoard(p);
+  var big = el('div', 'watch-card-big');
+  var pctTitle = boardPct.done !== null && boardPct.total !== null
+    ? 'Tickets done divided by all tickets in the approved scope: ' + boardPct.done + ' of ' + boardPct.total + '. The project page shows the same number.'
+    : 'Tickets done divided by all tickets in the approved scope. The project page shows the same number.';
+  big.appendChild(el('span', 'watch-num-label', 'percent done'));
+  var pctNum = el('span', 'watch-card-pct watch-num num', String(boardPct.pct));
+  pctNum.title = pctTitle;
+  big.appendChild(pctNum);
+  big.appendChild(el('span', 'watch-card-pct-suffix', '%'));
+  var bar = meter(boardPct.pct);
+  bar.title = pctTitle;
+  big.appendChild(bar);
+  var doneLab = el('span', 'watch-card-done-label', 'done');
+  doneLab.title = pctTitle;
+  big.appendChild(doneLab);
+  host.appendChild(big);
+  var rows = el('div', 'watch-card-rows');
+  function row(label, valueNode) {
+    var r = el('div', 'watch-card-row');
+    r.appendChild(el('span', 'watch-card-row-label', label));
+    var val = el('div', 'watch-card-row-value');
+    val.appendChild(valueNode);
+    r.appendChild(val);
+    rows.appendChild(r);
+  }
+  var now = card.now || {};
+  var building = now.buildingTickets || 0;
+  var checkoutsB = now.checkoutsBuilding || 0;
+  var lastFin = now.lastTicketFinishedAt;
+  var agoSpan = el('span', 'watch-card-ago', ago(lastFin));
+  agoSpan.title = 'The most recent ticket marked done, from the ticket ledger.';
+  var nowText = el('span', 'watch-card-now-text');
+  if (building > 0) {
+    nowText.appendChild(watchNum(building, 'building tickets ', String(building) + ' tickets are running across the project family.'));
+    nowText.appendChild(el('span', '', ' tickets building on '));
+    nowText.appendChild(watchNum(checkoutsB, 'checkouts building ', String(checkoutsB) + ' checkouts have a live run.'));
+    nowText.appendChild(el('span', '', ' checkouts. Last ticket finished '));
+  } else {
+    nowText.appendChild(el('span', '', 'Nothing building. Last ticket finished '));
+  }
+  nowText.appendChild(agoSpan);
+  nowText.appendChild(el('span', '', '.'));
+  row('Now', nowText);
+  var next = card.next || {};
+  var ready = next.ready || 0;
+  var nextVal = el('div', 'watch-card-next');
+  var readyBtn = el('button', 'watch-card-toggle', String(ready));
+  readyBtn.type = 'button';
+  readyBtn.title = ready + ' ticket' + (ready === 1 ? '' : 's') + ' ready to start.';
+  readyBtn.setAttribute('aria-label', 'Show ready tickets');
+  var readyList = cardItemList(next.items, 'ready');
+  toggleCardList(readyBtn, readyList);
+  var readyBtnWrap = el('span', 'watch-num-wrap');
+  readyBtnWrap.appendChild(el('span', 'watch-num-label', 'ready tickets'));
+  readyBtnWrap.appendChild(readyBtn);
+  nextVal.appendChild(readyBtnWrap);
+  nextVal.appendChild(el('span', '', ' tickets ready to start. '));
+  var slotLine = slotsSentence(card);
+  var slotSpan = el('span', 'watch-card-slots', slotLine.text);
+  slotSpan.title = slotLine.title;
+  nextVal.appendChild(slotSpan);
+  var eta = card.eta || {};
+  var etaLine = el('div', 'watch-card-eta');
+  if (eta.days === null || eta.days === undefined) {
+    etaLine.appendChild(el('span', '', 'no estimate yet: nothing finished in the last 7 days'));
+    etaLine.title = 'No done transitions in the last ' + (eta.windowDays || 7) + ' days, so pace is unknown.';
+  } else {
+    etaLine.appendChild(el('span', '', 'about '));
+    etaLine.appendChild(watchNum(eta.days, 'ETA days ', eta.remaining + ' tickets left / ' + eta.perDay + ' done per day over the last 7 days (' + eta.doneLast7Days + ' done)'));
+    etaLine.appendChild(el('span', '', ' days at today\'s pace'));
+    etaLine.title = eta.remaining + ' tickets left / ' + eta.perDay + ' done per day over the last 7 days (' + eta.doneLast7Days + ' done)';
+  }
+  nextVal.appendChild(etaLine);
+  nextVal.appendChild(readyList);
+  row('Next', nextVal);
+  var blocked = card.blocked || {};
+  var waiting = blocked.waitingOnTickets || 0;
+  var needYou = blocked.needYou || 0;
+  var blockedVal = el('div', 'watch-card-blocked');
+  var waitBtn = el('button', 'watch-card-toggle', String(waiting));
+  waitBtn.type = 'button';
+  waitBtn.title = waiting + ' ticket' + (waiting === 1 ? '' : 's') + ' waiting on other tickets.';
+  waitBtn.setAttribute('aria-label', 'Show tickets waiting on dependencies');
+  var waitList = cardItemList(blocked.items, 'waiting');
+  toggleCardList(waitBtn, waitList);
+  var waitWrap = el('span', 'watch-num-wrap');
+  waitWrap.appendChild(el('span', 'watch-num-label', 'waiting on tickets'));
+  waitWrap.appendChild(waitBtn);
+  blockedVal.appendChild(waitWrap);
+  blockedVal.appendChild(el('span', '', ' wait on other tickets. '));
+  var needBtn = el('button', 'watch-card-toggle', String(needYou));
+  needBtn.type = 'button';
+  needBtn.title = needYou + ' item' + (needYou === 1 ? '' : 's') + ' need you.';
+  needBtn.setAttribute('aria-label', 'Show need-you items');
+  var needList = cardItemList(blocked.needYouItems, 'need-you');
+  toggleCardList(needBtn, needList);
+  var needWrap = el('span', 'watch-num-wrap');
+  needWrap.appendChild(el('span', 'watch-num-label', 'need you'));
+  needWrap.appendChild(needBtn);
+  blockedVal.appendChild(needWrap);
+  blockedVal.appendChild(el('span', '', ' need you.'));
+  blockedVal.appendChild(waitList);
+  blockedVal.appendChild(needList);
+  row('Blocked', blockedVal);
+  host.appendChild(rows);
+  var facts = card.facts || {};
+  var factsRow = el('div', 'watch-card-facts');
+  var guardN = facts.handEditsBlocked24h || 0;
+  var guard = el('span', 'watch-card-fact');
+  guard.appendChild(watchNum(guardN, 'hand-edits blocked by the guard ', 'Hand-edits the guard refused in the last 24 hours. Each one means someone tried to change code by hand instead of through the swarm.'));
+  guard.appendChild(el('span', '', ' hand-edits blocked by the guard'));
+  factsRow.appendChild(guard);
+  var untrackedN = facts.untrackedRuns || 0;
+  var untracked = el('span', 'watch-card-fact');
+  var untrackedLink = link(projectHref(p.id) + (facts.listHref || '#untracked'), 'watch-card-fact-link', []);
+  untrackedLink.appendChild(watchNum(untrackedN, 'untracked runs ', 'Runs found on this project\'s checkouts that no ticket claims. Smoke tests and lane tests are left out. Click to see the list.'));
+  untrackedLink.appendChild(el('span', '', ' untracked runs'));
+  untrackedLink.title = 'Runs found on this project\'s checkouts that no ticket claims. Smoke tests and lane tests are left out. Click to see the list.';
+  untracked.appendChild(untrackedLink);
+  factsRow.appendChild(untracked);
+  var coN = facts.checkouts || 0;
+  var co = el('span', 'watch-card-fact');
+  co.appendChild(watchNum(coN, 'checkouts ', 'Folders where this project is checked out: the main folder, linked worktrees and scratch folders. Runs from all of them are counted.'));
+  co.appendChild(el('span', '', ' checkouts'));
+  factsRow.appendChild(co);
+  host.appendChild(factsRow);
+  if (p.idleWithReady) {
+    var idleReady = el('div', 'watch-card-idle-ready');
+    idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad'));
+    host.appendChild(idleReady);
+  }
+  if (card.headsUp) {
+    var hu = el('div', 'watch-card-headsup-row');
+    hu.appendChild(el('span', 'watch-card-row-label', 'Heads up'));
+    var huText = el('span', 'watch-card-headsup-text', card.headsUp);
+    huText.title = card.headsUp;
+    hu.appendChild(huText);
+    host.appendChild(hu);
+  }
+  return host;
 }
 function handledLine(p) { return p.handled && p.handled.today ? el('div', 'sub', p.handled.today + ' handled for you today') : null; }
 function peerForProject(p) {
@@ -324,15 +580,7 @@ function renderProjects(projects) {
     tr.appendChild(td(laneDots(p))); tr.appendChild(td(ago(p.lastActivityAt), 'mono'));
     body.appendChild(tr);
     var c = el('div', 'pcard');
-    var head = el('div', 'row'); head.appendChild(projectName(p, (isWorktree ? '↳ ' : '') + p.name)); head.appendChild(el('span', 'stage', isWorktree ? 'worktree' : (p.stage ? 'stage ' + p.stage : 'no stage'))); if (p.testOrTemp) { head.appendChild(el('span', '', ' ')); head.appendChild(pill('test', 'warn')); } appendPinnedBadge(head, p); c.appendChild(head); c.appendChild(machineLine(p));
-    var cardProgress = progressLine(p); if (cardProgress) { c.appendChild(cardProgress); }
-    var cardSplit = splitLine(p); if (cardSplit) { c.appendChild(cardSplit); }
-    var cardHandled = handledLine(p); if (cardHandled) { c.appendChild(cardHandled); }
-    (p.warnings || []).forEach(function (w) { var wl = el('div', 'sub'); wl.appendChild(pill(w.text, 'warn')); c.appendChild(wl); });
-    var mixCard = buildMixText(p.orchestrator); if (mixCard) { var ml = el('div', 'sub'); ml.appendChild(pill(mixCard, p.orchestrator.handPct > 0 ? 'warn' : 'good')); c.appendChild(ml); }
-    if (p.idleWithReady) { var idleReady = el('div', 'sub'); idleReady.appendChild(pill('Idle with ' + p.readyTickets + ' ready tickets', 'bad')); c.appendChild(idleReady); }
-    c.appendChild(liveCell(p));
-    var meta = el('div', 'row'); meta.appendChild(el('span', 'mono', p.tickets.open + ' open' + (p.tickets.blocked ? ', ' + p.tickets.blocked + ' blocked' : ''))); meta.appendChild(el('span', 'mono', ago(p.lastActivityAt))); c.appendChild(meta);
+    renderWatchProjectCard(p, c, { worktree: isWorktree });
     cards.appendChild(c);
   });
   table.appendChild(body);
@@ -459,7 +707,7 @@ function tickCountdowns() {
   $('liveDot').className = 'dot' + (lv.state === 'live' ? '' : ' off');
   $('liveText').textContent = lv.state === 'live' ? 'Live, updated ' + clock(state.lastOk) : state.lastOk ? 'Stale, last update ' + clock(state.lastOk) : 'connecting';
 }
-setInterval(tickCountdowns, 1000);
+if (__boardAutoBoot) { setInterval(tickCountdowns, 1000); }
 
 // ---- agents --------------------------------------------------------------------------------------------------------------------------------------
 
@@ -618,7 +866,13 @@ $('scratch').addEventListener('change', function () {
   poll(); loadHistory();
 });
 
-applyHash();
-poll();
-setInterval(poll, 2000);
-setInterval(loadHistory, 10000);
+if (__boardAutoBoot) {
+  applyHash();
+  poll();
+  setInterval(poll, 2000);
+  setInterval(loadHistory, 10000);
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__swarmBoardTestExports = { renderWatchProjectCard: renderWatchProjectCard, slotsSentence: slotsSentence, percentBoard: percentBoard };
+}
