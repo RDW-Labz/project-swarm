@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
@@ -483,6 +485,39 @@ export function integrationBlocker(checkout) {
 export async function autopilotStep(root, deps, { now = Date.now, memory = new Set(), legacyPlan = false } = {}) {
   const nowFn = typeof now === 'function' ? now : () => nowValue(now);
   const nowMs = nowFn();
+  const mem = memory && typeof memory === 'object' ? memory : {};
+  let pollObserveContext = null;
+  let pollDigestBefore = null;
+  try {
+    if (typeof deps.readyTickets === 'function') {
+      const observeRuns = (await safe(() => deps.loadRuns(root), [])).slice(0, MAX_RUNS);
+      let live = [];
+      let busy = [];
+      let observeDepError = false;
+      if (typeof deps.liveRuns === 'function') {
+        try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { observeDepError = true; live = []; }
+      }
+      if (typeof deps.busyMarkers === 'function') {
+        try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { observeDepError = true; busy = []; }
+      }
+      pollObserveContext = { live, busy, runs: observeRuns, depError: observeDepError };
+      if (!observeDepError) noteStartReadyLive(mem, nowMs, pollObserveContext);
+    }
+    const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+      now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+    });
+    pollDigestBefore = pollSnapshot?.digest ?? null;
+    const storedDigest = pollDigestBefore ? await readAutopilotPollDigest(root) : null;
+    if (pollSnapshot?.idle && pollDigestBefore && storedDigest !== null && storedDigest === pollDigestBefore) {
+      return {
+        actions: [],
+        blocked: [],
+        idle: true,
+        stepWroteJournal: false,
+        pollUnchanged: true,
+      };
+    }
+  } catch { /* digest must never block autopilot */ }
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
   catch (error) { return { actions: [], blocked: [], idle: true, error: `journal-unreadable: ${String(error?.message ?? error).slice(0, 200)}` }; }
@@ -505,8 +540,8 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
-  async function write(event) {
-    stepWroteJournal = true;
+  async function write(event, { incidental = false } = {}) {
+    if (!incidental) stepWroteJournal = true;
     try { await deps.appendEvent(root, event); }
     catch (error) { journalBroken ??= `journal-unwritable: ${String(error?.message ?? error).slice(0, 200)}`; }
     events.push({ ...event, ts: new Date(nowMs).toISOString() });
@@ -589,7 +624,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (last?.status === run.status) continue;
     const manifest = history.find(e => e.manifest)?.manifest;
     const retryOf = history.find(e => e.retryOf)?.retryOf;
-    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) });
+    await write({ kind: 'run', id: run.id, status: run.status, ...(run.counts ? { counts: run.counts } : {}), ...(Number.isFinite(run.costUsd) ? { costUsd: run.costUsd } : {}), ...(manifest ? { manifest } : {}), ...(retryOf ? { retryOf } : {}) }, { incidental: true });
     if (run.integrated === true || ['cancelled', 'abandoned'].includes(run.status)) {
       await resolveIntegrateBlockersForRun(run.id, { resolvedBy: run.status === 'cancelled' ? 'cancel' : run.integrated ? 'integrate' : 'abandoned' });
     }
@@ -784,13 +819,17 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     let live = [];
     let busy = [];
     let capRoom = true;
-    if (!depError && typeof deps.liveRuns === 'function') {
+    if (pollObserveContext?.depError) depError = true;
+    if (!depError && pollObserveContext) {
+      live = Array.isArray(pollObserveContext.live) ? pollObserveContext.live : [];
+      busy = Array.isArray(pollObserveContext.busy) ? pollObserveContext.busy : [];
+    } else if (!depError && typeof deps.liveRuns === 'function') {
       try {
         live = await deps.liveRuns(root);
         if (!Array.isArray(live)) live = [];
       } catch { depError = true; live = []; }
     }
-    if (!depError && typeof deps.busyMarkers === 'function') {
+    if (!depError && !pollObserveContext && typeof deps.busyMarkers === 'function') {
       try {
         busy = await deps.busyMarkers();
         if (!Array.isArray(busy)) busy = [];
@@ -799,7 +838,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     if (!depError && typeof deps.capRoom === 'function') {
       try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
     }
-    if (!depError) noteStartReadyLive(memory, nowMs, { live, busy, runs });
+    if (!depError) noteStartReadyLive(mem, nowMs, { live, busy, runs });
 
     const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
     const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
@@ -859,11 +898,20 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
 
+  if (!journalBroken) {
+    try {
+      const pollSnapshot = await buildAutopilotPollDigest(root, deps, {
+        now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
+      });
+      if (pollSnapshot?.digest) await writeAutopilotPollDigest(root, pollSnapshot.digest);
+    } catch { /* digest file is best effort */ }
+  }
+
   return {
     actions,
     blocked,
     idle: actions.length === 0 && blocked.length === 0,
-    stepWroteJournal,
+    ...(stepWroteJournal ? { stepWroteJournal } : {}),
     ...(journalBroken ? { error: journalBroken } : {}),
   };
 }
@@ -876,6 +924,164 @@ async function defaultSleep(ms, signal) {
 }
 
 export const MIN_INTERVAL_MS = 5000;
+
+const AUTOPILOT_POLL_DIGEST_FILE = path.join('.swarm', 'autopilot', 'last-poll-digest');
+
+function stableDigest(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function autopilotPollSnapshotIdle(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.wave) return false;
+  for (const run of Array.isArray(payload.runs) ? payload.runs : []) {
+    if ((run.journalStatus ?? null) !== (run.status ?? null)) return false;
+    const action = run.decision?.action;
+    if (action && action !== 'wait') return false;
+  }
+  const startReady = payload.startReady;
+  if (startReady && !startReady.depError && startReady.startable > 0
+    && startReady.cooldownOpen && !startReady.hasLiveRun && !startReady.hasBusy && startReady.capRoom) {
+    return false;
+  }
+  return true;
+}
+
+function journalEventFinger(events) {
+  const list = Array.isArray(events) ? events : [];
+  return list.map(event => {
+    if (!event || typeof event !== 'object') return null;
+    const out = { kind: event.kind };
+    if (event.id !== undefined) out.id = event.id;
+    if (event.status !== undefined) out.status = event.status;
+    if (event.action !== undefined) out.action = event.action;
+    if (event.run !== undefined) out.run = event.run;
+    if (event.resolved !== undefined) out.resolved = event.resolved;
+    if (event.wave !== undefined) out.wave = event.wave;
+    if (event.integrateKind !== undefined) out.integrateKind = event.integrateKind;
+    if (event.integrateRun !== undefined) out.integrateRun = event.integrateRun;
+    return out;
+  });
+}
+
+export async function readAutopilotPollDigest(root) {
+  try {
+    const text = await fs.readFile(path.join(root, AUTOPILOT_POLL_DIGEST_FILE), 'utf8');
+    const digest = text.trim();
+    return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    return null;
+  }
+}
+
+export async function writeAutopilotPollDigest(root, digest) {
+  if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) return;
+  const dir = path.join(root, '.swarm', 'autopilot');
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(root, AUTOPILOT_POLL_DIGEST_FILE);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, `${digest}\n`, { encoding: 'utf8', mode: 0o600 });
+  await fs.rename(tmp, file);
+}
+
+/** Stable digest of autopilot inputs and pending decisions (no side effects). */
+export async function buildAutopilotPollDigest(root, deps, { now = Date.now, legacyPlan = false, memory = null, observeContext = null } = {}) {
+  const nowMs = typeof now === 'function' ? now() : nowValue(now);
+  let events = [];
+  try { events = await deps.readJournal(root); } catch { return null; }
+  const eventList = Array.isArray(events) ? events : [];
+  const loadedRuns = await safe(() => deps.loadRuns(root), []);
+  const runs = (Array.isArray(loadedRuns) ? loadedRuns : []).slice(0, MAX_RUNS);
+  const plan = await safe(() => deps.readPlan(root), null);
+  const open = openIds(eventList);
+  const runParts = [];
+  for (const run of runs) {
+    const history = eventList.filter(e => e && e.kind === 'run' && e.id === run.id);
+    const last = history[history.length - 1];
+    const decision = decide(run, {
+      now: nowMs,
+      events: eventList,
+      plan,
+      manifest: runManifest(run, eventList),
+      runs,
+    });
+    runParts.push({
+      id: run.id,
+      status: run.status ?? null,
+      integrated: run.integrated === true,
+      integrable: run.integrable,
+      counts: run.counts ?? null,
+      pause: run.pause ?? null,
+      journalStatus: last?.status ?? null,
+      decision: decision
+        ? {
+          action: decision.action,
+          run: decision.run ?? null,
+          id: decision.id ?? null,
+          integrateKind: decision.integrateKind ?? null,
+        }
+        : null,
+    });
+  }
+  let startReady = null;
+  if (typeof deps.readyTickets === 'function') {
+    let ticketList = [];
+    let approvalList = [];
+    let depError = false;
+    try { ticketList = await deps.readyTickets(root); } catch { depError = true; ticketList = []; }
+    if (!depError && typeof deps.pendingApprovals === 'function') {
+      try { approvalList = await deps.pendingApprovals(root); } catch { depError = true; approvalList = []; }
+    }
+    const { startable, held } = pickReadyTickets({
+      tickets: Array.isArray(ticketList) ? ticketList : [],
+      approvals: Array.isArray(approvalList) ? approvalList : [],
+    });
+    let live = [];
+    let busy = [];
+    let capRoom = true;
+    const observed = observeContext && typeof observeContext === 'object' ? observeContext : null;
+    if (observed?.depError) depError = true;
+    if (!depError && observed && Array.isArray(observed.live)) {
+      live = observed.live;
+    } else if (!depError && typeof deps.liveRuns === 'function') {
+      try { live = await deps.liveRuns(root); if (!Array.isArray(live)) live = []; } catch { depError = true; }
+    }
+    if (!depError && observed && Array.isArray(observed.busy)) {
+      busy = observed.busy;
+    } else if (!depError && typeof deps.busyMarkers === 'function') {
+      try { busy = await deps.busyMarkers(); if (!Array.isArray(busy)) busy = []; } catch { depError = true; }
+    }
+    if (!depError && typeof deps.capRoom === 'function') {
+      try { capRoom = await deps.capRoom(root); } catch { depError = true; capRoom = false; }
+    }
+    const mem = memory && typeof memory === 'object' ? memory : {};
+    const hasLiveRun = (Array.isArray(live) && live.length > 0) || runs.some(r => r.status === 'running');
+    const hasBusy = Array.isArray(busy) && busy.some(m => m != null && m !== false);
+    startReady = {
+      depError,
+      startable: startable.length,
+      held: (held ?? []).length,
+      hasLiveRun,
+      hasBusy,
+      capRoom: capRoom !== false,
+      cooldownOpen: startReadyCooldownOpen(mem, nowMs),
+      lastAt: mem.startReadyLastAt ?? null,
+      lastLiveAt: mem.startReadyLastLiveAt ?? null,
+    };
+  }
+  const wave = legacyPlan ? nextWave(eventList, plan) : null;
+  const payload = {
+    v: 1,
+    legacyPlan: Boolean(legacyPlan),
+    events: journalEventFinger(eventList),
+    openBlockers: [...open].sort(),
+    runs: runParts,
+    wave: wave?.id ?? null,
+    startReady,
+  };
+  return { digest: stableDigest(payload), idle: autopilotPollSnapshotIdle(payload), payload };
+}
 
 export async function runAutopilot(root, deps, { intervalMs = 30000, once = false, maxSteps = Infinity, signal, sleep = defaultSleep, now = Date.now, legacyPlan = false } = {}) {
   const results = [];
@@ -891,6 +1097,7 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
     } finally {
       try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
     }
+    if (once && step && !step.stepWroteJournal) step.stepWroteJournal = false;
     noteAutopilotStep(root, step, { once });
     results.push(step);
     // A broken journal ends the loop: nothing it does could be remembered across steps by anyone else.
