@@ -95,6 +95,43 @@ function sendJson(res, method, obj) {
   send(res, method, 200, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
 }
 
+function sendJsonStatus(res, method, status, obj) {
+  send(res, method, status, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
+}
+
+const OWNER_BODY_LIMIT = 8 * 1024;
+
+function ownerRouteOf(pathname) {
+  if (pathname === '/api/owner/audit') return { route: 'audit' };
+  const match = /^\/api\/owner\/actions\/([^/]+)\/(prepare|decision)$/.exec(pathname);
+  if (!match) return null;
+  return { route: match[2] === 'prepare' ? 'prepare' : 'decision', itemId: match[1] };
+}
+
+function agentSessionOf(req) {
+  const marker = req.headers['x-swarm-agent-session'];
+  return marker !== undefined && marker !== null && String(marker).length > 0;
+}
+
+async function readJsonBody(req, limit = OWNER_BODY_LIMIT) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) return { error: 'too-large' };
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim();
+  if (!text) return { value: {} };
+  try {
+    const value = JSON.parse(text);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'invalid' };
+    return { value };
+  } catch {
+    return { error: 'invalid' };
+  }
+}
+
 function sse(event, data) {
   return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
 }
@@ -261,6 +298,7 @@ export function createWatchServer(opts) {
     // swarm remote: the board is also reached through `tailscale serve`, which proxies from the tailnet to this loopback port. `hosts` are the names it is
     // reached by and `login` is the tailnet login allowed to use it (Tailscale sets that header on what it proxies). Nothing else is ever listened on.
     remote,
+    ownerActions,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
@@ -342,12 +380,73 @@ export function createWatchServer(opts) {
     streamManager.open(res, run);
   }
 
+  function tailnetVerifiedForOwner(req, host, localHost) {
+    if (!remote || localHost) return false;
+    if (req.headers['tailscale-funnel-request'] !== undefined) return false;
+    const login = req.headers['tailscale-user-login'];
+    const named = remote.hosts.includes(String(host).toLowerCase());
+    if (!named || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) return false;
+    return true;
+  }
+
+  async function handleOwner(req, res, method, u, ownerRoute) {
+    if (!remote) return sendText(res, method, 404, 'not found');
+    const host = req.headers.host;
+    const localHost = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+    if (remote) {
+      const login = req.headers['tailscale-user-login'];
+      const named = remote.hosts.includes(String(host).toLowerCase());
+      if (!named || req.headers['tailscale-funnel-request'] !== undefined || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) {
+        return sendJsonStatus(res, method, 401, { error: 'not-signed-in', message: 'a Tailscale owner identity is required' });
+      }
+    }
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const tokenOk = headerOk;
+    const ownerReq = {
+      tokenOk,
+      tokenInQuery: typeof queryToken === 'string',
+      local: u.searchParams.get('local') === '1',
+      agentSession: agentSessionOf(req),
+      tailnetVerified: tailnetVerifiedForOwner(req, host, localHost),
+      headers: req.headers,
+    };
+    if (ownerRoute.route === 'audit') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+      }
+      const out = await ownerActions.audit(ownerReq);
+      return sendJsonStatus(res, method, out.status, out.body);
+    }
+    if (method !== 'POST') {
+      return send(res, method, 405, { Allow: 'POST', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+    }
+    const bodyRead = await readJsonBody(req);
+    if (bodyRead.error === 'too-large') {
+      return sendJsonStatus(res, method, 413, { error: 'payload-too-large', message: 'request body exceeds 8 KB' });
+    }
+    if (bodyRead.error === 'invalid') {
+      return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
+    }
+    const out = ownerRoute.route === 'prepare'
+      ? await ownerActions.prepare(ownerRoute.itemId, ownerReq, bodyRead.value)
+      : await ownerActions.decide(ownerRoute.itemId, bodyRead.value, ownerReq);
+    return sendJsonStatus(res, method, out.status, out.body);
+  }
+
   async function handle(req, res) {
     const method = req.method;
+    if (!server) return sendText(res, method, 421, 'misdirected request');
+    const u = new URL(req.url || '/', 'http://127.0.0.1');
+    const ownerRoute = ownerRouteOf(u.pathname);
+    if (ownerRoute) {
+      if (!ownerActions) return sendText(res, method, 404, 'not found');
+      return handleOwner(req, res, method, u, ownerRoute);
+    }
     if (method !== 'GET' && method !== 'HEAD') {
       return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }, 'method not allowed');
     }
-    if (!server) return sendText(res, method, 421, 'misdirected request');
     const host = req.headers.host;
     const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     if (remote) {
@@ -359,7 +458,6 @@ export function createWatchServer(opts) {
     } else if (!local) {
       return sendText(res, method, 421, 'misdirected request');
     }
-    const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
     if (pathname === '/api/health') {
       if (remote || !local) return sendText(res, method, 421, 'misdirected request');

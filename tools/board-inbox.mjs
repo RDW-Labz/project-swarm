@@ -10,6 +10,7 @@ import { readLedger, isApproved } from './tickets.mjs';
 import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
 import { sanitizeText } from './journal.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 
 // Secrets redacted, control characters (terminal escapes) removed, length bounded: everything shown here came from a file on disk.
 const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/;   // controls, C1, zero-width and text-direction characters
@@ -61,6 +62,23 @@ const isFyi = it => it.kind === 'human' && (String(it.id).startsWith('prune-') |
 
 // The commands (with a label) the owner can run at the computer, and for a blocker always a plain "do this" line.
 const plain = value => !UNSAFE.test(String(value)) && String(value) !== '';
+
+function decisionProtectedTopic(it) {
+  if (it?.kind !== 'decision') return undefined;
+  const fields = [
+    it.text ?? it.title,
+    it.title,
+    it.id,
+    it.default ?? it.choice,
+    ...(Array.isArray(it.choices) ? it.choices : []),
+    ...(Array.isArray(it.options) ? it.options : []),
+  ];
+  for (const field of fields) {
+    if (field !== undefined && field !== null && isProtectedTopic(String(field))) return true;
+  }
+  return false;
+}
+
 function nextFor(item, root) {
   if (![root, String(item.id)].every(plain)) return { commands: [], next: null };
   const swarm = `swarm --root ${quote(root)}`;
@@ -119,7 +137,29 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
       const mine = [];
       for (const it of await collect([project.root], deps)) {
         const phone = asked.get(`${project.root}|${it.kind}|${it.id}`);
-        mine.push({ kind: it.kind, id: txt(it.id, 80), title: txt(it.title, TITLE_MAX), since: it.since ?? null, unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0, steps: (it.steps ?? []).length, choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null, ...stepsOf(nextFor(it, project.root)), fyi: isFyi(it), phone: phoneOf(phone, now) });
+        mine.push({
+          kind: it.kind,
+          id: txt(it.id, 80),
+          title: txt(it.title, TITLE_MAX),
+          text: txt(it.text ?? it.title, TITLE_MAX),
+          ...(it.kind === 'decision' ? { protectedTopic: decisionProtectedTopic(it) } : {}),
+          ...(it.boardSafe === true ? { boardSafe: true } : {}),
+          ...(it.kind === 'decision' ? (() => {
+            const choiceOptions = Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)).filter(Boolean) : [];
+            const defaultChoice = it.default !== undefined ? txt(String(it.default), 40) : null;
+            return {
+              ...(defaultChoice ? { defaultChoice } : {}),
+              ...(choiceOptions.length ? { choiceOptions } : {}),
+            };
+          })() : {}),
+          since: it.since ?? null,
+          unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
+          steps: (it.steps ?? []).length,
+          choices: Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)) : null,
+          ...stepsOf(nextFor(it, project.root)),
+          fyi: isFyi(it),
+          phone: phoneOf(phone, now),
+        });
       }
       const ledger = await ledgerOf(project.root).catch(() => null);
       for (const t of ledger?.tickets ?? []) {
@@ -157,7 +197,9 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
     // The items that unblock the most come first, then the oldest; a project's list is capped, and the cap is reported, not hidden.
     mine.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)));
     hidden += Math.max(0, mine.length - MAX_PER_PROJECT);
-    for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
+    for (const it of mine.slice(0, MAX_PER_PROJECT)) {
+      items.push({ projectId: project.id, project: txt(project.name, 80), projectRoot: project.root, ...it });
+    }
   }
   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
   const phoneIssue = rec => {

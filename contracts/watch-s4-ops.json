@@ -170,7 +170,7 @@
         "tags": ["owner-actions"],
         "operationId": "prepareOwnerAction",
         "summary": "Prepare an owner decision",
-        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This route is unavailable to agent sessions and to remote-board requests with local=1.",
+        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. Only inbox item kinds in allowedKinds may be prepared; every other kind, including unknown kinds, is refused server-side by default. Decision items require boardSafe true (set only when the decision is raised with swarm decision --board-safe); decisions about merge, deploy, spend, caps, keys, or migrations are never board-safe and are refused with decision-not-board-safe (403). Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This route is unavailable to agent sessions and to remote-board requests with local=1.",
         "security": [
           {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
@@ -179,6 +179,16 @@
             "$ref": "#/components/parameters/ItemId"
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerPrepareRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "$ref": "#/components/responses/PrepareOwnerAction"
@@ -187,13 +197,33 @@
             "$ref": "#/components/responses/NotSignedIn"
           },
           "403": {
-            "$ref": "#/components/responses/OwnerForbidden"
+            "description": "Owner forbidden or decision-not-board-safe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {"$ref": "#/components/schemas/Error"},
+                    {"$ref": "#/components/schemas/DecisionNotBoardSafe"}
+                  ]
+                }
+              }
+            }
           },
           "409": {
             "$ref": "#/components/responses/ConfirmConflict"
           },
           "422": {
-            "$ref": "#/components/responses/NotOwnerDecidable"
+            "description": "Not owner-decidable or unknown choice.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {"$ref": "#/components/schemas/Error"},
+                    {"$ref": "#/components/schemas/UnknownChoice"}
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -203,7 +233,7 @@
         "tags": ["owner-actions"],
         "operationId": "submitOwnerDecision",
         "summary": "Approve or deny an owner-decidable request",
-        "description": "Step 2 of the confirmation flow. The server refuses merge, deploy, cap-raise, spend, key, and migration actions regardless of client input. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). Agent-session markers and remote-board local=1 requests are always refused.",
+        "description": "Step 2 of the confirmation flow. Only item kinds in allowedKinds may be approved or denied; unknown kinds are refused server-side by default, and merge, deploy, cap-raise, spend, key, and migration kinds remain refused regardless of client input. Decision items require boardSafe true on the inbox item; otherwise the server responds with decision-not-board-safe (403). Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). Agent-session markers and remote-board local=1 requests are always refused.",
         "security": [
           {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
@@ -230,7 +260,17 @@
             "$ref": "#/components/responses/NotSignedIn"
           },
           "403": {
-            "$ref": "#/components/responses/OwnerForbidden"
+            "description": "Owner forbidden or decision-not-board-safe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {"$ref": "#/components/schemas/Error"},
+                    {"$ref": "#/components/schemas/DecisionNotBoardSafe"}
+                  ]
+                }
+              }
+            }
           },
           "409": {
             "$ref": "#/components/responses/ConfirmConflict"
@@ -554,15 +594,58 @@
           {"type": "object", "additionalProperties": true}
         ]
       },
-      "OwnerDecisionRequest": {
+      "OwnerPrepareRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["decision", "confirm"],
         "properties": {
-          "decision": {"type": "string", "enum": ["approve", "deny"]},
-          "confirm": {"type": "string", "minLength": 1},
-          "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+          "choice": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required for decision items: must match one of the item option labels exactly."
+          }
         }
+      },
+      "OwnerDecisionRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["decision", "confirm"],
+            "properties": {
+              "decision": {"type": "string", "enum": ["approve", "deny"]},
+              "confirm": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["choice", "confirm"],
+            "properties": {
+              "choice": {"type": "string", "minLength": 1},
+              "confirm": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+            }
+          }
+        ]
+      },
+      "UnknownChoice": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {"type": "string", "const": "unknown-choice"},
+          "message": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      },
+      "OwnerDecisionOption": {
+        "type": "object",
+        "required": ["label"],
+        "properties": {
+          "label": {"type": "string"},
+          "recommended": {"type": "boolean"}
+        },
+        "additionalProperties": false
       },
       "PrepareOwnerAction": {
         "type": "object",
@@ -592,7 +675,7 @@
           "at": {"type": "string", "format": "date-time"},
           "actor": {"type": "string"},
           "itemId": {"type": "string"},
-          "kind": {"type": "string"},
+          "kind": {"$ref": "#/components/schemas/allowedKinds"},
           "decision": {"type": "string", "enum": ["approve", "deny"]},
           "result": {"type": "string"},
           "machine": {"type": "string"}
@@ -603,10 +686,46 @@
         "type": "array",
         "items": {"$ref": "#/components/schemas/AuditEntry"}
       },
+      "allowedKinds": {
+        "type": "string",
+        "description": "The only item kinds the board may approve or deny; every other kind is refused server-side.",
+        "enum": ["handbuild", "decision", "proposed-ticket", "scope"]
+      },
       "refusedKinds": {
         "type": "string",
         "description": "Action kinds that are always refused server-side, regardless of client input.",
         "enum": ["merge", "deploy", "cap-raise", "spend", "key", "migration"]
+      },
+      "OwnerInboxItem": {
+        "type": "object",
+        "description": "A Needs-you inbox row exposed to owner actions. Decisions are board-answerable only when boardSafe is true (set at raise time via swarm decision --board-safe). Decisions about merge, deploy, spend, caps, keys, or migrations are never board-safe.",
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"$ref": "#/components/schemas/allowedKinds"},
+          "title": {"type": "string"},
+          "text": {"type": ["string", "null"]},
+          "boardSafe": {
+            "type": "boolean",
+            "default": false,
+            "description": "True only when the decision journal event was raised with boardSafe. Default false. Decisions about merge, deploy, spend, caps, keys, or migrations are never board-safe."
+          },
+          "choices": {"type": "array", "items": {"type": "string"}},
+          "options": {
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/OwnerDecisionOption"},
+            "description": "Decision options with recommended true only on the recorded default choice."
+          }
+        },
+        "additionalProperties": true
+      },
+      "DecisionNotBoardSafe": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {"type": "string", "const": "decision-not-board-safe"},
+          "message": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
       },
       "Error": {
         "type": "object",
@@ -691,6 +810,12 @@
         "description": "The request is not from the allowed tailnet owner, carries an agent-session marker, uses remote local=1, or names an action kind that is refused server-side.",
         "content": {
           "application/json": {"schema": {"$ref": "#/components/schemas/Error"}}
+        }
+      },
+      "DecisionNotBoardSafe": {
+        "description": "The decision was not raised as board-safe or its text, id, or choices name a protected topic (merge, deploy, spend, caps, keys, migrations).",
+        "content": {
+          "application/json": {"schema": {"$ref": "#/components/schemas/DecisionNotBoardSafe"}}
         }
       },
       "ConfirmConflict": {

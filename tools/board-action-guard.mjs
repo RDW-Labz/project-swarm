@@ -9,21 +9,97 @@ export const REFUSED_KINDS = Object.freeze([
   'migration',
 ]);
 
+export const ALLOWED_KINDS = Object.freeze([
+  'handbuild',
+  'decision',
+  'proposed-ticket',
+  'scope',
+]);
+
+const ALLOWED_ITEM_KINDS = new Set(ALLOWED_KINDS);
+
 const SOURCES = new Set(['board', 'phone']);
 const ALLOWED_DECISIONS = new Set(['approve', 'deny']);
 
-// A refused kind is an exact token after trimming and case-folding, or a refused
-// token followed by a separator. Separators are any characters outside ASCII
-// letters and digits, so `merge-request` is refused while `merger` is not.
-const REFUSED_KIND_RE = /^(?:merge|deploy|cap-raise|spend|key|migration)(?:$|[^a-z0-9])/i;
+const REFUSED_WORDS = new Set([
+  'merge',
+  'deploy',
+  'cap',
+  'budget',
+  'spend',
+  'key',
+  'keys',
+  'secret',
+  'migration',
+  'migrate',
+  'rollback-prod',
+]);
+
+export function kindWords(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const spaced = trimmed
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/[^\w\s-]+/g, ' ');
+  return spaced.toLowerCase().split(/[-_.: \t]+/).filter(Boolean);
+}
+
+const PROTECTED_TOPIC_WORDS = new Set([
+  'merge',
+  'merged',
+  'merging',
+  'deploy',
+  'deployed',
+  'deployment',
+  'spend',
+  'spending',
+  'cap',
+  'caps',
+  'budget',
+  'key',
+  'keys',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'migration',
+  'migrations',
+  'migrate',
+  'rollback-prod',
+]);
+
+/** True when decision text must not be marked board-safe or answered from the board. */
+export function isProtectedTopic(text) {
+  if (typeof text !== 'string') return true;
+  const words = kindWords(text);
+  if (words === null) return true;
+  if (words.length === 0) return false;
+  const lower = text.toLowerCase();
+  if (lower.includes('pull request') && words.includes('merge')) return true;
+  for (const word of words) {
+    if (PROTECTED_TOPIC_WORDS.has(word)) return true;
+  }
+  return false;
+}
+
+export function isRefusedActionKind(value) {
+  const words = kindWords(value);
+  if (words === null) return true;
+  if (words.length === 0) return true;
+  if (words.includes('limit') && words.includes('raise')) return true;
+  if (REFUSED_WORDS.has(words.join('-'))) return true;
+  if (REFUSED_KINDS.includes(words.join('-'))) return true;
+  for (const word of words) {
+    if (REFUSED_WORDS.has(word)) return true;
+    if (REFUSED_KINDS.includes(word)) return true;
+  }
+  return false;
+}
 
 function normalizedString(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : null;
-}
-
-function isRefusedKind(value) {
-  const normalized = normalizedString(value);
-  return normalized !== null && REFUSED_KIND_RE.test(normalized);
 }
 
 export function guardBoardAction({ kind, source, itemKind } = {}) {
@@ -32,13 +108,19 @@ export function guardBoardAction({ kind, source, itemKind } = {}) {
   }
 
   const normalizedKind = normalizedString(kind);
-  if (normalizedKind === null || !ALLOWED_DECISIONS.has(normalizedKind) || isRefusedKind(normalizedKind)) {
+  if (normalizedKind === null || !ALLOWED_DECISIONS.has(normalizedKind) || isRefusedActionKind(normalizedKind)) {
     return { allowed: false, reason: 'kind-refused' };
   }
 
   const normalizedItemKind = normalizedString(itemKind);
-  if (normalizedItemKind === null || normalizedItemKind === '' || isRefusedKind(normalizedItemKind)) {
+  if (normalizedItemKind === null || normalizedItemKind === '') {
     return { allowed: false, reason: 'item-kind-refused' };
+  }
+  if (isRefusedActionKind(itemKind)) {
+    return { allowed: false, reason: 'item-kind-refused' };
+  }
+  if (!ALLOWED_ITEM_KINDS.has(normalizedItemKind)) {
+    return { allowed: false, reason: 'not an allowed action kind' };
   }
 
   return { allowed: true, reason: 'allowed' };
