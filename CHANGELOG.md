@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.165.1
+
+The board shows no money figures it cannot prove, and Live no longer flaps.
+- **Board:** billed today, billed all time, list value, the cap cells and Spend today are removed from the board, project page, overview and their API responses (spend files and cap enforcement are unchanged).
+- **Board:** the project page Live chip has one owner and says connecting only after two missed polls; the run stream sends a ping every 10 seconds.
+- **Scope:** a project can list extra root files in scopeRootFiles, and one bad ticket is rejected alone instead of the whole split.
+- **S2:** build tickets own their tests; job ignoreTests can exceed 100 files with a reason.
+
 ## 1.165.0
 
 Resolved blockers never return, generated files never dirty the tree, and the update restarts servers safely.
