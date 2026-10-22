@@ -91,7 +91,7 @@ export const COMMANDS = [
   command('decision', 'Record a default the swarm picked, for you to confirm.', 'none', '--choice --option --id --board-safe'),
   command('resolve', 'Close a blocker you have dealt with (it leaves the inbox and the board).', 'none'),
   command('backlog', 'Queue goals to start when a run is waiting.', 'none', '--paths --max-usd'),
-  command('autopilot', 'Drive the project forward with no model.', 'none', '--once --interval --max-steps'),
+  command('autopilot', 'Drive the project forward with no model.', 'none', '--once --interval --max-steps --legacy-plan'),
   command('completion', 'Print the zsh completion script.'),
   command('help', 'Show command usage.'),
 ];
