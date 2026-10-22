@@ -1264,7 +1264,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (!omActive || tool !== 'Bash') return decision;
     if (decision.allow) {
       if (decision.approval) return decision;
-      if (orchestratorModeCommandAllowed(ti.command, { root, cwd })) return decision;
+      if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
       return omDeny(decision.files ?? []);
     }
     if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
@@ -1273,7 +1273,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     if (decision.reason === GH_PR_MERGE_BLOCKED || decision.reason === MERGE_BLOCKED_REASON) return decision;
     if (decision.reason?.includes(DENY_ADVICE)) return decision;
-    if (!orchestratorModeCommandAllowed(ti.command, { root, cwd })) return omDeny(decision.files ?? []);
+    if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(decision.files ?? []);
     return decision;
   };
   const approvals = activeApprovals(root, now());
@@ -1305,6 +1305,12 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel === null && typeof raw === 'string' && raw && underAbs(absRaw, protectedAbsolute(h)) && !isClaudeMemoryPathOutside(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    if (omActive && rel !== null) {
+      const rlow = rel.replace(/\\/g, '/');
+      if (rlow === ORCHESTRATOR_MODE_OFF_FILE || rlow === OFF_FILE) {
+        return omDeny([rel]);
+      }
+    }
     if (rel === null || AllowRel(rel)) return { allow: true };
     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
     if (rel !== null && produced.has(rel)) {

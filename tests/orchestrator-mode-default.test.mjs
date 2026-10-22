@@ -75,9 +75,9 @@ test('handbuild-guard subprocess: default-on allowlist at project root', async t
     assert.equal(denied, true, command);
   }
   const allowCommands = [
-    'git status -s | head -5',
+    'git status -s | head -n 5',
     'swarm tickets --status blocked',
-    'grep -n foo f | head -50',
+    'grep -n foo f | head -n 50',
     'gh pr view 3',
   ];
   for (const command of allowCommands) {
