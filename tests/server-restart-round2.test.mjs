@@ -259,10 +259,10 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
   });
 
   let seq = 0;
-  let releaseFirstHold;
-  const firstMayContinue = new Promise(resolve => { releaseFirstHold = resolve; });
-  let firstHoldingLockBody = false;
-  let secondRestartStarted = false;
+  let releaseHolderGate;
+  const holderMayContinue = new Promise(resolve => { releaseHolderGate = resolve; });
+  let lockHolderRunId = null;
+  let holdingLockBody = false;
   let lockWaitSleepCalls = 0;
   let pidLooksAlive = true;
   const criticalEvents = [];
@@ -275,19 +275,18 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
   };
 
   const run = async () => {
-    const callId = ++seq;
-    if (callId === 2) secondRestartStarted = true;
+    const runId = ++seq;
     let insideCritical = false;
     const enterCritical = () => {
       if (!insideCritical) {
         insideCritical = true;
-        criticalEvents.push(`enter-${callId}`);
+        criticalEvents.push(`enter-${runId}`);
       }
     };
     const exitCritical = () => {
       if (insideCritical) {
         insideCritical = false;
-        criticalEvents.push(`exit-${callId}`);
+        criticalEvents.push(`exit-${runId}`);
       }
     };
     try {
@@ -300,10 +299,13 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
           const targetsFakeOldPid = args.some(arg => String(arg) === String(fakeOldPid));
           if (targetsFakeOldPid) {
             enterCritical();
-            if (callId === 1) {
-              firstHoldingLockBody = true;
-              await firstMayContinue;
-              firstHoldingLockBody = false;
+            if (lockHolderRunId === null) {
+              lockHolderRunId = runId;
+            }
+            if (runId === lockHolderRunId) {
+              holdingLockBody = true;
+              await holderMayContinue;
+              holdingLockBody = false;
             }
           }
           return psMocks(cmd, args);
@@ -316,16 +318,16 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
         },
         spawnImpl: () => ({ on: () => {}, unref: () => {}, pid: null }),
         sleep: async ms => {
-          if (firstHoldingLockBody && secondRestartStarted) {
+          if (holdingLockBody && runId !== lockHolderRunId) {
             lockWaitSleepCalls += 1;
-            releaseFirstHold();
+            releaseHolderGate();
           }
           await new Promise(r => setTimeout(r, typeof ms === 'number' ? ms : 0));
         },
       });
     } finally {
       exitCritical();
-      if (callId === 1) pidLooksAlive = true;
+      if (runId === lockHolderRunId) pidLooksAlive = true;
     }
   };
 
