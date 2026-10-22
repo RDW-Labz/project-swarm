@@ -1,0 +1,726 @@
+{"at":"2026-10-21T02:11:51.481Z","event":"split","tickets":229,"run":"1792548393651-28032016","ok":true}
+{"at":"2026-10-21T02:59:30.294Z","event":"transition","id":"T-9001","from":"todo","to":"cancelled","by":"owner","note":"false Day-0 signal (scope check keyword match; the roadmap only mentions these words in its risk rules)"}
+{"at":"2026-10-21T02:59:30.398Z","event":"transition","id":"T-9002","from":"todo","to":"cancelled","by":"owner","note":"false Day-0 signal (scope check keyword match; the roadmap only mentions these words in its risk rules)"}
+{"at":"2026-10-21T02:59:30.506Z","event":"transition","id":"T-9003","from":"todo","to":"cancelled","by":"owner","note":"false Day-0 signal (scope check keyword match; the roadmap only mentions these words in its risk rules)"}
+{"at":"2026-10-21T02:59:30.638Z","event":"transition","id":"T-9004","from":"todo","to":"cancelled","by":"owner","note":"false Day-0 signal (scope check keyword match; the roadmap only mentions these words in its risk rules)"}
+{"at":"2026-10-21T03:08:50.235Z","event":"approve","by":"owner","scopeHash":"9f7a4d502a540b227b88f796b0fa49b0337d8e0ab3fa34305e85c4237ad6e57e","ticketsHash":"efd5bf44cf397ba55f8b3e865b420077c49b9d599112c4a6b56c317581a5c511"}
+{"at":"2026-10-21T03:09:38.775Z","event":"transition","id":"T-0001","from":"todo","to":"blocked","by":"owner","note":"hold: R-001 already built elsewhere (wave 2026-10-21)"}
+{"at":"2026-10-21T03:09:44.103Z","event":"transition","id":"T-0002","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:44.907Z","event":"transition","id":"T-0003","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:46.433Z","event":"transition","id":"T-0004","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:47.191Z","event":"transition","id":"T-0005","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:47.636Z","event":"transition","id":"T-0006","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:48.590Z","event":"transition","id":"T-0007","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-001"}
+{"at":"2026-10-21T03:09:49.470Z","event":"transition","id":"T-0008","from":"todo","to":"blocked","by":"owner","note":"hold: tools/autopilot.mjs [fix/no-output-blockers]; built:R-002"}
+{"at":"2026-10-21T03:09:50.441Z","event":"transition","id":"T-0009","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-002"}
+{"at":"2026-10-21T03:09:51.512Z","event":"transition","id":"T-0010","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-002"}
+{"at":"2026-10-21T03:09:51.995Z","event":"transition","id":"T-0011","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-002"}
+{"at":"2026-10-21T03:09:52.885Z","event":"transition","id":"T-0012","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-002"}
+{"at":"2026-10-21T03:09:54.342Z","event":"transition","id":"T-0013","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-002"}
+{"at":"2026-10-21T03:09:54.965Z","event":"transition","id":"T-0014","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-003"}
+{"at":"2026-10-21T03:09:55.540Z","event":"transition","id":"T-0015","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-003"}
+{"at":"2026-10-21T03:09:56.757Z","event":"transition","id":"T-0016","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-003"}
+{"at":"2026-10-21T03:09:57.945Z","event":"transition","id":"T-0017","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-003"}
+{"at":"2026-10-21T03:09:59.491Z","event":"transition","id":"T-0018","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-003"}
+{"at":"2026-10-21T03:09:59.785Z","event":"transition","id":"T-0019","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:00.366Z","event":"transition","id":"T-0020","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:01.443Z","event":"transition","id":"T-0021","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:03.197Z","event":"transition","id":"T-0022","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:04.526Z","event":"transition","id":"T-0023","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:05.384Z","event":"transition","id":"T-0024","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:06.654Z","event":"transition","id":"T-0025","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:07.789Z","event":"transition","id":"T-0026","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:08.649Z","event":"transition","id":"T-0027","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs; built:R-004"}
+{"at":"2026-10-21T03:10:09.691Z","event":"transition","id":"T-0028","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:10.250Z","event":"transition","id":"T-0029","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-004"}
+{"at":"2026-10-21T03:10:11.239Z","event":"transition","id":"T-0030","from":"todo","to":"blocked","by":"owner","note":"hold: tools/self-approval.mjs [fix/self-approval-claude-word]; built:R-005"}
+{"at":"2026-10-21T03:10:12.115Z","event":"transition","id":"T-0031","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-005"}
+{"at":"2026-10-21T03:10:12.600Z","event":"transition","id":"T-0032","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-005"}
+{"at":"2026-10-21T03:10:13.454Z","event":"transition","id":"T-0033","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-005"}
+{"at":"2026-10-21T03:10:15.213Z","event":"transition","id":"T-0034","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-005"}
+{"at":"2026-10-21T03:10:16.943Z","event":"transition","id":"T-0035","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-005"}
+{"at":"2026-10-21T03:10:18.129Z","event":"transition","id":"T-0037","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:19.797Z","event":"transition","id":"T-0039","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:20.564Z","event":"transition","id":"T-0042","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:21.011Z","event":"transition","id":"T-0044","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:22.275Z","event":"transition","id":"T-0046","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:23.238Z","event":"transition","id":"T-0047","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-011"}
+{"at":"2026-10-21T03:10:24.230Z","event":"transition","id":"T-0048","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]; built:R-011"}
+{"at":"2026-10-21T03:10:25.023Z","event":"transition","id":"T-0050","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:25.582Z","event":"transition","id":"T-0052","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:26.519Z","event":"transition","id":"T-0053","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-014"}
+{"at":"2026-10-21T03:10:27.075Z","event":"transition","id":"T-0054","from":"todo","to":"blocked","by":"owner","note":"hold: tools/tickets.mjs [fix/scope-fixes]; built:R-014"}
+{"at":"2026-10-21T03:10:27.596Z","event":"transition","id":"T-0055","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]; built:R-014"}
+{"at":"2026-10-21T03:10:28.805Z","event":"transition","id":"T-0059","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-011; built:R-014"}
+{"at":"2026-10-21T03:10:29.357Z","event":"transition","id":"T-0062","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-014"}
+{"at":"2026-10-21T03:10:30.461Z","event":"transition","id":"T-0068","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:10:32.112Z","event":"transition","id":"T-0080","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:10:32.987Z","event":"transition","id":"T-0085","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:10:33.467Z","event":"transition","id":"T-0090","from":"todo","to":"blocked","by":"owner","note":"hold: tools/scope-commands.mjs [fix/scope-fixes]"}
+{"at":"2026-10-21T03:10:34.004Z","event":"transition","id":"T-0091","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-021"}
+{"at":"2026-10-21T03:10:35.462Z","event":"transition","id":"T-0092","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-021"}
+{"at":"2026-10-21T03:10:36.264Z","event":"transition","id":"T-0093","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-021"}
+{"at":"2026-10-21T03:10:38.756Z","event":"transition","id":"T-0094","from":"todo","to":"blocked","by":"owner","note":"hold: tests/verify-local.test.mjs [feat/verify-local]; built:R-021"}
+{"at":"2026-10-21T03:10:40.153Z","event":"transition","id":"T-0095","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs; built:R-021"}
+{"at":"2026-10-21T03:10:42.354Z","event":"transition","id":"T-0096","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-022"}
+{"at":"2026-10-21T03:10:42.838Z","event":"transition","id":"T-0097","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-022"}
+{"at":"2026-10-21T03:10:43.206Z","event":"transition","id":"T-0098","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-022"}
+{"at":"2026-10-21T03:10:43.588Z","event":"transition","id":"T-0099","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-022"}
+{"at":"2026-10-21T03:10:45.175Z","event":"transition","id":"T-0100","from":"todo","to":"blocked","by":"owner","note":"hold: tools/lanes.mjs [fix/crash-fixes,feat/test-isolation]; built:R-022"}
+{"at":"2026-10-21T03:10:47.062Z","event":"transition","id":"T-0101","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023; built:R-024"}
+{"at":"2026-10-21T03:10:48.667Z","event":"transition","id":"T-0102","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025; built:R-026; built:R-029"}
+{"at":"2026-10-21T03:10:50.929Z","event":"transition","id":"T-0103","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023"}
+{"at":"2026-10-21T03:10:51.782Z","event":"transition","id":"T-0104","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-024"}
+{"at":"2026-10-21T03:10:52.282Z","event":"transition","id":"T-0105","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025"}
+{"at":"2026-10-21T03:10:53.768Z","event":"transition","id":"T-0106","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025"}
+{"at":"2026-10-21T03:10:54.922Z","event":"transition","id":"T-0107","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025"}
+{"at":"2026-10-21T03:10:55.381Z","event":"transition","id":"T-0108","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-026"}
+{"at":"2026-10-21T03:10:56.495Z","event":"transition","id":"T-0111","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:10:57.005Z","event":"transition","id":"T-0112","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:10:57.637Z","event":"transition","id":"T-0113","from":"todo","to":"blocked","by":"owner","note":"hold: tools/board-data.mjs [PR216,PR215,PR211,PR210,PR207]; built:R-023; built:R-024"}
+{"at":"2026-10-21T03:10:57.998Z","event":"transition","id":"T-0114","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:10:59.203Z","event":"transition","id":"T-0115","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023"}
+{"at":"2026-10-21T03:11:00.003Z","event":"transition","id":"T-0116","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023"}
+{"at":"2026-10-21T03:11:01.243Z","event":"transition","id":"T-0117","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-024"}
+{"at":"2026-10-21T03:11:03.461Z","event":"transition","id":"T-0118","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025"}
+{"at":"2026-10-21T03:11:05.263Z","event":"transition","id":"T-0119","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-025"}
+{"at":"2026-10-21T03:11:07.611Z","event":"transition","id":"T-0120","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-026"}
+{"at":"2026-10-21T03:11:09.170Z","event":"transition","id":"T-0123","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:11:10.393Z","event":"transition","id":"T-0124","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:11:11.463Z","event":"transition","id":"T-0125","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023"}
+{"at":"2026-10-21T03:11:11.983Z","event":"transition","id":"T-0126","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-024"}
+{"at":"2026-10-21T03:11:12.444Z","event":"transition","id":"T-0127","from":"todo","to":"blocked","by":"owner","note":"hold: tests/board-worktrees.test.mjs [PR207]; built:R-025"}
+{"at":"2026-10-21T03:11:12.891Z","event":"transition","id":"T-0128","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-026"}
+{"at":"2026-10-21T03:11:13.955Z","event":"transition","id":"T-0131","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-029"}
+{"at":"2026-10-21T03:11:14.802Z","event":"transition","id":"T-0132","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]; tools/watch-assets/project.js [PR215,PR211,PR210]; tools/watch-assets/project.html [PR210]"}
+{"at":"2026-10-21T03:11:16.042Z","event":"transition","id":"T-0133","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]; built:R-024"}
+{"at":"2026-10-21T03:11:17.507Z","event":"transition","id":"T-0134","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]; tools/watch-assets/board.css [PR207]; built:R-025"}
+{"at":"2026-10-21T03:11:19.562Z","event":"transition","id":"T-0135","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]; built:R-026"}
+{"at":"2026-10-21T03:11:21.003Z","event":"transition","id":"T-0136","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/project.js [PR215,PR211,PR210]; tools/watch-assets/project.html [PR210]"}
+{"at":"2026-10-21T03:11:21.832Z","event":"transition","id":"T-0137","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]"}
+{"at":"2026-10-21T03:11:22.621Z","event":"transition","id":"T-0138","from":"todo","to":"blocked","by":"owner","note":"hold: tools/watch-assets/board.js [PR216,PR215,PR214,PR210,PR207]; tools/watch-assets/orchestrator-view.js [PR214]; built:R-029"}
+{"at":"2026-10-21T03:11:23.796Z","event":"transition","id":"T-0139","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-023; built:R-024; built:R-025"}
+{"at":"2026-10-21T03:11:25.260Z","event":"transition","id":"T-0145","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:11:27.050Z","event":"transition","id":"T-0150","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:11:27.779Z","event":"transition","id":"T-0152","from":"todo","to":"blocked","by":"owner","note":"hold: tools/lanes.mjs [fix/crash-fixes,feat/test-isolation]"}
+{"at":"2026-10-21T03:11:28.952Z","event":"transition","id":"T-0154","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:11:30.587Z","event":"transition","id":"T-0159","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:11:31.677Z","event":"transition","id":"T-0160","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-034"}
+{"at":"2026-10-21T03:11:33.159Z","event":"transition","id":"T-0161","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-034"}
+{"at":"2026-10-21T03:11:34.018Z","event":"transition","id":"T-0162","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-034"}
+{"at":"2026-10-21T03:11:34.998Z","event":"transition","id":"T-0163","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-034"}
+{"at":"2026-10-21T03:11:36.220Z","event":"transition","id":"T-0164","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs; built:R-034"}
+{"at":"2026-10-21T03:11:37.579Z","event":"transition","id":"T-0165","from":"todo","to":"blocked","by":"owner","note":"hold: tools/field-export.mjs [feat/field-data]; built:R-035"}
+{"at":"2026-10-21T03:11:38.042Z","event":"transition","id":"T-0166","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-035"}
+{"at":"2026-10-21T03:11:39.016Z","event":"transition","id":"T-0167","from":"todo","to":"blocked","by":"owner","note":"hold: tools/field-report.mjs [feat/field-data]; built:R-035"}
+{"at":"2026-10-21T03:11:39.731Z","event":"transition","id":"T-0168","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-035"}
+{"at":"2026-10-21T03:11:40.339Z","event":"transition","id":"T-0169","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-035"}
+{"at":"2026-10-21T03:11:41.388Z","event":"transition","id":"T-0170","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-035"}
+{"at":"2026-10-21T03:11:42.047Z","event":"transition","id":"T-0171","from":"todo","to":"blocked","by":"owner","note":"hold: built:R-035"}
+{"at":"2026-10-21T03:11:42.730Z","event":"transition","id":"T-0172","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs; built:R-035"}
+{"at":"2026-10-21T03:11:43.584Z","event":"transition","id":"T-0225","from":"todo","to":"blocked","by":"owner","note":"hold: swarm.mjs"}
+{"at":"2026-10-21T03:12:21.983Z","event":"release","by":"autopilot","tickets":["T-0036","T-0038","T-0040","T-0043","T-0045","T-0049","T-0051","T-0056","T-0063","T-0069","T-0075","T-0077","T-0081","T-0082","T-0086","T-0141","T-0146","T-0151","T-0155","T-0173","T-0189"]}
+{"at":"2026-10-21T03:13:48.299Z","event":"wave","by":"go","tickets":["T-0173","T-0189"]}
+{"at":"2026-10-21T03:20:46.248Z","event":"transition","id":"T-0173","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:20:46.256Z","event":"transition","id":"T-0189","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:20:46.304Z","event":"transition","id":"T-0173","from":"review","to":"done","by":"sync","note":"integrated 1792552431718-ece16047"}
+{"at":"2026-10-21T03:21:06.108Z","event":"acceptance-review","id":"T-0189","pass":0,"fail":1,"run":"1792552848946-5fd25bc3","by":"owner"}
+{"at":"2026-10-21T03:21:06.140Z","event":"retry","id":"T-0189","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792552431718-ece16047","by":"sync"}
+{"at":"2026-10-21T03:21:07.646Z","event":"release","by":"go","tickets":["T-0174","T-0175","T-0176","T-0185"]}
+{"at":"2026-10-21T03:21:17.707Z","event":"wave","by":"go","tickets":["T-0174","T-0175","T-0176","T-0185","T-0189"]}
+{"at":"2026-10-21T03:29:07.100Z","event":"transition","id":"T-0174","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:29:07.106Z","event":"transition","id":"T-0175","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:29:07.114Z","event":"transition","id":"T-0176","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:29:07.120Z","event":"transition","id":"T-0185","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:29:07.126Z","event":"transition","id":"T-0189","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:29:07.140Z","event":"transition","id":"T-0185","from":"review","to":"done","by":"sync","note":"integrated 1792552890267-6ff18fbe"}
+{"at":"2026-10-21T03:29:22.953Z","event":"acceptance-review","id":"T-0174","pass":1,"fail":0,"run":"1792553347457-8774ad21","by":"owner"}
+{"at":"2026-10-21T03:29:22.953Z","event":"acceptance-review","id":"T-0175","pass":1,"fail":0,"run":"1792553347457-8774ad21","by":"owner"}
+{"at":"2026-10-21T03:29:22.954Z","event":"acceptance-review","id":"T-0176","pass":1,"fail":0,"run":"1792553347457-8774ad21","by":"owner"}
+{"at":"2026-10-21T03:29:22.954Z","event":"acceptance-review","id":"T-0189","pass":0,"fail":1,"run":"1792553347457-8774ad21","by":"owner"}
+{"at":"2026-10-21T03:29:22.963Z","event":"transition","id":"T-0174","from":"review","to":"done","by":"sync","note":"integrated 1792552890267-6ff18fbe"}
+{"at":"2026-10-21T03:29:22.975Z","event":"transition","id":"T-0175","from":"review","to":"done","by":"sync","note":"integrated 1792552890267-6ff18fbe"}
+{"at":"2026-10-21T03:29:22.989Z","event":"transition","id":"T-0176","from":"review","to":"done","by":"sync","note":"integrated 1792552890267-6ff18fbe"}
+{"at":"2026-10-21T03:29:23.002Z","event":"retry","id":"T-0189","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792552890267-6ff18fbe","by":"sync"}
+{"at":"2026-10-21T03:29:23.099Z","event":"release","by":"go","tickets":["T-0177","T-0186","T-0187","T-0206","T-0214"]}
+{"at":"2026-10-21T03:29:25.580Z","event":"wave","by":"go","tickets":["T-0177","T-0186","T-0187","T-0189","T-0206","T-0214"]}
+{"at":"2026-10-21T03:36:44.591Z","event":"transition","id":"T-0177","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:36:44.600Z","event":"transition","id":"T-0186","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:36:44.621Z","event":"transition","id":"T-0187","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:36:44.627Z","event":"transition","id":"T-0189","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:36:44.632Z","event":"transition","id":"T-0206","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:36:44.638Z","event":"transition","id":"T-0214","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0177","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0186","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0187","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0189","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0206","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.980Z","event":"acceptance-review","id":"T-0214","pass":1,"fail":0,"run":"1792553804855-43b0b921","by":"owner"}
+{"at":"2026-10-21T03:37:04.990Z","event":"transition","id":"T-0177","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.003Z","event":"transition","id":"T-0186","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.015Z","event":"transition","id":"T-0187","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.027Z","event":"transition","id":"T-0189","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.038Z","event":"transition","id":"T-0206","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.049Z","event":"transition","id":"T-0214","from":"review","to":"done","by":"sync","note":"integrated 1792553367983-7d1a338b"}
+{"at":"2026-10-21T03:37:05.145Z","event":"release","by":"go","tickets":["T-0178","T-0183"]}
+{"at":"2026-10-21T03:37:05.846Z","event":"wave","by":"go","tickets":["T-0178","T-0183"]}
+{"at":"2026-10-21T03:39:44.700Z","event":"transition","id":"T-0178","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:39:44.706Z","event":"transition","id":"T-0183","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:40:04.086Z","event":"acceptance-review","id":"T-0178","pass":1,"fail":0,"run":"1792553988158-b19c7e4d","by":"owner"}
+{"at":"2026-10-21T03:40:04.086Z","event":"acceptance-review","id":"T-0183","pass":1,"fail":0,"run":"1792553988158-b19c7e4d","by":"owner"}
+{"at":"2026-10-21T03:40:04.094Z","event":"transition","id":"T-0178","from":"review","to":"done","by":"sync","note":"integrated 1792553826527-3d22628a"}
+{"at":"2026-10-21T03:40:04.106Z","event":"transition","id":"T-0183","from":"review","to":"done","by":"sync","note":"integrated 1792553826527-3d22628a"}
+{"at":"2026-10-21T03:40:04.201Z","event":"release","by":"go","tickets":["T-0179","T-0180","T-0181","T-0182","T-0184"]}
+{"at":"2026-10-21T03:40:05.771Z","event":"wave","by":"go","tickets":["T-0179","T-0180","T-0181","T-0182","T-0184"]}
+{"at":"2026-10-21T03:48:39.325Z","event":"transition","id":"T-0179","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:48:39.353Z","event":"transition","id":"T-0180","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:48:39.417Z","event":"transition","id":"T-0181","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:48:39.438Z","event":"transition","id":"T-0182","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:48:39.505Z","event":"transition","id":"T-0184","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:49:03.837Z","event":"acceptance-review","id":"T-0179","pass":1,"fail":0,"run":"1792554522033-f675fdfb","by":"owner"}
+{"at":"2026-10-21T03:49:03.837Z","event":"acceptance-review","id":"T-0180","pass":1,"fail":0,"run":"1792554522033-f675fdfb","by":"owner"}
+{"at":"2026-10-21T03:49:03.837Z","event":"acceptance-review","id":"T-0181","pass":1,"fail":0,"run":"1792554522033-f675fdfb","by":"owner"}
+{"at":"2026-10-21T03:49:03.838Z","event":"acceptance-review","id":"T-0182","pass":1,"fail":0,"run":"1792554522033-f675fdfb","by":"owner"}
+{"at":"2026-10-21T03:49:03.838Z","event":"acceptance-review","id":"T-0184","pass":0,"fail":1,"run":"1792554522033-f675fdfb","by":"owner"}
+{"at":"2026-10-21T03:49:03.848Z","event":"transition","id":"T-0179","from":"review","to":"done","by":"sync","note":"integrated 1792554007377-739024bc"}
+{"at":"2026-10-21T03:49:03.861Z","event":"transition","id":"T-0180","from":"review","to":"done","by":"sync","note":"integrated 1792554007377-739024bc"}
+{"at":"2026-10-21T03:49:03.871Z","event":"transition","id":"T-0181","from":"review","to":"done","by":"sync","note":"integrated 1792554007377-739024bc"}
+{"at":"2026-10-21T03:49:03.882Z","event":"transition","id":"T-0182","from":"review","to":"done","by":"sync","note":"integrated 1792554007377-739024bc"}
+{"at":"2026-10-21T03:49:03.898Z","event":"retry","id":"T-0184","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792554007377-739024bc","by":"sync"}
+{"at":"2026-10-21T03:49:03.992Z","event":"release","by":"go","tickets":["T-0191","T-0194","T-0199","T-0200","T-0202","T-0209","T-0211","T-0217","T-0220"]}
+{"at":"2026-10-21T03:49:07.674Z","event":"wave","by":"go","tickets":["T-0184","T-0191","T-0194","T-0199","T-0200","T-0202","T-0209","T-0211","T-0217","T-0220"]}
+{"at":"2026-10-21T03:59:13.722Z","event":"transition","id":"T-0184","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.737Z","event":"transition","id":"T-0191","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.749Z","event":"transition","id":"T-0194","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.756Z","event":"transition","id":"T-0199","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.762Z","event":"transition","id":"T-0200","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.768Z","event":"transition","id":"T-0202","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.774Z","event":"transition","id":"T-0209","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.779Z","event":"transition","id":"T-0211","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.784Z","event":"transition","id":"T-0217","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:13.790Z","event":"transition","id":"T-0220","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T03:59:27.055Z","event":"ticket-edit","id":"T-0223","by":"owner","fields":["context"],"before":{"context":["tools/managers/visual-qa/pr-attach.mjs","tools/managers/lessons/close.mjs","lessons/swarm"]},"after":{"context":["tools/managers/visual-qa/pr-attach.mjs","tools/managers/lessons/close.mjs","lessons/swarm/L-0001.json"]},"reapproved":true}
+{"at":"2026-10-21T04:04:27.847Z","event":"transition","id":"T-0220","from":"review","to":"blocked","by":"owner","note":"context was a directory; fixing"}
+{"at":"2026-10-21T04:04:28.141Z","event":"ticket-edit","id":"T-0220","by":"owner","fields":["context"],"before":{"context":["lessons/swarm","tools/managers/registry.mjs"]},"after":{"context":["lessons/swarm/L-0001.json","tools/managers/registry.mjs"]},"reapproved":true}
+{"at":"2026-10-21T04:04:28.457Z","event":"release","by":"owner","tickets":["T-0220"],"from":"blocked","note":"context fixed"}
+{"at":"2026-10-21T04:05:35.758Z","event":"acceptance-review","id":"T-0184","pass":0,"fail":1,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.758Z","event":"acceptance-review","id":"T-0191","pass":1,"fail":0,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.758Z","event":"acceptance-review","id":"T-0194","pass":1,"fail":0,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.758Z","event":"acceptance-review","id":"T-0199","pass":1,"fail":0,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.759Z","event":"acceptance-review","id":"T-0200","pass":0,"fail":1,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.759Z","event":"acceptance-review","id":"T-0202","pass":0,"fail":1,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.759Z","event":"acceptance-review","id":"T-0209","pass":1,"fail":0,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.759Z","event":"acceptance-review","id":"T-0211","pass":0,"fail":1,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.759Z","event":"acceptance-review","id":"T-0217","pass":1,"fail":0,"run":"1792555505421-93afd195","by":"owner"}
+{"at":"2026-10-21T04:05:35.857Z","event":"retry","id":"T-0184","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792554551479-fa87f745","by":"sync"}
+{"at":"2026-10-21T04:05:35.866Z","event":"transition","id":"T-0191","from":"review","to":"done","by":"sync","note":"integrated 1792554551479-fa87f745"}
+{"at":"2026-10-21T04:05:35.878Z","event":"transition","id":"T-0194","from":"review","to":"done","by":"sync","note":"integrated 1792554551479-fa87f745"}
+{"at":"2026-10-21T04:05:35.890Z","event":"transition","id":"T-0199","from":"review","to":"done","by":"sync","note":"integrated 1792554551479-fa87f745"}
+{"at":"2026-10-21T04:05:35.900Z","event":"retry","id":"T-0200","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792554551479-fa87f745","by":"sync"}
+{"at":"2026-10-21T04:05:35.904Z","event":"retry","id":"T-0202","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792554551479-fa87f745","by":"sync"}
+{"at":"2026-10-21T04:05:35.913Z","event":"transition","id":"T-0209","from":"review","to":"done","by":"sync","note":"integrated 1792554551479-fa87f745"}
+{"at":"2026-10-21T04:05:35.924Z","event":"retry","id":"T-0211","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792554551479-fa87f745","by":"sync"}
+{"at":"2026-10-21T04:05:35.930Z","event":"transition","id":"T-0217","from":"review","to":"done","by":"sync","note":"integrated 1792554551479-fa87f745"}
+{"at":"2026-10-21T04:05:42.695Z","event":"release","by":"go","tickets":["T-0192","T-0195","T-0210","T-0218"]}
+{"at":"2026-10-21T04:05:50.093Z","event":"wave","by":"go","tickets":["T-0184","T-0192","T-0195","T-0200","T-0202","T-0210","T-0211","T-0218","T-0220"]}
+{"at":"2026-10-21T04:14:33.929Z","event":"transition","id":"T-0184","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.934Z","event":"transition","id":"T-0192","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.956Z","event":"transition","id":"T-0195","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.963Z","event":"transition","id":"T-0200","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.969Z","event":"transition","id":"T-0202","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.975Z","event":"transition","id":"T-0210","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.980Z","event":"transition","id":"T-0211","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.984Z","event":"transition","id":"T-0218","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:14:33.990Z","event":"transition","id":"T-0220","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:15:44.239Z","event":"acceptance-review","id":"T-0184","pass":0,"fail":1,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.240Z","event":"acceptance-review","id":"T-0192","pass":1,"fail":0,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.240Z","event":"acceptance-review","id":"T-0195","pass":1,"fail":0,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.242Z","event":"acceptance-review","id":"T-0200","pass":0,"fail":1,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.243Z","event":"acceptance-review","id":"T-0202","pass":0,"fail":1,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.243Z","event":"acceptance-review","id":"T-0210","pass":1,"fail":0,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.244Z","event":"acceptance-review","id":"T-0211","pass":1,"fail":0,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.244Z","event":"acceptance-review","id":"T-0218","pass":1,"fail":0,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.245Z","event":"acceptance-review","id":"T-0220","pass":0,"fail":1,"run":"1792556109792-8beb867f","by":"owner"}
+{"at":"2026-10-21T04:15:44.263Z","event":"retry","id":"T-0184","attempts":3,"level":3,"kind":"failed","to":"ready","run":"1792555553879-082372b4","by":"sync"}
+{"at":"2026-10-21T04:15:44.272Z","event":"transition","id":"T-0192","from":"review","to":"done","by":"sync","note":"integrated 1792555553879-082372b4"}
+{"at":"2026-10-21T04:15:44.292Z","event":"transition","id":"T-0195","from":"review","to":"done","by":"sync","note":"integrated 1792555553879-082372b4"}
+{"at":"2026-10-21T04:15:44.316Z","event":"retry","id":"T-0200","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792555553879-082372b4","by":"sync"}
+{"at":"2026-10-21T04:15:44.327Z","event":"retry","id":"T-0202","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792555553879-082372b4","by":"sync"}
+{"at":"2026-10-21T04:15:44.339Z","event":"transition","id":"T-0210","from":"review","to":"done","by":"sync","note":"integrated 1792555553879-082372b4"}
+{"at":"2026-10-21T04:15:44.364Z","event":"transition","id":"T-0211","from":"review","to":"done","by":"sync","note":"integrated 1792555553879-082372b4"}
+{"at":"2026-10-21T04:15:44.383Z","event":"transition","id":"T-0218","from":"review","to":"done","by":"sync","note":"integrated 1792555553879-082372b4"}
+{"at":"2026-10-21T04:15:44.408Z","event":"retry","id":"T-0220","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792555553879-082372b4","by":"sync"}
+{"at":"2026-10-21T04:15:45.057Z","event":"release","by":"go","tickets":["T-0193","T-0196","T-0212","T-0219"]}
+{"at":"2026-10-21T04:15:51.122Z","event":"wave","by":"go","tickets":["T-0184","T-0193","T-0196","T-0200","T-0202","T-0212","T-0219","T-0220"]}
+{"at":"2026-10-21T04:19:33.881Z","event":"transition","id":"T-0193","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:19:33.887Z","event":"transition","id":"T-0196","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:19:33.893Z","event":"transition","id":"T-0200","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:19:33.914Z","event":"transition","id":"T-0202","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:19:33.919Z","event":"transition","id":"T-0219","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:19:33.925Z","event":"transition","id":"T-0220","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0193","pass":1,"fail":0,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0196","pass":1,"fail":0,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0200","pass":0,"fail":1,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0202","pass":1,"fail":0,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0219","pass":1,"fail":0,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.172Z","event":"acceptance-review","id":"T-0220","pass":1,"fail":0,"run":"1792556374496-311aeaee","by":"owner"}
+{"at":"2026-10-21T04:20:05.184Z","event":"transition","id":"T-0193","from":"review","to":"done","by":"sync","note":"integrated 1792556154256-695ed866"}
+{"at":"2026-10-21T04:20:05.196Z","event":"transition","id":"T-0196","from":"review","to":"done","by":"sync","note":"integrated 1792556154256-695ed866"}
+{"at":"2026-10-21T04:20:05.209Z","event":"retry","id":"T-0200","attempts":3,"level":3,"kind":"failed","to":"ready","run":"1792556154256-695ed866","by":"sync"}
+{"at":"2026-10-21T04:20:05.214Z","event":"transition","id":"T-0202","from":"review","to":"done","by":"sync","note":"integrated 1792556154256-695ed866"}
+{"at":"2026-10-21T04:20:05.223Z","event":"transition","id":"T-0219","from":"review","to":"done","by":"sync","note":"integrated 1792556154256-695ed866"}
+{"at":"2026-10-21T04:20:05.232Z","event":"transition","id":"T-0220","from":"review","to":"done","by":"sync","note":"integrated 1792556154256-695ed866"}
+{"at":"2026-10-21T04:20:05.329Z","event":"release","by":"go","tickets":["T-0203","T-0221"]}
+{"at":"2026-10-21T04:20:06.872Z","event":"wave","by":"go","tickets":["T-0200","T-0203","T-0221"]}
+{"at":"2026-10-21T04:22:20.103Z","event":"transition","id":"T-0200","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:22:20.155Z","event":"transition","id":"T-0203","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:22:20.264Z","event":"transition","id":"T-0221","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:22:38.226Z","event":"acceptance-review","id":"T-0200","pass":1,"fail":0,"run":"1792556541214-1e448f80","by":"owner"}
+{"at":"2026-10-21T04:22:38.232Z","event":"acceptance-review","id":"T-0203","pass":1,"fail":0,"run":"1792556541214-1e448f80","by":"owner"}
+{"at":"2026-10-21T04:22:38.236Z","event":"acceptance-review","id":"T-0221","pass":0,"fail":1,"run":"1792556541214-1e448f80","by":"owner"}
+{"at":"2026-10-21T04:22:38.265Z","event":"transition","id":"T-0200","from":"review","to":"done","by":"sync","note":"integrated 1792556407619-842104af"}
+{"at":"2026-10-21T04:22:38.308Z","event":"transition","id":"T-0203","from":"review","to":"done","by":"sync","note":"integrated 1792556407619-842104af"}
+{"at":"2026-10-21T04:22:38.329Z","event":"retry","id":"T-0221","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792556407619-842104af","by":"sync"}
+{"at":"2026-10-21T04:22:38.703Z","event":"release","by":"go","tickets":["T-0201","T-0204"]}
+{"at":"2026-10-21T04:22:43.582Z","event":"wave","by":"go","tickets":["T-0201","T-0204","T-0221"]}
+{"at":"2026-10-21T04:27:15.556Z","event":"transition","id":"T-0201","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:27:15.563Z","event":"transition","id":"T-0204","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:27:15.577Z","event":"transition","id":"T-0221","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:27:35.322Z","event":"acceptance-review","id":"T-0201","pass":1,"fail":0,"run":"1792556836013-ca7137c2","by":"owner"}
+{"at":"2026-10-21T04:27:35.322Z","event":"acceptance-review","id":"T-0204","pass":1,"fail":0,"run":"1792556836013-ca7137c2","by":"owner"}
+{"at":"2026-10-21T04:27:35.322Z","event":"acceptance-review","id":"T-0221","pass":1,"fail":0,"run":"1792556836013-ca7137c2","by":"owner"}
+{"at":"2026-10-21T04:27:35.331Z","event":"transition","id":"T-0201","from":"review","to":"done","by":"sync","note":"integrated 1792556567186-f910d233"}
+{"at":"2026-10-21T04:27:35.344Z","event":"transition","id":"T-0204","from":"review","to":"done","by":"sync","note":"integrated 1792556567186-f910d233"}
+{"at":"2026-10-21T04:27:35.374Z","event":"transition","id":"T-0221","from":"review","to":"done","by":"sync","note":"integrated 1792556567186-f910d233"}
+{"at":"2026-10-21T04:27:35.553Z","event":"release","by":"go","tickets":["T-0205","T-0222"]}
+{"at":"2026-10-21T04:27:36.334Z","event":"wave","by":"go","tickets":["T-0205","T-0222"]}
+{"at":"2026-10-21T04:27:46.011Z","event":"transition","id":"T-0205","from":"running","to":"ready","by":"sync","note":"run cancelled"}
+{"at":"2026-10-21T04:27:46.016Z","event":"transition","id":"T-0222","from":"running","to":"ready","by":"sync","note":"run cancelled"}
+{"at":"2026-10-21T04:27:53.920Z","event":"transition","id":"T-0184","from":"running","to":"ready","by":"owner","note":"wave cancelled for swarm update"}
+{"at":"2026-10-21T04:27:54.017Z","event":"transition","id":"T-0212","from":"running","to":"ready","by":"owner","note":"wave cancelled for swarm update"}
+{"at":"2026-10-21T04:28:22.012Z","event":"wave","by":"go","tickets":["T-0184","T-0205","T-0212","T-0222"]}
+{"at":"2026-10-21T04:30:12.054Z","event":"transition","id":"T-0212","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:30:12.060Z","event":"transition","id":"T-0222","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:30:22.165Z","event":"acceptance-review","id":"T-0212","pass":1,"fail":0,"run":"1792557012419-b01b64cd","by":"owner"}
+{"at":"2026-10-21T04:30:22.165Z","event":"acceptance-review","id":"T-0222","pass":1,"fail":0,"run":"1792557012419-b01b64cd","by":"owner"}
+{"at":"2026-10-21T04:30:22.172Z","event":"transition","id":"T-0212","from":"review","to":"done","by":"sync","note":"integrated 1792556903107-b9fe8cc2"}
+{"at":"2026-10-21T04:30:22.184Z","event":"transition","id":"T-0222","from":"review","to":"done","by":"sync","note":"integrated 1792556903107-b9fe8cc2"}
+{"at":"2026-10-21T04:30:22.277Z","event":"release","by":"go","tickets":["T-0213"]}
+{"at":"2026-10-21T04:30:22.644Z","event":"wave","by":"go","tickets":["T-0213"]}
+{"at":"2026-10-21T04:43:15.980Z","event":"transition","id":"T-0184","from":"running","to":"ready","by":"owner","note":"worker blocked: no summary; retry (context gap)"}
+{"at":"2026-10-21T04:43:16.085Z","event":"transition","id":"T-0205","from":"running","to":"ready","by":"owner","note":"worker blocked: no summary; retry (context gap)"}
+{"at":"2026-10-21T04:43:16.191Z","event":"transition","id":"T-0213","from":"running","to":"ready","by":"owner","note":"worker blocked: no summary; retry (context gap)"}
+{"at":"2026-10-21T04:43:17.288Z","event":"wave","by":"go","tickets":["T-0184","T-0205","T-0213"]}
+{"at":"2026-10-21T04:47:02.895Z","event":"transition","id":"T-0213","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:47:11.948Z","event":"acceptance-review","id":"T-0213","pass":1,"fail":0,"run":"1792558023460-21e93c01","by":"owner"}
+{"at":"2026-10-21T04:47:11.956Z","event":"transition","id":"T-0213","from":"review","to":"done","by":"sync","note":"integrated 1792557798035-7b3c2267"}
+{"at":"2026-10-21T04:54:20.082Z","event":"transition","id":"T-0184","from":"running","to":"ready","by":"owner","note":"stale running after failed wave"}
+{"at":"2026-10-21T04:54:20.188Z","event":"transition","id":"T-0205","from":"running","to":"ready","by":"owner","note":"stale running after failed wave"}
+{"at":"2026-10-21T04:54:32.371Z","event":"wave","by":"go","tickets":["T-0184","T-0205"]}
+{"at":"2026-10-21T04:56:52.835Z","event":"transition","id":"T-0184","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:56:52.841Z","event":"transition","id":"T-0205","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:57:09.834Z","event":"acceptance-review","id":"T-0184","pass":1,"fail":0,"run":"1792558613296-92d09cbf","by":"owner"}
+{"at":"2026-10-21T04:57:09.834Z","event":"acceptance-review","id":"T-0205","pass":1,"fail":0,"run":"1792558613296-92d09cbf","by":"owner"}
+{"at":"2026-10-21T04:57:09.847Z","event":"transition","id":"T-0184","from":"review","to":"done","by":"sync","note":"integrated 1792558472741-a365092e"}
+{"at":"2026-10-21T04:57:09.859Z","event":"transition","id":"T-0205","from":"review","to":"done","by":"sync","note":"integrated 1792558472741-a365092e"}
+{"at":"2026-10-21T04:57:09.962Z","event":"release","by":"go","tickets":["T-0188","T-0190","T-0197","T-0215","T-0223"]}
+{"at":"2026-10-21T04:57:11.295Z","event":"wave","by":"go","tickets":["T-0190","T-0197"]}
+{"at":"2026-10-21T04:59:28.847Z","event":"transition","id":"T-0190","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:59:28.854Z","event":"transition","id":"T-0197","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T04:59:43.839Z","event":"acceptance-review","id":"T-0190","pass":1,"fail":0,"run":"1792558769344-9d6cf4fc","by":"owner"}
+{"at":"2026-10-21T04:59:43.839Z","event":"acceptance-review","id":"T-0197","pass":2,"fail":0,"run":"1792558769344-9d6cf4fc","by":"owner"}
+{"at":"2026-10-21T04:59:43.847Z","event":"transition","id":"T-0190","from":"review","to":"done","by":"sync","note":"integrated 1792558633257-849e9a16"}
+{"at":"2026-10-21T04:59:43.859Z","event":"transition","id":"T-0197","from":"review","to":"done","by":"sync","note":"integrated 1792558633257-849e9a16"}
+{"at":"2026-10-21T04:59:43.955Z","event":"release","by":"go","tickets":["T-0198"]}
+{"at":"2026-10-21T04:59:44.941Z","event":"wave","by":"go","tickets":["T-0198"]}
+{"at":"2026-10-21T05:01:29.114Z","event":"transition","id":"T-0198","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:01:52.495Z","event":"acceptance-review","id":"T-0198","pass":1,"fail":0,"run":"1792558901798-c308b7bc","by":"owner"}
+{"at":"2026-10-21T05:01:52.509Z","event":"transition","id":"T-0198","from":"review","to":"done","by":"sync","note":"integrated 1792558785480-772b59a1"}
+{"at":"2026-10-21T05:01:52.628Z","event":"release","by":"go","tickets":["T-0208"]}
+{"at":"2026-10-21T05:02:36.657Z","event":"transition","id":"T-0040","from":"ready","to":"blocked","by":"owner","note":"hold: edits tools/ticket-manifest.mjs (many tests reference it; needs context auto-attach, Ticket Manager v2)"}
+{"at":"2026-10-21T05:02:36.894Z","event":"release","by":"go","tickets":["T-0208"]}
+{"at":"2026-10-21T05:02:55.681Z","event":"wave","by":"go","tickets":["T-0036","T-0038","T-0043","T-0045","T-0049","T-0051","T-0056","T-0063","T-0069","T-0075","T-0077","T-0081","T-0082","T-0086","T-0141","T-0146","T-0151","T-0155","T-0188","T-0208","T-0215","T-0223"]}
+{"at":"2026-10-21T05:15:58.239Z","event":"transition","id":"T-0036","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.245Z","event":"transition","id":"T-0038","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.253Z","event":"transition","id":"T-0043","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.260Z","event":"transition","id":"T-0045","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.266Z","event":"transition","id":"T-0049","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.272Z","event":"transition","id":"T-0051","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.278Z","event":"transition","id":"T-0056","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.284Z","event":"transition","id":"T-0063","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.290Z","event":"transition","id":"T-0069","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.296Z","event":"transition","id":"T-0075","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.302Z","event":"transition","id":"T-0077","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.309Z","event":"transition","id":"T-0081","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.315Z","event":"transition","id":"T-0082","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.321Z","event":"transition","id":"T-0086","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.327Z","event":"transition","id":"T-0141","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.333Z","event":"transition","id":"T-0146","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.339Z","event":"transition","id":"T-0151","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.345Z","event":"transition","id":"T-0155","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.351Z","event":"transition","id":"T-0188","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.357Z","event":"transition","id":"T-0208","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.363Z","event":"transition","id":"T-0215","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:15:58.368Z","event":"transition","id":"T-0223","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:16:24.188Z","event":"security-review","id":"T-0045","verdict":"fail","findings":2,"run":"1792559758768-46d3e34d","by":"owner"}
+{"at":"2026-10-21T05:16:24.188Z","event":"security-review","id":"T-0141","verdict":"pass","findings":0,"run":"1792559758768-46d3e34d","by":"owner"}
+{"at":"2026-10-21T05:17:47.869Z","event":"acceptance-review","id":"T-0036","pass":1,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0038","pass":1,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0043","pass":0,"fail":2,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0049","pass":1,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0051","pass":1,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0056","pass":1,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0063","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0069","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0075","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.870Z","event":"acceptance-review","id":"T-0077","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0081","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0082","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0086","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0146","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0151","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0155","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0188","pass":2,"fail":0,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0208","pass":0,"fail":1,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.871Z","event":"acceptance-review","id":"T-0215","pass":2,"fail":0,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.872Z","event":"acceptance-review","id":"T-0223","pass":2,"fail":0,"run":"1792559784403-cf3ba409","by":"owner"}
+{"at":"2026-10-21T05:17:47.882Z","event":"retry","id":"T-0045","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.889Z","event":"retry","id":"T-0063","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.896Z","event":"retry","id":"T-0069","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.903Z","event":"retry","id":"T-0075","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.909Z","event":"retry","id":"T-0077","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.915Z","event":"retry","id":"T-0081","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.922Z","event":"retry","id":"T-0082","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.927Z","event":"retry","id":"T-0086","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.934Z","event":"retry","id":"T-0146","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.939Z","event":"retry","id":"T-0151","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.946Z","event":"retry","id":"T-0155","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:17:47.953Z","event":"transition","id":"T-0188","from":"review","to":"done","by":"sync","note":"integrated 1792558986023-2eab439b"}
+{"at":"2026-10-21T05:17:47.966Z","event":"transition","id":"T-0215","from":"review","to":"done","by":"sync","note":"integrated 1792558986023-2eab439b"}
+{"at":"2026-10-21T05:17:47.978Z","event":"transition","id":"T-0223","from":"review","to":"done","by":"sync","note":"integrated 1792558986023-2eab439b"}
+{"at":"2026-10-21T05:18:13.191Z","event":"acceptance-review","id":"T-0036","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.191Z","event":"acceptance-review","id":"T-0038","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.191Z","event":"acceptance-review","id":"T-0043","pass":2,"fail":0,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.191Z","event":"acceptance-review","id":"T-0049","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.192Z","event":"acceptance-review","id":"T-0051","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.192Z","event":"acceptance-review","id":"T-0056","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.192Z","event":"acceptance-review","id":"T-0141","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.192Z","event":"acceptance-review","id":"T-0208","pass":0,"fail":1,"run":"1792559868211-76c5cb94","by":"owner"}
+{"at":"2026-10-21T05:18:13.204Z","event":"transition","id":"T-0043","from":"review","to":"done","by":"sync","note":"integrated 1792558986023-2eab439b"}
+{"at":"2026-10-21T05:18:13.218Z","event":"retry","id":"T-0141","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792558986023-2eab439b","by":"sync"}
+{"at":"2026-10-21T05:18:30.991Z","event":"acceptance-review","id":"T-0036","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:30.991Z","event":"acceptance-review","id":"T-0038","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:30.991Z","event":"acceptance-review","id":"T-0049","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:30.991Z","event":"acceptance-review","id":"T-0051","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:30.992Z","event":"acceptance-review","id":"T-0056","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:30.992Z","event":"acceptance-review","id":"T-0208","pass":0,"fail":1,"run":"1792559893430-563c4372","by":"owner"}
+{"at":"2026-10-21T05:18:33.818Z","event":"wave","by":"go","tickets":["T-0045","T-0063","T-0069","T-0075","T-0077","T-0081","T-0082","T-0086","T-0141","T-0146","T-0151","T-0155"]}
+{"at":"2026-10-21T05:26:45.365Z","event":"transition","id":"T-0045","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.372Z","event":"transition","id":"T-0063","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.378Z","event":"transition","id":"T-0069","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.400Z","event":"transition","id":"T-0075","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.406Z","event":"transition","id":"T-0077","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.411Z","event":"transition","id":"T-0081","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.417Z","event":"transition","id":"T-0086","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.423Z","event":"transition","id":"T-0141","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.429Z","event":"transition","id":"T-0146","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.436Z","event":"transition","id":"T-0151","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:26:45.441Z","event":"transition","id":"T-0155","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:27:42.714Z","event":"security-review","id":"T-0045","verdict":"fail","findings":4,"run":"1792560406016-471bcf51","by":"owner"}
+{"at":"2026-10-21T05:27:42.714Z","event":"security-review","id":"T-0141","verdict":"fail","findings":3,"run":"1792560406016-471bcf51","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0063","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0069","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0075","pass":0,"fail":1,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0077","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0081","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0086","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0146","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.251Z","event":"acceptance-review","id":"T-0151","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.252Z","event":"acceptance-review","id":"T-0155","pass":1,"fail":0,"run":"1792560462928-b6f3b2ce","by":"owner"}
+{"at":"2026-10-21T05:28:21.261Z","event":"retry","id":"T-0045","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792559916524-68e3062a","by":"sync"}
+{"at":"2026-10-21T05:28:21.268Z","event":"transition","id":"T-0063","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.280Z","event":"transition","id":"T-0069","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.293Z","event":"retry","id":"T-0075","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792559916524-68e3062a","by":"sync"}
+{"at":"2026-10-21T05:28:21.298Z","event":"transition","id":"T-0077","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.309Z","event":"transition","id":"T-0081","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.324Z","event":"transition","id":"T-0086","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.335Z","event":"retry","id":"T-0141","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792559916524-68e3062a","by":"sync"}
+{"at":"2026-10-21T05:28:21.341Z","event":"transition","id":"T-0146","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.354Z","event":"transition","id":"T-0151","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.365Z","event":"transition","id":"T-0155","from":"review","to":"done","by":"sync","note":"integrated 1792559916524-68e3062a"}
+{"at":"2026-10-21T05:28:21.460Z","event":"release","by":"go","tickets":["T-0064","T-0065","T-0070","T-0078","T-0083","T-0087","T-0088","T-0147","T-0156","T-0157"]}
+{"at":"2026-10-21T05:28:25.097Z","event":"wave","by":"go","tickets":["T-0045","T-0064","T-0065","T-0070","T-0075","T-0078","T-0083","T-0087","T-0088","T-0141","T-0147","T-0156","T-0157"]}
+{"at":"2026-10-21T05:36:21.623Z","event":"transition","id":"T-0045","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.629Z","event":"transition","id":"T-0064","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.635Z","event":"transition","id":"T-0065","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.646Z","event":"transition","id":"T-0070","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.652Z","event":"transition","id":"T-0075","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.658Z","event":"transition","id":"T-0078","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.664Z","event":"transition","id":"T-0083","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.670Z","event":"transition","id":"T-0087","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.675Z","event":"transition","id":"T-0088","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.682Z","event":"transition","id":"T-0147","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.688Z","event":"transition","id":"T-0156","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:21.693Z","event":"transition","id":"T-0157","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:36:49.598Z","event":"security-review","id":"T-0045","verdict":"pass","findings":2,"run":"1792560982283-31f4095c","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0064","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0065","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0070","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0075","pass":0,"fail":1,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0078","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0083","pass":0,"fail":1,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0087","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.395Z","event":"acceptance-review","id":"T-0088","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.396Z","event":"acceptance-review","id":"T-0147","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.396Z","event":"acceptance-review","id":"T-0156","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.396Z","event":"acceptance-review","id":"T-0157","pass":1,"fail":0,"run":"1792561009815-24171e46","by":"owner"}
+{"at":"2026-10-21T05:37:21.409Z","event":"transition","id":"T-0064","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.420Z","event":"transition","id":"T-0065","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.433Z","event":"transition","id":"T-0070","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.446Z","event":"retry","id":"T-0075","attempts":3,"level":3,"kind":"failed","to":"ready","run":"1792560508576-4b57c927","by":"sync"}
+{"at":"2026-10-21T05:37:21.452Z","event":"transition","id":"T-0078","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.463Z","event":"retry","id":"T-0083","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792560508576-4b57c927","by":"sync"}
+{"at":"2026-10-21T05:37:21.470Z","event":"transition","id":"T-0087","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.479Z","event":"transition","id":"T-0088","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.490Z","event":"transition","id":"T-0147","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.502Z","event":"transition","id":"T-0156","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:21.514Z","event":"transition","id":"T-0157","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:32.371Z","event":"acceptance-review","id":"T-0045","pass":2,"fail":0,"run":"1792561041733-bc36d329","by":"owner"}
+{"at":"2026-10-21T05:37:32.384Z","event":"transition","id":"T-0045","from":"review","to":"done","by":"sync","note":"integrated 1792560508576-4b57c927"}
+{"at":"2026-10-21T05:37:32.496Z","event":"release","by":"go","tickets":["T-0066","T-0071","T-0072","T-0089","T-0148","T-0158"]}
+{"at":"2026-10-21T05:37:34.733Z","event":"wave","by":"go","tickets":["T-0066","T-0071","T-0072","T-0075","T-0083","T-0089","T-0148","T-0158"]}
+{"at":"2026-10-21T05:43:42.009Z","event":"transition","id":"T-0066","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.016Z","event":"transition","id":"T-0071","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.022Z","event":"transition","id":"T-0072","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.049Z","event":"transition","id":"T-0075","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.055Z","event":"transition","id":"T-0083","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.061Z","event":"transition","id":"T-0089","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:43:42.067Z","event":"transition","id":"T-0158","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0066","pass":1,"fail":0,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0071","pass":0,"fail":1,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0072","pass":0,"fail":1,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0075","pass":1,"fail":0,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0083","pass":0,"fail":1,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.800Z","event":"acceptance-review","id":"T-0089","pass":3,"fail":0,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.801Z","event":"acceptance-review","id":"T-0158","pass":2,"fail":0,"run":"1792561422600-7740303b","by":"owner"}
+{"at":"2026-10-21T05:44:08.811Z","event":"transition","id":"T-0066","from":"review","to":"done","by":"sync","note":"integrated 1792561056927-0e616a13"}
+{"at":"2026-10-21T05:44:08.824Z","event":"retry","id":"T-0071","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792561056927-0e616a13","by":"sync"}
+{"at":"2026-10-21T05:44:08.832Z","event":"retry","id":"T-0072","attempts":1,"level":1,"kind":"failed","to":"ready","run":"1792561056927-0e616a13","by":"sync"}
+{"at":"2026-10-21T05:44:08.838Z","event":"transition","id":"T-0075","from":"review","to":"done","by":"sync","note":"integrated 1792561056927-0e616a13"}
+{"at":"2026-10-21T05:44:08.848Z","event":"retry","id":"T-0083","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792561056927-0e616a13","by":"sync"}
+{"at":"2026-10-21T05:44:08.853Z","event":"transition","id":"T-0089","from":"review","to":"done","by":"sync","note":"integrated 1792561056927-0e616a13"}
+{"at":"2026-10-21T05:44:08.863Z","event":"transition","id":"T-0158","from":"review","to":"done","by":"sync","note":"integrated 1792561056927-0e616a13"}
+{"at":"2026-10-21T05:44:08.954Z","event":"release","by":"go","tickets":["T-0067","T-0076"]}
+{"at":"2026-10-21T05:44:10.343Z","event":"wave","by":"go","tickets":["T-0067","T-0071","T-0072","T-0076","T-0083"]}
+{"at":"2026-10-21T05:46:03.196Z","event":"transition","id":"T-0067","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:46:03.203Z","event":"transition","id":"T-0071","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:46:03.237Z","event":"transition","id":"T-0072","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:46:03.244Z","event":"transition","id":"T-0076","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:46:03.251Z","event":"transition","id":"T-0083","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:46:44.303Z","event":"acceptance-review","id":"T-0067","pass":2,"fail":0,"run":"1792561563637-587f4b08","by":"owner"}
+{"at":"2026-10-21T05:46:44.303Z","event":"acceptance-review","id":"T-0071","pass":0,"fail":1,"run":"1792561563637-587f4b08","by":"owner"}
+{"at":"2026-10-21T05:46:44.303Z","event":"acceptance-review","id":"T-0072","pass":1,"fail":0,"run":"1792561563637-587f4b08","by":"owner"}
+{"at":"2026-10-21T05:46:44.303Z","event":"acceptance-review","id":"T-0076","pass":1,"fail":0,"run":"1792561563637-587f4b08","by":"owner"}
+{"at":"2026-10-21T05:46:44.303Z","event":"acceptance-review","id":"T-0083","pass":0,"fail":1,"run":"1792561563637-587f4b08","by":"owner"}
+{"at":"2026-10-21T05:46:44.313Z","event":"transition","id":"T-0067","from":"review","to":"done","by":"sync","note":"integrated 1792561451652-e0f14b6b"}
+{"at":"2026-10-21T05:46:44.327Z","event":"retry","id":"T-0071","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792561451652-e0f14b6b","by":"sync"}
+{"at":"2026-10-21T05:46:44.334Z","event":"transition","id":"T-0072","from":"review","to":"done","by":"sync","note":"integrated 1792561451652-e0f14b6b"}
+{"at":"2026-10-21T05:46:44.346Z","event":"transition","id":"T-0076","from":"review","to":"done","by":"sync","note":"integrated 1792561451652-e0f14b6b"}
+{"at":"2026-10-21T05:46:44.359Z","event":"retry","id":"T-0083","attempts":3,"level":3,"kind":"failed","to":"ready","run":"1792561451652-e0f14b6b","by":"sync"}
+{"at":"2026-10-21T05:46:44.440Z","event":"release","by":"go","tickets":["T-0079"]}
+{"at":"2026-10-21T05:46:45.208Z","event":"wave","by":"go","tickets":["T-0071","T-0079","T-0083"]}
+{"at":"2026-10-21T05:47:55.078Z","event":"transition","id":"T-0071","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:47:55.086Z","event":"transition","id":"T-0079","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:48:10.276Z","event":"acceptance-review","id":"T-0071","pass":1,"fail":0,"run":"1792561675401-f12a7c10","by":"owner"}
+{"at":"2026-10-21T05:48:10.276Z","event":"acceptance-review","id":"T-0079","pass":2,"fail":0,"run":"1792561675401-f12a7c10","by":"owner"}
+{"at":"2026-10-21T05:48:10.286Z","event":"transition","id":"T-0071","from":"review","to":"done","by":"sync","note":"integrated 1792561605888-ce60dedf"}
+{"at":"2026-10-21T05:48:10.297Z","event":"transition","id":"T-0079","from":"review","to":"done","by":"sync","note":"integrated 1792561605888-ce60dedf"}
+{"at":"2026-10-21T05:48:10.384Z","event":"release","by":"go","tickets":["T-0073"]}
+{"at":"2026-10-21T05:48:10.844Z","event":"wave","by":"go","tickets":["T-0073"]}
+{"at":"2026-10-21T05:49:14.841Z","event":"transition","id":"T-0073","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T05:49:29.262Z","event":"acceptance-review","id":"T-0073","pass":1,"fail":1,"run":"1792561755125-418187ee","by":"owner"}
+{"at":"2026-10-21T05:49:37.453Z","event":"acceptance-review","id":"T-0073","pass":0,"fail":1,"run":"1792561769419-71b20814","by":"owner"}
+{"at":"2026-10-21T05:49:55.652Z","event":"acceptance-review","id":"T-0073","pass":0,"fail":1,"run":"1792561777611-1a32f7d4","by":"owner"}
+{"at":"2026-10-21T05:50:18.961Z","event":"transition","id":"T-0082","from":"running","to":"ready","by":"owner","note":"stale running after loop exit"}
+{"at":"2026-10-21T05:50:19.050Z","event":"transition","id":"T-0083","from":"running","to":"ready","by":"owner","note":"stale running after loop exit"}
+{"at":"2026-10-21T05:50:19.139Z","event":"transition","id":"T-0141","from":"running","to":"ready","by":"owner","note":"stale running after loop exit"}
+{"at":"2026-10-21T05:50:19.226Z","event":"transition","id":"T-0148","from":"running","to":"ready","by":"owner","note":"stale running after loop exit"}
+{"at":"2026-10-21T05:51:56.120Z","event":"acceptance-review","id":"T-0036","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:51:56.120Z","event":"acceptance-review","id":"T-0038","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:51:56.120Z","event":"acceptance-review","id":"T-0049","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:51:56.120Z","event":"acceptance-review","id":"T-0051","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:51:56.121Z","event":"acceptance-review","id":"T-0056","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:51:56.121Z","event":"acceptance-review","id":"T-0208","pass":0,"fail":1,"run":"1792561882151-ab00c9d8","by":"owner"}
+{"at":"2026-10-21T05:52:47.642Z","event":"acceptance-review","id":"T-0073","pass":0,"fail":1,"run":"1792561959387-b2d5819e","by":"owner"}
+{"at":"2026-10-21T05:54:08.002Z","event":"acceptance-review","id":"T-0036","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:08.002Z","event":"acceptance-review","id":"T-0038","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:08.003Z","event":"acceptance-review","id":"T-0049","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:08.003Z","event":"acceptance-review","id":"T-0051","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:08.003Z","event":"acceptance-review","id":"T-0056","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:08.003Z","event":"acceptance-review","id":"T-0208","pass":0,"fail":1,"run":"1792562015061-bc8e0015","by":"owner"}
+{"at":"2026-10-21T05:54:50.930Z","event":"acceptance-review","id":"T-0073","pass":0,"fail":1,"run":"1792562080431-19e0e3aa","by":"owner"}
+{"at":"2026-10-21T05:55:24.446Z","event":"wave","by":"go","tickets":["T-0082","T-0083","T-0141","T-0148"]}
+{"at":"2026-10-21T06:00:28.674Z","event":"transition","id":"T-0082","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T06:00:28.680Z","event":"transition","id":"T-0141","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T06:01:00.778Z","event":"security-review","id":"T-0141","verdict":"fail","findings":3,"run":"1792562429203-9073aad0","by":"owner"}
+{"at":"2026-10-21T06:01:20.025Z","event":"acceptance-review","id":"T-0082","pass":0,"fail":1,"run":"1792562460935-d32ffcd0","by":"owner"}
+{"at":"2026-10-21T06:01:20.035Z","event":"retry","id":"T-0082","attempts":2,"level":2,"kind":"failed","to":"ready","run":"1792562125189-3a219e65","by":"sync"}
+{"at":"2026-10-21T06:01:20.041Z","event":"retry","id":"T-0141","attempts":3,"level":3,"kind":"failed","to":"ready","run":"1792562125189-3a219e65","by":"sync"}
+{"at":"2026-10-21T06:01:20.437Z","event":"wave","by":"go","tickets":["T-0082","T-0141"]}
+{"at":"2026-10-21T06:02:04.153Z","event":"transition","id":"T-0141","from":"running","to":"review","by":"sync","note":"run complete"}
+{"at":"2026-10-21T06:02:47.155Z","event":"security-review","id":"T-0141","verdict":"pass","findings":3,"run":"1792562524457-6b798a76","by":"owner"}
+{"at":"2026-10-21T06:03:03.026Z","event":"acceptance-review","id":"T-0141","pass":0,"fail":1,"run":"1792562567353-4acfaa02","by":"owner"}
+{"at":"2026-10-21T06:03:03.039Z","event":"retry","id":"T-0141","attempts":4,"level":4,"kind":"failed","to":"blocked","run":"1792562480682-c9d2ba54","by":"sync"}
+{"at":"2026-10-21T06:55:14.376Z","event":"delivered","id":"T-0101","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.378Z","event":"delivered","id":"T-0103","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.379Z","event":"delivered","id":"T-0104","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.382Z","event":"delivered","id":"T-0105","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.385Z","event":"delivered","id":"T-0106","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.386Z","event":"delivered","id":"T-0107","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.388Z","event":"delivered","id":"T-0108","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.390Z","event":"delivered","id":"T-0113","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.393Z","event":"delivered","id":"T-0115","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.395Z","event":"delivered","id":"T-0116","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.397Z","event":"delivered","id":"T-0117","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.399Z","event":"delivered","id":"T-0118","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.400Z","event":"delivered","id":"T-0119","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.401Z","event":"delivered","id":"T-0120","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.402Z","event":"delivered","id":"T-0125","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.403Z","event":"delivered","id":"T-0126","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.403Z","event":"delivered","id":"T-0127","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.404Z","event":"delivered","id":"T-0128","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.404Z","event":"delivered","id":"T-0132","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.405Z","event":"delivered","id":"T-0133","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.406Z","event":"delivered","id":"T-0134","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.406Z","event":"delivered","id":"T-0135","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:14.407Z","event":"delivered","id":"T-0139","from":"blocked","to":"done","by":"owner","prs":[239],"mergeCommits":["3bd2d119f07ce0433a59149ff954a475ea5cc25d"],"note":"delivered by PR #239 (3bd2d119f07ce0433a59149ff954a475ea5cc25d)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0001","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0002","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0003","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0004","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0005","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.057Z","event":"delivered","id":"T-0006","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:28.058Z","event":"delivered","id":"T-0007","from":"blocked","to":"done","by":"owner","prs":[244],"mergeCommits":["bba97b58bbd5442d1497a0835f71a94f7e7b61aa"],"note":"delivered by PR #244 (bba97b58bbd5442d1497a0835f71a94f7e7b61aa)"}
+{"at":"2026-10-21T06:55:31.927Z","event":"delivered","id":"T-0030","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:31.927Z","event":"delivered","id":"T-0031","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:31.927Z","event":"delivered","id":"T-0032","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:31.928Z","event":"delivered","id":"T-0033","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:31.928Z","event":"delivered","id":"T-0034","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:31.928Z","event":"delivered","id":"T-0035","from":"blocked","to":"done","by":"owner","prs":[208,219,243],"mergeCommits":["8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186","c444ce3addbda30cb7e619ebd9cf2b06c2548187","52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #208 (8702ffbd55dbd8ec6dca21a742ff6ce1dbfa4186); delivered by PR #219 (c444ce3addbda30cb7e619ebd9cf2b06c2548187); delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:33.348Z","event":"delivered","id":"T-0047","from":"blocked","to":"done","by":"owner","prs":[243],"mergeCommits":["52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:33.348Z","event":"delivered","id":"T-0048","from":"blocked","to":"done","by":"owner","prs":[243],"mergeCommits":["52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:33.348Z","event":"delivered","id":"T-0059","from":"blocked","to":"done","by":"owner","prs":[243],"mergeCommits":["52f895c4dbf0e910fe173736265e20db8f9cc33f"],"note":"delivered by PR #243 (52f895c4dbf0e910fe173736265e20db8f9cc33f)"}
+{"at":"2026-10-21T06:55:34.661Z","event":"delivered","id":"T-0008","from":"blocked","to":"done","by":"owner","prs":[209],"mergeCommits":["e84dfea2da66202b3d846d807c65900e7470005b"],"note":"delivered by PR #209 (e84dfea2da66202b3d846d807c65900e7470005b)"}
+{"at":"2026-10-21T06:55:35.944Z","event":"delivered","id":"T-0010","from":"blocked","to":"done","by":"owner","prs":[206],"mergeCommits":["2de8093480481c42f1678b596ded5bc234334530"],"note":"delivered by PR #206 (2de8093480481c42f1678b596ded5bc234334530)"}
+{"at":"2026-10-21T18:38:14.211Z","event":"transition","id":"T-0036","from":"review","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:14.435Z","event":"transition","id":"T-0038","from":"review","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:14.745Z","event":"transition","id":"T-0041","from":"todo","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:15.169Z","event":"transition","id":"T-0049","from":"review","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:15.385Z","event":"transition","id":"T-0051","from":"review","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:15.899Z","event":"transition","id":"T-0056","from":"review","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:16.020Z","event":"transition","id":"T-0057","from":"todo","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:16.142Z","event":"transition","id":"T-0058","from":"todo","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:16.263Z","event":"transition","id":"T-0060","from":"todo","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T18:38:16.379Z","event":"transition","id":"T-0061","from":"todo","to":"blocked","by":"owner","note":"owned by mac-mini: handed off 2026-10-21 (branch mini/s2-ticket-manager-v2); mark done with swarm tickets ID --delivered PR when its PRs merge","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T19:31:55.045Z","event":"delivered","id":"T-0036","from":"blocked","to":"done","by":"owner","prs":[253],"mergeCommits":["9f76d5a793a6a58fb7378c0879ccf99fd96b3d25"],"note":"delivered by PR #253 (9f76d5a793a6a58fb7378c0879ccf99fd96b3d25)"}
+{"at":"2026-10-21T19:31:55.046Z","event":"delivered","id":"T-0037","from":"blocked","to":"done","by":"owner","prs":[253],"mergeCommits":["9f76d5a793a6a58fb7378c0879ccf99fd96b3d25"],"note":"delivered by PR #253 (9f76d5a793a6a58fb7378c0879ccf99fd96b3d25)"}
+{"at":"2026-10-21T19:31:55.046Z","event":"delivered","id":"T-0060","from":"blocked","to":"done","by":"owner","prs":[253],"mergeCommits":["9f76d5a793a6a58fb7378c0879ccf99fd96b3d25"],"note":"delivered by PR #253 (9f76d5a793a6a58fb7378c0879ccf99fd96b3d25)"}
+{"at":"2026-10-21T19:31:55.046Z","event":"delivered","id":"T-0056","from":"blocked","to":"done","by":"owner","prs":[253],"mergeCommits":["9f76d5a793a6a58fb7378c0879ccf99fd96b3d25"],"note":"delivered by PR #253 (9f76d5a793a6a58fb7378c0879ccf99fd96b3d25)"}
+{"at":"2026-10-21T19:31:55.046Z","event":"delivered","id":"T-0057","from":"blocked","to":"done","by":"owner","prs":[253],"mergeCommits":["9f76d5a793a6a58fb7378c0879ccf99fd96b3d25"],"note":"delivered by PR #253 (9f76d5a793a6a58fb7378c0879ccf99fd96b3d25)"}
+{"at":"2026-10-21T19:52:07.740Z","event":"delivered","id":"T-0049","from":"blocked","to":"done","by":"owner","prs":[254],"mergeCommits":["944498cf1cd3974ec38135da1ceae0cdf1b1db8f"],"note":"delivered by PR #254 (944498cf1cd3974ec38135da1ceae0cdf1b1db8f)"}
+{"at":"2026-10-21T19:52:08.932Z","event":"delivered","id":"T-0050","from":"blocked","to":"done","by":"owner","prs":[254],"mergeCommits":["944498cf1cd3974ec38135da1ceae0cdf1b1db8f"],"note":"delivered by PR #254 (944498cf1cd3974ec38135da1ceae0cdf1b1db8f)"}
+{"at":"2026-10-21T19:52:09.985Z","event":"delivered","id":"T-0061","from":"blocked","to":"done","by":"owner","prs":[254],"mergeCommits":["944498cf1cd3974ec38135da1ceae0cdf1b1db8f"],"note":"delivered by PR #254 (944498cf1cd3974ec38135da1ceae0cdf1b1db8f)"}
+{"at":"2026-10-21T20:08:57.568Z","event":"delivered","id":"T-0038","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:08:59.073Z","event":"delivered","id":"T-0039","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:09:00.297Z","event":"delivered","id":"T-0051","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:09:01.348Z","event":"delivered","id":"T-0052","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:09:02.403Z","event":"delivered","id":"T-0053","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:09:03.498Z","event":"delivered","id":"T-0054","from":"blocked","to":"done","by":"owner","prs":[255],"mergeCommits":["e28be0dde8be867d9d4a84c241e8530fb3553056"],"note":"delivered by PR #255 (e28be0dde8be867d9d4a84c241e8530fb3553056)"}
+{"at":"2026-10-21T20:23:20.129Z","event":"delivered","id":"T-0044","from":"blocked","to":"done","by":"owner","prs":[256],"mergeCommits":["a5deb8a959c6616fd92c61c3219af8dedc40ed44"],"note":"delivered by PR #256 (a5deb8a959c6616fd92c61c3219af8dedc40ed44)"}
+{"at":"2026-10-21T20:23:21.180Z","event":"delivered","id":"T-0046","from":"blocked","to":"done","by":"owner","prs":[256],"mergeCommits":["a5deb8a959c6616fd92c61c3219af8dedc40ed44"],"note":"delivered by PR #256 (a5deb8a959c6616fd92c61c3219af8dedc40ed44)"}
+{"at":"2026-10-21T20:23:22.238Z","event":"delivered","id":"T-0055","from":"blocked","to":"done","by":"owner","prs":[256],"mergeCommits":["a5deb8a959c6616fd92c61c3219af8dedc40ed44"],"note":"delivered by PR #256 (a5deb8a959c6616fd92c61c3219af8dedc40ed44)"}
+{"at":"2026-10-21T20:23:23.291Z","event":"delivered","id":"T-0062","from":"blocked","to":"done","by":"owner","prs":[256],"mergeCommits":["a5deb8a959c6616fd92c61c3219af8dedc40ed44"],"note":"delivered by PR #256 (a5deb8a959c6616fd92c61c3219af8dedc40ed44)"}
+{"at":"2026-10-21T20:46:18.275Z","event":"release","by":"owner","tickets":["T-0009"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.386Z","event":"release","by":"owner","tickets":["T-0011"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.489Z","event":"release","by":"owner","tickets":["T-0014"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.593Z","event":"release","by":"owner","tickets":["T-0091"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.695Z","event":"release","by":"owner","tickets":["T-0096"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.798Z","event":"release","by":"owner","tickets":["T-0098"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:18.900Z","event":"release","by":"owner","tickets":["T-0152"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:19.004Z","event":"release","by":"owner","tickets":["T-0160"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:19.109Z","event":"release","by":"owner","tickets":["T-0161"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:19.216Z","event":"release","by":"owner","tickets":["T-0162"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:19.320Z","event":"release","by":"owner","tickets":["T-0168"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:19.424Z","event":"release","by":"owner","tickets":["T-0165"],"from":"blocked","note":null}
+{"at":"2026-10-21T20:46:21.913Z","event":"transition","id":"T-0019","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:21.913Z","event":"prune-deps","cancelled":"T-0019","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.026Z","event":"transition","id":"T-0020","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.026Z","event":"prune-deps","cancelled":"T-0020","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.136Z","event":"transition","id":"T-0021","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.136Z","event":"prune-deps","cancelled":"T-0021","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.246Z","event":"transition","id":"T-0022","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.246Z","event":"prune-deps","cancelled":"T-0022","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.358Z","event":"transition","id":"T-0023","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.358Z","event":"prune-deps","cancelled":"T-0023","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.469Z","event":"transition","id":"T-0024","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.469Z","event":"prune-deps","cancelled":"T-0024","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.589Z","event":"transition","id":"T-0025","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.589Z","event":"prune-deps","cancelled":"T-0025","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:22.713Z","event":"transition","id":"T-0026","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251 (24 modules under tools/swarm/)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:22.714Z","event":"prune-deps","cancelled":"T-0026","by":"owner","tickets":["T-0027","T-0028","T-0029"]}
+{"at":"2026-10-21T20:46:33.174Z","event":"delivered","id":"T-0109","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:34.312Z","event":"delivered","id":"T-0121","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:35.283Z","event":"delivered","id":"T-0129","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:36.328Z","event":"delivered","id":"T-0136","from":"blocked","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:37.549Z","event":"delivered","id":"T-0110","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:38.943Z","event":"delivered","id":"T-0122","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:39.989Z","event":"delivered","id":"T-0130","from":"todo","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:40.946Z","event":"delivered","id":"T-0137","from":"blocked","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:41.982Z","event":"delivered","id":"T-0124","from":"blocked","to":"done","by":"owner","prs":[246],"mergeCommits":["431b6ef5b5d9d785dce9db6b2da072b32a46676b"],"note":"delivered by PR #246 (431b6ef5b5d9d785dce9db6b2da072b32a46676b)"}
+{"at":"2026-10-21T20:46:59.667Z","event":"transition","id":"T-0142","from":"todo","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:46:59.887Z","event":"transition","id":"T-0143","from":"todo","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:00.085Z","event":"transition","id":"T-0144","from":"todo","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:00.283Z","event":"transition","id":"T-0149","from":"todo","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:00.485Z","event":"transition","id":"T-0152","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:00.687Z","event":"transition","id":"T-0153","from":"todo","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:00.888Z","event":"transition","id":"T-0160","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:01.086Z","event":"transition","id":"T-0161","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:01.282Z","event":"transition","id":"T-0162","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:01.587Z","event":"transition","id":"T-0165","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T20:47:01.972Z","event":"transition","id":"T-0168","from":"ready","to":"blocked","by":"owner","note":"handed to the Mac mini (owned there, branch mini/s4-s5-handoff)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T21:32:29.908Z","event":"change-order","id":"CO-001","reason":"Add stage S9 Cluster (R-052..R-065) from #257; S7 and S8 scope text comes along from main","cancelled":0,"reopened":0}
+{"at":"2026-10-21T21:35:24.692Z","event":"transition","id":"T-0027","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T21:35:24.692Z","event":"prune-deps","cancelled":"T-0027","by":"owner","tickets":["T-0028","T-0029"]}
+{"at":"2026-10-21T21:35:24.803Z","event":"transition","id":"T-0028","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T21:35:24.803Z","event":"prune-deps","cancelled":"T-0028","by":"owner","tickets":["T-0029"]}
+{"at":"2026-10-21T21:35:24.911Z","event":"transition","id":"T-0029","from":"blocked","to":"cancelled","by":"owner","note":"superseded by the acorn split merged in #251","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-21T21:38:21.493Z","event":"split-merge","tickets":52,"run":"1792618530141-0aa96f6b","ok":false}
+{"at":"2026-10-21T21:42:19.373Z","event":"split-merge","tickets":155,"run":"1792618723546-ed0c23b2","ok":true}
+{"at":"2026-10-21T21:43:41.883Z","event":"split-merge","tickets":1,"run":"1792618943558-b1eacc9e","ok":true}
+{"at":"2026-10-21T21:43:47.671Z","event":"delivered","id":"T-0012","from":"blocked","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:48.596Z","event":"delivered","id":"T-0017","from":"blocked","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:49.621Z","event":"delivered","id":"T-0278","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:50.690Z","event":"delivered","id":"T-0279","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:51.754Z","event":"delivered","id":"T-0280","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:52.716Z","event":"delivered","id":"T-0281","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:53.769Z","event":"delivered","id":"T-0282","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:54.819Z","event":"delivered","id":"T-0283","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:55.886Z","event":"delivered","id":"T-0284","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:56.902Z","event":"delivered","id":"T-0285","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:58.033Z","event":"delivered","id":"T-0286","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:43:59.040Z","event":"delivered","id":"T-0287","from":"todo","to":"done","by":"owner","prs":[251],"mergeCommits":["b93b1a9693a22579c0c4fe284e7dad4e9028e08f"],"note":"delivered by PR #251 (b93b1a9693a22579c0c4fe284e7dad4e9028e08f)"}
+{"at":"2026-10-21T21:44:11.982Z","event":"manual-revert","ids":["T-0012","T-0017"],"from":"done","to":"blocked","by":"orchestrator","note":"wrongly marked delivered by #251 (swarm-cli-autopilot and swarm-cli-run mounts are not built); restored from the ledger backup"}
+{"at":"2026-10-21T22:16:12.194Z","event":"delivered","id":"T-0160","from":"blocked","to":"done","by":"owner","prs":[258],"mergeCommits":["475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03"],"note":"delivered by PR #258 (475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03)"}
+{"at":"2026-10-21T22:16:13.614Z","event":"delivered","id":"T-0161","from":"blocked","to":"done","by":"owner","prs":[258],"mergeCommits":["475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03"],"note":"delivered by PR #258 (475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03)"}
+{"at":"2026-10-21T22:16:14.872Z","event":"delivered","id":"T-0162","from":"blocked","to":"done","by":"owner","prs":[258],"mergeCommits":["475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03"],"note":"delivered by PR #258 (475dd836bc98d8e0cbb09bfd9a1eb3c72ce59b03)"}
+{"at":"2026-10-21T22:43:00.928Z","event":"delivered","id":"T-0163","from":"blocked","to":"done","by":"owner","prs":[261],"mergeCommits":["86c4e888d49fd3bfd646d9682275011151adf2c7"],"note":"delivered by PR #261 (86c4e888d49fd3bfd646d9682275011151adf2c7)"}
+{"at":"2026-10-21T22:43:02.025Z","event":"delivered","id":"T-0169","from":"blocked","to":"done","by":"owner","prs":[261],"mergeCommits":["86c4e888d49fd3bfd646d9682275011151adf2c7"],"note":"delivered by PR #261 (86c4e888d49fd3bfd646d9682275011151adf2c7)"}
+{"at":"2026-10-21T22:49:50.450Z","event":"delivered","id":"T-0141","from":"blocked","to":"done","by":"owner","prs":[259],"mergeCommits":["abcdb4fbf79815fb81e73a59335fbf9004412be1"],"note":"delivered by PR #259 (abcdb4fbf79815fb81e73a59335fbf9004412be1)"}
+{"at":"2026-10-21T23:27:29.184Z","event":"delivered","id":"T-0040","from":"blocked","to":"done","by":"owner","prs":[263],"mergeCommits":["8e6f4029ce043fb26dd7d81f2c32a71e41e31903"],"note":"delivered by PR #263 (8e6f4029ce043fb26dd7d81f2c32a71e41e31903)"}
+{"at":"2026-10-21T23:27:31.753Z","event":"delivered","id":"T-0041","from":"blocked","to":"done","by":"owner","prs":[263],"mergeCommits":["8e6f4029ce043fb26dd7d81f2c32a71e41e31903"],"note":"delivered by PR #263 (8e6f4029ce043fb26dd7d81f2c32a71e41e31903)"}
+{"at":"2026-10-21T23:27:34.118Z","event":"delivered","id":"T-0042","from":"blocked","to":"done","by":"owner","prs":[263],"mergeCommits":["8e6f4029ce043fb26dd7d81f2c32a71e41e31903"],"note":"delivered by PR #263 (8e6f4029ce043fb26dd7d81f2c32a71e41e31903)"}
+{"at":"2026-10-22T01:38:24.551Z","event":"transition","id":"T-0082","from":"running","to":"ready","by":"owner","note":"stale running: no live run since 2026-10-21 06:01 UTC (found by the Command Center data check)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-22T01:38:26.074Z","event":"transition","id":"T-0083","from":"running","to":"ready","by":"owner","note":"stale running: no live run since 2026-10-21 06:01 UTC (found by the Command Center data check)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-22T01:38:27.464Z","event":"transition","id":"T-0148","from":"running","to":"blocked","by":"owner","note":"stale running since 2026-10-21 06:01 UTC, no live run; handed to the Mac mini (S5)","actor":"bean","source":"tickets-set","confirmation":"yes"}
+{"at":"2026-10-22T02:08:03.933Z","event":"delivered","id":"T-0148","from":"blocked","to":"done","by":"owner","prs":[279],"mergeCommits":["2957e5f6c2108f2dc93984fc7d8988eeaa9a0d17"],"note":"delivered by PR #279 (2957e5f6c2108f2dc93984fc7d8988eeaa9a0d17)"}
+{"at":"2026-10-22T02:08:06.117Z","event":"delivered","id":"T-0149","from":"blocked","to":"done","by":"owner","prs":[279],"mergeCommits":["2957e5f6c2108f2dc93984fc7d8988eeaa9a0d17"],"note":"delivered by PR #279 (2957e5f6c2108f2dc93984fc7d8988eeaa9a0d17)"}
