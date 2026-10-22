@@ -31,7 +31,7 @@ function request(port, reqPath, headers = {}, method = 'GET') {
   });
 }
 
-async function startServer(t) {
+async function startServer(t, options = {}) {
   const assetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'watch-token-urls-'));
   await Promise.all([
     fs.writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>board</title>'),
@@ -61,6 +61,7 @@ async function startServer(t) {
     contextCommands: () => [],
     nav: { project: { id: 'p1', name: 'Project' }, runId: 'r1', openBoard: async () => null },
     idleMs: 60000,
+    ...options,
   });
   await server.listen();
   t.after(async () => {
@@ -94,7 +95,7 @@ test('non-page routes ignore query tokens and accept the header or strict cookie
     const byHeader = await request(port, route, { 'x-watch-token': token });
     assert.notEqual(byHeader.status, 401, `header token must not be unauthorized for ${route}`);
     assert.notEqual(byHeader.status, 403, `header token must be accepted for ${route}`);
-    const byCookie = await request(port, route, { Cookie: `swarm_watch=${token}` });
+    const byCookie = await request(port, route, { Cookie: `swarm_watch_${port}=${token}` });
     assert.notEqual(byCookie.status, 401, `cookie token must not be unauthorized for ${route}`);
     assert.notEqual(byCookie.status, 403, `cookie token must be accepted for ${route}`);
   }
@@ -108,9 +109,23 @@ test('non-page routes ignore query tokens and accept the header or strict cookie
     req.on('error', (error) => error.code === 'ECONNRESET' ? resolve() : reject(error));
     req.end();
   });
-  assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch=${token}; malformed` })).status, 403);
-  assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch=${token}; other=value` })).status, 200);
+  assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch_${port}=${token}; malformed` })).status, 403);
+  assert.equal((await request(port, '/api/snapshot', { Cookie: `swarm_watch_${port}=${token}; other=value` })).status, 200);
   assert.equal(server.token, token);
+});
+
+test('watch cookies are scoped to the listening port', async (t) => {
+  const token = 'a'.repeat(48);
+  const first = await startServer(t, { token });
+  const second = await startServer(t, { token });
+  const firstCookie = `swarm_watch_${first.port}=${token}`;
+  const secondCookie = `swarm_watch_${second.port}=${token}`;
+  assert.notEqual(first.port, second.port);
+  assert.equal((await request(first.port, '/api/snapshot', { Cookie: firstCookie })).status, 200);
+  assert.equal((await request(first.port, '/api/snapshot', { Cookie: secondCookie })).status, 403);
+  assert.equal((await request(first.port, '/api/snapshot', { Cookie: `swarm_watch=${token}` })).status, 403);
+  assert.equal((await request(second.port, '/api/snapshot', { Cookie: firstCookie })).status, 403);
+  assert.equal((await request(second.port, '/api/snapshot', { Cookie: secondCookie })).status, 200);
 });
 
 test('/api/health is token-free on loopback only', async (t) => {
@@ -125,7 +140,7 @@ test('HTML page query tokens are exchanged for a protected cookie and privacy he
   const { port, token } = await startServer(t);
   const page = await request(port, `/?keep=yes&t=${token}#ignored`);
   assert.equal(page.status, 200);
-  assert.match(page.headers['set-cookie']?.[0] ?? '', new RegExp(`^swarm_watch=${token}; HttpOnly; SameSite=Strict; Path=/$`));
+  assert.match(page.headers['set-cookie']?.[0] ?? '', new RegExp(`^swarm_watch_${port}=${token}; HttpOnly; SameSite=Strict; Path=/$`));
   assert.equal(page.headers['referrer-policy'], 'no-referrer');
   assert.equal(page.headers['cache-control'], 'no-store');
 
@@ -137,7 +152,7 @@ test('HTML page query tokens are exchanged for a protected cookie and privacy he
   assert.match(secure.headers['set-cookie']?.[0] ?? '', /; Secure$/);
   const head = await request(port, `/run?id=p1&run=r1&t=${token}`, {}, 'HEAD');
   assert.equal(head.status, 200);
-  assert.match(head.headers['set-cookie']?.[0] ?? '', /^swarm_watch=/);
+  assert.match(head.headers['set-cookie']?.[0] ?? '', new RegExp(`^swarm_watch_${port}=`));
 });
 
 test('watch assets and remote local calls do not build token URLs', async () => {

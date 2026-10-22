@@ -39,7 +39,7 @@ function safeEqual(a, b) {
 const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const COOKIE_VALUE = /^[!#$%&'()*+\-.\/0-9:<=>?@A-Z[\\\]^_`a-z{|}~]*$/;
 
-function watchCookie(header) {
+function watchCookie(header, expectedName) {
   if (typeof header !== 'string' || header.length === 0) return null;
   const pairs = [];
   for (const raw of header.split(';')) {
@@ -51,7 +51,7 @@ function watchCookie(header) {
     if (!COOKIE_VALUE.test(value)) return null;
     pairs.push([name, value]);
   }
-  const matches = pairs.filter(([name]) => name === 'swarm_watch');
+  const matches = pairs.filter(([name]) => name === expectedName);
   return matches.length === 1 ? matches[0][1] : null;
 }
 
@@ -354,7 +354,8 @@ export function createWatchServer(opts) {
     const isHtmlPage = pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'));
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
-    const cookieToken = watchCookie(req.headers.cookie);
+    const cookieName = `swarm_watch_${port}`;
+    const cookieToken = watchCookie(req.headers.cookie, cookieName);
     const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
     const cookieOk = typeof cookieToken === 'string' && safeEqual(cookieToken, token);
     const queryOk = isHtmlPage && typeof queryToken === 'string' && safeEqual(queryToken, token);
@@ -364,7 +365,7 @@ export function createWatchServer(opts) {
     }
     lastActivity = now();
     const pageHeaders = queryOk ? {
-      'Set-Cookie': `swarm_watch=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
     } : {};
     if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
