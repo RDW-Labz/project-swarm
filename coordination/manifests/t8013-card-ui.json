@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8013",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3600000,
+      "outputs": [
+        "tools/watch-assets/board.js",
+        "tools/watch-assets/board.css",
+        "tests/board-card-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tools/board-data.mjs",
+        "tools/watch-assets/board.html",
+        "tools/watch-assets/board-lib.js",
+        "tests/board-page.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tools/watch-assets/swarm-ui.css"
+      ],
+      "prompt": "Ticket T-8013 (owner-approved Swarm Watch project card, UI). The data is ready on this branch: projectOverview(...).card (see tools/board-data.mjs and tests/board-accuracy-card.test.mjs for the exact shape: now, next, blocked, slots, eta, facts, headsUp) plus percent (boardPercent), version (installed), activity (building | active-today | idle), finished, checkouts. Render the approved card in tools/watch-assets/board.js (renderProjects card section ~354-365 and helpers), with styles in tools/watch-assets/board.css (make sure board.html actually loads it: board.html links assets/swarm-ui.css; if board.css is not imported there, put the card styles at the end of board.css AND tell me in notes; do not edit board.html):\nHEAD: project name, machine name, 'swarm <installed version>' (title: 'The swarm version installed on this machine right now.').\nBIG: percent done large + bar + 'done' (title: 'Tickets done divided by all tickets in the approved scope: D of T. The project page shows the same number.').\nROWS (label column + value): Now: '<N> tickets building on <M> checkouts. Last ticket finished <ago>.' (or 'Nothing building. Last ticket finished <ago>.'); title on the ago: 'The most recent ticket marked done, from the ticket ledger.'. Next: '<K> tickets ready to start.' plus the slots sentence that never contradicts building: when slots are full say 'Waiting for a free slot: all <max> machine slots are in use (<other> by other projects).', else '<free> of <max> machine slots free.'; ETA line 'about <days> days at today's pace' with title explaining the math with the inputs: '<remaining> tickets left / <perDay> done per day over the last 7 days (<doneLast7Days> done)'; when days is null show 'no estimate yet: nothing finished in the last 7 days'. Blocked: '<W> wait on other tickets.' and '<U> need you.'.\nCLICKABLE: the ready, waiting and need-you counts are buttons that open a small list under the card (no new page): each item shows id, title and its exact command in a <code> element with a copy button (navigator.clipboard, wrapped in try/catch); items without a command show none.\nFACTS row: '<n> hand-edits blocked by the guard' (title: 'Hand-edits the guard refused in the last 24 hours. Each one means someone tried to change code by hand instead of through the swarm.'), '<n> untracked runs' linking to facts.listHref (title: 'Runs found on this project's checkouts that no ticket claims. Smoke tests and lane tests are left out. Click to see the list.'), '<n> checkouts' (title: 'Folders where this project is checked out: the main folder, linked worktrees and scratch folders. Runs from all of them are counted.'). NO money anywhere.\nHEADS UP row: shown only when headsUp is a sentence: a 'Heads up' label + the sentence.\nFINISHED: when finished is true render a quiet card: name, version, 'Finished' and the last release/merge if present; no Now/Next/Blocked rows and no warnings.\nPLAIN WORDS: replace 'off-ledger' with 'untracked runs', 'trees' with 'checkouts', 'split red' with the heads-up sentence, the bare 'N blocked' guard count with 'N hand-edits blocked by the guard', across board.js. Every number on the card has a visible label and a title attribute. Build DOM with createElement/textContent only (no innerHTML with data). Keep the token in headers only (BoardLib.watchToken), no money (tests/board-no-money.test.mjs must stay green).\nTESTS in tests/board-card-ui.test.mjs: load board.js in a minimal fake DOM (see how existing tests such as tests/board-page.test.mjs or tests/watch-ui.test.mjs load board scripts) with card data built from tests/helpers/board-accuracy-fixture.mjs through projectOverview: assert every number shown equals its data field (percent, building, checkouts, ready, waiting, need you, slots, ETA days and the hover inputs, facts), every number element has a label and a non-empty title, the clickable lists show the exact commands, the slots sentence never says slots are free while building is waiting for a slot, Finished cards show no rows or warnings, and the words 'off-ledger', 'trees', 'split red' no longer appear in board.js output. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files, .github or server files. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-card-ui.test.mjs tests/board-no-money.test.mjs tests/board-*.test.mjs tests/watch-*.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/board.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/cursor-lane-guard.test.mjs",
+        "tests/field-lessons-batch-ag-runtime.test.mjs",
+        "tests/field-lessons-batch-ai-runtime.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/integration-lock-branch.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/scheduling.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-s4-contract.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests load board.js or board.css for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}
