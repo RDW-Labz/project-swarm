@@ -1,5 +1,5 @@
 diff --git a/tools/board-inbox.mjs b/tools/board-inbox.mjs
-index 1e1e30e..525558c 100644
+index 1e1e30e..2498671 100644
 --- a/tools/board-inbox.mjs
 +++ b/tools/board-inbox.mjs
 @@ -3,20 +3,21 @@
@@ -62,7 +62,7 @@ index 1e1e30e..525558c 100644
      const choice = String(item.default ?? item.choices?.[0] ?? 'CHOICE');
      if (plain(choice) && !choice.startsWith('-')) commands.push({ label: 'Choose', cmd: `${swarm} decide ${quote(item.id)} ${quote(choice)}` });
    } else if (item.kind === 'proposed-ticket') commands.push(item.files ? { label: 'Approve it', cmd: `${swarm} tickets ${quote(item.id)} --approve --yes` } : { label: 'Name its files first', cmd: `${swarm} tickets ${quote(item.id)} --files FILE[,FILE] --yes` });
-@@ -112,21 +130,35 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+@@ -112,21 +130,43 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
    const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
    const asked = new Map();
    for (const rec of Object.values(state.issues)) if (rec && (rec.status === 'open' || rec.status === 'confirming')) asked.set(rec.key, rec);
@@ -81,6 +81,14 @@ index 1e1e30e..525558c 100644
 +          text: txt(it.text ?? it.title, TITLE_MAX),
 +          ...(it.kind === 'decision' ? { protectedTopic: decisionProtectedTopic(it) } : {}),
 +          ...(it.boardSafe === true ? { boardSafe: true } : {}),
++          ...(it.kind === 'decision' ? (() => {
++            const choiceOptions = Array.isArray(it.choices) ? it.choices.slice(0, 9).map(c => txt(c, 40)).filter(Boolean) : [];
++            const defaultChoice = it.default !== undefined ? txt(String(it.default), 40) : null;
++            return {
++              ...(defaultChoice ? { defaultChoice } : {}),
++              ...(choiceOptions.length ? { choiceOptions } : {}),
++            };
++          })() : {}),
 +          since: it.since ?? null,
 +          unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,
 +          steps: (it.steps ?? []).length,
@@ -99,8 +107,33 @@ index 1e1e30e..525558c 100644
        for (const t of ledger?.tickets ?? []) {
          if (!ticketReleaseAllowed(t, ledger)) continue;
          if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+@@ -150,21 +190,23 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
+   }));
+   const items = [];
+   const fyi = [];
+   let hidden = 0;
+   for (const { project, mine: all } of perProject) {
+     const mine = all.filter(it => !it.fyi);
+     for (const it of all.filter(x => x.fyi).slice(0, 30)) fyi.push({ projectId: project.id, project: txt(project.name, 80), id: it.id, title: it.title, since: it.since, command: it.command });
+     // The items that unblock the most come first, then the oldest; a project's list is capped, and the cap is reported, not hidden.
+     mine.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)));
+     hidden += Math.max(0, mine.length - MAX_PER_PROJECT);
+-    for (const it of mine.slice(0, MAX_PER_PROJECT)) items.push({ projectId: project.id, project: txt(project.name, 80), ...it });
++    for (const it of mine.slice(0, MAX_PER_PROJECT)) {
++      items.push({ projectId: project.id, project: txt(project.name, 80), projectRoot: project.root, ...it });
++    }
+   }
+   items.sort((a, b) => (b.unblocks - a.unblocks) || String(a.since).localeCompare(String(b.since)) || String(a.project).localeCompare(String(b.project)));
+   const phoneIssue = rec => {
+     if (phoneRecordScratch(rec, scratchOpts)) return false;
+     return rec.status === 'open' || rec.status === 'confirming';
+   };
+   const open = [...asked.values()].filter(r => r.status === 'open' && !phoneRecordScratch(r, scratchOpts)).length;
+   const confirming = [...asked.values()].filter(phoneIssue).length - open;
+   return {
+     total: items.length + hidden,
 diff --git a/tools/handbuild-commands.mjs b/tools/handbuild-commands.mjs
-index d8b3f87..90d0362 100644
+index 60712e8..90d0362 100644
 --- a/tools/handbuild-commands.mjs
 +++ b/tools/handbuild-commands.mjs
 @@ -1,17 +1,18 @@
@@ -122,7 +155,30 @@ index d8b3f87..90d0362 100644
    const projects = await listProjects({
      file,
      forOwner: false,
-@@ -60,22 +61,34 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
+@@ -22,21 +23,21 @@ async function registeredScratchHandbuildRoot(root, installRoot, env = process.e
+     installRoot,
+   });
+   return isScratchRoot(root, {
+     env,
+     home,
+     installRoot,
+     strict: true,
+     registeredRoots: projects.map(p => p.root),
+   });
+ }
+-import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir, refreshProjectInstallHooks, readGuardHookCommandFromSettings, guardHookPathStatus, collectSwarmHookStatuses } from './install.mjs';
++import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir, refreshTrackedSettingsHooks, readGuardHookCommandFromSettings, guardHookPathStatus } from './install.mjs';
+ import { installGitHooks, removeGitHooks } from './git-hooks.mjs';
+ 
+ export const HANDBUILD_USAGE = [
+   'Usage: swarm handbuild request --kind swarm-cannot|emergency|secret|tiny --reason "why the swarm cannot do it" --files "src/a.ts,src/b.ts" [--minutes 30] [--git commit,push]',
+   '       swarm handbuild approve ID | deny ID      (the owner only: an orchestrator session cannot run these)',
+   '       swarm handbuild status [--json] | log [--json]',
+   '       swarm handbuild install | uninstall | off | on',
+   `Valid reasons (anything else: write a ticket instead): ${KIND_LIST.map(k => `${k}: ${REASON_KINDS[k]}`).join('; ')}. An approval covers only the files named, for at most ${MAX_MINUTES} minutes (default ${DEFAULT_MINUTES}), then expires.`,
+ ].join('\n') + '\n';
+ 
+@@ -60,83 +61,85 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
        const r = (await registeredScratchHandbuildRoot(root, installRoot, env))
          ? createScratchDeniedHandbuildRequest(root, fields, { now })
          : createRequest(root, fields, { now });
@@ -158,8 +214,72 @@ index d8b3f87..90d0362 100644
      }
      if (sub === 'status') {
        const all = listRequests(root);
+       const live = activeApprovals(root, now());
+       let hookSettings = {};
+       try {
+         hookSettings = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.local.json'), 'utf8'));
+       } catch { /* no local settings */ }
+       const hookCommand = readGuardHookCommandFromSettings(hookSettings);
+       const hookInfo = installRoot ? guardHookPathStatus({ hookCommand, installRoot }) : null;
+-      const swarmHooks = installRoot ? collectSwarmHookStatuses(hookSettings, installRoot) : [];
+       if (flags.json) {
+         return out(JSON.stringify({
+           requests: all,
+           active: live.map(r => r.id),
+           off: fs.existsSync(path.join(root, OFF_FILE)),
+           guardHook: hookInfo,
+-          swarmHooks,
+         }));
+       }
+       const hookLines = [];
+       if (hookInfo?.hookPath) {
+         hookLines.push(`guard hook: ${hookInfo.hookPath}`);
+         hookLines.push(`guard hook stable: ${hookInfo.matches ? 'yes' : 'no'}`);
+         if (hookInfo.warn) hookLines.push('warning: guard hook path is not under the install current/ release; run swarm update or swarm handbuild install');
+       }
+-      for (const row of swarmHooks) {
+-        if (row.label.startsWith('hand-build guard')) continue;
+-        const pathLine = row.hookPath ?? row.command;
+-        hookLines.push(`${row.label}: ${pathLine}`);
+-        hookLines.push(`${row.label} stable: ${row.matches ? 'yes' : 'no'}`);
+-        if (row.warn) hookLines.push(`warning: ${row.label} is not on the install current/ release or is missing; run swarm update or swarm handbuild install`);
+-      }
+       return out([
+         `guard: ${fs.existsSync(path.join(root, OFF_FILE)) ? 'OFF (.swarm/handbuild/off exists)' : 'on where the hook is installed (swarm handbuild install)'}`,
+         ...hookLines,
+         `${live.length} live approval(s), ${all.filter(r => r.status === 'pending').length} pending`,
+         ...all.slice(0, 20).map(describe),
+       ].join('\n'));
+     }
+     if (sub === 'log') {
+       let lines = [];
+       try { lines = fs.readFileSync(path.join(root, LOG_FILE), 'utf8').split('\n').filter(Boolean).slice(-200); } catch { /* none yet */ }
+       return out(flags.json ? `[${lines.join(',')}]` : lines.map(l => { try { const e = JSON.parse(l); return `${e.at}  ${e.event}${e.id ? ` ${e.id}` : ''}${e.tool ? ` ${e.tool}` : ''}${e.files?.length ? ` ${e.files.join(', ')}` : ''}${e.reason ? `  ${e.reason}` : ''}`; } catch { return l; } }).join('\n') || 'nothing logged yet');
+     }
+     if (sub === 'install') {
+-      const refreshed = await refreshProjectInstallHooks(root, installRoot, { refreshOnly: true });
+-      let r = refreshed.handbuild;
+-      if (r.status === 'absent' || r.status === 'removed-by-owner') r = await ensureHandbuildGuard(root, installRoot);
++      const r = await ensureHandbuildGuard(root, installRoot);
+       if (r.status === 'skipped') return out(`not installed: ${r.reason}`, 1);
++      const tracked = await refreshTrackedSettingsHooks(root, installRoot);
+       const install = stableInstallDir(installRoot);
+       const hooks = installGitHooks(root, { checkScript: path.join(install, 'tools', 'githook-check.mjs') });
+       const hookNote = hooks?.status === 'skipped' ? `git hooks not installed (${hooks.reason})` : 'git hooks installed';
+-      const trackedNote = refreshed.tracked?.status === 'updated' ? '\nhooks-path-fixed-tracked: .claude/settings.json (commit this file if your project tracks it)' : '';
++      const trackedNote = tracked.status === 'updated' ? '\nhooks-path-fixed-tracked: .claude/settings.json (commit this file if your project tracks it)' : '';
+       return out(`hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)${trackedNote}\n${hookNote}`);
+     }
+     if (sub === 'uninstall') {
+       const r = await removeHandbuildGuard(root);
+       removeGitHooks(root);
+       return out(`hand-build guard ${r.status}\ngit hooks removed`);
+     }
+     if (sub === 'off' || sub === 'on') {
+       const file = path.join(root, OFF_FILE);
+       if (sub === 'off') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, ''); } else fs.rmSync(file, { force: true });
 diff --git a/tools/inbox-commands.mjs b/tools/inbox-commands.mjs
-index df11064..8d87da8 100644
+index 7a67191..8d87da8 100644
 --- a/tools/inbox-commands.mjs
 +++ b/tools/inbox-commands.mjs
 @@ -1,25 +1,26 @@
@@ -177,8 +297,9 @@ index df11064..8d87da8 100644
    inbox: 'Usage: swarm inbox [--json] [--all]\n',
    done: 'Usage: swarm done ID\n',
    decide: 'Usage: swarm decide ID CHOICE\n',
-   resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
+-  resolve: 'Usage: swarm resolve BLOCKER_ID | swarm resolve RUN_ID --handled\n',
 -  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID]\n',
++  resolve: 'Usage: swarm resolve BLOCKER_ID   (closes a blocker you have dealt with; swarm inbox shows the ids)\n',
 +  decision: 'Usage: swarm decision "TEXT" --choice CHOICE [--option OPTION]... [--id ID] [--board-safe]\n',
    backlog: 'Usage: swarm backlog | backlog add "GOAL" [--paths a/,b/] [--max-usd N] | backlog remove ID\n',
  };
@@ -190,7 +311,40 @@ index df11064..8d87da8 100644
    if (!process.stdin.isTTY || !process.stdout.isTTY) return 'agent';
    if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT) return 'agent';
    if (env.SWARM_AGENT_SESSION) return 'agent';
-@@ -103,33 +104,49 @@ export async function runInboxCommand(root, command, args, { installRoot, now =
+@@ -86,66 +87,66 @@ export async function runInboxCommand(root, command, args, { installRoot, now =
+       if (args.length !== 1) return bad(command);
+       const out = await markDone(root, args[0], inboxDeps({ now }));
+       return { stdout: `done: ${out.id}\n`, exitCode: 0 };
+     }
+     if (command === 'decide') {
+       if (args.length !== 2) return bad(command);
+       const out = await decide(root, args[0], args[1], inboxDeps({ now, channel: decideChannelFromEnvironment() }));
+       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
+     }
+     if (command === 'resolve') {
+-      if (args.length === 2 && args[1] === '--handled') {
+-        const runId = args[0];
+-        if (!runId || runId.startsWith('-') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) return bad(command);
+-        const statePath = path.join(root, '.swarm', 'runs', runId, 'state.json');
+-        let state;
+-        try {
+-          state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+-        } catch {
+-          return { stdout: `no run state for ${sanitizeText(runId)}\n`, exitCode: 1 };
+-        }
+-        state.handled = true;
+-        state.handledAt = new Date(now()).toISOString();
+-        await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+-        await appendEvent(root, { kind: 'run', id: runId, status: state.status ?? 'failed', handled: true }, { now });
+-        return { stdout: `handled: ${runId}\n`, exitCode: 0 };
+-      }
+       if (args.length !== 1 || args[0].startsWith('-')) return bad(command);
+       const open = openItems(await readJournal(root, { limit: Infinity })).find(event => event.kind === 'blocker' && String(event.id) === args[0]);
+       if (!open) return { stdout: `no open blocker ${sanitizeText(args[0])} in this project (swarm inbox lists them)\n`, exitCode: 1 };
+       const integrateKind = integrateBlockerKindFromId(open.id);
+       const integrateRun = integrateBlockerRunIdFromId(open.id);
+       const resolution = integrateKind && integrateRun
+         ? integrateBlockerResolutionEvent(open, {
            integrateKind,
            integrateRun,
            integrateCause: open.integrateCause ?? open.text,
@@ -274,13 +428,43 @@ index e633ebe..06da5d9 100644
    const { listRuns, readState, readJournal, now, onNote } = deps;
    const ms = nowOf(now);
 diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
-index b283f96..c7a5cdb 100644
+index 1c3fb40..5ea5916 100644
 --- a/tools/watch-cli.mjs
 +++ b/tools/watch-cli.mjs
-@@ -18,20 +18,23 @@ import { ticketComments } from './gallery-tickets.mjs';
+@@ -1,50 +1,62 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // `swarm watch` and `swarm gallery`: command glue for the read-only dashboard. The pieces
+ // (state, plan, delta, server, tui, gallery) are separate modules; this only wires them.
+ 
+ import fs from 'node:fs/promises';
+-import { realpathSync } from 'node:fs';
+ import path from 'node:path';
+ import { execFile, spawn } from 'node:child_process';
+ import { openSync, closeSync, constants as fsConstants } from 'node:fs';
+ import { fileURLToPath } from 'node:url';
+ import { buildRunSnapshot } from './watch-state.mjs';
+ import { sanitizeWorkerText, UNTRUSTED_LABEL } from './worker-text.mjs';
+ import { buildPlanSnapshot } from './watch-plan.mjs';
+ import { liveOverview } from './board-live.mjs';
+ import { createWatchServer } from './watch-server.mjs';
+ import { renderTui } from './watch-tui.mjs';
+ import { readGallery, approveScreens, addComment } from './watch-gallery.mjs';
+ import { ticketComments } from './gallery-tickets.mjs';
  import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
  import { COMMANDS } from './completion.mjs';
- import { readLedger } from './tickets.mjs';
+-import { readLedger } from './tickets.mjs';
++import {
++  readLedger,
++  writeLedger,
++  validateTicket,
++  approveLedger,
++  isApproved,
++  transition,
++  appendLog,
++} from './tickets.mjs';
++import { decide } from './inbox.mjs';
++import { inboxDeps } from './inbox-commands.mjs';
++import { decideRequest } from './handbuild.mjs';
  import { boardSummary, listLiveRuns } from './board.mjs';
  import { listProjects, projectsFile, projectId, isScratchRoot } from './projects.mjs';
  import { isBoardTempRoot } from './scratch-roots.mjs';
@@ -301,7 +485,66 @@ index b283f96..c7a5cdb 100644
  import { loadLocalConfig } from './local-config.mjs';
  import { backfillHistory } from './board-commands.mjs';
  import { projectSummary } from './project-spend.mjs';
-@@ -483,21 +486,72 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
+ import { createDeployTracker } from './deploy-status.mjs';
+-import { runnerVersion } from './runner-version.mjs';
+ 
+ const here = path.dirname(fileURLToPath(import.meta.url));
+ const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+ const LIVE = new Set(['running', 'queued']);
+ 
+ export const WATCH_USAGE = 'Usage: swarm watch [RUN] [--all [--text|--json]] [--tui] [--open] [--json]\n       swarm gallery list | approve ID... | comment ID "text" | tickets [ID...]\n';
+ 
+ async function readJson(file) {
+   try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return null; }
+ }
+@@ -349,46 +361,28 @@ export function registryModeFields(mode, { stdin = process.stdin, stdout = proce
+   return {
+     mode,
+     ...(mode === 'background' && explicitBackground ? { explicitBackground: true, modeFromTty: fromTty } : {}),
+   };
+ }
+ 
+ async function readPackageVersion(root = here) {
+   try { return JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version ?? null; } catch { return null; }
+ }
+ 
+-/** Version stamped on board/remote server records: the runner executing this code, not SWARM_INSTALL_DIR. */
+-export async function serverRecordVersion(importMetaUrl = import.meta.url) {
+-  try {
+-    const fromRunner = await runnerVersion(importMetaUrl);
+-    if (fromRunner) return fromRunner;
+-  } catch { /* fall through */ }
+-  const fromPkg = await readPackageVersion();
+-  if (fromPkg) return fromPkg;
+-  throw new Error('could not determine swarm runner version for server record');
+-}
+-
+ async function installedVersionFor(env, versionState = {}) {
+   const install = env?.SWARM_INSTALL_DIR;
+   if (install) {
+     const direct = await readPackageVersion(path.join(install, 'current'));
+     if (direct) return direct;
+   }
+   return versionState?.installedVersion ?? null;
+ }
+-
+-function runnerFieldsForRegistry(entry = path.join(here, 'swarm.mjs')) {
+-  const runner = entry;
+-  let runnerRealpath = runner;
+-  try { runnerRealpath = realpathSync(runner); } catch { /* keep literal path */ }
+-  return { runner, runnerRealpath };
+-}
+ // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
+ const pidAlive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+ 
+ async function boardAnswers(url, fetchImpl = fetch) {
+   try {
+     const u = new URL(url);
+     if (u.hostname !== '127.0.0.1') return false;
+     // Only our own board answers with the board's shape; a redirect is never followed (the token goes to this address and nowhere else).
+     const res = await fetchImpl(`${u.origin}/api/board?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`, { redirect: 'manual', signal: AbortSignal.timeout?.(2000) });
+     if (!res.ok) return false;
+@@ -503,21 +497,153 @@ async function boardHistoryQuery(q, env, showsScratch, scratchIds) {
      fold: true,
      exclude: showsScratch ? undefined : scratchIds,
    };
@@ -339,6 +582,85 @@ index b283f96..c7a5cdb 100644
 +  return { entries, skipped };
 +}
 +
++export async function approveProposedTicketOnBoard(root, ticketId, { now: nowFn }) {
++  const fresh = await readLedger(root);
++  if (!fresh) return { ok: false, message: 'no ticket ledger; run swarm scope split first' };
++  const ticket = fresh.tickets.find(x => x.id === ticketId);
++  if (!ticket) return { ok: false, message: `no ticket ${ticketId}` };
++  if (ticket.status !== 'proposed') return { ok: false, message: `${ticket.id} is ${ticket.status}, not proposed` };
++  if (!(ticket.files ?? []).length) return { ok: false, message: `${ticket.id} names no files yet` };
++  const clash = [];
++  for (const f of ticket.files) {
++    const owners = fresh.tickets.filter(x => x.id !== ticket.id && ['todo', 'ready', 'running', 'review', 'blocked'].includes(x.status) && ((x.files ?? []).includes(f) || (x.deletes ?? []).includes(f)));
++    if (owners.length) clash.push(`${f} (${owners.map(o => o.id).join(', ')})`);
++  }
++  if (clash.length) return { ok: false, message: `${ticket.id} writes files that open tickets also write` };
++  const next = { ...ticket, status: 'todo', approvedBy: 'owner' };
++  const v = validateTicket(next);
++  if (!v.ok) return { ok: false, message: v.errors[0] };
++  const wasApproved = isApproved(fresh);
++  fresh.tickets = fresh.tickets.map(x => (x.id === ticket.id ? next : x));
++  const prev = fresh.approved;
++  const saved = wasApproved
++    ? { ...fresh, approved: { ...prev, ...approveLedger(fresh, { by: 'owner', now: nowFn() }).approved, at: prev.at, ...(prev.ciTickets ? { ciTickets: prev.ciTickets } : {}) } }
++    : fresh;
++  saved.updatedAt = new Date(nowFn()).toISOString();
++  await writeLedger(root, saved);
++  await appendLog(root, { event: 'proposed-approved', id: ticket.id, by: 'owner', note: 'board' });
++  return { ok: true };
++}
++
++export function boardOwnerApply(env, now = Date.now) {
++  const inboxApplyDeps = inboxDeps({ channel: 'board', now });
++  return async (item, answer, { identity, now: nowFn }) => {
++    const root = item?.projectRoot;
++    if (!root) return { ok: false, message: 'the action could not be applied' };
++    const kind = item.kind;
++    const decision = answer?.decision;
++    const choice = answer?.choice ?? null;
++    if (kind === 'scope') {
++      return { ok: false, message: 'scope approval runs its gate in the terminal: swarm scope approve' };
++    }
++    const handbuildId = String(item.id ?? '');
++    if (handbuildId.startsWith('handbuild-') || kind === 'handbuild') {
++      const picked = choice ?? (decision === 'approve' ? 'approve' : 'deny');
++      try {
++        const hbRef = handbuildId.startsWith('handbuild-') ? handbuildId.slice('handbuild-'.length) : handbuildId;
++        decideRequest(root, hbRef, picked, { now: nowFn, by: 'owner', channel: 'board' });
++        return { ok: true };
++      } catch (error) {
++        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
++      }
++    }
++    if (kind === 'decision') {
++      const picked = choice;
++      try {
++        await decide(root, item.id, picked, { ...inboxApplyDeps, now: nowFn, channel: 'board' });
++        return { ok: true };
++      } catch (error) {
++        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
++      }
++    }
++    if (kind === 'proposed-ticket') {
++      if (decision === 'approve') {
++        return approveProposedTicketOnBoard(root, item.id, { now: nowFn });
++      }
++      try {
++        await transition(root, item.id, 'cancelled', {
++          by: 'owner',
++          note: `denied on the board by ${identity}`,
++          now: nowFn(),
++        });
++        return { ok: true };
++      } catch (error) {
++        return { ok: false, message: String(error.message ?? 'the action could not be applied').slice(0, 400) };
++      }
++    }
++    return { ok: false, message: 'the action could not be applied' };
++  };
++}
++
++// watch-server handleOwner reads prepare POST JSON and passes choice into ownerActions.prepare.
 +function buildOwnerActions({ env, now, live, remoteLogin }) {
 +  const auditFile = ownerAuditPath(env);
 +  const appendAudit = async entry => {
@@ -347,6 +669,7 @@ index b283f96..c7a5cdb 100644
 +  };
 +  const readAudit = async () => (await readOwnerAudit(env)).entries;
 +  const login = typeof remoteLogin === 'string' ? remoteLogin : '';
++  const apply = boardOwnerApply(env, now);
 +  return createOwnerActions({
 +    listItems: async () => {
 +      const opts = boardProjectOpts(env);
@@ -357,6 +680,7 @@ index b283f96..c7a5cdb 100644
 +    appendAudit,
 +    readAudit,
 +    guard: guardBoardAction,
++    apply,
 +    now,
 +    randomId: () => randomBytes(16).toString('hex'),
 +    ownerIdentities: login ? [login] : [],
@@ -375,7 +699,7 @@ index b283f96..c7a5cdb 100644
      },
    });
    let boardUrl = null;
-@@ -648,42 +702,49 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
+@@ -668,55 +794,60 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
        })();
        watchers.set(key, entry);
        entry.pending.catch(() => { entry.closed = true; watchers.delete(key); });
@@ -393,9 +717,10 @@ index b283f96..c7a5cdb 100644
  // Starts the board server in this process and records its address for run pages that want to go back to it.
  // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
  // and it does not stop when idle.
- export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
+-export async function startBoardServer({ env = process.env, root, remote, registry = null }) {
 -  const api = createBoardApi({ env });
-+  const api = createBoardApi({ env, remote });
++export async function startBoardServer({ env = process.env, root, remote, registry = null, now = Date.now } = {}) {
++  const api = createBoardApi({ env, remote, now });
    backfillHistory({ env }).catch(() => {});
    const server = createWatchServer({
      root,
@@ -420,10 +745,24 @@ index b283f96..c7a5cdb 100644
    });
    const { url, port } = await server.listen();
    api.setBoardUrl(remote ? null : url);
-   const version = await readPackageVersion();
+-  const version = await serverRecordVersion();
++  const version = await readPackageVersion();
    const boardMode = remote ? 'background' : serverMode({ explicitBackground: registry?.explicitBackground === true });
+-  const swarmEntry = path.join(here, 'swarm.mjs');
    const baseRegistry = {
      version,
      argv: remote ? argvForRemoteServe(remote, registry ?? {}) : ['watch', '--all'],
      cwd: process.cwd(),
      port,
+     env: safeEnvSubset(env),
+-    ...runnerFieldsForRegistry(swarmEntry),
+     ...registryModeFields(boardMode, { explicitBackground: remote || registry?.explicitBackground === true }),
+     ...(registry && typeof registry === 'object' ? registry : {}),
+   };
+   if (!remote) {
+     try {
+       await writeBoardFile(url, { env, registry: baseRegistry });
+     } catch (error) {
+       process.stderr.write(`board server record write failed: ${error.message}\n`);
+     }
+   } else {
