@@ -7,6 +7,7 @@ import path from 'node:path';
 import { expandTicketRefs } from './ticket-refs.mjs';
 import { effectiveTargetWorktree, readLedger, resolveTargetWorktree } from './tickets.mjs';
 import { worktreeFamily } from './project-spend.mjs';
+import { validateManifest } from './swarm/core-31.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -391,6 +392,34 @@ export function acceptanceReviewSkipWarning(ticketId, reason) {
  * Build and write an acceptance review manifest for one ticket at the project root.
  * Throws when the ticket worktree cannot be resolved or context files are not visible there.
  */
+export function reviewManifestPathError(relativeFile) {
+  return `review manifest ${relativeFile} is missing or not valid JSON`;
+}
+
+/** Read a review manifest from disk; refuse with a path-specific message before generic validate errors. */
+export async function readReviewManifest(projectRoot, relativeFile) {
+  if (!relativeFile || typeof relativeFile !== 'string') {
+    throw Object.assign(new Error(reviewManifestPathError(String(relativeFile ?? ''))), { code: 'review-manifest' });
+  }
+  const filePath = path.isAbsolute(relativeFile) ? relativeFile : path.join(projectRoot, relativeFile);
+  let raw;
+  try {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch {
+    throw Object.assign(new Error(reviewManifestPathError(relativeFile)), { code: 'review-manifest' });
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw Object.assign(new Error(reviewManifestPathError(relativeFile)), { code: 'review-manifest' });
+  }
+}
+
+export async function loadReviewManifest(projectRoot, relativeFile) {
+  const manifest = await readReviewManifest(projectRoot, relativeFile);
+  return validateManifest(manifest);
+}
+
 export async function prepareAcceptanceReviewFile(projectRoot, {
   runId,
   ticket,
