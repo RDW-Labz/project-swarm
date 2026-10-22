@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { collectInbox } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
-import { readLedger } from './tickets.mjs';
+import { readLedger, isApproved } from './tickets.mjs';
 import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
 import { sanitizeText } from './journal.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
@@ -31,6 +31,29 @@ const deadline = (promise, ms, label) => {
 const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
 const MAX_PER_PROJECT = 50;
 const stepsOf = ({ commands, next }) => ({ commands, command: commands[0]?.cmd ?? null, next });
+
+export function ticketReleaseAllowed(ticket, ledger) {
+  if (!ticket || ticket.type === 'human') return false;
+  if (!['blocked', 'todo', 'review'].includes(ticket.status)) return false;
+  const done = new Set((ledger?.tickets ?? []).filter(t => t.status === 'done').map(t => t.id));
+  const waiting = (ticket.dependsOn ?? []).filter(d => !done.has(d));
+  if (waiting.length) return false;
+  if (ticket.status === 'todo' && ledger && !isApproved(ledger)) return false;
+  return true;
+}
+
+export function needYouForProject(inbox, projectId) {
+  const items = (inbox?.items ?? []).filter(item => item.projectId === projectId);
+  return {
+    needYou: items.length,
+    needYouItems: items.map(item => ({
+      id: item.id,
+      title: item.title,
+      kind: item.kind,
+      command: item.command ?? item.commands?.[0]?.cmd ?? null,
+    })),
+  };
+}
 const phoneOf = (rec, now) => (rec ? { status: Number.isFinite(rec.expiresAt) && rec.expiresAt <= now ? 'expired' : rec.status, expiresAt: Number.isFinite(rec.expiresAt) ? new Date(rec.expiresAt).toISOString() : null, issue: Number.isInteger(rec.number) ? rec.number : null } : null);
 
 // "FYI, no action needed" notes are not for the owner: they are listed apart, collapsed, and never counted.
@@ -48,7 +71,10 @@ function nextFor(item, root) {
     const choice = String(item.default ?? item.choices?.[0] ?? 'CHOICE');
     if (plain(choice) && !choice.startsWith('-')) commands.push({ label: 'Choose', cmd: `${swarm} decide ${quote(item.id)} ${quote(choice)}` });
   } else if (item.kind === 'proposed-ticket') commands.push(item.files ? { label: 'Approve it', cmd: `${swarm} tickets ${quote(item.id)} --approve --yes` } : { label: 'Name its files first', cmd: `${swarm} tickets ${quote(item.id)} --files FILE[,FILE] --yes` });
-  else if (item.kind === 'blocker') {
+  else if (item.kind === 'held-ticket') {
+    next = 'Release this ticket to ready when you are satisfied it can run again.';
+    commands.push({ label: 'Release to ready', cmd: `${swarm} tickets ${quote(item.id)} --release` });
+  } else if (item.kind === 'blocker') {
     const text = String(item.text ?? item.title ?? '');
     const run = /^security-(\d{10,}-[0-9a-f]{6,8})-/.exec(String(item.id))?.[1];
     const manifest = /unsupported-manifest: (\S+) changed/.exec(text)?.[1];
@@ -100,6 +126,22 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
         if (t?.status !== 'proposed') continue;
         const phone = asked.get(`${project.root}|ticket|${t.id}`);
         mine.push({ kind: 'proposed-ticket', id: txt(t.id, 20), title: txt(t.title, TITLE_MAX), since: t.createdAt ?? ledger.updatedAt ?? null, unblocks: 0, steps: 0, choices: null, origin: txt(t.origin, 20), filesNamed: (t.files ?? []).length > 0, ...stepsOf(nextFor({ kind: 'proposed-ticket', id: t.id, files: (t.files ?? []).length > 0 }, project.root)), fyi: false, phone: phoneOf(phone, now) });
+      }
+      for (const t of ledger?.tickets ?? []) {
+        if (!ticketReleaseAllowed(t, ledger)) continue;
+        if (t.status === 'blocked' && t.blockReason === 'deps') continue;
+        mine.push({
+          kind: 'held-ticket',
+          id: txt(t.id, 20),
+          title: txt(t.title, TITLE_MAX),
+          since: ledger.updatedAt ?? new Date(ms).toISOString(),
+          unblocks: 0,
+          steps: 0,
+          choices: null,
+          ...stepsOf(nextFor({ kind: 'held-ticket', id: t.id }, project.root)),
+          fyi: false,
+          phone: null,
+        });
       }
       return mine;
     };

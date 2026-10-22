@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-8012-gaps",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2400000,
+      "outputs": [
+        "tests/board-accuracy-card.test.mjs",
+        "tools/board-data.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "coordination/reviews/acc-review-t8012.json",
+        "tools/build-progress.mjs",
+        "tools/board-inbox.mjs"
+      ],
+      "prompt": "T-8012 acceptance gaps (coordination/reviews/acc-review-t8012.json), tests only, in tests/board-accuracy-card.test.mjs using tests/helpers/board-accuracy-fixture.mjs: (1) card.facts.untrackedRuns: oracle reads every run state file in the family from disk, keeps runs from the last 14 days or live, drops nonIntegrating runs and runs whose manifest/job ids match smoke, lane-test, lane-bench, probe or doctor, and counts runs having any job id that is not a ticket id in any family ledger file; assert equality, with a fixture containing each excluded kind plus two real untracked runs; (2) card.facts.checkouts: oracle = entries from `git worktree list --porcelain` in the main root plus scratch worktrees of the repo; (3) a test that uses the fixture's merged-PR list: whatever card field depends on merged PRs (check how projectOverview uses prState/merge history; if none, assert that card.now/next/blocked and percent are unchanged when the PR list changes and say so in a comment); (4) assert JSON.stringify(card) has no money-shaped key (usd, cost, billed, list value, flatRate, price, spend, budget) and no dollar-shaped value. Fix tools/board-data.mjs only if an oracle exposes a real mismatch, and say so. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-accuracy-card.test.mjs tests/board-accuracy-*.test.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests import board-data for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "reviewer": "cursor",
+  "reviews": [
+    {
+      "ticket": "T-8012",
+      "verdict": "fail",
+      "lines": [
+        {
+          "n": 1,
+          "met": true,
+          "evidence": "tools/board-data.mjs:597-622 buildWatchCard; tools/board-data.mjs:558-564 enrichWatchCard; tests/board-accuracy-card.test.mjs COVERAGE + per-field tests",
+          "gap": ""
+        },
+        {
+          "n": 2,
+          "met": true,
+          "evidence": "tools/board-data.mjs:605-606 next.command; tools/board-data.mjs:501-502 blocked.command; tools/board-inbox.mjs:63-92 need-you commands; tests: card.next.items fields match disk oracle, card.blocked.items command follows release rule read from disk, card.blocked.needYouItems match inbox-on-disk oracle",
+          "gap": ""
+        },
+        {
+          "n": 3,
+          "met": false,
+          "evidence": "tests/board-accuracy-card.test.mjs:390-403 oracleUntrackedRuns; tests/board-accuracy-card.test.mjs:214-217 oracleNextReady; tests/board-accuracy-card.test.mjs:542-548 card.next.items fields match disk oracle",
+          "gap": "facts.untrackedRuns oracle calls offLedgerRuns from tools/build-progress.mjs (same helper buildWatchCard uses at board-data.mjs:588-595), so a bug in offLedgerRuns would not be caught. next.ready/next.items oracles call ticketsReadyToRun (shared with production) instead of restating ready rules from ledger JSON alone. card.next.items expected titles omit boardTitle/sanitizeWorkerText applied in board-data.mjs:605."
+        },
+        {
+          "n": 4,
+          "met": true,
+          "evidence": "tools/board-data.mjs:597-622 card object has no spend fields; tests/board-accuracy-card.test.mjs card JSON omits money-shaped keys and dollar values",
+          "gap": ""
+        }
+      ]
+    }
+  ]
+}

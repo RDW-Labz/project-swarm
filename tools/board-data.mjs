@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
-import { readLedger } from './tickets.mjs';
+import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
 import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
 import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
@@ -13,7 +13,11 @@ import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { boardPercent, buildProgress, ledgerRoot, progressSummary } from './build-progress.mjs';
+import { boardPercent, buildProgress, cardEtaFromFamily, ledgerRoot, offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID, progressSummary } from './build-progress.mjs';
+import { checkTicketTree } from './scope-integrity.mjs';
+import { readEvents } from './orchestrator-events.mjs';
+import { lanesDir } from './lanes.mjs';
+import { boardInbox, needYouForProject, ticketReleaseAllowed } from './board-inbox.mjs';
 import { effectiveStage, stageDisplay } from './build-progress.mjs';
 import { doneTimes } from './client-report.mjs';
 import { parseScope } from './scope.mjs';
@@ -468,8 +472,158 @@ export async function boardOwnOnly(root) {
   return Boolean(await mainWorktreeRoot(root));
 }
 
+function familyRunningTickets(ledgers) {
+  const ids = new Set();
+  for (const ledger of ledgers ?? []) {
+    for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'running' && ticket.id) ids.add(String(ticket.id));
+  }
+  return ids.size;
+}
+
+function checkoutsBuildingCount(roots, runs) {
+  const liveRoots = new Set();
+  for (const run of runs ?? []) if (activeRunState(run.state)) liveRoots.add(run.root);
+  let count = 0;
+  for (const root of roots ?? []) if (liveRoots.has(root)) count += 1;
+  return count;
+}
+
+function blockedDependencyCard(ledger) {
+  const byId = new Map((ledger?.tickets ?? []).map(ticket => [ticket.id, ticket]));
+  const items = [];
+  let waitingOnTickets = 0;
+  for (const ticket of ledger?.tickets ?? []) {
+    if (ticket?.status !== 'blocked') continue;
+    const waitsOn = (ticket.dependsOn ?? []).filter(dep => byId.get(dep)?.status !== 'done');
+    if (!waitsOn.length) continue;
+    if (ticket.blockReason && ticket.blockReason !== 'deps') continue;
+    waitingOnTickets += 1;
+    const command = ticketReleaseAllowed(ticket, ledger) ? `swarm tickets ${ticket.id} --release` : null;
+    items.push({ id: ticket.id, title: txt(ticket.title, 140), waitsOn, command });
+  }
+  items.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return { waitingOnTickets, items };
+}
+
+function watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished }) {
+  if (finished) return null;
+  const tree = checkTicketTree({ scope, tickets: ledger?.tickets ?? [] });
+  const conflicts = tree.conflicts ?? [];
+  if (conflicts.length) {
+    const groups = new Map();
+    for (const conflict of conflicts) {
+      const stage = (ledger?.tickets ?? []).find(ticket => conflict.tickets?.includes(ticket.id))?.stage ?? 'unknown';
+      const key = `${stage}\0${conflict.file}`;
+      const entry = groups.get(key) ?? { stage, tickets: new Set() };
+      for (const id of conflict.tickets ?? []) entry.tickets.add(id);
+      groups.set(key, entry);
+    }
+    const worst = [...groups.values()].sort((a, b) => b.tickets.size - a.tickets.size)[0];
+    const count = worst.tickets.size;
+    const stageLabel = /^S\d+$/i.test(String(worst.stage)) ? `Stage ${worst.stage}` : `Stage ${worst.stage}`;
+    return `${stageLabel} has ${count} ticket${count === 1 ? '' : 's'} that write the same file in the same wave, so they cannot run together.`;
+  }
+  const waves = underfilledWaves(recentJobCounts, slots);
+  if (waves) return `${waves.charAt(0).toUpperCase()}${waves.slice(1)}.`;
+  return null;
+}
+
+function guardBlockedLast24h(roots, now) {
+  const since = now - DAY;
+  let count = 0;
+  for (const root of roots ?? []) {
+    for (const event of readEvents(root, { limit: 4000 })) {
+      if (event.e !== 'blocked') continue;
+      const at = Date.parse(event.at ?? '');
+      if (Number.isFinite(at) && at >= since && at <= now) count += 1;
+    }
+  }
+  return count;
+}
+
+export function watchCardSlots({ held, familyProjectIds, projectId }) {
+  const machineMax = held?.max ?? null;
+  const inUse = held?.total ?? 0;
+  const family = new Set([...(familyProjectIds ?? []), projectId].filter(Boolean));
+  let byThisProject = 0;
+  let byOtherProjects = 0;
+  for (const [key, entry] of Object.entries(held?.byProject ?? {})) {
+    const total = entry?.total ?? 0;
+    if (family.has(key)) byThisProject += total;
+    else if (key !== 'unknown') byOtherProjects += total;
+  }
+  return { machineMax, inUse, byThisProject, byOtherProjects };
+}
+
+export function enrichWatchCard(card, { held, familyProjectIds, projectId, inbox } = {}) {
+  if (!card) return card;
+  const need = needYouForProject(inbox, projectId);
+  card.blocked.needYou = need.needYou;
+  card.blocked.needYouItems = need.needYouItems;
+  card.slots = watchCardSlots({ held, familyProjectIds, projectId });
+  return card;
+}
+
+async function buildWatchCard({
+  ledger,
+  scope,
+  ledgers,
+  roots,
+  runs,
+  ticketFinishedAt,
+  progressFinished,
+  projectId,
+  now,
+  recentJobCounts,
+  slots,
+  historyFile,
+}) {
+  const readyList = ticketsReadyToRun(ledger?.tickets ?? []);
+  const blocked = blockedDependencyCard(ledger);
+  const eta = await cardEtaFromFamily({ roots, ledger, now });
+  const familyTicketIds = new Set();
+  for (const familyLedger of ledgers ?? []) {
+    for (const ticket of familyLedger?.tickets ?? []) if (ticket?.id) familyTicketIds.add(String(ticket.id));
+  }
+  const offLedger = offLedgerRuns(
+    runs.map(run => ({ runId: run.id, state: run.state })),
+    ledger,
+    null,
+    now,
+    familyTicketIds,
+    projectId,
+  );
+  const headsUp = watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished: progressFinished });
+  return {
+    now: {
+      buildingTickets: familyRunningTickets(ledgers),
+      checkoutsBuilding: checkoutsBuildingCount(roots, runs),
+      lastTicketFinishedAt: ticketFinishedAt,
+    },
+    next: {
+      ready: readyList.length,
+      items: readyList.map(ticket => ({ id: ticket.id, title: txt(ticket.title, 140), command: `swarm tickets ${ticket.id}` })),
+    },
+    blocked: {
+      waitingOnTickets: blocked.waitingOnTickets,
+      items: blocked.items,
+      needYou: 0,
+      needYouItems: [],
+    },
+    slots: { machineMax: slots ?? null, inUse: 0, byThisProject: 0, byOtherProjects: 0 },
+    eta,
+    facts: {
+      handEditsBlocked24h: guardBlockedLast24h(roots, now),
+      untrackedRuns: offLedger.count ?? 0,
+      listHref: offLedger.countHref ?? `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+      checkouts: (roots ?? []).length,
+    },
+    headsUp,
+  };
+}
+
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [] } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [], prState = undefined } = {}) {
   const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
   const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
   const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
@@ -504,7 +658,9 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...finishedProgress(raw), overall: boardPercent(raw), _rawFinished: raw.finished } : null, () => null);
+  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly, prState }).catch(() => null);
+  const progress = rawProgress ? { ...finishedProgress(rawProgress), overall: boardPercent(rawProgress), _rawFinished: rawProgress.finished } : null;
+  const progressFinished = progress?._rawFinished ?? false;
   if (progress) delete progress._rawFinished;
   const cost = costOf(runs, now);
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
@@ -534,6 +690,21 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   }).catch(() => null);
   const handled = await handledForProject(project.root, { now }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
+  const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0));
+  const card = await buildWatchCard({
+    ledger,
+    scope,
+    ledgers,
+    roots,
+    runs,
+    ticketFinishedAt,
+    progressFinished,
+    projectId: project.id,
+    now,
+    recentJobCounts,
+    slots,
+    historyFile,
+  });
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     pinnedVersion,
@@ -546,7 +717,8 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     spend: { usd: cost.allUsd, familyUsd: spend.spendUsd ?? null, familyBilledUsd: spend.billedUsd ?? null, capUsedUsd: capUsedUsd ?? null, sharedTrees: spend.sharedTrees ?? 1, capUsd: spend.capUsd ?? null, noCap: spend.capUsd === null || spend.capUsd === undefined ? !spend.capError : false, capInvalid: Boolean(spend.capError), reached: Boolean(spend.reached), capSource: spend.capSource ?? null, capInherited: Boolean(spend.capInherited), inheritedFrom: spend.inheritedFrom ?? null, why: spend.why ?? null, billedUsd: cost.paidUsd, listUsd: cost.flatRateListUsd, capBasis },
     progress,
     split,
-    recentJobCounts: runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0)),
+    recentJobCounts,
+    card,
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
@@ -569,7 +741,7 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined } = {}) {
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -611,6 +783,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     const parentIndex = inputProjects.findIndex(project => project.id === parentIds[i]);
     if (parentIndex >= 0) families[parentIndex].add(childRoot);
   }
+  const overviewFamilyIds = [];
   for (let i = 0; i < inputProjects.length; i += 1) {
     const project = inputProjects[i];
     const projectRoot = await realRoot(project.root);
@@ -624,7 +797,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root) }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState }));
+    const familyIds = new Set([project.id]);
+    for (const root of family) {
+      const member = registered.get(root);
+      if (member?.id) familyIds.add(member.id);
+    }
+    overviewFamilyIds.push(familyIds);
   }
   for (const overview of overviews) {
     overview.parentId = null;
@@ -648,6 +827,13 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     if (!overview.worktreeIds.length || !overview.progress?.headline) continue;
     const count = overview.worktreeIds.length;
     overview.progress.headline += ` (incl. ${count} worktree${count === 1 ? '' : 's'})`;
+  }
+  let heldWorkers = { total: 0, max: workers?.max ?? null, byProject: {} };
+  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: workers?.max ?? null }); } catch { /* empty lane store */ }
+  let inboxSnapshot = { items: [] };
+  try { inboxSnapshot = await boardInbox({ projects: inputProjects, now, env }); } catch { /* inbox unavailable */ }
+  for (let i = 0; i < overviews.length; i += 1) {
+    enrichWatchCard(overviews[i].card, { held: heldWorkers, familyProjectIds: overviewFamilyIds[i], projectId: overviews[i].id, inbox: inboxSnapshot });
   }
   for (const o of overviews) {
     const liveWarnings = [];

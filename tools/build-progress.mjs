@@ -2,7 +2,7 @@
 // Read-only build progress for one project, assembled from its ledger, scope, journal and history.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { readLedger, isApproved } from './tickets.mjs';
+import { readLedger, isApproved, logPath } from './tickets.mjs';
 import { worktreeFamily } from './project-spend.mjs';
 import { parseScope } from './scope.mjs';
 import { doneTimes } from './client-report.mjs';
@@ -28,6 +28,36 @@ const requirementIdRe = /R-\d{3,}/gi;
 
 // Board progress is the floor of done / counted tickets in the approved scope selected above.
 // Counted excludes human, cancelled, and proposed tickets; all board consumers use this basis.
+export async function cardEtaFromFamily({ roots, ledger, now = Date.now() } = {}) {
+  const tickets = (Array.isArray(ledger?.tickets) ? ledger.tickets : []).filter(COUNTED);
+  const remaining = tickets.filter(ticket => ticket.status !== 'done').length;
+  const since = now - 7 * DAY;
+  let doneLast7Days = 0;
+  for (const root of Array.isArray(roots) ? roots : []) {
+    try {
+      const content = await fs.readFile(logPath(root), 'utf8');
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let event;
+        try { event = JSON.parse(line); } catch { continue; }
+        const to = event.to ?? event.nextStatus ?? event.status;
+        if (String(to).toLowerCase() !== 'done') continue;
+        const at = Date.parse(event.at ?? '');
+        if (!Number.isFinite(at) || at < since || at > now) continue;
+        if (event.event === 'transition' || event.event === 'delivered' || event.event === undefined) doneLast7Days += 1;
+      }
+    } catch { /* no tickets.log */ }
+  }
+  const perDay = doneLast7Days > 0 ? Math.round((doneLast7Days / 7) * 100) / 100 : 0;
+  let days = null;
+  if (remaining === 0) days = 0;
+  else if (perDay > 0) days = Math.min(3650, Math.ceil(remaining / perDay));
+  const basis = doneLast7Days > 0
+    ? `${doneLast7Days} done in the last 7 days (family tickets.log)`
+    : 'no done transitions in family tickets.log in the last 7 days';
+  return { days, remaining, perDay, doneLast7Days, windowDays: 7, basis };
+}
+
 export function boardPercent(progress) {
   const basis = progress?.percent?.board ?? progress?.percent?.tickets;
   return pct(Number(basis?.done ?? 0), Number(basis?.total ?? 0));
@@ -446,7 +476,7 @@ function runHasIgnoredName(state, jobs) {
   return jobs.some(job => typeof job?.id === 'string' && IGNORED_RUN_WORDS.test(job.id));
 }
 
-function offLedgerRuns(records, ledger, history, now, ticketIds = null, projectId = null) {
+export function offLedgerRuns(records, ledger, history, now, ticketIds = null, projectId = null) {
   const ids = ticketIds ?? new Set((ledger?.tickets ?? []).map(ticket => ticket?.id).filter(Boolean));
   const prsByRun = new Map();
   for (const event of history ?? []) {
