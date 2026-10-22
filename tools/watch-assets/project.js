@@ -1,27 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 (function () {
   'use strict';
-  var TOKEN = self.BoardLib.watchToken();
+  var BoardLib = self.BoardLib;
+  var L = BoardLib;
+  var TOKEN = BoardLib.watchToken();
   var params = new URLSearchParams(location.search);
   var ID = params.get('id') || '';
   var $ = function (id) { return document.getElementById(id); };
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) { n.className = cls; } if (text !== undefined) { n.textContent = text; } return n; }
-  function meter(pct) { var m = el('div', 'meter'); var i = el('i'); i.style.width = Math.max(0, Math.min(100, typeof pct === 'number' ? pct : 0)) + '%'; m.appendChild(i); m.setAttribute('role', 'img'); m.setAttribute('aria-label', (typeof pct === 'number' ? Math.round(pct) : 0) + ' percent'); return m; }
+  function pill(text, cls) { return el('span', 'pill ' + (cls || 'info'), text); }
   function when(iso) { return iso ? String(iso).slice(0, 16).replace('T', ' ') : '-'; }
   function runHref(runId) { return '/run?id=' + encodeURIComponent(ID) + '&run=' + encodeURIComponent(runId); }
   $('back').href = '/';
   $('crumbBack').href = '/';
   $('crumbAll').href = '/';
-
-  function progressList(title, items) {
-    var box = el('div', 'progress-list');
-    box.appendChild(el('div', 'label', title));
-    var list = el('ul', 'board-list');
-    if (!items.length) { list.appendChild(el('li', 'board-entry sub', 'none')); }
-    items.forEach(function (item) { list.appendChild(el('li', 'board-entry', item)); });
-    box.appendChild(list);
-    return box;
-  }
 
   var panelErrors = Object.create(null);
   function failedPanel(id, error) {
@@ -30,111 +22,37 @@
   }
   function panel(id, fn) { try { fn(); } catch (error) { failedPanel(id, error); } }
 
-  function renderProgress(progress) {
+  function renderProgress(p) {
     var host = $('progressBody'); host.textContent = '';
-    if (!progress) { host.appendChild(el('div', 'board-empty', 'Build progress unavailable.')); return; }
-    var overall = progress.percent && progress.percent.overall;
-    var tickets = progress.percent && progress.percent.tickets || { done: 0, total: 0 };
-    var requirements = progress.percent && progress.percent.requirements;
-    var headlineText = progress.headline || ('build ' + tickets.done + '/' + tickets.total);
-    var headline = el('div', 'livebar'); headline.appendChild(meter(overall));
-    headline.appendChild(el('strong', 'big num', overall === null || overall === undefined ? 'Unknown' : String(overall) + '%'));
-    headline.appendChild(el('span', 'sub', headlineText));
-    host.appendChild(headline);
-
-    var milestones = el('ol', 'milestones');
-    (progress.milestones || []).forEach(function (item) {
-      var classes = item.state + (item.state === 'current' && item.currentDone ? ' done' : '');
-      var label = item.label + (item.evidence === 'not tracked' ? ' · not tracked' : '');
-      var li = el('li', classes, label); var title = [item.evidence, item.at].filter(Boolean).join(' · '); if (title) { li.setAttribute('title', title); } if (item.state === 'current') { li.setAttribute('aria-current', 'step'); } milestones.appendChild(li);
-    });
-    host.appendChild(milestones);
-
-    if (progress.scopes && progress.scopes.length) {
-      host.appendChild(el('div', 'label', 'Scopes'));
-      var scopeList = el('div', 'board-list');
-      progress.scopes.forEach(function (scope) {
-        var label = scope.name + ' · build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total;
-        if (scope.done) {
-          var details = el('details', 'board-entry');
-          details.appendChild(el('summary', '', label + ' · done'));
-          details.appendChild(el('div', 'sub', scope.current || 'Finished'));
-          scopeList.appendChild(details);
-        } else {
-          var row = el('div', 'board-entry');
-          row.appendChild(el('span', 'name', scope.name));
-          row.appendChild(meter(scope.build.total ? scope.build.done * 100 / scope.build.total : 0));
-          row.appendChild(el('span', 'mono sub', 'build ' + scope.build.done + '/' + scope.build.total + ' · human ' + scope.human.done + '/' + scope.human.total + ' · ' + (scope.current || 'Unknown')));
-          scopeList.appendChild(row);
-        }
-      });
-      host.appendChild(scopeList);
+    var progressSection = $('progress');
+    if (progressSection) {
+      var heading = progressSection.querySelector('h2');
+      if (heading) { heading.textContent = 'Project status'; }
     }
-
-    var stages = el('div', 'board-list');
-    (progress.stages || []).forEach(function (stage) {
-      var row = el('div', 'board-entry'); row.appendChild(el('span', 'name', stage.title || stage.id)); row.appendChild(meter(stage.pct)); row.appendChild(el('span', 'mono sub', stage.done + ' done/' + stage.open + ' open/' + stage.blocked + ' blocked')); stages.appendChild(row);
-    });
-    if (!stages.childNodes.length) { stages.appendChild(el('div', 'board-empty', 'No stages recorded.')); }
-    host.appendChild(stages);
-
-    var left = progress.left || { openByType: {}, human: [], blockers: [], approvals: [] };
-    var types = Object.keys(left.openByType || {}).sort().map(function (type) { return type + ': ' + left.openByType[type]; });
-    var humans = (left.human || []).map(function (item) { return item.id + ' · ' + item.title + (item.stage ? ' · ' + item.stage : ''); });
-    var blockers = (left.blockers || []).map(function (item) { return item.id + ' · ' + item.title + ' — ' + item.reason; });
-    var approvals = (left.approvals || []).map(function (item) { return item.kind + ': ' + item.id + ' · ' + item.title; });
-    host.appendChild(el('div', 'label', 'What is left'));
-    host.appendChild(progressList('Open by type', types));
-    host.appendChild(progressList('Human tickets', humans));
-    host.appendChild(progressList('Blockers', blockers));
-    host.appendChild(progressList('Approvals', approvals));
-
-    var untracked = progress.untracked || progress.offLedger;
-    if (untracked && (untracked.count || untracked.jobs)) {
-      var untrackedHead = el('div', 'label');
-      untrackedHead.appendChild(el('span', '', 'Untracked work · '));
-      var untrackedCount = el('a', '');
-      untrackedCount.setAttribute('href', untracked.countHref || ('#' + (untracked.listAnchorId || 'untracked')));
-      untrackedCount.textContent = String(untracked.count || 0) + ' run' + (untracked.count === 1 ? '' : 's');
-      untrackedHead.appendChild(untrackedCount);
-      host.appendChild(untrackedHead);
-      host.appendChild(el('div', 'board-note', untracked.warning || 'untracked work: no ledger ticket'));
-      (untracked.runs || untracked.newest || []).forEach(function (run) {
-        var row = el('div', 'board-entry');
-        var runLink = el('a', 'mono', run.runId);
-        runLink.setAttribute('href', run.href || runHref(run.runId));
-        runLink.setAttribute('title', 'Open the run inspector');
-        row.appendChild(runLink);
-        row.appendChild(el('span', 'sub', ' · ' + (run.name || run.runId) + ' · ' + run.status + ' · ' + when(run.startedAt)));
-        host.appendChild(row);
-      });
-    }
-
-    host.appendChild(el('div', 'board-note', progress.eta ? 'ETA ~' + progress.eta.days + ' days (' + progress.eta.basis + ')' : 'ETA: not enough history'));
+    if (!p.card) { host.appendChild(el('div', 'board-empty', 'Project status unavailable.')); return; }
+    var wrap = el('div', 'watch-project-page-card-wrap');
+    L.renderWatchProjectCard(p, wrap, { pageMode: true });
+    host.appendChild(wrap);
   }
 
-  function renderSplit(split) {
+  function renderSplit(p) {
     var host = $('splitBody'); host.textContent = '';
-    if (!split) { host.appendChild(el('div', 'board-empty', 'Split quality unavailable.')); return; }
-    var grade = split.grade || 'unknown';
-    var header = el('div', 'row'); header.appendChild(el('span', 'label', 'Overall grade'));
-    header.appendChild(pill(grade, grade === 'green' ? 'good' : grade === 'amber' ? 'warn' : grade === 'red' ? 'bad' : 'quiet'));
-    host.appendChild(header);
-    (split.metrics || []).forEach(function (metric) {
-      var row = el('div', 'board-entry');
-      row.setAttribute('title', metric.note || '');
-      row.appendChild(el('span', 'dot grade-' + (metric.grade || 'unknown')));
-      var body = el('div', 'split-text');
-      var top = el('div', 'row'); top.appendChild(el('span', 'name', metric.label || metric.key || 'Metric')); top.appendChild(el('span', 'mono', metric.display || '—')); body.appendChild(top);
-      body.appendChild(el('div', 'sub', metric.grade === 'unknown' ? (metric.note || 'Unknown') : (metric.basis || metric.note || '')));
-      row.appendChild(body); host.appendChild(row);
-    });
+    var section = $('split');
+    if (section) { section.hidden = true; }
+    if (!p.card || !p.card.headsUp) { return; }
+    if (section) { section.hidden = false; }
+    host.appendChild(el('div', 'board-note', 'Wave and split warnings appear in the Heads up row on the project status card above.'));
   }
 
   function renderHandled(handled) {
     var host = $('handledBody'); host.textContent = '';
     if (!handled) { host.appendChild(el('div', 'board-empty', 'Handled-for-you data unavailable.')); return; }
-    host.appendChild(el('div', 'label', handled.today + ' today · ' + handled.week + ' this week'));
+    var todayWrap = el('div', 'label');
+    todayWrap.appendChild(L.watchNum(handled.today, 'handled today', handled.today + ' auto-decision' + (handled.today === 1 ? '' : 's') + ' logged today.'));
+    todayWrap.appendChild(el('span', '', ' today · '));
+    todayWrap.appendChild(L.watchNum(handled.week, 'handled this week', handled.week + ' auto-decision' + (handled.week === 1 ? '' : 's') + ' logged in the last 7 days.'));
+    todayWrap.appendChild(el('span', '', ' this week'));
+    host.appendChild(todayWrap);
     if (!handled.items || !handled.items.length) {
       host.appendChild(el('div', 'board-empty', 'Nothing handled yet. The policy engine logs auto-decisions here.'));
       return;
@@ -209,12 +127,22 @@
   function renderTickets(p) {
     var t = $('tickets'); t.textContent = '';
     var counts = p.ticketCounts.byStatus;
-    t.appendChild(el('div', 'board-note', Object.keys(counts).sort().map(function (k) { return k + ' ' + counts[k]; }).join(', ') || 'No ticket ledger.'));
+    var summary = el('div', 'board-note');
+    Object.keys(counts).sort().forEach(function (k) {
+      if (!counts[k]) { return; }
+      summary.appendChild(L.watchNum(counts[k], k + ' tickets', counts[k] + ' ticket' + (counts[k] === 1 ? '' : 's') + ' in status ' + k + '.'));
+      summary.appendChild(el('span', '', ' ' + k + ' · '));
+    });
+    if (!summary.textContent.trim()) { summary.textContent = 'No ticket ledger.'; }
+    t.appendChild(summary);
     ['blocked', 'running', 'review', 'ready', 'todo', 'proposed', 'done'].forEach(function (status) {
       var list = p.tickets.filter(function (x) { return x.status === status; });
       if (!list.length) { return; }
       var d = el('details', 'board-lane'); d.open = status !== 'done';
-      d.appendChild(el('summary', '', status + ' (' + list.length + ')'));
+      var sum = el('summary', '');
+      sum.appendChild(L.watchNum(list.length, status + ' tickets', list.length + ' ticket' + (list.length === 1 ? '' : 's') + ' in ' + status + '.'));
+      sum.appendChild(el('span', '', ' ' + status));
+      d.appendChild(sum);
       var body = el('div', 'lane-body');
       list.slice(0, 200).forEach(function (x) { body.appendChild(el('div', 'board-entry', x.id + '  ' + (x.stage || '') + '  ' + (x.risk || '') + '  ' + x.title)); });
       d.appendChild(body); t.appendChild(d);
@@ -227,21 +155,38 @@
     p.runs.slice(0, 100).forEach(function (run) {
       var a = el('a', 'board-run'); a.href = runHref(run.runId); a.title = 'Open the run inspector (graph, journal, compare)';
       a.appendChild(el('span', 'mono', run.runId)); a.appendChild(el('span', 'pill ' + (run.live ? 'good' : run.failed ? 'bad' : 'info'), run.live ? 'live' : run.status));
-      a.appendChild(el('span', 'num mono', run.done + '/' + run.jobs + ' jobs' + (run.failed ? ', ' + run.failed + ' failed' : '')));
+      var jobs = el('span', 'num mono');
+      jobs.appendChild(L.watchNum(run.done, 'jobs done', run.done + ' of ' + run.jobs + ' jobs finished in this run.'));
+      jobs.appendChild(el('span', '', '/' + run.jobs + ' jobs'));
+      if (run.failed) {
+        jobs.appendChild(el('span', '', ', '));
+        jobs.appendChild(L.watchNum(run.failed, 'jobs failed', run.failed + ' job' + (run.failed === 1 ? '' : 's') + ' failed in this run.'));
+        jobs.appendChild(el('span', '', ' failed'));
+      }
+      a.appendChild(jobs);
       a.appendChild(el('span', 'mono', when(run.startedAt)));
       r.appendChild(a);
     });
-    var off = p.offLedger || (p.progress && (p.progress.offLedger || p.progress.untracked));
-    if (off && off.count) {
-      var listAnchor = off.listAnchorId || 'untracked';
-      var offTitle = el('div', 'label', 'Off-ledger work'); offTitle.id = listAnchor; r.appendChild(offTitle);
-      off.runs.forEach(function (run) {
+    var untracked = p.untracked || (p.progress && (p.progress.untracked || p.progress.offLedger));
+    if (untracked && untracked.count) {
+      var listAnchor = untracked.listAnchorId || 'untracked';
+      var offTitle = el('div', 'label');
+      offTitle.id = listAnchor;
+      offTitle.appendChild(el('span', '', 'Untracked runs · '));
+      var countLink = el('a', '');
+      countLink.href = '#' + listAnchor;
+      countLink.appendChild(L.watchNum(untracked.count, 'untracked runs', (untracked.warning || 'Runs on this project\'s checkouts that no ticket claims.') + ' Smoke tests and lane tests are left out.'));
+      countLink.appendChild(el('span', '', ' runs'));
+      offTitle.appendChild(countLink);
+      r.appendChild(offTitle);
+      if (untracked.warning) { r.appendChild(el('div', 'board-note', untracked.warning)); }
+      (untracked.runs || untracked.newest || []).forEach(function (run) {
         var row = el('div', 'board-entry');
         var runLink = el('a', 'mono', run.runId);
         runLink.setAttribute('href', run.href || runHref(run.runId));
         runLink.setAttribute('title', 'Open the run inspector');
         row.appendChild(runLink);
-        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + run.jobs + ' jobs'));
+        row.appendChild(el('span', 'sub', ' · ' + when(run.startedAt) + ' · ' + run.status + ' · ' + (run.jobs || 0) + ' jobs'));
         r.appendChild(row);
       });
     }
@@ -259,8 +204,6 @@
     projectEverOk = true;
   }
 
-  // Both project requests share the page chip. Mark successful responses before their
-  // JSON/render continuations, so a renderer exception cannot make a good response stale.
   if (!window.__swarmProjectFetchWrapped) {
     var projectFetch = window.fetch.bind(window);
     window.fetch = function (input, init) {
@@ -274,8 +217,8 @@
   }
   setInterval(function () {
     var at = Number(window.__swarmProjectOkAt) || 0;
-    var live = window.BoardLib && window.BoardLib.chipState
-      ? window.BoardLib.chipState({ lastOkAt: at, now: Date.now(), pollMs: 5000, everOk: projectEverOk })
+    var live = L.chipState
+      ? L.chipState({ lastOkAt: at, now: Date.now(), pollMs: 5000, everOk: projectEverOk })
       : { state: projectEverOk ? 'live' : 'connecting', ageS: null };
     var dot = $('liveDot'), label = $('liveText');
     if (dot && label) {
@@ -294,8 +237,8 @@
     $('crumbProject').textContent = p.name;
     $('root').textContent = p.root;
     panel('spend', function () { renderSpend(p); });
-    panel('progressBody', function () { renderProgress(p.progress); });
-    panel('splitBody', function () { renderSplit(p.splitQuality); });
+    panel('progressBody', function () { renderProgress(p); });
+    panel('splitBody', function () { renderSplit(p); });
     panel('benchBody', function () { renderBench(p.benchmarks); });
     panel('handledBody', function () { renderHandled(p.handled); });
     panel('tickets', function () { renderTickets(p); });

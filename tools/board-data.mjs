@@ -11,6 +11,7 @@ import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
 import { boardPercent, buildProgress, cardEtaFromFamily, ledgerRoot, offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID, progressSummary } from './build-progress.mjs';
@@ -29,6 +30,15 @@ import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
+
+async function swarmPackageVersion() {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Start of the calendar day containing `now`, in the machine's local time zone (for tests and board activity). */
 export function startOfLocalDay(now = Date.now()) {
@@ -751,8 +761,11 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     slots,
     historyFile,
   });
+  const installedVersion = await swarmPackageVersion();
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    machine: os.hostname(),
+    version: installedVersion,
     pinnedVersion,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
@@ -883,8 +896,15 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   }
   for (const o of overviews) {
     const liveWarnings = [];
-    const splitWarning = o.split?.reds > 0 || o.split?.grade === 'red' ? { code: 'split-quality-red', text: `split quality red${o.split?.worst ? `: ${o.split.worst}` : ''}` } : null;
-    const wavesWarning = underfilledWaves(o.recentJobCounts, workers?.max);
+    const wavesWarning = underfilledWaves(o.recentJobCounts, workers?.max ?? o.card?.slots?.machineMax);
+    const waveHeadsUp = wavesWarning ? `${wavesWarning.charAt(0).toUpperCase()}${wavesWarning.slice(1)}.` : null;
+    const splitHeadsUp = o.card?.headsUp && o.card.headsUp !== waveHeadsUp;
+    const splitWarning = (o.split?.reds > 0 || o.split?.grade === 'red')
+      ? {
+        code: 'split-quality-red',
+        text: splitHeadsUp ? o.card.headsUp : (o.split?.worst ? String(o.split.worst) : 'Split quality needs attention'),
+      }
+      : null;
     if (splitWarning) liveWarnings.push(splitWarning);
     if (wavesWarning) liveWarnings.push({ code: 'waves-underfilled', text: wavesWarning });
     const history = Array.isArray(o.history) ? o.history : [];
@@ -994,28 +1014,65 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const detailSpend = { usd: capUsedUsd ?? detailCost.allUsd, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => raw ? { ...raw, finished: finishedProgress(raw)?.finished ?? false, percent: { ...raw.percent, overall: boardPercent(raw) } } : null).catch(() => null);
+  const progress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: detailSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly }).then(raw => {
+    if (!raw) return null;
+    const overall = boardPercent(raw);
+    return { ...raw, finished: finishedProgress(raw)?.finished ?? false, overall, percent: { ...raw.percent, overall } };
+  }).catch(() => null);
   const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
   const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
   const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
   const pinnedVersion = await pinnedVersionFor(project.root);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
-  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
+  const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers);
+  const progressFinished = progress?.finished ?? false;
+  const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state?.jobs) ? r.state.jobs.length : 0));
+  let card = await buildWatchCard({
+    ledger,
+    scope,
+    ledgers,
+    roots,
+    runs,
+    ticketFinishedAt,
+    progressFinished,
+    projectId: project.id,
+    now,
+    recentJobCounts,
+    slots,
+    historyFile,
+  });
+  let heldWorkers = { total: 0, max: slots ?? null, byProject: {} };
+  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: slots ?? null }); } catch { /* empty lane store */ }
+  let inboxSnapshot = { items: [] };
+  try { inboxSnapshot = await boardInbox({ projects: [project], now, env }); } catch { /* inbox unavailable */ }
+  enrichWatchCard(card, { held: heldWorkers, familyProjectIds: [project.id], projectId: project.id, inbox: inboxSnapshot });
+  const installedVersion = await swarmPackageVersion();
+  const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0), Date.parse(ticketFinishedAt ?? '') || 0);
+  const scopeTickets = ticketsOf(ledger, scope);
+  const readyTickets = scopeTickets.byStatus.ready ?? 0;
+  const liveIds = liveRunIds;
+  const { activity } = projectActivityState({ activeLiveCount: liveIds.size, lastActivityMs, now });
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    machine: os.hostname(),
+    version: installedVersion,
     pinnedVersion,
+    card,
+    progress,
+    readyTickets,
+    activity,
+    idleWithReady: liveIds.size === 0 && readyTickets > 0,
     tickets, ticketCounts: ticketsOf(ledger, scope),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
     }),
     spend: { ...detailCost, byLane: plain(byLane), billedUsd: detailCost.paidUsd, listUsd: detailCost.flatRateListUsd, capBasis },
-    progress,
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
-    lastTicketFinishedAt: await lastTicketFinishedAt(roots, runs, ledgers),
+    lastTicketFinishedAt: ticketFinishedAt,
     checkouts: roots.length,
-    offLedger: progress?.offLedger ?? progress?.untracked ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked work: no ledger ticket' },
+    untracked: progress?.untracked ?? progress?.offLedger ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked runs: no ticket claims this run', listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID },
     splitQuality: split,
     benchmarks,
     handled,

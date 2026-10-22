@@ -295,3 +295,6 @@ body.paused-motion *, body.paused-motion *::before, body.paused-motion *::after 
   .watch-card-list-cmd code { background: #f4f4f5; color: #312e81; border-color: var(--line); }
   .watch-card-toggle:hover { background: rgba(0, 0, 0, .04); }
 }
+.kpis .v { font-size: 1.75rem; font-weight: 700; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.kpis .watch-num-wrap { display: inline-flex; align-items: baseline; gap: 4px; }
+.watch-project-page-card-wrap .watch-project-card { border: none; box-shadow: none; padding: 0; background: transparent; }
