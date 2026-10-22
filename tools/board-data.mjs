@@ -14,7 +14,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { projectOrchestrator } from './board-orchestrator.mjs';
 import { combinedUsage } from './orchestrator-usage.mjs';
-import { boardPercent, buildProgress, cardEtaFromFamily, ledgerRoot, offLedgerRuns, OFF_LEDGER_LIST_ANCHOR_ID, progressSummary } from './build-progress.mjs';
+import { boardPercent, buildProgress, cardEtaFromFamily, ledgerRoot, offLedgerRunHref, OFF_LEDGER_LIST_ANCHOR_ID, progressSummary } from './build-progress.mjs';
 import { checkTicketTree } from './scope-integrity.mjs';
 import { readEvents } from './orchestrator-events.mjs';
 import { lanesDir } from './lanes.mjs';
@@ -30,6 +30,131 @@ import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
+export const UNTRACKED_HEADLINE_MS = 7 * DAY;
+const UNTRACKED_WARNING = 'untracked work: no ledger ticket';
+const LIVE_RUN = new Set(['queued', 'pending', 'running', 'active', 'in_progress', 'in-progress', 'live']);
+const IGNORED_UNTRACKED_RUN_WORDS = /\b(?:smoke|lane-test|lane-bench|probe|doctor|bench)\b/i;
+
+function runIsLiveForUntracked(state) {
+  return state?.live === true || LIVE_RUN.has(String(state?.status ?? '').toLowerCase());
+}
+
+function stateTicketIdsForUntracked(state) {
+  const ids = new Set();
+  const visit = value => {
+    if (typeof value === 'string') ids.add(value);
+    else if (Array.isArray(value)) for (const item of value) visit(item);
+    else if (value && typeof value === 'object') { visit(value.id); visit(value.ticket); visit(value.ticketId); }
+  };
+  visit(state?.ticketIds);
+  visit(state?.tickets);
+  return ids;
+}
+
+function jobTicketIdsForUntracked(job) {
+  const ids = new Set();
+  for (const key of ['id', 'ticket', 'ticketId', 'name']) if (typeof job?.[key] === 'string') ids.add(job[key]);
+  return ids;
+}
+
+export function untrackedRunHasIgnoredName(state, jobs) {
+  const manifestNames = [
+    state?.manifest,
+    state?.manifest?.file,
+    state?.manifest?.fileName,
+    state?.manifest?.filename,
+    state?.manifest?.name,
+    state?.manifest?.path,
+    state?.manifestFile,
+    state?.manifestFileName,
+    state?.manifestName,
+    state?.manifestPath,
+    state?.request?.manifest,
+    state?.request?.manifestFile,
+    state?.options?.manifest,
+    state?.options?.manifestFile,
+    state?.name,
+    state?.title,
+    state?.label,
+  ];
+  if (manifestNames.some(value => typeof value === 'string' && IGNORED_UNTRACKED_RUN_WORDS.test(value))) return true;
+  if (typeof state?.id === 'string' && IGNORED_UNTRACKED_RUN_WORDS.test(state.id)) return true;
+  return jobs.some(job => typeof job?.id === 'string' && IGNORED_UNTRACKED_RUN_WORDS.test(job.id));
+}
+
+export function isOffLedgerUntrackedRun(state, ticketIds) {
+  if (!state || state.nonIntegrating === true) return false;
+  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+  const ids = ticketIds instanceof Set ? ticketIds : new Set(ticketIds ?? []);
+  const stateMapped = [...stateTicketIdsForUntracked(state)].some(id => ids.has(id));
+  const untrackedJobs = jobs.filter(job => ![...jobTicketIdsForUntracked(job)].some(id => ids.has(id)));
+  return Boolean(untrackedJobs.length || (!jobs.length && !stateMapped));
+}
+
+function runCostUsd(state) {
+  return Math.round(num(runTotals(state).usd) * 1e6) / 1e6;
+}
+
+/** Full untracked list (all ages, includes smoke/probe/bench noise) and 7-day headline count for the board card. */
+export function boardUntrackedSummary(records, ticketIds, { now = Date.now(), projectId = null } = {}) {
+  const ids = ticketIds instanceof Set ? ticketIds : new Set(ticketIds ?? []);
+  const runs = [];
+  for (const record of records) {
+    const state = record.state;
+    if (!state || typeof state !== 'object') continue;
+    const live = runIsLiveForUntracked(state);
+    const started = Date.parse(state.startedAt ?? '');
+    if (Number.isFinite(started) && started > now) continue;
+    const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+    if (!isOffLedgerUntrackedRun(state, ids)) continue;
+    const ignored = untrackedRunHasIgnoredName(state, jobs);
+    const untrackedJobs = jobs.filter(job => ![...jobTicketIdsForUntracked(job)].some(id => ids.has(id)));
+    runs.push({
+      runId: record.runId ?? record.id,
+      startedAt: Number.isFinite(started) ? new Date(started).toISOString() : null,
+      startedMs: Number.isFinite(started) ? started : 0,
+      status: txt(state.status, 'unknown'),
+      jobs: jobs.length,
+      untrackedJobs: untrackedJobs.length,
+      done: jobs.filter(job => job?.status === 'complete').length,
+      costUsd: runCostUsd(state),
+      ignored,
+      name: txt(state.name ?? state.title ?? state.label, record.runId ?? record.id),
+      href: offLedgerRunHref(projectId, record.runId ?? record.id),
+    });
+  }
+  runs.sort((a, b) => (b.startedMs - a.startedMs) || String(a.runId).localeCompare(String(b.runId)));
+  const headlineRuns = runs.filter(run => !run.ignored && run.startedMs >= now - UNTRACKED_HEADLINE_MS && run.startedMs <= now);
+  const jobs = runs.reduce((total, run) => total + run.untrackedJobs, 0);
+  const headlineJobs = headlineRuns.reduce((total, run) => total + run.untrackedJobs, 0);
+  const newest = headlineRuns.slice(0, 5).map(run => ({ runId: run.runId, name: run.name, startedAt: run.startedAt, status: run.status }));
+  const listHref = `#${OFF_LEDGER_LIST_ANCHOR_ID}`;
+  const full = {
+    runs,
+    count: runs.length,
+    jobs,
+    newest: runs.slice(0, 5).map(run => ({ runId: run.runId, name: run.name, startedAt: run.startedAt, status: run.status })),
+    warning: UNTRACKED_WARNING,
+    listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID,
+    countHref: listHref,
+    listHref,
+  };
+  return {
+    full,
+    headline: { count: headlineRuns.length, jobs: headlineJobs, newest, listHref },
+    listHref,
+  };
+}
+
+export function shouldArchiveUntrackedRun(state, ticketIds, { now = Date.now() } = {}) {
+  if (!isOffLedgerUntrackedRun(state, ticketIds)) return false;
+  if (runIsLiveForUntracked(state)) return false;
+  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+  if (untrackedRunHasIgnoredName(state, jobs)) return true;
+  const started = Date.parse(state.startedAt ?? '');
+  if (!Number.isFinite(started)) return false;
+  return started < now - UNTRACKED_HEADLINE_MS;
+}
 
 async function swarmPackageVersion() {
   try {
@@ -671,13 +796,10 @@ async function buildWatchCard({
   for (const familyLedger of ledgers ?? []) {
     for (const ticket of familyLedger?.tickets ?? []) if (ticket?.id) familyTicketIds.add(String(ticket.id));
   }
-  const offLedger = offLedgerRuns(
+  const untrackedSummary = boardUntrackedSummary(
     runs.map(run => ({ runId: run.id, state: run.state })),
-    ledger,
-    null,
-    now,
     familyTicketIds,
-    projectId,
+    { now, projectId },
   );
   const headsUp = watchCardHeadsUp({ ledger, scope, recentJobCounts, slots, finished: progressFinished });
   return {
@@ -700,8 +822,8 @@ async function buildWatchCard({
     eta,
     facts: {
       handEditsBlocked24h: guardBlockedLast24h(roots, now),
-      untrackedRuns: offLedger.count ?? 0,
-      listHref: offLedger.countHref ?? `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
+      untrackedRuns: untrackedSummary.headline.count ?? 0,
+      listHref: untrackedSummary.listHref ?? `#${OFF_LEDGER_LIST_ANCHOR_ID}`,
       checkouts: (roots ?? []).length,
     },
     headsUp,
@@ -1082,6 +1204,15 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const readyTickets = scopeTickets.byStatus.ready ?? 0;
   const liveIds = liveRunIds;
   const { activity } = projectActivityState({ activeLiveCount: liveIds.size, lastActivityMs, now });
+  const familyTicketIds = new Set();
+  for (const familyLedger of ledgers ?? []) {
+    for (const ticket of familyLedger?.tickets ?? []) if (ticket?.id) familyTicketIds.add(String(ticket.id));
+  }
+  const untrackedOnDisk = boardUntrackedSummary(
+    runs.map(run => ({ runId: run.id, state: run.state })),
+    familyTicketIds,
+    { now, projectId: project.id },
+  ).full;
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
     machine: os.hostname(),
@@ -1102,7 +1233,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
     checkouts: roots.length,
-    untracked: progress?.untracked ?? progress?.offLedger ?? { runs: [], count: 0, jobs: 0, newest: [], warning: 'untracked runs: no ticket claims this run', listAnchorId: OFF_LEDGER_LIST_ANCHOR_ID },
+    untracked: untrackedOnDisk,
     splitQuality: split,
     benchmarks,
     handled,

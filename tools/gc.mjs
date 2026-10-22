@@ -13,14 +13,16 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { shouldArchiveUntrackedRun } from './board-data.mjs';
 
 const execFileAsync = promisify(execFile);
 
-export const GC_USAGE = `Usage: swarm gc [--apply] [--all-projects | --root PATH] [--older-than DAYS] [--keep-runs N] [--include-scratch] [--force-unsafe] [--json] [--usage]
+export const GC_USAGE = `Usage: swarm gc [--apply] [--all-projects | --root PATH] [--older-than DAYS] [--keep-runs N] [--include-scratch] [--archive-untracked] [--force-unsafe] [--json] [--usage]
        Dry run by default: lists removable paths and bytes. --apply deletes them.
        --older-than DAYS   Only finished/orphan items older than this (default 7).
        --keep-runs N       Keep the N newest run folders per project (default 20).
        --include-scratch   Also consider stale scratch checkouts under the scratch base.
+       --archive-untracked Summarize and trim off-ledger noise runs (older than 7 days or smoke/probe/bench).
        --json              Machine-readable plan or disk usage (--usage).
        --usage             With --json, print only diskUsage for the board.
 `;
@@ -101,6 +103,30 @@ function ticketList(ledger) {
   if (Array.isArray(ledger)) return ledger;
   if (Array.isArray(ledger.tickets)) return ledger.tickets;
   return [];
+}
+
+function ledgerTicketIds(ledger) {
+  const ids = new Set();
+  for (const ticket of ticketList(ledger)) if (ticket?.id) ids.add(String(ticket.id));
+  return ids;
+}
+
+async function collectArchiveUntrackedRuns(root, { nowMs = Date.now(), duImpl } = {}) {
+  const ledger = await readJsonFile(path.join(root, '.swarm', 'project', 'tickets.json'));
+  const ticketIds = ledgerTicketIds(ledger);
+  const runsDir = path.join(root, '.swarm', 'runs');
+  const rows = [];
+  let ids = [];
+  try { ids = (await fs.readdir(runsDir)).filter(Boolean); } catch { return rows; }
+  for (const runId of ids) {
+    let state;
+    try { state = await readState(root, runId); } catch { continue; }
+    if (!shouldArchiveUntrackedRun(state, ticketIds, { now: nowMs })) continue;
+    const runDir = path.join(runsDir, runId);
+    const bytes = await pathBytes(runDir, { duImpl }) ?? 0;
+    rows.push({ path: runDir, bytes, runId, kind: 'untracked-archive' });
+  }
+  return rows;
 }
 
 function addPath(set, root, candidate) {
@@ -451,6 +477,7 @@ export async function collectProjectGcPlan(root, opts = {}) {
     nowMs = Date.now(),
     env = process.env,
     includeScratch = false,
+    archiveUntracked = false,
     forceUnsafe = false,
     gitImpl = git,
     duImpl,
@@ -462,7 +489,7 @@ export async function collectProjectGcPlan(root, opts = {}) {
   const worktreesBase = await worktreesBaseFor(root, config, { env });
   const bases = [path.join(root, '.swarm', 'workspaces'), worktreesBase];
   const protectedPaths = await collectProtectedWorkspacePaths(root);
-  const categories = { finishedRuns: [], orphans: [], oldRunFolders: [], scratch: [] };
+  const categories = { finishedRuns: [], orphans: [], oldRunFolders: [], scratch: [], untrackedArchives: [] };
   let totalBytes = 0;
 
   const runsDir = path.join(root, '.swarm', 'runs');
@@ -529,6 +556,13 @@ export async function collectProjectGcPlan(root, opts = {}) {
     totalBytes += bytes;
   }
 
+  if (archiveUntracked) {
+    for (const row of await collectArchiveUntrackedRuns(root, { nowMs, duImpl })) {
+      categories.untrackedArchives.push(row);
+      totalBytes += row.bytes;
+    }
+  }
+
   if (includeScratch) {
     const scratchBase = scratchRootDir({ env });
     let entries = [];
@@ -567,7 +601,7 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
   for (const wt of plan.categories.orphans.filter(o => o.kind === 'git-metadata')) {
     try { await gitImpl(root, ['worktree', 'prune']); } catch { /* ignore */ }
   }
-  for (const row of plan.categories.oldRunFolders) {
+  for (const row of [...plan.categories.oldRunFolders, ...plan.categories.untrackedArchives]) {
     await writeRunSummary(root, row.runId);
     const heavy = ['jobs', 'worktrees', 'artifacts'];
     for (const name of heavy) {
@@ -602,12 +636,14 @@ export async function runGc(args, deps = {}) {
   let json = false;
   let usageOnly = false;
   let forceUnsafe = false;
+  let archiveUntracked = false;
   const rest = [...args];
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i];
     if (flag === '--apply') apply = true;
     else if (flag === '--all-projects') allProjects = true;
     else if (flag === '--include-scratch') includeScratch = true;
+    else if (flag === '--archive-untracked') archiveUntracked = true;
     else if (flag === '--json') json = true;
     else if (flag === '--usage') usageOnly = true;
     else if (flag === '--force-unsafe') forceUnsafe = true;
@@ -629,13 +665,13 @@ export async function runGc(args, deps = {}) {
   if (!projects.length) return { stdout: `${GC_USAGE}`, exitCode: 2 };
   const plans = [];
   let totalBytes = 0;
-  const counts = { finishedRuns: 0, orphans: 0, oldRunFolders: 0, scratch: 0 };
+  const counts = { finishedRuns: 0, orphans: 0, oldRunFolders: 0, scratch: 0, untrackedArchives: 0 };
   for (const projectRoot of projects) {
     if (apply && await projectHasActiveRun(projectRoot)) {
       plans.push({ root: projectRoot, skipped: true, reason: 'active-run' });
       continue;
     }
-    const plan = await collectProjectGcPlan(projectRoot, { olderThanDays, keepRuns, env, includeScratch, forceUnsafe, gitImpl: deps.gitImpl, duImpl: deps.duImpl, nowMs: deps.now?.() ?? Date.now() });
+    const plan = await collectProjectGcPlan(projectRoot, { olderThanDays, keepRuns, env, includeScratch, archiveUntracked, forceUnsafe, gitImpl: deps.gitImpl, duImpl: deps.duImpl, nowMs: deps.now?.() ?? Date.now() });
     plans.push(plan);
     for (const key of Object.keys(counts)) counts[key] += plan.categories[key].length;
     totalBytes += plan.totalBytes;
