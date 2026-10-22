@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "dep-gate",
+      "agent": "auto",
+      "prompt": "BUG 5 from parts-request-app: swarm integrate stops at the dependency gate for any package.json change, even a one-line scripts addition: refused with a dependency manifest or lockfile changed; plain integrate cannot audit it (tools/swarm.mjs about line 1808), and with --queue the whole-tree npm audit runs, so findings that existed before the change block it. Fix: for package.json compare the parsed dependency fields before and after (dependencies, devDependencies, optionalDependencies, peerDependencies, overrides, resolutions, bundledDependencies, engines is NOT a dependency field, workspaces and any field that changes install behavior such as scripts named preinstall, install, postinstall, prepare, prepack stay security-relevant): when only other fields changed (for example scripts that are not install lifecycle scripts, name, description, version, bin, files, type) skip the dependency audit and the dependency gate for that file and say so in the integrate output (dependency fields unchanged; audit skipped); any dependency field change, any lifecycle script add or change, and any lockfile change still goes through the gate exactly as today; when the file cannot be parsed before or after, keep the gate. Where the audit runs only because of a manifest change (queue path), run it only for changes of the dependency fields and compare against the base tree: findings that already exist at the base do not block, new findings do. Put the comparison in a pure function in a new tools/dependency-diff.mjs (dependencyFieldsChanged(beforeText, afterText)) and use it in tools/security-gate.mjs and the integrate path. Tests in tests/dependency-diff.test.mjs: scripts-only change skips; adding a dev dependency does not skip; a postinstall script does not skip; overrides change does not skip; version bump alone skips; a lockfile change does not skip; unparsable input does not skip; the queue audit does not block on a finding present at base. Keep every existing test passing (change a test only where intended behavior changes, with a comment). Never import install.mjs statically from new modules. Hermetic tests (no ambient environment, no TTY, no network, injected clock). No token-shaped literals and no URL with credentials. ignoreTests reason: only the named files and their tests change; the fixture ledger is a frozen data copy.",
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/swarm.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs",
+        "tools/swarm.mjs",
+        "tools/dependency-diff.mjs",
+        "tests/dependency-diff.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}
