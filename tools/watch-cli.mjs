@@ -608,6 +608,7 @@ export function boardOwnerApply(env, now = Date.now) {
   };
 }
 
+// watch-server handleOwner reads prepare POST JSON and passes choice into ownerActions.prepare.
 function buildOwnerActions({ env, now, live, remoteLogin }) {
   const auditFile = ownerAuditPath(env);
   const appendAudit = async entry => {
