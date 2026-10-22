@@ -28,6 +28,7 @@ export const COMMAND_META = {
   ship: { what: 'Ships a run or branch: pushes, opens the PR and merges once checks are green.', when: 'When the branch is ready and you want it on the main line.', example: 'swarm ship 20250311-login --repo acme/app --pr 412', cost: 'local', approval: true },
   think: { what: 'Asks the local brain for a short top-3 list with reasons.', when: 'When you are stuck choosing between options and want a quick view.', example: 'swarm think --rounds 2 which-bug-to-fix-first', cost: 'local', approval: false },
   digest: { what: 'Condenses a log, diff, test output or run into 15 lines.', when: 'When a long output is too big to read in full.', example: 'swarm digest --kind log build.log', cost: 'local', approval: false },
+  diagnose: { what: 'Runs a one-shot read-only diagnose job and prints a short summary.', when: 'When you need a quick likely cause without opening a ticket.', example: 'swarm diagnose "why did router skip hermes?" --files tools/router.mjs', cost: 'spends', approval: true },
   draft: { what: 'Drafts docs, PR text or a plan with the local brain, then polishes it.', when: 'When you need a first draft of text without paying for a model.', example: 'swarm draft --context notes.md --out docs/login-plan.md', cost: 'local', approval: false },
   brain: { what: 'Shows local brain status, stats or runs a test call.', when: 'To check the local brain is up or see how it has been used.', example: 'swarm brain --markdown', cost: 'local', approval: false },
   budget: { what: 'Sets or shows the project daily spend limit and ceiling.', when: 'When you need to raise or inspect the billed daily cap before more paid runs.', example: 'swarm budget show', cost: 'local', approval: false },
@@ -79,6 +80,13 @@ export const COMMAND_META = {
   forget: { what: 'Removes projects from the machine registry only; folders and pointers are untouched.', when: 'When the board lists idle scratch or gone checkouts you no longer want tracked.', example: 'swarm forget --scratch --yes', cost: 'free', approval: false },
   help: { what: 'Shows command usage.', when: 'When you forget a command or flag.', example: 'swarm help ship', cost: 'free', approval: false }
 };
+
+/** Command-list docs (Swarm Watch Commands tab and `swarm help diagnose`). */
+export const DIAGNOSE_COMMAND_SECTION = [
+  '### diagnose',
+  'One read-only diagnose job (Hermes then Cursor on auto): `swarm diagnose "question" [--files a,b] [--lane hermes|cursor] [--json]`.',
+  'Prints only a capped summary (20 lines × 160 characters). Failures are one line with the lane. Appends to `.swarm/diagnose/log.ndjson`.',
+].join('\n') + '\n';
 
 export function buildCommandList(commands, meta = COMMAND_META) {
   const list = (commands || []).map((command) => {
