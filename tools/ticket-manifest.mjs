@@ -24,6 +24,37 @@ function byIdMap(list){return new Map(list.map(t=>[t.id,t]));}
 
 function depsDone(t,byId){return (t.dependsOn||[]).every(d=>byId.get(d)?.status==='done');}
 
+function ticketOutputPaths(t){
+  const out=[];
+  for(const f of t.files||[])if(typeof f==='string'&&f&&!f.endsWith('/'))out.push(f);
+  for(const f of t.tests||[])if(typeof f==='string'&&f)out.push(f);
+  return out;
+}
+
+/** A path another open ticket will write; not in this wave and not done yet. */
+export function pendingOutputOwner(path,allTickets,waveIds){
+  for(const t of allTickets){
+    if(t.status==='done'||t.status==='cancelled')continue;
+    if(waveIds.has(t.id))continue;
+    if(ticketOutputPaths(t).includes(path))return t;
+  }
+  return null;
+}
+
+export function dropPendingTicketContext(context,ticketId,allTickets,waveIds,warnings){
+  const list=Array.isArray(context)?context:[];
+  const kept=[];
+  for(const p of list){
+    const owner=pendingOutputOwner(p,allTickets,waveIds);
+    if(owner){
+      warnings.push(`${ticketId}: context ${p} belongs to ${owner.id} (pending), dropped for this run`);
+      continue;
+    }
+    kept.push(p);
+  }
+  return kept;
+}
+
 function hasOtherTestOwner(t,file,all){
   const open=all.filter(o=>o.id!==t.id&&o.status!=='cancelled');
   if(open.some(o=>(o.files||[]).includes(file)||(o.deletes||[]).includes(file)))return true;
@@ -185,6 +216,7 @@ export function ticketsToManifest(tickets,opts={}){
     // The engine integrates a deletion only for a path that is both an output and in `deletes`: the worker's copy holds the file, the worker removes it, integrate removes it from the project.
     for(const f of deletes)if(!outputs.includes(f))outputs.push(f);
     context=context.filter(p=>!deletes.includes(p));
+    context=dropPendingTicketContext(context,t.id,[...byId.values()],inSet,warnings);
     const job={id:t.id,type:TYPE_MAP[t.type],agent:'auto',sensitive:isSensitiveJob(t,scope,reqs),prompt:promptFor(t,reqs,lessons,{ownsTest:outputs.some(looksLikeTestFile),ownedTestFiles,envLine:['build','migration','contract'].includes(t.type)?contextEnv?.envLine:undefined,promptLine:vfields?((t.dependsOn||[]).some(d=>inSet.has(d))||vfields.setup||vfields.testEnv?vfields.promptLine:vfields.queuePromptLine):undefined,kind,hasPackageJson:context.includes('package.json'),packageManager}),context,outputs,acceptance:t.acceptance||[],timeoutMs:600000};
     if(deletes.length)job.deletes=deletes;
     if((t.dependencies||[]).length)job.dependencies=[...t.dependencies];

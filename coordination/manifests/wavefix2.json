@@ -1,0 +1,38 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "wavefix2",
+   "agent": "auto",
+   "prompt": "Three tests fail on this branch after the wave-prep change; fix them with the smallest edits and keep the wave-prep behaviour (tests/wave-prep-context.test.mjs must still pass). (1) tests/lanes-run.test.mjs 'manifest accepts 5000 jobs...': validateManifest in tools/swarm/core-31.mjs now says 'Manifest has more than 5000 jobs' for 5001 jobs; the old message matched /1\u20135000/. Make the message contain 'requires version: 1 and 1\u20135000 jobs' again (tools/scope-loop.mjs matches that text) while the wave-prep test about 5001 jobs still passes (update its regex if needed). (2) tests/review-tier-batch.test.mjs 'AC3: buildAcceptanceReviewManifest picks tier from batched tickets like ledger gate' now gets zero review jobs because the new code skips tickets whose acceptance is already covered or has no test sources: edit the test fixture so its tickets have uncovered acceptance lines (or pass uncovered explicitly), do not weaken the skip. (3) tests/s13-blockers.test.mjs 'ticket ids in context resolve to that ticket's files, and unknown ids are dropped': the new rule drops context files owned by a pending ticket outside the wave; the test's referenced ticket is pending so its files are dropped. Make the referenced ticket status done in the test fixture so its files resolve, and keep a case showing unknown ids are dropped.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tools/scope-loop.mjs",
+    "tools/ticket-manifest.mjs",
+    "tools/acceptance.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/review-tier-batch.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/review-tier-batch.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/wave-prep-context.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ],
+   "ignoreTestsReason": "message-only edit; these tests run in the full suite before merge"
+  }
+ ]
+}

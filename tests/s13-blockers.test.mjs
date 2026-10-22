@@ -23,7 +23,7 @@ test('a ticket pinned to a non-Anthropic lane carries no cacheContext and the ma
 });
 
 test('ticket ids in context resolve to that ticket\'s files, and unknown ids are dropped', () => {
-  const tickets = [t('T-0001'), t('T-0193', { files: ['src/a.ts', 'src/dir/'], tests: ['tests/a.test.ts'] })];
+  const tickets = [t('T-0001'), t('T-0193', { status: 'done', files: ['src/a.ts', 'src/dir/'], tests: ['tests/a.test.ts'] })];
   assert.deepEqual(expandTicketRefs(['T-0193', 'README.md', 'T-9999'], tickets), ['src/a.ts', 'tests/a.test.ts', 'README.md']);
   const user = t('T-0002', { context: ['T-0193'] });
   const { manifest } = ticketsToManifest([user], { ledger: { tickets: [...tickets, user] } });
