@@ -9,7 +9,11 @@ import {
   swarmHandbuildVerbFromPlain,
   plainSetsHandbuildSelfApproval,
   swarmChangeFromPlain,
+  executablePlainWordsForHandbuild,
+  handbuildOwnerMatchInPlain,
 } from './shell-writes.mjs';
+
+const executablePlainWords = executablePlainWordsForHandbuild;
 
 export const HANDBUILD_OWNER_RULE_ID = 'handbuild-owner-verb';
 export const HANDBUILD_SELF_APPROVAL_RULE_ID = 'handbuild-self-approval';
@@ -21,7 +25,7 @@ export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL
 
 export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help']);
 
-const handbuildOwnerDenyReason = verb => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: orchestrator sessions cannot run handbuild ${verb} (owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
+const handbuildOwnerDenyReason = ({ verb, token, position }) => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: matched "${token}" at executable position ${position} (orchestrator sessions cannot run handbuild ${verb}; owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
 
 /** Whether the shell line invokes swarm handbuild and whether the orchestrator may run that verb. */
 export function handbuildShellPolicy(commandText) {
@@ -31,29 +35,22 @@ export function handbuildShellPolicy(commandText) {
   let sawHandbuild = false;
   for (const words of tokenize(text)) {
     const plain = plainWords(words);
-    if (plainHasDecideHandbuildApprove(plain)) {
+    const ownerMatch = handbuildOwnerMatchInPlain(plain);
+    if (ownerMatch) {
       return {
         applies: true,
         allow: false,
-        verb: 'approve',
+        verb: ownerMatch.verb,
         ruleId: HANDBUILD_OWNER_RULE_ID,
-        reason: handbuildOwnerDenyReason('approve'),
+        matchedToken: ownerMatch.token,
+        matchedPosition: ownerMatch.position,
+        reason: handbuildOwnerDenyReason(ownerMatch),
       };
     }
     const hbVerb = swarmHandbuildVerbFromPlain(plain);
-    if (hbVerb !== null && HANDBUILD_OWNER_VERBS.has(hbVerb)) {
-      return {
-        applies: true,
-        allow: false,
-        verb: hbVerb,
-        ruleId: HANDBUILD_OWNER_RULE_ID,
-        reason: handbuildOwnerDenyReason(hbVerb),
-      };
-    }
-    const v = hbVerb;
-    if (v !== null) {
+    if (hbVerb !== null) {
       sawHandbuild = true;
-      verb = v;
+      verb = hbVerb;
     }
   }
   if (!sawHandbuild) return { applies: false };
@@ -61,12 +58,20 @@ export function handbuildShellPolicy(commandText) {
   if (!sub || sub === '--help' || sub.startsWith('-')) return { applies: true, allow: true, verb: sub || '(bare)' };
   if (HANDBUILD_ORCHESTRATOR_VERBS.has(sub)) return { applies: true, allow: true, verb: sub };
   if (HANDBUILD_OWNER_VERBS.has(sub)) {
+    let ownerMatch = null;
+    for (const words of tokenize(text)) {
+      const m = handbuildOwnerMatchInPlain(plainWords(words));
+      if (m && m.verb === sub) { ownerMatch = m; break; }
+    }
+    ownerMatch = ownerMatch ?? { verb: sub, token: sub, position: 0 };
     return {
       applies: true,
       allow: false,
       verb: sub,
       ruleId: HANDBUILD_OWNER_RULE_ID,
-      reason: handbuildOwnerDenyReason(sub),
+      matchedToken: ownerMatch.token,
+      matchedPosition: ownerMatch.position,
+      reason: handbuildOwnerDenyReason(ownerMatch),
     };
   }
   return { applies: true, allow: true, verb: sub };
@@ -117,10 +122,6 @@ export function normalizeSelfApprovalCommandText(commandText) {
   return s;
 }
 
-const DATA_VALUE_FLAGS = new Set([
-  '-m', '-F', '-C', '-c', '--message', '--reason', '--prompt', '--guard-text',
-  '--body', '--title', '--description', '--subject', '--file',
-]);
 const SWARM_INLINE = /\b(?:node|python3?)\b[\s\S]*\bswarm\b[\s\S]*\b(?:decide|handbuild)\b/;
 const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
 
@@ -780,38 +781,6 @@ function nestedCommandStrings(text) {
   return out;
 }
 
-/** Skip commit messages, manifest prompts, and other literal text (guard/safeguard words there are not commands). */
-function executablePlainWords(plain) {
-  const out = [];
-  let i = 0;
-  while (i < plain.length) {
-    const w = plain[i];
-    const low = w.toLowerCase();
-    if (low === 'ask' && i > 0 && plain[i - 1].toLowerCase() === 'swarm') {
-      i += 1;
-      while (i < plain.length && plain[i].startsWith('-')) {
-        const f = plain[i].toLowerCase();
-        if (DATA_VALUE_FLAGS.has(f) || f.startsWith('--reason=') || f.startsWith('--prompt=') || f.startsWith('--guard-text=')) {
-          i += f.includes('=') ? 1 : 2;
-        } else i += 1;
-      }
-      if (i < plain.length) { i += 1; continue; }
-      continue;
-    }
-    if (DATA_VALUE_FLAGS.has(low)) {
-      i += low.includes('=') ? 1 : 2;
-      continue;
-    }
-    if (low.startsWith('--message=') || low.startsWith('--reason=') || low.startsWith('--guard-text=') || low.startsWith('--prompt=')) {
-      i += 1;
-      continue;
-    }
-    out.push(w);
-    i += 1;
-  }
-  return out;
-}
-
 function plainHasHandbuildSelfAction(plain) {
   return plainSetsHandbuildSelfApproval(plain);
 }
@@ -819,9 +788,8 @@ function plainHasHandbuildSelfAction(plain) {
 function plainHasDecideHandbuildApprove(plain) {
   const lower = executablePlainWords(plain).map(w => w.toLowerCase());
   for (let i = 0; i < lower.length; i += 1) {
-    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && lower[i + 2] === 'approve') return true;
-    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && lower[i + 2] === 'deny') return true;
-    if (lower[i] === 'swarm' && lower[i + 1] === 'decide' && lower[i + 2]?.startsWith('handbuild-') && lower[i + 3] === 'approve') return true;
+    if (lower[i] === 'decide' && lower[i + 1]?.startsWith('handbuild-') && (lower[i + 2] === 'approve' || lower[i + 2] === 'deny')) return true;
+    if (lower[i] === 'swarm' && lower[i + 1] === 'decide' && lower[i + 2]?.startsWith('handbuild-') && (lower[i + 3] === 'approve' || lower[i + 3] === 'deny')) return true;
   }
   return false;
 }

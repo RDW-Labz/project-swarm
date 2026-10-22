@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.166.0
+
+Safer restarts, partial-run retry and fixes from the parts-app field report.
+- **Update:** a live restart lock is never stolen, the server record stores its runner path so servers started from any install path are restarted, and a held autopilot is not counted busy by update --when-idle.
+- **Integrate:** a partly blocked run stays integrable; the retry integrates only the remaining jobs.
+- **Autopilot:** read-only runs count as integrated and never raise integrate blockers; a failed run already re-run by hand is not retried (swarm resolve RUN --handled); quiet polls write nothing.
+- **Dependency gate:** a package.json change that touches no dependency field and no install script skips the audit.
+- **Guard:** free text in notes, asks, tickets and commit messages never trips the hand-build guard; refusals name the rule and the matched token.
+- **Failure regression:** new failure causes become regression test stubs at run end (profile option failureRegression, off by default).
+
 ## 1.165.2
 
 No money figure is left on Swarm Watch.

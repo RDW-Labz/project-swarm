@@ -19,6 +19,29 @@ function jobList(manifest) {
   return jobs.filter(job => job && typeof job.id === 'string');
 }
 
+function jobsFromState(state) {
+  if (!state || typeof state !== 'object') return [];
+  const jobs = state.jobs;
+  if (Array.isArray(jobs)) return jobs.filter(job => job && typeof job === 'object');
+  if (jobs && typeof jobs === 'object') return Object.values(jobs).filter(job => job && typeof job === 'object');
+  return [];
+}
+
+/** True when every job declares an explicit empty `outputs` list (review / ask style runs). */
+export function runHasNoOutputs(state) {
+  const list = jobsFromState(state);
+  if (!list.length) return false;
+  return list.every(job => Array.isArray(job.outputs) && job.outputs.length === 0);
+}
+
+/** Run ids or job ids from swarm ask / review helpers. */
+export function isAskRun(state, manifest) {
+  const id = typeof state?.id === 'string' ? state.id : '';
+  if (id === 'ask' || id.startsWith('ask-') || id.endsWith('-ask') || /^review-ask-/.test(id)) return true;
+  const jobs = [...jobList(manifest), ...jobsFromState(state)];
+  return jobs.some(job => typeof job?.id === 'string' && (job.id === 'ask' || job.id.startsWith('ask-')));
+}
+
 function manifestIntegrateOff(manifest) {
   return manifest && typeof manifest === 'object' && manifest.integrate === false;
 }
@@ -36,6 +59,11 @@ function jobIdPatterns(manifest) {
   return jobList(manifest).some(job => NON_INTEGRATING_JOB_ID_RE.test(job.id));
 }
 
+function integrationStatusAllowsIntegrated(state) {
+  const status = state?.integrationStatus;
+  return status === 'complete' || status === undefined || status === null;
+}
+
 /**
  * True for smoke, lane-test, probe, bake-off, eval, and explicit no-integrate runs.
  *
@@ -45,10 +73,20 @@ function jobIdPatterns(manifest) {
 export function isNonIntegratingRun(state, manifest) {
   if (stateFlag(state)) return true;
   if (manifestIntegrateOff(manifest)) return true;
+  if (isAskRun(state, manifest) && runHasNoOutputs(state)) return true;
+  if (runHasNoOutputs(state)) return true;
   const id = typeof state?.id === 'string' ? state.id : '';
   if (runIdPatterns(id)) return true;
   if (jobIdPatterns(manifest)) return true;
   return false;
+}
+
+/** Whether a saved run state should be treated as integrated for autopilot and the brief. */
+export function runIntegratedFromState(state) {
+  if (!state || typeof state !== 'object') return false;
+  if (!integrationStatusAllowsIntegrated(state)) return false;
+  if (Boolean(state.integratedFiles?.length) || state.integrated === true || state.integratedAt) return true;
+  return runHasNoOutputs(state);
 }
 
 /** Stable digest for integrate blocker cause strings (journal-safe). */

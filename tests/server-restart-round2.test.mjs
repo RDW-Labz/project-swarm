@@ -257,32 +257,98 @@ test('(9) concurrent restarts serialize on install restart lock', async () => {
     mode: 'background',
     explicitBackground: true,
   });
-  let overlap = 0;
-  let maxOverlap = 0;
-  const run = async () => restartRegisteredServers({
-    installRoot: install,
-    targetVersion: '2.0.0',
-    env: { HOME: home, PATH: process.env.PATH },
-    home,
-    execFileImpl: async (_cmd, args) => {
-      if (args.some(arg => String(arg).includes('command'))) {
-        return { stdout: `${process.execPath} ${runner} watch --all\n` };
+
+  let seq = 0;
+  let releaseHolderGate;
+  const holderMayContinue = new Promise(resolve => { releaseHolderGate = resolve; });
+  let lockHolderRunId = null;
+  let holdingLockBody = false;
+  let lockWaitSleepCalls = 0;
+  let pidLooksAlive = true;
+  const criticalEvents = [];
+
+  const psMocks = async (_cmd, args) => {
+    if (args.some(arg => String(arg).includes('command'))) {
+      return { stdout: `${process.execPath} ${runner} watch --all\n` };
+    }
+    return { stdout: '60\n' };
+  };
+
+  const run = async () => {
+    const runId = ++seq;
+    let insideCritical = false;
+    const enterCritical = () => {
+      if (!insideCritical) {
+        insideCritical = true;
+        criticalEvents.push(`enter-${runId}`);
       }
-      return { stdout: '60\n' };
-    },
-    strictPidCheck: true,
-    pidAliveImpl: pid => pid === fakeOldPid && alive,
-    killImpl: () => { alive = false; },
-    spawnImpl: () => ({ on: () => {}, unref: () => {}, pid: null }),
-    sleep: async () => {
-      overlap += 1;
-      maxOverlap = Math.max(maxOverlap, overlap);
-      await new Promise(r => setTimeout(r, 40));
-      overlap -= 1;
-    },
-  });
-  await Promise.all([run(), run()]);
-  assert.equal(maxOverlap, 1);
+    };
+    const exitCritical = () => {
+      if (insideCritical) {
+        insideCritical = false;
+        criticalEvents.push(`exit-${runId}`);
+      }
+    };
+    try {
+      return await restartRegisteredServers({
+        installRoot: install,
+        targetVersion: '2.0.0',
+        env: { HOME: home, PATH: process.env.PATH },
+        home,
+        execFileImpl: async (cmd, args) => {
+          const targetsFakeOldPid = args.some(arg => String(arg) === String(fakeOldPid));
+          if (targetsFakeOldPid) {
+            enterCritical();
+            if (lockHolderRunId === null) {
+              lockHolderRunId = runId;
+            }
+            if (runId === lockHolderRunId) {
+              holdingLockBody = true;
+              await holderMayContinue;
+              holdingLockBody = false;
+            }
+          }
+          return psMocks(cmd, args);
+        },
+        strictPidCheck: true,
+        pidAliveImpl: pid => pid === fakeOldPid && pidLooksAlive,
+        killImpl: () => {
+          pidLooksAlive = false;
+          alive = false;
+        },
+        spawnImpl: () => ({ on: () => {}, unref: () => {}, pid: null }),
+        sleep: async ms => {
+          if (holdingLockBody && runId !== lockHolderRunId) {
+            lockWaitSleepCalls += 1;
+            releaseHolderGate();
+          }
+          await new Promise(r => setTimeout(r, typeof ms === 'number' ? ms : 0));
+        },
+      });
+    } finally {
+      exitCritical();
+      if (runId === lockHolderRunId) pidLooksAlive = true;
+    }
+  };
+
+  const [firstResult, secondResult] = await Promise.all([run(), run()]);
+
+  assert.ok(lockWaitSleepCalls >= 1, 'second restart must wait on the install lock (sleep while contending)');
+  assert.equal(criticalEvents.length, 4, `expected four critical-section events, got ${criticalEvents.join(', ')}`);
+  for (let i = 0; i < criticalEvents.length; i += 2) {
+    const enter = criticalEvents[i];
+    const exit = criticalEvents[i + 1];
+    assert.match(enter, /^enter-\d+$/);
+    assert.match(exit, /^exit-\d+$/);
+    assert.equal(enter.slice('enter-'.length), exit.slice('exit-'.length));
+  }
+  let criticalDepth = 0;
+  for (const ev of criticalEvents) {
+    criticalDepth += ev.startsWith('enter-') ? 1 : -1;
+    assert.ok(criticalDepth >= 0 && criticalDepth <= 1, `critical sections overlapped: ${criticalEvents.join(', ')}`);
+  }
+  assert.equal(criticalDepth, 0);
+  assert.ok(firstResult && secondResult, 'both concurrent restart calls must resolve');
 });
 
 test('(10) forged NODE_OPTIONS is stripped from registry env on read', async () => {

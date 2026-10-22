@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // After `swarm update`, restart board and remote-serve processes that still run an older version.
 import { spawn, execFile } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -164,6 +164,52 @@ function tokenizeCommandLine(line) {
   return tokens;
 }
 
+/** Tokenize ps -o args= output; paths that exist on disk stay one token even with spaces. */
+export function tokenizePsArgs(line) {
+  const raw = String(line).trim();
+  if (!raw) return [];
+  const tokens = [];
+  let i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /\s/.test(raw[i])) i += 1;
+    if (i >= raw.length) break;
+    if (raw[i] === '\'' || raw[i] === '"') {
+      const quote = raw[i];
+      i += 1;
+      let word = '';
+      while (i < raw.length && raw[i] !== quote) {
+        word += raw[i];
+        i += 1;
+      }
+      if (raw[i] === quote) i += 1;
+      tokens.push(word);
+      continue;
+    }
+    let end = raw.length;
+    for (let j = i; j < raw.length; j += 1) {
+      if (/\s/.test(raw[j])) {
+        end = j;
+        break;
+      }
+    }
+    let candidate = raw.slice(i, end);
+    let sliceEnd = end;
+    while (sliceEnd < raw.length) {
+      const nextSpace = raw.indexOf(' ', sliceEnd + 1);
+      const tryEnd = nextSpace === -1 ? raw.length : nextSpace;
+      if (tryEnd <= sliceEnd) break;
+      const tryPath = raw.slice(i, tryEnd);
+      if (!existsSync(tryPath)) break;
+      candidate = tryPath;
+      sliceEnd = tryEnd;
+    }
+    tokens.push(candidate);
+    i += candidate.length;
+    while (i < raw.length && /\s/.test(raw[i])) i += 1;
+  }
+  return tokens;
+}
+
 function resolvePathReal(candidate) {
   if (!candidate || typeof candidate !== 'string') return null;
   try { return realpathSync(candidate); } catch {
@@ -171,23 +217,75 @@ function resolvePathReal(candidate) {
   }
 }
 
-export function commandLineMatchesRecord(commandLine, record, runnerPath) {
-  if (!commandLine || typeof commandLine !== 'string' || !runnerPath) return false;
-  const tokens = tokenizeCommandLine(commandLine.trim());
-  const resolvedRunner = resolvePathReal(runnerPath);
-  if (!resolvedRunner) return false;
-  const hasRunner = tokens.some(token => {
-    const resolved = resolvePathReal(token);
-    return resolved !== null && resolved === resolvedRunner;
-  });
-  if (!hasRunner) return false;
-  const { tokens: subcommand } = expectedSubcommandForRecord(record);
-  for (const token of subcommand) {
-    if (!tokens.includes(token)) return false;
+export function installRunnerCandidates(installRoot) {
+  if (!installRoot || typeof installRoot !== 'string') return [];
+  const out = [];
+  out.push(path.join(installRoot, 'current', 'tools', 'swarm.mjs'));
+  const versionsDir = path.join(installRoot, 'versions');
+  try {
+    for (const name of readdirSync(versionsDir)) {
+      out.push(path.join(versionsDir, name, 'tools', 'swarm.mjs'));
+    }
+  } catch { /* no versions dir */ }
+  return out;
+}
+
+export function resolvedRunnerPathsForRecord(record, { installRoot, fallbackRunner } = {}) {
+  const seen = new Set();
+  const paths = [];
+  const add = candidate => {
+    if (!candidate || typeof candidate !== 'string') return;
+    const resolved = resolvePathReal(candidate);
+    if (!resolved || seen.has(resolved)) return;
+    seen.add(resolved);
+    paths.push(resolved);
+  };
+  if (typeof record?.runnerRealpath === 'string') add(record.runnerRealpath);
+  if (typeof record?.runner === 'string') add(record.runner);
+  if (fallbackRunner) add(fallbackRunner);
+  for (const candidate of installRunnerCandidates(installRoot)) add(candidate);
+  return paths;
+}
+
+export function commandLineMatchesRecord(commandLine, record, runnerPathOrOpts) {
+  if (!commandLine || typeof commandLine !== 'string' || !record) return false;
+  const opts = typeof runnerPathOrOpts === 'string'
+    ? { fallbackRunner: runnerPathOrOpts }
+    : (runnerPathOrOpts ?? {});
+  const { installRoot, fallbackRunner, tokenize = tokenizePsArgs } = opts;
+  const accepted = resolvedRunnerPathsForRecord(record, { installRoot, fallbackRunner });
+  if (!accepted.length) return false;
+  const tokenizers = tokenize === tokenizePsArgs ? [tokenizePsArgs, tokenizeCommandLine] : [tokenize];
+  for (const tokenizer of tokenizers) {
+    const tokens = tokenizer(commandLine.trim());
+    if (!tokens.length) continue;
+    const hasRunner = tokens.some(token => {
+      const resolved = resolvePathReal(token);
+      return resolved !== null && accepted.includes(resolved);
+    });
+    if (!hasRunner) continue;
+    const { tokens: subcommand } = expectedSubcommandForRecord(record);
+    let argvOk = true;
+    for (const token of subcommand) {
+      if (!tokens.includes(token)) argvOk = false;
+    }
+    if (!argvOk) continue;
+    for (const arg of argvWithoutOpen(record.argv ?? [])) {
+      if (!tokens.includes(arg)) argvOk = false;
+    }
+    if (argvOk) return true;
   }
-  for (const arg of argvWithoutOpen(record.argv ?? [])) {
-    if (!tokens.includes(arg)) return false;
+  return false;
+}
+
+function looksLikePsCommandLine(line) {
+  const raw = String(line).trim();
+  if (!raw) return false;
+  if (/^\d+$/.test(raw)) return false;
+  if (parsePsEtime(raw) !== null && !raw.includes('/') && !raw.includes('\\') && !/\bnode\b/i.test(raw)) {
+    return false;
   }
+  if (!raw.includes('/') && !raw.includes('\\') && !/\bnode\b/i.test(raw)) return false;
   return true;
 }
 
@@ -214,10 +312,18 @@ export function parsePsEtime(etimeStr) {
 export async function readProcessIdentity(pid, { execFileImpl = execFileAsync, now = Date.now } = {}) {
   let command;
   try {
-    const { stdout: commandOut } = await execFileImpl('ps', ['-o', 'command=', '-p', String(pid)]);
-    command = String(commandOut).trim();
-  } catch {
-    return null;
+    const { stdout: argsOut } = await execFileImpl('ps', ['-o', 'args=', '-p', String(pid)]);
+    const argsLine = String(argsOut).trim();
+    // Some test mocks return etime text for every non-command ps field; ignore that shape here.
+    if (argsLine && looksLikePsCommandLine(argsLine)) command = argsLine;
+  } catch { /* fall through */ }
+  if (!command) {
+    try {
+      const { stdout: commandOut } = await execFileImpl('ps', ['-o', 'command=', '-p', String(pid)]);
+      command = String(commandOut).trim();
+    } catch {
+      return null;
+    }
   }
   if (!command) return null;
 
@@ -247,10 +353,10 @@ export function identityMismatchRemovesRecord(reason) {
   return reason === 'process start time is newer than the server record';
 }
 
-export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync } = {}) {
+export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync, installRoot } = {}) {
   const identity = await readProcessIdentity(record.pid, { execFileImpl });
   if (!identity) return { ok: false, reason: 'could not read process command line', removeRecord: false };
-  if (!commandLineMatchesRecord(identity.command, record, runnerPath)) {
+  if (!commandLineMatchesRecord(identity.command, record, { installRoot, fallbackRunner: runnerPath })) {
     return { ok: false, reason: 'process command line does not match server record', removeRecord: false };
   }
   if (identity.startedAt === null) {
@@ -390,27 +496,60 @@ async function assertStartable({ runner, cwd, argv }) {
 const RESTART_LOCK_BASENAME = '.server-restart.lock';
 
 export const STALE_LOCK_MAX_AGE_MS = 60_000;
+export const LOCK_REFRESH_INTERVAL_MS = 5_000;
 
-export function formatProcessLockPayload(pid = process.pid, createdAt = new Date().toISOString()) {
-  return `${pid}\n${createdAt}\n`;
+export function formatProcessLockPayload(pid = process.pid, ownerStartedAt = new Date().toISOString(), refreshedAt = ownerStartedAt) {
+  const owner = typeof ownerStartedAt === 'string' ? ownerStartedAt : new Date(ownerStartedAt).toISOString();
+  const refreshed = typeof refreshedAt === 'string' ? refreshedAt : new Date(refreshedAt).toISOString();
+  return `${pid}\n${owner}\n${refreshed}\n`;
 }
 
 export function parseProcessLockPayload(text) {
   const lines = String(text).trim().split('\n');
   const pid = Number(lines[0]);
-  const createdAt = lines[1] ? Date.parse(lines[1]) : NaN;
+  const ownerStartedAt = lines[1] ? Date.parse(lines[1]) : NaN;
+  const refreshedAt = lines[2] ? Date.parse(lines[2]) : ownerStartedAt;
   return {
     pid: Number.isInteger(pid) && pid > 0 ? pid : null,
-    createdAt: Number.isFinite(createdAt) ? createdAt : null,
+    ownerStartedAt: Number.isFinite(ownerStartedAt) ? ownerStartedAt : null,
+    refreshedAt: Number.isFinite(refreshedAt) ? refreshedAt : null,
+    createdAt: Number.isFinite(refreshedAt) ? refreshedAt : (Number.isFinite(ownerStartedAt) ? ownerStartedAt : null),
   };
 }
 
-export async function isProcessLockStale(lockPath, { isAlive = pidAlive, now = Date.now, maxAgeMs = STALE_LOCK_MAX_AGE_MS } = {}) {
+export function lockOwnerIdentity(payload) {
+  if (!payload || payload.pid === null) return null;
+  return { pid: payload.pid, ownerStartedAt: payload.ownerStartedAt };
+}
+
+export function lockOwnerIdentityEqual(a, b) {
+  if (!a || !b) return false;
+  return a.pid === b.pid && a.ownerStartedAt === b.ownerStartedAt;
+}
+
+export async function processStartMatchesLockOwner(pid, ownerStartedAt, { execFileImpl = execFileAsync } = {}) {
+  if (ownerStartedAt === null || ownerStartedAt === undefined) return false;
+  const identity = await readProcessIdentity(pid, { execFileImpl });
+  if (!identity || identity.startedAt === null) return false;
+  return Math.abs(identity.startedAt - ownerStartedAt) <= 5000;
+}
+
+export async function isProcessLockStale(lockPath, {
+  isAlive = pidAlive,
+  now = Date.now,
+  maxAgeMs = STALE_LOCK_MAX_AGE_MS,
+  execFileImpl = execFileAsync,
+} = {}) {
   try {
     const text = await fs.readFile(lockPath, 'utf8');
-    const { pid, createdAt } = parseProcessLockPayload(text);
+    const payload = parseProcessLockPayload(text);
+    const { pid, ownerStartedAt, refreshedAt } = payload;
     if (pid !== null && !isAlive(pid)) return true;
-    if (createdAt !== null) return now() - createdAt > maxAgeMs;
+    if (pid !== null && isAlive(pid)) {
+      if (await processStartMatchesLockOwner(pid, ownerStartedAt, { execFileImpl })) return false;
+    }
+    const ageAnchor = refreshedAt ?? ownerStartedAt;
+    if (ageAnchor !== null) return now() - ageAnchor > maxAgeMs;
     const stat = await fs.stat(lockPath);
     return now() - stat.mtimeMs > maxAgeMs;
   } catch {
@@ -419,10 +558,28 @@ export async function isProcessLockStale(lockPath, { isAlive = pidAlive, now = D
 }
 
 export async function stealProcessLockIfStale(lockPath, opts = {}) {
+  const renameImpl = opts.renameImpl ?? ((from, to) => fs.rename(from, to));
+  let snapshotText;
+  try {
+    snapshotText = await fs.readFile(lockPath, 'utf8');
+  } catch {
+    return false;
+  }
+  const snapshotOwner = lockOwnerIdentity(parseProcessLockPayload(snapshotText));
   if (!(await isProcessLockStale(lockPath, opts))) return false;
   try {
     const stolen = `${lockPath}.stale.${process.pid}.${randomBytes(4).toString('hex')}`;
-    await fs.rename(lockPath, stolen);
+    await renameImpl(lockPath, stolen);
+    try {
+      const afterText = await fs.readFile(lockPath, 'utf8');
+      const recreatedOwner = lockOwnerIdentity(parseProcessLockPayload(afterText));
+      if (!lockOwnerIdentityEqual(snapshotOwner, recreatedOwner)) {
+        await fs.rm(stolen, { force: true });
+        return false;
+      }
+    } catch {
+      /* lock path absent after rename — expected */
+    }
     await fs.rm(stolen, { force: true });
     return true;
   } catch {
@@ -430,12 +587,35 @@ export async function stealProcessLockIfStale(lockPath, opts = {}) {
   }
 }
 
-export async function releaseProcessLock(lockPath, { pid = process.pid } = {}) {
+export async function releaseProcessLock(lockPath, { pid = process.pid, clearRefreshTimer } = {}) {
+  if (typeof clearRefreshTimer === 'function') clearRefreshTimer();
   try {
     const text = await fs.readFile(lockPath, 'utf8');
     const { pid: owner } = parseProcessLockPayload(text);
     if (owner === pid) await fs.rm(lockPath, { force: true });
   } catch { /* already gone */ }
+}
+
+async function refreshProcessLockFile(lockPath, ownerIdentity) {
+  const refreshedAt = new Date().toISOString();
+  const payload = formatProcessLockPayload(
+    ownerIdentity.pid,
+    new Date(ownerIdentity.ownerStartedAt).toISOString(),
+    refreshedAt,
+  );
+  await fs.writeFile(lockPath, payload, { mode: 0o600 });
+}
+
+export function startProcessLockRefresh(lockPath, ownerIdentity, {
+  intervalMs = LOCK_REFRESH_INTERVAL_MS,
+  refresh = refreshProcessLockFile,
+} = {}) {
+  if (!ownerIdentity?.pid) return () => {};
+  const timer = setInterval(() => {
+    void refresh(lockPath, ownerIdentity).catch(() => {});
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 export async function withProcessLock(lockPath, fn, {
@@ -444,28 +624,36 @@ export async function withProcessLock(lockPath, fn, {
   openFlags = 'wx',
   isAlive = pidAlive,
   maxAgeMs = STALE_LOCK_MAX_AGE_MS,
+  execFileImpl = execFileAsync,
 } = {}) {
   await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
   const deadline = Date.now() + timeoutMs;
   let handle = null;
-  const createdAt = new Date().toISOString();
+  let ownerIdentity = null;
+  let clearRefreshTimer = () => {};
+  const identity = await readProcessIdentity(process.pid, { execFileImpl });
+  const ownerStartedAt = identity?.startedAt ?? Date.now();
   while (Date.now() < deadline) {
     try {
       handle = await fs.open(lockPath, openFlags, 0o600);
-      await handle.writeFile(formatProcessLockPayload(process.pid, createdAt));
+      const nowIso = new Date().toISOString();
+      ownerIdentity = { pid: process.pid, ownerStartedAt };
+      await handle.writeFile(formatProcessLockPayload(process.pid, ownerStartedAt, nowIso));
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      await stealProcessLockIfStale(lockPath, { isAlive, maxAgeMs });
+      await stealProcessLockIfStale(lockPath, { isAlive, maxAgeMs, execFileImpl });
       await sleep(50);
     }
   }
   if (!handle) throw Object.assign(new Error('process-lock-timeout'), { code: 'EBUSY' });
+  clearRefreshTimer = startProcessLockRefresh(lockPath, ownerIdentity);
   try {
     return await fn();
   } finally {
+    clearRefreshTimer();
     await handle.close().catch(() => {});
-    await releaseProcessLock(lockPath);
+    await releaseProcessLock(lockPath, { clearRefreshTimer: () => {} });
   }
 }
 
@@ -599,7 +787,7 @@ export async function restartRegisteredServers({
     }
 
     const identity = strictPidCheck || !process.env.SWARM_TEST_TMP
-      ? await verifyRegistryPid(record, runner, { execFileImpl })
+      ? await verifyRegistryPid(record, runner, { execFileImpl, installRoot })
       : { ok: true };
     if (!identity.ok) {
       const remove = identity.removeRecord === true || identityMismatchRemovesRecord(identity.reason);

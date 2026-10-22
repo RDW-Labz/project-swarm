@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "fixwhenidle",
+      "agent": "auto",
+      "prompt": "Two tests are flaky on CI (ubuntu node 22 and macOS) and in a Linux container (about 1 in 6): in tests/update-when-idle.test.mjs the test update --when-idle waits for a busy marker then runs performUpdate fails on assert.ok(polls > 1), and the test held launcher is released when pending expires even if update pid is dead also fails sometimes. Both depend on real timing (real sleeps, Date.now, expiry racing the poll loop). Make them fully deterministic with injected dependencies only (the existing options of runWhenIdleUpdate and waitBeforeLaunchingWork such as sleep, now, describeBusy, isAlive, the pending record expiresAt computed from an injected clock): the busy check returns busy for the first 3 polls and then idle; the sleep hook advances an injected clock and counts polls; for the expiry test use an injected now that moves past expiresAt without any real waiting. Do not change product code unless you find a real bug (then fix it and say so in a comment). Verify: run the whole file 60 times in a Linux container (docker run --rm -v THISDIR:/w -w /w node:22 sh -c loop; must be 0 failures of 60; use CPU load by running two containers at once if docker works in your sandbox) and 30 times natively; if docker is not available just run it natively 60 times with a parallel CPU burner. ignoreTests reason: only the named test files change.",
+      "context": [
+        "tests/update-when-idle.test.mjs",
+        "tools/update-pending.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tests/update-when-idle.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ]
+    }
+  ]
+}

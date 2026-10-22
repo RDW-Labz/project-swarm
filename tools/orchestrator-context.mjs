@@ -156,8 +156,70 @@ function writeJsonAtomic(file, value, { writeFileSync = fs.writeFileSync, mkdirS
   return true;
 }
 
+/** Autopilot --once with no journal or action changes: skip post-command writes (journal line, HANDOFF, etc.). */
+let autopilotPollMeta = null;
+
+export function noteAutopilotStep(root, step, { once = false } = {}) {
+  const quiet = Boolean(
+    step && !step.error
+    && !(step.actions?.length)
+    && !(step.blocked?.length)
+    && !step.stepWroteJournal,
+  );
+  autopilotPollMeta = {
+    root,
+    once: Boolean(once),
+    quiet,
+    suppressPostCommand: Boolean(once && quiet),
+  };
+}
+
+function quietAutopilotPollFor(root) {
+  const meta = autopilotPollMeta;
+  if (!meta || meta.root !== root || !meta.once || !meta.quiet) return false;
+  return true;
+}
+
+export function clearAutopilotPollMeta() {
+  autopilotPollMeta = null;
+}
+
+/** When true, journalAfterCommand must not append journal lines or refresh generated coordination files. */
+export function shouldSuppressPostAutopilotPollWrites(root) {
+  const meta = autopilotPollMeta;
+  if (!meta || meta.root !== root || !meta.suppressPostCommand) return false;
+  return true;
+}
+
+export function finishPostAutopilotPollWriteSuppression(root) {
+  if (autopilotPollMeta?.root === root) clearAutopilotPollMeta();
+}
+
+/** When true, journalAfterCommand should not append or refresh generated files for this autopilot poll. */
+export function shouldSkipJournalForAutopilotPoll(root) {
+  if (!shouldSuppressPostAutopilotPollWrites(root)) return false;
+  finishPostAutopilotPollWriteSuppression(root);
+  return true;
+}
+
+function projectRootFromGeneratedPath(file) {
+  if (typeof file !== 'string' || !file) return null;
+  const normalized = path.normalize(file);
+  const parts = normalized.split(path.sep);
+  const coordIdx = parts.lastIndexOf('coordination');
+  if (coordIdx > 0) return parts.slice(0, coordIdx).join(path.sep);
+  const swarmIdx = parts.indexOf('.swarm');
+  if (swarmIdx > 0) return parts.slice(0, swarmIdx).join(path.sep);
+  return null;
+}
+
 /** Atomic UTF-8 write for generated project files (temp file in the same directory, then rename). */
 export function writeUtf8Atomic(file, text, { writeFile = fs.promises.writeFile, rename = fs.promises.rename, mkdir = fs.promises.mkdir } = {}) {
+  const root = projectRootFromGeneratedPath(file);
+  if (root && shouldSuppressPostAutopilotPollWrites(root)) {
+    finishPostAutopilotPollWriteSuppression(root);
+    return Promise.resolve(false);
+  }
   const dir = path.dirname(file);
   return mkdir(dir, { recursive: true }).then(() => {
     if (isLink(file)) return false;
