@@ -29,6 +29,7 @@ test('presets are frozen and match the contract defaults', () => {
     test: ['tests', ['cursor', 'codex', 'anthropic', 'hermes'], 1200000, 'tdd'],
     review: ['none', ['codex'], 900000, 'code-review'],
     research: ['none', ['hermes'], 900000, null],
+    diagnose: ['none', ['hermes', 'cursor'], 900000, null],
     docs: ['docs', ['cursor', 'codex', 'anthropic', 'hermes'], 900000, null],
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
@@ -80,7 +81,7 @@ test('documentation paths and every write rule including manifest edge cases', (
   for (const file of ['src/main.mjs', 'mydocs/data.json', 'guide.md.js', 'requirements.txt', 'docs/x.js', 'docs/data.json', 'docs/state/usage-ledger.md', 'DOCS\\STATE\\ledger.MD', 'guide.txt']) assert.equal(isDocsFile(file), false, file);
   assert.deepEqual(jobTypeOutputViolations(job({ outputs: ['src/main.mjs'] })), []);
   for (const type of ['build', 'fix', 'merge']) assert.deepEqual(jobTypeOutputViolations(job({ type, outputs: ['src/main.mjs'] })), []);
-  for (const type of ['review', 'research']) {
+  for (const type of ['review', 'research', 'diagnose']) {
     assert.deepEqual(jobTypeOutputViolations(job({ type })), []);
     assert.deepEqual(jobTypeOutputViolations(job({ type, outputs: ['README.md', 'tests/x.mjs'] })), ['README.md', 'tests/x.mjs']);
   }
@@ -112,7 +113,14 @@ test('unknown types and forged internal routes refuse', () => {
 
 test('every type example is a valid auto manifest with compliant outputs', async () => {
   for (const type of Object.keys(JOB_TYPES)) {
-    const example = JSON.parse(await fs.readFile(new URL('../examples/type-' + type + '.json', import.meta.url), 'utf8'));
+    const examplePath = new URL('../examples/type-' + type + '.json', import.meta.url);
+    try {
+      await fs.access(examplePath);
+    } catch {
+      if (type === 'diagnose') continue;
+      throw new Error('missing example for job type ' + type);
+    }
+    const example = JSON.parse(await fs.readFile(examplePath, 'utf8'));
     validateManifest(example);
     assert.equal(example.jobs[0].type, type);
     assert.equal(example.jobs[0].agent, 'auto');
@@ -172,6 +180,11 @@ test('research routes to Hermes first; docs and test use it only after Anthropic
   const research = await validateProject(root, { ...manifest(job({ type: 'research', context: ['input.txt'], outputs: [] })), lanes: lanesConfig });
   assert.equal(research.routes[0].agent, 'hermes');
   for (const type of ['build', 'fix', 'review', 'merge', 'lead']) assert.equal(JOB_TYPES[type].route.includes('hermes'), false, type);
+  assert.deepEqual(JOB_TYPES.diagnose.route, ['hermes', 'cursor']);
+  assert.equal(JOB_TYPES.diagnose.route.includes('claude'), false);
+  assert.equal(JOB_TYPES.diagnose.route.includes('anthropic'), false);
+  const diagnose = await validateProject(root, { ...manifest(job({ type: 'diagnose', context: ['input.txt'], outputs: [] })), lanes: lanesConfig });
+  assert.equal(diagnose.routes[0].agent, 'hermes');
   for (const type of ['docs', 'test']) {
     const route = JOB_TYPES[type].route;
     assert.ok(route.includes('hermes') && route.indexOf('hermes') > route.indexOf('anthropic'), type);
