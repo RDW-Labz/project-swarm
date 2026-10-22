@@ -10,6 +10,7 @@ import { readLedger, isApproved } from './tickets.mjs';
 import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
 import { sanitizeText } from './journal.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
+import { isProtectedTopic } from './board-action-guard.mjs';
 
 // Secrets redacted, control characters (terminal escapes) removed, length bounded: everything shown here came from a file on disk.
 const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/;   // controls, C1, zero-width and text-direction characters
@@ -61,6 +62,23 @@ const isFyi = it => it.kind === 'human' && (String(it.id).startsWith('prune-') |
 
 // The commands (with a label) the owner can run at the computer, and for a blocker always a plain "do this" line.
 const plain = value => !UNSAFE.test(String(value)) && String(value) !== '';
+
+function decisionProtectedTopic(it) {
+  if (it?.kind !== 'decision') return undefined;
+  const fields = [
+    it.text ?? it.title,
+    it.title,
+    it.id,
+    it.default ?? it.choice,
+    ...(Array.isArray(it.choices) ? it.choices : []),
+    ...(Array.isArray(it.options) ? it.options : []),
+  ];
+  for (const field of fields) {
+    if (field !== undefined && field !== null && isProtectedTopic(String(field))) return true;
+  }
+  return false;
+}
+
 function nextFor(item, root) {
   if (![root, String(item.id)].every(plain)) return { commands: [], next: null };
   const swarm = `swarm --root ${quote(root)}`;
@@ -124,6 +142,7 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
           id: txt(it.id, 80),
           title: txt(it.title, TITLE_MAX),
           text: txt(it.text ?? it.title, TITLE_MAX),
+          ...(it.kind === 'decision' ? { protectedTopic: decisionProtectedTopic(it) } : {}),
           ...(it.boardSafe === true ? { boardSafe: true } : {}),
           since: it.since ?? null,
           unblocks: Number.isFinite(it.unblocks) ? it.unblocks : 0,

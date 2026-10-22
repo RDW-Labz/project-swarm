@@ -85,12 +85,14 @@ export function ownerItemsFromBoardInbox(inbox) {
     projectId: item.projectId,
     ...(item.boardSafe === true ? { boardSafe: true } : {}),
     ...(Array.isArray(item.choices) ? { choices: item.choices } : {}),
+    ...(item.kind === 'decision' && typeof item.protectedTopic === 'boolean' ? { protectedTopic: item.protectedTopic } : {}),
   }));
 }
 
 export function decisionBoardSafeForOwner(item) {
   if (!item || item.kind !== 'decision') return true;
   if (item.boardSafe !== true) return false;
+  if (item.protectedTopic !== false) return false;
   const fields = [
     item.text,
     item.title,

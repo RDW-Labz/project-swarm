@@ -462,3 +462,86 @@ test('a hand-build request decision is answerable from the board', async t => {
   assert.equal(audit.some(entry => entry.outcome === 'approved'), true);
   await cleanupTestProject(root);
 });
+
+test('production remote board lists inbox decisions through ownerItemsFromBoardInbox and enforces board-safe rules', async t => {
+  const suiteHome = await fs.mkdtemp(path.join(process.env.HOME, 'owner-remote-e2e-'));
+  const root = path.join(fileURLToPath(new URL('../evals', import.meta.url)), `owner-e2e-${Date.now()}`);
+  t.after(async () => {
+    await fs.rm(suiteHome, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  await fs.mkdir(path.join(root, 'docs', 'scope'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'scope', 'roadmap.md'), '# roadmap\n');
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src', 'fix.ts'), 'export const x = 1;\n');
+  const project = { id: projectId(root), name: 'owner-e2e-app', root };
+  const env = {
+    ...process.env,
+    SWARM_PROJECTS_FILE: path.join(suiteHome, 'projects.json'),
+    SWARM_PHONE_DIR: path.join(suiteHome, 'no-phone'),
+    SWARM_LANES_DIR: path.join(suiteHome, 'lanes'),
+  };
+  await fs.writeFile(env.SWARM_PROJECTS_FILE, JSON.stringify({
+    version: 1,
+    projects: [{ ...project, addedAt: new Date().toISOString(), lastSeen: new Date().toISOString() }],
+  }));
+  const now = () => 1_700_000_000_000;
+  await runInboxCommand(root, 'decision', ['Pick the accent color?', '--choice', 'blue', '--id', 'safe-accent', '--board-safe'], { now });
+  await runInboxCommand(root, 'decision', ['Pick the default theme?', '--choice', 'light', '--id', 'theme-default'], { now });
+  const harmlessLong = `${'alpha '.repeat(50).slice(0, 300).trimEnd()} merge to main`;
+  await appendEvent(root, {
+    kind: 'decision',
+    id: 'long-merge-tail',
+    text: harmlessLong,
+    choice: 'yes',
+    options: ['yes', 'no'],
+    confirm: true,
+    boardSafe: true,
+  }, { now });
+  const handbuild = await runHandbuildCommand(root, ['request', '--kind', 'tiny', '--reason', 'One-off fix', '--files', 'src/fix.ts'], { env, now });
+  assert.equal(handbuild.exitCode, 0);
+  const handbuildId = (await readJournal(root, { limit: Infinity })).find(e => e.kind === 'decision' && String(e.id).startsWith('handbuild-'))?.id;
+  assert.ok(handbuildId);
+
+  const board = await startBoardServer({
+    env,
+    root: process.env.HOME,
+    remote: { port: 0, token: 'e'.repeat(48), hosts: [HOST.toLowerCase()], login: LOGIN },
+  });
+  t.after(async () => { await board.server.close(); await board.api.close(); });
+  const port = Number(new URL(board.url).port);
+  const headers = { 'x-watch-token': board.server.token };
+
+  async function approveItem(itemId) {
+    const prepared = await tailnet(port, `/api/owner/actions/${itemId}/prepare`, { method: 'POST', headers });
+    assert.equal(prepared.status, 200, `prepare ${itemId}`);
+    const decided = await tailnet(port, `/api/owner/actions/${itemId}/decision`, {
+      method: 'POST',
+      headers,
+      body: { decision: 'approve', confirm: prepared.json.confirmToken },
+    });
+    assert.equal(decided.status, 200, `decide ${itemId}`);
+    assert.equal(decided.json.result, 'approved');
+  }
+
+  async function refuseItem(itemId) {
+    const refused = await tailnet(port, `/api/owner/actions/${itemId}/prepare`, { method: 'POST', headers });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.json?.error, 'decision-not-board-safe');
+  }
+
+  await approveItem('safe-accent');
+  await approveItem(handbuildId);
+  await refuseItem('theme-default');
+  await refuseItem('long-merge-tail');
+
+  const auditGet = await tailnet(port, '/api/owner/audit', { headers });
+  assert.equal(auditGet.status, 200);
+  const approvedIds = auditGet.json.filter(entry => entry.outcome === 'approved').map(entry => entry.itemId);
+  assert.deepEqual(approvedIds.sort(), ['safe-accent', handbuildId].sort());
+  assert.equal(auditGet.json.some(entry => entry.itemId === 'theme-default' && entry.outcome === 'approved'), false);
+  assert.equal(auditGet.json.some(entry => entry.itemId === 'long-merge-tail' && entry.outcome === 'approved'), false);
+
+  await cleanupTestProject(root);
+});

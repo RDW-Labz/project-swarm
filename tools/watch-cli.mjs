@@ -25,7 +25,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { readHistory, historyFile } from './history.mjs';
 import { boardInbox, inboxText } from './board-inbox.mjs';
-import { createOwnerActions } from './board-owner-actions.mjs';
+import { createOwnerActions, ownerItemsFromBoardInbox } from './board-owner-actions.mjs';
 import { guardBoardAction } from './board-action-guard.mjs';
 import { remoteFile } from './remote.mjs';
 import { runDetail, compareRuns } from './board-run.mjs';
@@ -533,13 +533,7 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
       const flagged = await classifyProjects(all, { now: now(), liveRuns: await live(), env });
       const projects = flagged.filter(p => !projectHiddenFromBoard(p, { scratch: false, env }));
       const inbox = await boardInbox({ projects, now: now(), env, forOwner: true, ownerInbox: true });
-      return (inbox.items ?? []).map(item => ({
-        id: item.id,
-        kind: item.kind,
-        title: item.title,
-        summary: item.title,
-        projectId: item.projectId,
-      }));
+      return ownerItemsFromBoardInbox(inbox);
     },
     appendAudit,
     readAudit,
