@@ -118,10 +118,11 @@ describe('board owner actions UI', () => {
     assert.equal(container.childNodes.length, 0);
   });
 
-  it('never renders controls for refused kinds', () => {
+  it('never renders controls for non-allowlisted or refused kinds', () => {
     const doc = makeDoc();
     const container = doc.createElement('div');
     for (const kind of [
+      'human', 'limit-up', 'blocker', 'held-ticket',
       'merge', 'deploy', 'cap-raise', 'spend', 'key', 'migration', ' Deploy', 'MERGE-request',
       'cap', 'capRaise', 'cap-increase', 'budget', 'limit-raise', 'spend-limit', 'keys', 'rollback-prod',
     ]) {

@@ -76,6 +76,27 @@ test('deprecated query token is legacy and header is primary on every read route
   }
 });
 
+test('allowedKinds lists the only owner-approvable inbox item kinds', () => {
+  assert.deepEqual(contract.components?.schemas?.allowedKinds?.enum, [
+    'handbuild',
+    'decision',
+    'proposed-ticket',
+    'scope',
+  ]);
+  assert.match(
+    contract.paths['/api/owner/actions/{itemId}/prepare']?.post?.description ?? '',
+    /unknown kinds.*refused/i,
+  );
+  assert.match(
+    contract.paths['/api/owner/actions/{itemId}/decision']?.post?.description ?? '',
+    /unknown kinds.*refused/i,
+  );
+  assert.equal(
+    contract.components?.schemas?.AuditEntry?.properties?.kind?.$ref,
+    '#/components/schemas/allowedKinds',
+  );
+});
+
 test('refusedKinds contains every server-side refused action kind', () => {
   assert.deepEqual(contract.components?.schemas?.refusedKinds?.enum, [
     'merge',

@@ -170,7 +170,7 @@
         "tags": ["owner-actions"],
         "operationId": "prepareOwnerAction",
         "summary": "Prepare an owner decision",
-        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This route is unavailable to agent sessions and to remote-board requests with local=1.",
+        "description": "Step 1 of the confirmation flow. The returned confirmToken is short-lived, single-use, and bound to itemId. Only inbox item kinds in allowedKinds may be prepared; every other kind, including unknown kinds, is refused server-side by default. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). This route is unavailable to agent sessions and to remote-board requests with local=1.",
         "security": [
           {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
@@ -203,7 +203,7 @@
         "tags": ["owner-actions"],
         "operationId": "submitOwnerDecision",
         "summary": "Approve or deny an owner-decidable request",
-        "description": "Step 2 of the confirmation flow. The server refuses merge, deploy, cap-raise, spend, key, and migration actions regardless of client input. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). Agent-session markers and remote-board local=1 requests are always refused.",
+        "description": "Step 2 of the confirmation flow. Only item kinds in allowedKinds may be approved or denied; unknown kinds are refused server-side by default, and merge, deploy, cap-raise, spend, key, and migration kinds remain refused regardless of client input. Authenticate with x-watch-token only; a board token in the t query parameter is refused (401). Agent-session markers and remote-board local=1 requests are always refused.",
         "security": [
           {"boardTokenHeader": [], "tailnetSignIn": []}
         ],
@@ -592,7 +592,7 @@
           "at": {"type": "string", "format": "date-time"},
           "actor": {"type": "string"},
           "itemId": {"type": "string"},
-          "kind": {"type": "string"},
+          "kind": {"$ref": "#/components/schemas/allowedKinds"},
           "decision": {"type": "string", "enum": ["approve", "deny"]},
           "result": {"type": "string"},
           "machine": {"type": "string"}
@@ -602,6 +602,11 @@
       "OwnerAudit": {
         "type": "array",
         "items": {"$ref": "#/components/schemas/AuditEntry"}
+      },
+      "allowedKinds": {
+        "type": "string",
+        "description": "The only item kinds the board may approve or deny; every other kind is refused server-side.",
+        "enum": ["handbuild", "decision", "proposed-ticket", "scope"]
       },
       "refusedKinds": {
         "type": "string",

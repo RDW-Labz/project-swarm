@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Approve / deny controls for owner-decidable Needs-you items (tailnet sign-in + board token header only).
+// Allowed item kinds: contracts/watch-s4-ops.json components/schemas/allowedKinds
+var ALLOWED_OWNER_KINDS = ['handbuild', 'decision', 'proposed-ticket', 'scope'];
 var REFUSED_OWNER_WORDS = ['merge', 'deploy', 'cap', 'budget', 'spend', 'key', 'keys', 'secret', 'migration', 'migrate', 'rollback-prod'];
 
 function refusedOwnerKindWords(value) {
@@ -46,11 +48,18 @@ function authHeaders(token) {
   return { 'x-watch-token': token, 'Content-Type': 'application/json' };
 }
 
+function isAllowedOwnerKind(value) {
+  if (typeof value !== 'string') { return false; }
+  var normalized = value.trim().toLowerCase();
+  if (!normalized) { return false; }
+  if (ALLOWED_OWNER_KINDS.indexOf(normalized) === -1) { return false; }
+  return !isRefusedOwnerKind(value);
+}
+
 export function ownerActionAvailable(item, options) {
   if (!options || !options.signedIn) { return false; }
   if (!item || item.needsOwner !== true) { return false; }
-  var kind = item.kind ? String(item.kind) : '';
-  return !isRefusedOwnerKind(kind);
+  return isAllowedOwnerKind(item.kind ? String(item.kind) : '');
 }
 
 export function renderOwnerActions(container, item, options) {

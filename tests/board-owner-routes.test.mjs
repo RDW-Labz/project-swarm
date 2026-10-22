@@ -258,6 +258,17 @@ test('owner prepare, decide, and audit work over the tailnet path', async t => {
   }
 });
 
+test('limit-up inbox items are refused end to end with no approved audit entry', async t => {
+  const { actions, audit } = ownerActionsFixture({
+    items: [{ id: 'limit-1', kind: 'limit-up', title: 'Raise daily limit' }],
+  });
+  const { port, token } = await startServer(t, { ownerActions: actions });
+  const headers = { 'x-watch-token': token };
+  const refused = await tailnet(port, '/api/owner/actions/limit-1/prepare', { method: 'POST', headers });
+  assert.equal(refused.status, 403);
+  assert.equal(audit.some(entry => entry.outcome === 'approved'), false);
+});
+
 test('refused item kinds, replayed confirms, expiry sweep, and pending cap are enforced', async t => {
   for (const kind of ['deploy', 'merge', 'cap-raise']) {
     const { actions } = ownerActionsFixture({ items: [{ id: `${kind}-1`, kind, title: kind }] });

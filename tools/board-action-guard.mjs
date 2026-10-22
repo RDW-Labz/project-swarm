@@ -9,6 +9,15 @@ export const REFUSED_KINDS = Object.freeze([
   'migration',
 ]);
 
+export const ALLOWED_KINDS = Object.freeze([
+  'handbuild',
+  'decision',
+  'proposed-ticket',
+  'scope',
+]);
+
+const ALLOWED_ITEM_KINDS = new Set(ALLOWED_KINDS);
+
 const SOURCES = new Set(['board', 'phone']);
 const ALLOWED_DECISIONS = new Set(['approve', 'deny']);
 
@@ -42,8 +51,10 @@ export function isRefusedActionKind(value) {
   if (words.length === 0) return true;
   if (words.includes('limit') && words.includes('raise')) return true;
   if (REFUSED_WORDS.has(words.join('-'))) return true;
+  if (REFUSED_KINDS.includes(words.join('-'))) return true;
   for (const word of words) {
     if (REFUSED_WORDS.has(word)) return true;
+    if (REFUSED_KINDS.includes(word)) return true;
   }
   return false;
 }
@@ -63,8 +74,14 @@ export function guardBoardAction({ kind, source, itemKind } = {}) {
   }
 
   const normalizedItemKind = normalizedString(itemKind);
-  if (normalizedItemKind === null || normalizedItemKind === '' || isRefusedActionKind(itemKind)) {
+  if (normalizedItemKind === null || normalizedItemKind === '') {
     return { allowed: false, reason: 'item-kind-refused' };
+  }
+  if (isRefusedActionKind(itemKind)) {
+    return { allowed: false, reason: 'item-kind-refused' };
+  }
+  if (!ALLOWED_ITEM_KINDS.has(normalizedItemKind)) {
+    return { allowed: false, reason: 'not an allowed action kind' };
   }
 
   return { allowed: true, reason: 'allowed' };
