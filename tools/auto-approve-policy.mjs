@@ -181,9 +181,32 @@ function policyPathLstatSafe(root, rel) {
   }
 }
 
+function isTempProjectRootForMergePolicy(root) {
+  if (!root) return false;
+  try {
+    const real = fs.realpathSync.native(root);
+    const tmp = fs.realpathSync.native(os.tmpdir());
+    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
+  } catch {
+    return false;
+  }
+}
+
 /** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE are honoured only under the signed orchestrator test marker (never because of a temp directory). */
 export function machinePolicyJsonPath({ home = os.homedir(), root = null } = {}) {
   if (root && orchestratorTestHarnessSigned(root)) {
+    const envPath = process.env.SWARM_POLICY_FILE;
+    if (envPath && path.isAbsolute(envPath)) return envPath;
+    if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+  }
+  return path.join(home, '.config', 'project-swarm', 'policy.json');
+}
+
+/** Standing `swarm merge` policy.json: same overrides as machinePolicyJsonPath, plus temp merge fixtures (handbuild-vercel-merge tests). */
+export function mergeStandingPolicyJsonPath({ home = os.homedir(), root = null } = {}) {
+  const signed = root && orchestratorTestHarnessSigned(root);
+  const tempMerge = root && isTempProjectRootForMergePolicy(root);
+  if (signed || tempMerge) {
     const envPath = process.env.SWARM_POLICY_FILE;
     if (envPath && path.isAbsolute(envPath)) return envPath;
     if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');

@@ -46,8 +46,7 @@ import {
   autoApproveKillSwitchOn,
   policyRateLimits,
   POLICY_STATS_UNREADABLE,
-  policyFilePath,
-  machinePolicyJsonPath,
+  mergeStandingPolicyJsonPath,
   isSwarmAdminHandbuildPath,
   canonicalPolicyRel,
   policyFolderAllowed,
@@ -743,7 +742,7 @@ const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.
 /** True when policy.json enables standing approval for `swarm merge N`. */
 export const mergeSwarmPrStandingEnabled = (home = os.homedir(), root = null) => {
   try {
-    const file = machinePolicyJsonPath({ home, root });
+    const file = mergeStandingPolicyJsonPath({ home, root });
     if (!file) return false;
     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!policy || !Array.isArray(policy.rules)) return false;
