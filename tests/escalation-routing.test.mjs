@@ -25,7 +25,7 @@ async function project(t2) {
 const wave = tickets => { const m = ticketsToManifest(tickets, { ledger: { tickets }, contextEnv, laneModels: lanes }).manifest; m.lanes = lanes; return m; };
 const env = { HOME: os.tmpdir(), PATH: process.env.PATH };
 
-test('an escalated ticket plans at every level: level 1 on Cursor, level 2 hard on Codex, level 3 (tier expensive) on claude:opus', async t2 => {
+test('an escalated ticket plans at every level: levels 0–2 on anthropic:claude-haiku-5-5, level 3 (tier expensive) on claude:opus', async t2 => {
   const root = await project(t2);
   const out = {};
   for (const level of [0, 1, 2, 3]) {
@@ -33,9 +33,10 @@ test('an escalated ticket plans at every level: level 1 on Cursor, level 2 hard 
     const v = await validateProject(root, manifest, { env });
     out[level] = v.routes[0];
   }
-  assert.equal(out[0].agent, 'cursor');
-  assert.equal(out[1].agent, 'cursor');
-  assert.equal(out[2].agent, 'codex', 'hard ticket: codex first');
+  for (const level of [0, 1, 2]) {
+    assert.equal(out[level].agent, 'anthropic');
+    assert.equal(out[level].model, 'claude-haiku-5-5');
+  }
   assert.equal(out[3].agent, 'claude');
   assert.equal(out[3].model, 'opus');
 });

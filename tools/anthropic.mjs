@@ -19,7 +19,7 @@ export const ANTHROPIC_KEY_ENV = 'SWARM_ANTHROPIC_API_KEY';
 export const ANTHROPIC_KEY_ITEM = Object.freeze({ service: 'project-swarm', account: 'anthropic.api_key' });
 // Raising either cap is the operator's decision; nothing here reads a raise from a manifest.
 export const TOTAL_CAP_USD = 500;
-export const DAY_CAP_USD = 20;
+export const DAY_CAP_USD = 25;
 export const JOB_CAP_USD = 5;
 
 // USD per token. Haiku 5.5 charges more once a prompt passes 100K tokens (`longIn`/`longOut`).
@@ -105,11 +105,15 @@ export function usageCostUsd(model, usage = {}) {
 export function caps(env = process.env) {
   const lanes = loadLocalConfig({ env })?.spend?.lanes?.anthropic ?? {};
   const lower = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, fallback) : fallback);
-  return { totalUsd: TOTAL_CAP_USD, dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD };
+  const dayMode = lanes.mode === 'notify' ? 'notify' : 'stop';
+  return { totalUsd: TOTAL_CAP_USD, dayUsd: lower(lanes.dailyUsd, DAY_CAP_USD), jobUsd: JOB_CAP_USD, dayMode };
+}
+export function dayCapWouldRefuse({ worstUsd, spent, limits = caps() }) {
+  return spent.today + worstUsd > limits.dayUsd;
 }
 export function assertWithinCaps({ worstUsd, spent, limits = caps() }) {
   if (spent.job + worstUsd > limits.jobUsd) fail(`Anthropic job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${limits.jobUsd}; request refused`);
-  if (spent.today + worstUsd > limits.dayUsd) fail(`Anthropic day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${limits.dayUsd}; request refused (ask the operator before raising it)`);
+  if (dayCapWouldRefuse({ worstUsd, spent, limits }) && limits.dayMode === 'stop') fail(`Anthropic day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${limits.dayUsd}; request refused (ask the operator before raising it)`);
   if (spent.total + worstUsd > limits.totalUsd) fail(`Anthropic total cap: $${spent.total.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${limits.totalUsd}; request refused (ask the operator before raising it)`);
 }
 
