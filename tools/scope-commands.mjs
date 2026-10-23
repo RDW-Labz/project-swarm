@@ -146,20 +146,70 @@ export function parseTicketIdBlock(raw) {
   return { start, end };
 }
 
-function ticketIdBlockFromLocalConfig() {
+function readLocalConfigForIngest() {
   try {
-    const config = loadLocalConfig();
-    const raw = config?.ticketIdBlock ?? config?.machine?.ticketIdBlock;
-    return parseTicketIdBlock(raw);
-  } catch { return null; }
+    return loadLocalConfig();
+  } catch (error) {
+    throw fail('ticket-id-block', `cannot read local config: ${error.message}`);
+  }
 }
 
-function peerTicketsLedgerPathFromLocalConfig() {
+function ticketIdBlockFromConfig(config) {
+  const top = config?.ticketIdBlock;
+  const machine = config?.machine?.ticketIdBlock;
+  // Top-level ticketIdBlock wins; machine.ticketIdBlock applies only when the top-level key is absent.
+  const raw = top !== undefined && top !== null ? top : machine;
+  if (raw === undefined || raw === null) return null;
+  const block = parseTicketIdBlock(raw);
+  if (!block) {
+    throw fail(
+      'ticket-id-block',
+      'invalid ticketIdBlock in local config: start must be an integer from 1 through 8999 and end must be an integer from start through 8998',
+    );
+  }
+  return block;
+}
+
+function peerTicketsLedgerRawFromConfig(config) {
+  if (config?.peerTicketsLedger !== undefined && config?.peerTicketsLedger !== null) {
+    return { raw: config.peerTicketsLedger, label: 'peerTicketsLedger' };
+  }
+  if (config?.peerLedger !== undefined && config?.peerLedger !== null) {
+    return { raw: config.peerLedger, label: 'peerLedger' };
+  }
+  if (config?.machine?.peerTicketsLedger !== undefined && config?.machine?.peerTicketsLedger !== null) {
+    return { raw: config.machine.peerTicketsLedger, label: 'machine.peerTicketsLedger' };
+  }
+  return null;
+}
+
+function resolvePeerTicketsLedgerPath(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw fail('ticket-id-collision', 'invalid peer tickets ledger in local config: must be a non-empty path to an existing file');
+  }
+  let resolved = path.resolve(raw.trim());
   try {
-    const config = loadLocalConfig();
-    const raw = config?.peerTicketsLedger ?? config?.peerLedger ?? config?.machine?.peerTicketsLedger;
-    return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
-  } catch { return null; }
+    resolved = realpathSync(resolved);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot access peer tickets ledger: ${error.message}`);
+  }
+  const st = lstatSync(resolved);
+  if (!st.isFile()) {
+    throw fail('ticket-id-collision', 'peer tickets ledger path is not a regular file');
+  }
+  return resolved;
+}
+
+function peerTicketsLedgerPathFromConfig(config) {
+  const entry = peerTicketsLedgerRawFromConfig(config);
+  if (!entry) return null;
+  try {
+    return resolvePeerTicketsLedgerPath(entry.raw);
+  } catch (error) {
+    if (error.code === 'ticket-id-collision') throw error;
+    throw fail('ticket-id-collision', `invalid ${entry.label} in local config: ${error.message}`);
+  }
 }
 
 function idNumberInBlock(n, block) {
@@ -199,27 +249,35 @@ export function validateIngestTicketIds({ startAt, itemCount, block, peerIds, pe
       : `${formatTicketId(startAt)} through ${formatTicketId(last)}`;
     return `ticket-id-block: cannot mint ${attempted}; this machine is configured for ticket ids ${ticketIdBlockLabel(block)}`;
   }
-  if (peerIds?.size) {
+  if (peerIds) {
     for (let n = startAt; n <= last; n += 1) {
       const id = formatTicketId(n);
       if (peerIds.has(id)) {
-        const where = peerPath ? ` at ${peerPath}` : '';
-        return `ticket-id-collision: ${id} already exists in peer tickets ledger${where}`;
+        return `ticket-id-collision: ${id} already exists in peer tickets ledger`;
       }
     }
   }
   return null;
 }
 
-async function loadPeerTicketIds(peerPath) {
+async function loadPeerTicketIds(validatedPeerPath) {
+  let text;
   try {
-    const text = await fs.readFile(peerPath, 'utf8');
-    const ledger = JSON.parse(text);
-    return new Set((ledger?.tickets ?? []).map(t => t.id).filter(id => /^T-\d+$/.test(id)));
+    text = await fs.readFile(validatedPeerPath, 'utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') throw fail('ticket-id-collision', `peer tickets ledger not found at ${peerPath}`);
-    throw fail('ticket-id-collision', `cannot read peer tickets ledger at ${peerPath}: ${error.message}`);
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot read peer tickets ledger: ${error.message}`);
   }
+  let ledger;
+  try {
+    ledger = JSON.parse(text);
+  } catch (error) {
+    throw fail('ticket-id-collision', `peer tickets ledger is not valid JSON: ${error.message}`);
+  }
+  if (!Array.isArray(ledger?.tickets)) {
+    throw fail('ticket-id-collision', 'peer tickets ledger must contain a tickets array');
+  }
+  return new Set(ledger.tickets.map(t => t.id).filter(id => /^T-\d+$/.test(id)));
 }
 
 function longestWaveChain(tickets) {
@@ -1827,8 +1885,9 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
   const rootFileNotes = [];
   const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
   const profile = await readProfile(root);
-  const ticketIdBlock = ticketIdBlockFromLocalConfig();
-  const peerTicketsLedgerPath = peerTicketsLedgerPathFromLocalConfig();
+  const ingestConfig = readLocalConfigForIngest();
+  const ticketIdBlock = ticketIdBlockFromConfig(ingestConfig);
+  const peerTicketsLedgerPath = peerTicketsLedgerPathFromConfig(ingestConfig);
   const peerTicketIds = peerTicketsLedgerPath ? await loadPeerTicketIds(peerTicketsLedgerPath) : null;
   const startAt = resolveIngestStartAt(existing, ticketIdBlock);
   const repoFiles = await listTrackedRepoFiles(root);
@@ -3617,7 +3676,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {
     if (error.code && /^(scope|ticket|ledger|approval)/.test(error.code)) return out(`${error.code}: ${error.message}`, 1);
-    if (error.code === 'ticket-id-collision') return out(error.message, 1);
+    if (error.code === 'ticket-id-collision' || error.code === 'ticket-id-block') return out(error.message, 1);
     throw error;
   }
 }

@@ -55,7 +55,11 @@ async function gitRepo(root) {
 async function setLocalConfig(patch) {
   const configPath = process.env.SWARM_CONFIG;
   const base = JSON.parse(await fs.readFile(configPath, 'utf8'));
-  await fs.writeFile(configPath, `${JSON.stringify({ ...base, ...patch }, null, 2)}\n`, { mode: 0o600 });
+  const next = { ...base, ...patch };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+  }
+  await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
 }
 
 async function project(t) {
@@ -162,4 +166,54 @@ test('validateIngestTicketIds flags cross-block minting without ingest', () => {
     'ticket-id-block: cannot mint T-0001; this machine is configured for ticket ids T-0100 through T-0199',
   );
   assert.equal(resolveIngestStartAt(null, blockA), 100);
+});
+
+test('ingest refuses malformed ticketIdBlock instead of unblocked numbering', async t => {
+  await setLocalConfig({ ticketIdBlock: { start: 0, end: 10 } });
+  const root = await project(t);
+  await fakeRun(root, 'r1', [build()]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 1, result.stdout);
+  assert.match(result.stdout, /invalid ticketIdBlock in local config/);
+  assert.equal(await readLedger(root), null);
+});
+
+test('ingest refuses when local config cannot be read', async t => {
+  const configPath = process.env.SWARM_CONFIG;
+  const prior = await fs.readFile(configPath, 'utf8');
+  t.after(async () => {
+    await fs.writeFile(configPath, prior, { mode: 0o600 });
+  });
+  await fs.writeFile(configPath, '{not json', { mode: 0o600 });
+  const root = await project(t);
+  await fakeRun(root, 'r1', [build()]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 1, result.stdout);
+  assert.match(result.stdout, /cannot read local config/);
+  assert.equal(await readLedger(root), null);
+});
+
+test('ingest refuses malformed peerTicketsLedger instead of skipping collision check', async t => {
+  await setLocalConfig({ ticketIdBlock: null, peerTicketsLedger: '' });
+  const root = await project(t);
+  await fakeRun(root, 'r1', [build()]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 1, result.stdout);
+  assert.match(result.stdout, /invalid peer tickets ledger in local config/);
+  assert.equal(await readLedger(root), null);
+});
+
+test('ingest refuses peer ledger file without a tickets array', async t => {
+  const peerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ticket-id-peer-shape-'));
+  t.after(() => fs.rm(peerDir, { recursive: true, force: true }));
+  const peerFile = path.join(peerDir, 'tickets.json');
+  await fs.writeFile(peerFile, '{}\n');
+
+  await setLocalConfig({ ticketIdBlock: null, peerTicketsLedger: peerFile });
+  const root = await project(t);
+  await fakeRun(root, 'r1', [build()]);
+  const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(result.exitCode, 1, result.stdout);
+  assert.match(result.stdout, /peer tickets ledger must contain a tickets array/);
+  assert.equal(await readLedger(root), null);
 });
