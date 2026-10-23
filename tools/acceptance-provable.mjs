@@ -2,16 +2,52 @@
 // R-009: acceptance lines checkable from ticket files plus splitter auto context only.
 import { acceptanceLines } from './acceptance.mjs';
 import { buildTicketContext } from './ticket-context.mjs';
+import { addingDepCreatesCycle, ownersOfTicketPath, ticketOwnedPaths } from './ticket-paths.mjs';
 
 const norm = (p) => String(p).split('\\').join('/').replace(/^\.\//, '');
 const arr = (value) => (Array.isArray(value) ? value : []);
 
-function ticketOutputPaths(ticket) {
-  const out = [];
-  for (const f of [...arr(ticket?.files), ...arr(ticket?.tests)]) {
-    if (typeof f === 'string' && !f.endsWith('/')) out.push(norm(f));
+export function isGlobPath(p) {
+  return /[*?]/.test(String(p ?? ''));
+}
+
+export function globToRegExp(glob) {
+  const g = norm(glob);
+  let re = '^';
+  for (let i = 0; i < g.length; i += 1) {
+    const c = g[i];
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if (/[.+^${}()|[\]\\]/.test(c)) re += `\\${c}`;
+    else re += c;
   }
-  return out;
+  return new RegExp(`${re}$`);
+}
+
+export function repoPathsMatching(pattern, repoFiles) {
+  const p = norm(pattern);
+  const files = (repoFiles ?? []).map(norm).filter(Boolean);
+  if (!isGlobPath(p)) return files.includes(p) ? [p] : [];
+  const re = globToRegExp(p);
+  return files.filter((f) => re.test(f));
+}
+
+function ticketOutputPaths(ticket) {
+  return [...ticketOwnedPaths(ticket)];
+}
+
+export function ownersMatchingPattern(pattern, tickets) {
+  const p = norm(pattern);
+  if (!isGlobPath(p)) return ownersOfPath(p, tickets);
+  const re = globToRegExp(p);
+  const owners = new Set();
+  for (const t of tickets ?? []) {
+    if (!t?.id) continue;
+    for (const f of ticketOutputPaths(t)) {
+      if (re.test(norm(f))) owners.add(t.id);
+    }
+  }
+  return [...owners].sort();
 }
 
 function transitiveDependents(ticketId, tickets) {
@@ -109,15 +145,37 @@ export function allowedPathsForAcceptance({
  * @returns {string[]}
  */
 export function ownersOfPath(path, tickets) {
-  const p = norm(path);
-  const owners = new Set();
-  for (const t of tickets) {
-    if (!t?.id) continue;
-    for (const f of ticketOutputPaths(t)) {
-      if (f === p) owners.add(t.id);
+  return ownersOfTicketPath(path, tickets);
+}
+
+/**
+ * Add dependsOn edges for acceptance lines that name another ticket's outputs (including globs).
+ */
+export function wireAcceptancePathDependencies(ticket, allTickets, repoFiles, { notes = [], warnings = [] } = {}) {
+  const deps = () => new Set(ticket.dependsOn ?? []);
+  for (const item of acceptanceLines({ acceptance: ticket.acceptance })) {
+    for (const ref of pathsInAcceptanceText(item.line)) {
+      const p = norm(ref);
+      if (repoPathsMatching(p, repoFiles).length) continue;
+      const owners = ownersMatchingPattern(p, allTickets).filter((id) => id !== ticket.id);
+      if (!owners.length) {
+        if (isGlobPath(p)) {
+          warnings.push(`${ticket.id}: acceptance references ${p}; no repo file or ticket owns a matching path`);
+        }
+        continue;
+      }
+      const ownerId = owners[0];
+      if (addingDepCreatesCycle(ticket.id, ownerId, allTickets)) {
+        warnings.push(`${ticket.id}: acceptance references ${p} owned by ${ownerId} but that dependency would cycle`);
+        continue;
+      }
+      const set = deps();
+      if (!set.has(ownerId)) {
+        ticket.dependsOn = [...set, ownerId];
+        notes.push(`${ticket.id}: added dependency on ${ownerId} (owns ${p})`);
+      }
     }
   }
-  return [...owners].sort();
 }
 
 /**
@@ -128,7 +186,7 @@ export function ownersOfPath(path, tickets) {
  * @param {object[]} params.allTickets
  * @returns {{ provable: boolean, code: string, reason: string }}
  */
-export function provabilityOfAcceptanceLine({ line, ticket = {}, allowed, allTickets = [] }) {
+export function provabilityOfAcceptanceLine({ line, ticket = {}, allowed, allTickets = [], repoFiles = [] }) {
   const refs = pathsInAcceptanceText(line);
   if (!refs.length) {
     return { provable: true, code: 'ok', reason: '' };
@@ -139,6 +197,28 @@ export function provabilityOfAcceptanceLine({ line, ticket = {}, allowed, allTic
 
   for (const ref of refs) {
     const p = norm(ref);
+    if (isGlobPath(p)) {
+      if (repoPathsMatching(p, repoFiles).length) continue;
+      const owners = ownersMatchingPattern(p, allTickets).filter((id) => id !== ticket.id);
+      for (const owner of owners) {
+        if (later.has(owner)) {
+          return {
+            provable: false,
+            code: 'later-ticket-file',
+            reason: `line references ${p}, which ticket ${owner} (later than ${ticket.id}) will write`,
+          };
+        }
+      }
+      if (owners.length && deps.has(owners[0])) continue;
+      if (owners.length) {
+        return {
+          provable: false,
+          code: 'outside-context',
+          reason: `line references ${p}, owned by ${owners.join(', ')}, which is not in this ticket's files or auto context`,
+        };
+      }
+      continue;
+    }
     const owners = ownersOfPath(p, allTickets);
     for (const owner of owners) {
       if (later.has(owner)) {
@@ -178,10 +258,11 @@ export function filterProvableAcceptance(params = {}) {
   const acceptance = Array.isArray(params.acceptance) ? params.acceptance : arr(ticket.acceptance);
   const allowed = params.allowed ?? allowedPathsForAcceptance(params);
   const allTickets = arr(params.allTickets);
+  const repoFiles = arr(params.repoFiles);
   const kept = [];
   const dropped = [];
   for (const item of acceptanceLines({ acceptance })) {
-    const verdict = provabilityOfAcceptanceLine({ line: item.line, ticket, allowed, allTickets });
+    const verdict = provabilityOfAcceptanceLine({ line: item.line, ticket, allowed, allTickets, repoFiles });
     if (verdict.provable) kept.push(item.line);
     else dropped.push({ n: item.n, line: item.line, code: verdict.code, reason: verdict.reason });
   }
