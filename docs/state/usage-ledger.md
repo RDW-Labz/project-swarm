@@ -171,6 +171,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-23 | - | review-aa3: FAIL. Of the second review's findings, only the guardDecision push path is partly fixed, | claude | opus | pass | 56,428 | $0.49 |
 | 2026-10-23 | - | review-aa3: FAIL. Fixed: hooks common-dir, invocation-rule push path, Write/Edit guard and daily win | claude | opus | pass | 148,785 | $0.92 |
 | 2026-10-23 | - | aanew5: H1–L6: hardened URL/config/git argv, opaque/non-git policy denial, stats fail-closed, truste | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-23 | - | review-aa5: FAIL. The redesign fixes system/global config, environment and absolute-path classificat | claude | opus | pass | 131,843 | $1.07 |
 
 ## Daily summary
 
@@ -188,6 +189,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 4 | 4 | 0 | 312,955 | $2.39 |
+| 2026-10-23 | claude | 5 | 5 | 0 | 444,798 | $3.46 |
 | 2026-10-23 | cursor | 2 | 2 | 0 | 0 | subscription |
-| **total** | all | 167 | 152 | 15 | 15,024,330 | $29.06 (incl. estimates) |
+| **total** | all | 168 | 153 | 15 | 15,156,173 | $30.13 (incl. estimates) |
