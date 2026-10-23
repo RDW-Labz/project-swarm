@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.2
+
+Work now spreads across lanes.
+- **Routing:** API workers route Haiku first for build, fix and docs, Sonnet for large or risky or review jobs, Opus only for security reviews, with a daily cap in stop mode; Codex is paused by default.
+- **Wave prep:** go --scope no longer drops context for tickets that exist, skips acceptance reviews already covered, and keeps manifest errors readable.
+
 ## 1.167.1
 
 Held tickets no longer flood the owner's Needs you.
