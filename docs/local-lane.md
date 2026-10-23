@@ -34,7 +34,23 @@ On Linux, set `linuxEnv` on the endpoint (or under `keychain`) to the name of an
 
 **Default:** no endpoints are configured; add `dev2` only after you confirm the tunnel and server.
 
-## SSH tunnel (example: dev2 Strata)
+## Managed tunnel (recommended)
+
+`swarm tunnel` installs a **launchd** SSH forward that reconnects on its own, so dev2 keeps working when your terminal is closed.
+
+Example (use **18001** locally so you do not collide with other tunnels on **18000**):
+
+```bash
+swarm tunnel add dev2 --host user@dev2.example --key ~/.ssh/project-swarm --local-port 18001 --remote-port 8000
+```
+
+Point `baseUrl` at `http://127.0.0.1:18001`, then `swarm tunnel status dev2` for launchd state, the local port, log tail, and `GET /v1/models` reachability (no API key is sent).
+
+```bash
+swarm tunnel remove dev2
+```
+
+## Manual SSH tunnel (example: dev2 Strata)
 
 On your laptop, forward a local port to the server’s loopback inference port:
 
@@ -64,4 +80,4 @@ For each endpoint, the parent runs `GET /v1/models` through `baseUrl` with a **5
 
 ## Routing
 
-Auto jobs treat **local** as the cheapest API lane after Cursor and Codex when endpoints are configured and healthy. The router skips endpoints that fail health checks and picks the first healthy endpoint when the job does not name one.
+Auto jobs treat **local** as the cheapest API lane after Cursor and Codex when endpoints are configured and healthy. Before routing, the lane probes `GET /v1/models` (5 s timeout). A dead tunnel (connection refused or timeout) marks that endpoint **paused for 60 s** so jobs spill to other lanes instead of failing immediately. The router skips paused endpoints and picks the first healthy one when the job does not name a model.

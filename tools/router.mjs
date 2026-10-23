@@ -3,7 +3,14 @@
 import { isBookkeepingJob } from './openrouter.mjs';
 import { prefersLocalLane } from './job-types.mjs';
 import { LANE_AGENTS } from './lanes.mjs';
-import { LOCAL_MODEL_PREFIX, parseLocalModel, isLoopbackLocalBaseUrl } from './local-lane.mjs';
+import {
+  LOCAL_MODEL_PREFIX,
+  parseLocalModel,
+  localEndpointsForJob,
+  createLocalEndpointPauseTracker,
+  gateLocalEndpointsBeforeRoute,
+  mergeLocalEndpointHealth,
+} from './local-lane.mjs';
 
 // Lanes that only ever get jobs marked `sensitive: false`. validateManifest also refuses a sensitive job
 // on these; the router checks too, so a sensitive job is never even a candidate.
@@ -37,12 +44,6 @@ const ANTHROPIC_OPUS_MODEL = 'claude-opus-5-5';
 
 function knownLane(agent) {
   return agent === 'local' || LANE_AGENTS.includes(agent);
-}
-
-function localEndpointsForJob(lanes, job) {
-  const endpoints = lanes.local?.endpoints ?? [];
-  if (job.sensitive === false) return endpoints;
-  return endpoints.filter(ep => isLoopbackLocalBaseUrl(ep.baseUrl));
 }
 
 function localConfigured(lanes, job, endpointHealth) {
@@ -169,4 +170,23 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
   const error = new Error(`route-exhausted: no lane left for job ${job.id} (${reason})`);
   error.code = 'route-exhausted';
   throw error;
+}
+
+export async function routeJobWithLocalHealthGate(job, options = {}) {
+  const {
+    probeLocalEndpoints = true,
+    localHealthTracker,
+    fetchImpl,
+    now,
+    timeoutMs,
+    endpointHealth: baseEndpointHealth,
+    ...rest
+  } = options;
+  const tracker = localHealthTracker ?? createLocalEndpointPauseTracker({ now });
+  if (probeLocalEndpoints && (rest.lanes?.local?.endpoints ?? []).length) {
+    await gateLocalEndpointsBeforeRoute(job, rest.lanes, tracker, { fetchImpl, now, timeoutMs });
+  }
+  const endpointHealth = mergeLocalEndpointHealth(tracker, baseEndpointHealth);
+  const route = routeJob(job, { ...rest, endpointHealth });
+  return { ...route, localHealthTracker: tracker };
 }

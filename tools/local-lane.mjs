@@ -6,6 +6,7 @@ import { loadLocalConfig } from './local-config.mjs';
 
 export const LOCAL_MODEL_PREFIX = 'local:';
 export const LOCAL_DOCTOR_TIMEOUT_MS = 5000;
+export const LOCAL_ENDPOINT_UNHEALTHY_PAUSE_MS = 60000;
 export const DEFAULT_AGENCY_CONCURRENCY = 1;
 export const AGENCY_JOB_TYPES = Object.freeze(['diagnose', 'test', 'docs']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
@@ -286,6 +287,54 @@ export function localRouterHealth(endpoints, cache = new Map()) {
     const ep = endpoints.find(item => item.name === name);
     if (!ep) return { state: 'paused' };
     return { state: 'ok' };
+  };
+}
+
+export function localEndpointsForJob(lanes, job) {
+  const endpoints = lanes?.local?.endpoints ?? [];
+  if (job?.sensitive === false) return endpoints;
+  return endpoints.filter(ep => isLoopbackLocalBaseUrl(ep.baseUrl));
+}
+
+export function createLocalEndpointPauseTracker({ now = Date.now } = {}) {
+  const pauseUntil = new Map();
+  return {
+    markUnreachable(name) {
+      pauseUntil.set(name, now() + LOCAL_ENDPOINT_UNHEALTHY_PAUSE_MS);
+    },
+    clear(name) {
+      pauseUntil.delete(name);
+    },
+    health(name) {
+      const until = pauseUntil.get(name);
+      if (until !== undefined && now() < until) return { state: 'paused' };
+      return { state: 'ok' };
+    },
+    pauseUntil,
+  };
+}
+
+export async function probeLocalEndpointsBeforeRoute(endpoints, tracker, { fetchImpl = fetch, timeoutMs = LOCAL_DOCTOR_TIMEOUT_MS, now = Date.now } = {}) {
+  for (const endpoint of endpoints) {
+    const result = await probeLocalEndpoint(endpoint, { fetchImpl, timeoutMs, now });
+    if (!result.reachable) tracker.markUnreachable(endpoint.name);
+    else tracker.clear(endpoint.name);
+  }
+}
+
+export async function gateLocalEndpointsBeforeRoute(job, lanes, tracker, deps = {}) {
+  const endpoints = localEndpointsForJob(lanes, job);
+  if (!endpoints.length) return;
+  const wanted = parseLocalModel(job?.model);
+  const candidates = wanted ? endpoints.filter(ep => ep.name === wanted) : endpoints;
+  await probeLocalEndpointsBeforeRoute(candidates.length ? candidates : endpoints, tracker, deps);
+}
+
+export function mergeLocalEndpointHealth(tracker, base = () => ({ state: 'ok' })) {
+  return name => {
+    const paused = tracker.health(name);
+    if (paused.state === 'paused') return paused;
+    return base(name);
   };
 }
 
