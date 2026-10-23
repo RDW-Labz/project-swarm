@@ -23,6 +23,41 @@ import { fileURLToPath } from 'node:url';
 const GUARDED_TOOLS = new Set(['Bash', 'Edit', 'Write', 'NotebookEdit']);
 const DECIDE_ARG = '--guard-decide';
 
+const swarmLayoutAt = dir => {
+  try {
+    const r = fs.realpathSync.native(dir);
+    const base = path.join(r, '.swarm');
+    if (!fs.existsSync(base)) return null;
+    const markers = ['runs', 'workspaces', 'worktrees', 'orchestrator-mode'];
+    return markers.some(s => fs.existsSync(path.join(base, s))) ? r : null;
+  } catch { return null; }
+};
+
+/** Project root for the guard: prefer a swarm checkout under `cwd` when it disagrees with `CLAUDE_PROJECT_DIR` (fail closed). */
+const resolveHandbuildProjectRoot = cwd => {
+  const fromCwd = projectRootOf(cwd);
+  let fromEnv = null;
+  if (process.env.CLAUDE_PROJECT_DIR && fs.existsSync(process.env.CLAUDE_PROJECT_DIR)) {
+    try { fromEnv = fs.realpathSync.native(process.env.CLAUDE_PROJECT_DIR); } catch { fromEnv = null; }
+  }
+  if (!fromEnv) return fromCwd;
+  if (!fromCwd) return fromEnv;
+  try {
+    if (fs.realpathSync.native(fromEnv) === fs.realpathSync.native(fromCwd)) return fromEnv;
+  } catch { return fromEnv; }
+  const swarmAtCwd = swarmLayoutAt(fromCwd);
+  if (swarmAtCwd) return swarmAtCwd;
+  const swarmAtEnv = swarmLayoutAt(fromEnv);
+  if (swarmAtEnv) return fromEnv;
+  return fromEnv;
+};
+
+const guardChildEnv = root => {
+  const env = { ...process.env };
+  if (root && swarmLayoutAt(root) && !env.CLAUDE_PROJECT_DIR) env.CLAUDE_PROJECT_DIR = root;
+  return env;
+};
+
 const scriptPath = (() => {
   try { return fs.realpathSync.native(fileURLToPath(import.meta.url)); } catch { return fileURLToPath(import.meta.url); }
 })();
@@ -65,9 +100,7 @@ function runDecideChild(raw) {
     }
     const tool = typeof input.tool_name === 'string' ? input.tool_name : 'unknown';
     toolForLog = tool;
-    const root = process.env.CLAUDE_PROJECT_DIR && fs.existsSync(process.env.CLAUDE_PROJECT_DIR)
-      ? fs.realpathSync(process.env.CLAUDE_PROJECT_DIR)
-      : projectRootOf(input.cwd);
+    const root = resolveHandbuildProjectRoot(input.cwd);
     rootForLog = root;
     if (!root || !GUARDED_TOOLS.has(tool)) {
       process.exit(0);
@@ -115,7 +148,7 @@ function runParentGuard(raw, truncated) {
       }
 
       if (truncated) {
-        const root = fromEnv ?? projectRootOf(process.cwd());
+        const root = resolveHandbuildProjectRoot(process.cwd());
         rootForLog = root;
         if (root && !fs.existsSync(path.join(root, OFF_FILE))) {
           logAction(root, { event: 'blocked', by: 'guard', tool: 'unknown', reason: 'the hook input was too large for the guard to read' });
@@ -131,12 +164,12 @@ function runParentGuard(raw, truncated) {
       try {
         input = JSON.parse(raw);
       } catch (e) {
-        if (raw.trim()) finishDenyCrash(fromEnv ?? rootForLog, toolForLog, e);
+        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, e);
         else process.exit(0);
         return;
       }
       if (!input || typeof input !== 'object') {
-        if (raw.trim()) finishDenyCrash(fromEnv ?? rootForLog, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
+        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
         else process.exit(0);
         return;
       }
@@ -146,7 +179,7 @@ function runParentGuard(raw, truncated) {
 
       let root;
       try {
-        root = fromEnv ?? projectRootOf(input.cwd);
+        root = resolveHandbuildProjectRoot(input.cwd);
         rootForLog = root;
         if (!root) {
           process.exit(0);
@@ -169,7 +202,7 @@ function runParentGuard(raw, truncated) {
       const timeoutMs = guardTimeoutMs();
       const child = child_process.spawnSync(process.execPath, [scriptPath, DECIDE_ARG], {
         input: raw,
-        env: { ...process.env },
+        env: guardChildEnv(root),
         encoding: 'utf8',
         timeout: timeoutMs,
         killSignal: 'SIGKILL',

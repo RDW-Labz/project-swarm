@@ -18,6 +18,7 @@ import {
   isReadOnlyGitSub,
   orchestratorModeCommandAllowed,
   orchestratorModeEnabled,
+  orchestratorModeApplies,
   ORCHESTRATOR_MODE_OFF_FILE,
   ORCHESTRATOR_MODE_RULE_ID,
   ORCHESTRATOR_MODE_DENY_REASON,
@@ -1037,7 +1038,15 @@ const applyGuardTestFault = root => {
 /** Run guard decision for a parsed hook payload (used by handbuild-guard child). */
 export function runGuardDecisionForHook(input, { root, cwd } = {}) {
   const tool = input.tool_name;
-  const decision = guardDecision({ tool, toolInput: input.tool_input, root, cwd: cwd ?? input.cwd });
+  const sessionCwd = cwd ?? input.cwd;
+  const enforceOrchestratorMode = !process.env.CLAUDE_PROJECT_DIR || !String(process.env.CLAUDE_PROJECT_DIR).trim();
+  const decision = guardDecision({
+    tool,
+    toolInput: input.tool_input,
+    root,
+    cwd: sessionCwd,
+    enforceOrchestratorMode,
+  });
   return { tool, decision, input };
 }
 export const MAX_MINUTES = 120;
@@ -1372,11 +1381,12 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
   return false;
 };
 
-export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit } = {}) {
+export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = false } = {}) {
   applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
-  const omActive = orchestratorModeEnabled(root, cwd);
+  const omActive = orchestratorModeApplies(root, cwd)
+    || (enforceOrchestratorMode && orchestratorModeEnabled(root, cwd));
   const omDeny = (files = []) => ({ allow: false, files, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID });
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;

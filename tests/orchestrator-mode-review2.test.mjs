@@ -34,7 +34,7 @@ const tmp = async t => {
 async function swarmProject(t, { withGit = true } = {}) {
   const root = await tmp(t);
   if (withGit) await fs.mkdir(path.join(root, '.git'));
-  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
   return root;
 }
 
@@ -143,6 +143,7 @@ test('orchestrator mode blocks writes under .swarm/orchestrator-mode with case v
 test('orchestrator mode on with only .git when CLAUDE_PROJECT_DIR unset', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
   const prev = process.env.CLAUDE_PROJECT_DIR;
   delete process.env.CLAUDE_PROJECT_DIR;
   try {
@@ -172,12 +173,17 @@ test('scratch path shape does not disable orchestrator mode when scratch exempt 
   }
 });
 
-test('handbuild-guard denies invalid JSON without CLAUDE_PROJECT_DIR when stdin non-empty', () => {
+test('handbuild-guard denies invalid JSON when CLAUDE_PROJECT_DIR is set and stdin non-empty', async t => {
+  const root = await swarmProject(t);
+  const prev = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
   const r = spawnSync(process.execPath, [GUARD], {
     input: '{bad-json',
     encoding: 'utf8',
-    env: { ...process.env, NODE_ENV: 'test' },
+    env: { ...process.env, NODE_ENV: 'test', CLAUDE_PROJECT_DIR: root },
   });
+  if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+  else process.env.CLAUDE_PROJECT_DIR = prev;
   assert.equal(r.status, 0);
   const line = r.stdout.trim().split('\n').filter(Boolean).pop();
   const parsed = JSON.parse(line);

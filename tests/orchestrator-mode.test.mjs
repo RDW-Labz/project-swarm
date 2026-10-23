@@ -35,7 +35,7 @@ const tmp = async t => {
 async function swarmProject(t) {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.git'));
-  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   const bash = (command, cwd = root, extra = {}) => {
     const prev = process.env.CLAUDE_PROJECT_DIR;

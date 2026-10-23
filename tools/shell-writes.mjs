@@ -18,10 +18,14 @@ export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
 const GIT_COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--message', '--author', '--date']);
 
+const SWARM_PROJECT_SUBDIRS = ['runs', 'workspaces', 'worktrees', 'orchestrator-mode'];
+
 const swarmProjectMarkers = projectRoot => {
   try {
     const r = fs.realpathSync.native(projectRoot);
-    return fs.existsSync(path.join(r, '.swarm')) || fs.existsSync(path.join(r, '.git'));
+    const base = path.join(r, '.swarm');
+    if (!fs.existsSync(base)) return false;
+    return SWARM_PROJECT_SUBDIRS.some(s => fs.existsSync(path.join(base, s)));
   } catch { return false; }
 };
 
@@ -63,7 +67,7 @@ const orchestratorWorkerSessionExempt = (root, cwd) => {
   return false;
 };
 
-/** Orchestrator mode is on by default at a swarm project root (`.swarm/` or `.git/`) unless the owner added `.swarm/orchestrator-mode/off`. Worker sessions (verified workspace cwd) and scratch/test roots (test harness only) are exempt. Session type and project root come from `root`, not from orchestrator `cd` targets. */
+/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless the owner added `.swarm/orchestrator-mode/off`. Worker sessions (verified workspace cwd) and scratch/test roots (test harness only) are exempt. Session type and project root come from `root`, not from orchestrator `cd` targets; `CLAUDE_PROJECT_DIR` alignment is not required. */
 export function orchestratorModeEnabled(root, cwd = root) {
   if (!root || !swarmProjectMarkers(root)) return false;
   if (scratchOrchestratorExempt(root, cwd)) return false;
@@ -71,6 +75,13 @@ export function orchestratorModeEnabled(root, cwd = root) {
   try {
     return !fs.existsSync(path.join(fs.realpathSync.native(root), ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
+}
+
+/** Shell allowlist enforcement: swarm project with orchestrator mode on and a Claude project dir in the session (set by Claude Code or the guard hook when it resolves the checkout). */
+export function orchestratorModeApplies(root, cwd = root) {
+  if (!orchestratorModeEnabled(root, cwd)) return false;
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  return Boolean(fromEnv && String(fromEnv).trim() && fs.existsSync(fromEnv));
 }
 
 // Build output and installed packages are written by tools, not by hand.
