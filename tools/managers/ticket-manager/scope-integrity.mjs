@@ -142,24 +142,117 @@ function missingContextOnLedger({
 }
 
 /**
- * Each repo path may be written by at most one active ticket (files, deletes, or test ownership).
+ * Active tickets that `id` transitively depends on (cancelled and done tickets are skipped).
  *
+ * @param {string} ticketId
+ * @param {object[]} tickets
+ * @returns {Set<string>}
+ */
+export function transitiveDependsOnIds(ticketId, tickets) {
+  const byId = new Map((tickets ?? []).filter(Boolean).map((t) => [t.id, t]));
+  const out = new Set();
+  const stack = [...depsOf(byId.get(ticketId))];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!id || out.has(id)) continue;
+    const t = byId.get(id);
+    if (!t || t.status === 'cancelled' || t.status === 'done') continue;
+    out.add(id);
+    for (const d of depsOf(t)) stack.push(d);
+  }
+  return out;
+}
+
+/**
+ * Every pair of claimers is ordered by dependsOn (one transitively depends on the other).
+ *
+ * @param {string[]} claimerIds
+ * @param {object[]} tickets
+ */
+export function claimersDependencyOrdered(claimerIds, tickets) {
+  const ids = [...new Set(claimerIds)].filter(Boolean);
+  if (ids.length <= 1) return true;
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      const a = ids[i];
+      const b = ids[j];
+      const aReach = transitiveDependsOnIds(a, tickets);
+      const bReach = transitiveDependsOnIds(b, tickets);
+      if (!aReach.has(b) && !bReach.has(a)) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * @param {object[]} active
+ * @param {object[]} [allTickets]
  * @returns {{ file: string, tickets: string[] }[]}
  */
-function duplicateFileOwners(active) {
+export function duplicateFileOwners(active, allTickets = active) {
   const owners = new Map();
   const claim = (file, id) => {
     if (!file || file.endsWith('/')) return;
     const f = norm(file);
     if (!owners.has(f)) owners.set(f, []);
-    owners.get(f).push(id);
+    const list = owners.get(f);
+    if (!list.includes(id)) list.push(id);
   };
   for (const t of active) {
     for (const f of [...(t.files || []), ...(t.deletes || [])]) claim(f, t.id);
     if (t.type === 'test') for (const f of t.tests || []) claim(f, t.id);
   }
-  return [...owners].filter(([, ids]) => ids.length > 1).map(([file, tickets]) => ({ file, tickets: [...new Set(tickets)].sort() }));
+  return [...owners]
+    .map(([file, ids]) => ({ file, tickets: [...ids].sort() }))
+    .filter(({ tickets: ids }) => ids.length > 1 && !claimersDependencyOrdered(ids, allTickets));
+}
+
+/**
+ * Chain duplicate file claimers in ticket id order with dependsOn edges.
+ *
+ * @param {object[]} tickets
+ * @returns {{ edits: { ticket: string, addDep: string, file: string }[], blocked: { file: string, later: string, earlier: string }[] }}
+ */
+function transitiveDependsOnIdsWithExtra(ticketId, tickets, extraDeps) {
+  const byId = new Map((tickets ?? []).filter(Boolean).map((t) => [t.id, t]));
+  const out = new Set();
+  const stack = [...new Set([...depsOf(byId.get(ticketId)), ...(extraDeps.get(ticketId) ?? [])])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!id || out.has(id)) continue;
+    const t = byId.get(id);
+    if (!t || t.status === 'cancelled' || t.status === 'done') continue;
+    out.add(id);
+    for (const d of [...depsOf(t), ...(extraDeps.get(id) ?? [])]) stack.push(d);
+  }
+  return out;
+}
+
+export function duplicateOwnerDependsOnFixes(tickets) {
+  const active = activeOf(tickets);
+  const duplicates = duplicateFileOwners(active, tickets);
+  const byId = new Map(tickets.filter(Boolean).map((t) => [t.id, t]));
+  const extraDeps = new Map(tickets.filter(Boolean).map((t) => [t.id, new Set()]));
+  const edits = [];
+  const blocked = [];
+  for (const { file, tickets: ids } of duplicates) {
+    const chain = [...ids].sort();
+    for (let i = 1; i < chain.length; i += 1) {
+      const later = chain[i];
+      const earlier = chain[i - 1];
+      const ticket = byId.get(later);
+      if (!ticket) continue;
+      const deps = new Set([...depsOf(ticket), ...(extraDeps.get(later) ?? [])]);
+      if (deps.has(earlier)) continue;
+      if (transitiveDependsOnIdsWithExtra(earlier, tickets, extraDeps).has(later)) {
+        blocked.push({ file, later, earlier });
+        continue;
+      }
+      edits.push({ ticket: later, addDep: earlier, file });
+      extraDeps.get(later).add(earlier);
+    }
+  }
+  return { edits, blocked };
 }
 
 const depsOf = (t) => (Array.isArray(t.dependsOn) ? t.dependsOn : []);
@@ -242,7 +335,7 @@ export function checkTicketManagerScopeIntegrity({
     findings.push(treeItemToFinding(warn, 'warning'));
   }
 
-  const duplicates = duplicateFileOwners(activeOf(tickets));
+  const duplicates = duplicateFileOwners(activeOf(tickets), tickets);
   for (const { file, tickets: ids } of duplicates) {
     findings.push({
       code: 'duplicate-file-owner',

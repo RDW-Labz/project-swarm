@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-omode2",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "security review of the orchestrator-mode shell guard that gates every shell command of the owner's coding sessions",
+   "type": "review",
+   "prompt": "Second static security review of coordination/review/omode-guard2.diff (orchestrator-mode guard: tools/shell-writes.mjs, tools/handbuild.mjs, tools/handbuild-guard.mjs, tools/orchestrator-hook.mjs). The first review (verdict FAIL) found: (1) mode switched off by cd into a self-made workspace folder; (2) approvals skipping the allowlist so git commit/push and gh pr create/merge were not always refused; (3) case-sensitive off-file check; (4) scratch-root or missing-env silent off and the .swarm requirement; (5) no stdin watchdog in the parent; (6) fail-open on invalid JSON without a project dir; (7) recorder hook stdin timer; (8) every swarm subcommand allowed. Check each is really fixed and look for NEW bypasses or fail-open paths introduced by the fixes. Do not include working bypass commands; describe the class and the fix. Verdict PASS or FAIL, ranked findings with file and line.",
+   "context": [
+    "coordination/review/omode-guard2.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

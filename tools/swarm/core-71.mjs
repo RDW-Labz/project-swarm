@@ -23,6 +23,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+/** Best-effort removal of per-job OS scratch; failures are recorded, never job status. */
+export async function cleanupJobScratchDir(scratchDir, result, env = process.env) {
+  if (!scratchDir || env.SWARM_KEEP_TMP === '1') return;
+  try {
+    await fs.rm(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    if (result) result.cleanupError = error.message;
+  }
+}
+
 export async function executeCodexJob(root, directory, job, proposalRoot, options) {
   const gitImpl = options.gitImpl ?? git;
   const isCursor = job.agent === 'cursor';
@@ -183,7 +193,7 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
     }
     throw error;
   } finally {
-    if (scratchDir && (options.env ?? process.env).SWARM_KEEP_TMP !== '1') await fs.rm(scratchDir, { recursive: true, force: true });
+    await cleanupJobScratchDir(scratchDir, result, options.env ?? process.env);
     // Deletions veto retries, but only surviving edits justify retaining a failed worktree. A
     // worktree holding a leaked CURSOR_API_KEY is never kept (same rule as a shell job's).
     if (result?.workerKeyExposed) { keepWorktree = false; result.keptWorkspace = null; }

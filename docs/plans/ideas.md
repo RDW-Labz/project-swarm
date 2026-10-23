@@ -78,3 +78,10 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - The build check is on by default; a build script that needs CI-only environment values fails every stage until the profile says `build: false`. Report that first failure as a setup problem.
 - A deleted file is not in the security review context (the reviewer sees only its name). Add its pre-delete content.
 - `--take-from` leaves the source ticket's `tests` and `dependsOn` as they were, and a ready source already in an active run's manifest still writes the moved file.
+
+## Owner order 2026-10-23: the swarm defines undefined ui screens itself
+
+- When swarm scope approve (or scope check) finds tickets that name a ui screen the profile ui block does not define, the orchestrator defines it automatically under policy instead of raising a card: match the screen id against the repo's design references (docs/design/reference and the files named in the scope), pick the mockup by an unambiguous name or id match, derive the route from the watch/app route table, write the screens entry to the profile ui block, and log the definition in the project journal with the evidence (screen id, mockup path, route, why it matched).
+- When the match is ambiguous or no reference exists, raise ONE board card with the candidate mappings and a one-line question, never a blocker for the whole approve.
+- Policy rule name ui-screen-define in the approval policy, default on for design references inside the repo, off for references outside it; every use is listed in swarm brief.
+- Acceptance: a ledger with tickets naming two undefined screens and two reference images approves without the owner touching the profile; the journal shows both definitions; a test covers the ambiguous case raising exactly one card.

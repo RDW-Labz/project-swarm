@@ -4,13 +4,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { guardDecision } from '../tools/handbuild.mjs';
 import { handbuildShellPolicy, isSelfApprovalCommand } from '../tools/self-approval.mjs';
 import { swarmHandbuildVerbFromPlain } from '../tools/shell-writes.mjs';
 
-const execFileAsync = promisify(execFile);
+const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
 
 const REASON_WORDS = ['approve', 'approved', 'approving', 'deny', 'denied', 'on', 'off', 'swarm handbuild approve'];
 const ORCH_VERBS = ['request', 'status', 'list', 'show', 'log'];
@@ -85,15 +85,16 @@ test('guardDecision allows orchestrator verbs with reason words', async () => {
 
 test('handbuild-guard hook allows status with reason words on stdin', async () => {
   const root = await tmpProject();
-  const guard = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'tools', 'handbuild-guard.mjs');
   const input = JSON.stringify({
     tool_name: 'Bash',
     tool_input: { command: 'swarm handbuild status --reason "approving and denied off"' },
     cwd: root,
   });
-  const { stdout } = await execFileAsync(process.execPath, [guard], {
+  const r = spawnSync(process.execPath, [GUARD], {
     input,
+    encoding: 'utf8',
     env: { ...process.env, CLAUDE_PROJECT_DIR: root, HOME: process.env.HOME },
   });
-  assert.equal(stdout.trim(), '');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), '');
 });

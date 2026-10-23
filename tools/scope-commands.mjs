@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome, criticalPathLength } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import {
   ROOT_RULES,
@@ -53,6 +53,10 @@ import { allowedPathsForAcceptance, filterProvableAcceptance, ownersOfPath, path
 import { isSensitiveTicket } from './sensitive-ticket.mjs';
 import { syncCheckForTicket } from './ticket-sync-checks.mjs';
 import { runManagersScopeGate } from './manager-commands.mjs';
+import {
+  checkTicketManagerScopeIntegrity,
+  duplicateOwnerDependsOnFixes,
+} from './managers/ticket-manager/scope-integrity.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, normTicketPath } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
@@ -67,6 +71,7 @@ export const SCOPE_USAGE = [
   '       swarm scope check [FILE]',
   '       swarm scope split [FILE] [--stage S1] | scope split --wire [--all] | scope split --ingest RUN [--merge] [--wire] [--max-repairs N] [--accept-waves] [--accept-new-path PATH[,PATH]]',
   '       swarm scope approve [FILE] [--yes] [--accept-waves]',
+  '       swarm scope gate --list [--json] | scope gate --fix-owners [--yes]',
   '       swarm scope sync RUN [--integrated] [--accept-unreviewed T-0001 --reason TEXT --yes] [--accept-unmet T-0001 --reason TEXT --yes]',
   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
@@ -83,6 +88,20 @@ export const SCOPE_USAGE = [
   '       swarm change "reason" [FILE] [--yes] [--no-split] [--max-repairs N]',
   '       swarm go --scope [--max-jobs N] [go options]',
   ''].join('\n');
+
+/** Scope subcommands for completion and command meta (see tools/watch-command-meta.mjs). */
+export const SCOPE_SUBCOMMANDS = [
+  { name: 'new', summary: 'Interview that writes the scope file.', flags: ['--type', '--out', '--answers'] },
+  { name: 'template', summary: 'Print or write the scope template.', flags: ['--out'] },
+  { name: 'check', summary: 'Validate the scope file.', flags: [] },
+  { name: 'split', summary: 'Split the scope into tickets.', flags: ['--stage', '--ingest', '--merge', '--wire', '--all', '--max-repairs', '--accept-waves', '--accept-new-path'] },
+  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves'] },
+  { name: 'gate', summary: 'Ticket-manager scope gate: list findings or fix duplicate file owners.', flags: ['--list', '--json', '--fix-owners', '--yes'] },
+  { name: 'sync', summary: 'Sync ticket status from a run.', flags: ['--integrated', '--accept-unreviewed', '--accept-unmet', '--reason', '--yes'] },
+  { name: 'security-review', summary: 'Record Opus security review verdicts for a run.', flags: [] },
+  { name: 'acceptance-review', summary: 'Record acceptance review verdicts for a run.', flags: [] },
+  { name: 'contracts', summary: 'Generate contract helpers from OpenAPI.', flags: ['--yes'] },
+];
 
 export const DEFAULT_SCOPE_FILE = 'docs/scope/scope.md';
 const SNAPSHOT = ['.swarm', 'project', 'scope.snapshot.md'];
@@ -316,6 +335,59 @@ async function loadScope(root, file) {
   return { file: target, text, scope: parseScope(text), hash: scopeHash(text) };
 }
 
+async function resolveTicketManagerScope(root, ledger) {
+  const embedded = ledger?.scope;
+  if (embedded && Array.isArray(embedded.requirements) && embedded.requirements.length > 0) return embedded;
+  const snapshot = await readText(path.join(root, '.swarm', 'project', 'scope.snapshot.md'));
+  if (snapshot) return parseScope(snapshot);
+  if (embedded && typeof embedded === 'object' && !Array.isArray(embedded)) return embedded;
+  const file = ledger.scope?.file ?? DEFAULT_SCOPE_FILE;
+  try {
+    const { scope } = await loadScope(root, file);
+    return scope;
+  } catch {
+    return embedded && typeof embedded === 'object' ? embedded : {};
+  }
+}
+
+async function ticketManagerGateCheck(root, ledger) {
+  const scope = await resolveTicketManagerScope(root, ledger);
+  const profile = await readProfile(root);
+  const { exists, listFiles, sizes, profileContext } = contextEnvFor(root, profile);
+  return checkTicketManagerScopeIntegrity({
+    scope,
+    tickets: ledger.tickets,
+    exists,
+    listFiles,
+    sizes,
+    profileContext,
+  });
+}
+
+const GATE_SEVERITY_ORDER = ['needs_you', 'warn', 'info'];
+
+function formatGateFindingLines(findings) {
+  const sorted = [...findings].sort((a, b) => {
+    const ai = GATE_SEVERITY_ORDER.indexOf(a.severity);
+    const bi = GATE_SEVERITY_ORDER.indexOf(b.severity);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi) || String(a.code).localeCompare(String(b.code));
+  });
+  const lines = sorted.map((f) => [f.code, f.ticket ?? '-', f.reason, f.recommendation ?? ''].join('\t'));
+  const totals = GATE_SEVERITY_ORDER.map((sev) => {
+    const n = findings.filter((x) => x.severity === sev).length;
+    return n ? `${sev} ${n}` : null;
+  }).filter(Boolean);
+  lines.push(`totals: ${totals.length ? totals.join(', ') : 'none'}`);
+  return lines.join('\n');
+}
+
+function approveGateFindingLines(findings, limit = 25) {
+  return findings
+    .filter((f) => f.severity === 'needs_you')
+    .slice(0, limit)
+    .map((f) => `finding: ${f.code} ${f.ticket ?? '-'} ${f.reason}`);
+}
+
 const ROOT_FILE_NAME = /^[\w.-]{1,100}$/;
 const isAllowedRootFileName = name => typeof name === 'string' && ROOT_FILE_NAME.test(name) && !/^\.env/i.test(name);
 
@@ -482,6 +554,7 @@ function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
         changed = true;
       }
     }
+    normalizeCacheContext(updated);
     return updated;
   });
   return changed ? next : jobs;
@@ -532,6 +605,7 @@ export async function finalizeScopeWaveManifest(manifest, { validate, tickets, w
   const limit = Math.max(50, (manifest.jobs?.length ?? 0) * 4 + 10);
   for (let pass = 0; pass < limit; pass += 1) {
     try {
+      for (const job of manifest.jobs ?? []) normalizeCacheContext(job);
       await validate(manifest);
       return { manifest, parked, unroutable };
     } catch (error) {
@@ -1914,6 +1988,87 @@ function managerGateOutcome(result) {
   return { kind: 'ok', reason: '' };
 }
 
+async function cmdGate(root, { flags }) {
+  const list = flags.list === true;
+  const fix = flags['fix-owners'] === true;
+  if (!list && !fix) return bad('scope gate needs --list or --fix-owners');
+  if (list && fix) return bad('scope gate: use --list or --fix-owners, not both');
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  if (list) {
+    const gate = await ticketManagerGateCheck(root, ledger);
+    if (flags.json === true) return out(JSON.stringify(gate.findings), 0);
+    return out(formatGateFindingLines(gate.findings), 0);
+  }
+  const { edits, blocked } = duplicateOwnerDependsOnFixes(ledger.tickets);
+  const preview = edits.map((e) => `  ${e.ticket}: add dependsOn ${e.addDep} (${e.file})`);
+  const blockedLines = blocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle; needs the owner)`);
+  if (!edits.length && !blocked.length) return out('no duplicate file owners to fix', 0);
+  if (flags.yes !== true) {
+    return out([
+      edits.length ? `would add ${edits.length} dependsOn edge(s):` : 'no dependsOn edges to add',
+      ...preview,
+      ...(blocked.length ? ['still needs the owner:', ...blockedLines] : []),
+      'Rerun with --yes to apply.',
+    ].filter(Boolean).join('\n'));
+  }
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      if (!fresh) return out('no ticket ledger; run swarm scope split first', 1);
+      const { edits: plan, blocked: stillBlocked } = duplicateOwnerDependsOnFixes(fresh.tickets);
+      if (!plan.length && !stillBlocked.length) return out('no duplicate file owners to fix', 0);
+      const byId = new Map(fresh.tickets.map((t) => [t.id, t]));
+      const applied = [];
+      for (const { ticket: id, addDep } of plan) {
+        const t = byId.get(id);
+        if (!t) continue;
+        const deps = [...new Set([...(t.dependsOn ?? []), addDep])].sort();
+        const next = { ...t, dependsOn: deps };
+        const v = validateTicket(next);
+        if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+        byId.set(id, next);
+        applied.push({ id, addDep });
+      }
+      if (!applied.length) {
+        return out([
+          'no dependsOn edges applied',
+          ...(stillBlocked.length ? ['still needs the owner:', ...stillBlocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle)`)] : []),
+        ].join('\n'), stillBlocked.length ? 1 : 0);
+      }
+      const wasApproved = isApproved(fresh);
+      const nextTickets = fresh.tickets.map((t) => byId.get(t.id) ?? t);
+      const saved = wasApproved ? approveLedger({ ...fresh, tickets: nextTickets }, { by: 'owner' }) : { ...fresh, tickets: nextTickets };
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      for (const { id, addDep } of applied) {
+        const before = fresh.tickets.find((t) => t.id === id);
+        const after = saved.tickets.find((t) => t.id === id);
+        await appendLog(root, {
+          event: 'ticket-edit',
+          id,
+          by: 'owner',
+          fields: ['dependsOn'],
+          before: { dependsOn: before?.dependsOn ?? [] },
+          after: { dependsOn: after?.dependsOn ?? [] },
+          note: 'scope gate --fix-owners',
+          reapproved: wasApproved,
+        });
+      }
+      await refreshPlan(root);
+      return out([
+        `applied ${applied.length} dependsOn edge(s):`,
+        ...applied.map((e) => `  ${e.id}: depends on ${e.addDep}`),
+        ...(wasApproved ? ['The ledger stays approved (sealed again over the new dependsOn edges).'] : []),
+        ...(stillBlocked.length ? ['still needs the owner:', ...stillBlocked.map((b) => `  ${b.file}: ${b.later} cannot depend on ${b.earlier} (would cycle)`)] : []),
+      ].join('\n'), stillBlocked.length ? 1 : 0);
+    });
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    throw error;
+  }
+}
+
 async function cmdApprove(root, { rest, flags }, deps = {}) {
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
@@ -1953,6 +2108,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
   const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
   const managerWarnings = [];
+  const managerFindingLines = [];
   const managerGate = deps.runManagersScopeGate ?? runManagersScopeGate;
   try {
     const outcome = managerGateOutcome(await managerGate(root, { now }));
@@ -1961,6 +2117,16 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   } catch (error) {
     const reason = String(error?.message ?? error);
     managerWarnings.push(`warning: manager scope gate failed: ${reason}`);
+  }
+  if (managerWarnings.length) {
+    const gateCheck = await ticketManagerGateCheck(root, ledger);
+    const lines = approveGateFindingLines(gateCheck.findings);
+    if (lines.length) {
+      managerFindingLines.push(...lines);
+      if (gateCheck.findings.some((f) => f.severity === 'needs_you')) {
+        managerFindingLines.push('swarm scope gate --list shows all');
+      }
+    }
   }
   for (const warning of managerWarnings) {
     await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
@@ -1985,7 +2151,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -3330,6 +3496,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     if (verb === 'check') return await cmdCheck(root, sub);
     if (verb === 'split') return await cmdSplit(root, sub, deps);
     if (verb === 'approve') return await cmdApprove(root, sub, deps);
+    if (verb === 'gate') return await cmdGate(root, sub);
     if (verb === 'sync') return await cmdSync(root, sub, deps);
     if (verb === 'security-review') return await cmdSecurityReview(root, sub, deps);
     if (verb === 'acceptance-review') return await cmdAcceptanceReview(root, sub, deps);

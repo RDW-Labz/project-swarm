@@ -1,0 +1,65 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode4",
+   "agent": "auto",
+   "prompt": "Owner decision: the hand-build guard must FAIL CLOSED. Today tools/handbuild-guard.mjs fails open on any exception and on a 4 s timeout (exit 0, no output = allow). Change it for the Bash, Edit, Write and NotebookEdit tool calls in a guarded project root: (1) On an exception anywhere in the decision path, or when the watchdog timer fires, print a deny decision (hookSpecificOutput permissionDecision deny) with the exact reason 'guard error: retry or make a ticket (swarm diagnose \"<question>\" or swarm ticket ...)' and exit 0. Run the decision inside try/catch/finally with a watchdog (setTimeout, unref'd is NOT ok: it must fire) that writes the deny and exits; make sure only one decision is ever printed. Raise the watchdog from 4 s to 15 s (a constant GUARD_TIMEOUT_MS, env override SWARM_GUARD_TIMEOUT_MS for tests only, bounded 50 ms..60000 ms) and keep normal commands far below it (measure the 95th percentile on the existing test commands in a test and assert it is under 1 s). (2) The owner kill switches stay exactly as they are and are checked FIRST, in a tiny separate try block before anything that can throw: the handbuild off file, the orchestrator-mode off file, worker cwd (isWorkerCwd) and scratch/test roots exempt as today; if those cheap checks themselves throw, deny. If the project root cannot be determined at all, allow (nothing to guard; not a project). (3) An oversized hook input (the existing truncated-input path) already denies: keep. (4) Every crash and every timeout is appended as one JSON line to .swarm/handbuild/guard-errors.ndjson (time, tool, error name and message (no command text, no secrets), kind crash|timeout, guard version) and `swarm status` prints a line 'guard errors today: N' when N>0 (read-only, cheap); add the count to the data the board reads, as a plain number guardErrorsToday in the project summary object the board uses (the board owner renders it). Treat it as a swarm bug in the sense that the log is the bug record: also write the first error of the day to the existing lessons or events stream if one exists for orchestrator events (orchestrator-events.mjs appendEvent kind 'guard-error'). (5) Test commands designed to crash and to time out the guard: add a test-only hook point so a test can make guardDecision throw and another make it hang (e.g. env SWARM_GUARD_TEST_FAULT=throw|hang honoured ONLY when NODE_ENV=test or SWARM_GUARD_TEST_MODE=1 is set AND the project root is a temp dir); drive tools/handbuild-guard.mjs as a subprocess: both must produce the deny with the exact message, exit 0, log a line, and the off file must still let the call through; also assert the fault env var is ignored (no effect) outside test mode. (6) FALSE POSITIVE: `head -5`, `tail -5`, `head -20` (numeric shorthand) must be accepted exactly like `head -n 5` when the number is <= 200 and denied above 200 and for -c, -f, -F, --follow, combined flags with f/c. Add tests. Keep all handbuild, self-approval, shell-writes, orchestrator-mode tests passing; update docs where the guard's failure mode is described.",
+   "context": [
+    "tools/handbuild-guard.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-events.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/handbuild-guard.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { analyzeShell, tokenize } from '../tools/shell-writes.mjs';
-import { guardDecision, createRequest, decideRequest, listRequests, activeApprovals, matchesFile, LOG_FILE, OFF_FILE } from '../tools/handbuild.mjs';
+import { guardDecision, createRequest, decideRequest, listRequests, activeApprovals, matchesFile, LOG_FILE, OFF_FILE, GUARD_ERROR_DENY_REASON } from '../tools/handbuild.mjs';
 import { runHandbuildCommand } from '../tools/handbuild-commands.mjs';
 import { runInboxCommand } from '../tools/inbox-commands.mjs';
 import { collectInbox } from '../tools/inbox.mjs';
@@ -170,9 +170,14 @@ test('every request, approval, denial and blocked attempt is on the journal and 
   assert.ok(log.some(e => e.event === 'request') && log.some(e => e.event === 'approve') && log.some(e => e.event === 'deny'));
 });
 
-test('the guard hook as a process: deny output with the reason, allow prints nothing, workers and outside paths pass, junk fails open, off switches it off', async t => {
+test('the guard hook as a process: deny output with the reason, allow prints nothing, workers and outside paths pass, junk denies in a guarded project, off switches it off', async t => {
   const root = await project(t);
-  const run = (input, raw) => spawnSync(process.execPath, [GUARD], { input: raw ?? JSON.stringify(input), encoding: 'utf8' });
+  const run = (input, raw, opts = {}) => spawnSync(process.execPath, [GUARD], {
+    input: raw ?? JSON.stringify(input),
+    encoding: 'utf8',
+    cwd: opts.cwd,
+    env: opts.env ? { ...process.env, ...opts.env } : process.env,
+  });
   const denied = run({ session_id: 's1', cwd: path.join(root, 'src'), tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/new.ts'), content: 'x' } });
   assert.equal(denied.status, 0);
   const out = JSON.parse(denied.stdout);
@@ -189,8 +194,22 @@ test('the guard hook as a process: deny output with the reason, allow prints not
   await fs.mkdir(workspace, { recursive: true });
   assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Edit', tool_input: { file_path: path.join(workspace, 'src/a.ts') } }).stdout, '', 'worktree edits allowed');
   assert.equal(run({ session_id: 'w', cwd: root, tool_name: 'Edit', tool_input: { file_path: '/tmp/other/a.ts' } }).stdout, '', 'outside the checkout');
-  for (const junk of ['not json', '', 'null', '{"cwd":1}']) { const r = run(null, junk); assert.equal(r.status, 0, junk); assert.equal(r.stdout, '', junk); }
+  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  for (const junk of ['not json', 'null']) {
+    const r = run(null, junk, { cwd: root });
+    assert.equal(r.status, 0, junk);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', junk);
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, GUARD_ERROR_DENY_REASON, junk);
+  }
+  assert.equal(run(null, '', { cwd: root }).stdout, '', 'empty hook input in a guarded project');
+  assert.equal(run(null, '{"cwd":1}', { cwd: root }).stdout, '', 'parsed object without a guarded tool');
   const none = await tmp(t);
+  for (const junk of ['not json', '', 'null', '{"cwd":1}']) {
+    const r = run(null, junk, { cwd: none });
+    assert.equal(r.status, 0, junk);
+    assert.equal(r.stdout, '', junk);
+  }
   assert.equal(run({ session_id: 's', cwd: none, tool_name: 'Edit', tool_input: { file_path: path.join(none, 'a.ts') } }).stdout, '', 'a folder that is not a project');
   await fs.mkdir(path.join(root, '.swarm/handbuild'), { recursive: true });
   await fs.writeFile(path.join(root, OFF_FILE), '');
