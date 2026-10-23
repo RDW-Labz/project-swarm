@@ -3,8 +3,8 @@
  * Ticket work leases with monotonic fencing tokens (single machine, no network).
  *
  * Lease records live in `.swarm/project/leases.json` (sibling to `tickets.json`), keyed by ticket id.
- * Mutations use the same exclusive lockfile discipline as scope-go: `.swarm/project/leases.lock`
- * (O_CREAT|O_EXCL; stale locks older than ten minutes are removed).
+ * Mutations take `.swarm/project/leases.lock` then, when `tickets.json` changes, `.swarm/project/scope-go.lock`
+ * (same order as the rest of the ledger tooling; O_CREAT|O_EXCL; stale locks older than ten minutes are removed).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -17,9 +17,10 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 export const DEFAULT_LEASE_TTL_MS = 60_000;
 const LOCK_STALE_MS = 10 * 60 * 1000;
 const STORE_VERSION = 1;
+const LOCK_ATTEMPTS = 48;
+const LOCK_RETRY_MS = 10;
 
 export const leasesPath = root => path.join(root, '.swarm', 'project', 'leases.json');
-const lockPath = root => path.join(root, '.swarm', 'project', 'leases.lock');
 
 function emptyStore() {
   return { version: STORE_VERSION, leases: {}, maxToken: {} };
@@ -34,6 +35,41 @@ function parseExpiresAt(expiresAt) {
   return NaN;
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateLeaseStore(data) {
+  if (!isPlainObject(data)) throw fail('lease-corrupt', 'leases.json must be a JSON object');
+  if (data.version !== STORE_VERSION) {
+    throw fail('lease-corrupt', `leases.json version must be ${STORE_VERSION}`);
+  }
+  if (!isPlainObject(data.leases)) throw fail('lease-corrupt', 'leases must be a plain object');
+  if (!isPlainObject(data.maxToken)) throw fail('lease-corrupt', 'maxToken must be a plain object');
+
+  for (const [ticketId, token] of Object.entries(data.maxToken)) {
+    if (!Number.isInteger(token) || token < 0) {
+      throw fail('lease-corrupt', `maxToken.${ticketId} must be a non-negative integer`);
+    }
+  }
+
+  for (const [ticketId, lease] of Object.entries(data.leases)) {
+    if (!isPlainObject(lease)) throw fail('lease-corrupt', `lease ${ticketId} must be an object`);
+    if (!Number.isInteger(lease.fencingToken)) {
+      throw fail('lease-corrupt', `lease ${ticketId} fencingToken must be an integer`);
+    }
+    if (!Number.isFinite(parseExpiresAt(lease.expiresAt))) {
+      throw fail('lease-corrupt', `lease ${ticketId} expiresAt must be a parseable timestamp`);
+    }
+  }
+
+  return {
+    version: STORE_VERSION,
+    leases: data.leases,
+    maxToken: data.maxToken,
+  };
+}
+
 export function isLeaseActive(lease, nowMs) {
   if (!lease) return false;
   const exp = parseExpiresAt(lease.expiresAt);
@@ -43,14 +79,10 @@ export function isLeaseActive(lease, nowMs) {
 export async function readLeases(root) {
   try {
     const data = JSON.parse(await fs.readFile(leasesPath(root), 'utf8'));
-    if (!data || typeof data !== 'object') return emptyStore();
-    return {
-      version: STORE_VERSION,
-      leases: data.leases && typeof data.leases === 'object' ? data.leases : {},
-      maxToken: data.maxToken && typeof data.maxToken === 'object' ? data.maxToken : {},
-    };
+    return validateLeaseStore(data);
   } catch (error) {
     if (error.code === 'ENOENT') return emptyStore();
+    if (error.code === 'lease-corrupt') throw error;
     throw error;
   }
 }
@@ -79,21 +111,98 @@ async function writeLeases(root, store) {
   }
 }
 
+function makeLockNonce() {
+  return `${process.pid}:${Date.now()}:${randomBytes(16).toString('hex')}`;
+}
+
+async function readLockNonce(lockFile) {
+  try {
+    return (await fs.readFile(lockFile, 'utf8')).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function removeLockIfStillNonce(lockFile, expectedNonce) {
+  const current = await readLockNonce(lockFile);
+  if (current !== expectedNonce) return false;
+  try {
+    await fs.rm(lockFile, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function acquireLeaseLock(dir) {
+  const lock = path.join(dir, 'leases.lock');
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    const ourNonce = makeLockNonce();
+    try {
+      const handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+      await handle.writeFile(ourNonce);
+      return { handle, lock, ourNonce };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const stat = await fs.lstat(lock).catch(() => null);
+      if (!stat || Date.now() - stat.mtimeMs <= LOCK_STALE_MS) {
+        if (attempt + 1 >= LOCK_ATTEMPTS) {
+          throw fail('lease-busy', 'another lease mutation is in progress; try again');
+        }
+        await sleep(LOCK_RETRY_MS);
+        continue;
+      }
+      const staleNonce = await readLockNonce(lock);
+      if (staleNonce === null) {
+        await fs.rm(lock, { force: true }).catch(() => {});
+        continue;
+      }
+      const removed = await removeLockIfStillNonce(lock, staleNonce);
+      if (!removed) {
+        await sleep(LOCK_RETRY_MS);
+        continue;
+      }
+    }
+  }
+  throw fail('lease-busy', 'could not take the lease lock');
+}
+
 async function withLeaseLock(root, fn) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const lock = path.join(dir, 'leases.lock');
+  const { handle, lock, ourNonce } = await acquireLeaseLock(dir);
+  try {
+    return await fn();
+  } finally {
+    await handle.close().catch(() => {});
+    await removeLockIfStillNonce(lock, ourNonce);
+  }
+}
+
+async function withScopeGoLock(root, fn) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const lock = path.join(dir, 'scope-go.lock');
   let handle = null;
-  for (let attempt = 0; attempt < 2 && !handle; attempt += 1) {
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS && !handle; attempt += 1) {
     try {
       handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const stat = await fs.lstat(lock).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
-      else throw fail('lease-busy', 'another lease mutation is in progress; try again');
+      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+        await fs.rm(lock, { force: true });
+        continue;
+      }
+      if (attempt + 1 >= LOCK_ATTEMPTS) {
+        throw fail('lease-busy', 'ticket ledger is busy; try again');
+      }
+      await sleep(LOCK_RETRY_MS);
     }
   }
-  if (!handle) throw fail('lease-busy', 'could not take the lease lock');
+  if (!handle) throw fail('lease-busy', 'could not take the ticket ledger lock');
   try {
     return await fn();
   } finally {
@@ -102,9 +211,32 @@ async function withLeaseLock(root, fn) {
   }
 }
 
+async function withLeaseAndScopeGoLock(root, fn) {
+  return withLeaseLock(root, () => withScopeGoLock(root, fn));
+}
+
 function nextFencingToken(store, ticketId) {
-  const prev = Number(store.maxToken?.[ticketId] ?? 0);
-  const next = (Number.isInteger(prev) && prev >= 0 ? prev : 0) + 1;
+  const maxToken = store.maxToken ?? {};
+  const hasMax = Object.prototype.hasOwnProperty.call(maxToken, ticketId);
+  let fromMax = 0;
+  if (hasMax) {
+    const raw = maxToken[ticketId];
+    if (!Number.isInteger(raw) || raw < 0) {
+      throw fail('lease-corrupt', `maxToken.${ticketId} must be a non-negative integer`);
+    }
+    fromMax = raw;
+  }
+
+  const lease = store.leases?.[ticketId];
+  let fromLease = 0;
+  if (lease !== undefined) {
+    if (!Number.isInteger(lease.fencingToken)) {
+      throw fail('lease-corrupt', `lease ${ticketId} fencingToken must be an integer`);
+    }
+    fromLease = lease.fencingToken;
+  }
+
+  const next = Math.max(fromMax, fromLease) + 1;
   store.maxToken[ticketId] = next;
   return next;
 }
@@ -153,10 +285,10 @@ function setTicketRunning(ledger, ticketId, nowMs) {
 export async function claim(root, ticketId, holderId, { now = Date.now, ttlMs = DEFAULT_LEASE_TTL_MS } = {}) {
   assertTicketId(ticketId);
   const holder = assertHolderId(holderId);
-  const nowMs = typeof now === 'function' ? now() : now;
   const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : DEFAULT_LEASE_TTL_MS;
 
-  return withLeaseLock(root, async () => {
+  return withLeaseAndScopeGoLock(root, async () => {
+    const nowMs = typeof now === 'function' ? now() : now;
     const store = await readLeases(root);
     const active = activeLeaseFor(store, ticketId, nowMs);
     if (active) throw fail('lease-held', `${ticketId} is leased to ${active.holderId} until ${active.expiresAt}`);
@@ -182,10 +314,10 @@ export async function renew(root, ticketId, fencingToken, { now = Date.now, ttlM
   assertTicketId(ticketId);
   const token = Number(fencingToken);
   if (!Number.isInteger(token) || token < 1) throw fail('lease-invalid', 'fencingToken must be a positive integer');
-  const nowMs = typeof now === 'function' ? now() : now;
   const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : DEFAULT_LEASE_TTL_MS;
 
   return withLeaseLock(root, async () => {
+    const nowMs = typeof now === 'function' ? now() : now;
     const store = await readLeases(root);
     const lease = store.leases?.[ticketId];
     if (!lease || !isLeaseActive(lease, nowMs)) throw fail('lease-expired', `no active lease on ${ticketId}`);
@@ -203,9 +335,9 @@ export async function release(root, ticketId, fencingToken, { now = Date.now } =
   assertTicketId(ticketId);
   const token = Number(fencingToken);
   if (!Number.isInteger(token) || token < 1) throw fail('lease-invalid', 'fencingToken must be a positive integer');
-  const nowMs = typeof now === 'function' ? now() : now;
 
-  return withLeaseLock(root, async () => {
+  return withLeaseAndScopeGoLock(root, async () => {
+    const nowMs = typeof now === 'function' ? now() : now;
     const store = await readLeases(root);
     const lease = store.leases?.[ticketId];
     if (!lease || !isLeaseActive(lease, nowMs)) throw fail('lease-expired', `no active lease on ${ticketId}`);
@@ -226,9 +358,8 @@ export async function release(root, ticketId, fencingToken, { now = Date.now } =
  * Returns { swept: ticketId[] }.
  */
 export async function sweepExpiredLeases(root, { now = Date.now } = {}) {
-  const nowMs = typeof now === 'function' ? now() : now;
-
-  return withLeaseLock(root, async () => {
+  return withLeaseAndScopeGoLock(root, async () => {
+    const nowMs = typeof now === 'function' ? now() : now;
     const store = await readLeases(root);
     const expiredIds = Object.keys(store.leases ?? {}).filter(id => {
       const lease = store.leases[id];

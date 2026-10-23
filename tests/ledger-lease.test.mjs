@@ -3,8 +3,10 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { createLedger, writeLedger, readLedger } from '../tools/tickets.mjs';
 import {
   claim,
@@ -141,4 +143,146 @@ test('leases persist under .swarm/project/leases.json', async t => {
   const parsed = JSON.parse(text);
   assert.equal(parsed.leases['T-0172'].holderId, 'node-a');
   assert.ok(parsed.maxToken['T-0172'] >= 1);
+});
+
+const LOCK_STALE_MS = 10 * 60 * 1000;
+
+function leaseLockFile(root) {
+  return path.join(root, '.swarm', 'project', 'leases.lock');
+}
+
+function scopeGoLockFile(root) {
+  return path.join(root, '.swarm', 'project', 'scope-go.lock');
+}
+
+async function touchStale(file) {
+  const staleMs = Date.now() - LOCK_STALE_MS - 60_000;
+  await fs.utimes(file, staleMs / 1000, staleMs / 1000);
+}
+
+/** Same exclusive lock discipline as `swarm go --scope` (scope-commands.mjs). */
+async function withScopeGoLockLikeCli(root, fn) {
+  const lock = scopeGoLockFile(root);
+  let handle = null;
+  for (let attempt = 0; attempt < 2 && !handle; attempt += 1) {
+    try {
+      handle = await fs.open(lock, fsSync.constants.O_WRONLY | fsSync.constants.O_CREAT | fsSync.constants.O_EXCL | fsSync.constants.O_NOFOLLOW, 0o600);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const stat = await fs.lstat(lock).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
+      else throw error;
+    }
+  }
+  if (!handle) throw new Error('could not take scope-go.lock');
+  try {
+    return await fn();
+  } finally {
+    await handle.close().catch(() => {});
+    await fs.rm(lock, { force: true });
+  }
+}
+
+test('stale lease lock takeover with nonce check yields one holder', async t => {
+  const root = await project(t);
+  const lock = leaseLockFile(root);
+  await fs.writeFile(lock, `stale:${randomBytes(8).toString('hex')}`);
+  await touchStale(lock);
+
+  const results = await Promise.allSettled([
+    claim(root, 'T-0172', 'node-a', { now: Date.now(), ttlMs: 30_000 }),
+    claim(root, 'T-0172', 'node-b', { now: Date.now(), ttlMs: 30_000 }),
+  ]);
+  const fulfilled = results.filter(r => r.status === 'fulfilled');
+  const rejected = results.filter(r => r.status === 'rejected');
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(['lease-held', 'lease-busy'].includes(rejected[0].reason.code));
+
+  assert.equal(await fs.readFile(lock, 'utf8').catch(() => null), null);
+  const store = await readLeases(root);
+  assert.equal(Object.keys(store.leases).length, 1);
+  assert.equal(store.leases['T-0172'].holderId, fulfilled[0].value.holderId);
+});
+
+test('malformed leases.json throws lease-corrupt instead of resetting', async t => {
+  const root = await project(t);
+  const file = leasesPath(root);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+
+  for (const body of [
+    'null',
+    JSON.stringify({ version: 1 }),
+    JSON.stringify({ version: 1, leases: {}, maxToken: { 'T-0172': -1 } }),
+    JSON.stringify({ version: 1, leases: {}, maxToken: { 'T-0172': 'x' } }),
+  ]) {
+    await fs.writeFile(file, body);
+    await assert.rejects(() => readLeases(root), err => err.code === 'lease-corrupt');
+    await assert.rejects(() => claim(root, 'T-0172', 'node-a', { now: Date.now() }), err => err.code === 'lease-corrupt');
+  }
+});
+
+test('claim issues token above lease record when maxToken was tampered lower', async t => {
+  let now = Date.now();
+  const root = await project(t);
+  const past = new Date(now - 60_000).toISOString();
+  await fs.mkdir(path.dirname(leasesPath(root)), { recursive: true });
+  await fs.writeFile(leasesPath(root), JSON.stringify({
+    version: 1,
+    leases: {
+      'T-0172': {
+        ticketId: 'T-0172',
+        holderId: 'old',
+        fencingToken: 7,
+        expiresAt: past,
+      },
+    },
+    maxToken: { 'T-0172': 1 },
+  }, null, 2));
+
+  const claimed = await claim(root, 'T-0172', 'node-b', { now: () => now, ttlMs: 30_000 });
+  assert.ok(claimed.fencingToken > 7);
+  assert.equal((await readLeases(root)).maxToken['T-0172'], claimed.fencingToken);
+});
+
+test('lease claim and scope-go ticket write do not lose each other', async t => {
+  const now = Date.now();
+  const root = await project(t);
+  const marker = `scope-touch-${randomBytes(4).toString('hex')}`;
+
+  const [claimResult] = await Promise.all([
+    claim(root, 'T-0172', 'worker', { now, ttlMs: 60_000 }),
+    withScopeGoLockLikeCli(root, async () => {
+      const ledger = await readLedger(root);
+      ledger.tickets[0].title = marker;
+      await writeLedger(root, ledger);
+    }),
+  ]);
+
+  const ledger = await readLedger(root);
+  assert.equal(ledger.tickets[0].title, marker);
+  assert.equal(ledger.tickets[0].status, 'running');
+  assert.equal(claimResult.holderId, 'worker');
+});
+
+test('claim samples now after lock so long waits do not use stale expiry', async t => {
+  let now = Date.now();
+  const root = await project(t);
+  const lock = scopeGoLockFile(root);
+  await fs.mkdir(path.dirname(lock), { recursive: true });
+  const hold = await fs.open(lock, fsSync.constants.O_WRONLY | fsSync.constants.O_CREAT | fsSync.constants.O_EXCL | fsSync.constants.O_NOFOLLOW, 0o600);
+
+  const claimPromise = claim(root, 'T-0172', 'late-clock', {
+    now: () => now,
+    ttlMs: 5_000,
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 40));
+  now += 8_000;
+  await hold.close();
+  await fs.rm(lock, { force: true });
+
+  const claimed = await claimPromise;
+  const expiresMs = Date.parse(claimed.expiresAt);
+  assert.ok(expiresMs > now - 1_000, 'expiresAt should reflect now sampled inside the critical section');
 });
