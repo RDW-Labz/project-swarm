@@ -17,7 +17,13 @@
 
   var panelErrors = Object.create(null);
   function failedPanel(id, error) {
-    var host = $(id); host.textContent = ''; host.appendChild(el('div', 'board-empty', 'This panel failed to render.'));
+    var host = $(id);
+    if (!host) {
+      if (!panelErrors[id]) { panelErrors[id] = true; console.error('Swarm Watch panel failed to render:', id, error); }
+      return;
+    }
+    host.textContent = '';
+    host.appendChild(el('div', 'board-empty', 'This panel failed to render.'));
     if (!panelErrors[id]) { panelErrors[id] = true; console.error('Swarm Watch panel failed to render:', id, error); }
   }
   function panel(id, fn) { try { fn(); } catch (error) { failedPanel(id, error); } }
@@ -117,11 +123,6 @@
       });
     });
     if (benchmarks.skipped && benchmarks.skipped.length) { host.appendChild(el('div', 'board-note', benchmarks.skipped.length + ' scorecard file' + (benchmarks.skipped.length === 1 ? '' : 's') + ' skipped.')); }
-  }
-
-  function renderSpend(p) {
-    var s = $('spend'); s.textContent = '';
-    var section = s.closest('section'); if (section) { section.hidden = true; }
   }
 
   function renderTickets(p) {
@@ -232,11 +233,32 @@
     }
   }, 250);
 
+  function loadErrorReason(err) {
+    if (typeof err === 'string') { return err.slice(0, 120); }
+    if (err && err.message) { return String(err.message).slice(0, 120); }
+    return 'unknown error';
+  }
+  function showLoadError(reason) {
+    var main = document.querySelector('main');
+    if (!main) { return; }
+    var banner = $('projectLoadError');
+    if (!banner) {
+      banner = el('div', 'board-empty');
+      banner.id = 'projectLoadError';
+      banner.setAttribute('role', 'alert');
+      main.insertBefore(banner, main.firstChild);
+    }
+    banner.textContent = 'Could not load this project: ' + reason;
+  }
+  function clearLoadError() {
+    var banner = $('projectLoadError');
+    if (banner) { banner.remove(); }
+  }
+
   function render(p) {
-    $('title').textContent = p.name;
-    $('crumbProject').textContent = p.name;
-    $('root').textContent = p.root;
-    panel('spend', function () { renderSpend(p); });
+    if ($('title')) { $('title').textContent = p.name; }
+    if ($('crumbProject')) { $('crumbProject').textContent = p.name; }
+    if ($('root')) { $('root').textContent = p.root; }
     panel('progressBody', function () { renderProgress(p); });
     panel('splitBody', function () { renderSplit(p); });
     panel('benchBody', function () { renderBench(p.benchmarks); });
@@ -248,9 +270,26 @@
 
   function load() {
     fetch('/api/project?id=' + encodeURIComponent(ID), { headers: { 'x-watch-token': TOKEN } })
-      .then(function (res) { return res.ok ? res.json() : null; })
-      .then(function (p) { if (p) { markProjectResponse(); render(p); } else { $('title').textContent = 'Unknown project'; } })
-      .catch(function () {});
+      .then(function (res) {
+        if (!res.ok) {
+          showLoadError('HTTP ' + res.status);
+          return null;
+        }
+        return res.json();
+      })
+      .then(function (p) {
+        if (!p) { return; }
+        try {
+          markProjectResponse();
+          render(p);
+          clearLoadError();
+        } catch (error) {
+          showLoadError(loadErrorReason(error));
+        }
+      })
+      .catch(function (err) {
+        showLoadError(err && err.name === 'SyntaxError' ? 'invalid JSON' : loadErrorReason(err));
+      });
   }
   load();
   setInterval(load, 5000);
