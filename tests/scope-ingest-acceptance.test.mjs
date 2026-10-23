@@ -39,8 +39,9 @@ test('ingest refuses a build acceptance path that no ticket owns', async t => {
   await fakeRun(root, 'r1', [build({ acceptance: ['`src/other.mjs` is exported'] })]);
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 1);
-  assert.match(result.stdout, /T-0001: acceptance line 1 names src\/other\.mjs, owned by nobody/);
-  assert.equal(await readLedger(root), null);
+  assert.match(result.stdout, /acceptance line 1 names src\/other\.mjs, owned by nobody/);
+  assert.match(result.stdout, /parked:/);
+  await assert.rejects(fs.access(path.join(root, '.swarm/project/tickets.json')));
 });
 
 test('copied requirement acceptance is deferred until an integration ticket exists', async t => {

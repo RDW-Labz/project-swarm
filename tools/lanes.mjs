@@ -18,6 +18,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
   pauseMs: 900000,
   maxPauseMs: 900000,
   model: null,
+  paused: agent === 'codex',
   // null, or { start, min }: the lane begins at `start` requests in flight and finds its own limit (see report()).
   adaptive: agent === 'rented' ? Object.freeze({ min: 1, start: 4 }) : null,
 })])));
@@ -51,6 +52,7 @@ function validate(agent, lane) {
   if (lane.model !== null && (typeof lane.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.model))) {
     throw invalid(agent, 'model', 'must be null or a valid model name');
   }
+  if (Object.hasOwn(lane, 'paused') && lane.paused !== true && lane.paused !== false) throw invalid(agent, 'paused', 'must be true or false');
 }
 
 export function resolveLanes({ config = {}, manifest = {}, env = process.env } = {}) {
@@ -87,6 +89,8 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
   if (rented) { lanes.rented.concurrency = Math.min(lanes.rented.concurrency, rented.concurrency); if (lanes.rented.adaptive && typeof lanes.rented.adaptive === 'object') lanes.rented.adaptive.start = Math.min(lanes.rented.adaptive.start ?? 4, lanes.rented.concurrency); }
   // No override may make the rented lane routable without a live session.
   if (!routableSession) lanes.rented.model = null;
+  const machine = machineConcurrency(config);
+  if (machine !== null) lanes.anthropic.concurrency = machine;
   for (const agent of LANE_AGENTS) {
     const adaptive = lanes[agent].adaptive;
     if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.max(adaptive.min ?? 1, Math.min(8, lanes[agent].concurrency)) };

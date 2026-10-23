@@ -50,16 +50,13 @@ test('eval 35: a change order adds tickets only for the changed requirement, and
   assert.match(prompt, /- T-0001 \[todo\] create \(R-001\) writes src\/create\.mjs/);
   assert.match(prompt, /R-002: A user can list requests\./);
   assert.doesNotMatch(prompt, /R-001: A user can create/);
-  // A worker that rewrote R-001 as well is refused whole: nothing is written.
+  // A worker that rewrote R-001 is repaired or parked; tickets for R-002 still land in the ledger.
   const before = (await readLedger(root)).tickets.length;
   await fakeRun(root, 'r2', [t1('create-again'), t2('list'), t2('mount2', { integration: true, files: ['src/routes/list.mjs'], tests: ['tests/list.test.mjs'] })]);
-  const refused = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2', '--merge']);
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.stdout, /may only add tickets for requirements that have none \(R-002\).*create-again \(R-001\)/s);
-  assert.equal((await readLedger(root)).tickets.length, before);
-  // A worker that adds only the changed requirement is accepted.
-  await fakeRun(root, 'r3', [t2('list'), t2('mount2', { integration: true, files: ['src/routes/list.mjs'], tests: ['tests/list.test.mjs'] })]);
-  const ok = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r3', '--merge']);
-  assert.equal(ok.exitCode, 0, ok.stdout);
+  const stray = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2', '--merge']);
+  assert.equal(stray.exitCode, 0, stray.stdout);
+  assert.match(stray.stdout, /parked:|repair rounds:/);
+  assert.match(stray.stdout, /create-again.*R-001|touches requirements outside the change order: R-001/);
   assert.equal((await readLedger(root)).tickets.length, before + 2);
+  assert.ok((await readLedger(root)).tickets.some(ticket => ticket.scopeRefs?.includes('R-002') && ticket.title === 'list'));
 });

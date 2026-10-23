@@ -31,16 +31,19 @@ async function fakeRun(root, id, items) {
 
 test('eval 38.1: the route-level test of an integration ticket must be a real test file', async t => {
   const root = await setup(t);
-  // Old behavior: any path counted, so a page file named as the "test" passed the wiring rule.
+  // Old behavior: any path counted, so a page file named as the "test" passed the wiring rule; whole-stage refusal wrote nothing.
   await fakeRun(root, 'r1', [item('a', ['R-001']), mount('m1', 'R-001', { tests: ['src/app/page.tsx'] }), item('b', ['R-002']), mount('m2', 'R-002', { files: ['src/routes/m2.mjs'] })]);
-  const refused = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.stdout, /R-001: the route-level test of its integration ticket is not a test file \(src\/app\/page\.tsx\)/);
-  assert.equal(await readLedger(root), null, 'nothing written');
+  const parked = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1', '--max-repairs', '0']);
+  assert.equal(parked.exitCode, 0, parked.stdout);
+  assert.match(parked.stdout, /route-level test.*not a test file|not a test file \(src\/app\/page\.tsx\)/);
+  const { readJournal } = await import('../tools/journal.mjs');
+  const blockers = await readJournal(root, { kinds: ['blocker'] });
+  assert.ok(blockers.some(event => /route-level test|not a test file/i.test(event.text ?? '')), 'parked blocker names the bad route-level test');
   for (const ok of ['tests/routes.test.mjs', 'src/a.spec.ts', 'e2e/list.ts', 'tests/test_routes.py', 'pkg/routes_test.go', 'supabase/tests/r1.sql', 'polls/tests.py', 'routes_test.ts']) assert.equal(looksLikeTestFile(ok), true, ok);
   for (const bad of ['src/app/page.tsx', 'src/routes/list.mjs', 'tests/', '', undefined, 'cypress/support/commands.ts', 'tests/fixtures/data.json', 'src/app/test/page.tsx', 'tests/helpers/db.ts', 'e2e/notes.md']) assert.equal(looksLikeTestFile(bad), false, String(bad));
-  await fakeRun(root, 'r2', [item('a', ['R-001']), mount('m1', 'R-001'), item('b', ['R-002']), mount('m2', 'R-002', { files: ['src/routes/m2.mjs'] })]);
-  assert.equal((await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2'])).exitCode, 0);
+  const goodRoot = await setup(t);
+  await fakeRun(goodRoot, 'r1', [item('a', ['R-001']), mount('m1', 'R-001'), item('b', ['R-002']), mount('m2', 'R-002', { files: ['src/routes/m2.mjs'] })]);
+  assert.equal((await runScopeCommand(goodRoot, 'scope', ['split', '--ingest', 'r1'])).exitCode, 0);
 });
 
 test('eval 38.2: integration tickets that edit the same file are chained, the later after the earlier', async t => {

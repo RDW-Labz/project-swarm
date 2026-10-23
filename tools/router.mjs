@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { isBookkeepingJob } from './openrouter.mjs';
-import { LOCAL_MODEL_PREFIX, parseLocalModel } from './local-lane.mjs';
+import { prefersLocalLane } from './job-types.mjs';
+import { LANE_AGENTS } from './lanes.mjs';
 
 // Lanes that only ever get jobs marked `sensitive: false`. validateManifest also refuses a sensitive job
 // on these; the router checks too, so a sensitive job is never even a candidate.
@@ -18,68 +19,88 @@ const failureLimit = agent => (agent === 'rented' ? 1 : 2);
 export function rentedContractProblem(job, contract = job?.contract) {
   const text = value => typeof value === 'string' && value.trim().length > 0;
   if (!Array.isArray(job?.outputs) || !job.outputs.length) return 'name the exact output files (outputs)';
-  if (!Array.isArray(job.context) || !job.context.length) return 'name the exact files to read (context)';
+  if (!Array.isArray(job?.context) || !job.context.length) return 'name the exact files to read (context)';
   if (!text(contract) || !job.context.includes(contract)) return 'name its contract file (contract: a file that is also in context)';
   if (!Array.isArray(job.acceptance) || !job.acceptance.length || !job.acceptance.every(text)) return 'list the acceptance tests (acceptance: test files or commands that must pass)';
   return null;
 }
 
-// Code jobs: the flat-rate subscriptions first (Cursor, then Codex: a job there costs nothing extra), then paid Haiku; the Claude subscription only after 2 failures or for tier
-// "expensive". A lane that is paused (rate limit, out of credit) is skipped, so work falls to the next lane on its own.
+// Code jobs: Cursor stays in the mix, then paid Anthropic (Haiku or Sonnet); Codex is paused by default in lane config.
 // Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
-// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
-// from the lane benchmark (docs/state/lane-benchmark.md).
+// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive.
 export const CHEAP_ORDER = Object.freeze(['cursor', 'codex', 'anthropic', 'openrouter']);
 export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
 
-// The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
-// tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
 const ANTHROPIC_MID_MODEL = 'claude-sonnet-5-5';
-// The Claude subscription lane has three tiers: `model` is the everyday one, `expensiveModel` (default: `model`) serves tier "expensive" jobs, `midModel` serves tier "mid".
-const laneModel = (job, agent, lanes, endpointHealth = () => ({ state: 'ok' })) => {
-  if (agent === 'local') {
-    const endpoints = lanes.local?.endpoints ?? [];
-    const wanted = parseLocalModel(job.model);
-    if (wanted) {
-      const exact = endpoints.find(ep => ep.name === wanted && endpointHealth(ep.name).state !== 'paused');
-      return exact ? `${LOCAL_MODEL_PREFIX}${exact.name}` : null;
-    }
-    const pick = endpoints.find(ep => endpointHealth(ep.name).state !== 'paused');
-    return pick ? `${LOCAL_MODEL_PREFIX}${pick.name}` : null;
+const ANTHROPIC_OPUS_MODEL = 'claude-opus-5-5';
+
+function knownLane(agent) {
+  return agent === 'local' || LANE_AGENTS.includes(agent);
+}
+
+function laneConfigured(agent, lanes) {
+  if (agent === 'local') return typeof lanes.local?.model === 'string';
+  return typeof lanes[agent]?.model === 'string';
+}
+
+function laneConfigPaused(agent, lanes) {
+  return lanes[agent]?.paused === true;
+}
+
+function needsAnthropicOpus(job) {
+  return job?.type === 'review' && (job.sensitive === true || job.securityReview === true || job.tier === 'expensive');
+}
+
+function needsAnthropicSonnet(job, failures = {}) {
+  if (job?.type === 'review' && !needsAnthropicOpus(job)) return true;
+  if (job?.type !== 'build' && job?.type !== 'fix') return false;
+  if (job.risk === 'high' || job.size === 'large') return true;
+  return (failures.anthropic ?? 0) >= 1;
+}
+
+const laneModel = (job, agent, lanes, failures = {}) => {
+  if (agent === 'anthropic') {
+    if (needsAnthropicOpus(job)) return ANTHROPIC_OPUS_MODEL;
+    if (needsAnthropicSonnet(job, failures) || job.tier === 'mid') return ANTHROPIC_MID_MODEL;
+    return lanes.anthropic.model;
   }
-  if (agent === 'anthropic' && job.tier === 'mid') return ANTHROPIC_MID_MODEL;
   if (agent === 'claude') {
     if (job.tier === 'expensive') return lanes.claude.expensiveModel ?? lanes.claude.model;
     if (job.tier === 'mid' && lanes.claude.midModel) return lanes.claude.midModel;
   }
+  if (agent === 'local') return lanes.local.model;
   return lanes[agent].model;
 };
 
-const localConfigured = (lanes, job, endpointHealth) => Array.isArray(lanes.local?.endpoints) && lanes.local.endpoints.length > 0 && laneModel(job, 'local', lanes, endpointHealth) !== null;
+function typeRouteAgents(job, lanes) {
+  const route = Array.isArray(job.typeRoute) ? job.typeRoute : [];
+  return route.filter(agent => agent !== 'claude' && knownLane(agent) && (agent !== 'local' || laneConfigured('local', lanes)));
+}
 
-export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), endpointHealth = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
+export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {
   if (job?.agent !== 'auto') {
     const error = new Error('route-invalid: job.agent must be auto');
     error.code = 'route-invalid';
     throw error;
   }
 
-  const configured = agent => (agent === 'local' ? localConfigured(lanes, job, endpointHealth) : typeof lanes[agent]?.model === 'string');
-  const accepted = agent => accepts({ ...job, agent, model: laneModel(job, agent, lanes, endpointHealth) }) !== false;
+  const configured = agent => laneConfigured(agent, lanes);
+  const accepted = agent => accepts({ ...job, agent, model: laneModel(job, agent, lanes, failures) }) !== false;
   const minReady = Number.isFinite(lanes.rented?.minReady) ? lanes.rented.minReady : RENTED_MIN_READY;
   const useRented = configured('rented') && job.sensitive === false && ready >= minReady && rentedContractProblem(job, contract ?? job.contract) === null;
-  const hardCodex = job.hard === true && job.tier !== 'expensive' && configured('codex') && accepted('codex');
-  const cheapOrder = localConfigured(lanes, job, endpointHealth)
-    ? ['cursor', 'codex', 'local', 'anthropic', 'openrouter']
-    : [...CHEAP_ORDER];
-  const order = [...new Set([...(hardCodex ? ['codex'] : []), ...(useRented ? RENTED_FIRST : []), ...(Array.isArray(job.typeRoute) ? job.typeRoute : []).filter(agent => agent !== 'claude'), ...(useRented ? RENTED_AFTER : []), ...cheapOrder])];
+  const codexLive = configured('codex') && lanes.codex?.paused !== true;
+  const hardCodex = job.hard === true && job.tier !== 'expensive' && codexLive && accepted('codex');
+  const typed = typeRouteAgents(job, lanes);
+  const localFirst = prefersLocalLane(job) && configured('local') ? ['local'] : [];
+  const order = [...new Set([...(hardCodex ? ['codex'] : []), ...(useRented ? RENTED_FIRST : []), ...localFirst, ...typed.filter(agent => !localFirst.includes(agent)), ...(useRented ? RENTED_AFTER : []), ...CHEAP_ORDER])];
   let reason = hardCodex ? 'hard ticket: codex first' : 'cheapest healthy lane';
   let candidates;
-  if (job.tier === 'expensive') {
+  if (job.tier === 'expensive' && job.type !== 'review') {
     reason = 'tier expensive';
     candidates = configured('claude') && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
   } else {
     candidates = order.filter(agent => configured(agent)
+      && !laneConfigPaused(agent, lanes)
       && (agent !== 'rented' || useRented)
       && (!NON_SENSITIVE_ONLY.includes(agent) || job.sensitive === false)
       && (agent !== 'openrouter' || isBookkeepingJob(job.outputs))
@@ -93,16 +114,16 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), en
       candidates = ['claude'];
       reason = `fallback after 2 failures on ${order.filter(agent => failures[agent] > 0).join(', ')}`;
     }
-    if (!candidates.length && !order.some(configured) && totalFailures === 0) {
+    if (!candidates.length && !order.some(agent => configured(agent) && !laneConfigPaused(agent, lanes)) && totalFailures === 0) {
       throw Object.assign(new Error(`route-exhausted: no cheap lane available for job ${job.id}; Claude needs 2 real failures first or tier "expensive"`), { code: 'route-exhausted' });
     }
   }
   for (const agent of candidates) {
-    if (health(agent).state !== 'paused') return { agent, model: laneModel(job, agent, lanes, endpointHealth), reason };
+    if (health(agent).state !== 'paused') return { agent, model: laneModel(job, agent, lanes, failures), reason };
   }
   if (candidates.length > 0) {
     const agent = candidates[0];
-    return { agent, model: laneModel(job, agent, lanes, endpointHealth), reason: `${reason}; lane ${agent} paused` };
+    return { agent, model: laneModel(job, agent, lanes, failures), reason: `${reason}; lane ${agent} paused` };
   }
 
   const error = new Error(`route-exhausted: no lane left for job ${job.id} (${reason})`);

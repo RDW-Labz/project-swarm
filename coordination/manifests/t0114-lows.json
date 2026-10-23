@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-lows",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 2700000,
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tools/board-action-guard.mjs",
+        "tools/watch-assets/board-owner-actions.js",
+        "tools/watch-cli.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-action-guard-unit.test.mjs",
+        "tests/board-owner-actions-ui.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "contracts/watch-s4-ops.json",
+        "tools/board-owner-actions.mjs",
+        "tests/board-owner-actions-handlers.test.mjs"
+      ],
+      "prompt": "Fix the Opus review lows on T-0114 (all four): (1) tools/watch-server.mjs: every owner route (including GET /api/owner/audit) accepts ONLY the x-watch-token header token (no cookie, no query), as the contract says. (2) tools/watch-server.mjs handleOwner: return 404 (not found, same as an unknown route) when the server is not in remote mode, before anything else. (3) tools/board-action-guard.mjs: the refused kinds must also catch 'cap' and any kind that is 'cap' followed by a separator or word (cap-increase, cap_raise, capRaise, 'raise cap', 'budget', 'limit-raise', 'spend-limit'): refuse when the normalized kind (trim, lowercase, camelCase split into words, separators - _ : . space) contains any of the words merge, deploy, cap, budget, spend, key, keys, secret, migration, migrate, rollback-prod as a whole word; keep fail-closed for unknown or non-string kinds; update tools/watch-assets/board-owner-actions.js's client-side copy of the rule to match (it already mirrors the server rule). (4) tools/watch-cli.mjs readAudit: parse each line separately and skip unparsable lines (count them in a skipped field) instead of returning [] for the whole file. Tests: extend tests/board-owner-routes.test.mjs (cookie refused on audit; owner routes 404 when not remote; corrupt audit line skipped, others returned) and tests/board-action-guard-unit.test.mjs (every variant above refused, approve/deny of a normal item allowed) and tests/board-owner-actions-ui.test.mjs if the client rule test exists there. Do NOT touch tools/swarm.mjs, the tools/swarm folder, package files or .github. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-action-guard-unit.test.mjs tests/board-owner-actions-handlers.test.mjs tests/board-owner-actions-ui.test.mjs tests/watch-server.test.mjs` and `node tools/check-package.mjs`.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use the watch server or CLI for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

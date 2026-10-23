@@ -2,11 +2,12 @@
 // Acceptance enforcement (docs/plans/acceptance-design.md): which acceptance lines a passing test covers, which need the review, and whether a ticket is met.
 import { verdictLine } from './review-text.mjs';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { expandTicketRefs } from './ticket-refs.mjs';
 import { effectiveTargetWorktree, readLedger, resolveTargetWorktree } from './tickets.mjs';
 import { worktreeFamily } from './project-spend.mjs';
+import { validateManifest } from './swarm/core-31.mjs';
 
 const NL = String.fromCharCode(10);
 
@@ -217,8 +218,31 @@ export function evaluate({ ticket, cov, record, filesHash, testsPassed, accepted
   return { state, lines, missing, failing };
 }
 
+function readTestSources(root, ticket) {
+  const sources = new Map();
+  for (const f of arr(ticket?.tests)) {
+    if (typeof f !== 'string' || /[*?]|\/$/.test(f)) continue;
+    try {
+      const full = path.resolve(root, f);
+      const info = lstatSync(full);
+      if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
+    } catch { /* missing: nothing covered by it */ }
+  }
+  return sources;
+}
+
+/** Acceptance line numbers that still need a review (not already met by passing tests). */
+export function acceptanceUncoveredLineNumbers(root, ticket, { testsPassed = true, record = null } = {}) {
+  const cov = coverage(ticket, readTestSources(root, ticket));
+  const ev = evaluate({ ticket, cov, record, filesHash: 'acceptance-review-prep', testsPassed, accepted: false });
+  if (ev.state === 'met') return [];
+  if (ev.missing.length) return ev.missing;
+  return acceptanceLines(ticket).map((line) => line.n);
+}
+
 export function reviewManifest(runId, items, { model = 'sonnet', agent = 'claude', tickets = [], exists = null, root = null } = {}) {
-  const list = arr(items);
+  const list = arr(items).filter((item) => arr(item.uncovered).length > 0);
+  if (!list.length) return { version: 1, jobs: [] };
   const context = [];
   const canSee = typeof exists === 'function'
     ? exists
@@ -391,6 +415,34 @@ export function acceptanceReviewSkipWarning(ticketId, reason) {
  * Build and write an acceptance review manifest for one ticket at the project root.
  * Throws when the ticket worktree cannot be resolved or context files are not visible there.
  */
+export function reviewManifestPathError(relativeFile) {
+  return `review manifest ${relativeFile} is missing or not valid JSON`;
+}
+
+/** Read a review manifest from disk; refuse with a path-specific message before generic validate errors. */
+export async function readReviewManifest(projectRoot, relativeFile) {
+  if (!relativeFile || typeof relativeFile !== 'string') {
+    throw Object.assign(new Error(reviewManifestPathError(String(relativeFile ?? ''))), { code: 'review-manifest' });
+  }
+  const filePath = path.isAbsolute(relativeFile) ? relativeFile : path.join(projectRoot, relativeFile);
+  let raw;
+  try {
+    raw = await fs.readFile(filePath, 'utf8');
+  } catch {
+    throw Object.assign(new Error(reviewManifestPathError(relativeFile)), { code: 'review-manifest' });
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw Object.assign(new Error(reviewManifestPathError(relativeFile)), { code: 'review-manifest' });
+  }
+}
+
+export async function loadReviewManifest(projectRoot, relativeFile) {
+  const manifest = await readReviewManifest(projectRoot, relativeFile);
+  return validateManifest(manifest);
+}
+
 export async function prepareAcceptanceReviewFile(projectRoot, {
   runId,
   ticket,
@@ -403,9 +455,14 @@ export async function prepareAcceptanceReviewFile(projectRoot, {
   }
   const resolvedRoot = await resolveAcceptanceRoot(projectRoot, ticket, { runId });
   const resolvedLedger = ledger ?? await readLedger(projectRoot);
-  const lines = uncovered ?? acceptanceLines(ticket).map(line => line.n);
+  let lines = uncovered;
+  if (lines === null || lines === undefined) {
+    const records = await readAcceptanceRecords(resolvedRoot, { ticket, runId });
+    const rec = records.tickets?.[ticket.id];
+    lines = acceptanceUncoveredLineNumbers(resolvedRoot, ticket, { record: rec });
+  }
   if (!lines.length) {
-    throw Object.assign(new Error(`no acceptance lines to review for ${ticket.id}`), { code: 'acceptance-review-manifest' });
+    throw Object.assign(new Error('acceptance review has nothing to review'), { code: 'acceptance-review-skip' });
   }
   const exists = candidate => {
     if (typeof candidate !== 'string' || candidate.includes('..')) return false;
@@ -421,6 +478,9 @@ export async function prepareAcceptanceReviewFile(projectRoot, {
     exists,
     root: resolvedRoot,
   });
+  if (!manifest.jobs?.length) {
+    throw Object.assign(new Error('acceptance review has nothing to review'), { code: 'acceptance-review-skip' });
+  }
   const filePath = path.join(projectRoot, relativeFile);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(manifest, null, 2)}\n`);

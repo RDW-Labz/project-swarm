@@ -23,7 +23,7 @@ test('a ticket pinned to a non-Anthropic lane carries no cacheContext and the ma
 });
 
 test('ticket ids in context resolve to that ticket\'s files, and unknown ids are dropped', () => {
-  const tickets = [t('T-0001'), t('T-0193', { files: ['src/a.ts', 'src/dir/'], tests: ['tests/a.test.ts'] })];
+  const tickets = [t('T-0001'), t('T-0193', { status: 'done', files: ['src/a.ts', 'src/dir/'], tests: ['tests/a.test.ts'] })];
   assert.deepEqual(expandTicketRefs(['T-0193', 'README.md', 'T-9999'], tickets), ['src/a.ts', 'tests/a.test.ts', 'README.md']);
   const user = t('T-0002', { context: ['T-0193'] });
   const { manifest } = ticketsToManifest([user], { ledger: { tickets: [...tickets, user] } });
@@ -73,11 +73,18 @@ test('a guard marker from before the last boot is stale even if its pid is alive
 
 import { applyJobType } from '../tools/job-types.mjs';
 import { routeJob } from '../tools/router.mjs';
-test('every job type that any lane can do routes cheapest first: Cursor, then Codex, then Anthropic', () => {
+test('routes by job type: Haiku first for build, fix and docs; codex first for test; paused lane hands on', () => {
   const lanes = { cursor: { model: 'u' }, codex: { model: 'c' }, anthropic: { model: 'h' }, claude: { model: 'sonnet' } };
-  for (const type of ['build', 'fix', 'test', 'docs']) {
-    const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs: type === 'docs' ? ['docs/a.md'] : ['src/a.test.ts'] });
-    assert.equal(routeJob(job, { lanes }).agent, 'cursor', type);
-    assert.equal(routeJob(job, { lanes, health: a => ({ state: a === 'cursor' ? 'paused' : 'ok' }) }).agent, 'codex', `${type}: paused cursor hands on`);
+  const anthropicPaused = { lanes, health: a => ({ state: a === 'anthropic' ? 'paused' : 'ok' }) };
+  for (const type of ['build', 'fix', 'docs']) {
+    const outputs = type === 'docs' ? ['docs/a.md'] : ['src/a.ts'];
+    const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs });
+    assert.equal(routeJob(job, { lanes }).agent, 'anthropic', type);
+    assert.equal(routeJob(job, anthropicPaused).agent, 'cursor', `${type}: paused anthropic hands on`);
+  }
+  for (const type of ['test']) {
+    const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs: ['src/a.test.ts'] });
+    assert.equal(routeJob(job, { lanes }).agent, 'codex', type);
+    assert.equal(routeJob(job, anthropicPaused).agent, 'codex', `${type}: codex first when anthropic paused`);
   }
 });

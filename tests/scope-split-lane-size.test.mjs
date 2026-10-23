@@ -75,6 +75,7 @@ test('scope split --ingest refuses a ticket exceeding every lane with a split hi
   assert.equal(result.exitCode, 1);
   assert.match(result.stdout, /T-0001: 0 bytes exceeds the cheap-lane cap of 15360 bytes/);
   assert.match(result.stdout, /split this ticket or reduce its outputs/);
+  assert.match(result.stdout, /parked:/);
 });
 
 test('scope approve warns when a pinned API lane exceeds its byte budget', async () => {

@@ -24,12 +24,12 @@ test('untyped jobs remain unchanged and are copied', () => {
 
 test('presets are frozen and match the contract defaults', () => {
   const expected = {
-    build: ['any', ['cursor', 'codex', 'anthropic'], 1800000, null],
-    fix: ['any', ['cursor', 'codex', 'anthropic'], 1800000, 'diagnosing-bugs'],
-    test: ['tests', ['cursor', 'codex', 'anthropic', 'hermes'], 1200000, 'tdd'],
-    review: ['none', ['codex'], 900000, 'code-review'],
+    build: ['any', ['local', 'anthropic', 'cursor'], 1800000, null], // owner decision 2026-10-22
+    fix: ['any', ['local', 'anthropic', 'cursor'], 1800000, 'diagnosing-bugs'], // owner decision 2026-10-22
+    test: ['tests', ['local', 'codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd'], // owner decision 2026-10-22
+    review: ['none', ['anthropic', 'cursor'], 900000, 'code-review'], // owner decision 2026-10-22
     research: ['none', ['hermes'], 900000, null],
-    docs: ['docs', ['cursor', 'codex', 'anthropic', 'hermes'], 900000, null],
+    docs: ['docs', ['local', 'anthropic', 'hermes', 'cursor'], 900000, null], // owner decision 2026-10-22
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };
@@ -104,7 +104,7 @@ test('unknown types and forged internal routes refuse', () => {
       assert.throws(() => check(input), { code: 'job-type-invalid', message: 'Job typed: unknown type ' + type });
     }
   }
-  validateManifest(manifest(job({ type: 'build', typeRoute: ['cursor', 'codex', 'anthropic'] })));
+  validateManifest(manifest(job({ type: 'build', typeRoute: ['local', 'anthropic', 'cursor'] }))); // owner decision 2026-10-22
   for (const input of [job({ typeRoute: ['codex'] }), job({ type: 'build', typeRoute: ['cursor', 'codex'] }), job({ type: 'build', typeRoute: [] })]) {
     assert.throws(() => validateManifest(manifest(input)), { code: 'job-type-invalid' });
   }
@@ -134,9 +134,9 @@ async function fixture(t) {
 test('validateProject returns skill warnings and the applied prompt before routing', async t => {
   const root = await fixture(t);
   const input = job({ type: 'review', context: ['input.txt'] });
-  const value = { ...manifest(input), lanes: { hermes: { model: 'test-model' }, codex: { model: 'gpt-5' } } };
+  const value = { ...manifest(input), lanes: { hermes: { model: 'test-model' }, anthropic: { model: 'claude-haiku-5-5' }, cursor: { model: 'u' } } };
   const result = await validateProject(root, value);
-  assert.equal(result.routes[0].agent, 'codex');
+  assert.equal(result.routes[0].agent, 'anthropic'); // owner decision 2026-10-22: review routes anthropic (Sonnet), not codex
   assert.equal(result.jobs[0].prompt, applyJobType(input).job.prompt);
   assert.equal(result.jobs[0].timeoutMs, 900000);
   assert.equal(result.warnings.filter(warning => warning.code === 'job-type-skill-unavailable').length, 1);

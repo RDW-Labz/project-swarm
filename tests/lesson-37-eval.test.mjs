@@ -68,8 +68,6 @@ test('eval 37.1: integration tickets that share a file across stages are chained
 });
 
 test('eval 37.4: an ingest conflict names the exact tickets and file', async t => {
-  const root = await oldLedger(t);
-  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
   const a = { key: 'a', title: 'Create list page', type: 'build', scopeRefs: ['R-002'], acceptance: ['ok'], files: ['src/pages/list.tsx'], size: 'S', risk: 'low' };
   const b = { key: 'b', title: 'Add list filters', type: 'build', scopeRefs: ['R-002'], acceptance: ['ok'], files: ['src/pages/list.tsx'], size: 'S', risk: 'low' };
   const rootNew = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'l37b-')));
@@ -77,10 +75,21 @@ test('eval 37.4: an ingest conflict names the exact tickets and file', async t =
   await fs.mkdir(path.join(rootNew, 'docs/scope'), { recursive: true });
   await fs.writeFile(path.join(rootNew, 'docs/scope/scope.md'), SCOPE);
   await fakeRun(rootNew, 'r1', { S1: [{ ...a, scopeRefs: ['R-001'] }, { ...b, scopeRefs: ['R-001'] }, mount('m1', 'R-001', { files: ['src/routes/m1.mjs'] })] });
-  const refused = await runScopeCommand(rootNew, 'scope', ['split', '--ingest', 'r1']);
-  assert.equal(refused.exitCode, 1);
-  assert.match(refused.stdout, /T-0001 "Create list page" and T-0002 "Add list filters" both write src\/pages\/list\.tsx \(wave 1\)/);
-  assert.match(refused.stdout, /Make one wait for the other/);
+  const ingested = await runScopeCommand(rootNew, 'scope', ['split', '--ingest', 'r1']);
+  assert.equal(ingested.exitCode, 0, ingested.stdout);
+  const ledger = await readLedger(rootNew);
+  const ta = ledger.tickets.find(ticket => ticket.title === 'Create list page');
+  const tb = ledger.tickets.find(ticket => ticket.title === 'Add list filters');
+  assert.ok(ta && tb);
+  if (tb.dependsOn?.includes(ta.id)) {
+    assert.deepEqual(tb.dependsOn, [ta.id]);
+  } else {
+    const { readJournal } = await import('../tools/journal.mjs');
+    const blockers = await readJournal(rootNew, { kinds: ['blocker'] });
+    const text = blockers.map(event => event.text ?? '').join('\n');
+    assert.match(text, /T-0001.*Create list page.*T-0002.*Add list filters|Create list page.*Add list filters/);
+    assert.match(text, /src\/pages\/list\.tsx/);
+  }
 });
 
 test('eval 37.2: .env.example is allowed as read-only context, and still refused as an output', async t => {
