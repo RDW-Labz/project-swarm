@@ -17,10 +17,10 @@ const manifest={version:1,jobs:[{id:'a',agent:'openai',sensitive:false,model:'fi
 test('adapter counts in every guide agree with the executable adapter list',async()=>{
  const count=swarm.AGENTS.length;
  assert.equal(count,3+EXTRA_CLI_AGENTS.length+API_AGENTS.length);
- const words=['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve'];let assertions=0;
+ const words=['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen'];let assertions=0;
  for(const file of ['README.md','skills/project-swarm/SKILL.md',...(await fs.readdir(path.join(root,'docs'))).filter(f=>f.endsWith('.md')).map(f=>`docs/${f}`)]){
   const text=await fs.readFile(path.join(root,file),'utf8');
-  for(const match of text.matchAll(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:provider\s+)?adapters\b/gi)){
+  for(const match of text.matchAll(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen)\s+(?:provider\s+)?adapters\b/gi)){
    assert.equal(words.includes(match[1].toLowerCase())?words.indexOf(match[1].toLowerCase()):Number(match[1]),count,file);assertions++;
   }
  }
