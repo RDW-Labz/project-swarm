@@ -30,6 +30,29 @@ test('a second autopilot is refused while the first holds the lock; release free
   await again();
 });
 
+test('stale takeover quarantine does not delete a live lock published before quarantine rename', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  const liveRecord = { pid: 222, token: 'live-token', startedAt: new Date().toISOString() };
+  await fs.writeFile(lockFile(root), JSON.stringify({ pid: 999999 }));
+  let hookRan = false;
+  await assert.rejects(
+    acquireAutopilotLock(root, {
+      pid: 111,
+      isAlive: p => p === 222,
+      afterStaleJudgmentBeforeQuarantine: async () => {
+        hookRan = true;
+        await fs.writeFile(lockFile(root), `${JSON.stringify(liveRecord)}\n`);
+      },
+    }),
+    /autopilot-running: pid 222/,
+  );
+  assert.ok(hookRan);
+  const onDisk = JSON.parse(await fs.readFile(lockFile(root), 'utf8'));
+  assert.equal(onDisk.pid, 222);
+  assert.equal(onDisk.token, 'live-token');
+});
+
 test('a lock left by a dead process, or an unreadable one, is cleared', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });

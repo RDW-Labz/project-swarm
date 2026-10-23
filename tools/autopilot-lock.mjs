@@ -16,7 +16,58 @@ function lockIsHeldByOther(owner, pid, token, isAlive) {
   return owner.pid !== pid || owner.token !== token;
 }
 
-export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = alive, name = 'autopilot' } = {}) {
+function staleTakeoverJudgment(owner) {
+  if (Number.isInteger(owner?.pid) && owner.pid > 0) return { type: 'dead_pid', pid: owner.pid };
+  return { type: 'unparseable' };
+}
+
+function quarantinedContentStillStale(raw, judgment, isAlive) {
+  let owner = null;
+  try { owner = JSON.parse(raw); } catch { owner = null; }
+  if (judgment.type === 'dead_pid') {
+    if (owner?.pid !== judgment.pid) return false;
+    return !isAlive(owner.pid);
+  }
+  if (!raw || String(raw).trim() === '') return true;
+  if (owner === null) return true;
+  if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return true;
+  return !isAlive(owner.pid);
+}
+
+async function quarantineStaleTakeover(file, judgment, isAlive, afterStaleJudgmentBeforeQuarantine) {
+  await afterStaleJudgmentBeforeQuarantine?.();
+  const quarantinePath = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.quarantine`;
+  try {
+    await fs.rename(file, quarantinePath);
+  } catch (renameError) {
+    if (renameError.code === 'ENOENT') return 'retry';
+    throw renameError;
+  }
+  let quarantinedRaw = '';
+  try {
+    quarantinedRaw = await fs.readFile(quarantinePath, 'utf8');
+  } catch {
+    await fs.rm(quarantinePath, { force: true }).catch(() => {});
+    return 'retry';
+  }
+  if (quarantinedContentStillStale(quarantinedRaw, judgment, isAlive)) {
+    await fs.rm(quarantinePath, { force: true });
+    return 'cleared';
+  }
+  try {
+    await fs.rename(quarantinePath, file);
+  } catch (restoreError) {
+    if (restoreError.code !== 'EEXIST') throw restoreError;
+  }
+  return 'live_stolen_backoff';
+}
+
+export async function acquireAutopilotLock(root, {
+  pid = process.pid,
+  isAlive = alive,
+  name = 'autopilot',
+  afterStaleJudgmentBeforeQuarantine,
+} = {}) {
   const token = randomBytes(16).toString('hex');
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, `${name}.lock`);
@@ -42,7 +93,12 @@ export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = 
         if (lockIsHeldByOther(owner, pid, token, isAlive)) {
           throw Object.assign(new Error(`${name}-running: pid ${owner.pid} already runs ${name} for this project`), { code: `${name}-running` });
         }
-        await fs.rm(file, { force: true });
+        const takeover = await quarantineStaleTakeover(
+          file,
+          staleTakeoverJudgment(owner),
+          isAlive,
+          afterStaleJudgmentBeforeQuarantine,
+        );
         continue;
       }
       let released = false;
