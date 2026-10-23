@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { isScratchRoot } from './scratch-roots.mjs';
+import { tokenize } from './shell-writes.mjs';
 
 export const POLICY_ID = 'swarm-admin-handbuild';
 export const POLICY_VERSION = 2;
@@ -16,6 +17,10 @@ export const MAX_POLICY_FILES = 20;
 export const DEFAULT_MAX_ACTIONS_PER_WINDOW = 20;
 export const DEFAULT_MAX_ACTIONS_PER_DAY = 100;
 export const DEFAULT_MAX_FILES_PER_DAY = 100;
+export const POLICY_LIMIT_CEILING_ACTIONS_PER_WINDOW = 100;
+export const POLICY_LIMIT_CEILING_ACTIONS_PER_DAY = 500;
+export const POLICY_LIMIT_CEILING_FILES_PER_DAY = 500;
+export const POLICY_STATS_UNREADABLE = '__policyStatsUnreadable';
 
 const norm = p => String(p).replace(/\\/g, '/');
 const normBranch = b => String(b ?? '').replace(/^refs\/heads\//, '');
@@ -62,9 +67,7 @@ const SWARM_PROJECT_LEDGER = new Set([
 ]);
 
 function matchesSwarmAdminPattern(lower) {
-  if (lower === '.project-swarm.json') return true;
   if (SWARM_PROJECT_LEDGER.has(lower)) return true;
-  if (lower.startsWith('coordination/manifests/')) return true;
   if (lower.startsWith('coordination/review/')) return true;
   if (/^coordination\/handoff[^/]*\.md$/i.test(lower)) return true;
   if (lower.startsWith('docs/scope/')) return true;
@@ -76,8 +79,23 @@ function matchesSwarmAdminPattern(lower) {
     if (dot === -1) return true;
     return !CODE_EXT.has(base.slice(dot));
   }
-  if (lower.startsWith('jobs/') && /manifest/i.test(path.basename(lower))) return true;
+  if (lower.startsWith('jobs/')) {
+    if (!lower.endsWith('.json')) return false;
+    return /manifest/i.test(path.basename(lower));
+  }
   return false;
+}
+
+function deepestExistingRel(root, raw) {
+  const p = norm(raw);
+  if (!p || path.isAbsolute(p) || pathHasDotDot(p)) return null;
+  const parts = p.split('/');
+  for (let n = parts.length; n >= 1; n -= 1) {
+    const prefix = parts.slice(0, n).join('/');
+    const resolved = realpathUnderRoot(root, prefix);
+    if (resolved !== null) return resolved;
+  }
+  return null;
 }
 
 export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
@@ -89,18 +107,16 @@ export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
     if (top !== 'docs' && top !== 'coordination') return false;
   }
   let canonical = raw;
+  const lowerRaw = raw.toLowerCase();
   if (root) {
     const resolved = realpathUnderRoot(root, raw);
     if (resolved !== null) {
       if (/^(?:docs|coordination)\//i.test(resolved) && resolved !== raw) return false;
       canonical = resolved;
     } else {
-      try {
-        const abs = path.join(root, raw);
-        if (fs.existsSync(abs)) return false;
-      } catch {
-        return false;
-      }
+      if (!matchesSwarmAdminPattern(lowerRaw)) return false;
+      if (deepestExistingRel(root, raw) === null) return false;
+      canonical = raw;
     }
   }
   const lower = canonical.toLowerCase();
@@ -141,14 +157,44 @@ export function policyRateLimits(home = os.homedir()) {
       const v = Number(lim[k]);
       return Number.isInteger(v) && v > 0 ? v : d;
     };
+    const cap = (v, max) => Math.min(v, max);
     return {
-      maxActionsPerWindow: n('maxActionsPerWindow', defaults.maxActionsPerWindow),
-      maxActionsPerDay: n('maxActionsPerDay', defaults.maxActionsPerDay),
-      maxFilesPerDay: n('maxFilesPerDay', defaults.maxFilesPerDay),
+      maxActionsPerWindow: cap(n('maxActionsPerWindow', defaults.maxActionsPerWindow), POLICY_LIMIT_CEILING_ACTIONS_PER_WINDOW),
+      maxActionsPerDay: cap(n('maxActionsPerDay', defaults.maxActionsPerDay), POLICY_LIMIT_CEILING_ACTIONS_PER_DAY),
+      maxFilesPerDay: cap(n('maxFilesPerDay', defaults.maxFilesPerDay), POLICY_LIMIT_CEILING_FILES_PER_DAY),
     };
   } catch {
     return defaults;
   }
+}
+
+/** Trusted clone URL from owner machine policy.json only (not project files). */
+export function trustedRepositoryUrl(home = os.homedir()) {
+  try {
+    const file = policyFilePath(home);
+    if (!file) return null;
+    const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const rules = Array.isArray(policy?.rules) ? policy.rules : [];
+    const row = rules.find(r => r?.id === POLICY_ID && r.enabled !== false && r.disabled !== true);
+    const raw = row?.repository ?? row?.repo ?? row?.git?.url ?? row?.remote?.url;
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    return normalizeGitRemoteUrl(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function policyGitEnv(home = os.homedir()) {
+  const env = { HOME: home };
+  if (process.env.PATH) env.PATH = process.env.PATH;
+  if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
+  if (process.env.TEMP) env.TEMP = process.env.TEMP;
+  return env;
+}
+
+export function policyGitExec(root, gitArgs, { cwd = root, home = os.homedir() } = {}) {
+  const work = cwd ?? root;
+  return execFileSync('git', gitArgs, { cwd: work, encoding: 'utf8', timeout: 3000, env: policyGitEnv(home) });
 }
 
 export function evaluateHandbuildAutoApprove(root, { files, minutes, git }) {
@@ -186,66 +232,161 @@ export function autoApproveKillSwitchOn(root) {
   }
 }
 
-export function branchOf(root) {
+export function branchOf(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    return policyGitExec(root, ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, home }).trim();
   } catch {
     return 'HEAD';
   }
 }
 
-export function headOf(root) {
+export function headOf(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    return policyGitExec(root, ['rev-parse', 'HEAD'], { cwd, home }).trim();
   } catch {
     return '';
   }
 }
 
-function normalizeGitRemoteUrl(url) {
+export function normalizeGitRemoteUrl(url) {
   let u = String(url ?? '').trim();
   if (!u) return '';
   u = u.replace(/\.git$/i, '');
-  const scp = /^[^@]+@[^:]+:(.+)$/.exec(u);
-  if (scp) u = scp[1];
+  const scp = /^[^@]+@([^:]+):(.+)$/.exec(u);
+  if (scp) {
+    const host = scp[1].toLowerCase();
+    const repoPath = scp[2].replace(/^\//, '').replace(/\/$/, '').toLowerCase();
+    return `${host}/${repoPath}`;
+  }
   try {
     if (/^https?:\/\//i.test(u)) {
       const parsed = new URL(u);
-      return `${parsed.hostname.toLowerCase()}${parsed.pathname.replace(/\/$/, '').toLowerCase()}`;
+      const repoPath = parsed.pathname.replace(/^\//, '').replace(/\/$/, '').toLowerCase();
+      return `${parsed.hostname.toLowerCase()}/${repoPath}`;
     }
   } catch { /* keep */ }
-  return u.replace(/\/$/, '').toLowerCase();
+  return u.replace(/^\//, '').replace(/\/$/, '').toLowerCase();
 }
 
-function projectRepositoryUrls(root) {
-  const out = new Set();
+function gitOriginUrlRewritesPresent(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    const raw = fs.readFileSync(path.join(root, '.project-swarm.json'), 'utf8');
-    const j = JSON.parse(raw);
-    for (const k of [j?.repository, j?.repo, j?.github?.repository, j?.git?.url, j?.remote?.url]) {
-      if (typeof k === 'string' && k.trim()) out.add(normalizeGitRemoteUrl(k));
-    }
-  } catch { /* no pointer */ }
+    const pushUrl = policyGitExec(root, ['config', '--get', 'remote.origin.pushurl'], { cwd, home }).trim();
+    if (pushUrl) return true;
+  } catch { /* absent */ }
   try {
-    const origin = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
-    if (origin) out.add(normalizeGitRemoteUrl(origin));
-  } catch { /* no origin */ }
-  return [...out];
+    const instead = policyGitExec(root, ['config', '--get-regexp', '^url\\..*\\.insteadOf$'], { cwd, home }).trim();
+    if (instead) return true;
+  } catch { /* absent */ }
+  try {
+    const pushInstead = policyGitExec(root, ['config', '--get-regexp', '^url\\..*\\.pushInsteadOf$'], { cwd, home }).trim();
+    if (pushInstead) return true;
+  } catch { /* absent */ }
+  return false;
 }
 
-export function originIsProjectRepository(root) {
+export function originIsProjectRepository(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    const remotes = execFileSync('git', ['remote'], { cwd: root, encoding: 'utf8', timeout: 3000 })
-      .split('\n').map(s => s.trim()).filter(Boolean);
+    const trusted = trustedRepositoryUrl(home);
+    if (!trusted) return false;
+    const remotes = policyGitExec(root, ['remote'], { cwd, home }).split('\n').map(s => s.trim()).filter(Boolean);
     if (!remotes.includes('origin')) return false;
-    const originUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
-    const normOrigin = normalizeGitRemoteUrl(originUrl);
-    const candidates = projectRepositoryUrls(root);
-    if (!candidates.length) return Boolean(normOrigin);
-    return candidates.some(c => c === normOrigin || normOrigin.endsWith(c) || c.endsWith(normOrigin));
+    if (gitOriginUrlRewritesPresent(root, { cwd, home })) return false;
+    let urls = [];
+    try {
+      urls = policyGitExec(root, ['remote', 'get-url', '--push', '--all', 'origin'], { cwd, home })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch { /* fall back */ }
+    if (!urls.length) {
+      try {
+        urls = [policyGitExec(root, ['remote', 'get-url', 'origin'], { cwd, home }).trim()].filter(Boolean);
+      } catch {
+        return false;
+      }
+    }
+    return urls.every(u => normalizeGitRemoteUrl(u) === trusted);
   } catch {
     return false;
   }
+}
+
+export function gitPushMappingConfigSafe(root, { cwd = root, home = os.homedir() } = {}) {
+  try {
+    const push = policyGitExec(root, ['config', '--get', 'remote.origin.push'], { cwd, home }).trim();
+    if (push) return false;
+    const pushDefault = policyGitExec(root, ['config', '--get', 'push.default'], { cwd, home }).trim();
+    if (pushDefault && pushDefault !== 'simple' && pushDefault !== 'current') return false;
+  } catch { /* defaults ok */ }
+  return true;
+}
+
+export function gitHooksPolicySafe(root, { cwd = root, home = os.homedir() } = {}) {
+  try {
+    try {
+      const hooksPath = policyGitExec(root, ['config', '--get', 'core.hooksPath'], { cwd, home }).trim();
+      if (hooksPath) return false;
+    } catch { /* unset is fine */ }
+    const gitDir = policyGitExec(root, ['rev-parse', '--git-dir'], { cwd, home }).trim();
+    const hooksDir = path.isAbsolute(gitDir) ? path.join(gitDir, 'hooks') : path.join(cwd, gitDir, 'hooks');
+    if (!fs.existsSync(hooksDir)) return true;
+    const entries = fs.readdirSync(hooksDir);
+    for (const name of entries) {
+      if (name === '.' || name === '..') continue;
+      if (!name.endsWith('.sample')) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function headDescendsFromGranted(root, grantedHead, { cwd = root, home = os.homedir() } = {}) {
+  if (!grantedHead) return false;
+  try {
+    const cur = policyGitExec(root, ['rev-parse', 'HEAD'], { cwd, home }).trim();
+    if (cur === grantedHead) return true;
+    policyGitExec(root, ['merge-base', '--is-ancestor', grantedHead, cur], { cwd, home });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const POLICY_SHELL_WRAPPERS = new Set(['sudo', 'command', 'time', 'nohup', 'exec', 'env', 'nice', 'builtin', 'xargs', 'stdbuf', 'timeout', 'sh', 'bash', 'zsh']);
+
+/** Refuse env assignments, wrappers, chaining, cd, or git -C/--git-dir/--work-tree on the policy git path. */
+export function policyCommandShellBlocked(command) {
+  const text = String(command ?? '');
+  if (!text.trim()) return false;
+  const segments = tokenize(text);
+  if (segments.length > 1) return true;
+  for (const words of segments) {
+    if (words.piped) return true;
+    let i = 0;
+    while (i < words.length) {
+      const w = words[i];
+      if (/^GIT_[A-Z0-9_]+=/.test(w)) return true;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) return true;
+      if (POLICY_SHELL_WRAPPERS.has(w)) return true;
+      if (w === 'cd') return true;
+      i += 1;
+    }
+    const gi = words.findIndex(w => path.basename(w) === 'git');
+    if (gi === -1) continue;
+    const args = words.slice(gi + 1);
+    let j = 0;
+    while (j < args.length && args[j].startsWith('-') && args[j] !== '--') {
+      const g = args[j];
+      if (g === '-C' || g === '--git-dir' || g === '--work-tree' || g.startsWith('--git-dir=') || g.startsWith('--work-tree=')) return true;
+      j += g.includes('=') ? 1 : (g === '-C' ? 2 : 1);
+    }
+  }
+  return false;
+}
+
+export function policyGitInvocationsFromOps(policyOps) {
+  return (policyOps ?? [])
+    .filter(o => o?.tool === 'git' && o.sub)
+    .map(o => ({ tool: 'git', sub: o.sub, rest: o.rest ?? [] }));
 }
 
 const CONFIG_FLAGS = new Set(['-c', '--config', '--config-env', '--output', '--exec', '-x', '--exec-path', '--upload-pack', '--receive-pack', '--ext-diff']);
@@ -312,38 +453,40 @@ export function parseGitInvocation(args) {
   return { sub, rest, globalOpts, benignGlobalOnly: globalOpts && benignGlobalOnly, hasConfig: gitHasConfig, globalWords };
 }
 
-export function policyGitCommitAllowed(args, { root, currentBranch }) {
+export function policyGitCommitAllowed(args, { root, currentBranch, cwd = root, home = os.homedir() }) {
   const inv = parseGitInvocation(args);
   if (inv.sub !== 'commit') return false;
   if (isProtectedBranch(currentBranch)) return false;
   if (!policyBranchAllowed(currentBranch)) return false;
-  if (!gitWorktreePolicyContext(root).ok) return false;
+  if (!gitWorktreePolicyContext(root, { cwd, home }).ok) return false;
+  if (!gitHooksPolicySafe(root, { cwd, home })) return false;
   if (inv.globalOpts || inv.hasConfig) return false;
   const rest = inv.rest;
-  const ALLOW = new Set(['-a', '--all', '-o', '--only', '-i', '--include']);
+  let hasMessage = false;
   let i = 0;
   while (i < rest.length) {
     const a = rest[i];
-    if (!a.startsWith('-')) { i += 1; continue; }
+    if (!a.startsWith('-')) return false;
     const base = a.split('=')[0];
     if (COMMIT_DENY_FLAGS.has(base) || a.startsWith('--no-verify=') || base === '--amend') return false;
     if (COMMIT_MSG_DENY.has(base)) return false;
     if (COMMIT_MSG_ALLOW.has(base) || a.startsWith('--message=')) {
+      hasMessage = true;
       i += a.includes('=') ? 1 : 2;
       continue;
     }
-    if (ALLOW.has(base)) { i += 1; continue; }
     if (!a.startsWith('--') && a.length > 1) {
       for (const ch of a.slice(1)) {
         if (ch === 'n' || ch === 'C' || ch === 'c') return false;
-        if (!['a', 'm', 'o', 'i', 'F'].includes(ch)) return false;
+        if (ch !== 'm' && ch !== 'F') return false;
+        if (ch === 'm') hasMessage = true;
       }
       i += 1;
       continue;
     }
     return false;
   }
-  return true;
+  return hasMessage;
 }
 
 function pushTargetAllowed(branchWord, currentBranch) {
@@ -353,14 +496,16 @@ function pushTargetAllowed(branchWord, currentBranch) {
   return b === cur || b === 'HEAD';
 }
 
-export function policyGitPushAllowed(args, { root, currentBranch }) {
+export function policyGitPushAllowed(args, { root, currentBranch, cwd = root, home = os.homedir() }) {
   const inv = parseGitInvocation(args);
   if (inv.sub !== 'push') return false;
   if (isProtectedBranch(currentBranch)) return false;
   if (!policyBranchAllowed(currentBranch)) return false;
-  if (!gitWorktreePolicyContext(root).ok) return false;
+  if (!gitWorktreePolicyContext(root, { cwd, home }).ok) return false;
+  if (!gitHooksPolicySafe(root, { cwd, home })) return false;
   if (inv.globalOpts || inv.hasConfig) return false;
-  if (!originIsProjectRepository(root)) return false;
+  if (!originIsProjectRepository(root, { cwd, home })) return false;
+  if (!gitPushMappingConfigSafe(root, { cwd, home })) return false;
   const rest = inv.rest;
   const flags = rest.filter(a => a.startsWith('-'));
   const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
@@ -383,44 +528,41 @@ export function policyGitPushAllowed(args, { root, currentBranch }) {
 const SWITCH_BLOCK = new Set(['-f', '--force', '-B', '-C', '--discard-changes', '--orphan', '--merge', '-m', '--detach', '-d']);
 const SWITCH_CREATE = new Set(['-b', '-c', '--create']);
 
-export function isCleanWorkingTree(root) {
+export function isCleanWorkingTree(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    const out = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
+    const out = policyGitExec(root, ['status', '--porcelain'], { cwd, home }).trim();
     return out === '';
   } catch {
     return false;
   }
 }
 
-export function policyGitSwitchAllowed(args, { root, currentBranch }) {
+export function policyGitSwitchAllowed(args, { root, currentBranch, cwd = root, home = os.homedir() }) {
   const inv = parseGitInvocation(args);
   if (inv.sub !== 'switch') return false;
   if (inv.globalOpts || inv.hasConfig) return false;
-  if (!isCleanWorkingTree(root)) return false;
+  if (!isCleanWorkingTree(root, { cwd, home })) return false;
   const rest = inv.rest;
   if (rest.includes('--')) return false;
   const flags = rest.filter(a => a.startsWith('-') && a !== '--');
-  for (const f of flags) {
-    if (SWITCH_BLOCK.has(f) || SWITCH_BLOCK.has(f.split('=')[0])) return false;
-    if (!f.startsWith('--') && f.startsWith('-')) {
-      for (const ch of f.slice(1)) {
-        if (['f', 'B', 'C', 'm', 'd'].includes(ch)) return false;
-      }
-    }
-  }
   const create = flags.some(f => SWITCH_CREATE.has(f) || (!f.startsWith('--') && f.slice(1).split('').some(ch => ch === 'b' || ch === 'c')));
+  if (create) {
+    if (flags.length !== 1) return false;
+    const f0 = flags[0].split('=')[0];
+    if (!SWITCH_CREATE.has(f0) && f0 !== '-b' && f0 !== '-c') return false;
+  } else if (flags.length > 0) return false;
   const plain = rest.filter(a => a && !a.startsWith('-'));
   if (create) {
     if (plain.length !== 1) return false;
     const name = plain[0];
     if (!PLAIN_REF.test(name) || isProtectedBranch(name) || !policyBranchAllowed(name)) return false;
-    return gitWorktreePolicyContext(root).ok;
+    return gitWorktreePolicyContext(root, { cwd, home }).ok;
   }
   if (plain.length !== 1) return false;
   const ref = plain[0];
   if (!PLAIN_REF.test(ref) || ref.includes('..') || ref === '.' || ref === '-') return false;
   if (isProtectedBranch(ref) || !policyBranchAllowed(ref)) return false;
-  return gitWorktreePolicyContext(root).ok;
+  return gitWorktreePolicyContext(root, { cwd, home }).ok;
 }
 
 export function policyGitSwitchCheckoutAllowed(args, opts) {
@@ -429,29 +571,8 @@ export function policyGitSwitchCheckoutAllowed(args, opts) {
   return policyGitSwitchAllowed(args, opts);
 }
 
-export function policyGitWorktreeAllowed(args, { root, home = os.homedir() }) {
-  const inv = parseGitInvocation(args);
-  if (inv.sub !== 'worktree') return false;
-  if (inv.globalOpts || inv.hasConfig) return false;
-  const rest = inv.rest;
-  const verb = rest.find(a => a && !a.startsWith('-'));
-  if (verb === 'prune') return false;
-  if (verb === 'list') return true;
-  if (verb === 'remove') {
-    if (rest.some(a => a === '--force' || a === '-f' || shortFlagHas(a, 'f'))) return false;
-    const pos = rest.filter(a => a && !a.startsWith('-') && a !== 'remove');
-    if (pos.length !== 1) return false;
-    if (!worktreePathUnderScratch(pos[0], { root, home })) return false;
-    return worktreeIsClean(pos[0], { root, home });
-  }
-  if (verb !== 'add') return false;
-  const pos = rest.filter(a => a && !a.startsWith('-') && a !== 'add');
-  if (pos.length < 2) return false;
-  const wtPath = pos[0];
-  if (!worktreePathUnderScratch(wtPath, { root, home })) return false;
-  const afterPath = rest.slice(rest.indexOf(wtPath) + 1);
-  if (!afterPath.includes('-b') && !afterPath.some(a => a === '-b' || (a.startsWith('-') && a.slice(1).includes('b')))) return false;
-  return true;
+export function policyGitWorktreeAllowed() {
+  return false;
 }
 
 function worktreePathUnderScratch(rawPath, { root, home }) {
@@ -511,15 +632,19 @@ export function gitWorktreePolicyContext(root, { home = os.homedir(), cwd = root
   }
 }
 
+export function policyGitSubBlockedDuringWindow(sub) {
+  return sub === 'remote' || sub === 'config';
+}
+
 export function policyGitInvocationRule(args, opts) {
   const inv = parseGitInvocation(args);
   if (!inv.sub) return null;
   if (policyGitRestoreDenied(args)) return { rule: 'git-deny-restore', ok: false };
   const sub = inv.sub;
+  if (policyGitSubBlockedDuringWindow(sub)) return { rule: `git-${sub}`, ok: false };
   if (sub === 'commit' && policyGitCommitAllowed(args, opts)) return { rule: 'git-commit', ok: true };
   if (sub === 'push' && policyGitPushAllowed(args, opts)) return { rule: 'git-push', ok: true };
   if (sub === 'switch' && policyGitSwitchAllowed(args, opts)) return { rule: 'git-switch', ok: true };
-  if (sub === 'worktree' && policyGitWorktreeAllowed(args, opts)) return { rule: 'git-worktree', ok: true };
-  if (['commit', 'push', 'switch', 'worktree', 'checkout'].includes(sub)) return { rule: `git-${sub}`, ok: false };
+  if (['commit', 'push', 'switch', 'worktree', 'checkout', 'remote', 'config'].includes(sub)) return { rule: `git-${sub}`, ok: false };
   return null;
 }

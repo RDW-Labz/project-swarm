@@ -12,18 +12,18 @@ At `swarm handbuild request` time the swarm evaluates the **normalized** request
 
 ### File window
 
-Auto-approved when **every** file is under swarm-admin paths: `coordination/manifests/**`, `coordination/HANDOFF*.md`, `coordination/review/**`, `docs/scope/**`, `docs/plans/**`, `docs/state/**`, `docs/design/**` (documentation only—no code extensions), `.project-swarm.json`, `.swarm/project/` ticket ledger files, and manifests under `jobs/`. At most **60** minutes and **20** files. Everything else (including `tools/`, `tests/`, CI, package files, and guard state) stays on the normal owner flow.
+Auto-approved when **every** file is under swarm-admin paths: `coordination/HANDOFF*.md`, `coordination/review/**`, `docs/scope/**`, `docs/plans/**`, `docs/state/**`, `docs/design/**` (documentation only—no code extensions), `.swarm/project/` ticket ledger files, and `jobs/**/manifest*.json` only. At most **60** minutes and **20** files. Everything else (including `coordination/manifests/`, `.project-swarm.json`, `tools/`, `tests/`, CI, package files, and guard state) stays on the normal owner flow.
 
 ### Git (hand-build policy window only)
 
 On the **current** branch (read from git, not from the command text), when the checkout is the main tree or a worktree under `~/.project-swarm-scratch`, and a policy approval window is active:
 
 - `git commit` on `swarm/…` or `feat/…` branches (no amend, hook-skipping, or reuse-message forms).
-- `git push origin <same-branch>` only when `origin` is this project's repository (never another remote name, never bare `git push`, never refspecs with `:` or `+`, never force or delete).
-- `git switch <branch>` or `git switch -c <branch>` on allowed prefixes with a **clean** working tree (no `checkout`, no path restores, no force/detach flags).
-- `git worktree remove <path>` only for a **clean** worktree under `~/.project-swarm-scratch` (not `prune` or `remove --force`).
+- `git push origin <same-branch>` only when every `origin` push URL matches the **trusted repository URL** in owner machine `policy.json` (rule `swarm-admin-handbuild`, field `repository`) with exact normalized host/path—never another remote name, never bare `git push`, never refspecs with `:` or `+`, never force or delete, and no `remote.origin.pushurl`, `url.*.insteadOf`, or `url.*.pushInsteadOf` rewrites or non-default push mapping.
+- `git switch <branch>` or `git switch -c <branch>` (no other flags) on allowed prefixes with a **clean** working tree (no `checkout`, no path restores).
+- Read-only: `git status`, `git diff`, `git log`. `git add` only for swarm-produced paths when covered by the window.
 
-Each window is bound to the branch name and `HEAD` at grant time; both are re-checked before the command runs. Rate limits (defaults: **20** actions per window, **100** actions and **100** changed files per UTC day, overridable in machine `policy.json` under rule `swarm-admin-handbuild`) fall back to owner approval when exceeded.
+Each window is bound to the branch name and the `HEAD` at grant time; the branch must still match and the current `HEAD` must descend from the granted commit. Policy git checks use a cleaned environment (`PATH` and `HOME` only) at the command’s working directory; shell wrappers, `cd`, env assignments, and `git -C` / `--git-dir` / `--work-tree` are refused on the policy path. Rate limits (defaults: **20** actions per window, **100** actions and **100** changed files per UTC day, hard-capped in code, overridable in machine `policy.json`) fail closed when stats are unreadable.
 
 Still owner-only: merge, deploy, rebase, `reset --hard`, `branch -D`, force push, `git checkout -- <paths>`, `restore`, `clean`, and `git -c` / hook-skipping commits (`--no-verify`).
 
