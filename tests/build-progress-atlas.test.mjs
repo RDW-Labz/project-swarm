@@ -42,6 +42,7 @@ test('atlas excludes human-only S2 from stage rows and uses the exact build/huma
   const progress = await buildProgress({
     ...fixture,
     now: NOW,
+    discoverWorktrees: false,
     prState: branch => {
       assert.equal(branch, 'swarm/atlas');
       return [{ number: 5, state: 'OPEN', mergedAt: '2026-10-20T12:00:00.000Z', headRefName: branch }];
@@ -62,7 +63,7 @@ test('headline omits human segment when the ledger has no human tickets', async 
     ...ledger,
     tickets: ledger.tickets.filter(ticket => ticket.type !== 'human'),
   }));
-  const progress = await buildProgress({ ...fixture, now: NOW });
+  const progress = await buildProgress({ ...fixture, now: NOW, discoverWorktrees: false });
   const expectedHeadline = `build ${progress.percent.tickets.done}/${progress.percent.tickets.total}`;
   assert.equal(progress.headline, expectedHeadline);
   assert.equal(JSON.parse(JSON.stringify(progressSummary(progress))).headline, expectedHeadline);
@@ -70,11 +71,11 @@ test('headline omits human segment when the ledger has no human tickets', async 
 
 test('atlas PR state distinguishes open-only from unreadable GitHub state', async t => {
   const fixture = await atlasFixture(t);
-  const open = await buildProgress({ ...fixture, now: NOW, prState: () => [{ number: 5, state: 'OPEN', mergedAt: null, headRefName: 'swarm/atlas' }] });
+  const open = await buildProgress({ ...fixture, now: NOW, discoverWorktrees: false, prState: () => [{ number: 5, state: 'OPEN', mergedAt: null, headRefName: 'swarm/atlas' }] });
   assert.equal(open.milestones.find(item => item.key === 'pr').state, 'current');
   assert.equal(open.milestones.find(item => item.key === 'merged').state, 'todo');
 
-  const unreadable = await buildProgress({ ...fixture, now: NOW, prState: () => null });
+  const unreadable = await buildProgress({ ...fixture, now: NOW, discoverWorktrees: false, prState: () => null });
   for (const key of ['pr', 'merged']) {
     const item = unreadable.milestones.find(milestone => milestone.key === key);
     assert.equal(item.state, 'unknown');
@@ -119,7 +120,10 @@ test('rollup keeps a finished scope row and calculates overall build percent acr
   const historyFile = path.join(temp, 'history.ndjson');
   await fs.writeFile(historyFile, '');
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
-  const progress = await buildProgress({ root: main, projectId: 'atlas-scopes', now: NOW, historyFile });
+  const mainRoot = await fs.realpath(main);
+  const linkedRoot = await fs.realpath(linked);
+  const family = async () => [mainRoot, linkedRoot];
+  const progress = await buildProgress({ root: mainRoot, projectId: 'atlas-scopes', now: NOW, historyFile, family });
   assert.deepEqual(progress.scopes.map(scope => [scope.name, scope.build.done, scope.build.total, scope.done]), [['Scope B', 3, 12, false], ['Scope A', 17, 17, true]]);
   assert.deepEqual(progress.percent.tickets, { done: 20, total: 29, pct: 68 });
 });
@@ -128,7 +132,7 @@ test('untracked work counts unmapped jobs and ignores jobs mapped to ledger tick
   const fixture = await atlasFixture(t);
   await run(fixture.root, 'untracked', { status: 'complete', startedAt: new Date(NOW - DAY).toISOString(), name: 'Untracked run', jobs: [{ name: 'not-a-ticket', status: 'complete' }] });
   await run(fixture.root, 'mapped', { status: 'complete', startedAt: new Date(NOW - DAY / 2).toISOString(), name: 'Mapped run', jobs: [{ id: 'T-0001', name: 'T-0001', status: 'complete' }] });
-  const progress = await buildProgress({ ...fixture, now: NOW });
+  const progress = await buildProgress({ ...fixture, now: NOW, discoverWorktrees: false });
   assert.equal(progress.untracked.runs.length, 1);
   assert.equal(progress.untracked.jobs, 1);
   assert.deepEqual(progress.untracked.newest, [{ runId: 'untracked', name: 'Untracked run', startedAt: new Date(NOW - DAY).toISOString(), status: 'complete' }]);

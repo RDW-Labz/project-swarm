@@ -92,7 +92,7 @@ test('roadmap ledger fixture matches ticket counts, scope requirements, stage ti
     scopeRelative: 'docs/scope/roadmap.md',
   });
   const scope = parseScope(await fs.readFile(path.join(root, 'docs/scope/roadmap.md'), 'utf8'));
-  const progress = await buildProgress({ root, projectId: 'roadmap-fixture', now: NOW, historyFile });
+  const progress = await buildProgress({ root, projectId: 'roadmap-fixture', now: NOW, historyFile, discoverWorktrees: false });
 
   assertTicketPercent(progress, ledger);
   const req = expectedRequirements(scope, ledger);
@@ -117,7 +117,7 @@ test('roadmap ledger fixture matches ticket counts, scope requirements, stage ti
 
 test('anonymized parts-app ledger fixture uses ticket percent only when scope file is missing', async t => {
   const { root, historyFile, ledger } = await copyLedgerFixture(t, 'parts-app-ledger.anon.json');
-  const progress = await buildProgress({ root, projectId: 'parts-app-fixture', now: NOW, historyFile });
+  const progress = await buildProgress({ root, projectId: 'parts-app-fixture', now: NOW, historyFile, discoverWorktrees: false });
 
   assertTicketPercent(progress, ledger);
   assert.equal(progress.percent.requirements, null);

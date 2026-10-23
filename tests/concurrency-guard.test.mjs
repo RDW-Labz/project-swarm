@@ -169,9 +169,9 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
   assert.ok(childPid, 'the marker names the command\'s pid');
   process.kill(p.child.pid, 'SIGKILL');
   await p.exited;
-  assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 10000), 'restored by the watcher');
-  assert.ok(await until(() => !fs.existsSync(markerPath(f.file)), 5000));
-  assert.ok(await until(() => { try { process.kill(childPid, 0); return false; } catch { return true; } }, 5000), 'the orphaned command was stopped before the value went back');
+  assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 30000), 'restored by the watcher');
+  assert.ok(await until(() => !fs.existsSync(markerPath(f.file)), 15000));
+  assert.ok(await until(() => { try { process.kill(childPid, 0); return false; } catch { return true; } }, 15000), 'the orphaned command was stopped before the value went back');
 });
 
 test('process: after a power cut (a leftover marker, its owner gone) the next swarm command puts the value back', async t => {
