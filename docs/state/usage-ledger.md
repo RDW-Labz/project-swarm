@@ -176,6 +176,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
 | 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
 | 2026-10-23 | - | aanew9: complete | claude | sonnet | pass | 2,877,661 | $1.18 |
+| 2026-10-23 | - | review-aa7: FAIL. Line numbers are lines in coordination/review/aa-new7.diff. Fixed from review 6: w | claude | opus | pass | 132,966 | $0.55 |
 
 ## Daily summary
 
@@ -193,6 +194,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 9 | 7 | 2 | 3,423,033 | $5.34 |
+| 2026-10-23 | claude | 10 | 8 | 2 | 3,555,999 | $5.89 |
 | 2026-10-23 | cursor | 2 | 2 | 0 | 0 | subscription |
-| **total** | all | 172 | 155 | 17 | 18,134,408 | $32.01 (incl. estimates) |
+| **total** | all | 173 | 156 | 17 | 18,267,374 | $32.56 (incl. estimates) |
