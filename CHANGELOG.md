@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.8
+
+The local lane takes work, and tickets no longer park on files they create.
+- **Local lane:** a key-less probe that gets 401 or 403 means the endpoint is up and wants a key, so dev2 over a tunnel is routed instead of being marked unreachable; swarm doctor local --probe-local --verify-key checks the Keychain key without printing it.
+- **Splitter:** a path a ticket owns (files, tests of any ticket type, contracts it writes, new sources) is never reported as missing; a read owned by another ticket adds the dependency instead of parking; acceptance globs and foreign files add dependencies.
+
 ## 1.167.7
 
 Approvals no longer idle for hours.
