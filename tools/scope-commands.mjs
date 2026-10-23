@@ -2558,10 +2558,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
     const manifestText = await readText(path.join(root, '.swarm', 'runs', rest[0], 'manifest.json'));
     if (manifestText) {
-      const { verifyIntegratedOutputsOnTree } = await import('./swarm.mjs');
+      const { verifyRecordedIntegrationOnTree } = await import('./swarm.mjs');
       const manifest = JSON.parse(manifestText);
-      const jobIds = (state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id);
-      const mismatches = await verifyIntegratedOutputsOnTree(root, rest[0], state, manifest, jobIds, {});
+      const mismatches = await verifyRecordedIntegrationOnTree(root, rest[0], state, manifest, {});
       if (mismatches.length) return out(`integrate-no-op: ${mismatches[0]} differs from the job output; run swarm integrate ${rest[0]} again`, 1);
     }
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));

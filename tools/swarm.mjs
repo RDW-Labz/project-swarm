@@ -1506,30 +1506,71 @@ function clearRecordedIntegration(state) {
   for (const key of ['integratedAt', 'integratedFiles', 'integratedNewFiles', 'integratedHashes', 'integrationStatus', 'integrationCommit', 'integrationOutputsVerified', 'jobIntegration', 'integrationPasses', 'acceptedFailedChecks', 'mergeQueue']) delete state[key];
 }
 
-export async function verifyIntegratedOutputsOnTree(root, runId, state, manifest, jobIds, options = {}) {
-  const want = new Set(jobIds);
+async function verifyWritesOnTree(root, writes) {
   const mismatches = [];
-  for (const [index, job] of state.jobs.entries()) {
-    const declared = manifest.jobs[index];
-    if (!declared || declared.type === 'lead' || !want.has(job.id)) continue;
-    for (const file of declared.outputs) {
-      if ((declared.deletes ?? []).includes(file)) continue;
-      const expected = await jobOutputBytes(root, runId, declared, job, file, options);
-      if (expected === null) continue;
-      const actual = await bytesAt(root, file);
-      if (actual === null || !actual.equals(expected)) mismatches.push(file);
+  for (const change of writes) {
+    const actual = await bytesAt(root, change.file);
+    if (change.bytes === null) {
+      if (actual !== null) mismatches.push(change.file);
+      continue;
     }
-    for (const file of declared.deletes ?? []) {
-      const expected = await jobOutputBytes(root, runId, declared, job, file, options);
-      if (expected !== null) continue;
-      if (await bytesAt(root, file) !== null) mismatches.push(file);
+    if (actual === null || !actual.equals(change.bytes)) {
+      mismatches.push(change.file);
+      continue;
+    }
+    try {
+      const mode = (await fs.stat(await safePath(root, change.file))).mode & 0o777;
+      if (mode !== change.mode) mismatches.push(change.file);
+    } catch {
+      mismatches.push(change.file);
     }
   }
   return mismatches;
 }
 
-async function refuseIntegrationNoOp(root, runId, state, manifest, jobIds, options) {
-  const mismatches = await verifyIntegratedOutputsOnTree(root, runId, state, manifest, jobIds, options);
+/** Tree still matches what a prior integrate pass recorded (hashes, else job bytes for integrated paths). */
+export async function verifyRecordedIntegrationOnTree(root, runId, state, manifest, options = {}) {
+  const mismatches = [];
+  const hashes = state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes)
+    ? state.integratedHashes : {};
+  const files = [...new Set(state.integratedFiles ?? [])];
+  for (const file of files) {
+    const expectedHash = hashes[file];
+    const actual = await bytesAt(root, file);
+    if (typeof expectedHash === 'string' && expectedHash) {
+      if (actual === null || digest(actual) !== expectedHash) mismatches.push(file);
+      continue;
+    }
+    let expected = null;
+    let owned = false;
+    const manifestJobs = manifest?.jobs ?? [];
+    for (const [index, job] of (state.jobs ?? []).entries()) {
+      const declared = manifestJobs[index];
+      if (!declared) continue;
+      const inOutputs = declared.outputs?.includes(file);
+      const inDeletes = (declared.deletes ?? []).includes(file);
+      if (!inOutputs && !inDeletes) continue;
+      owned = true;
+      expected = await jobOutputBytes(root, runId, declared, job, file, options);
+      break;
+    }
+    if (!owned) continue;
+    if (expected === null) {
+      if (actual !== null) mismatches.push(file);
+    } else if (actual === null || !actual.equals(expected)) mismatches.push(file);
+  }
+  return mismatches;
+}
+
+export async function verifyIntegratedOutputsOnTree(root, runId, state, manifest, jobIds, options = {}) {
+  if (options.writes?.length) return verifyWritesOnTree(root, options.writes);
+  return verifyRecordedIntegrationOnTree(root, runId, state, manifest, options);
+}
+
+async function refuseIntegrationNoOp(root, runId, state, manifest, options) {
+  const mismatches = options.writes?.length
+    ? await verifyWritesOnTree(root, options.writes)
+    : await verifyRecordedIntegrationOnTree(root, runId, state, manifest, options);
   if (!mismatches.length) {
     state.integrationOutputsVerified = new Date().toISOString();
     return;
@@ -1539,11 +1580,8 @@ async function refuseIntegrationNoOp(root, runId, state, manifest, jobIds, optio
   fail(`integrate-no-op: ${mismatches[0]} differs from the job output`, 'integrate-no-op');
 }
 
-async function finalizeIntegrationCommit(root, id, state, manifest, baseResult, options, swarmEnv) {
-  const jobIds = (state.mergeQueue?.integrated ?? []).length
-    ? state.mergeQueue.integrated.map(entry => (typeof entry === 'string' ? entry : entry?.job)).filter(Boolean)
-    : state.jobs.map(job => job.id);
-  await refuseIntegrationNoOp(root, id, state, manifest, jobIds, options);
+async function finalizeIntegrationCommit(root, id, state, manifest, baseResult, options, swarmEnv, writes = []) {
+  await refuseIntegrationNoOp(root, id, state, manifest, { ...options, writes });
   const autoCommit = options.autoCommit !== false && !options.noCommit;
   if (!autoCommit) return { ...baseResult, integrationOutputsVerified: state.integrationOutputsVerified };
   const { commit, humanLine } = await commitIntegratedRun(root, {
@@ -1610,17 +1648,18 @@ async function integrateRunLocked(root, id, options = {}) {
   // completed integration refuses outright. Checked before the completeness gate below so a run
   // already integrated (blocked or otherwise) always reports that, not a generic status mismatch.
   if (state.integratedAt && state.integrationStatus !== 'partial' && !(queue && state.mergeQueue?.state === 'running')) {
-    const verifyIds = jobs ?? state.jobs.filter(j => jobsAcceptable(j)).map(j => j.id);
-    const mismatches = await verifyIntegratedOutputsOnTree(root, id, state, manifest, verifyIds, { salvage });
-    if (!mismatches.length) {
-      // A run integrated by an older swarm, whose checks failed after its files were written: --accept-failed-checks records that the owner accepts them (nothing is rewritten).
-      if (acceptFailedChecks && !queue && state.checksPassed === false && !state.acceptedFailedChecks) {
+    // Checks failed after an older integrate wrote files (or rolled them back): never compare job
+    // outputs on the tree here — only whether the owner accepts the failed checks.
+    if (state.checksPassed === false && !state.acceptedFailedChecks) {
+      if (acceptFailedChecks && !queue) {
         state.acceptedFailedChecks = { at: new Date().toISOString(), checks: (state.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name) };
         await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
         return { id, status: 'integrated', checksPassed: false, checks: state.checks, integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, acceptedFailedChecks: state.acceptedFailedChecks, integrationOutputsVerified: state.integrationOutputsVerified, warnings: ['the failed checks of this already integrated run were accepted by the owner (--accept-failed-checks); the files were written earlier'] };
       }
-      fail(state.checksPassed === false && !state.acceptedFailedChecks ? `Run already integrated; its checks failed (${(state.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name).join(', ') || 'unknown'}): pass --accept-failed-checks to accept them, or fix the failures with a new ticket` : 'Run already integrated');
+      fail(`Run already integrated; its checks failed (${(state.checks ?? []).filter(check => !['passed', 'skipped'].includes(check.status)).map(check => check.name).join(', ') || 'unknown'}): pass --accept-failed-checks to accept them, or fix the failures with a new ticket`);
     }
+    const mismatches = await verifyRecordedIntegrationOnTree(root, id, state, manifest, { salvage });
+    if (!mismatches.length) fail('Run already integrated');
     clearRecordedIntegration(state);
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
   }
@@ -1825,8 +1864,8 @@ async function integrateRunLocked(root, id, options = {}) {
         if (conflictingFiles.length) queueConflicts.push({ job: job.id, files: conflictingFiles, reason: conflictReason });
         else {
           let alreadyApplied = !plannedWrites.length && (isJobIntegrated(state, job.id) || state.mergeQueue?.state === 'running');
-          if (alreadyApplied) {
-            const mismatches = await verifyIntegratedOutputsOnTree(root, id, state, manifest, [job.id], { salvage });
+          if (alreadyApplied && plannedWrites.length) {
+            const mismatches = await verifyWritesOnTree(root, plannedWrites);
             if (mismatches.length) alreadyApplied = false;
           }
           queuePlans.push({ job: job.id, writes: plannedWrites, snapshots, alreadyApplied });
@@ -1890,7 +1929,7 @@ async function integrateRunLocked(root, id, options = {}) {
       const result = await applyQueuePlans(root, id, state, manifest, queuePlans, { batchSize, adaptive, conflicts: queueConflicts, skipped: queueSkipped, noChecks, noFlakeCheck, spawnImpl, releaseIntegrationLock, securityGate, warnings: [...designWarnings, ...droppedWriteWarnings(state), ...inventedHashWarnings, ...resultShapeWarnings, ...packagingWarnings, ...neverWrittenOutputs.map(file => `output-never-written: ${file}`)] });
       const merged = { ...result, ...(children.length ? { children } : {}) };
       const queueIntegratedIds = (state.mergeQueue?.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job)).filter(Boolean);
-      if (queueIntegratedIds.length) await refuseIntegrationNoOp(root, id, state, manifest, queueIntegratedIds, { salvage });
+      if (queueIntegratedIds.length) await refuseIntegrationNoOp(root, id, state, manifest, { salvage, writes });
       if (state.mergeQueue?.state === 'done') {
         if (merged.status === 'partial' || state.integrationStatus === 'partial') {
           if (!options.keepWorkspaces) {
@@ -1899,7 +1938,7 @@ async function integrateRunLocked(root, id, options = {}) {
           return merged;
         }
         const { env: swarmEnv } = await loadSwarmEnv(root);
-        const finalized = await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv);
+        const finalized = await finalizeIntegrationCommit(root, id, state, manifest, merged, options, swarmEnv, writes);
         if (!options.keepWorkspaces) {
           try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
         }
@@ -2062,14 +2101,14 @@ async function integrateRunLocked(root, id, options = {}) {
     // and the blocked reason rides along as ready-made evidence for whatever job comes next.
     const blockedJobs = state.jobs.filter(job => job.status === 'blocked');
     const salvagedJobs = state.jobs.filter(job => job.salvaged);
-    await refuseIntegrationNoOp(root, id, state, manifest, integratedJobs, { salvage });
+    await refuseIntegrationNoOp(root, id, state, manifest, { salvage, writes });
     state.integrationStatus = acceptBlocked && blockedJobs.length ? 'integrated-blocked' : 'complete';
     // Field lesson #256: an accepted deviation is logged in the integrate result (and persisted
     // state), never merely swallowed by --accept-deviation.
     if (acceptedDeviations.length) state.acceptedDeviations = acceptedDeviations;
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     const baseReturn = { id, status: 'integrated', ...(children.length ? { children } : {}), integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles, portBase, ...(preChecksResult.preChecks.length ? { preChecks: preChecksResult.preChecks } : {}), ...(warnings.length ? { warnings } : {}), ...checksResult, ...mutantsResult, ...(blockedJobs.length ? { blockedEvidence: blockedJobs.map(job => ({ name: job.id, lines: [job.error ?? 'blocked'] })) } : {}), ...(salvagedJobs.length ? { salvaged: true, salvagedJobs: salvagedJobs.map(job => job.id) } : {}), ...(acceptedDeviations.length ? { acceptedDeviations } : {}), ...(jobs ? { integratedJobs, skippedJobs } : {}) };
-    const finalized = await finalizeIntegrationCommit(root, id, state, manifest, baseReturn, options, swarmEnv);
+    const finalized = await finalizeIntegrationCommit(root, id, state, manifest, baseReturn, options, swarmEnv, writes);
     if (!options.keepWorkspaces) {
       try { await cleanupRunWorkspaces(root, id, state, { env, keepWorkspaces: options.keepWorkspaces, removeWorkspaceCopies: false }); } catch { /* best-effort */ }
     }
