@@ -4,7 +4,6 @@ import path from 'node:path';
 import { assertScannedCleanBundle } from './field-push.mjs';
 
 const HASH = /^[a-f0-9]{64}$/;
-const SAFE_CATEGORY = /^[a-z0-9-]{1,32}$/;
 const KNOWN_AREAS = new Set(['tool', 'gotchas', 'security', 'release', 'testing', 'workflow']);
 const KNOWN_LANES = new Set(['fast', 'standard', 'slow', 'cheap', 'mid', 'expensive']);
 const KNOWN_LESSON_STATUSES = new Set(['queued', 'built', 'shipped', 'dropped', 'open', 'closed']);
@@ -36,8 +35,12 @@ function bumpCount(map, key) {
   map[label] = (map[label] ?? 0) + 1;
 }
 
-function safeCategory(value, known) {
-  return typeof value === 'string' && (known.has(value) || SAFE_CATEGORY.test(value)) ? value : 'other';
+function safeArea(value) {
+  return typeof value === 'string' && KNOWN_AREAS.has(value) ? value : 'other';
+}
+
+function safeLane(value) {
+  return typeof value === 'string' && KNOWN_LANES.has(value) ? value : 'other';
 }
 
 function safeLessonStatus(value) {
@@ -51,7 +54,7 @@ export function lessonMetadataOnly(lesson) {
     : [];
   return {
     id: asString(source.id),
-    area: safeCategory(source.area, KNOWN_AREAS),
+    area: safeArea(source.area),
     status: safeLessonStatus(source.status),
     version: typeof source.version === 'string' ? source.version : null,
     createdAt: typeof source.createdAt === 'string' ? source.createdAt : null,
@@ -63,7 +66,7 @@ export function lessonMetadataOnly(lesson) {
 export function runMetadataOnly(run) {
   const source = asObject(run);
   return {
-    lane: safeCategory(source.lane, KNOWN_LANES),
+    lane: safeLane(source.lane),
     jobs: finiteNumber(source.jobs),
     pass: finiteNumber(source.pass),
     fail: finiteNumber(source.fail),
@@ -111,6 +114,11 @@ async function readBundleFiles(root, source, relativeDir, { scan, skippedBundles
     try {
       parsed = JSON.parse(await fs.readFile(path.join(dir, entry.name), 'utf8'));
     } catch {
+      skippedBundles?.push({
+        source,
+        file: entry.name,
+        reason: 'field-report-bundle-unparseable',
+      });
       continue;
     }
     let clean;

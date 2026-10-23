@@ -186,6 +186,27 @@ test('field report never includes raw customer content fields or lesson text', a
   assert.equal(report.lessons.total >= 1, true);
 });
 
+test('field report buckets regex-valid but unknown area and lane as other', async () => {
+  const unknownArea = 'acme-internal-proj';
+  const unknownLane = 'acme-internal-proj';
+  const report = aggregateFieldReport([{
+    source: 'exports',
+    projectId: 'a'.repeat(64),
+    exportedAt: '2026-10-21T15:30:00.000Z',
+    scannedClean: true,
+    lessonCount: 1,
+    runCount: 1,
+    lessons: [{ id: 'L-1', area: unknownArea, status: 'shipped', ruleLength: 0, tags: [] }],
+    runs: [{ lane: unknownLane, jobs: 1, pass: 1, fail: 0, medianMinutes: 1 }],
+  }], { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.lessons.byArea.other, 1);
+  assert.equal(report.lessons.byArea[unknownArea], undefined);
+  assert.equal(report.runs.byLane.other, 1);
+  assert.equal(report.runs.byLane[unknownLane], undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(report.lessons.byArea, unknownArea), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(report.runs.byLane, unknownLane), false);
+});
+
 test('field report buckets unknown area, status, and lane as other in count maps', async () => {
   const maliciousKey = '__proto__';
   const report = aggregateFieldReport([{
@@ -205,6 +226,22 @@ test('field report buckets unknown area, status, and lane as other in count maps
   assert.equal(report.runs.byLane.other, 1);
   assert.equal(report.runs.byLane[maliciousKey], undefined);
   assert.equal(Object.prototype.hasOwnProperty.call(report.lessons.byArea, maliciousKey), false);
+});
+
+test('field report records unparseable bundle files in skippedBundles', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  const exportsDir = path.join(root, '.swarm', 'field', 'exports');
+  await fs.mkdir(exportsDir, { recursive: true });
+  await fs.writeFile(path.join(exportsDir, '2026-10-21-broken.json'), '{ not json\n');
+  await writeFieldExport(root, bundle);
+  const report = await buildFieldReport(root, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 1);
+  assert.equal(report.skippedBundles.length, 1);
+  assert.equal(report.skippedBundles[0].source, 'exports');
+  assert.equal(report.skippedBundles[0].file, '2026-10-21-broken.json');
+  assert.equal(report.skippedBundles[0].reason, 'field-report-bundle-unparseable');
 });
 
 test('field report excludes unscanned export bundles and reports the rejection', async () => {
