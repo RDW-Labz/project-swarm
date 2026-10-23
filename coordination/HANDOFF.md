@@ -5,13 +5,20 @@
 ```text
 Project Swarm brief
 Goal: none
-Done: none
+Done:
+  - run 1792780901814-2bac2925 integrated, 0 files
+  - run 1792779738802-cb3cc7d8 integrated, 0 files
+  - run 1792779367485-835f32c7 integrated, 0 files
+  - run 1792779019861-74b889f7 integrated, 0 files
+  - run 1792778609628-6e31f508 integrated, 0 files
+  - run 1792778092154-dbc968c9 integrated, 0 files
+  - run 1792777328596-77fe8ec2 integrated, 0 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792415686129-b359f989 --queue
-  2. swarm "describe the goal in one sentence"
-  3. swarm status
+  1. swarm "describe the goal in one sentence"
+  2. swarm status
+  3. swarm board
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -19,3 +26,33 @@ Rules:
   - Workers run on the installed runner; update the runner only after the owner merges.
   - Record decisions with swarm note "<text>".
 ```
+
+Pending approvals:
+- blocker integrate-checkout-1792766283201-bba38c87 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- owner-decision approve-co001-split 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S10-T-0333 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S10-T-0312 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0285 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0286 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0287 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0288 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0289 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0284 4h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792733914448-9b7b7849 10h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792739556062-ee907779 10h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792740702318-45fe032e 10h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792741346409-2d4fee76 10h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792739406131-0c19addf 11h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792739491504-ed1d8133 11h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S1-T-0226 16h branch (no branch) /Users/bean/project-swarm
+- blocker split-park-S1-T-0226 16h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792618361836-41e05e85 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-575f4d93 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-0aa96f6b 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618723546-ed0c23b2 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618943558-b1eacc9e 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792635375937-7fdc332b 23h branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker security-1792687365474-0f0a07d2-locallane 24h branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
+- unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
+
+Generated at: 2026-10-23T18:42:28.006Z
