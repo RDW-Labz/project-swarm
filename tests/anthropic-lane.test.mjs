@@ -90,7 +90,7 @@ test('missing key names the keychain item before any request', async () => {
 test('machine-wide total and day caps refuse before a request is sent', async () => {
   const dir = tmp(); const env = { SWARM_LOGS_DIR: dir, SWARM_ANTHROPIC_API_KEY: KEY };
   const today = new Date().toISOString();
-  fs.writeFileSync(ledgerPath(env), `${JSON.stringify({ ts: today, jobId: 'other', model: 'claude-haiku-5-5', costUsd: 19.999 })}\n`);
+  fs.writeFileSync(ledgerPath(env), `${JSON.stringify({ ts: today, jobId: 'other', model: 'claude-haiku-5-5', costUsd: 24.999 })}\n`); // owner decision 2026-10-22: day cap $25
   let called = false;
   const day = await executeApi(job({ maxOutputTokens: 8192 }), [], { env, fetchImpl: async () => { called = true; return reply(); } });
   assert.equal(called, false);
@@ -100,7 +100,7 @@ test('machine-wide total and day caps refuse before a request is sent', async ()
   const total = await executeApi(job({ maxOutputTokens: 8192 }), [], { env, fetchImpl: async () => { called = true; return reply(); } });
   assert.match(total.error, /total cap/);
   assert.equal(called, false);
-  assert.throws(() => assertWithinCaps({ worstUsd: 1, spent: { job: 0, today: 19.5, total: 0 } }), /day cap/);
+  assert.throws(() => assertWithinCaps({ worstUsd: 1, spent: { job: 0, today: 24.5, total: 0 } }), /day cap/); // owner decision 2026-10-22: day cap $25
   assert.deepEqual(spentSoFar([{ ts: today, jobId: 'a', costUsd: 1 }], { jobId: 'a', day: today.slice(0, 10) }), { job: 1, today: 1, total: 1 });
 });
 

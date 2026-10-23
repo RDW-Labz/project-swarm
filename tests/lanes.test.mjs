@@ -48,7 +48,9 @@ test('defaults are complete, deeply frozen, and independently resolved', () => {
     assert.deepEqual(lanes[agent], {
       concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 64 })[agent] ?? 32,
       requestsPerMinute: null, backoff: { baseMs: 2000, maxMs: 300000, maxRetries: 5 },
-      pauseMs: 900000, maxPauseMs: 900000, model: null, adaptive: agent === 'rented' ? { min: 1, start: 4 } : null,
+      pauseMs: 900000, maxPauseMs: 900000, model: null,
+      paused: agent === 'codex', // owner decision 2026-10-22
+      adaptive: agent === 'rented' ? { min: 1, start: 4 } : null,
     });
   }
   lanes.hermes.backoff.baseMs = 7;
@@ -61,7 +63,7 @@ test('config precedes manifest; lane and backoff fields merge independently', ()
   const manifest = { lanes: { codex: { concurrency: 5, backoff: { maxMs: 400 } }, cursor: { model: 'vendor/model:v1.2_3' } } };
   assert.deepEqual(resolveLanes({ config, manifest }).codex, {
     concurrency: 5, requestsPerMinute: 8, model: 'gpt-5', backoff: { baseMs: 10, maxMs: 400, maxRetries: 2 },
-    pauseMs: 900000, maxPauseMs: 900000, adaptive: null,
+    pauseMs: 900000, maxPauseMs: 900000, paused: true, adaptive: null, // owner decision 2026-10-22: codex paused by default
   });
   assert.equal(config.lanes.codex.concurrency, 9);
   assert.equal(manifest.lanes.codex.backoff.baseMs, undefined);

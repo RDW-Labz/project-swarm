@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0114-owner-list",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "timeoutMs": 3000000,
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tools/board-inbox.mjs",
+        "tests/board-owner-routes.test.mjs"
+      ],
+      "context": [
+        "tests/_isolate-config.mjs",
+        "tools/scratch-roots.mjs",
+        "tools/projects.mjs",
+        "tools/inbox.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-owner-actions-handlers.test.mjs",
+        "coordination/reviews/t0114-e2e-evidence.json"
+      ],
+      "prompt": "T-0114: the previous attempt widened production owner listItems to include scratch/test projects (ownerInbox keeps every registry row), which breaks the deliberate 1.164 rule that scratch and test projects never reach the owner inbox; that commit has been REVERTED. Do it right: (1) tools/watch-cli.mjs buildOwnerActions.listItems must list projects and build the inbox exactly the way the owner text view does (boardText ~line 265: listProjects({ file: projectsFile(env), forOwner: true, ...boardProjectOpts(env) }) and boardInbox({ projects, env, forOwner: true })), then map with ownerItemsFromBoardInbox; scratch/test projects stay excluded. (2) The end-to-end test in tests/board-owner-routes.test.mjs ('production remote board lists inbox decisions ...') fails with prepare 404 because its temp project lives under os.tmpdir(), which the scratch rules (tools/scratch-roots.mjs) treat as a test/temp root. Make the TEST realistic the way other forOwner tests do (search tests for forOwner / SWARM_TEST_TMP / home options): give the board env a fake HOME and place the registered project under it in a non-temp-looking folder (or use the documented test override env the scratch rules honour) so the project counts as a real owner project; add one more assertion that a project registered under a scratch root is NOT offered (its decision prepare returns 404). Keep every other refusal. Do not change tools/scratch-roots.mjs or tools/projects.mjs. Run `node --import ./tests/_isolate-config.mjs --test --test-timeout=60000 tests/board-owner-routes.test.mjs tests/board-inbox.test.mjs tests/board-owner-actions-handlers.test.mjs` and report the pass count.",
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "These tests use watch-cli or board-inbox for unrelated behavior; the coordinator runs the full suite after integration."
+    }
+  ]
+}

@@ -14,6 +14,7 @@ import { appendEvent } from '../tools/journal.mjs';
 import { createLedger, writeLedger } from '../tools/tickets.mjs';
 import { createBoardApi } from '../tools/watch-cli.mjs';
 import { createWatchServer } from '../tools/watch-server.mjs';
+import { decisionBoardSafeForOwner, ownerItemsFromBoardInbox } from '../tools/board-owner-actions.mjs';
 
 const NOW = Date.UTC(2026, 9, 19, 12, 0, 0);
 const assets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
@@ -35,6 +36,33 @@ async function world(t) {
   await fs.writeFile(path.join(phoneDirectory, 'state.json'), JSON.stringify({ repo: 'o/swarm-inbox', issues: { 7: { key: `${A.root}|decision|logo`, kind: 'decision', status: 'confirming', number: 7, expiresAt: NOW + 5 * 3600000 }, 8: { key: `${A.root}|ticket|T-0002`, kind: 'ticket', status: 'open', number: 8, expiresAt: NOW + 3600000 }, 9: { key: 'panic', kind: 'panic', status: 'open', number: 9, expiresAt: NOW + 3600000 } } }));
   return { home, A, B, phoneDirectory };
 }
+
+test('protectedTopic scans the full decision before display clip so owner board-safe stays fail-closed', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  const pastTitleClip = `${'alpha '.repeat(200)} merge to main`;
+  const manyChoices = Array.from({ length: 10 }, (_, i) => `choice-${i}`);
+  manyChoices[9] = `${'z'.repeat(45)} deploy`;
+  const collect = async () => [{
+    kind: 'decision',
+    id: 'past-clip-protected',
+    title: pastTitleClip,
+    text: pastTitleClip,
+    choices: manyChoices,
+    default: 'choice-0',
+    boardSafe: true,
+    since: new Date(NOW).toISOString(),
+    unblocks: 0,
+  }];
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  const item = inbox.items.find(i => i.id === 'past-clip-protected');
+  assert.equal(item.protectedTopic, true);
+  assert.equal(/merge/i.test(item.title ?? ''), false, 'clipped title hides the protected word');
+  assert.equal(item.choiceOptions?.length, 9, 'only nine choices are shown');
+  assert.equal(/deploy/i.test((item.choiceOptions ?? []).join(' ')), false, 'clipped choices hide the protected word');
+  const ownerItem = ownerItemsFromBoardInbox({ items: [{ ...item, projectId: A.id, projectRoot: A.root }] })[0];
+  assert.equal(decisionBoardSafeForOwner(ownerItem), false);
+});
 
 test('the panel lists what waits in each project: decisions, human tasks, blockers and proposed tickets; each with the command to run at the computer; other projects do not leak into each other', async t => {
   const w = await world(t);
@@ -256,6 +284,28 @@ test('feedback 4: a pull request and its merge are one row (the merge); an unmer
   assert.equal((await readHistory({ file })).total, 5, 'the raw log (and the CSV) keep every event');
   assert.deepEqual((await readHistory({ file, fold: true, kind: 'pr' })).events.map(e => e.key).sort(), ['pr:p1:172', 'pr:p1:173', 'pr:p2:172']);
   assert.deepEqual((await readHistory({ file, fold: true, exclude: new Set(['p2']) })).events.map(e => e.key).sort(), ['merge:p1:172', 'pr:p1:173']);
+});
+
+test('held tickets: a manual block without a hold question stays off Needs you; with a hold question the item shows that text; dependency blocks stay excluded', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  const question = 'Should we ship the migration before the API freeze?';
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0200', 'blocked', { blockReason: 'manual' }),
+      tk('T-0201', 'blocked', { blockReason: 'manual', holdQuestion: question }),
+      tk('T-0199', 'done'),
+      tk('T-0202', 'blocked', { blockReason: 'deps', dependsOn: ['T-0199'] }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0201']);
+  assert.equal(held[0].text, question);
+  assert.equal(held[0].command, `swarm --root ${A.root} tickets T-0201 --release`);
 });
 
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {

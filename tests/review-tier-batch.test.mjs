@@ -208,13 +208,13 @@ test('AC3: manifest review model patterns match scope sync acceptance and securi
 test('AC3: buildAcceptanceReviewManifest picks tier from batched tickets like ledger gate', () => {
   const ledger = {
     tickets: [
-      { id: 'T-a', type: 'test', tests: ['tests/a.test.mjs'], risk: 'low', size: 'S' },
-      { id: 'T-b', type: 'test', tests: ['tests/b.test.mjs'], risk: 'low', size: 'S' },
+      { id: 'T-a', type: 'test', tests: ['tests/review-tier-batch.test.mjs'], acceptance: ['covers behavior a'], risk: 'low', size: 'S' },
+      { id: 'T-b', type: 'test', tests: ['tests/review-tier-batch.test.mjs'], acceptance: ['covers behavior b'], risk: 'low', size: 'S' },
     ],
   };
   const items = [
-    { ticket: ledger.tickets[0], uncovered: [] },
-    { ticket: ledger.tickets[1], uncovered: [] },
+    { ticket: ledger.tickets[0], uncovered: [1] },
+    { ticket: ledger.tickets[1], uncovered: [1] },
   ];
   const manifest = buildAcceptanceReviewManifest('run-1', items, ledger);
   const reviewJobs = (manifest.jobs ?? []).filter((j) => j.type === 'review');

@@ -76,6 +76,27 @@ test('deprecated query token is legacy and header is primary on every read route
   }
 });
 
+test('allowedKinds lists the only owner-approvable inbox item kinds', () => {
+  assert.deepEqual(contract.components?.schemas?.allowedKinds?.enum, [
+    'handbuild',
+    'decision',
+    'proposed-ticket',
+    'scope',
+  ]);
+  assert.match(
+    contract.paths['/api/owner/actions/{itemId}/prepare']?.post?.description ?? '',
+    /unknown kinds.*refused/i,
+  );
+  assert.match(
+    contract.paths['/api/owner/actions/{itemId}/decision']?.post?.description ?? '',
+    /unknown kinds.*refused/i,
+  );
+  assert.equal(
+    contract.components?.schemas?.AuditEntry?.properties?.kind?.$ref,
+    '#/components/schemas/allowedKinds',
+  );
+});
+
 test('refusedKinds contains every server-side refused action kind', () => {
   assert.deepEqual(contract.components?.schemas?.refusedKinds?.enum, [
     'merge',
@@ -94,6 +115,13 @@ test('every x-tickets route is present in the contract', () => {
     assert.ok(contract.paths[match[2]], `x-tickets route is missing from paths: ${route}`);
     assert.ok(Array.isArray(contract['x-tickets'][route]) && contract['x-tickets'][route].length > 0, `${route} must name a ticket`);
   }
+});
+
+test('owner prepare and decision request schemas support per-option choices', () => {
+  assert.ok(contract.components?.schemas?.OwnerPrepareRequest?.properties?.choice);
+  assert.ok(contract.components?.schemas?.OwnerDecisionRequest?.oneOf);
+  assert.ok(contract.components?.schemas?.UnknownChoice?.properties?.error?.const === 'unknown-choice');
+  assert.ok(contract.components?.schemas?.OwnerInboxItem?.properties?.options);
 });
 
 test('S4 read and owner response shapes are represented', () => {

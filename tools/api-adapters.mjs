@@ -463,6 +463,19 @@ export function inlineContext(context, { byteCap = CONTEXT_BYTE_CAP } = {}) {
   return { inlined, contextInlined };
 }
 
+// Shared repo context: stable file order, cache_control on the last shared block only, identical system prompt per job.
+export function anthropicUserContent(job, cappedContext, { skillsBlock = '' } = {}) {
+  const taskText = `${skillsBlock}${job.prompt}${contractBlock(job)}`;
+  const cached = [...new Set(Array.isArray(job.cacheContext) ? job.cacheContext : [])].sort();
+  const shared = cappedContext.filter(file => cached.includes(file.path)).sort((a, b) => a.path.localeCompare(b.path));
+  if (!shared.length) return JSON.stringify({ task: taskText, declaredOutputs: job.outputs, files: cappedContext });
+  const rest = cappedContext.filter(file => !cached.includes(file.path));
+  return [
+    { type: 'text', text: JSON.stringify({ files: shared }), cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: JSON.stringify({ task: taskText, declaredOutputs: job.outputs, files: rest }) },
+  ];
+}
+
 export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null } = {}) {
   const controller = new AbortController(); let reason = null, finishReason = null, anthropicBilled = () => null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
@@ -520,11 +533,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // cacheContext names context files shared by many jobs (a contract, a style guide, the repo map). They go first, in their own
       // block marked cacheable, so a fan-out pays full price for them once and about a tenth after; the rest of the task follows.
       // Below the model's minimum size (1024 to 4096 tokens) the marker is simply ignored.
-      const cached = new Set(Array.isArray(job.cacheContext) ? job.cacheContext : []);
-      const shared = cappedContext.filter(file => cached.has(file.path));
-      const content = shared.length
-        ? [{ type: 'text', text: JSON.stringify({ files: shared }), cache_control: { type: 'ephemeral' } }, { type: 'text', text: JSON.stringify({ task: `${skillsBlock}${job.prompt}${contractBlock(job)}`, declaredOutputs: job.outputs, files: cappedContext.filter(file => !cached.has(file.path)) }) }]
-        : input;
+      const content = anthropicUserContent(job, cappedContext, { skillsBlock });
       body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
     }
     else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(config.selfHosted && env.SWARM_LAMBDA_THINKING !== 'on' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }

@@ -180,6 +180,7 @@ export function validateTicket(t) {
     const r = t.acceptanceBlocked;
     if (!r || typeof r !== 'object' || Array.isArray(r) || typeof r.reason !== 'string' || r.reason.length < 1 || r.reason.length > 600) errors.push('acceptanceBlocked must be {reason, at, run}');
   }
+  if (t.holdQuestion !== undefined && (typeof t.holdQuestion !== 'string' || t.holdQuestion.length < 1 || t.holdQuestion.length > 300)) errors.push('holdQuestion must be a string of 1 to 300 characters when set');
   if (t.acceptanceResults !== undefined) {
     const list = t.acceptanceResults;
     if (!Array.isArray(list) || list.length > 100 || !list.every(r => r && typeof r === 'object' && Number.isInteger(r.n) && r.n >= 1 && r.n <= 200 && ['test', 'review', 'owner'].includes(r.by) && ['pass', 'fail', 'pending', 'missing', 'accepted'].includes(r.verdict) && (r.line === undefined || (typeof r.line === 'string' && r.line.length <= 200)) && (r.evidence === undefined || (typeof r.evidence === 'string' && r.evidence.length <= 300)))) errors.push('acceptanceResults must be a list of {n, line, by, verdict, evidence} (verdict pass, fail, pending, missing or accepted)');
@@ -360,6 +361,7 @@ export async function verifyMergedPullRequests(prNumbers, { repo } = {}) {
 
 const clearRunState = ticket => {
   delete ticket.blockReason;
+  delete ticket.holdQuestion;
   for (const key of ['attempts', 'escalation', 'retryNote', 'retryHistory', 'runId', 'infraRetries']) delete ticket[key];
 };
 
@@ -392,7 +394,7 @@ export async function applyDelivered(root, { ids, prNumbers, repo, by = 'owner',
   return { ledger: saved, note, prInfos, tickets: ids.map(id => saved.tickets.find(t => t.id === id)) };
 }
 
-export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, actor, source, confirmation } = {}) {
+export async function transition(root, id, to, { by = 'system', note, now = Date.now(), reason, holdQuestion, actor, source, confirmation } = {}) {
   const ledger = await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const ticket = ledger.tickets.find(t => t.id === id);
@@ -406,7 +408,14 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
   const from = ticket.status;
   ticket.status = to;
   // Why a ticket is blocked decides whether it may unlock by itself: only a dependency block does.
-  if (to === 'blocked') ticket.blockReason = reason ?? 'manual'; else delete ticket.blockReason;
+  if (to === 'blocked') {
+    ticket.blockReason = reason ?? 'manual';
+    if (holdQuestion !== undefined) ticket.holdQuestion = holdQuestion;
+    else delete ticket.holdQuestion;
+  } else {
+    delete ticket.blockReason;
+    delete ticket.holdQuestion;
+  }
   // A cancelled ticket stops being a dependency: the tickets that waited on it no longer wait.
   const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();

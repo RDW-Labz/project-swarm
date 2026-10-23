@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import http from 'node:http';
+import os from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -7,6 +8,10 @@ import { diffSnapshots, createThrottle } from './watch-delta.mjs';
 import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+import { projectFamilyRoots } from './board-data.mjs';
+import { runDetail, RUN_ID } from './board-run.mjs';
+import { listPeers } from './board-peers.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -51,6 +56,146 @@ export const WATCH_ROUTES = Object.freeze([
 const MAX_STREAMS = 8;
 export const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
 const MAX_STREAM_PAUSED_MS = 60000;
+const PEER_RUN_TIMEOUT_MS = 3000;
+const PEER_RUN_MAX_BYTES = 5 * 1024 * 1024;
+
+export function formatRunLocationMessage(location) {
+  const machine = location?.machine ?? 'another machine';
+  const pathPart = location?.path ? ` at ${location.path}` : '';
+  const boardPart = location?.boardUrl ? ` (board: ${location.boardUrl})` : '';
+  return `Run lives on ${machine}${pathPart}${boardPart}`;
+}
+
+async function readPeerRunBody(response) {
+  const text = typeof response?.text === 'function' ? await response.text() : '';
+  if (Buffer.byteLength(text, 'utf8') > PEER_RUN_MAX_BYTES) throw new Error('body-too-large');
+  return text;
+}
+
+export async function fetchPeerRunApi(peer, projectId, runId, compare, fetchImpl = globalThis.fetch) {
+  if (!peer || typeof peer.url !== 'string' || typeof peer.token !== 'string') return null;
+  const url = new URL('/api/run', peer.url);
+  url.searchParams.set('id', String(projectId ?? ''));
+  url.searchParams.set('run', String(runId ?? ''));
+  if (compare) url.searchParams.set('compare', String(compare));
+  const controller = new AbortController();
+  let timeout;
+  try {
+    const response = await Promise.race([
+      fetchImpl(url, { method: 'GET', headers: { 'x-watch-token': peer.token }, redirect: 'error', signal: controller.signal }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error('timeout'));
+        }, PEER_RUN_TIMEOUT_MS);
+      }),
+    ]);
+    const status = Number(response?.status);
+    const text = await readPeerRunBody(response);
+    if (status === 404) {
+      try {
+        const body = JSON.parse(text);
+        if (body && typeof body === 'object' && body.runLocation) return { runLocation: body.runLocation, message: body.message };
+      } catch { /* plain not found */ }
+      return null;
+    }
+    if (!response?.ok || status >= 400) return null;
+    let detail;
+    try { detail = JSON.parse(text); } catch { return null; }
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+    const loc = detail.runLocation && typeof detail.runLocation === 'object' ? detail.runLocation : null;
+    return {
+      detail,
+      machine: loc?.machine ?? null,
+      path: loc?.path ?? null,
+    };
+  } catch {
+    return null;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+export async function resolveBoardRun({
+  board,
+  projectId,
+  runId,
+  compare = null,
+  remote = false,
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const id = String(projectId ?? '');
+  const run = String(runId ?? '');
+  if (!RUN_ID.test(run)) return { ok: false };
+
+  const direct = await board.run(id, run, compare ? String(compare) : null);
+  if (direct) return { ok: true, detail: direct };
+
+  const projects = await listProjects({ file: projectsFile(env) }).catch(() => []);
+  const extraRoots = projects.map(p => p.root);
+  const project = projects.find(p => p.id === id) ?? null;
+
+  const locateOnRoot = async (row, root) => {
+    const found = await runDetail({ ...row, root }, run);
+    if (!found) return null;
+    const resolvedRoot = path.resolve(root);
+    const registered = projects.find(p => path.resolve(p.root) === resolvedRoot);
+    const location = {
+      machine: os.hostname(),
+      path: resolvedRoot,
+      local: true,
+      projectId: registered?.id ?? row.id,
+      alternateProjectId: registered && registered.id !== id ? registered.id : undefined,
+    };
+    return { detail: { ...found, runLocation: location }, location };
+  };
+
+  if (project && !compare) {
+    const family = await projectFamilyRoots(project.root, { env, extraRoots });
+    for (const root of family) {
+      if (path.resolve(root) === path.resolve(project.root)) continue;
+      const hit = await locateOnRoot(project, root);
+      if (hit) return { ok: true, ...hit };
+    }
+  }
+
+  let peers = [];
+  try { peers = await listPeers(env); } catch { peers = []; }
+  for (const peer of peers) {
+    const hit = await fetchPeerRunApi(peer, id, run, compare ? String(compare) : null, fetchImpl);
+    if (hit?.detail) {
+      const location = {
+        machine: hit.machine ?? peer.name,
+        path: hit.path ?? null,
+        boardUrl: peer.url,
+        peer: peer.name,
+        remote: true,
+      };
+      return {
+        ok: true,
+        detail: { ...hit.detail, runLocation: location, remoteBoard: true, openRun: !remote },
+        location,
+        peer,
+      };
+    }
+    if (hit?.runLocation) return { ok: false, location: hit.runLocation, message: hit.message };
+  }
+
+  if (!compare) {
+    for (const row of projects) {
+      if (project && row.id === project.id) continue;
+      const family = await projectFamilyRoots(row.root, { env, extraRoots });
+      for (const root of family) {
+        const hit = await locateOnRoot(row, root);
+        if (hit) return { ok: true, ...hit, location: { ...hit.location, alternateProjectId: row.id } };
+      }
+    }
+  }
+
+  return { ok: false };
+}
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a), 'utf8');
@@ -93,6 +238,43 @@ function sendText(res, method, status, msg) {
 
 function sendJson(res, method, obj) {
   send(res, method, 200, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
+}
+
+function sendJsonStatus(res, method, status, obj) {
+  send(res, method, status, { 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify(obj));
+}
+
+const OWNER_BODY_LIMIT = 8 * 1024;
+
+function ownerRouteOf(pathname) {
+  if (pathname === '/api/owner/audit') return { route: 'audit' };
+  const match = /^\/api\/owner\/actions\/([^/]+)\/(prepare|decision)$/.exec(pathname);
+  if (!match) return null;
+  return { route: match[2] === 'prepare' ? 'prepare' : 'decision', itemId: match[1] };
+}
+
+function agentSessionOf(req) {
+  const marker = req.headers['x-swarm-agent-session'];
+  return marker !== undefined && marker !== null && String(marker).length > 0;
+}
+
+async function readJsonBody(req, limit = OWNER_BODY_LIMIT) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) return { error: 'too-large' };
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim();
+  if (!text) return { value: {} };
+  try {
+    const value = JSON.parse(text);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { error: 'invalid' };
+    return { value };
+  } catch {
+    return { error: 'invalid' };
+  }
 }
 
 function sse(event, data) {
@@ -261,6 +443,8 @@ export function createWatchServer(opts) {
     // swarm remote: the board is also reached through `tailscale serve`, which proxies from the tailnet to this loopback port. `hosts` are the names it is
     // reached by and `login` is the tailnet login allowed to use it (Tailscale sets that header on what it proxies). Nothing else is ever listened on.
     remote,
+    ownerActions,
+    env = process.env,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
@@ -342,12 +526,73 @@ export function createWatchServer(opts) {
     streamManager.open(res, run);
   }
 
+  function tailnetVerifiedForOwner(req, host, localHost) {
+    if (!remote || localHost) return false;
+    if (req.headers['tailscale-funnel-request'] !== undefined) return false;
+    const login = req.headers['tailscale-user-login'];
+    const named = remote.hosts.includes(String(host).toLowerCase());
+    if (!named || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) return false;
+    return true;
+  }
+
+  async function handleOwner(req, res, method, u, ownerRoute) {
+    if (!remote) return sendText(res, method, 404, 'not found');
+    const host = req.headers.host;
+    const localHost = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+    if (remote) {
+      const login = req.headers['tailscale-user-login'];
+      const named = remote.hosts.includes(String(host).toLowerCase());
+      if (!named || req.headers['tailscale-funnel-request'] !== undefined || typeof login !== 'string' || login.toLowerCase() !== String(remote.login ?? '').toLowerCase()) {
+        return sendJsonStatus(res, method, 401, { error: 'not-signed-in', message: 'a Tailscale owner identity is required' });
+      }
+    }
+    const queryToken = u.searchParams.get('t');
+    const headerToken = req.headers['x-watch-token'];
+    const headerOk = typeof headerToken === 'string' && safeEqual(headerToken, token);
+    const tokenOk = headerOk;
+    const ownerReq = {
+      tokenOk,
+      tokenInQuery: typeof queryToken === 'string',
+      local: u.searchParams.get('local') === '1',
+      agentSession: agentSessionOf(req),
+      tailnetVerified: tailnetVerifiedForOwner(req, host, localHost),
+      headers: req.headers,
+    };
+    if (ownerRoute.route === 'audit') {
+      if (method !== 'GET' && method !== 'HEAD') {
+        return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+      }
+      const out = await ownerActions.audit(ownerReq);
+      return sendJsonStatus(res, method, out.status, out.body);
+    }
+    if (method !== 'POST') {
+      return send(res, method, 405, { Allow: 'POST', 'Content-Type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'method-not-allowed' }));
+    }
+    const bodyRead = await readJsonBody(req);
+    if (bodyRead.error === 'too-large') {
+      return sendJsonStatus(res, method, 413, { error: 'payload-too-large', message: 'request body exceeds 8 KB' });
+    }
+    if (bodyRead.error === 'invalid') {
+      return sendJsonStatus(res, method, 400, { error: 'invalid-body' });
+    }
+    const out = ownerRoute.route === 'prepare'
+      ? await ownerActions.prepare(ownerRoute.itemId, ownerReq, bodyRead.value)
+      : await ownerActions.decide(ownerRoute.itemId, bodyRead.value, ownerReq);
+    return sendJsonStatus(res, method, out.status, out.body);
+  }
+
   async function handle(req, res) {
     const method = req.method;
+    if (!server) return sendText(res, method, 421, 'misdirected request');
+    const u = new URL(req.url || '/', 'http://127.0.0.1');
+    const ownerRoute = ownerRouteOf(u.pathname);
+    if (ownerRoute) {
+      if (!ownerActions) return sendText(res, method, 404, 'not found');
+      return handleOwner(req, res, method, u, ownerRoute);
+    }
     if (method !== 'GET' && method !== 'HEAD') {
       return send(res, method, 405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' }, 'method not allowed');
     }
-    if (!server) return sendText(res, method, 421, 'misdirected request');
     const host = req.headers.host;
     const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
     if (remote) {
@@ -359,7 +604,6 @@ export function createWatchServer(opts) {
     } else if (!local) {
       return sendText(res, method, 421, 'misdirected request');
     }
-    const u = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = u.pathname;
     if (pathname === '/api/health') {
       if (remote || !local) return sendText(res, method, 421, 'misdirected request');
@@ -415,7 +659,28 @@ export function createWatchServer(opts) {
       delete q.t;
       if (pathname === '/project') return sendAsset(res, method, 'project.html', pageHeaders);
       if (pathname === '/run') return sendAsset(res, method, 'run.html', pageHeaders);
-      if (pathname === '/api/run') { const detail = await board.run(String(q.id ?? ''), String(q.run ?? ''), q.compare ? String(q.compare) : null); return detail ? sendJson(res, method, stripMoney({ ...detail, openRun: !remote })) : sendText(res, method, 404, 'not found'); }
+      if (pathname === '/api/run') {
+        const resolved = await resolveBoardRun({
+          board,
+          projectId: String(q.id ?? ''),
+          runId: String(q.run ?? ''),
+          compare: q.compare ? String(q.compare) : null,
+          remote,
+          env,
+        });
+        if (resolved.ok === true && resolved.detail) {
+          const openRun = resolved.detail.openRun ?? !remote;
+          return sendJson(res, method, stripMoney({ ...resolved.detail, openRun }));
+        }
+        if (resolved.location) {
+          return sendJsonStatus(res, method, 404, {
+            error: 'run-not-found',
+            message: resolved.message ?? formatRunLocationMessage(resolved.location),
+            runLocation: resolved.location,
+          });
+        }
+        return sendText(res, method, 404, 'not found');
+      }
       // `openRun`: the "Watch" links start a run's own page on this computer, which the remote board never does (it links to the run inspector instead). `server`: the version this
       // process runs, the one now installed, and whether they differ (it was started before the last swarm update).
       if (pathname === '/api/board') {
@@ -427,7 +692,26 @@ export function createWatchServer(opts) {
       if (pathname === '/api/history') return sendJson(res, method, await board.history(q));
       if (pathname === '/history.csv') return send(res, method, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="swarm-history.csv"' }, await board.historyCsv(q));
       // /open/run?id=PROJECT&run=RUN: starts the run's own Watch server (or reuses it) and sends the browser to it. The target address carries that server's own token.
-      const target = await board.openRun(String(q.id ?? ''), String(q.run ?? ''));
+      const openId = String(q.id ?? '');
+      const openRunId = String(q.run ?? '');
+      let target = await board.openRun(openId, openRunId);
+      if (!target) {
+        const resolved = await resolveBoardRun({ board, projectId: openId, runId: openRunId, remote, env });
+        if (resolved.ok === true) {
+          const altId = resolved.location?.alternateProjectId ?? resolved.location?.projectId;
+          if (altId && altId !== openId) target = await board.openRun(String(altId), openRunId);
+          else if (resolved.peer?.url) {
+            const peerUrl = new URL('/open/run', resolved.peer.url);
+            peerUrl.searchParams.set('id', openId);
+            peerUrl.searchParams.set('run', openRunId);
+            peerUrl.searchParams.set('t', resolved.peer.token);
+            target = peerUrl.href;
+          }
+        }
+        if (!target && resolved.location) {
+          return sendText(res, method, 404, resolved.message ?? formatRunLocationMessage(resolved.location));
+        }
+      }
       if (!target) return sendText(res, method, 404, 'not found');
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
     }
