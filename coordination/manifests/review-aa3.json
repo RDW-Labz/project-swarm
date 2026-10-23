@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-aa3",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "auto-approval policy for hand-build windows and git push; a bypass lets a session push or rewrite the repo unattended",
+   "type": "review",
+   "prompt": "Third static security review of coordination/review/aa-new3.diff (auto-approve windows: tools/auto-approve-policy.mjs and its hooks in tools/handbuild.mjs, tools/shell-writes.mjs, tools/self-approval.mjs). The second review (FAIL) found: H remote URL normaliser spoofable (scp pattern before scheme parsing); H program-running git config unchecked (core sshCommand, gpg program, fsmonitor, filters, pager, credential helpers, proxies, global gitconfig via HOME); M hooks check missed linked worktrees (common git dir); M policy push free on the invocation rule alone, skipping kill switch, env check, rate limits and HEAD binding; M Write/Edit/NotebookEdit under a window skipped kill switch, binding and rate limits and the daily window count was unlimited; M insteadOf key case; M deleting stats.json reset counters and only exact paths protected; M scope included job manifests and coordination review files; L empty granted HEAD, push.default check dead, policy path env override, checks outside the lock, window with no git ops, first live window chosen, read-only git denied, unanchored SAFE_SWARM. Check each is really fixed and look for NEW bypasses or fail-open paths. No exploit commands: class and fix. Verdict PASS or FAIL, ranked findings with file and line.",
+   "context": [
+    "coordination/review/aa-new3.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

@@ -53,7 +53,6 @@ import {
   headDescendsFromGranted,
   POLICY_STATS_UNREADABLE,
   policyGitSubBlockedDuringWindow,
-  policyFilePath,
 } from './auto-approve-policy.mjs';
 export const SCRATCH_DENY_REASON = 'scratch project';
 
@@ -724,10 +723,22 @@ const isFreeReadOnlyGh = (op, command) => {
   return ALLOWED_GH.has(op.sub);
 };
 
+const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
+
+/** Standing `swarm merge` reads machine policy.json; not the hand-build policy-file override gate. */
+const swarmMergePolicyFilePath = (home = os.homedir()) => {
+  const envPath = process.env.SWARM_POLICY_FILE;
+  if (envPath) {
+    if (!path.isAbsolute(envPath)) return null;
+    return envPath;
+  }
+  return path.join(swarmConfigDir(home), 'policy.json');
+};
+
 /** True when policy.json enables standing approval for `swarm merge N`. */
 export const mergeSwarmPrStandingEnabled = (home = os.homedir()) => {
   try {
-    const file = policyFilePath(home);
+    const file = swarmMergePolicyFilePath(home);
     if (!file) return false;
     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!policy || !Array.isArray(policy.rules)) return false;
@@ -1681,8 +1692,10 @@ function applyPolicyGuardedAllow(root, {
   cwd,
   approvals,
   finishBash = d => d,
+  skipPolicyGuard = false,
 }) {
   if (!allowResult?.allow) return finishBash(allowResult);
+  if (skipPolicyGuard) return finishBash(allowResult);
   const policyRows = (approvals ?? []).filter(a => a.policyId);
   const policyGitInvocations = policyGitOps ?? policyGitInvocationsFromOps(policyOps);
   const touchesPolicyFiles = files.some(f => policyRows.some(a => matchesFile(a.files, f)));
@@ -2025,6 +2038,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
       return finishBash({ allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` });
     }
+    const swarmMergeAllow = standingMergeAllow || chatMergeOk;
     const finishAllow = result => {
       const out = applyPolicyGuardedAllow(root, {
         command: ti.command,
@@ -2036,6 +2050,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         cwd,
         approvals,
         finishBash,
+        skipPolicyGuard: swarmMergeAllow,
       });
       if (out.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
       if (out.allow && standingMergeAllow) return finishBash({ ...out, standing: 'merge-swarm-pr' });
