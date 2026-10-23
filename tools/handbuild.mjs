@@ -2007,7 +2007,6 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
 
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
   applyGuardTestFault(root);
-  if (root) verifyPolicyWriteQueue(root, { now: typeof now === 'function' ? now() : now });
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
   const resolvedRoot = root ?? orchestratorResolvedRoot(cwd);
@@ -2016,6 +2015,15 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const omActive = enforceOrchestratorMode !== undefined
     ? Boolean(enforceOrchestratorMode)
     : (orchestratorSession && orchestratorModeEnabled(resolvedRoot, cwd));
+  if (tool === 'Bash' && omActive && orchestratorCommandTooLong(ti.command)) {
+    return {
+      allow: false,
+      files: [],
+      reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+      ruleId: ORCHESTRATOR_MODE_RULE_ID,
+    };
+  }
+  if (root) verifyPolicyWriteQueue(root, { now: typeof now === 'function' ? now() : now });
   let handbuildOff = false;
   try { handbuildOff = fs.existsSync(path.join(resolvedRoot ?? root ?? '', OFF_FILE)); } catch { handbuildOff = false; }
   if (handbuildOff && !omActive) return { allow: true };
