@@ -9,11 +9,14 @@ import {
   probeLocalEndpointsBeforeRoute,
   createLocalEndpointPauseTracker,
 } from '../tools/local-lane.mjs';
+import { resolveLanes } from '../tools/lanes.mjs';
+import { routeJob } from '../tools/router.mjs';
 
 const endpoint = {
   name: 'dev2',
   model: 'demo-model',
   slots: 2,
+  baseUrl: 'http://127.0.0.1:18000',
   modelsUrl: 'http://127.0.0.1:18000/v1/models',
   keychain: { service: 'project-swarm', account: 'local.dev2' },
 };
@@ -27,8 +30,8 @@ test('probeLocalEndpoint classifies HTTP statuses without sending a key', async 
     { status: 200, statusLabel: 'ok', reachable: true, liveVerified: true },
     { status: 401, statusLabel: 'ok-auth-required', reachable: true, liveVerified: false },
     { status: 403, statusLabel: 'ok-auth-required', reachable: true, liveVerified: false },
-    { status: 404, statusLabel: 'ok-unverified', reachable: true, liveVerified: false },
-    { status: 405, statusLabel: 'ok-unverified', reachable: true, liveVerified: false },
+    { status: 404, statusLabel: 'ok-unverified', reachable: false, liveVerified: false },
+    { status: 405, statusLabel: 'ok-unverified', reachable: false, liveVerified: false },
     { status: 500, statusLabel: 'unreachable', reachable: false, liveVerified: false },
   ];
   for (const item of cases) {
@@ -100,6 +103,85 @@ test('verifyLocalEndpointKey accepts 2xx and rejects 401 without leaking secret'
   assert.equal(rejected.note, 'key rejected');
   const blob = JSON.stringify(rejected);
   assert.ok(!blob.includes(secret));
+});
+
+test('verifyLocalEndpointKey blocks non-loopback http before key read or fetch', async () => {
+  const remote = {
+    ...endpoint,
+    name: 'remote',
+    baseUrl: 'http://192.168.1.50:8000',
+    modelsUrl: 'http://192.168.1.50:8000/v1/models',
+  };
+  let readCalls = 0;
+  let fetchCalls = 0;
+  const result = await verifyLocalEndpointKey(remote, {}, {
+    readKey: () => {
+      readCalls += 1;
+      return 'must-not-read';
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return mockResponse(200);
+    },
+  });
+  assert.equal(readCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(result.keyStatus, 'key-blocked');
+  assert.equal(result.status, 'key-blocked');
+});
+
+test('doctorLocal health cache marks key-rejected endpoints unhealthy', async () => {
+  const configPath = process.env.SWARM_CONFIG;
+  const fs = await import('node:fs');
+  fs.writeFileSync(configPath, JSON.stringify({
+    lanes: {
+      local: {
+        endpoints: [{
+          name: 'dev2',
+          baseUrl: 'http://127.0.0.1:18000',
+          model: 'demo-model',
+          slots: 1,
+          keychain: { service: 'project-swarm', account: 'local.dev2' },
+        }],
+      },
+    },
+  }));
+  const cache = new Map();
+  await doctorLocal({ SWARM_CONFIG: configPath }, {
+    verifyKey: true,
+    healthCache: cache,
+    readKey: () => 'bad-key',
+    fetchImpl: async (url, init) => {
+      if (init.headers?.authorization) return mockResponse(401);
+      return mockResponse(401);
+    },
+    now: () => 0,
+  });
+  assert.equal(cache.get('dev2'), false);
+});
+
+test('sensitive jobs never route to non-loopback local endpoints even when health is ok', () => {
+  const keychain = { service: 'project-swarm', account: 'local.test' };
+  const lanes = resolveLanes({
+    config: {
+      lanes: {
+        local: {
+          endpoints: [
+            { name: 'remote', baseUrl: 'https://gpu.example.com', model: 'm', slots: 2, keychain },
+            { name: 'home', baseUrl: 'http://127.0.0.1:18001', model: 'm', slots: 2, keychain },
+          ],
+        },
+      },
+    },
+  });
+  const job = { id: 'sens-1', agent: 'auto', type: 'docs', sensitive: true, outputs: ['README.md'] };
+  const route = routeJob(job, {
+    lanes,
+    failures: { cursor: 9, codex: 9, anthropic: 9 },
+    endpointHealth: () => ({ state: 'ok' }),
+  });
+  assert.equal(route.agent, 'local');
+  assert.equal(route.model, 'local:home');
 });
 
 test('doctorLocal with verifyKey sets liveVerified from keyed probe', async () => {

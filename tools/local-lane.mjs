@@ -174,6 +174,17 @@ export function isLoopbackLocalBaseUrl(baseUrl) {
   try { return LOOPBACK.has(new URL(baseUrl).hostname); } catch { return false; }
 }
 
+export function isLocalKeyVerifyAllowed(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    if (url.protocol === 'https:') return true;
+    if (url.protocol === 'http:' && LOOPBACK.has(url.hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function localSlotRoom(store, { endpoint, slotsLimit, agency, agencyConcurrency }) {
   const endpointInFlight = countLocalSlots(store, { endpoint });
   const endpointRoom = Math.max(0, slotsLimit - endpointInFlight);
@@ -203,7 +214,7 @@ function classifyModelsProbeResponse(response) {
   if (response.ok) return { status: 'ok', reachable: true, liveVerified: true };
   const code = response.status;
   if (code === 401 || code === 403) return { status: 'ok-auth-required', reachable: true, liveVerified: false };
-  if (code === 404 || code === 405) return { status: 'ok-unverified', reachable: true, liveVerified: false };
+  if (code === 404 || code === 405) return { status: 'ok-unverified', reachable: false, liveVerified: false };
   if (code >= 500) return { status: 'unreachable', reachable: false, liveVerified: false };
   return { status: 'unreachable', reachable: false, liveVerified: false };
 }
@@ -242,6 +253,9 @@ export async function probeLocalEndpoint(endpoint, { fetchImpl = fetch, timeoutM
 }
 
 export async function verifyLocalEndpointKey(endpoint, env = process.env, { fetchImpl = fetch, timeoutMs = LOCAL_DOCTOR_TIMEOUT_MS, now = Date.now, readKey } = {}) {
+  if (!isLocalKeyVerifyAllowed(endpoint.baseUrl)) {
+    return { liveVerified: false, status: 'key-blocked', httpStatus: null, keyStatus: 'key-blocked' };
+  }
   const credential = readLocalCredential(endpoint, env, { readKey });
   if (!credential) {
     return { liveVerified: false, status: 'key-missing', httpStatus: null, keyStatus: 'missing' };
@@ -321,9 +335,19 @@ export async function doctorLocal(env = process.env, { fetchImpl = fetch, timeou
     probes = await Promise.all(probes.map(async (probe, index) => {
       const ep = endpoints[index];
       const keyed = await verifyLocalEndpointKey(ep, env, { fetchImpl, timeoutMs, now, readKey });
+      let reachable = probe.reachable;
+      let liveVerified = keyed.liveVerified;
+      if (keyed.keyStatus === 'rejected') {
+        reachable = false;
+        liveVerified = false;
+      } else if (keyed.liveVerified) {
+        reachable = true;
+        liveVerified = true;
+      }
       return {
         ...probe,
-        liveVerified: keyed.liveVerified,
+        reachable,
+        liveVerified,
         keyVerify: keyed,
         ...(keyed.note ? { note: keyed.note } : {}),
         ...(keyed.status === 'key-rejected' ? { status: 'key-rejected' } : {}),
@@ -332,7 +356,12 @@ export async function doctorLocal(env = process.env, { fetchImpl = fetch, timeou
     }));
   }
   const healthy = probes.filter(item => item.reachable);
-  if (healthCache) for (const item of probes) healthCache.set(item.name, item.reachable);
+  if (healthCache) {
+    for (const item of probes) {
+      const cacheHealthy = item.keyVerify?.keyStatus === 'rejected' ? false : item.reachable;
+      healthCache.set(item.name, cacheHealthy);
+    }
+  }
   const anyReachable = healthy.length > 0;
   const anyLiveVerified = probes.some(item => item.liveVerified);
   return {
