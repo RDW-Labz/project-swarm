@@ -53,7 +53,20 @@ import {
   headDescendsFromGranted,
   POLICY_STATS_UNREADABLE,
   policyGitSubBlockedDuringWindow,
+  policyFilePath,
+  policyGitConfigAbsPaths,
+  policyRewriteGitCommand,
+  policyGitArgvFromCommand,
+  resolveTrustedPolicyGitExecutable,
 } from './auto-approve-policy.mjs';
+
+const policyGitAt = (words, start = 0, home = os.homedir()) => {
+  const trusted = resolveTrustedPolicyGitExecutable({ home });
+  for (let i = start; i < words.length; i += 1) {
+    if (words[i] === 'git' || (trusted && words[i] === trusted)) return i;
+  }
+  return -1;
+};
 export const SCRATCH_DENY_REASON = 'scratch project';
 
 export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
@@ -447,7 +460,7 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     return;
   }
   if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
-  if (cmd === 'git') {
+  if (policyGitAt(plain, k) === k) {
     let globalOpts = false;
     let benignGlobalOnly = true;
     let i = 0;
@@ -725,14 +738,11 @@ const isFreeReadOnlyGh = (op, command) => {
 
 const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
 
-/** Standing `swarm merge` reads machine policy.json; not the hand-build policy-file override gate. */
+/** Standing `swarm merge` reads machine policy.json (optional absolute SWARM_POLICY_FILE for tests). */
 const swarmMergePolicyFilePath = (home = os.homedir()) => {
   const envPath = process.env.SWARM_POLICY_FILE;
-  if (envPath) {
-    if (!path.isAbsolute(envPath)) return null;
-    return envPath;
-  }
-  return path.join(swarmConfigDir(home), 'policy.json');
+  if (envPath && path.isAbsolute(envPath)) return envPath;
+  return policyFilePath(home);
 };
 
 /** True when policy.json enables standing approval for `swarm merge N`. */
@@ -893,7 +903,7 @@ const gitAddPaths = (command, root, cwd) => {
   const paths = [];
   for (const words of tokenize(command)) {
     const plain = plainWords(words);
-    const gi = plain.findIndex(w => path.basename(w) === 'git');
+    const gi = policyGitAt(plain);
     if (gi === -1) continue;
     const rest = plain.slice(gi + 1);
     const ai = rest.indexOf('add');
@@ -914,7 +924,7 @@ const commitCarriedPaths = (command, root, cwd) => {
   const paths = [];
   for (const words of tokenize(command)) {
     const plain = plainWords(words);
-    const gi = plain.findIndex(w => path.basename(w) === 'git');
+    const gi = policyGitAt(plain);
     if (gi === -1) continue;
     const rest = plain.slice(gi + 1);
     const ci = rest.indexOf('commit');
@@ -1392,8 +1402,7 @@ function readHandbuildStatsRaw(root) {
     const file = path.join(root, STATS_FILE);
     if (isLink(file)) return { [POLICY_STATS_UNREADABLE]: true };
     if (!fs.existsSync(file)) {
-      if (!handbuildStatsInitialized(root)) return { [POLICY_STATS_UNREADABLE]: true };
-      return {};
+      return { [POLICY_STATS_UNREADABLE]: true };
     }
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!data || typeof data !== 'object' || Array.isArray(data)) return { [POLICY_STATS_UNREADABLE]: true };
@@ -1443,7 +1452,7 @@ function policyRateLimitsExceeded(data, approvalId, limits, now, { countNewWindo
 }
 
 /** Record one policy-guarded allow (git or file) against rate limits. */
-export function recordPolicyGuardAllow(root, { approvalId, files = [], rule, command, branch, head }, { now = Date.now, home = os.homedir() } = {}) {
+export function recordPolicyGuardAllow(root, { approvalId, files = [], rule, command, branch, head, policyGitArgv }, { now = Date.now, home = os.homedir() } = {}) {
   const limits = policyRateLimits(home);
   return withStateLock(root, () => {
     const data = readHandbuildStatsRaw(root);
@@ -1471,6 +1480,7 @@ export function recordPolicyGuardAllow(root, { approvalId, files = [], rule, com
       branch,
       head,
       rule,
+      policyGitArgv,
     }, { now });
     return { blocked: false };
   });
@@ -1515,11 +1525,17 @@ export function handbuildStatsJson(root, { now = Date.now } = {}) {
 const POLICY_READ_GIT_SUBS = new Set(['status', 'diff', 'log', 'show']);
 
 function pickPolicyApproval(policyApprovals, fileRels = []) {
-  if (!fileRels.length) return policyApprovals[0];
-  const full = policyApprovals.find(a => fileRels.every(f => matchesFile(a.files, f)));
-  if (full) return full;
-  const partial = policyApprovals.find(a => fileRels.some(f => matchesFile(a.files, f)));
-  return partial ?? policyApprovals[0];
+  if (!policyApprovals.length) return null;
+  if (!fileRels.length) {
+    if (policyApprovals.length > 1) return null;
+    return policyApprovals[0];
+  }
+  const full = policyApprovals.filter(a => fileRels.every(f => matchesFile(a.files, f)));
+  if (full.length === 1) return full[0];
+  if (full.length > 1) return null;
+  const partial = policyApprovals.filter(a => fileRels.some(f => matchesFile(a.files, f)));
+  if (partial.length === 1) return partial[0];
+  return null;
 }
 
 export function handbuildPolicyGuardCheck(root, {
@@ -1539,6 +1555,9 @@ export function handbuildPolicyGuardCheck(root, {
   if (!policyApprovals.length) return null;
   return withStateLock(root, () => {
     const used = pickPolicyApproval(policyApprovals, guardFiles);
+    if (!used) {
+      return { ok: false, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)`, approvalId: policyApprovals[0]?.id };
+    }
     if (autoApproveKillSwitchOn(root)) {
       return { ok: false, reason: `${DENY_ADVICE} (blocked: policy kill-switch)`, approvalId: used.id };
     }
@@ -1561,8 +1580,23 @@ export function handbuildPolicyGuardCheck(root, {
       return { ok: false, reason: `${DENY_ADVICE} (blocked: policy shell-env)`, approvalId: used.id, rule: 'policy-shell' };
     }
     const gitInvocations = (policyGitOps ?? policyGitInvocationsFromOps(policyOps));
+    if (gitInvocations.length) {
+      const rewritten = policyRewriteGitCommand(command, { home, cwd: workCwd });
+      if (!rewritten) {
+        return {
+          ok: false,
+          reason: `${DENY_ADVICE} (blocked: policy git must use hardened git argv)`,
+          approvalId: used.id,
+          rule: 'policy-git-rewrite',
+        };
+      }
+      const argv = policyGitArgvFromCommand(rewritten, { home });
+      if (!argv) {
+        return { ok: false, reason: `${DENY_ADVICE} (blocked: policy git argv)`, approvalId: used.id, rule: 'policy-git-argv' };
+      }
+    }
     if (!gitInvocations.length) return { ok: true, approvalId: used.id };
-    const opts = { root, currentBranch: curBranch, cwd: workCwd, home };
+    const opts = { root, currentBranch: curBranch, cwd: workCwd, home, policyFiles: used.files };
     const approvedGit = new Set((used.git ?? []).map(g => String(g)));
     for (const op of gitInvocations) {
       const sub = op.sub;
@@ -1595,7 +1629,16 @@ export function handbuildPolicyGuardCheck(root, {
         };
       }
     }
-    return { ok: true, approvalId: used.id, command, branch: curBranch, head: curHead, rule: 'policy-git' };
+    const argv = policyGitArgvFromCommand(policyRewriteGitCommand(command, { home, cwd: workCwd }) ?? command, { home });
+    return {
+      ok: true,
+      approvalId: used.id,
+      command,
+      branch: curBranch,
+      head: curHead,
+      rule: 'policy-git',
+      policyGitArgv: argv,
+    };
   });
 }
 
@@ -1647,7 +1690,13 @@ const orchestratorSwarmRunWrites = (command, root, cwd) => {
 const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || isSwarmRunRecord(r) || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
 const swarmRecordReason = rel => `Hand-build guard: ${rel} is swarm run state (only swarm commands may write it); no approval covers it.`;
 // Outside the checkout too: the install (the guard's own scripts) and the user's own Claude settings could switch the hooks off.
-export const protectedAbsolute = (home = os.homedir()) => [path.join(home, '.project-swarm'), path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.local.json'), ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : [])];
+export const protectedAbsolute = (home = os.homedir()) => [
+  path.join(home, '.project-swarm'),
+  path.join(home, '.claude', 'settings.json'),
+  path.join(home, '.claude', 'settings.local.json'),
+  ...policyGitConfigAbsPaths(home),
+  ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : []),
+];
 const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.startsWith(`${prefix}/`));
 const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
 
@@ -1700,6 +1749,12 @@ function applyPolicyGuardedAllow(root, {
   const policyGitInvocations = policyGitOps ?? policyGitInvocationsFromOps(policyOps);
   const touchesPolicyFiles = files.some(f => policyRows.some(a => matchesFile(a.files, f)));
   if (!policyRows.length || (!policyGitInvocations.length && !touchesPolicyFiles)) return finishBash(allowResult);
+  if (policyOps.some(o => o.opaque)) {
+    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: policy opaque command)` });
+  }
+  if (policyOps.some(o => o.tool && o.tool !== 'git')) {
+    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: policy non-git command)` });
+  }
   const check = handbuildPolicyGuardCheck(root, {
     command,
     approvals: policyRows,
@@ -1721,6 +1776,7 @@ function applyPolicyGuardedAllow(root, {
     command,
     branch: check?.branch,
     head: check?.head,
+    policyGitArgv: check?.policyGitArgv,
   }, { now, home: h });
   if (rec?.blocked) {
     return finishBash({
@@ -1938,8 +1994,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const chatMergeCandidates = [];
     let standingMergeAllow = false;
     const policyWindowsLive = approvals.some(a => a.policyId);
+    if (policyWindowsLive && policyOps.some(o => o.opaque)) {
+      return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: policy opaque command)` });
+    }
     for (const op of policyOps) {
-      if (op.opaque) { policyGitOps.push('commit'); continue; }
+      if (op.opaque) continue;
       if (op.tool === 'git') {
         if (op.sub === 'fetch') {
           if (!isFreeGitFetch(op, root)) policyGitOps.push('config');
@@ -2050,7 +2109,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         cwd,
         approvals,
         finishBash,
-        skipPolicyGuard: swarmMergeAllow,
+        skipPolicyGuard: swarmMergeAllow && policyOps.length === 1 && policyOps[0]?.tool === 'swarm' && policyOps[0]?.sub === 'merge',
+        policyOps,
       });
       if (out.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
       if (out.allow && standingMergeAllow) return finishBash({ ...out, standing: 'merge-swarm-pr' });
@@ -2071,7 +2131,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const added = [];
       let everything = false;
       for (const words of tokenize(ti.command)) {
-        const gi = words.findIndex(w => path.basename(w) === 'git');
+        const gi = policyGitAt(words);
         if (gi === -1) continue;
         const rest = words.slice(gi + 1);
         const ai = rest.indexOf('add');

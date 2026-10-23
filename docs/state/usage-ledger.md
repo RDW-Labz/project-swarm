@@ -169,6 +169,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-23 | - | review-aa2: FAIL. H1 is closed in finishAllow, but the guardDecision push path still makes a push fr | claude | opus | pass | 58,235 | $0.53 |
 | 2026-10-23 | - | aanew3: Hardened remote URL normalization, git exec env/config, repo config allow-list, common-dir h | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-23 | - | review-aa3: FAIL. Of the second review's findings, only the guardDecision push path is partly fixed, | claude | opus | pass | 56,428 | $0.49 |
+| 2026-10-23 | - | review-aa3: FAIL. Fixed: hooks common-dir, invocation-rule push path, Write/Edit guard and daily win | claude | opus | pass | 148,785 | $0.92 |
+| 2026-10-23 | - | aanew5: H1–L6: hardened URL/config/git argv, opaque/non-git policy denial, stats fail-closed, truste | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -186,6 +188,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 3 | 3 | 0 | 164,170 | $1.47 |
-| 2026-10-23 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 165 | 150 | 15 | 14,875,545 | $28.14 (incl. estimates) |
+| 2026-10-23 | claude | 4 | 4 | 0 | 312,955 | $2.39 |
+| 2026-10-23 | cursor | 2 | 2 | 0 | 0 | subscription |
+| **total** | all | 167 | 152 | 15 | 15,024,330 | $29.06 (incl. estimates) |

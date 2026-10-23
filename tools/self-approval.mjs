@@ -865,7 +865,10 @@ function fullCommandHasStaticMarker(commandText) {
 function surfaceHasStaticMarker(surface) {
   if (!surface) return false;
   if (swarmChangeOrchestratorCommandAllowed(surface)) return false;
-  if (SAFE_SWARM.some(re => re.test(surface))) return false;
+  if (SAFE_SWARM.some(re => {
+    const anchored = new RegExp(`^(?:${re.source})`, re.flags.replace(/g/g, ''));
+    return anchored.test(surface);
+  })) return false;
   return STATIC_MARKERS.some(re => re.test(surface));
 }
 
@@ -909,7 +912,10 @@ function commandWordsInlineInterpreterRisky(words) {
 
 function matchesNormalized(normalized, rawText = '', { skipSafeSwarm = false } = {}) {
   if (!normalized) return false;
-  if (!skipSafeSwarm && SAFE_SWARM.some(re => re.test(normalized))) return false;
+  if (!skipSafeSwarm && SAFE_SWARM.some(re => {
+    const anchored = new RegExp(`^(?:${re.source})`, re.flags.replace(/g/g, ''));
+    return anchored.test(normalized);
+  })) return false;
   if (rawText && tmuxOrchestratorMarker(rawText)) return true;
   return false;
 }
