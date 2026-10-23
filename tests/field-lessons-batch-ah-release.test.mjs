@@ -27,16 +27,16 @@ async function publicFiles() {
   return Object.fromEntries(entries);
 }
 
-test('AH release pins 1.167.3 and publishes five scrubbed lesson dispositions', async () => {
+test('AH release pins 1.167.4 and publishes five scrubbed lesson dispositions', async () => {
   const text = await publicFiles();
   const pkg = JSON.parse(text['package.json']);
   const lock = JSON.parse(text['package-lock.json']);
-  assert.equal(pkg.version, '1.167.3');
-  assert.equal(lock.version, '1.167.3');
-  assert.equal(lock.packages[''].version, '1.167.3');
+  assert.equal(pkg.version, '1.167.4');
+  assert.equal(lock.version, '1.167.4');
+  assert.equal(lock.packages[''].version, '1.167.4');
 
   const changelog = text['CHANGELOG.md'];
-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.3\n/);
+  assert.match(changelog, /^# Changelog\n\n## 1\.167\.4\n/);
   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
   const bullets = current.split('\n').filter(line => line.startsWith('- '));
   assert.equal(bullets.length, 5);
@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
 
   const expectedPins = {
-    'README.md': '1.167.3',
+    'README.md': '1.167.4',
     'skills/project-swarm/SKILL.md': '1.48.0',
-    'tests/field-lesson-t80-cli.test.mjs': '1.167.3',
-    'tests/field-lessons-batch-x.test.mjs': '1.167.3',
-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.3',
-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.3',
+    'tests/field-lesson-t80-cli.test.mjs': '1.167.4',
+    'tests/field-lessons-batch-x.test.mjs': '1.167.4',
+    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.4',
+    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.4',
   };
   for (const [file, version] of Object.entries(expectedPins)) {
     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
