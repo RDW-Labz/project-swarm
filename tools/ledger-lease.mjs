@@ -112,7 +112,7 @@ async function writeLeases(root, store) {
 }
 
 function makeLockNonce() {
-  return `${process.pid}:${Date.now()}:${randomBytes(16).toString('hex')}`;
+  return randomBytes(16).toString('hex');
 }
 
 async function readLockNonce(lockFile) {
@@ -123,92 +123,81 @@ async function readLockNonce(lockFile) {
   }
 }
 
-async function removeLockIfStillNonce(lockFile, expectedNonce) {
-  const current = await readLockNonce(lockFile);
+async function sleep(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function removeStaleLockBestEffort(lockPath) {
+  try {
+    await fs.rm(lockPath, { force: true });
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      // ignore other errors; next O_EXCL attempt is the safety boundary
+    }
+  }
+}
+
+/** @internal Exported for lock-discipline tests. */
+export async function releaseExclusiveLock(lockPath, expectedNonce) {
+  const current = await readLockNonce(lockPath);
   if (current !== expectedNonce) return false;
   try {
-    await fs.rm(lockFile, { force: true });
+    await fs.rm(lockPath, { force: true });
     return true;
   } catch {
     return false;
   }
 }
 
-async function sleep(ms) {
-  await new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function acquireLeaseLock(dir) {
-  const lock = path.join(dir, 'leases.lock');
+/** @internal Exported for lock-discipline tests. */
+export async function acquireExclusiveLock(lockPath, { busyMessage } = {}) {
+  const message = busyMessage ?? 'lock is busy; try again';
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-    const ourNonce = makeLockNonce();
     try {
-      const handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+      const handle = await fs.open(
+        lockPath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+        0o600,
+      );
+      const ourNonce = makeLockNonce();
       await handle.writeFile(ourNonce);
-      return { handle, lock, ourNonce };
+      return { handle, ourNonce };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
+      const stat = await fs.lstat(lockPath).catch(() => null);
       if (!stat || Date.now() - stat.mtimeMs <= LOCK_STALE_MS) {
         if (attempt + 1 >= LOCK_ATTEMPTS) {
-          throw fail('lease-busy', 'another lease mutation is in progress; try again');
+          throw fail('lease-busy', message);
         }
         await sleep(LOCK_RETRY_MS);
         continue;
       }
-      const staleNonce = await readLockNonce(lock);
-      if (staleNonce === null) {
-        await fs.rm(lock, { force: true }).catch(() => {});
-        continue;
-      }
-      const removed = await removeLockIfStillNonce(lock, staleNonce);
-      if (!removed) {
-        await sleep(LOCK_RETRY_MS);
-        continue;
-      }
+      await removeStaleLockBestEffort(lockPath);
     }
   }
-  throw fail('lease-busy', 'could not take the lease lock');
+  throw fail('lease-busy', message);
 }
 
-async function withLeaseLock(root, fn) {
-  const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const { handle, lock, ourNonce } = await acquireLeaseLock(dir);
+async function withExclusiveLock(lockPath, busyMessage, fn) {
+  const { handle, ourNonce } = await acquireExclusiveLock(lockPath, { busyMessage });
   try {
     return await fn();
   } finally {
     await handle.close().catch(() => {});
-    await removeLockIfStillNonce(lock, ourNonce);
+    await releaseExclusiveLock(lockPath, ourNonce);
   }
+}
+
+async function withLeaseLock(root, fn) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const lock = path.join(dir, 'leases.lock');
+  return withExclusiveLock(lock, 'another lease mutation is in progress; try again', fn);
 }
 
 async function withScopeGoLock(root, fn) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const lock = path.join(dir, 'scope-go.lock');
-  let handle = null;
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS && !handle; attempt += 1) {
-    try {
-      handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-        await fs.rm(lock, { force: true });
-        continue;
-      }
-      if (attempt + 1 >= LOCK_ATTEMPTS) {
-        throw fail('lease-busy', 'ticket ledger is busy; try again');
-      }
-      await sleep(LOCK_RETRY_MS);
-    }
-  }
-  if (!handle) throw fail('lease-busy', 'could not take the ticket ledger lock');
-  try {
-    return await fn();
-  } finally {
-    await handle.close().catch(() => {});
-    await fs.rm(lock, { force: true });
-  }
+  return withExclusiveLock(lock, 'ticket ledger is busy; try again', fn);
 }
 
 async function withLeaseAndScopeGoLock(root, fn) {

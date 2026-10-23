@@ -16,6 +16,8 @@ import {
   readLeases,
   leasesPath,
   DEFAULT_LEASE_TTL_MS,
+  acquireExclusiveLock,
+  releaseExclusiveLock,
 } from '../tools/ledger-lease.mjs';
 
 const scope = { name: 'P', version: 1, hash: 'a'.repeat(64) };
@@ -182,6 +184,46 @@ async function withScopeGoLockLikeCli(root, fn) {
     await fs.rm(lock, { force: true });
   }
 }
+
+test('two simultaneous stale-takeover attempts yield exactly one O_EXCL holder', async t => {
+  const root = await project(t);
+  const lock = leaseLockFile(root);
+  await fs.mkdir(path.dirname(lock), { recursive: true });
+  await fs.writeFile(lock, `dead:${randomBytes(8).toString('hex')}`);
+  await touchStale(lock);
+
+  const results = await Promise.allSettled([
+    acquireExclusiveLock(lock, { busyMessage: 'busy' }),
+    acquireExclusiveLock(lock, { busyMessage: 'busy' }),
+  ]);
+
+  const acquired = results.filter(r => r.status === 'fulfilled');
+  const blocked = results.filter(r => r.status === 'rejected');
+  assert.equal(acquired.length, 1, 'exactly one caller wins O_EXCL after stale rm ping-pong');
+  assert.equal(blocked.length, 1);
+  assert.equal(blocked[0].reason.code, 'lease-busy');
+
+  const { handle, ourNonce } = acquired[0].value;
+  assert.equal((await fs.readFile(lock, 'utf8')).trim(), ourNonce);
+  await handle.close();
+  await releaseExclusiveLock(lock, ourNonce);
+  assert.equal(await fs.readFile(lock, 'utf8').catch(() => null), null);
+});
+
+test('release does not remove lock when another nonce has taken over', async t => {
+  const root = await project(t);
+  const lock = leaseLockFile(root);
+  await fs.mkdir(path.dirname(lock), { recursive: true });
+
+  const { handle, ourNonce } = await acquireExclusiveLock(lock, { busyMessage: 'busy' });
+  const successorNonce = randomBytes(16).toString('hex');
+  await fs.writeFile(lock, successorNonce);
+  await handle.close();
+
+  const removed = await releaseExclusiveLock(lock, ourNonce);
+  assert.equal(removed, false);
+  assert.equal((await fs.readFile(lock, 'utf8')).trim(), successorNonce);
+});
 
 test('stale lease lock takeover with nonce check yields one holder', async t => {
   const root = await project(t);
