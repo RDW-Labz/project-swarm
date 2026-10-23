@@ -69,8 +69,22 @@ test('AC1: every file a ticket writes or reads as context is checked against the
   assert.equal(bad.errors[0].field, 'context');
   assert.equal(bad.errors[0].path, 'docs/missing.md');
   const writeTypo = validateTicketPaths(ticket({ files: ['src/lib/util.ts'] }), { repoFiles: REPO, exists });
-  assert.equal(writeTypo.ok, false);
-  assert.equal(writeTypo.errors[0].field, 'files');
+  assert.equal(writeTypo.ok, true);
+  assert.equal(writeTypo.errors.length, 0);
+  assert.equal(writeTypo.warnings.length, 1);
+  assert.equal(writeTypo.warnings[0].code, 'similar-new-file');
+  assert.equal(writeTypo.warnings[0].field, 'files');
+});
+
+test('AC1: delete-field typo and read-field missing file stay errors', () => {
+  const exists = (p) => REPO.includes(p);
+  const deleteTypo = validateTicketPaths(ticket({ deletes: ['tools/ticket.mjs'] }), { repoFiles: REPO, exists });
+  assert.equal(deleteTypo.ok, false);
+  assert.equal(deleteTypo.errors[0].field, 'deletes');
+  assert.equal(deleteTypo.errors[0].reason, 'likely typo');
+  const readMissing = validateTicketPaths(ticket({ context: ['docs/missing.md'] }), { repoFiles: REPO, exists });
+  assert.equal(readMissing.ok, false);
+  assert.equal(readMissing.errors[0].field, 'context');
 });
 
 test('AC1: a genuinely new write path with no close match is allowed', () => {

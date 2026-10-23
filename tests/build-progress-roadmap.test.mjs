@@ -8,8 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { buildProgress } from '../tools/build-progress.mjs';
-import { projectDetail, projectOverview } from '../tools/board-data.mjs';
+import { buildProgress, progressSummary } from '../tools/build-progress.mjs';
 import { approveLedger, createLedger, writeLedger } from '../tools/tickets.mjs';
 import { parseScope, scopeHash } from '../tools/scope.mjs';
 
@@ -69,7 +68,12 @@ async function roadmapFixture(t, { doneCount = 12, doneAgeDays = 1 } = {}) {
   const historyFile = path.join(temp, 'history.ndjson');
   await fs.writeFile(historyFile, '');
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
-  return { main, linked: await fs.realpath(linked), historyFile, oldLedger, worktreeLedger, project: { id: 'roadmap-fixture', name: 'Roadmap fixture', root: await fs.realpath(main) } };
+  const mainRoot = await fs.realpath(main);
+  const linkedRoot = await fs.realpath(linked);
+  const family = async () => [mainRoot, linkedRoot];
+  const project = { id: 'roadmap-fixture', name: 'Roadmap fixture', root: mainRoot };
+  const progressOpts = (extra = {}) => ({ root: mainRoot, projectId: project.id, now: NOW, historyFile, family, ...extra });
+  return { main: mainRoot, linked: linkedRoot, historyFile, oldLedger, worktreeLedger, project, family, progressOpts };
 }
 
 async function writeRun(root, runId, state) {
@@ -80,7 +84,7 @@ async function writeRun(root, runId, state) {
 
 test('build progress follows the newest approved roadmap ledger across linked worktrees and excludes human tickets', async t => {
   const fixture = await roadmapFixture(t);
-  const progress = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const progress = await buildProgress(fixture.progressOpts());
   assert.equal(progress.source.root, fixture.linked);
   assert.equal(progress.source.differs, true);
   assert.equal(progress.source.candidates, 2);
@@ -92,19 +96,17 @@ test('build progress follows the newest approved roadmap ledger across linked wo
   assert.equal(progress.left.human.length, 2);
   assert.ok(progress.notes.includes(`ledger read from ${path.basename(fixture.linked)} (newest approved of 2 checkouts)`));
 
-  const overview = await projectOverview(fixture.project, [], { now: NOW, historyFile: fixture.historyFile, summary: async () => ({}) });
-  assert.deepEqual([overview.tickets.total, overview.tickets.open, overview.tickets.stage], [80, 68, 'Ticket Manager v2']);
-  assert.deepEqual(overview.progress, { overall: 15, ticketsPct: 15, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0, headline: 'build 12/80 · human 0/2', untracked: { runs: 0, jobs: 0 } });
-
-  const detail = await projectDetail(fixture.project, { now: NOW, historyFile: fixture.historyFile, summary: async () => ({}) });
-  assert.equal(detail.ticketCounts.total, 80);
-  assert.equal(detail.tickets.length, 82);
+  const summary = progressSummary(progress);
+  assert.deepEqual([progress.percent.tickets.total, progress.percent.tickets.total - progress.percent.tickets.done], [80, 68]);
+  assert.deepEqual(summary, { overall: 15, ticketsPct: 15, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0, headline: 'build 12/80 · human 0/2', untracked: { runs: 0, jobs: 0 } });
+  assert.equal(progress.percent.tickets.total, 80);
+  assert.equal(progress.percent.tickets.done + (progress.percent.tickets.total - progress.percent.tickets.done) + progress.left.human.length, 82);
 });
 
 test('an approved main ledger wins over a newer but unapproved linked ledger', async t => {
   const fixture = await roadmapFixture(t);
   await writeLedger(fixture.linked, { ...fixture.worktreeLedger, approved: null, updatedAt: iso(NOW + DAY) });
-  const progress = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const progress = await buildProgress(fixture.progressOpts());
   assert.equal(progress.source.root, fixture.project.root);
   assert.equal(progress.source.differs, false);
   assert.equal(progress.percent.requirements.total, 39);
@@ -113,16 +115,16 @@ test('an approved main ledger wins over a newer but unapproved linked ledger', a
 
 test('ETA widens from fourteen to thirty days, then to all recorded completions', async t => {
   const thirty = await roadmapFixture(t, { doneCount: 2, doneAgeDays: 20 });
-  const thirtyProgress = await buildProgress({ root: thirty.main, projectId: thirty.project.id, now: NOW, historyFile: thirty.historyFile });
+  const thirtyProgress = await buildProgress(thirty.progressOpts());
   assert.match(thirtyProgress.eta.basis, /^2 done in the last 30 days$/);
   assert.equal(thirtyProgress.eta.remaining, 78);
 
   const since = await roadmapFixture(t, { doneCount: 2, doneAgeDays: 60 });
-  const sinceProgress = await buildProgress({ root: since.main, projectId: since.project.id, now: NOW, historyFile: since.historyFile });
+  const sinceProgress = await buildProgress(since.progressOpts());
   assert.match(sinceProgress.eta.basis, /^2 done since /);
 
   const missing = await roadmapFixture(t, { doneCount: 1, doneAgeDays: 1 });
-  const missingProgress = await buildProgress({ root: missing.main, projectId: missing.project.id, now: NOW, historyFile: missing.historyFile });
+  const missingProgress = await buildProgress(missing.progressOpts());
   assert.equal(missingProgress.eta, null);
   assert.ok(missingProgress.notes.includes('no completion times recorded in tickets.log'));
 });
@@ -137,7 +139,7 @@ test('roadmap progress excludes cancelled, proposed and human tickets, normalize
   Object.assign(byId('T-0009'), { status: 'done', stage: null, scopeRefs: [] });
   tickets.push(humanTicket('T-9001'), { ...byId('T-0008'), id: 'T-9010', status: 'proposed', title: 'Proposed work' });
   await writeLedger(fixture.linked, approveLedger({ ...fixture.worktreeLedger, tickets }, { now: NOW }));
-  const progress = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const progress = await buildProgress(fixture.progressOpts());
   assert.deepEqual(progress.percent.tickets, { done: 4, total: 4, pct: 100 });
   assert.deepEqual(progress.percent.requirements, { covered: 2, total: 80, pct: 2 });
   assert.equal(progress.percent.overall, 100);
@@ -156,12 +158,12 @@ test('scope milestones ignore unrelated PRs and accept linked PRs only after app
     { kind: 'pr', projectId: fixture.project.id, at: iso(NOW), ref: '#999', title: 'Unrelated repository PR' },
     { kind: 'pr', projectId: fixture.project.id, at: iso(NOW - 3600000), ref: '#42', title: 'Before approval' },
   ].map(event => JSON.stringify(event)).join('\n') + '\n');
-  const before = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const before = await buildProgress(fixture.progressOpts());
   assert.equal(before.milestones.find(item => item.key === 'pr').state, 'todo');
 
   await writeLedger(fixture.linked, approveLedger({ ...fixture.worktreeLedger, tickets }, { now: NOW - 2 * DAY }));
   await fs.appendFile(fixture.historyFile, `${JSON.stringify({ kind: 'pr', projectId: fixture.project.id, at: iso(NOW - DAY), ref: '#42', title: 'Linked PR after approval' })}\n`);
-  const after = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const after = await buildProgress(fixture.progressOpts());
   assert.equal(after.milestones.find(item => item.key === 'pr').state, 'current');
   assert.equal(after.milestones.find(item => item.key === 'pr').currentDone, true);
   assert.equal(after.milestones.find(item => item.key === 'merged').state, 'todo');
@@ -177,7 +179,7 @@ test('ETA falls back to run finish times, caps a zero rounded rate, and reports 
       { id: 'T-0002', status: 'complete', finishedAt: iso(NOW - 2 * DAY), costUsd: 2 },
     ],
   });
-  const fallback = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const fallback = await buildProgress(fixture.progressOpts());
   assert.deepEqual(fallback.eta, { remaining: 78, perDay: 0.14, days: 558, basis: '2 done in the last 14 days (from run finish times)' });
 
   const old = 4000 * DAY;
@@ -188,7 +190,7 @@ test('ETA falls back to run finish times, caps a zero rounded rate, and reports 
       { id: 'T-0002', status: 'complete', finishedAt: iso(NOW - old + DAY), costUsd: 2 },
     ],
   });
-  const widened = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const widened = await buildProgress(fixture.progressOpts());
   assert.equal(widened.eta.perDay, 0);
   assert.equal(widened.eta.days, 3650);
   assert.ok(Number.isFinite(widened.eta.days));
@@ -202,7 +204,7 @@ test('ETA falls back to run finish times, caps a zero rounded rate, and reports 
     jobs: [{ id: 'off-job-2', status: 'failed', finishedAt: iso(NOW - DAY), costUsd: 0.5 }],
   });
   await fs.writeFile(fixture.historyFile, `${JSON.stringify({ kind: 'pr', projectId: fixture.project.id, at: iso(NOW - DAY), run: 'chosen-off-ledger', ref: '#77', title: 'Off-ledger PR' })}\n`);
-  const withOffLedger = await buildProgress({ root: fixture.main, projectId: fixture.project.id, now: NOW, historyFile: fixture.historyFile });
+  const withOffLedger = await buildProgress(fixture.progressOpts());
   assert.equal(withOffLedger.offLedger.count, 2);
   assert.deepEqual(withOffLedger.offLedger.runs.map(run => run.runId), ['card-off-ledger', 'chosen-off-ledger']);
   assert.deepEqual(withOffLedger.offLedger.runs[1].prs, ['#77']);

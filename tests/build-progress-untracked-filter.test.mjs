@@ -46,7 +46,7 @@ test('off-ledger counts exclude smoke, probe, lane tests, and non-integrating ru
   await run(root, 'non-integrating', { nonIntegrating: true, jobs: [job('real-job')] });
   await run(root, 'manifest-run', { manifest: 'release.json', jobs: [job('real-job')] });
 
-  const progress = await buildProgress({ root, projectId: 'filter-fixture', now: NOW, historyFile: path.join(root, 'history.ndjson') });
+  const progress = await buildProgress({ root, projectId: 'filter-fixture', now: NOW, historyFile: path.join(root, 'history.ndjson'), discoverWorktrees: false });
   assert.deepEqual(progress.untracked.runs.map(item => item.runId), ['manifest-run']);
   assert.equal(progress.untracked.jobs, 1);
   assert.deepEqual(progress.untracked.newest, [{ runId: 'manifest-run', name: 'manifest-run', startedAt: new Date(NOW - 1000).toISOString(), status: 'complete' }]);

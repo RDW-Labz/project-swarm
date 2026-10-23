@@ -37,7 +37,7 @@ function fixture(overrides = {}, globalConcurrency = 4, random = () => 1) {
 const outcome = (kind, extra = {}) => ({ kind, retryAfterMs: null, resetsAt: null, ...extra });
 
 test('defaults are complete, deeply frozen, and independently resolved', () => {
-  assert.deepEqual(LANE_AGENTS, ['hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented']);
+  assert.deepEqual(LANE_AGENTS, ['hermes', 'cursor', 'codex', 'claude', 'qwen', 'openai', 'gemini', 'ollama', 'lambda', 'openrouter', 'anthropic', 'rented', 'local']);
   assert.ok(Object.isFrozen(LANE_AGENTS));
   assert.ok(Object.isFrozen(LANE_DEFAULTS));
   const lanes = resolveLanes();

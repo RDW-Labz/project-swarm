@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.167.5
+
+Wide waves now start for tickets that list their own tests.
+- **Wave prep:** a ticket that lists its own tests no longer skips the cover for tests that mention its files in passing (T-0068 and every ticket touching tools/swarm.mjs); the tests go to context up to 25 and the rest to ignoreTests.
+
+## 1.167.4
+
+The project page no longer goes blank, and wide waves start.
+- **Board:** the project page rendered nothing when one panel failed (the removed spend panel threw and the error was swallowed); it now renders every panel, shows an error banner when loading fails, and has a large-ledger test.
+- **Wave prep:** one ticket that cannot be prepared (uncovered tests, a test file the ticket creates, oversized or binary context) is parked with a warning instead of aborting the whole wave, and tickets move to running only after the manifest validates.
+
+## 1.167.3
+
+New files are no longer refused as typos.
+- **Splitter:** a new write path never errors on similarity alone (warning only), and Next.js files, dynamic route folders, route groups, parallel slots, workflow files and test files are known conventions with no warning.
+- **Local lane:** any OpenAI-compatible endpoint (such as dev2) is a worker lane with a Keychain key, per-endpoint slots, loopback-only for sensitive jobs and no redirects on the key request.
+
 ## 1.167.2
 
 Work now spreads across lanes.

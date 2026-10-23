@@ -56,6 +56,10 @@ import { runManagersScopeGate } from './manager-commands.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
 import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, normTicketPath } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
+import { parseUncovered } from './uncovered-tests.mjs';
+import { suggestIgnoreTests } from './context-check.mjs';
+import { API_AGENTS, decodeContext } from './api-adapters.mjs';
+import { CONTEXT_TOTAL_CAP } from './swarm/patterns.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
@@ -410,7 +414,164 @@ export function contextEnvFor(root, profile) {
     profileContext: profile?.context ?? {},
     screenMockups: Object.fromEntries((profile?.ui?.screens ?? []).map(screen => [screen.id, screen.mockup])),
     envLine: envLineFor(root),
+    isApiTextFile: p => {
+      if (!usable(p) && !usable(p, true)) return false;
+      try {
+        decodeContext(readFileSync(path.join(root, p)));
+        return true;
+      } catch {
+        return false;
+      }
+    },
   };
+}
+
+export const WAVE_PREP_IGNORE_TESTS_REASON = 'tests that reference these files in passing are covered by the full suite run before merge';
+
+const UNCOVERED_TEST_REFERENCES_HEADER = 'Uncovered test references';
+const WAVE_PREP_CONTEXT_TESTS_MAX = 25;
+
+function wavePrepContextBytes(context, root) {
+  if (!root) return 0;
+  let total = 0;
+  for (const file of context ?? []) {
+    try { total += statSync(path.join(root, file)).size; } catch { /* missing */ }
+  }
+  return total;
+}
+
+function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
+  let changed = false;
+  const next = jobs.map(job => {
+    const add = suggested?.[job.id];
+    if (!add?.length) return job;
+    const outputs = new Set(job.outputs ?? []);
+    const context = [...(job.context ?? [])];
+    const seen = new Set(context);
+    const pending = [...new Set(add)].filter(test => !seen.has(test) && !outputs.has(test)).sort();
+    if (!pending.length) return job;
+    const forIgnore = [];
+    let contextAdds = 0;
+    let apiBytes = wavePrepContextBytes(context, root);
+    const usesApiCap = Boolean(root && API_AGENTS.includes(job.agent));
+    for (const test of pending) {
+      if (contextAdds >= WAVE_PREP_CONTEXT_TESTS_MAX) {
+        forIgnore.push(test);
+        continue;
+      }
+      let testBytes = 0;
+      if (root) {
+        try { testBytes = statSync(path.join(root, test)).size; } catch { testBytes = 0; }
+      }
+      if (usesApiCap && apiBytes + testBytes > CONTEXT_TOTAL_CAP) {
+        forIgnore.push(test);
+        continue;
+      }
+      context.push(test);
+      seen.add(test);
+      contextAdds += 1;
+      apiBytes += testBytes;
+      changed = true;
+    }
+    let updated = changed ? { ...job, context } : job;
+    if (forIgnore.length) {
+      const prior = new Set(updated.ignoreTests ?? []);
+      const merged = [...new Set([...prior, ...forIgnore])].sort().slice(0, 1000);
+      if (merged.length !== prior.size || updated.ignoreTestsReason !== WAVE_PREP_IGNORE_TESTS_REASON) {
+        updated = { ...updated, ignoreTests: merged, ignoreTestsReason: WAVE_PREP_IGNORE_TESTS_REASON };
+        changed = true;
+      }
+    }
+    return updated;
+  });
+  return changed ? next : jobs;
+}
+
+function dropWaveDependents(manifest, jobId, bucket, tail = 'which was skipped') {
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const j of [...manifest.jobs]) {
+      if ((j.after ?? []).some(a => a === jobId || bucket.some(u => u.id === a))) {
+        manifest.jobs = manifest.jobs.filter(x => x.id !== j.id);
+        bucket.push({ id: j.id, reason: `waits for ${jobId}, ${tail}` });
+        grew = true;
+      }
+    }
+  }
+}
+
+function prepFailureJobId(error, manifest, root) {
+  const msg = String(error?.message ?? '');
+  let id = /context-not-deliverable: context exceeds \d+ bytes for (\S+)/.exec(msg)?.[1];
+  if (id) return id;
+  id = /context exceeds \d+ bytes for (\S+)/.exec(msg)?.[1];
+  if (id) return id;
+  id = /for job (\S+?)(?:[;)]| \(|$)/.exec(msg)?.[1];
+  if (id && /^T-\d+$/.test(id)) return id;
+  id = /Job (\S+):/.exec(msg)?.[1];
+  if (id) return id;
+  const missing = /context-not-deliverable: missing context (\S+)/.exec(msg)?.[1]
+    ?? /Missing context: (\S+)/.exec(msg)?.[1];
+  if (missing) return manifest.jobs.find(j => (j.context ?? []).includes(missing))?.id ?? null;
+  if (/UTF-8 text files without NUL bytes only/.test(msg) && root) {
+    return manifest.jobs.find(j => (j.context ?? []).some(p => {
+      try {
+        decodeContext(readFileSync(path.join(root, p)));
+        return false;
+      } catch {
+        return true;
+      }
+    }))?.id ?? null;
+  }
+  return null;
+}
+
+export async function finalizeScopeWaveManifest(manifest, { validate, tickets, warnings, unroutable = [], root = null }) {
+  const ticketsById = new Map((tickets ?? []).map(t => [t.id, t]));
+  const parked = [];
+  const limit = Math.max(50, (manifest.jobs?.length ?? 0) * 4 + 10);
+  for (let pass = 0; pass < limit; pass += 1) {
+    try {
+      await validate(manifest);
+      return { manifest, parked, unroutable };
+    } catch (error) {
+      if (error?.code === 'route-exhausted') {
+        const jobId = /for job (\S+?)(?:[;)]| \(|$)/.exec(String(error.message))?.[1];
+        if (jobId && manifest.jobs.some(j => j.id === jobId)) {
+          manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
+          dropWaveDependents(manifest, jobId, unroutable, 'which no lane can take');
+          unroutable.push({ id: jobId, reason: String(error.message) });
+          if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave can be routed: ${unroutable.map(u => `${u.id}: ${u.reason}`).join('; ')}`);
+          pass -= 1;
+          continue;
+        }
+      }
+      const suggested = error?.details?.suggestedIgnoreTests;
+      if (suggested || String(error.message ?? '').startsWith(UNCOVERED_TEST_REFERENCES_HEADER)) {
+        const map = suggested ?? suggestIgnoreTests(parseUncovered(error.message));
+        const nextJobs = applyUncoveredTestReferences(manifest.jobs, map, ticketsById, root);
+        if (nextJobs !== manifest.jobs) {
+          manifest.jobs = nextJobs;
+          continue;
+        }
+        throw error;
+      }
+      const jobId = prepFailureJobId(error, manifest, root);
+      if (jobId && manifest.jobs.some(j => j.id === jobId)) {
+        const reason = String(error.message ?? error).split('\n')[0].slice(0, 300);
+        manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
+        parked.push({ id: jobId, reason });
+        warnings.push(`${jobId} skipped: ${reason}`);
+        const dependents = [];
+        dropWaveDependents(manifest, jobId, dependents);
+        for (const d of dependents) warnings.push(`${d.id} skipped: ${d.reason}`);
+        if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave could be prepared${parked.length ? ` (${parked.map(p => p.id).join(', ')} skipped)` : ''}`);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw fail('scope-prep', 'wave prep validation did not converge');
 }
 
 // Variable names (never values) from the project's example env file: a regular file, no symlink, small.
@@ -3242,28 +3403,10 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
     const unroutable = [];
     // A manifest the runner would refuse must not leave tickets stuck in running: it is validated before any ticket moves.
     if (typeof validate === 'function') {
-      // Existing project tests that mention a ticket's files go into that job's context (so the worker sees what they assert); then it is validated again.
-      for (let pass = 0; ; pass += 1) {
-        try { await validate(manifest); break; } catch (error) {
-          if (error?.code === 'route-exhausted') {
-            const jobId = /for job (\S+?)(?:[;)]| \(|$)/.exec(String(error.message))?.[1];
-            if (jobId && manifest.jobs.some(j => j.id === jobId)) {
-              manifest.jobs = manifest.jobs.filter(j => j.id !== jobId);
-              // anything that waits for the dropped job cannot run in this wave either
-              for (let grew = true; grew;) { grew = false; for (const j of [...manifest.jobs]) if ((j.after ?? []).some(a => unroutable.some(u => u.id === a) || a === jobId)) { manifest.jobs = manifest.jobs.filter(x => x.id !== j.id); unroutable.push({ id: j.id, reason: `waits for ${jobId}, which no lane can take` }); grew = true; } }
-              unroutable.push({ id: jobId, reason: String(error.message) });
-              pass -= 1;
-              if (!manifest.jobs.length) throw fail('scope-nothing', `no ticket of this wave can be routed: ${unroutable.map(u => `${u.id}: ${u.reason}`).join('; ')}`);
-              continue;
-            }
-          }
-          const suggested = error?.details?.suggestedIgnoreTests;
-          if (!suggested || pass >= 2) throw error;
-          for (const job of manifest.jobs) for (const test of (suggested[job.id] ?? []).slice(0, 6)) if (!job.context.includes(test) && !job.outputs.includes(test)) job.context.push(test);
-        }
-      }
+      await finalizeScopeWaveManifest(manifest, { validate, tickets: ready, warnings, unroutable, root });
     }
     ids = manifest.jobs.map(j => j.id);
+    if (!ids.length) throw fail('scope-nothing', humans ? `only ${humans} human ticket(s) are ready; finish them with swarm tickets ID --set done` : 'no ticket of this wave could be prepared');
     for (const u of unroutable) {
       const ticket = ledger.tickets.find(x => x.id === u.id);
       if (ticket && ['ready', 'todo'].includes(ticket.status)) { ticket.status = 'blocked'; ticket.blockReason = `unroutable: ${u.reason.slice(0, 300)}`; }
