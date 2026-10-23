@@ -129,7 +129,7 @@ test('AC1: retry jobs receive quarantined paths as read-only context', async (t)
   const fromRetryModule = attachQuarantineReadOnlyContextFromRecord(
     { id: ticketId, outputs: [sourceRel], context: [] },
     record,
-    { exists: (rel) => true },
+    { exists: () => true },
   );
   assert.ok(fromRetryModule.context.includes(metaRel));
   assert.ok(fromRetryModule.context.includes(record.outputs[0].path));
@@ -138,7 +138,7 @@ test('AC1: retry jobs receive quarantined paths as read-only context', async (t)
 
   const loaded = await attachQuarantineReadOnlyContextToRetryJob(
     { id: ticketId, context: [] },
-    { root, runId, ticketId, exists: (rel) => true },
+    { root, runId, ticketId, exists: () => true },
   );
   assert.deepEqual(
     loaded.context.sort(),

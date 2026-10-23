@@ -126,6 +126,8 @@ import { executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrent
 import { planDeps, redcheckRunLocked } from './swarm/core-62.mjs';
 import { applyQueuePlans, executeCodexJob, isJobIntegrated, redcheckRun } from './swarm/core-71.mjs';
 import { cleanupRunWorkspaces, GC_USAGE, runGc } from './gc.mjs';
+import { formatReleaseTrainStatus, releaseTrainStatusReport } from './release-train-cli.mjs';
+export { releaseTrainStatusReport } from './release-train-cli.mjs';
 
 
 
@@ -2783,18 +2785,6 @@ function autopilotDeps(root) {
   };
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 async function mainInner() {
   const args=process.argv.slice(2);let root=resolveDefaultRoot(ownRoot, process.cwd());
   // swarm --version (also -v, -V) is swarm version.
@@ -3316,6 +3306,21 @@ async function mainInner() {
     if(res.status==='merged')await(await import('./history-hooks.mjs')).recordShipHistory(root,{...res,url:res.repo&&res.pr?`https://github.com/${res.repo}/pull/${res.pr}`:null});
     if(res.status!=='merged')process.exitCode=1;
     return;
+  }
+  if(args[0]==='release-train'){
+    root=await fs.realpath(root);
+    const sub=args[1];
+    if(sub==='status'){
+      let json=false;
+      for(const flag of args.slice(2)){
+        if(flag==='--json'){json=true;continue;}
+        fail('Usage: swarm release-train status [--json]');
+      }
+      const report=await releaseTrainStatusReport(root);
+      process.stdout.write(json?`${JSON.stringify(report)}\n`:formatReleaseTrainStatus(report));
+      return;
+    }
+    fail('Usage: swarm release-train status [--json]');
   }
   if(['lessons','eval'].includes(args[0])){
     root=await fs.realpath(root);
