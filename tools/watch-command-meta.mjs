@@ -11,6 +11,15 @@ export const SCOPE_SUBCOMMAND_META = {
   },
 };
 
+export const TUNNEL_USAGE = `Usage: swarm tunnel add NAME --host user@host --key PATH --local-port N --remote-port M [--remote-host 127.0.0.1]
+       swarm tunnel status [NAME]
+       swarm tunnel remove NAME
+  add     Install a launchd SSH tunnel (KeepAlive, auto-reconnect) for a local lane endpoint.
+  status  launchd state, pid, local port probe, log tail, and GET /v1/models for matching endpoints.
+  remove  bootout and delete the LaunchAgent plist only.
+macOS only. Keys stay on disk as paths; nothing secret is written into the plist.
+`;
+
 export const FORGET_USAGE = `Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]
        --dry-run  List what would be forgotten without changing the registry.
        --missing  Forget every registered project whose folder no longer exists.
@@ -44,6 +53,7 @@ export const COMMAND_META = {
   brain: { what: 'Shows local brain status, stats or runs a test call.', when: 'To check the local brain is up or see how it has been used.', example: 'swarm brain --markdown', cost: 'local', approval: false },
   budget: { what: 'Sets or shows the project daily spend limit and ceiling.', when: 'When you need to raise or inspect the billed daily cap before more paid runs.', example: 'swarm budget show', cost: 'local', approval: false },
   gpu: { what: 'Manages a rented GPU session: models, up, down, status and bake-off. Never rents by itself.', when: 'When you want to run a local model on rented hardware.', example: 'swarm gpu up --target lambda --model qwen-32b --hourly-usd 1.2 --max-usd 20 --yes', cost: 'spends', approval: true },
+  tunnel: { what: 'Managed SSH tunnels for local lane endpoints (launchd, auto-reconnect).', when: 'When dev2 or another remote inference host must stay reachable without a manual ssh -N.', example: 'swarm tunnel add dev2 --host user@dev2 --key ~/.ssh/swarm --local-port 18001 --remote-port 8000', cost: 'local', approval: false },
   init: { what: 'Sets up a project: profile, base check and repo map.', when: 'Once, when you first point the swarm at a project.', example: 'swarm init --check --json', cost: 'local', approval: false },
   map: { what: 'Builds or refreshes the repo map the agents read.', when: 'After large changes to the code so agents see the new layout.', example: 'swarm map --json', cost: 'local', approval: false },
   scale: { what: 'Runs stub jobs to measure how many jobs the machine handles.', when: 'When you are sizing concurrency for a new machine.', example: 'swarm scale --jobs 50 --concurrency 8', cost: 'local', approval: false },

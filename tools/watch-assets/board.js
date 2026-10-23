@@ -4,6 +4,7 @@
 // Project card labels (board-lib): hand-edits blocked by the guard, untracked runs, checkouts.
 import { mountRobotHead, setAnimationPaused, animationPaused, reducedMotion } from './robot-head.js';
 import { renderOrchestrator, buildMixText } from './orchestrator-view.js';
+import { renderOwnerActions, ownerActionAvailable } from './board-owner-actions.js';
 
 var __boardAutoBoot = typeof process === 'undefined' || !process.env.SWARM_BOARD_CARD_TEST;
 var L = self.BoardLib;
@@ -413,6 +414,27 @@ document.addEventListener('visibilitychange', watchNeedsVisible);
 $('markRead').addEventListener('click', markRead);
 $('needsChip').addEventListener('click', function () { go('overview'); $('needsCard').scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' }); });
 
+var OWNER_INBOX_KINDS = { handbuild: true, decision: true, 'proposed-ticket': true, scope: true };
+function ownerSignedIn() { return Boolean(state.data && state.data.openRun === false); }
+function ownerItemForInbox(it) {
+  var kind = String(it.kind || '');
+  if (!OWNER_INBOX_KINDS[kind]) { return null; }
+  var out = { id: it.id, kind: it.kind, needsOwner: true, title: it.title, boardSafe: it.boardSafe === true };
+  if (kind === 'decision') {
+    var labels = Array.isArray(it.choiceOptions) ? it.choiceOptions.slice() : (Array.isArray(it.choices) ? it.choices.slice() : []);
+    var def = it.defaultChoice;
+    var seen = Object.create(null);
+    var options = [];
+    labels.forEach(function (label) {
+      var text = String(label);
+      if (!text || seen[text]) { return; }
+      seen[text] = true;
+      options.push({ label: text, recommended: def !== undefined && def !== null && String(def) === text });
+    });
+    if (options.length) { out.options = options; }
+  }
+  return out;
+}
 function renderNeeds(inbox) {
   var box = $('needs'); box.textContent = '';
   var items = inbox && inbox.items ? inbox.items : [];
@@ -459,6 +481,13 @@ function renderNeeds(inbox) {
       });
       cmd.appendChild(btn); row.appendChild(cmd);
     });
+    var ownerItem = ownerItemForInbox(it);
+    var signedIn = ownerSignedIn();
+    if (ownerItem && ownerActionAvailable(ownerItem, { signedIn: signedIn })) {
+      var ownerHost = el('div', 'need-owner-actions');
+      renderOwnerActions(ownerHost, ownerItem, { fetchImpl: fetch, token: TOKEN, signedIn: signedIn });
+      row.appendChild(ownerHost);
+    }
     box.appendChild(row);
   });
   state.rendered = keysNow;
@@ -469,7 +498,7 @@ function renderNeeds(inbox) {
   fyi.forEach(function (n) { var r = el('div', 'fyi-row'); r.appendChild(el('div', 'mono sub', n.project + ' | ' + ago(n.since))); r.appendChild(el('div', 'need-title', n.title || '')); fl.appendChild(r); });
   if (inbox && inbox.hidden) { box.appendChild(el('div', 'note', inbox.hidden + ' more not shown (the list is cut at 50 per project): swarm inbox --all')); }
   var ph = inbox && inbox.phone;
-  $('needsNote').textContent = 'Read-only: the board never answers anything. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
+  $('needsNote').textContent = 'Signed-in tailnet owners can approve or deny board-safe items here. Read-only: the board never answers anything except those owner actions. Run the command at your computer' + (ph ? ph.on ? ', or answer on your phone (' + ph.open + ' question' + (ph.open === 1 ? '' : 's') + ' open in ' + ph.repo + ').' : '. Phone questions are switched off.' : '. Phone answers are not set up (swarm phone setup).') + (inbox && inbox.problems && inbox.problems.length ? ' Could not read: ' + inbox.problems.map(function (p) { return p.project; }).join(', ') + '.' : '');
 }
 
 // ---- cost ----------------------------------------------------------------------------------------------------------------------------------------
