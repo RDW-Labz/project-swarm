@@ -13,6 +13,7 @@ import {
   isVerifiedSwarmWorkerCwd,
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_MODE_OFF_FILE,
+  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
 import {
   guardDecision,
@@ -72,13 +73,17 @@ test('verified worker workspace cwd exempts orchestrator mode', async t => {
   const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
   await fs.mkdir(workspace, { recursive: true });
   const prev = process.env.CLAUDE_PROJECT_DIR;
+  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
   process.env.CLAUDE_PROJECT_DIR = root;
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
   try {
     assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
     assert.equal(orchestratorModeEnabled(root, workspace), false);
   } finally {
     if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev;
+    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
   }
 });
 
@@ -191,7 +196,13 @@ test('handbuild-guard denies invalid JSON when CLAUDE_PROJECT_DIR is set and std
   assert.equal(parsed.hookSpecificOutput.permissionDecisionReason, GUARD_ERROR_DENY_REASON);
 });
 
-test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', () => {
+test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', async () => {
+  const binDir = path.join(process.env.HOME, '.local', 'bin');
+  await fs.mkdir(binDir, { recursive: true });
+  const swarmMjs = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
+  const wrapper = `#!/bin/sh\n# managed by project-swarm\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(swarmMjs)} "$@"\n`;
+  await fs.writeFile(path.join(binDir, 'swarm'), wrapper, { mode: 0o755 });
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
   assert.equal(orchestratorModeCommandAllowed('swarm init'), false);
   assert.equal(orchestratorModeCommandAllowed('swarm mutants'), false);
   assert.equal(orchestratorModeCommandAllowed('swarm status'), true);

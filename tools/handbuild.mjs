@@ -19,6 +19,8 @@ import {
   orchestratorModeCommandAllowed,
   orchestratorModeEnabled,
   orchestratorModeApplies,
+  orchestratorResolvedRoot,
+  orchestratorTestHarnessSigned,
   ORCHESTRATOR_MODE_OFF_FILE,
   ORCHESTRATOR_MODE_RULE_ID,
   ORCHESTRATOR_MODE_DENY_REASON,
@@ -960,18 +962,24 @@ export {
   orchestratorModeEnabled,
 } from './shell-writes.mjs';
 
-/** Watchdog duration for tools/handbuild-guard.mjs (override SWARM_GUARD_TIMEOUT_MS in tests only). */
-export function guardTimeoutMs() {
+/** True when guard fault injection / timeout overrides are allowed for this project root. */
+export function guardHarnessAllowsFaultInjection(root) {
+  if (root && orchestratorTestHarnessSigned(root)) return true;
+  return (process.env.NODE_ENV === 'test' || process.env.SWARM_GUARD_TEST_MODE === '1') && isTempProjectRoot(root);
+}
+
+/** Watchdog duration for tools/handbuild-guard.mjs (override SWARM_GUARD_TIMEOUT_MS only with signed test marker or temp test project). */
+export function guardTimeoutMs(root = null) {
   const raw = process.env.SWARM_GUARD_TIMEOUT_MS;
-  if (raw !== undefined && String(raw).trim() !== '') {
+  if (raw !== undefined && String(raw).trim() !== '' && guardHarnessAllowsFaultInjection(root)) {
     const n = Number(raw);
     if (Number.isFinite(n)) return Math.min(60000, Math.max(50, Math.floor(n)));
   }
   return DEFAULT_GUARD_TIMEOUT_MS;
 }
 
-export function isGuardTestMode() {
-  return process.env.NODE_ENV === 'test' || process.env.SWARM_GUARD_TEST_MODE === '1';
+export function isGuardTestMode(root = null) {
+  return guardHarnessAllowsFaultInjection(root);
 }
 
 /** True when `root` is under the OS temp dir (guard fault injection is limited to temp projects in test mode). */
@@ -1027,7 +1035,7 @@ export function logGuardError(root, { kind, tool, error }, { now = Date.now } = 
 }
 
 const applyGuardTestFault = root => {
-  if (!isGuardTestMode() || !isTempProjectRoot(root)) return;
+  if (!isGuardTestMode(root)) return;
   if (process.env.SWARM_GUARD_TEST_FAULT === 'throw') throw new Error('SWARM_GUARD_TEST_THROW');
   if (process.env.SWARM_GUARD_TEST_FAULT === 'spin') {
     for (;;) { /* test-only CPU hang */ }
@@ -1039,7 +1047,9 @@ const applyGuardTestFault = root => {
 export function runGuardDecisionForHook(input, { root, cwd } = {}) {
   const tool = input.tool_name;
   const sessionCwd = cwd ?? input.cwd;
-  const enforceOrchestratorMode = !process.env.CLAUDE_PROJECT_DIR || !String(process.env.CLAUDE_PROJECT_DIR).trim();
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const enforceOrchestratorMode = !(fromEnv && String(fromEnv).trim() && fs.existsSync(fromEnv))
+    && Boolean(orchestratorResolvedRoot(sessionCwd));
   const decision = guardDecision({
     tool,
     toolInput: input.tool_input,
@@ -1369,10 +1379,15 @@ const orchestratorModeBlockedOps = command => {
 const orchestratorModeProtectedWriteRel = (rel, root) => {
   if (rel === null || rel === undefined) return false;
   let abs;
+  const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
   try {
-    abs = fs.realpathSync.native(path.isAbsolute(rel) ? rel : path.join(root, rel));
+    abs = fs.realpathSync.native(candidate);
   } catch {
-    abs = path.join(root, rel);
+    try {
+      abs = fs.realpathSync.native(path.dirname(candidate));
+    } catch {
+      abs = candidate;
+    }
   }
   const inside = insideProject(root, abs);
   const norm = String(inside ?? rel).replace(/\\/g, '/').toLowerCase();
@@ -1385,8 +1400,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
-  const omActive = orchestratorModeApplies(root, cwd)
-    || (enforceOrchestratorMode && orchestratorModeEnabled(root, cwd));
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  const orchestratorSession = Boolean(fromEnv && String(fromEnv).trim() && fs.existsSync(fromEnv));
+  const omActive = orchestratorSession && orchestratorModeEnabled(root, cwd);
   const omDeny = (files = []) => ({ allow: false, files, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID });
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;
@@ -1462,6 +1478,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       });
     }
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+    if (omActive) {
+      const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
+        .filter(rel => orchestratorModeProtectedWriteRel(rel, root));
+      if (protectedWrites.length) return omDeny(protectedWrites);
+    }
     const current = branchOfFn(root);
     const protBranch = isProtectedBranch(current);
     const handbuildPol = handbuildShellPolicy(ti.command);

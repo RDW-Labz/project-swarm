@@ -11,6 +11,7 @@ import {
   logAction,
   logGuardError,
   guardTimeoutMs,
+  guardHarnessAllowsFaultInjection,
   OFF_FILE,
   ORCHESTRATOR_MODE_RULE_ID,
   GUARD_ERROR_DENY_REASON,
@@ -27,36 +28,22 @@ const swarmLayoutAt = dir => {
   try {
     const r = fs.realpathSync.native(dir);
     const base = path.join(r, '.swarm');
-    if (!fs.existsSync(base)) return null;
-    const markers = ['runs', 'workspaces', 'worktrees', 'orchestrator-mode'];
-    return markers.some(s => fs.existsSync(path.join(base, s))) ? r : null;
+    return fs.existsSync(base) && fs.statSync(base).isDirectory() ? r : null;
   } catch { return null; }
 };
 
-/** Project root for the guard: prefer a swarm checkout under `cwd` when it disagrees with `CLAUDE_PROJECT_DIR` (fail closed). */
+/** Project root: `CLAUDE_PROJECT_DIR` when set and exists, else walk up from cwd. */
 const resolveHandbuildProjectRoot = cwd => {
-  const fromCwd = projectRootOf(cwd);
-  let fromEnv = null;
-  if (process.env.CLAUDE_PROJECT_DIR && fs.existsSync(process.env.CLAUDE_PROJECT_DIR)) {
-    try { fromEnv = fs.realpathSync.native(process.env.CLAUDE_PROJECT_DIR); } catch { fromEnv = null; }
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  if (fromEnv && String(fromEnv).trim()) {
+    try {
+      if (fs.existsSync(fromEnv)) return fs.realpathSync.native(fromEnv);
+    } catch { /* fall through */ }
   }
-  if (!fromEnv) return fromCwd;
-  if (!fromCwd) return fromEnv;
-  try {
-    if (fs.realpathSync.native(fromEnv) === fs.realpathSync.native(fromCwd)) return fromEnv;
-  } catch { return fromEnv; }
-  const swarmAtCwd = swarmLayoutAt(fromCwd);
-  if (swarmAtCwd) return swarmAtCwd;
-  const swarmAtEnv = swarmLayoutAt(fromEnv);
-  if (swarmAtEnv) return fromEnv;
-  return fromEnv;
+  return projectRootOf(cwd);
 };
 
-const guardChildEnv = root => {
-  const env = { ...process.env };
-  if (root && swarmLayoutAt(root) && !env.CLAUDE_PROJECT_DIR) env.CLAUDE_PROJECT_DIR = root;
-  return env;
-};
+const guardChildEnv = () => ({ ...process.env });
 
 const scriptPath = (() => {
   try { return fs.realpathSync.native(fileURLToPath(import.meta.url)); } catch { return fileURLToPath(import.meta.url); }
@@ -106,7 +93,7 @@ function runDecideChild(raw) {
       process.exit(0);
       return;
     }
-    if (process.env.SWARM_GUARD_TEST_FAULT === 'hang') {
+    if (guardHarnessAllowsFaultInjection(root) && process.env.SWARM_GUARD_TEST_FAULT === 'hang') {
       for (;;) { /* test-only hang */ }
     }
     const { decision, input: hookInput } = runGuardDecisionForHook(input, { root, cwd: input.cwd });
@@ -199,7 +186,7 @@ function runParentGuard(raw, truncated) {
         return;
       }
 
-      const timeoutMs = guardTimeoutMs();
+      const timeoutMs = guardTimeoutMs(root);
       const child = child_process.spawnSync(process.execPath, [scriptPath, DECIDE_ARG], {
         input: raw,
         env: guardChildEnv(root),
@@ -240,7 +227,7 @@ if (process.argv.includes(DECIDE_ARG)) {
   let truncated = false;
   const stdinWatch = setTimeout(() => {
     finishDenyTimeout(null, 'unknown');
-  }, guardTimeoutMs());
+  }, guardTimeoutMs(null));
   stdinWatch.unref();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; else truncated = true; });

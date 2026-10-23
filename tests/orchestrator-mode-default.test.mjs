@@ -8,10 +8,29 @@ import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { guardDecision } from '../tools/handbuild.mjs';
-import { orchestratorModeEnabled } from '../tools/shell-writes.mjs';
+import {
+  orchestratorModeEnabled,
+  ORCHESTRATOR_TEST_MARKER_REL,
+  ORCHESTRATOR_TEST_MARKER_BODY,
+  SWARM_WORKER_RUN_ID_ENV,
+} from '../tools/shell-writes.mjs';
 
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
+const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+
+async function installLocalSwarmShim() {
+  const binDir = path.join(process.env.HOME, '.local', 'bin');
+  await fs.mkdir(binDir, { recursive: true });
+  const wrapper = `#!/bin/sh\n# managed by project-swarm\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(SWARM_MJS)} "$@"\n`;
+  await fs.writeFile(path.join(binDir, 'swarm'), wrapper, { mode: 0o755 });
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
+}
+
+async function writeOrchestratorTestMarker(root) {
+  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
+  await fs.writeFile(path.join(root, ORCHESTRATOR_TEST_MARKER_REL), ORCHESTRATOR_TEST_MARKER_BODY);
+}
 
 const tmp = async t => {
   const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-omdef-')));
@@ -93,6 +112,7 @@ test('default project root: orchestrator mode active with only .swarm (no orches
 });
 
 test('handbuild-guard subprocess: default-on allowlist at project root', async t => {
+  await installLocalSwarmShim();
   const root = await defaultSwarmProject(t);
   const denyCommands = [
     'node -e 1',
@@ -119,10 +139,19 @@ test('handbuild-guard subprocess: default-on allowlist at project root', async t
 
 test('worker workspace and scratch tmp cwd are not subject to orchestrator mode', async t => {
   const root = await defaultSwarmProject(t);
+  await writeOrchestratorTestMarker(root);
+  const runId = 'run1';
+  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
   const workspace = path.join(root, '.swarm', 'workspaces', 'run1', 'job-1');
   await fs.mkdir(workspace, { recursive: true });
-  const prev = process.env.CLAUDE_PROJECT_DIR;
+  const prev = {
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
+  };
   process.env.CLAUDE_PROJECT_DIR = root;
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
   try {
   assert.equal(orchestratorModeEnabled(root, workspace), false);
   const dWs = guardDecision({
@@ -138,6 +167,7 @@ test('worker workspace and scratch tmp cwd are not subject to orchestrator mode'
   assert.ok(testTmp, 'SWARM_TEST_TMP from isolate config');
   const scratchCwd = path.join(testTmp, 'tmp', 'orchestrator-worker');
   await fs.mkdir(scratchCwd, { recursive: true });
+  process.env.SWARM_OMODE_SCRATCH_EXEMPT = '1';
   assert.equal(orchestratorModeEnabled(root, scratchCwd), false);
   const dScratch = guardDecision({
     tool: 'Bash',
@@ -148,7 +178,11 @@ test('worker workspace and scratch tmp cwd are not subject to orchestrator mode'
   });
   assert.equal(dScratch.allow, true);
   } finally {
-    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
-    else process.env.CLAUDE_PROJECT_DIR = prev;
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev[SWARM_WORKER_RUN_ID_ENV];
+    if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+    else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
   }
 });

@@ -12,6 +12,9 @@ import {
   orchestratorModeEnabled,
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_MODE_OFF_FILE,
+  ORCHESTRATOR_TEST_MARKER_REL,
+  ORCHESTRATOR_TEST_MARKER_BODY,
+  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
 import {
   guardDecision,
@@ -24,7 +27,21 @@ import {
 import { orchestratorModeShellPolicy } from '../tools/self-approval.mjs';
 
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
+const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
+
+async function installLocalSwarmShim() {
+  const binDir = path.join(process.env.HOME, '.local', 'bin');
+  await fs.mkdir(binDir, { recursive: true });
+  const wrapper = `#!/bin/sh\n# managed by project-swarm\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(SWARM_MJS)} "$@"\n`;
+  await fs.writeFile(path.join(binDir, 'swarm'), wrapper, { mode: 0o755 });
+  process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
+}
+
+async function writeOrchestratorTestMarker(root) {
+  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
+  await fs.writeFile(path.join(root, ORCHESTRATOR_TEST_MARKER_REL), ORCHESTRATOR_TEST_MARKER_BODY);
+}
 
 const tmp = async t => {
   const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-om-')));
@@ -59,7 +76,8 @@ async function swarmProject(t) {
 
 const omReason = d => d.reason === ORCHESTRATOR_MODE_DENY_REASON && d.ruleId === ORCHESTRATOR_MODE_RULE_ID;
 
-test('orchestratorModeCommandAllowed: swarm and read-only git', () => {
+test('orchestratorModeCommandAllowed: swarm and read-only git', async () => {
+  await installLocalSwarmShim();
   const allow = [
     'swarm status',
     'swarm tickets list',
@@ -81,7 +99,8 @@ test('orchestratorModeCommandAllowed: swarm and read-only git', () => {
   for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c), true, c);
 });
 
-test('orchestratorModeCommandAllowed: read-only gh and capped reads', () => {
+test('orchestratorModeCommandAllowed: read-only gh and capped reads', async () => {
+  await installLocalSwarmShim();
   const allow = [
     'gh pr list',
     'gh pr view 1',
@@ -155,10 +174,20 @@ test('guardDecision allows git status under orchestrator mode', async t => {
 
 test('worker cwd is not subject to orchestrator mode', async t => {
   const { root, bash } = await swarmProject(t);
+  const runId = 'run1';
+  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
   const workspace = path.join(root, '.swarm/workspaces/run1/job-1');
   await fs.mkdir(workspace, { recursive: true });
-  assert.equal(bash('npm test', workspace).allow, true);
-  assert.equal(orchestratorModeEnabled(root, workspace), false);
+  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  try {
+    assert.equal(bash('npm test', workspace).allow, true);
+    assert.equal(orchestratorModeEnabled(root, workspace), false);
+  } finally {
+    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+  }
 });
 
 test('orchestrator-mode off file disables enforcement', async t => {
@@ -314,17 +343,25 @@ test('orchestratorModeEnabled: strict scratch on /test/ root and tests cwd', asy
   assert.ok(testTmp, 'SWARM_TEST_TMP');
   const testRoot = path.join(testTmp, 'test', `swarm-om-${Date.now()}`);
   await fs.mkdir(path.join(testRoot, '.git'), { recursive: true });
+  await fs.mkdir(path.join(testRoot, '.swarm'), { recursive: true });
+  await writeOrchestratorTestMarker(testRoot);
   t.after(() => fs.rm(testRoot, { recursive: true, force: true }));
-  const prev = process.env.CLAUDE_PROJECT_DIR;
+  const prev = {
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
+  };
   process.env.CLAUDE_PROJECT_DIR = testRoot;
+  process.env.SWARM_OMODE_SCRATCH_EXEMPT = '1';
   try {
     assert.equal(orchestratorModeEnabled(testRoot, testRoot), false);
     const testsCwd = path.join(testRoot, 'tests');
     await fs.mkdir(testsCwd, { recursive: true });
     assert.equal(orchestratorModeEnabled(testRoot, testsCwd), false);
   } finally {
-    if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
-    else process.env.CLAUDE_PROJECT_DIR = prev;
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+    else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
   }
 });
 
@@ -407,6 +444,7 @@ test('orchestratorModeCommandAllowed: security attack surface refusals', () => {
 });
 
 test('orchestratorModeCommandAllowed: security false-positive allows', async t => {
+  await installLocalSwarmShim();
   const { root } = await swarmProject(t);
   const ctx = { root, cwd: root };
   const allow = [
@@ -418,7 +456,6 @@ test('orchestratorModeCommandAllowed: security false-positive allows', async t =
     'git log --oneline -3',
     'grep -rn needle src | head -n 20',
     "sed -n '1,5p' src/a.ts | head -n 20",
-    'gh api repos/o/r/pulls | head -n 50',
     'cat package.json | head -n 100',
     'git diff | grep foo | head -n 10',
     'swarm diagnose "why"',
@@ -426,15 +463,20 @@ test('orchestratorModeCommandAllowed: security false-positive allows', async t =
   for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
 });
 
-test('guard watchdog default is 15s and override is bounded', () => {
+test('guard watchdog default is 15s and override is bounded', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  await writeOrchestratorTestMarker(root);
   const prev = process.env.SWARM_GUARD_TIMEOUT_MS;
   delete process.env.SWARM_GUARD_TIMEOUT_MS;
-  assert.equal(guardTimeoutMs(), DEFAULT_GUARD_TIMEOUT_MS);
+  assert.equal(guardTimeoutMs(root), DEFAULT_GUARD_TIMEOUT_MS);
   assert.equal(DEFAULT_GUARD_TIMEOUT_MS, 15000);
   process.env.SWARM_GUARD_TIMEOUT_MS = '10';
-  assert.equal(guardTimeoutMs(), 50);
+  assert.equal(guardTimeoutMs(root), 50);
   process.env.SWARM_GUARD_TIMEOUT_MS = '999999';
-  assert.equal(guardTimeoutMs(), 60000);
+  assert.equal(guardTimeoutMs(root), 60000);
+  assert.equal(guardTimeoutMs(null), DEFAULT_GUARD_TIMEOUT_MS);
   if (prev === undefined) delete process.env.SWARM_GUARD_TIMEOUT_MS;
   else process.env.SWARM_GUARD_TIMEOUT_MS = prev;
 });
