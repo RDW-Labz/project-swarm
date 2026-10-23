@@ -31,7 +31,7 @@ export const CHANGE_RECORD_DENY_REASON = changeRecordDenyReason({ token: '--yes'
 
 export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
 
-export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help']);
+export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help', 'stats']);
 
 const handbuildOwnerDenyReason = ({ verb, token, position }) => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: matched "${token}" at executable position ${position} (orchestrator sessions cannot run handbuild ${verb}; owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
 
@@ -166,6 +166,7 @@ const SAFE_SWARM = [
   /\bhandbuild\s+list\b/,
   /\bhandbuild\s+log\b/,
   /\bhandbuild\s+check\b/,
+  /\bhandbuild\s+stats\b/,
   /\bhandbuild\s+help\b/,
   /\bhandbuild\s*(--help|-h)\b/,
   /\bswarm\s+change\b(?!.*\s--yes(?:\s|$|=))/,
