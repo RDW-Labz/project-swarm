@@ -361,6 +361,26 @@ test('held tickets: a manual block without a hold question stays off Needs you; 
   assert.equal(held[0].command, `swarm --root ${A.root} tickets T-0201 --release`);
 });
 
+test('held tickets: review and todo are not held-ticket Needs-you items (only blocked tickets are)', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0300', 'review'),
+      tk('T-0301', 'todo'),
+      tk('T-0302', 'blocked', { blockReason: 'manual', holdQuestion: 'Release when ready?' }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0302']);
+  assert.equal(inbox.items.some(i => i.id === 'T-0300'), false);
+  assert.equal(inbox.items.some(i => i.id === 'T-0301'), false);
+});
+
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {
   const { isScratchRoot } = await import('../tools/projects.mjs');
   const { isBoardTempRoot } = await import('../tools/scratch-roots.mjs');
