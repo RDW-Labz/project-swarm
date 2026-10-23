@@ -903,6 +903,13 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
+/** Wave summary: only report committed when integrate post-write verification passed. */
+export function scopeWaveDisplayStatus(goResult) {
+  if (!goResult) return 'unknown';
+  if (goResult.status === 'committed' && !goResult.integrate?.integrationOutputsVerified) return 'integrated';
+  return goResult.status;
+}
+
 function splitPrompt(scope, stage, only, layout = '', wire = null, existing = null) {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
@@ -2549,6 +2556,14 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
   const state = await readRunState(root, rest[0]);
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
+    const manifestText = await readText(path.join(root, '.swarm', 'runs', rest[0], 'manifest.json'));
+    if (manifestText) {
+      const { verifyIntegratedOutputsOnTree } = await import('./swarm.mjs');
+      const manifest = JSON.parse(manifestText);
+      const jobIds = (state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id);
+      const mismatches = await verifyIntegratedOutputsOnTree(root, rest[0], state, manifest, jobIds, {});
+      if (mismatches.length) return out(`integrate-no-op: ${mismatches[0]} differs from the job output; run swarm integrate ${rest[0]} again`, 1);
+    }
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));
     const queue = state.mergeQueue;
     const integrated = queue ? new Set((queue.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job))) : null;
