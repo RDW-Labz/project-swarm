@@ -173,6 +173,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-23 | - | aanew5: H1–L6: hardened URL/config/git argv, opaque/non-git policy denial, stats fail-closed, truste | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-23 | - | review-aa5: FAIL. The redesign fixes system/global config, environment and absolute-path classificat | claude | opus | pass | 131,843 | $1.07 |
 | 2026-10-23 | - | review-aa6: FAIL. File-only scope mostly in place, but the policy re-check is skipped when the cover | claude | opus | pass | 100,574 | $0.70 |
+| 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
+| 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
+| 2026-10-23 | - | aanew9: complete | claude | sonnet | pass | 2,877,661 | $1.18 |
 
 ## Daily summary
 
@@ -190,6 +193,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 6 | 6 | 0 | 545,372 | $4.16 |
+| 2026-10-23 | claude | 9 | 7 | 2 | 3,423,033 | $5.34 |
 | 2026-10-23 | cursor | 2 | 2 | 0 | 0 | subscription |
-| **total** | all | 169 | 154 | 15 | 15,256,747 | $30.83 (incl. estimates) |
+| **total** | all | 172 | 155 | 17 | 18,134,408 | $32.01 (incl. estimates) |

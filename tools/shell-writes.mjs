@@ -1714,10 +1714,6 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
     const verb = String(rest[0] ?? '').toLowerCase();
     if (!verb || verb === '--help' || verb.startsWith('-')) return true;
     if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
-    if (verb === 'git') {
-      const gitArgs = rest.slice(1);
-      return gitArgs.length > 0 && omGitInvocationAllowed(gitArgs);
-    }
     return SWARM_HANDBUILD_FILE_OPS.has(verb);
   }
   if (sub === 'change') {

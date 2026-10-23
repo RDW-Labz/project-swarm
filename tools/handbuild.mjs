@@ -49,6 +49,8 @@ import {
   policyFilePath,
   machinePolicyJsonPath,
   isSwarmAdminHandbuildPath,
+  canonicalPolicyRel,
+  policyFolderAllowed,
 } from './auto-approve-policy.mjs';
 
 const policyGitAt = (words, start = 0) => {
@@ -450,6 +452,10 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
     return;
   }
   if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
+  if (cmd === 'ln' || cmd === 'link') {
+    ops.push({ tool: '_link', sub: cmd, args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
+    return;
+  }
   if (policyGitAt(plain, k) === k) {
     let globalOpts = false;
     let benignGlobalOnly = true;
@@ -520,20 +526,8 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
         if (scriptAt === -1 || path.basename(args[scriptAt]) !== 'swarm.mjs') return;
         swarmPos = args.slice(scriptAt + 1);
       }
-      const handbuildGitAt = swarmPos.findIndex((w, idx) => (
-        String(w).toLowerCase() === 'handbuild' && String(swarmPos[idx + 1] ?? '').toLowerCase() === 'git'
-      ));
-      if (handbuildGitAt !== -1) {
-        const gitArgs = swarmPos.slice(handbuildGitAt + 2);
-        const gsub = gitArgs[0];
-        const grest = gsub ? gitArgs.slice(1) : [];
-        if (gsub === 'push') ops.push({ ...gitPushPolicy(grest, { globalOpts: false, benignGlobalOnly: true, hasConfig: false, gitEnv: false, target: null }), rest: grest });
-        else ops.push({ tool: 'git', sub: gsub ?? null, args: grest.filter(a => a && !a.startsWith('-')), rest: grest, globalOpts: false, benignGlobalOnly: true, hasConfig: false, gitEnv: false, flags: grest.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: null });
-        return;
-      }
       const pos = swarmPos.filter(a => !a.startsWith('-'));
       const sub = pos[0] ?? null;
-      if (cmd !== 'swarm') return;
       const swarmTarget = sub === 'merge' && pos[1] !== undefined ? String(pos[1]) : null;
       ops.push({ tool: 'swarm', sub, args: pos.slice(1), globalOpts: args.some(a => a.startsWith('-')), hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: swarmTarget });
     }
@@ -1245,7 +1239,8 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   const policy = evaluateHandbuildAutoApprove(root, { files: list, minutes: mins, git: ops });
   const limits = policyRateLimits(undefined, { root });
   return withStateLock(root, () => {
-  const policyOk = policy.ok && !policyRateLimitsExceeded(readHandbuildStatsRaw(root), null, limits, now(), { countNewWindow: true }).blocked;
+  // policy windows are file edits only: a request that names any git operation waits for the owner
+  const policyOk = policy.ok && ops.length === 0 && !policyRateLimitsExceeded(readHandbuildStatsRaw(root), null, limits, now(), { countNewWindow: true }).blocked;
   const state = readState(root);
   const id = newId(now());
   const at = new Date(now()).toISOString();
@@ -1253,6 +1248,7 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   if (policyOk) {
     ensureHandbuildStatsInitialized(root);
     row.status = 'approved';
+    row.git = [];
     row.decidedAt = at;
     row.decidedBy = 'policy';
     row.policyId = policy.policyId;
@@ -1521,12 +1517,24 @@ export function handbuildStatsJson(root, { now = Date.now } = {}) {
  */
 const normPolicyRel = rel => String(rel ?? '').replace(/\\/g, '/');
 
-function pickPolicyApproval(policyApprovals, fileRels = []) {
+/** True when this policy row names `rel` in any way the guard's matcher or a canonical (resolved, case-folded) comparison would accept. */
+function policyRowCovers(root, row, rel) {
+  if (matchesFile(row.files, rel)) return true;
+  const want = canonicalPolicyRel(root, rel);
+  if (want === null) return false;
+  return (row.files ?? []).some(f => canonicalPolicyRel(root, f) === want);
+}
+
+function pickPolicyApproval(policyApprovals, fileRels = [], root = null) {
   if (!policyApprovals.length || !fileRels.length) return null;
   const want = [...new Set(fileRels.map(normPolicyRel))];
   const full = policyApprovals.filter(a => {
-    const listed = (a.files ?? []).map(normPolicyRel);
-    return want.every(f => listed.includes(f));
+    if (!root) {
+      const listed = (a.files ?? []).map(normPolicyRel);
+      return want.every(f => listed.includes(f));
+    }
+    const listed = (a.files ?? []).map(f => canonicalPolicyRel(root, f));
+    return want.every(f => { const c = canonicalPolicyRel(root, f); return c !== null && listed.includes(c); });
   });
   if (full.length === 1) return full[0];
   if (full.length > 1) return null;
@@ -1545,7 +1553,7 @@ export function handbuildPolicyGuardCheck(root, {
   const fileRels = (guardFiles ?? []).map(normPolicyRel).filter(Boolean);
   if (!fileRels.length) return null;
   return withStateLock(root, () => {
-    const used = pickPolicyApproval(policyApprovals, fileRels);
+    const used = pickPolicyApproval(policyApprovals, fileRels, root);
     if (!used) {
       return { ok: false, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)`, approvalId: policyApprovals[0]?.id };
     }
@@ -1559,6 +1567,16 @@ export function handbuildPolicyGuardCheck(root, {
       return { ok: false, reason: `${DENY_ADVICE} (blocked: policy rate limit ${exceeded.reason})`, approvalId: used.id };
     }
     for (const f of fileRels) {
+      // one spelling only: a path the window covers under another spelling (case, ./, ..) is a mismatch and is denied
+      const listedExact = (used.files ?? []).map(normPolicyRel);
+      if (!listedExact.includes(f) || canonicalPolicyRel(root, f) === null) {
+        return {
+          ok: false,
+          reason: `${DENY_ADVICE} (blocked: policy path ${f} does not match the window spelling)`,
+          approvalId: used.id,
+          rule: 'policy-path',
+        };
+      }
       if (!isSwarmAdminHandbuildPath(f, { root })) {
         return {
           ok: false,
@@ -1688,7 +1706,9 @@ function applyPolicyGuardedAllow(root, {
   if (policyRows.length && autoApproveKillSwitchOn(root)) {
     return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: policy kill-switch)` });
   }
-  const touchesPolicyFiles = files.some(f => policyRows.some(a => (a.files ?? []).map(normPolicyRel).includes(normPolicyRel(f))));
+  // the full policy check runs whenever the covering approval is a policy row or any policy row covers a path (matcher or canonical spelling), not only on an exact string match
+  const coveringIsPolicy = files.length > 0 && policyRows.some(a => a.id === allowResult.approval);
+  const touchesPolicyFiles = coveringIsPolicy || files.some(f => policyRows.some(a => policyRowCovers(root, a, f)));
   if (!policyRows.length || !touchesPolicyFiles) return finishBash(allowResult);
   const check = handbuildPolicyGuardCheck(root, {
     approvals: policyRows,
@@ -1699,7 +1719,7 @@ function applyPolicyGuardedAllow(root, {
   if (check && !check.ok) {
     return finishBash({ allow: false, files, reason: check.reason });
   }
-  const policyRow = pickPolicyApproval(policyRows, files);
+  const policyRow = pickPolicyApproval(policyRows, files, root);
   if (!policyRow) {
     return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)` });
   }
@@ -1790,7 +1810,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     return op;
   };
   const policyWindowsActive = approvals.some(a => a.policyId);
-  const covers = (rels, gitOps = []) => {
+  const policyWindowPath = rel => policyWindowsActive && (policyFolderAllowed(rel) || approvals.some(a => a.policyId && policyRowCovers(root, a, rel)));
+  const covers =(rels, gitOps = []) => {
     // every file and every git operation must be covered by one live approval
     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
     const gitPool = (policyWindowsActive && gitOps.length)
@@ -1930,11 +1951,14 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const chatMergeCandidates = [];
     let standingMergeAllow = false;
     const policyWindowsLive = approvals.some(a => a.policyId);
-    if (policyWindowsLive && policyOps.some(o => o.opaque)) {
-      return finishBash({ allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: policy opaque command)` });
-    }
     for (const op of policyOps) {
-      if (op.opaque) continue;
+      if (op.opaque) { policyGitOps.push('commit'); continue; }
+      if (op.tool === '_link') {
+        // a link made into a window path is the owner's: it could point a later write outside the window
+        const hits = op.args.map(w => resolveCmdPath(w, root, cwd)).filter(rel => rel !== null && policyWindowPath(rel));
+        if (hits.length) return finishBash({ allow: false, files: hits, reason: `Hand-build guard: ${op.sub} into a policy window path (${hits[0]}) belongs to the owner; no approval covers it.` });
+        continue;
+      }
       if (op.tool === 'git') {
         if (op.sub === 'fetch') {
           if (!isFreeGitFetch(op, root)) policyGitOps.push('config');

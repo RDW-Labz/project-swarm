@@ -14,6 +14,8 @@ import {
   isSwarmAdminHandbuildPath,
   isPolicyWindowFileEntry,
   policyFilePath,
+  machinePolicyJsonPath,
+  canonicalPolicyRel,
   POLICY_STATS_UNREADABLE,
   AUTO_OFF_FILE,
   POLICY_ID,
@@ -32,8 +34,10 @@ import {
   handbuildStatsJson,
   guardDecision,
   LOG_FILE,
+  STATE_FILE,
   STATS_FILE,
   AUTO_OFF_FILE as HB_AUTO_OFF,
+  MERGE_BLOCKED_REASON,
   handbuildPolicyGuardCheck,
   recordPolicyGuardAllow,
 } from '../tools/handbuild.mjs';
@@ -43,10 +47,13 @@ import { cleanupTestProject } from './_isolate-config.mjs';
 
 const exec = promisify(execFile);
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
+const SHELL_WRITES_SRC = fsSync.readFileSync(new URL('../tools/shell-writes.mjs', import.meta.url), 'utf8');
+const HANDBUILD_SRC = fsSync.readFileSync(new URL('../tools/handbuild.mjs', import.meta.url), 'utf8');
 const T0 = () => Date.UTC(2026, 9, 22, 12, 0, 0);
 const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
+const PLAN = 'docs/state/plan.md';
 
-async function tempRepo(t) {
+async function tempRepo(t, { signed = true } = {}) {
   const base = process.env.SWARM_TEST_TMP || os.tmpdir();
   const root = await fs.realpath(await fs.mkdtemp(path.join(base, 'auto-ap-')));
   t.after(async () => {
@@ -61,12 +68,12 @@ async function tempRepo(t) {
   await fs.mkdir(path.join(root, 'coordination', 'review'), { recursive: true });
   await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'off'), '');
-  await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'test-harness-signed'), ORCHESTRATOR_TEST_MARKER_BODY);
+  if (signed) await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'test-harness-signed'), ORCHESTRATOR_TEST_MARKER_BODY);
   await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', path.basename(STATS_INITIALIZED_FILE)), `${POLICY_ID}\n`);
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', 'stats.json'), '{}\n');
-  await fs.writeFile(path.join(root, 'docs/scope/plan.md'), '# plan\n');
-  await exec('git', ['add', 'docs/scope/plan.md'], { cwd: root });
+  await fs.writeFile(path.join(root, PLAN), '# plan\n');
+  await exec('git', ['add', PLAN], { cwd: root });
   await exec('git', ['commit', '-q', '-m', 'init', '--author', 't <t@t>'], { cwd: root });
   return root;
 }
@@ -88,22 +95,53 @@ function guardBash(root, command) {
   }
 }
 
+function guardWrite(root, rel) {
+  return guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: path.join(root, rel), content: '# x\n' },
+    root,
+    cwd: root,
+    now: T0,
+  });
+}
+
+function windowRequest(root, files = PLAN, extra = {}) {
+  return createRequest(root, {
+    kind: 'tiny',
+    reason: 'policy window for plain notes only',
+    files,
+    minutes: 30,
+    ...extra,
+  }, { now: T0 });
+}
+
+async function rewriteWindowFiles(root, id, files) {
+  const file = path.join(root, STATE_FILE);
+  const state = JSON.parse(await fs.readFile(file, 'utf8'));
+  state.requests[id].files = files;
+  await fs.writeFile(file, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function policyJsonPath() {
+  return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+}
+
 test('exact window entries: folder and extensionless paths rejected', async t => {
   const root = await tempRepo(t);
-  assert.equal(isPolicyWindowFileEntry('docs/scope/'), false);
-  assert.equal(isPolicyWindowFileEntry('docs/scope'), false);
-  assert.equal(isPolicyWindowFileEntry('docs/scope/plan'), false);
-  assert.equal(isPolicyWindowFileEntry('docs/scope/plan.md'), true);
-  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/scope/'], minutes: 30 }).ok, false);
-  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/scope/plan.md', 'docs/plans/'], minutes: 30 }).ok, false);
+  assert.equal(isPolicyWindowFileEntry('docs/state/'), false);
+  assert.equal(isPolicyWindowFileEntry('docs/state'), false);
+  assert.equal(isPolicyWindowFileEntry('docs/state/plan'), false);
+  assert.equal(isPolicyWindowFileEntry(PLAN), true);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/state/'], minutes: 30 }).ok, false);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: [PLAN, 'docs/design/'], minutes: 30 }).ok, false);
 });
 
 test('allowed paths and blocked areas', async t => {
   const root = await tempRepo(t);
   for (const f of [
-    'docs/scope/plan.md',
-    'docs/plans/ideas.md',
-    'docs/state/x.yaml',
+    PLAN,
+    'docs/state/x.csv',
+    'docs/state/x.ndjson',
     'docs/design/note.txt',
     'coordination/handoff-agent.md',
   ]) {
@@ -121,19 +159,33 @@ test('allowed paths and blocked areas', async t => {
   }
 });
 
+test('allowed folders narrowed to docs/state and docs/design; json and yaml dropped', async t => {
+  const root = await tempRepo(t);
+  for (const f of [
+    'docs/scope/plan.md',
+    'docs/plans/ideas.md',
+    'docs/state/x.json',
+    'docs/state/x.yaml',
+    'docs/design/x.yml',
+    'coordination/handoff-agent.json',
+    'coordination/handoff-agent.yaml',
+  ]) {
+    assert.equal(isPolicyWindowFileEntry(f), false, f);
+    assert.equal(isSwarmAdminHandbuildPath(f, { root }), false, f);
+    assert.equal(evaluateHandbuildAutoApprove(root, { files: [f], minutes: 30 }).ok, false, f);
+  }
+  assert.equal(windowRequest(root, 'docs/scope/plan.md').status, 'pending');
+  assert.equal(windowRequest(root, 'docs/state/x.md').status, 'approved');
+});
+
 test('write-time re-check rejects disallowed extension at guard', async t => {
   const root = await tempRepo(t);
-  const req = createRequest(root, {
-    kind: 'tiny',
-    reason: 'policy window for scope markdown only',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const req = windowRequest(root);
   assert.equal(req.status, 'approved');
-  assert.equal(isSwarmAdminHandbuildPath('docs/scope/evil.mjs', { root }), false);
+  assert.equal(isSwarmAdminHandbuildPath('docs/state/evil.mjs', { root }), false);
   const bad = handbuildPolicyGuardCheck(root, {
     approvals: [req],
-    files: ['docs/scope/evil.mjs'],
+    files: ['docs/state/evil.mjs'],
     now: T0(),
   });
   assert.equal(bad?.ok, false);
@@ -141,37 +193,156 @@ test('write-time re-check rejects disallowed extension at guard', async t => {
 
 test('symlinked ancestor rejected for policy paths', async t => {
   const root = await tempRepo(t);
-  const scopeLink = path.join(root, 'docs', 'scope-link');
-  await fs.symlink(path.join(root, 'docs', 'scope'), scopeLink);
-  assert.equal(isSwarmAdminHandbuildPath('docs/scope-link/plan.md', { root }), false);
+  const link = path.join(root, 'docs', 'state-link');
+  await fs.symlink(path.join(root, 'docs', 'state'), link);
+  assert.equal(isSwarmAdminHandbuildPath('docs/state-link/plan.md', { root }), false);
+});
+
+test('covered path spelled differently still gets the full policy check', async t => {
+  const root = await tempRepo(t);
+  const req = windowRequest(root);
+  assert.equal(req.status, 'approved');
+  assert.equal(guardWrite(root, PLAN).allow, true);
+  // a wildcard row covers evil.mjs through the matcher, but not by an exact listed path: the full check runs and denies
+  await rewriteWindowFiles(root, req.id, ['docs/state/*']);
+  const evil = guardWrite(root, 'docs/state/evil.mjs');
+  assert.equal(evil.allow, false);
+  assert.equal(guardWrite(root, PLAN).allow, false);
+  // a "./" spelling of the same file is covered by the matcher too: same canonical path, different spelling, denied
+  await rewriteWindowFiles(root, req.id, [`./${PLAN}`]);
+  assert.equal(guardWrite(root, PLAN).allow, false);
+  assert.equal(canonicalPolicyRel(root, `./docs/state/../state/plan.md`), canonicalPolicyRel(root, PLAN));
+  assert.equal(canonicalPolicyRel(root, '../outside.md'), null);
+});
+
+test('hard link to a window file is rejected; non-regular files too', async t => {
+  const root = await tempRepo(t);
+  await fs.mkdir(path.join(root, 'docs', 'state', 'dir.md'));
+  assert.equal(isSwarmAdminHandbuildPath('docs/state/dir.md', { root }), false);
+  const req = windowRequest(root);
+  assert.equal(req.status, 'approved');
+  assert.equal(guardWrite(root, PLAN).allow, true);
+  await fs.link(path.join(root, PLAN), path.join(root, 'docs', 'design', 'alias.md'));
+  assert.equal(isSwarmAdminHandbuildPath(PLAN, { root }), false);
+  assert.equal(handbuildPolicyGuardCheck(root, { approvals: [req], files: [PLAN], now: T0() })?.ok, false);
+  assert.equal(guardWrite(root, PLAN).allow, false);
+  // a new window cannot be auto-approved over a hard-linked file
+  assert.equal(windowRequest(root).status, 'pending');
+});
+
+test('ln and link into a window path are denied while a policy window is live', async t => {
+  const root = await tempRepo(t);
+  windowRequest(root);
+  for (const cmd of [
+    `ln ${PLAN} docs/design/x.md`,
+    `ln -s ../state/plan.md docs/design/x.md`,
+    `link ${PLAN} docs/design/y.md`,
+    `ln /tmp/somewhere docs/state/new.md`,
+  ]) {
+    const d = guardBash(root, cmd);
+    assert.equal(d.allow, false, cmd);
+    assert.match(d.reason, /policy window/, cmd);
+  }
+});
+
+test('opaque command without a policy window needs a commit-level approval', async t => {
+  const root = await tempRepo(t);
+  const d = guardBash(root, '$SOME_TOOL --flag');
+  assert.equal(d.allow, false);
+  assert.match(d.reason, /blocked: git commit/);
+});
+
+test('opaque command with a policy window live is not covered by the policy row', async t => {
+  const root = await tempRepo(t);
+  windowRequest(root);
+  const d = guardBash(root, '$SOME_TOOL --flag');
+  assert.equal(d.allow, false);
+  assert.match(d.reason, /blocked: git commit/);
+});
+
+test('policy windows never carry git ops', async t => {
+  const root = await tempRepo(t);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: [PLAN], minutes: 30, git: ['commit'] }).ok, false);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: [PLAN], minutes: 30, git: 'push' }).ok, false);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: [PLAN], minutes: 30, git: [] }).ok, true);
+  const withGit = windowRequest(root, PLAN, { git: 'commit,push' });
+  assert.equal(withGit.status, 'pending');
+  assert.deepEqual(withGit.git, ['commit', 'push']);
+  const plain = windowRequest(root);
+  assert.equal(plain.status, 'approved');
+  assert.equal(plain.autoApproved, true);
+  assert.deepEqual(plain.git, []);
+  assert.deepEqual(listRequests(root).find(r => r.id === plain.id).git, []);
+});
+
+test('orchestrator mode allowlist has no swarm handbuild git', async t => {
+  const root = await tempRepo(t);
+  assert.equal(orchestratorModeCommandAllowed('swarm handbuild git status', { root, cwd: root }), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm handbuild git commit -m x', { root, cwd: root }), false);
+  assert.doesNotMatch(SHELL_WRITES_SRC, /verb === 'git'/);
+  assert.doesNotMatch(HANDBUILD_SRC, /handbuildGitAt/);
+});
+
+test('node PATH/swarm.mjs merge reaches the standing-merge gate', async t => {
+  const root = await tempRepo(t);
+  fsSync.rmSync(policyJsonPath(), { force: true });
+  t.after(() => fsSync.rmSync(policyJsonPath(), { force: true }));
+  const blocked = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: 'node tools/swarm.mjs merge 12' },
+    root,
+    cwd: root,
+    now: T0,
+  });
+  assert.equal(blocked.allow, false);
+  assert.equal(blocked.reason, MERGE_BLOCKED_REASON);
+  fsSync.writeFileSync(policyJsonPath(), `${JSON.stringify({ rules: [{ id: 'merge-swarm-pr', enabled: true }] })}\n`);
+  const standing = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: 'node tools/swarm.mjs merge 12' },
+    root,
+    cwd: root,
+    now: T0,
+  });
+  assert.equal(standing.allow, true);
+  assert.equal(standing.standing, 'merge-swarm-pr');
+});
+
+test('policy file override needs the signed marker, never a temp directory', async t => {
+  const unsigned = await tempRepo(t, { signed: false });
+  const signed = await tempRepo(t);
+  const home = path.join(os.tmpdir(), 'no-such-home');
+  const fallback = path.join(home, '.config', 'project-swarm', 'policy.json');
+  const override = path.join(path.dirname(process.env.SWARM_CONFIG), 'override-policy.json');
+  const prev = process.env.SWARM_POLICY_FILE;
+  process.env.SWARM_POLICY_FILE = override;
+  try {
+    assert.equal(machinePolicyJsonPath({ home, root: unsigned }), fallback);
+    assert.equal(machinePolicyJsonPath({ home, root: unsigned, allowPolicyFile: true }), fallback);
+    assert.equal(machinePolicyJsonPath({ home }), fallback);
+    assert.equal(machinePolicyJsonPath({ home, root: signed }), override);
+  } finally {
+    if (prev === undefined) delete process.env.SWARM_POLICY_FILE;
+    else process.env.SWARM_POLICY_FILE = prev;
+  }
 });
 
 test('per-window rate limit', async t => {
   const root = await tempRepo(t);
-  const req = createRequest(root, {
-    kind: 'tiny',
-    reason: 'scope doc tweak for limits',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const req = windowRequest(root);
   assert.equal(req.status, 'approved');
   for (let i = 0; i < DEFAULT_MAX_ACTIONS_PER_WINDOW; i += 1) {
-    const rec = recordPolicyGuardAllow(root, { approvalId: req.id, files: ['docs/scope/plan.md'], rule: 'test' }, { now: T0 });
+    const rec = recordPolicyGuardAllow(root, { approvalId: req.id, files: [PLAN], rule: 'test' }, { now: T0 });
     assert.equal(rec.blocked, false);
   }
-  const blocked = recordPolicyGuardAllow(root, { approvalId: req.id, files: ['docs/scope/plan.md'], rule: 'test' }, { now: T0 });
+  const blocked = recordPolicyGuardAllow(root, { approvalId: req.id, files: [PLAN], rule: 'test' }, { now: T0 });
   assert.equal(blocked.blocked, true);
   assert.equal(blocked.reason, 'window-actions');
 });
 
 test('stats and handbuild paths protected from writes', async t => {
   const root = await tempRepo(t);
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'write manifest via policy',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  windowRequest(root);
   const prev = process.env.CLAUDE_PROJECT_DIR;
   process.env.CLAUDE_PROJECT_DIR = root;
   try {
@@ -200,7 +371,7 @@ test('createRequest auto-approves admin window', async t => {
   const r = createRequest(root, {
     kind: 'tiny',
     reason: 'coordination manifest update only',
-    files: 'docs/scope/plan.md',
+    files: PLAN,
     minutes: 45,
   }, { now: T0 });
   assert.equal(r.status, 'approved');
@@ -214,27 +385,17 @@ test('createRequest auto-approves admin window', async t => {
 test('kill switch and validation bounds', async t => {
   const root = await tempRepo(t);
   await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
-  const blocked = createRequest(root, {
-    kind: 'tiny',
-    reason: 'manifest only while switch on',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const blocked = windowRequest(root);
   assert.equal(blocked.status, 'pending');
   await fs.rm(path.join(root, HB_AUTO_OFF));
-  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/scope/a.md'], minutes: 61 }).ok, false);
-  const many = Array.from({ length: MAX_POLICY_FILES + 1 }, (_, i) => `docs/scope/f${i}.md`);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/state/a.md'], minutes: 61 }).ok, false);
+  const many = Array.from({ length: MAX_POLICY_FILES + 1 }, (_, i) => `docs/state/f${i}.md`);
   assert.equal(evaluateHandbuildAutoApprove(root, { files: many, minutes: 30 }).ok, false);
 });
 
 test('policy window does not auto-approve git commit', async t => {
   const root = await tempRepo(t);
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'policy window for scope doc only',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  windowRequest(root);
   const d = guardBash(root, 'git commit -m "manifest"');
   assert.equal(d.allow, false);
 });
@@ -254,19 +415,8 @@ test('orchestrator mode still blocks git writes', async t => {
 
 test('guard: auto-approved write in window', async t => {
   const root = await tempRepo(t);
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'write manifest via policy',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
-  const d = guardDecision({
-    tool: 'Write',
-    toolInput: { file_path: path.join(root, 'docs/scope/plan.md'), content: '# x\n' },
-    root,
-    cwd: root,
-    now: T0,
-  });
+  windowRequest(root);
+  const d = guardWrite(root, PLAN);
   assert.equal(d.allow, true);
   assert.ok(d.approval);
 });
@@ -274,24 +424,14 @@ test('guard: auto-approved write in window', async t => {
 test('unreadable stats block auto-approve', async t => {
   const root = await tempRepo(t);
   await fs.writeFile(path.join(root, STATS_FILE), 'not-json');
-  const pending = createRequest(root, {
-    kind: 'tiny',
-    reason: 'stats corrupt should not auto approve',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const pending = windowRequest(root);
   assert.equal(pending.status, 'pending');
 });
 
 test('missing stats after initialized marker blocks auto-approve', async t => {
   const root = await tempRepo(t);
   await fs.rm(path.join(root, STATS_FILE), { force: true });
-  const pending = createRequest(root, {
-    kind: 'tiny',
-    reason: 'deleted stats should not reset counters',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const pending = windowRequest(root);
   assert.equal(pending.status, 'pending');
 });
 
@@ -312,46 +452,30 @@ test('policy file path ignores SWARM_POLICY_FILE without signed harness', () => 
 
 test('kill switch blocks policy write at execution', async t => {
   const root = await tempRepo(t);
-  const req = createRequest(root, {
-    kind: 'tiny',
-    reason: 'policy write window for scope',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const req = windowRequest(root);
   await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
-  const killed = guardDecision({
-    tool: 'Write',
-    toolInput: { file_path: path.join(root, 'docs/scope/plan.md'), content: '# x\n' },
-    root,
-    cwd: root,
-    now: T0,
-  });
+  const killed = guardWrite(root, PLAN);
   assert.equal(killed.allow, false);
   await fs.rm(path.join(root, HB_AUTO_OFF));
-  const check = handbuildPolicyGuardCheck(root, { approvals: [req], files: ['docs/scope/plan.md'], now: T0() });
+  const check = handbuildPolicyGuardCheck(root, { approvals: [req], files: [PLAN], now: T0() });
   assert.equal(check?.ok, true);
 });
 
 test('daily auto-approve window cap', async t => {
   const root = await tempRepo(t);
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'write scope under policy window',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  windowRequest(root);
   for (let i = 1; i < DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY; i += 1) {
     createRequest(root, {
       kind: 'tiny',
       reason: `extra policy window number ${i}`,
-      files: 'docs/scope/plan.md',
+      files: PLAN,
       minutes: 5,
     }, { now: T0 });
   }
   const capped = createRequest(root, {
     kind: 'tiny',
     reason: 'one more policy window should be capped',
-    files: 'docs/scope/plan.md',
+    files: PLAN,
     minutes: 5,
   }, { now: T0 });
   assert.equal(capped.status, 'pending');
@@ -359,23 +483,13 @@ test('daily auto-approve window cap', async t => {
 
 test('ambiguous overlapping policy windows denied', async t => {
   const root = await tempRepo(t);
-  const a = createRequest(root, {
-    kind: 'tiny',
-    reason: 'first overlapping policy window',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
-  const b = createRequest(root, {
-    kind: 'tiny',
-    reason: 'second overlapping policy window',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  const a = windowRequest(root);
+  const b = windowRequest(root);
   assert.equal(a.status, 'approved');
   assert.equal(b.status, 'approved');
   const check = handbuildPolicyGuardCheck(root, {
     approvals: [a, b],
-    files: ['docs/scope/plan.md'],
+    files: [PLAN],
     now: T0(),
   });
   assert.equal(check?.ok, false);
@@ -383,14 +497,10 @@ test('ambiguous overlapping policy windows denied', async t => {
 
 test('standing swarm merge alone skips policy guard; git combo does not', async t => {
   const root = await tempRepo(t);
-  const policyPath = path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+  const policyPath = policyJsonPath();
   fsSync.writeFileSync(policyPath, `${JSON.stringify({ rules: [{ id: 'merge-swarm-pr', enabled: true }] })}\n`);
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'policy window alongside standing merge',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  t.after(() => fsSync.rmSync(policyPath, { force: true }));
+  windowRequest(root);
   const mergeOnly = guardDecision({
     tool: 'Bash',
     toolInput: { command: 'swarm merge 12' },
@@ -442,12 +552,7 @@ test('session cannot write home gitconfig or ssh config', async t => {
 test('stats: ownerTerminal vs autoApproved', async t => {
   const root = await tempRepo(t);
   bumpHandbuildStats(root, 'ownerTerminal', { now: T0 });
-  createRequest(root, {
-    kind: 'tiny',
-    reason: 'scope doc tweak for stats',
-    files: 'docs/scope/plan.md',
-    minutes: 30,
-  }, { now: T0 });
+  windowRequest(root);
   const stats = JSON.parse(handbuildStatsJson(root, { now: T0 }));
   assert.equal(stats.autoApproved, 1);
   assert.equal(stats.ownerTerminal, 1);

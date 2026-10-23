@@ -23,7 +23,8 @@ export const POLICY_LIMIT_CEILING_ACTIONS_PER_DAY = 500;
 export const POLICY_LIMIT_CEILING_FILES_PER_DAY = 500;
 export const POLICY_STATS_UNREADABLE = '__policyStatsUnreadable';
 
-const ALLOWED_EXT = new Set(['.md', '.txt', '.json', '.ndjson', '.csv', '.yaml', '.yml']);
+// Plain notes only: json and yaml are parsed as config by trusted processes, so they never ride a policy window.
+const ALLOWED_EXT = new Set(['.md', '.txt', '.csv', '.ndjson']);
 
 const BLOCKED_PREFIXES = [
   'tools/',
@@ -52,9 +53,45 @@ function fileExtension(lowerPath) {
 function folderAllowed(lower) {
   if (lower === '.project-swarm.json') return false;
   if (BLOCKED_PREFIXES.some(p => lower === p.slice(0, -1) || lower.startsWith(p))) return false;
-  if (/^docs\/(?:plans|state|scope|design)\//.test(lower)) return true;
-  if (/^coordination\/handoff[^/]*\.(md|txt|json|ndjson|csv|yaml|yml)$/i.test(lower)) return true;
+  if (/^docs\/(?:state|design)\//.test(lower)) return true;
+  if (/^coordination\/handoff[^/]*\.(md|txt|csv|ndjson)$/i.test(lower)) return true;
   return false;
+}
+
+/** True when `rel` (project-relative, any case) sits in a folder or file family a policy window may name. */
+export function policyFolderAllowed(rel) {
+  return folderAllowed(norm(rel).toLowerCase());
+}
+
+/** True when the filesystem under `root` ignores case (probed by stat of a case-swapped name; platform default when the probe cannot tell). */
+export function fsIsCaseInsensitive(root) {
+  const fallback = process.platform === 'darwin' || process.platform === 'win32';
+  try {
+    const real = fs.realpathSync.native(root);
+    const parts = real.split(path.sep);
+    for (let i = parts.length - 1; i > 0; i -= 1) {
+      const swapped = parts[i].replace(/[A-Za-z]/g, c => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+      if (swapped === parts[i]) continue;
+      const alt = [...parts.slice(0, i), swapped, ...parts.slice(i + 1)].join(path.sep);
+      try {
+        return fs.statSync(alt).ino === fs.statSync(real).ino;
+      } catch {
+        return false;
+      }
+    }
+  } catch { /* fall through */ }
+  return fallback;
+}
+
+/** One canonical spelling of a project-relative path: resolved against the root, slash-separated, lower-cased on a case-insensitive filesystem. null when it leaves the root. */
+export function canonicalPolicyRel(root, rel) {
+  const raw = norm(rel ?? '');
+  if (!raw) return null;
+  const abs = path.resolve(root, raw);
+  const back = path.relative(path.resolve(root), abs);
+  if (!back || back.startsWith('..') || path.isAbsolute(back)) return null;
+  const out = norm(back);
+  return fsIsCaseInsensitive(root) ? out.toLowerCase() : out;
 }
 
 function extensionAllowed(lower) {
@@ -86,6 +123,20 @@ export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
   return policyPathLstatSafe(root, raw) !== null;
 }
 
+/** No-follow open plus fstat: still a regular file with a single link at the moment of the check. */
+function openedPlainFile(abs) {
+  let fd;
+  try {
+    fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+    const st = fs.fstatSync(fd);
+    return st.isFile() && st.nlink === 1;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
 function policyPathLstatSafe(root, rel) {
   const p = norm(rel);
   if (!p || path.isAbsolute(p) || pathHasDotDot(p)) return null;
@@ -114,6 +165,9 @@ function policyPathLstatSafe(root, rel) {
       return p;
     }
     if (finalLst.isSymbolicLink()) return null;
+    // an existing target must be one plain file with one name: a second hard link would let a write land outside the window
+    if (!finalLst.isFile() || finalLst.nlink > 1) return null;
+    if (!openedPlainFile(absFinal)) return null;
     const real = fs.realpathSync.native(absFinal);
     const relToRoot = path.relative(rootReal, real);
     if (!relToRoot || relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) return null;
@@ -127,25 +181,12 @@ function policyPathLstatSafe(root, rel) {
   }
 }
 
-function isTempProjectRootForPolicy(root) {
-  if (!root) return false;
-  try {
-    const real = fs.realpathSync.native(root);
-    const tmp = fs.realpathSync.native(os.tmpdir());
-    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
-  } catch {
-    return false;
-  }
-}
-
-/** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE only with signed harness or temp merge tests. */
-export function machinePolicyJsonPath({ home = os.homedir(), root = null, allowPolicyFile = false } = {}) {
-  const signed = root && orchestratorTestHarnessSigned(root);
-  const tempMerge = root && isTempProjectRootForPolicy(root);
-  if (signed || tempMerge || allowPolicyFile) {
+/** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE are honoured only under the signed orchestrator test marker (never because of a temp directory). */
+export function machinePolicyJsonPath({ home = os.homedir(), root = null } = {}) {
+  if (root && orchestratorTestHarnessSigned(root)) {
     const envPath = process.env.SWARM_POLICY_FILE;
     if (envPath && path.isAbsolute(envPath)) return envPath;
-    if (signed && process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+    if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
   }
   return path.join(home, '.config', 'project-swarm', 'policy.json');
 }
@@ -189,10 +230,13 @@ export function policyRateLimits(home = os.homedir(), { root = null } = {}) {
   }
 }
 
-export function evaluateHandbuildAutoApprove(root, { files, minutes }) {
+export function evaluateHandbuildAutoApprove(root, { files, minutes, git }) {
   if (root && fs.existsSync(path.join(root, AUTO_OFF_FILE))) {
     return { ok: false, reason: 'kill-switch' };
   }
+  // file edits only: any requested git operation needs the owner
+  const gitOps = Array.isArray(git) ? git : String(git ?? '').split(',');
+  if (gitOps.some(g => String(g).trim())) return { ok: false, reason: 'git' };
   const list = Array.isArray(files) ? files : [];
   if (!list.length || list.length > MAX_POLICY_FILES) return { ok: false, reason: 'files' };
   const mins = Number(minutes);
