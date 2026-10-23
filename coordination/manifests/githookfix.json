@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "githookfix",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Bug (atlas-seafloor, long-lived branch swarm/boi): the pre-push hand-build guard in tools/githook-check.mjs flags about 75 unrelated historical files as 'not routing files and their staged content is not a recorded swarm integrate hash' on a push that only touches 8 files. Cause: diffFilesForPush diffs 'origin/main...localSha', i.e. the whole branch against main, instead of the commits actually being pushed. Fix: pass the remote sha of the ref being pushed to diffFilesForPush; when the remote ref exists (remoteSha is not all zeros) diff remoteSha..localSha (use 'git diff --name-only REMOTE LOCAL' with the two shas, and fall back to the merge-base of the two when remoteSha is not an ancestor, e.g. a rewrite, which is refused elsewhere anyway); when the branch is new on the remote, diff the merge-base of origin/main and localSha against localSha (so only the branch's own commits count); never fall back to the whole tree; keep returning null (and the existing fail-closed handling) on git errors. Update the callers (about lines 251-300). Add tests in tests/githook-push-range.test.mjs using real temp git repos with a bare remote: (a) a long-lived branch with 10 old non-routing files in its branch-vs-main history that were already pushed, then a new commit touching one routing file: the push check passes; (b) the same with the new commit touching a non-routing file with no recorded hash: refused and only that file is named; (c) a brand-new branch: only its own commits are checked. Keep every existing githook, handbuild and guard test passing.",
+   "context": [
+    "tools/githook-check.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/githook-check.mjs",
+    "tests/githook-push-range.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/commit-msg-manifest.test.mjs",
+    "tests/commit-msg-review.test.mjs",
+    "tests/commit-msg-round2.test.mjs",
+    "tests/commit-msg-round3.test.mjs",
+    "tests/git-hooks.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "hook tests; full suite before merge"
+  }
+ ]
+}
