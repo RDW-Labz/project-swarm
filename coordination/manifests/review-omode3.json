@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-omode3",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "security review of the orchestrator-mode shell guard that gates every shell command of the owner's coding sessions",
+   "type": "review",
+   "prompt": "Third static security review of coordination/review/omode-guard3.diff (orchestrator-mode guard). The second review (FAIL) found: H1 project root preferring a cwd-derived .swarm marker over CLAUDE_PROJECT_DIR; H2 worker status decided from cwd, cd into .swarm/workspaces; H3 env vars (missing CLAUDE_PROJECT_DIR path, NODE_ENV=test, SWARM_TEST_TMP, SWARM_OMODE_SCRATCH_EXEMPT) turning the mode off; H4 sed substitution write or exec; H5 gh api write flag spellings; M1 fail-open on bad JSON without a project dir; M2 swarm subcommand gaps (unknown global options, run/integrate/update/go/decide/change unchecked); M3 handbuild off-file also turning orchestrator mode off; M4 off-file protected only for Edit/Write and symlinked parent; M5 read operands outside the project or expanding; M6 gh auth status token exposure; L1 cd inside a subshell; L2 test env knobs outside test mode; L3 swarm resolved through PATH. Check each is really fixed and look for NEW bypasses or fail-open paths introduced by the fixes. No working bypass commands: describe class and fix. Verdict PASS or FAIL, ranked findings.",
+   "context": [
+    "coordination/review/omode-guard3.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}
