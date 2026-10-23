@@ -11,6 +11,14 @@ import {
   localFieldBundleTransport,
   pushFieldBundle,
 } from '../tools/field-push.mjs';
+import {
+  CUSTOMER_CONTENT_KEYS,
+  aggregateFieldReport,
+  assertReportHasNoCustomerContent,
+  buildFieldReport,
+  collectFieldBundleMetadata,
+  runFieldReport,
+} from '../tools/field-report.mjs';
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'field-ops-'));
@@ -97,4 +105,96 @@ test('refuses scanned-clean marker when payload still fails secret scanning', as
     () => assertScannedCleanBundle(bundle),
     error => error.code === 'field-push-unsafe' && error.findings.includes('email'),
   );
+});
+
+const RAW_RULE_SNIPPET = 'Keep the useful rule text private';
+const RAW_WHAT_SNIPPET = 'A field observation';
+
+function walkKeys(value, keys = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) walkKeys(item, keys);
+    return keys;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      keys.add(key);
+      walkKeys(child, keys);
+    }
+  }
+  return keys;
+}
+
+test('field report aggregates pushed and local export metadata across machines', async () => {
+  const source = await fixture();
+  const dest = await fs.mkdtemp(path.join(os.tmpdir(), 'field-ops-report-'));
+  const data = await exportFieldData(source, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  await writeFieldExport(source, bundle);
+  await pushFieldBundle(source, {
+    bundle,
+    send: localFieldBundleTransport(dest),
+  });
+  const localRecords = await collectFieldBundleMetadata(source);
+  const remoteRecords = await collectFieldBundleMetadata(dest);
+  assert.equal(localRecords.length, 1);
+  assert.equal(remoteRecords.length, 1);
+  assert.equal(localRecords[0].source, 'exports');
+  assert.equal(remoteRecords[0].source, 'inbox');
+  const report = aggregateFieldReport([...localRecords, ...remoteRecords], {
+    now: new Date('2026-10-22T09:00:00.000Z'),
+  });
+  assert.equal(report.bundleCount, 2);
+  assert.equal(report.sources.exports, 1);
+  assert.equal(report.sources.inbox, 1);
+  assert.equal(report.lessons.total, 2);
+  assert.equal(report.lessons.byArea.tool, 2);
+  assert.equal(report.lessons.byStatus.shipped, 2);
+  assert.equal(report.runs.total, 2);
+  assert.equal(report.runs.byLane.fast, 2);
+  assert.equal(report.runs.jobCount, 2);
+  assert.equal(report.projects[data.projectId].bundles, 2);
+  assert.equal(report.timestamps.earliestExportedAt, data.exportedAt);
+});
+
+test('field report never includes raw customer content fields or lesson text', async () => {
+  const source = await fixture();
+  const dest = await fs.mkdtemp(path.join(os.tmpdir(), 'field-ops-report-unsafe-'));
+  const data = await exportFieldData(source, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  await pushFieldBundle(source, { bundle, send: localFieldBundleTransport(dest) });
+  const poisoned = {
+    ...bundle,
+    rule: RAW_RULE_SNIPPET,
+    what: RAW_WHAT_SNIPPET,
+    fix: 'Do not leak this fix text',
+    lessons: [{ ...bundle.lessons[0], rule: RAW_RULE_SNIPPET, what: RAW_WHAT_SNIPPET }],
+  };
+  const inboxDir = path.join(dest, '.swarm', 'field', 'inbox');
+  await fs.writeFile(
+    path.join(inboxDir, '2026-10-21-poisoned.json'),
+    `${JSON.stringify(poisoned)}\n`,
+  );
+  const report = await buildFieldReport(dest, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assertReportHasNoCustomerContent(report);
+  const serialized = JSON.stringify(report);
+  assert.equal(serialized.includes(RAW_RULE_SNIPPET), false);
+  assert.equal(serialized.includes(RAW_WHAT_SNIPPET), false);
+  const keys = walkKeys(report);
+  for (const key of CUSTOMER_CONTENT_KEYS) {
+    assert.equal(keys.has(key), false, `report must not contain customer content key ${key}`);
+  }
+  assert.equal(report.lessons.total >= 1, true);
+});
+
+test('runFieldReport writes aggregate file and stays metadata-only', async () => {
+  const source = await fixture();
+  const data = await exportFieldData(source, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  await writeFieldExport(source, bundleForPush(data));
+  const report = await runFieldReport(source, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 1);
+  const reportFile = path.join(source, '.swarm', 'field', 'reports', '2026-10-22-aggregate.json');
+  const stored = JSON.parse(await fs.readFile(reportFile, 'utf8'));
+  assertReportHasNoCustomerContent(stored);
+  const stat = await fs.stat(reportFile);
+  assert.equal(stat.mode & 0o777, 0o600);
 });
