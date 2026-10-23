@@ -231,7 +231,24 @@ export async function probeLocalEndpoint(endpoint, { fetchImpl = fetch, timeoutM
 }
 
 export async function doctorLocal(env = process.env, { fetchImpl = fetch, timeoutMs = LOCAL_DOCTOR_TIMEOUT_MS, now = Date.now, healthCache } = {}) {
-  const { endpoints, agencyConcurrency } = loadLocalLaneConfig(env);
+  let endpoints;
+  let agencyConcurrency;
+  try {
+    ({ endpoints, agencyConcurrency } = loadLocalLaneConfig(env));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      agent: 'local',
+      status: 'invalid',
+      configured: false,
+      liveVerified: false,
+      reachable: false,
+      authentication: 'Fix lanes.local in machine config; credentials belong in Keychain or linuxEnv only',
+      endpoints: [],
+      agencyConcurrency: DEFAULT_AGENCY_CONCURRENCY,
+      note: message,
+    };
+  }
   if (!endpoints.length) {
     return {
       agent: 'local',

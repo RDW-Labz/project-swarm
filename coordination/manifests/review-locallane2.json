@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-locallane2",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "a lane that reads an API key from the macOS Keychain and sends it to a configurable URL",
+   "type": "review",
+   "prompt": "Re-review coordination/review/locallane2.diff (local lane after fixes). The first review (FAIL) found: slot claims tagged with the first waiter's endpoint/agency settings; sensitive jobs routed to non-loopback local endpoints; first-claim slot counting; manifest-supplied endpoints skipping validation; no redirect:error on the key-bearing fetch; doctor local throwing. Check each is fixed and look for new key-leak, sensitive-data or cap-bypass paths. Verdict PASS or FAIL, ranked findings, no exploit commands.",
+   "context": [
+    "coordination/review/locallane2.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

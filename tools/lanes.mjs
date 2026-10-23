@@ -347,7 +347,7 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
       else delete store.demand[key];
     }
     if (take === 0) return { granted: [], reason: machineLimited ? 'machine-full' : 'full', inFlight: slots.length };
-    const granted = [];
+    const granted = new Array(take).fill(null);
     const localFor = index => (Array.isArray(local) ? local[index] ?? null : local);
     for (let n = 0; n < take; n += 1) {
       const localMeta = localFor(n);
@@ -358,14 +358,15 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
           agency: Boolean(localMeta.agency),
           agencyConcurrency: localMeta.agencyConcurrency ?? 1,
         });
-        if (room < 1) break;
+        if (room < 1) continue;
       }
       let slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
       if (agent === 'local' && localMeta?.endpoint) slot = attachLocalSlotMeta(slot, { endpoint: localMeta.endpoint, agency: Boolean(localMeta.agency) });
       slots.push(slot);
-      granted.push(slot.id);
+      granted[n] = slot.id;
     }
     store.slots[agent] = slots;
+    if (!granted.some(Boolean)) return { granted: [], reason: 'full', inFlight: slots.length };
     return { granted, inFlight: slots.length };
   }, { dir, now, isAlive });
 }
@@ -622,11 +623,15 @@ export class LaneScheduler {
         continue;
       }
       const pending = this.closed ? [] : waiters.filter(waiter => lane.queue.includes(waiter));
-      const grantCount = Math.min(pending.length, claim.granted.length);
-      for (const slotId of claim.granted.slice(grantCount)) await releaseSlot(selected, slotId);
+      const grantedByWaiter = pending.map((_, index) => claim.granted[index] ?? null);
+      const grantCount = grantedByWaiter.filter(Boolean).length;
+      for (let index = pending.length; index < claim.granted.length; index += 1) {
+        const slotId = claim.granted[index];
+        if (slotId) await releaseSlot(selected, slotId);
+      }
       if (this.closed) return;
       if (claim.reason === 'machine-full') this.lastDemandAt = time;
-      if (!claim.granted.length) {
+      if (!grantCount) {
         if (claim.state) {
           if (lane.state !== 'paused' || lane.until < claim.until) {
             lane.state = claim.state;
@@ -636,10 +641,11 @@ export class LaneScheduler {
         } else skipped.add(selected);
         continue;
       }
-      lane.machineInFlight = claim.inFlight - (claim.granted.length - grantCount);
-      for (let n = 0; n < grantCount; n += 1) {
+      lane.machineInFlight = claim.inFlight - (claim.granted.filter(Boolean).length - grantCount);
+      for (let n = 0; n < pending.length; n += 1) {
         const waiter = pending[n];
-        const slotId = claim.granted[n];
+        const slotId = grantedByWaiter[n];
+        if (!slotId) continue;
         const index = lane.queue.indexOf(waiter);
         if (index >= 0) lane.queue.splice(index, 1);
         waiter.signal?.removeEventListener('abort', waiter.abort);

@@ -96,7 +96,24 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
 
 export function apiDoctor(agent, env = process.env) {
   if (agent === 'local') {
-    const { endpoints, agencyConcurrency } = loadLocalLaneConfig(env);
+    let endpoints;
+    let agencyConcurrency;
+    try {
+      ({ endpoints, agencyConcurrency } = loadLocalLaneConfig(env));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        agent: 'local',
+        status: 'invalid',
+        configured: false,
+        liveVerified: false,
+        reachable: false,
+        authentication: 'Fix lanes.local in machine config; credentials belong in Keychain or linuxEnv only',
+        endpoints: [],
+        agencyConcurrency: 1,
+        note: message,
+      };
+    }
     if (!endpoints.length) {
       return {
         agent: 'local',
@@ -650,7 +667,13 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       finishReason = null;
       await onFinishReason(finishReason);
       try {
-        const init = { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: controller.signal };
+        const init = {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+          redirect: 'error',
+        };
         // The rented lane has one vLLM replica per GPU: each request goes to the least busy healthy one.
         return job.agent === 'rented' && config.endpoints?.length ? await balancedFetch(config.endpoints, fetchImpl, init) : await fetchImpl(url, init);
       }

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { validateLocalLaneBlock } from '../tools/local-lane.mjs';
+import { validateLocalLaneBlock, doctorLocal } from '../tools/local-lane.mjs';
 import { resolveLanes, claimLaneSlots, releaseLaneSlots, lanesDir, withLaneStore } from '../tools/lanes.mjs';
 import { routeJob } from '../tools/router.mjs';
 import { executeApi, probeLocalProvider } from '../tools/api-adapters.mjs';
@@ -41,14 +41,40 @@ test('claimLaneSlots tags each granted slot with its waiter endpoint and agency 
     count: 4,
     local: locals,
   });
-  assert.equal(claim.granted.length, 2, 'only one fast slot and one agency docs slot');
+  const grantedIds = claim.granted.filter(Boolean);
+  assert.equal(grantedIds.length, 2, 'only one fast slot and one agency docs slot');
   const store = await withLaneStore(s => s, { dir });
   const held = store.slots.local ?? [];
   assert.equal(held.length, 2);
   assert.equal(held.filter(s => s.localEndpoint === 'fast').length, 1);
   assert.equal(held.filter(s => s.localEndpoint === 'docs').length, 1);
   assert.equal(held.filter(s => s.localAgency).length, 1);
-  await releaseLaneSlots({ dir, slots: claim.granted.map(id => ({ agent: 'local', slotId: id })) });
+  await releaseLaneSlots({ dir, slots: grantedIds.map(id => ({ agent: 'local', slotId: id })) });
+});
+
+test('claimLaneSlots skips a full endpoint waiter and still grants others', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-skip-'));
+  const full = { endpoint: 'busy', slotsLimit: 1, agency: false, agencyConcurrency: 1 };
+  const open = { endpoint: 'idle', slotsLimit: 2, agency: false, agencyConcurrency: 1 };
+  const block = await claimLaneSlots({ dir, agent: 'local', concurrency: 4, count: 1, local: full });
+  assert.equal(block.granted.filter(Boolean).length, 1);
+  const claim = await claimLaneSlots({
+    dir,
+    agent: 'local',
+    concurrency: 4,
+    count: 2,
+    local: [full, open],
+  });
+  const grantedIds = claim.granted.filter(Boolean);
+  assert.equal(grantedIds.length, 1);
+  assert.equal(claim.granted[0], null);
+  assert.ok(grantedIds[0]);
+  const store = await withLaneStore(s => s, { dir });
+  assert.equal(store.slots.local.filter(s => s.localEndpoint === 'idle').length, 1);
+  await releaseLaneSlots({
+    dir,
+    slots: [...block.granted, ...grantedIds].filter(Boolean).map(id => ({ agent: 'local', slotId: id })),
+  });
 });
 
 test('claimLaneSlots counts slots granted earlier in the same claim', async () => {
@@ -120,6 +146,30 @@ test('executeApi refuses sensitive jobs on non-loopback local endpoints', async 
   assert.match(result.error, /sensitive-provider/);
 });
 
+test('executeApi local job fails on HTTP redirect without a follow-up request', async () => {
+  const configPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-redir-')), 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    lanes: { local: { endpoints: [loopbackEp('dev2', 18000)] } },
+  }));
+  let calls = 0;
+  const result = await executeApi(
+    { id: 's2b', agent: 'local', model: 'local:dev2', sensitive: false, prompt: 'secret prompt', context: [], outputs: [] },
+    [],
+    {
+      env: { SWARM_CONFIG: configPath },
+      readLocal: () => 'token',
+      fetchImpl: async (_url, init) => {
+        calls += 1;
+        assert.equal(init.redirect, 'error');
+        throw Object.assign(new TypeError('redirect'), { cause: 'redirect' });
+      },
+    },
+  );
+  assert.equal(calls, 1);
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /redirect|transport/i);
+});
+
 test('executeApi local fetch uses redirect error', async () => {
   const configPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-cfg-')), 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({
@@ -147,6 +197,14 @@ test('executeApi local fetch uses redirect error', async () => {
     },
   );
   assert.equal(seen.redirect, 'error');
+});
+
+test('doctorLocal reports malformed lanes.local as invalid instead of throwing', async () => {
+  const configPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-bad-')), 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({ lanes: { local: { agencyConcurrency: 0 } } }));
+  const report = await doctorLocal({ SWARM_CONFIG: configPath });
+  assert.equal(report.status, 'invalid');
+  assert.match(report.note, /agencyConcurrency/);
 });
 
 test('probeLocalProvider handles local doctor without endpoint field', async () => {
