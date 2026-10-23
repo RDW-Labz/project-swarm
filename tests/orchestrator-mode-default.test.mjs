@@ -23,7 +23,30 @@ async function defaultSwarmProject(t) {
   const root = await tmp(t);
   execFileSync('git', ['init'], { cwd: root, encoding: 'utf8' });
   await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
+  // Intentional swarm root (not guard bootstrap only): keeps orchestrator mode on after hook logging.
+  await fs.writeFile(path.join(root, '.swarm', '.gitkeep'), '');
   return root;
+}
+
+function withOrchestratorModeEnv(fn) {
+  const prev = {
+    NODE_ENV: process.env.NODE_ENV,
+    SWARM_TEST_TMP: process.env.SWARM_TEST_TMP,
+    SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
+  };
+  delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+  delete process.env.SWARM_TEST_TMP;
+  process.env.NODE_ENV = 'production';
+  try {
+    return fn();
+  } finally {
+    if (prev.NODE_ENV === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prev.NODE_ENV;
+    if (prev.SWARM_TEST_TMP === undefined) delete process.env.SWARM_TEST_TMP;
+    else process.env.SWARM_TEST_TMP = prev.SWARM_TEST_TMP;
+    if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+    else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
+  }
 }
 
 function guardHook(root, cwd, command) {
@@ -35,7 +58,13 @@ function guardHook(root, cwd, command) {
       tool_input: { command },
     }),
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      SWARM_TEST_TMP: '',
+      SWARM_OMODE_SCRATCH_EXEMPT: '',
+      CLAUDE_PROJECT_DIR: root,
+    },
   });
   assert.equal(r.status, 0, r.stderr || r.stdout);
   const line = r.stdout.trim().split('\n').filter(Boolean).pop();
@@ -54,7 +83,9 @@ test('default project root: orchestrator mode active with only .swarm (no orches
   const prev = process.env.CLAUDE_PROJECT_DIR;
   process.env.CLAUDE_PROJECT_DIR = root;
   try {
-    assert.equal(orchestratorModeEnabled(root, root), true);
+    withOrchestratorModeEnv(() => {
+      assert.equal(orchestratorModeEnabled(root, root), true);
+    });
   } finally {
     if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev;

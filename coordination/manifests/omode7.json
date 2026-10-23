@@ -1,0 +1,69 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode7",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Fix the Opus security review findings on the orchestrator-mode guard (all in the files named; add tests for each in tests/orchestrator-mode-review2.test.mjs; keep every existing test passing). Do not weaken any deny list.\n1 HIGH tools/shell-writes.mjs orchestratorModeEnabled decides from the session cwd and returns false for a worker workspace or scratch cwd; a session can Write a folder under .swarm/workspaces, cd into it (omCdTargetOk allows cd inside the project) and the allowlist plus off-file protection stop applying. Decide from CLAUDE_PROJECT_DIR and session type, not cwd; exempt a cwd only when it is a real swarm workspace verified against run state (a manifest/state record for that run id under .swarm/runs), never just by path shape.\n2 HIGH tools/handbuild.mjs applyOrchestratorMode: any allow that carries an approval skips the allowlist, so git commit, git push, gh pr create and gh pr merge are not always refused; gitCover.approval widens it. In orchestrator mode refuse those four operations first, before any approval is checked, and run every other command through the allowlist unless the approval names that exact command.\n3 MEDIUM tools/handbuild.mjs off-file write check compares exact strings and rlow is never lowercased: a case variant reaches the same file on case-insensitive macOS. Compare after realpath and lowercase, and block writes to the whole .swarm/orchestrator-mode/ folder.\n4 MEDIUM tools/shell-writes.mjs: the strict isScratchRoot(root) exemption turns off the whole project; also mode silently off when CLAUDE_PROJECT_DIR is unset or differs from the root after realpath, or .swarm is missing (the last omode6 change requires a .swarm directory: undo that). Limit scratch exemption to the test harness behind an explicit test-only env flag; treat missing or mismatched project dir as ON when a .swarm or .git root is found.\n5 MEDIUM tools/handbuild-guard.mjs: the parent has no watchdog while reading stdin (old 4 s exit timer removed). Add an unref'd timer around the stdin read that writes a deny and exits on expiry.\n6 LOW tools/handbuild-guard.mjs: invalid JSON with no CLAUDE_PROJECT_DIR exits 0 silently and so does oversized input when no root is found. Deny whenever stdin is non-empty and cannot be decided.\n7 LOW tools/orchestrator-hook.mjs: restore a 2 s parent timer around its stdin read so the recorder cannot stall longer.\n8 LOW tools/shell-writes.mjs omSwarmInvocation returns true for any swarm subcommand. Replace with an explicit allowlist of read-only and job subcommands the orchestrator uses: status, brief, board, watch, jobs-like reads, tickets (read and --release/--set per existing tests), run, integrate, merge, update, note, version, doctor, rollup, scope read-only forms, msg; refuse the rest. Check existing tests to keep the used ones allowed.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tests/orchestrator-mode-review2.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ],
+   "ignoreTestsReason": "guard tests in context cover it; full suite before merge"
+  }
+ ]
+}

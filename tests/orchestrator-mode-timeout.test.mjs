@@ -102,9 +102,26 @@ test('handbuild-guard: hang fault times out (child)', async t => {
 
 test('orchestrator mode: oversized bash command denied', async t => {
   const root = await project(t);
-  const prev = process.env.CLAUDE_PROJECT_DIR;
+  const prev = {
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    NODE_ENV: process.env.NODE_ENV,
+    SWARM_TEST_TMP: process.env.SWARM_TEST_TMP,
+    SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
+  };
   process.env.CLAUDE_PROJECT_DIR = root;
-  t.after(() => { process.env.CLAUDE_PROJECT_DIR = prev; });
+  delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+  delete process.env.SWARM_TEST_TMP;
+  process.env.NODE_ENV = 'production';
+  t.after(() => {
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev.NODE_ENV === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prev.NODE_ENV;
+    if (prev.SWARM_TEST_TMP === undefined) delete process.env.SWARM_TEST_TMP;
+    else process.env.SWARM_TEST_TMP = prev.SWARM_TEST_TMP;
+    if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
+    else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
+  });
   const cmd = manySegments(2001);
   const decision = guardDecision({
     tool: 'Bash',

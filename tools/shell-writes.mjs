@@ -19,13 +19,17 @@ export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the gu
 const GIT_COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--message', '--author', '--date']);
 
 const SWARM_PROJECT_SUBDIRS = ['runs', 'workspaces', 'worktrees', 'orchestrator-mode'];
+const SWARM_GUARD_BOOTSTRAP = new Set(['handbuild', 'project', 'orchestrator']);
 
 const swarmProjectMarkers = projectRoot => {
   try {
     const r = fs.realpathSync.native(projectRoot);
     const base = path.join(r, '.swarm');
     if (!fs.existsSync(base)) return false;
-    return SWARM_PROJECT_SUBDIRS.some(s => fs.existsSync(path.join(base, s)));
+    if (SWARM_PROJECT_SUBDIRS.some(s => fs.existsSync(path.join(base, s)))) return true;
+    const entries = fs.readdirSync(base);
+    if (entries.length === 0) return true;
+    return entries.some(name => !SWARM_GUARD_BOOTSTRAP.has(name));
   } catch { return false; }
 };
 
