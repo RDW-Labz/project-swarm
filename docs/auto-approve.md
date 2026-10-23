@@ -12,7 +12,7 @@ At `swarm handbuild request` time the swarm evaluates the **normalized** request
 
 ### File window
 
-Auto-approved when **every** file is under swarm-admin paths: `coordination/HANDOFF*.md`, `coordination/review/**`, `docs/scope/**`, `docs/plans/**`, `docs/state/**`, `docs/design/**` (documentation only—no code extensions), `.swarm/project/` ticket ledger files, and `jobs/**/manifest*.json` only. At most **60** minutes and **20** files. Everything else (including `coordination/manifests/`, `.project-swarm.json`, `tools/`, `tests/`, CI, package files, and guard state) stays on the normal owner flow.
+Auto-approved when **every** file is under swarm-admin paths: `coordination/HANDOFF*.md`, `docs/scope/**`, `docs/plans/**`, `docs/state/**`, `docs/design/**` (documentation only—no code extensions), and `.swarm/project/` ticket ledger files. At most **60** minutes and **20** files. Everything else (including `coordination/review/`, `jobs/`, `coordination/manifests/`, `.project-swarm.json`, `tools/`, `tests/`, CI, package files, and guard state) stays on the normal owner flow.
 
 ### Git (hand-build policy window only)
 
@@ -23,13 +23,13 @@ On the **current** branch (read from git, not from the command text), when the c
 - `git switch <branch>` or `git switch -c <branch>` (no other flags) on allowed prefixes with a **clean** working tree (no `checkout`, no path restores).
 - Read-only: `git status`, `git diff`, `git log`. `git add` only for swarm-produced paths when covered by the window.
 
-Each window is bound to the branch name and the `HEAD` at grant time; the branch must still match and the current `HEAD` must descend from the granted commit. Policy git checks use a cleaned environment (`PATH` and `HOME` only) at the command’s working directory; shell wrappers, `cd`, env assignments, and `git -C` / `--git-dir` / `--work-tree` are refused on the policy path. Rate limits (defaults: **20** actions per window, **100** actions and **100** changed files per UTC day, hard-capped in code, overridable in machine `policy.json`) fail closed when stats are unreadable.
+Each window is bound to the branch name and the `HEAD` at grant time; the branch must still match and the current `HEAD` must descend from the granted commit (an empty granted `HEAD` never binds). Policy git checks ignore the user’s global and system gitconfig, refuse repo-local config outside a small allow-list, and run with `HOME` only plus hardened `-c` overrides at the command’s working directory; shell wrappers, `cd`, env assignments, and `git -C` / `--git-dir` / `--work-tree` are refused on the policy path. Rate limits (defaults: **20** actions per window, **20** auto-approved windows per UTC day, **100** policy actions and **100** changed files per UTC day, hard-capped in code, overridable in machine `policy.json`) fail closed when stats are unreadable or the stats initialized marker is missing.
 
 Still owner-only: merge, deploy, rebase, `reset --hard`, `branch -D`, force push, `git checkout -- <paths>`, `restore`, `clean`, and `git -c` / hook-skipping commits (`--no-verify`).
 
 ### Logging and stats
 
-Each auto-approval appends `auto-approved` and each policy-guarded allow appends `policy-allowed` to `.swarm/handbuild/log.ndjson` (policy id, branch, `HEAD`, rule, command). Per-day counters live in `.swarm/handbuild/stats.json` (`autoApproved`, `ownerTerminal`, `policyActions`, `policyFiles`); use `swarm handbuild stats --json` on the board. Agents cannot write `stats.json`, `log.ndjson`, or `auto-off`.
+Each auto-approval appends `auto-approved` and each policy-guarded allow appends `policy-allowed` to `.swarm/handbuild/log.ndjson` (policy id, branch, `HEAD`, rule, command). Per-day counters live in `.swarm/handbuild/stats.json` (`autoApproved`, `ownerTerminal`, `policyActions`, `policyFiles`); use `swarm handbuild stats --json` on the board. Agents cannot write, delete, or rename anything under `.swarm/handbuild/` (including `stats.json`, `stats.initialized`, `log.ndjson`, and `auto-off`).
 
 ## Kill switch
 

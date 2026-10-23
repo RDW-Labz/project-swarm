@@ -167,6 +167,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-23 | - | review-aa: FAIL. The policy module mostly closes the earlier failures on paper, but the guard wiring | claude | opus | pass | 49,507 | $0.45 |
 | 2026-10-23 | - | review-aa2: FAIL. H1 is closed in finishAllow, but the guardDecision push path still makes a push fr | claude | opus | pass | 58,235 | $0.53 |
+| 2026-10-23 | - | aanew3: Hardened remote URL normalization, git exec env/config, repo config allow-list, common-dir h | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-23 | - | review-aa3: FAIL. Of the second review's findings, only the guardDecision push path is partly fixed, | claude | opus | pass | 56,428 | $0.49 |
 
 ## Daily summary
 
@@ -184,5 +186,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 2 | 2 | 0 | 107,742 | $0.98 |
-| **total** | all | 163 | 148 | 15 | 14,819,117 | $27.65 (incl. estimates) |
+| 2026-10-23 | claude | 3 | 3 | 0 | 164,170 | $1.47 |
+| 2026-10-23 | cursor | 1 | 1 | 0 | 0 | subscription |
+| **total** | all | 165 | 150 | 15 | 14,875,545 | $28.14 (incl. estimates) |

@@ -20,6 +20,13 @@ import {
   originIsProjectRepository,
   trustedRepositoryUrl,
   normalizeGitRemoteUrl,
+  gitRepoLocalConfigSafe,
+  policyGitReadAllowed,
+  policyFilePath,
+  POLICY_FILE_OVERRIDE_MARKER,
+  POLICY_FILE_OVERRIDE_MARKER_BODY,
+  STATS_INITIALIZED_FILE,
+  DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY,
   policyCommandShellBlocked,
   headDescendsFromGranted,
   POLICY_STATS_UNREADABLE,
@@ -71,6 +78,8 @@ async function tempRepo(t, branch = 'feat/auto-policy') {
   await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
   await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'off'), '');
+  await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'handbuild', path.basename(STATS_INITIALIZED_FILE)), `${POLICY_ID}\n`);
   await fs.mkdir(path.join(root, 'tools'), { recursive: true });
   await fs.writeFile(path.join(root, 'docs/scope/plan.md'), '# plan\n');
   await exec('git', ['add', 'docs/scope/plan.md'], { cwd: root });
@@ -91,11 +100,11 @@ function writeTrustedRepository(url) {
   }, null, 2)}\n`);
 }
 
-async function addOrigin(root, name = 'origin', url = root) {
-  await exec('git', ['remote', 'add', name, url], { cwd: root });
+async function addOrigin(root, name = 'origin', url = null) {
+  const remote = url ?? `https://github.com/swarm-test/${path.basename(root)}.git`;
+  await exec('git', ['remote', 'add', name, remote], { cwd: root });
   if (name === 'origin') {
-    const out = await exec('git', ['remote', 'get-url', 'origin'], { cwd: root });
-    writeTrustedRepository(normalizeGitRemoteUrl(out.stdout.trim()));
+    writeTrustedRepository(normalizeGitRemoteUrl(remote));
   }
 }
 
@@ -125,11 +134,11 @@ test('policy paths: allowed admin files and rejects', async t => {
     'docs/state/x.md',
     'docs/design/note.md',
     'coordination/HANDOFF.md',
-    'coordination/review/r.md',
     '.swarm/project/tickets.json',
-    'jobs/wave/manifest.json',
   ];
   for (const f of ok) assert.equal(isSwarmAdminHandbuildPath(f, { root }), true, f);
+  assert.equal(isSwarmAdminHandbuildPath('coordination/review/r.md', { root }), false);
+  assert.equal(isSwarmAdminHandbuildPath('jobs/wave/manifest.json', { root }), false);
   assert.equal(isSwarmAdminHandbuildPath('coordination/manifests/w.json', { root }), false);
   assert.equal(isSwarmAdminHandbuildPath('.project-swarm.json', { root }), false);
   assert.equal(isSwarmAdminHandbuildPath('jobs/wave/manifest.md', { root }), false);
@@ -140,8 +149,8 @@ test('policy paths: allowed admin files and rejects', async t => {
 test('security (1): push only to origin for this repository', async t => {
   const root = await tempRepo(t, 'swarm/policy-git');
   const branch = 'swarm/policy-git';
-  await addOrigin(root, 'origin', root);
-  await addOrigin(root, 'evil', root);
+  await addOrigin(root, 'origin');
+  await addOrigin(root, 'evil', 'https://evil.example/other.git');
   assert.ok(originIsProjectRepository(root));
   assert.ok(policyGitPushAllowed(['push', 'origin', branch], { root, currentBranch: branch }));
   assert.equal(policyGitPushAllowed(['push', 'evil', branch], { root, currentBranch: branch }), false);
@@ -385,10 +394,11 @@ test('finding 1: denied policy push verdict and owner+policy guard check', async
 
 test('finding 2: origin trust is policy-only exact match', async t => {
   const root = await tempRepo(t, 'feat/origin');
-  await exec('git', ['remote', 'add', 'origin', root], { cwd: root });
-  await fs.writeFile(path.join(root, '.project-swarm.json'), `${JSON.stringify({ repository: 'github.com/evil/fake' })}\n`);
+  const remote = 'https://github.com/swarm-test/policy-origin.git';
+  await exec('git', ['remote', 'add', 'origin', remote], { cwd: root });
+  await fs.writeFile(path.join(root, '.project-swarm.json'), `${JSON.stringify({ repository: 'https://github.com/evil/fake' })}\n`);
   assert.equal(originIsProjectRepository(root), false);
-  const trusted = normalizeGitRemoteUrl(root);
+  const trusted = normalizeGitRemoteUrl(remote);
   writeTrustedRepository(trusted);
   assert.ok(originIsProjectRepository(root));
   assert.equal(trustedRepositoryUrl(), trusted);
@@ -498,6 +508,152 @@ test('finding 10: commit then push within HEAD ancestry window', async t => {
   await exec('git', ['commit', '--allow-empty', '-m', 'step'], { cwd: root });
   assert.ok(headDescendsFromGranted(root, req.policyHead, { cwd: root }));
   assert.ok(policyGitPushAllowed(['push', 'origin', 'feat/seq'], { root, currentBranch: 'feat/seq' }));
+});
+
+test('opus2 (1): normalizeGitRemoteUrl parses scheme before scp-like patterns', () => {
+  const trusted = 'https://github.com/org/repo';
+  const norm = normalizeGitRemoteUrl(trusted);
+  assert.equal(norm, 'https://github.com/org/repo');
+  assert.equal(normalizeGitRemoteUrl('https://attacker@github.com:org/repo'), '');
+  assert.equal(normalizeGitRemoteUrl('http://github.com/org/repo'), 'http://github.com/org/repo');
+  assert.notEqual(normalizeGitRemoteUrl('http://github.com/org/repo'), norm);
+  assert.equal(normalizeGitRemoteUrl('git@github.com:org/repo'), 'ssh://github.com/org/repo');
+  assert.equal(normalizeGitRemoteUrl('/tmp/x'), '');
+});
+
+test('opus2 (2): repo-local git config outside allow-list blocks auto-approve', async t => {
+  const root = await tempRepo(t);
+  await exec('git', ['config', 'core.sshCommand', 'id'], { cwd: root });
+  assert.equal(gitRepoLocalConfigSafe(root), false);
+  const pending = createRequest(root, {
+    kind: 'tiny',
+    reason: 'scope doc with unsafe git config',
+    files: 'docs/scope/plan.md',
+    minutes: 30,
+  }, { now: T0 });
+  assert.equal(pending.status, 'pending');
+});
+
+test('opus2 (3): hooks are checked under git-common-dir', async t => {
+  const root = await tempRepo(t, 'feat/hooks');
+  const commonHooks = path.join(root, '.git', 'hooks');
+  await fs.writeFile(path.join(commonHooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  assert.equal(policyGitCommitAllowed(['commit', '-m', 'x'], { root, currentBranch: 'feat/hooks' }), false);
+});
+
+test('opus2 (4): policy push respects kill switch and rate limits', async t => {
+  const root = await tempRepo(t, 'feat/push-guard');
+  await addOrigin(root);
+  createRequest(root, {
+    kind: 'tiny',
+    reason: 'policy push window for scope doc',
+    files: 'docs/scope/plan.md',
+    minutes: 30,
+    git: 'push',
+  }, { now: T0 });
+  await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
+  await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
+  const killed = guardBash(root, 'git push origin feat/push-guard', 'feat/push-guard');
+  assert.equal(killed.allow, false);
+  await fs.rm(path.join(root, HB_AUTO_OFF));
+  const req = listRequests(root)[0];
+  for (let i = 0; i < DEFAULT_MAX_ACTIONS_PER_WINDOW; i += 1) {
+    recordPolicyGuardAllow(root, { approvalId: req.id, files: ['docs/scope/plan.md'], rule: 'test' }, { now: T0 });
+  }
+  const limited = guardBash(root, 'git push origin feat/push-guard', 'feat/push-guard');
+  assert.equal(limited.allow, false);
+});
+
+test('opus2 (5): file-tool policy window respects kill switch and daily window cap', async t => {
+  const root = await tempRepo(t);
+  createRequest(root, {
+    kind: 'tiny',
+    reason: 'write scope under policy window',
+    files: 'docs/scope/plan.md',
+    minutes: 30,
+  }, { now: T0 });
+  await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
+  await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
+  const killed = guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: path.join(root, 'docs/scope/plan.md'), content: '# x\n' },
+    root,
+    cwd: root,
+    now: T0,
+  });
+  assert.equal(killed.allow, false);
+  await fs.rm(path.join(root, HB_AUTO_OFF));
+  for (let i = 1; i < DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY; i += 1) {
+    createRequest(root, {
+      kind: 'tiny',
+      reason: `extra policy window number ${i}`,
+      files: 'docs/scope/plan.md',
+      minutes: 5,
+    }, { now: T0 });
+  }
+  const capped = createRequest(root, {
+    kind: 'tiny',
+    reason: 'one more policy window should be capped',
+    files: 'docs/scope/plan.md',
+    minutes: 5,
+  }, { now: T0 });
+  assert.equal(capped.status, 'pending');
+});
+
+test('opus2 (6): url.insteadof keys are matched case-insensitively', async t => {
+  const root = await tempRepo(t, 'feat/instead');
+  const remote = 'https://github.com/swarm-test/instead.git';
+  await exec('git', ['remote', 'add', 'origin', remote], { cwd: root });
+  writeTrustedRepository(normalizeGitRemoteUrl(remote));
+  await exec('git', ['config', 'url.https://EVIL.example/.insteadOf', remote], { cwd: root });
+  assert.equal(originIsProjectRepository(root), false);
+});
+
+test('opus2 (7): missing stats without initialized marker blocks auto-approve', async t => {
+  const root = await tempRepo(t);
+  await fs.rm(path.join(root, STATS_INITIALIZED_FILE), { force: true });
+  await fs.rm(path.join(root, STATS_FILE), { force: true });
+  const pending = createRequest(root, {
+    kind: 'tiny',
+    reason: 'stats reset without marker should not auto approve',
+    files: 'docs/scope/plan.md',
+    minutes: 30,
+  }, { now: T0 });
+  assert.equal(pending.status, 'pending');
+});
+
+test('opus2 (8): SWARM_POLICY_FILE override ignored without signed marker', () => {
+  const cfgDir = path.dirname(process.env.SWARM_CONFIG);
+  fsSync.rmSync(path.join(cfgDir, POLICY_FILE_OVERRIDE_MARKER), { force: true });
+  const evil = path.join(cfgDir, 'evil-policy.json');
+  fsSync.writeFileSync(evil, `${JSON.stringify({ rules: [{ id: POLICY_ID, repository: 'https://github.com/evil/x' }] })}\n`);
+  const prev = process.env.SWARM_POLICY_FILE;
+  process.env.SWARM_POLICY_FILE = evil;
+  try {
+    assert.notEqual(policyFilePath(), evil);
+  } finally {
+    if (prev === undefined) delete process.env.SWARM_POLICY_FILE;
+    else process.env.SWARM_POLICY_FILE = prev;
+    fsSync.rmSync(evil, { force: true });
+    fsSync.rmSync(path.join(cfgDir, POLICY_FILE_OVERRIDE_MARKER), { force: true });
+  }
+});
+
+test('opus2 (9): read-only git and git add allowed under policy window', async t => {
+  const root = await tempRepo(t, 'feat/read-git');
+  createRequest(root, {
+    kind: 'tiny',
+    reason: 'policy window for read-only git',
+    files: 'docs/scope/plan.md',
+    minutes: 30,
+    git: 'commit',
+  }, { now: T0 });
+  assert.ok(policyGitReadAllowed(['status'], { root, cwd: root }));
+  assert.ok(policyGitReadAllowed(['diff', 'HEAD'], { root, cwd: root }));
+  const status = guardBash(root, 'git status', 'feat/read-git');
+  assert.equal(status.allow, true);
+  const add = guardBash(root, 'git add docs/scope/plan.md', 'feat/read-git');
+  assert.equal(add.allow, true);
 });
 
 test('stats: ownerTerminal vs autoApproved', async t => {
