@@ -1,0 +1,36 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "hermetic",
+   "agent": "auto",
+   "prompt": "Seven tests fail only when the repo checkout lives next to other git worktrees of the same repository on a machine (for example under ~/.project-swarm-scratch with a roadmap-build worktree at 39% progress): tests/build-progress-roadmap.test.mjs (six tests, they get 39 instead of 80: the build-progress code discovers the machine's real linked worktrees and their approved ledgers instead of only the fixture's) and tests/concurrency-guard.test.mjs test 'process: the wrapper killed outright (SIGKILL, a crash) is restored by the watcher within seconds' ( make it robust under load, for example a longer poll window with the same assertion, not a weaker assertion). Make these tests hermetic: the build-progress code (find where it lists linked worktrees, likely tools/build-progress.mjs or tools/board-data.mjs via git worktree list) must take an injectable worktree lister (and an option to disable discovery), and the tests must pass the fixture's own list or disable discovery so the machine's real worktrees never leak in. Do not change production behaviour when no option is given. Keep tests/build-progress*.test.mjs, tests/board-*.test.mjs passing.",
+   "context": [
+    "tools/build-progress.mjs",
+    "tests/build-progress-roadmap.test.mjs",
+    "tests/build-progress.test.mjs",
+    "tests/build-progress-atlas.test.mjs",
+    "tests/build-progress-ledgers.test.mjs",
+    "tests/build-progress-untracked-filter.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/concurrency-guard.test.mjs"
+   ],
+   "outputs": [
+    "tools/build-progress.mjs",
+    "tests/build-progress-roadmap.test.mjs",
+    "tests/build-progress.test.mjs",
+    "tests/build-progress-atlas.test.mjs",
+    "tests/build-progress-ledgers.test.mjs",
+    "tests/build-progress-untracked-filter.test.mjs",
+    "tests/concurrency-guard.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/board-accuracy-percent.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "build progress tests in context; full suite before merge"
+  }
+ ]
+}

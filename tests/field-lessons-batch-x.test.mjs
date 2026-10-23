@@ -365,14 +365,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
 });
 
 // ---------------------------------------------------------------------------------------------
-describe('release: 1.167.3', () => {
-  test('package.json and package-lock.json are both at 1.167.3', async () => {
+describe('release: 1.167.4', () => {
+  test('package.json and package-lock.json are both at 1.167.4', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(pkg.version, '1.167.3');
-    assert.equal(lock.version, '1.167.3');
-    assert.equal(lock.packages[''].version, '1.167.3');
+    assert.equal(pkg.version, '1.167.4');
+    assert.equal(lock.version, '1.167.4');
+    assert.equal(lock.packages[''].version, '1.167.4');
   });
 
   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {

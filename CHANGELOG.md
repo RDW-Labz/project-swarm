@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.4
+
+The project page no longer goes blank, and wide waves start.
+- **Board:** the project page rendered nothing when one panel failed (the removed spend panel threw and the error was swallowed); it now renders every panel, shows an error banner when loading fails, and has a large-ledger test.
+- **Wave prep:** one ticket that cannot be prepared (uncovered tests, a test file the ticket creates, oversized or binary context) is parked with a warning instead of aborting the whole wave, and tickets move to running only after the manifest validates.
+
 ## 1.167.3
 
 New files are no longer refused as typos.

@@ -218,9 +218,10 @@ const dateScore = value => {
   return Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
 };
 
-export async function ledgerRoot(root, { family = worktreeFamily, ownOnly = false } = {}) {
+export async function ledgerRoot(root, { family = worktreeFamily, ownOnly = false, discoverWorktrees } = {}) {
   const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
-  const members = ownOnly ? [root] : await family(root, { all: true });
+  const listFamily = discoverWorktrees === false ? async () => [] : family;
+  const members = ownOnly ? [root] : await listFamily(root, { all: true });
   const roots = [];
   for (const member of [...(Array.isArray(members) ? members : []), root]) {
     const candidateRoot = await fs.realpath(member).catch(() => path.resolve(member));
@@ -635,10 +636,11 @@ function headlineFor(build, human) {
   return human.total > 0 ? `${buildText} · human ${human.done}/${human.total}` : buildText;
 }
 
-export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined, ownOnly = false } = {}) {
+export async function buildProgress({ root, projectId, now = Date.now(), historyFile, spend = null, deploy = null, prState = undefined, ownOnly = false, family, discoverWorktrees } = {}) {
   const notes = [];
   try {
-    const selected = await ledgerRoot(root, { ownOnly });
+    const ledgerOpts = { ownOnly, ...(family !== undefined ? { family } : {}), ...(discoverWorktrees === false ? { discoverWorktrees: false } : {}) };
+    const selected = await ledgerRoot(root, ledgerOpts);
     const sourceCandidate = selected.candidates.find(candidate => candidate.root === selected.root);
     const source = { root: selected.root, approvedAt: sourceCandidate?.approvedAt ?? null, updatedAt: sourceCandidate?.updatedAt ?? null, differs: selected.differs, candidates: selected.candidates.length };
     if (selected.differs) notes.push(`ledger read from ${path.basename(selected.root)} (newest approved of ${selected.candidates.length} checkouts)`);
@@ -648,7 +650,8 @@ export async function buildProgress({ root, projectId, now = Date.now(), history
     const journal = await readJournalSafe(selected.root, notes);
     const history = await readHistorySafe(projectId, historyFile, notes);
     const times = await readDoneTimes(selected.root, notes);
-    const runRoots = ownOnly
+    const isolateRuns = ownOnly || discoverWorktrees === false;
+    const runRoots = isolateRuns
       ? [root]
       : [...new Set([root, selected.root, ...selected.candidates.map(candidate => candidate.root)])];
     const runRecords = await readRunRecords(runRoots);
