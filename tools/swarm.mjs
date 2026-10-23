@@ -760,7 +760,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
             };
           }
         }
-        try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]), local: localAcquire }); }
+        try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]), local: localAcquire, jobId: job.id }); }
         finally {
           waitingJobs.delete(waiting);
           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }

@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-locallane3",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "a lane that reads an API key from the macOS Keychain and sends it to a configurable URL",
+   "type": "review",
+   "prompt": "Final re-review of coordination/review/locallane3.diff (local lane). Previous review found: no redirect error on the key-bearing chat fetch (high); claim loop stops when one endpoint is full (medium); doctor local throwing on malformed config (low). Verify these three are fixed in the diff and look for any new key-leak, sensitive-data or cap-bypass path. Verdict PASS or FAIL, ranked findings, no exploit commands.",
+   "context": [
+    "coordination/review/locallane3.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

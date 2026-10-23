@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { validateLocalLaneBlock, doctorLocal } from '../tools/local-lane.mjs';
-import { resolveLanes, claimLaneSlots, releaseLaneSlots, lanesDir, withLaneStore } from '../tools/lanes.mjs';
+import { resolveLanes, claimLaneSlots, releaseLaneSlots, lanesDir, withLaneStore, LaneScheduler } from '../tools/lanes.mjs';
 import { routeJob } from '../tools/router.mjs';
 import { executeApi, probeLocalProvider } from '../tools/api-adapters.mjs';
 
@@ -83,6 +83,107 @@ test('claimLaneSlots counts slots granted earlier in the same claim', async () =
   const claim = await claimLaneSlots({ dir, agent: 'local', concurrency: 2, count: 2, local });
   assert.equal(claim.granted.length, 2);
   await releaseLaneSlots({ dir, slots: claim.granted.map(id => ({ agent: 'local', slotId: id })) });
+});
+
+test('claimLaneSlots tags each grant with its waiter job id', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-jobid-'));
+  const locals = [
+    { endpoint: 'fast', slotsLimit: 1, agency: false, agencyConcurrency: 1 },
+    { endpoint: 'docs', slotsLimit: 3, agency: true, agencyConcurrency: 1 },
+  ];
+  const claim = await claimLaneSlots({
+    dir,
+    agent: 'local',
+    concurrency: 4,
+    count: 2,
+    jobIds: ['job-fast', 'job-docs'],
+    local: locals,
+  });
+  assert.equal(claim.granted.length, 2);
+  assert.deepEqual(claim.granted[0], { jobId: 'job-fast', slotId: claim.granted[0].slotId });
+  assert.deepEqual(claim.granted[1], { jobId: 'job-docs', slotId: claim.granted[1].slotId });
+  await releaseLaneSlots({
+    dir,
+    slots: claim.granted.map(entry => ({ agent: 'local', slotId: entry.slotId })),
+  });
+});
+
+test('scheduler matches grants by job id when a middle waiter is cancelled during claim', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-cancel-shift-'));
+  const lanes = resolveLanes({
+    config: {
+      lanes: {
+        local: {
+          endpoints: [loopbackEp('fast', 18010, 2), loopbackEp('docs', 18011, 3)],
+          agencyConcurrency: 1,
+        },
+      },
+    },
+  });
+  const fast = { endpoint: 'fast', slotsLimit: 2, agency: false, agencyConcurrency: 1 };
+  const docsAgency = { endpoint: 'docs', slotsLimit: 3, agency: true, agencyConcurrency: 1 };
+  const scheduler = new LaneScheduler({
+    lanes,
+    globalConcurrency: 8,
+    shared: {
+      dir,
+      runId: 'review-cancel',
+      claimWait: async ({ waiters }) => {
+        waiters[1].abort();
+      },
+    },
+  });
+  const middle = new AbortController();
+  const releases = [];
+  const settled = await Promise.allSettled([
+    scheduler.acquire('local', { jobId: 'j-fast-1', local: fast }).then(release => { releases.push(release); }),
+    scheduler.acquire('local', { jobId: 'j-docs', local: docsAgency, signal: middle.signal }),
+    scheduler.acquire('local', { jobId: 'j-fast-2', local: fast }).then(release => { releases.push(release); }),
+  ]);
+  assert.equal(settled[1].status, 'rejected');
+  assert.equal(releases.length, 2);
+  const store = await withLaneStore(s => s, { dir });
+  const held = store.slots.local ?? [];
+  assert.equal(held.length, 2);
+  assert.equal(held.filter(s => s.localEndpoint === 'fast').length, 2);
+  assert.equal(held.filter(s => s.localAgency).length, 0);
+  for (const release of releases) await release();
+  await scheduler.close();
+});
+
+test('scheduler releases a grant when its job is no longer pending after claim', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-review-cancel-release-'));
+  const lanes = resolveLanes({
+    config: {
+      lanes: {
+        local: {
+          endpoints: [loopbackEp('docs', 18012, 3)],
+          agencyConcurrency: 1,
+        },
+      },
+    },
+  });
+  const docsAgency = { endpoint: 'docs', slotsLimit: 3, agency: true, agencyConcurrency: 1 };
+  const scheduler = new LaneScheduler({
+    lanes,
+    globalConcurrency: 8,
+    shared: {
+      dir,
+      runId: 'review-release',
+      claimWait: async ({ waiters }) => {
+        waiters[0].abort();
+      },
+    },
+  });
+  const ctrl = new AbortController();
+  await assert.rejects(
+    scheduler.acquire('local', { jobId: 'j-cancelled', local: docsAgency, signal: ctrl.signal }),
+    { name: 'AbortError' },
+  );
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const store = await withLaneStore(s => s, { dir });
+  assert.equal(store.slots.local?.length ?? 0, 0);
+  await scheduler.close();
 });
 
 test('manifest local endpoints and agencyConcurrency are ignored for routing limits', () => {
