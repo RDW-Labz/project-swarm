@@ -175,6 +175,7 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
         mine.push({ kind: 'proposed-ticket', id: txt(t.id, 20), title: txt(t.title, TITLE_MAX), since: t.createdAt ?? ledger.updatedAt ?? null, unblocks: 0, steps: 0, choices: null, origin: txt(t.origin, 20), filesNamed: (t.files ?? []).length > 0, ...stepsOf(nextFor({ kind: 'proposed-ticket', id: t.id, files: (t.files ?? []).length > 0 }, project.root)), fyi: false, phone: phoneOf(phone, now) });
       }
       for (const t of ledger?.tickets ?? []) {
+        if (t.status !== 'blocked') continue;
         if (!ticketReleaseAllowed(t, ledger)) continue;
         if (t.status === 'blocked' && t.blockReason === 'deps') continue;
         if (t.status === 'blocked' && t.blockReason !== 'deps' && !t.holdQuestion) continue;
