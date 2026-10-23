@@ -14,7 +14,7 @@ Auto-approved when **every** listed path is an **exact** file (no folder entries
 
 - `docs/state/` only (plain notes with allowed extensions)
 
-Allowed extensions: `.md`, `.txt`, `.csv`, `.ndjson` — nothing else (json and yaml are parsed as config by trusted processes, so they never ride a window).
+Allowed extensions: `.md`, `.txt`, `.csv` only — nothing else (json, yaml, and ndjson are parsed or streamed as structured state by trusted processes, so they never ride a window).
 
 Path components under `docs/state/` and each window file basename must be ASCII `^[A-Za-z0-9._-]+$`. Comparisons use `fold(s) = s.normalize('NFKC').toUpperCase().toLowerCase()`.
 
@@ -32,7 +32,7 @@ A request that names any git operation is never auto-approved (the owner decides
 
 At write time the guard runs the full policy check whenever the covering approval is a policy row or any policy row covers the path (exact window entry and canonical comparison via `fold` on a case-insensitive filesystem). A path spelled differently from the window entry is denied. An existing target must be a regular file with a single link (checked with lstat and a no-follow open plus fstat); symlinks and hard links are refused.
 
-**Timing gap:** Policy windows only cover inert notes under `docs/state/` that no tool executes or trusts as authoritative (see table above). Another process could still change a window file between the guard check and the editor write; the guard re-checks immediately before allow, but concurrent writers outside the session are not serialized.
+**Timing gap:** Policy windows only cover inert notes under `docs/state/` that no tool executes or trusts as authoritative (see table above). Another process could still change a window file between the guard check and the editor write; the guard re-checks immediately before allow, then records a post-write verification (inode, single link, plain file, still under `docs/state/`) on the next tool call and on `swarm handbuild stats`. A failed check logs `policy-integrity-alert`, turns on the auto-off kill switch, and sets `policyIntegrityAlert` in stats (surfaced in `swarm brief`). Window paths whose parent directory is a symlink or is group/world-writable are refused.
 
 Still owner-only: `docs/scope/`, `docs/plans/`, `docs/design/`, coordination handoff and review paths, job manifests, `.project-swarm.json`, `tools/`, `tests/`, `.github/`, `.swarm/`, `.git/`, guard state, code files, all shell commands, and all git commands (`commit`, `push`, `switch`, plain `git`, etc.).
 

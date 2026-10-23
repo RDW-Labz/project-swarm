@@ -26,6 +26,8 @@ import {
   DEFAULT_MAX_ACTIONS_PER_WINDOW,
   DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY,
   STATS_INITIALIZED_FILE,
+  DOCS_STATE_READER_DENIED_BASENAMES,
+  policyWindowParentDirSafe,
 } from '../tools/auto-approve-policy.mjs';
 import {
   createRequest,
@@ -44,6 +46,8 @@ import {
   recordPolicyGuardAllow,
   handbuildStatsInitialized,
   applyPolicyGuardedAllow,
+  verifyPolicyWriteQueue,
+  POLICY_INTEGRITY_ALERT_FILE,
 } from '../tools/handbuild.mjs';
 import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
 import { isSelfApprovalCommand } from '../tools/self-approval.mjs';
@@ -145,7 +149,6 @@ test('allowed paths and blocked areas', async t => {
   for (const f of [
     PLAN,
     'docs/state/x.csv',
-    'docs/state/x.ndjson',
     'docs/state/note.txt',
   ]) {
     assert.equal(isSwarmAdminHandbuildPath(f, { root }), true, f);
@@ -249,6 +252,25 @@ test('policy window does not auto-approve Bash (policy row is file tools only)',
   assert.match(d.reason, /write a ticket instead|blocked: writes/);
 });
 
+test('Bash cannot use a live policy row to write a listed window file', async t => {
+  const root = await tempRepo(t);
+  const without = guardBash(root, `echo x > ${PLAN}`);
+  assert.equal(without.allow, false);
+  windowRequest(root, PLAN);
+  const withWindow = guardBash(root, `echo x > ${PLAN}`);
+  assert.equal(withWindow.allow, false);
+  assert.equal(withWindow.allow, without.allow);
+  assert.match(withWindow.reason, /write a ticket instead|blocked: writes/);
+});
+
+test('authoritative reader basenames are denied for policy windows', () => {
+  assert.ok(DOCS_STATE_READER_DENIED_BASENAMES.has(fold('usage-ledger.md')));
+  assert.ok(DOCS_STATE_READER_DENIED_BASENAMES.has(fold('eval-scores.ndjson')));
+  assert.equal(isPolicyWindowFileEntry('docs/state/usage-ledger.md'), false);
+  assert.equal(isPolicyWindowFileEntry('docs/state/eval-scores.ndjson'), false);
+  assert.equal(isPolicyWindowFileEntry('docs/state/scratch.ndjson'), false);
+});
+
 test('fold() path rules: case and NFKC; non-ASCII path components rejected', async t => {
   const root = await tempRepo(t);
   assert.equal(fold('docs/state/PLAN.md'), fold('docs/state/plan.md'));
@@ -265,6 +287,48 @@ test('session cannot write ~/.config/project-swarm (policy.json and siblings)', 
   const d = guardDecision({
     tool: 'Bash',
     toolInput: { command: `echo x > ${cfg}` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
+});
+
+test('session cannot write XDG_CONFIG_HOME project-swarm when set', async t => {
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const xdg = path.join(home, 'xdg-config');
+  await fs.mkdir(path.join(xdg, 'project-swarm'), { recursive: true });
+  const prev = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = xdg;
+  try {
+    const cfg = path.join(xdg, 'project-swarm', 'policy.json');
+    const d = guardDecision({
+      tool: 'Bash',
+      toolInput: { command: `echo x > ${cfg}` },
+      root,
+      cwd: root,
+      now: T0,
+      home,
+    });
+    assert.equal(d.allow, false);
+  } finally {
+    if (prev === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = prev;
+  }
+});
+
+test('protected home path via symlink is blocked', async t => {
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const sshDir = path.join(home, '.ssh');
+  await fs.mkdir(sshDir, { recursive: true });
+  const link = path.join(home, 'ssh-link');
+  await fs.symlink(sshDir, link);
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${link}/config` },
     root,
     cwd: root,
     now: T0,
@@ -498,6 +562,47 @@ test('bumpHandbuildStats does not persist unreadable flag', async t => {
   bumpHandbuildStats(root, 'ownerTerminal', { now: T0 });
   const raw = await fs.readFile(path.join(root, STATS_FILE), 'utf8');
   assert.doesNotMatch(raw, /__policyStatsUnreadable/);
+});
+
+test('decideRequest ownerTerminal bump skips write when stats are unreadable', async t => {
+  const root = await tempRepo(t);
+  const pending = createRequest(root, {
+    kind: 'tiny',
+    reason: 'needs owner approval for stats test',
+    files: 'docs/plans/ideas.md',
+    minutes: 10,
+  }, { now: T0 });
+  assert.equal(pending.status, 'pending');
+  await fs.writeFile(path.join(root, STATS_FILE), 'not-json');
+  decideRequest(root, pending.id, 'approve', { now: T0, by: 'owner', channel: 'computer' });
+  const raw = await fs.readFile(path.join(root, STATS_FILE), 'utf8');
+  assert.equal(raw, 'not-json');
+});
+
+test('post-write verification engages kill switch when inode changes', async t => {
+  const root = await tempRepo(t);
+  windowRequest(root);
+  const allowed = guardWrite(root, PLAN);
+  assert.equal(allowed.allow, true);
+  const before = fsSync.readFileSync(path.join(root, PLAN), 'utf8');
+  await fs.rm(path.join(root, PLAN));
+  await fs.writeFile(path.join(root, PLAN), `${before}# replaced\n`);
+  const verify = verifyPolicyWriteQueue(root, { now: T0 });
+  assert.equal(verify.ok, false);
+  assert.ok(fsSync.existsSync(path.join(root, HB_AUTO_OFF)));
+  assert.ok(fsSync.existsSync(path.join(root, POLICY_INTEGRITY_ALERT_FILE)));
+  const stats = JSON.parse(handbuildStatsJson(root, { now: T0 }));
+  assert.equal(stats.policyIntegrityAlert, true);
+  assert.equal(stats.killSwitch, true);
+});
+
+test('policy window rejects parent dir that is group-writable', async t => {
+  const root = await tempRepo(t);
+  const dir = path.join(root, 'docs', 'state', 'loose');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.chmod(dir, 0o775);
+  assert.equal(policyWindowParentDirSafe(root, 'docs/state/loose/note.md'), false);
+  assert.equal(isSwarmAdminHandbuildPath('docs/state/loose/note.md', { root }), false);
 });
 
 test('missing stats after initialized marker blocks auto-approve', async t => {

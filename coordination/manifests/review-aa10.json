@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-aa10",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "auto-approval policy for hand-build windows and git push; a bypass lets a session push or rewrite the repo unattended",
+   "type": "review",
+   "prompt": "Tenth static security review of coordination/review/aa-new10.diff: auto-approve v1, now FILE-EDIT WINDOWS ONLY (no git capability at all: every git command stays owner-only as on main; the swarm merge standing path is unchanged). A policy window may auto-approve Write, Edit, NotebookEdit and analysed shell writes of EXACT files with extensions .md .txt .json .ndjson .csv .yaml .yml inside docs/plans, docs/state, docs/scope, docs/design and the routing notes main already allows, never tools, tests, .github, .swarm, .git, job manifests, coordination review files or the project pointer. Promises: exact-file entries only (no folder or prefix match); every written path re-checked at write time against folders and extensions; lstat-based symlink and dangling-symlink rejection; kill switch, expiry, per-window and per-day caps and stats protection on every approval path; stats initialised by the policy with a marker and never fail-open; policy file and override variables ignored outside the signed test marker; SAFE_SWARM anchored and every segment of a compound command tested; ssh and git config files protected; orchestrator mode gains nothing; git behaves exactly as on main. Previous findings (fifth review) that still apply to this scope: folder entries and code files in windows, dangling symlinks, stats never initialised, SAFE_SWARM anchoring, env overrides under the temp dir, protected files. Check each and look for NEW bypasses or fail-open paths, including: any remaining way a policy window can cover a git command or a command that runs code, a window file that is a hard link or a path reached through a symlinked ancestor, case-insensitive filesystem tricks, files inside allowed folders that other tools execute or trust (hooks, CI configs, scripts referenced from docs, package scripts), and the guard paths for shell writes (redirects, tee, sed -i, mv, cp onto a window file from a protected one). No exploit commands. Verdict PASS or FAIL, ranked findings with severity. Policy windows now cover ONLY the file tools Write, Edit and NotebookEdit of exact files under docs/state (ASCII names, .md .txt .csv .ndjson, no instruction names, full case folding); every shell command stays owner-only as on main; git and swarm merge paths are meant to be untouched. The ninth review (FAIL) found: H symlink/hard-link checks before execution beaten by compound Bash commands and races; M toLowerCase is not the filesystem case folding; M no allow-list of shell commands; M ~/.config/project-swarm unprotected; M ssh and shell startup protection gaps; L unreadable flag saved by the owner stats bump, stats counted before the final re-check, over-tight safe-swarm patterns, docs/state files trusted by tools. Verify each is fixed (Bash coverage gone, hunks touching git, merge or safe patterns gone), the docs list the readers of docs/state, and look for new bypasses in the remaining file-tool path: TOCTOU between check and write, hard links created by other tools, case or Unicode tricks, window entries that normalise to protected paths, caps and stats races (two concurrent approvals), kill switch and expiry, and the protected-path list. Verdict PASS or FAIL, ranked findings.",
+   "context": [
+    "coordination/review/aa-new10.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

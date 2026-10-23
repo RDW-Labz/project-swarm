@@ -30,7 +30,12 @@ export function fold(s) {
 
 const ASCII_PATH_COMPONENT = /^[A-Za-z0-9._-]+$/;
 
-const ALLOWED_EXT = new Set(['.md', '.txt', '.csv', '.ndjson']);
+const ALLOWED_EXT = new Set(['.md', '.txt', '.csv']);
+
+/** Basenames swarm tools read as authoritative state (see docs/auto-approve.md); never policy-window targets. */
+export const DOCS_STATE_READER_DENIED_BASENAMES = new Set(
+  ['usage-ledger.md', 'eval-scores.ndjson'].map(fold),
+);
 
 const INSTRUCTION_BASENAMES = new Set(
   ['claude.md', 'agents.md', 'gemini.md', 'readme.md', 'skill.md', 'claude.local.md'].map(fold),
@@ -78,13 +83,17 @@ function instructionBasenameBlocked(foldedPath) {
   return fb.endsWith('.instructions.md') || fb.endsWith('.rules.md') || fb.endsWith('.local.md');
 }
 
-function docsStateComponentsAscii(foldedPath) {
-  const parts = norm(foldedPath).split('/');
+function docsStateComponentsAsciiRaw(rawPath) {
+  const parts = norm(rawPath).split('/');
   if (parts[0] !== 'docs' || parts[1] !== 'state') return false;
   for (let i = 2; i < parts.length; i += 1) {
     if (!ASCII_PATH_COMPONENT.test(parts[i])) return false;
   }
   return true;
+}
+
+function docsStateComponentsAscii(foldedPath) {
+  return docsStateComponentsAsciiRaw(foldedPath);
 }
 
 function authoritativeStatePath(foldedPath) {
@@ -93,22 +102,33 @@ function authoritativeStatePath(foldedPath) {
   return p.startsWith(AUTHORITATIVE_STATE_PREFIX);
 }
 
-function folderAllowed(foldedPath) {
-  const lower = norm(foldedPath);
-  if (fold(lower) === fold('.project-swarm.json')) return false;
+function readerDeniedBasename(rawPath) {
+  const base = norm(rawPath).slice(norm(rawPath).lastIndexOf('/') + 1);
+  return DOCS_STATE_READER_DENIED_BASENAMES.has(fold(base));
+}
+
+function folderAllowedRaw(rawPath) {
+  const raw = norm(rawPath);
+  if (!docsStateComponentsAsciiRaw(raw)) return false;
+  const lower = fold(raw);
+  if (lower === fold('.project-swarm.json')) return false;
   if (BLOCKED_PREFIXES.some(p => {
     const fp = fold(p);
     return lower === fp.slice(0, -1) || lower.startsWith(fp);
   })) return false;
-  if (pathHasDotFolderComponent(lower) || instructionBasenameBlocked(lower)) return false;
-  if (!lower.startsWith('docs/state/')) return false;
-  if (!docsStateComponentsAscii(lower)) return false;
+  if (pathHasDotFolderComponent(raw) || instructionBasenameBlocked(lower)) return false;
+  if (!lower.startsWith(fold('docs/state/'))) return false;
+  if (readerDeniedBasename(raw)) return false;
   if (authoritativeStatePath(lower)) return false;
   return true;
 }
 
+function folderAllowed(foldedPath) {
+  return folderAllowedRaw(foldedPath);
+}
+
 export function policyFolderAllowed(rel) {
-  return folderAllowed(fold(norm(rel)));
+  return folderAllowedRaw(norm(rel));
 }
 
 export function fsIsCaseInsensitive(root) {
@@ -149,9 +169,34 @@ export function isPolicyWindowFileEntry(rel) {
   const raw = norm(rel);
   if (path.isAbsolute(raw) || pathHasDotDot(raw) || /[*?[{]/.test(raw)) return false;
   if (raw.endsWith('/') || !raw.includes('/')) return false;
+  if (!docsStateComponentsAsciiRaw(raw)) return false;
   const folded = fold(raw);
   if (!extensionAllowed(folded)) return false;
-  return folderAllowed(folded);
+  return folderAllowedRaw(raw);
+}
+
+export function policyWindowParentDirSafe(root, rel) {
+  const p = norm(rel);
+  if (!p.includes('/')) return false;
+  const parent = p.slice(0, p.lastIndexOf('/'));
+  if (!parent || parent === '.') return true;
+  const parts = parent.split('/');
+  let prefix = '';
+  for (let n = 0; n < parts.length; n += 1) {
+    prefix = n === 0 ? parts[0] : `${prefix}/${parts[n]}`;
+    const abs = path.join(root, prefix);
+    let lst;
+    try {
+      lst = fs.lstatSync(abs);
+    } catch {
+      if (n === parts.length - 1) return true;
+      return false;
+    }
+    if (lst.isSymbolicLink()) return false;
+    if ((lst.mode & 0o002) || (lst.mode & 0o020)) return false;
+    if (n < parts.length - 1 && !lst.isDirectory()) return false;
+  }
+  return true;
 }
 
 export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
@@ -159,9 +204,11 @@ export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
   const raw = norm(rel);
   if (path.isAbsolute(raw) || pathHasDotDot(raw) || /[*?[{]/.test(raw)) return false;
   if (raw.endsWith('/')) return false;
+  if (!docsStateComponentsAsciiRaw(raw)) return false;
   const folded = fold(raw);
-  if (!extensionAllowed(folded) || !folderAllowed(folded)) return false;
+  if (!extensionAllowed(folded) || !folderAllowedRaw(raw)) return false;
   if (!root) return true;
+  if (!policyWindowParentDirSafe(root, raw)) return false;
   return policyPathLstatSafe(root, raw) !== null;
 }
 
@@ -212,8 +259,9 @@ function policyPathLstatSafe(root, rel) {
     const relToRoot = path.relative(rootReal, real);
     if (!relToRoot || relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) return null;
     const canonical = norm(relToRoot);
+    if (!docsStateComponentsAsciiRaw(canonical) || !docsStateComponentsAsciiRaw(p)) return null;
     const foldedCanon = fold(canonical);
-    if (!extensionAllowed(foldedCanon) || !folderAllowed(foldedCanon)) return null;
+    if (!extensionAllowed(foldedCanon) || !folderAllowedRaw(canonical)) return null;
     if (canonical !== p) return null;
     return canonical;
   } catch {
