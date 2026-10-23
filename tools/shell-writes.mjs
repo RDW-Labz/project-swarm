@@ -904,11 +904,39 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     if (path.isAbsolute(p) || p === '~' || p.startsWith('~/') || heres.length < 2) return [resolve(raw, here, expands)];
     return [...new Set(heres)].map(base => resolve(raw, base, expands));
   };
-  const isProtectedAbs = r => [r.abs, r.real].filter(Boolean).some(abs => protectedAbs.some(prefix => {
-    const a = abs.toLowerCase(), pre = prefix.toLowerCase();
-    // the protected path, what lies under it, and the folders that contain it (removing or moving them removes it)
-    return a === pre || a.startsWith(`${pre}/`) || (pre.startsWith(`${a}/`) && a !== '/');
-  }));
+  const resolveProtectedReal = absPath => {
+    let cur = path.resolve(absPath);
+    const tail = [];
+    for (let i = 0; i < 64; i += 1) {
+      try {
+        const real = fs.realpathSync.native(cur);
+        return tail.length ? path.resolve(real, ...tail) : real;
+      } catch {
+        const base = path.basename(cur);
+        if (base) tail.unshift(base);
+        const up = path.dirname(cur);
+        if (up === cur) break;
+        cur = up;
+      }
+    }
+    try { return fs.realpathSync.native(cur); } catch { return path.resolve(absPath); }
+  };
+  const protectedPathForms = abs => {
+    const resolved = path.resolve(abs);
+    const text = resolved.toLowerCase();
+    let real = text;
+    try { real = resolveProtectedReal(resolved).toLowerCase(); } catch { /* text only */ }
+    return text === real ? [text] : [text, real];
+  };
+  const protectedPrefixMatches = (abs, prefix) => {
+    for (const a of protectedPathForms(abs)) {
+      for (const pre of protectedPathForms(prefix)) {
+        if (a === pre || a.startsWith(`${pre}/`) || (pre.startsWith(`${a}/`) && a !== '/')) return true;
+      }
+    }
+    return false;
+  };
+  const isProtectedAbs = r => [r.abs, r.real].filter(Boolean).some(abs => protectedAbs.some(prefix => protectedPrefixMatches(abs, prefix)));
   const globPatternUnknown = (raw, expands = false) => {
     if (!/[*?\[{]/.test(String(raw))) return false;
     const fixed = String(raw).replace(/[*?\[{].*$/, '');

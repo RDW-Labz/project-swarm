@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "aav7",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "CI fails only on the GitHub runners: tests/auto-approve.test.mjs fixtures run 'git commit -q -m init --author ...' in a temp repo and the runner has no committer identity ('Committer identity unknown'; about the tests at line 138 and others in that file). Make every git invocation in the test fixtures (in tests/auto-approve.test.mjs, and the helper it uses) independent of any global config: pass -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null on every git call, set GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM to /dev/null and GIT_CONFIG_NOSYSTEM=1 in the child environment, and init with -b main. Do not change production code. Run the file with HOME pointing at an empty temp dir and no global git config to prove it passes, then run the normal way too.",
+   "context": [
+    "tests/auto-approve.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/auto-approve.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "guard, approval and merge tests in context; full suite before merge"
+  }
+ ]
+}
