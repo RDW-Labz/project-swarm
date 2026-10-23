@@ -1,0 +1,1378 @@
+diff --git a/docs/auto-approve.md b/docs/auto-approve.md
+new file mode 100644
+index 0000000..2a6838d
+--- /dev/null
++++ b/docs/auto-approve.md
+@@ -0,0 +1,50 @@
++# Policy auto-approve (hand-build)
++
++Routine swarm-admin **file edits** are approved in-process—no owner terminal—unless the kill switch is on. Git and other shell operations are **not** covered by policy auto-approve; they follow the normal hand-build flow (owner approval that names the operation).
++
++## Frozen policy
++
++The rules live in code as `tools/auto-approve-policy.mjs` (`POLICY_ID` / `POLICY_VERSION`). Agents cannot edit this file through an approval window; only the owner merges code changes.
++
++At `swarm handbuild request` time the swarm evaluates the **normalized** request (validated exact file list and minutes). A matching request is stored as **approved** immediately. The guard re-checks every write path at tool time against the frozen allow-list, so forged paths in the request text do not expand the window.
++
++### File window (only)
++
++Auto-approved when **every** listed path is an **exact** file (no folder entries, no prefix wildcards) under:
++
++- `docs/state/` only (plain notes with allowed extensions)
++
++Allowed extensions: `.md`, `.txt`, `.csv`, `.ndjson` — nothing else (json and yaml are parsed as config by trusted processes, so they never ride a window).
++
++Blocked even under `docs/state/`: instruction-style basenames agents load as trusted context (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `README.md`, `SKILL.md`, any `*.instructions.md` or `*.rules.md`), and any path with a dot-folder component (for example `.cursor/rules/foo.md`).
++
++`docs/design/`, coordination handoff notes, `docs/scope/`, and `docs/plans/` are not allowed: they drive design, routing, scope approval, tickets and owner orders.
++
++A request that names any git operation is never auto-approved (the owner decides it), and a policy row always stores an empty git list.
++
++At write time the guard runs the full policy check whenever the covering approval is a policy row or any policy row covers the path (the file matcher or a canonical comparison: resolved, lower-cased on a case-insensitive filesystem). A path spelled differently from the window entry is denied. An existing target must be a regular file with a single link (checked with lstat and a no-follow open plus fstat); symlinks and hard links are refused. While a policy window is live, owner-only shell paths include any link-producing command that touches a window path (`ln`, `link`, `cp -l` / `cp -s`, `mv` onto a window path from outside the window file list, `tar`/`unzip` extraction, `rsync`, `install`, and `git checkout`/`switch`/`restore` of that path).
++
++Opaque shell commands (a command word that is a variable or substitution) count as a commit-level operation: they need an approval that names git `commit`, and a policy row never covers it.
++
++Still owner-only: `docs/scope/`, `docs/plans/`, `docs/design/`, coordination handoff and review paths, job manifests, `.project-swarm.json`, `tools/`, `tests/`, `.github/`, `.swarm/`, `.git/`, guard state, code files, and all git commands (`commit`, `push`, `switch`, plain `git`, etc.).
++
++At most **60** minutes and **20** files per window.
++
++### Limits and logging
++
++Rate limits (per window, per day, and max auto-approve windows per day) come from owner machine `~/.config/project-swarm/policy.json` (rule `swarm-admin-handbuild`). `SWARM_CONFIG` / `SWARM_POLICY_FILE` overrides apply only under the signed orchestrator test marker (never because a project sits in a temp directory).
++
++Stats: `.swarm/handbuild/stats.json` and `.swarm/handbuild/stats.initialized` are created under the state lock on first policy use (`handbuildStatsInitialized`). Before initialization, missing stats do not block caps. After initialization, missing or unreadable stats block auto-approve (fail closed; the unreadable flag is never persisted to disk).
++
++Each auto-approval logs `auto-approved`; each policy-guarded file allow logs `policy-allowed` in `.swarm/handbuild/log.ndjson`. Use `swarm handbuild stats --json` on the board.
++
++## Kill switch
++
++Only the owner can disable policy auto-approve by creating **`.swarm/handbuild/auto-off`** (same protection as `.swarm/handbuild/off`—orchestrators cannot create it). Remove the file to turn policy auto-approve back on. The kill switch blocks only allows covered by a live policy row (file edits under the window), not unrelated git or merge operations.
++
++## Deviations from main
++
++- **Policy git pool**: when a policy file-edit window is live, git operations must match a non-policy hand-build approval (policy rows always carry an empty git list).
++- **`node tools/swarm.mjs merge`**: classified as a `swarm merge` op so standing machine policy and the merge gate apply the same as the `swarm` CLI.
++- **Standing `swarm merge`**: merge-only bash lines skip the policy rate-limit guard; combined merge+git still runs the full guard.
++- **Chat merge token**: consumed after an allowed `swarm merge` that used a chat-recorded merge approval.
+diff --git a/docs/plans/ideas.md b/docs/plans/ideas.md
+index 563dbba..089b9cc 100644
+--- a/docs/plans/ideas.md
++++ b/docs/plans/ideas.md
+@@ -79,6 +79,10 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
+ - A deleted file is not in the security review context (the reviewer sees only its name). Add its pre-delete content.
+ - `--take-from` leaves the source ticket's `tests` and `dependsOn` as they were, and a ready source already in an active run's manifest still writes the moved file.
+ 
++## Parked: git actions under policy
++
++Git auto-approve was removed from hand-build policy v1 (files only). Before it returns, it needs a dedicated security review covering at least: pinned git binary, atomic policy checks in one process, protecting the git common dir, push by literal URL and explicit refspec, staged-file verification, and cwd equals project root.
++
+ ## Owner order 2026-10-23: the swarm defines undefined ui screens itself
+ 
+ - When swarm scope approve (or scope check) finds tickets that name a ui screen the profile ui block does not define, the orchestrator defines it automatically under policy instead of raising a card: match the screen id against the repo's design references (docs/design/reference and the files named in the scope), pick the mockup by an unambiguous name or id match, derive the route from the watch/app route table, write the screens entry to the profile ui block, and log the definition in the project journal with the evidence (screen id, mockup path, route, why it matched).
+diff --git a/docs/state/usage-ledger.md b/docs/state/usage-ledger.md
+index c7b08d2..2305027 100644
+--- a/docs/state/usage-ledger.md
++++ b/docs/state/usage-ledger.md
+@@ -165,6 +165,18 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
+ | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
+ | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
+ | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
++| 2026-10-23 | - | review-aa: FAIL. The policy module mostly closes the earlier failures on paper, but the guard wiring | claude | opus | pass | 49,507 | $0.45 |
++| 2026-10-23 | - | review-aa2: FAIL. H1 is closed in finishAllow, but the guardDecision push path still makes a push fr | claude | opus | pass | 58,235 | $0.53 |
++| 2026-10-23 | - | aanew3: Hardened remote URL normalization, git exec env/config, repo config allow-list, common-dir h | cursor | composer-2.5 | pass | - | subscription |
++| 2026-10-23 | - | review-aa3: FAIL. Of the second review's findings, only the guardDecision push path is partly fixed, | claude | opus | pass | 56,428 | $0.49 |
++| 2026-10-23 | - | review-aa3: FAIL. Fixed: hooks common-dir, invocation-rule push path, Write/Edit guard and daily win | claude | opus | pass | 148,785 | $0.92 |
++| 2026-10-23 | - | aanew5: H1–L6: hardened URL/config/git argv, opaque/non-git policy denial, stats fail-closed, truste | cursor | composer-2.5 | pass | - | subscription |
++| 2026-10-23 | - | review-aa5: FAIL. The redesign fixes system/global config, environment and absolute-path classificat | claude | opus | pass | 131,843 | $1.07 |
++| 2026-10-23 | - | review-aa6: FAIL. File-only scope mostly in place, but the policy re-check is skipped when the cover | claude | opus | pass | 100,574 | $0.70 |
++| 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
++| 2026-10-23 | - | aanew9: complete | claude | composer-2.5 | failed: exit 1: [31m✗ Failed to reach the Cursor API. If you are beh | - | subscription |
++| 2026-10-23 | - | aanew9: complete | claude | sonnet | pass | 2,877,661 | $1.18 |
++| 2026-10-23 | - | review-aa7: FAIL. Line numbers are lines in coordination/review/aa-new7.diff. Fixed from review 6: w | claude | opus | pass | 132,966 | $0.55 |
+ 
+ ## Daily summary
+ 
+@@ -182,4 +194,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
+ | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
+ | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
+ | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
+-| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
++| 2026-10-23 | claude | 10 | 8 | 2 | 3,555,999 | $5.89 |
++| 2026-10-23 | cursor | 2 | 2 | 0 | 0 | subscription |
++| **total** | all | 173 | 156 | 17 | 18,267,374 | $32.56 (incl. estimates) |
+diff --git a/tools/auto-approve-policy.mjs b/tools/auto-approve-policy.mjs
+new file mode 100644
+index 0000000..b54f494
+--- /dev/null
++++ b/tools/auto-approve-policy.mjs
+@@ -0,0 +1,290 @@
++// SPDX-License-Identifier: Apache-2.0
++// Frozen in-code policy for hand-build auto-approve (file edits only; not writable by agents).
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { orchestratorTestHarnessSigned } from './shell-writes.mjs';
++
++export const POLICY_ID = 'swarm-admin-handbuild';
++export const POLICY_VERSION = 3;
++export const AUTO_OFF_FILE = '.swarm/handbuild/auto-off';
++export const STATS_FILE = '.swarm/handbuild/stats.json';
++export const STATS_INITIALIZED_FILE = '.swarm/handbuild/stats.initialized';
++export const LOG_FILE = '.swarm/handbuild/log.ndjson';
++export const DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY = 20;
++export const POLICY_LIMIT_CEILING_WINDOWS_PER_DAY = 100;
++export const MAX_POLICY_MINUTES = 60;
++export const MAX_POLICY_FILES = 20;
++export const DEFAULT_MAX_ACTIONS_PER_WINDOW = 20;
++export const DEFAULT_MAX_ACTIONS_PER_DAY = 100;
++export const DEFAULT_MAX_FILES_PER_DAY = 100;
++export const POLICY_LIMIT_CEILING_ACTIONS_PER_WINDOW = 100;
++export const POLICY_LIMIT_CEILING_ACTIONS_PER_DAY = 500;
++export const POLICY_LIMIT_CEILING_FILES_PER_DAY = 500;
++export const POLICY_STATS_UNREADABLE = '__policyStatsUnreadable';
++
++// Plain notes only: json and yaml are parsed as config by trusted processes, so they never ride a policy window.
++const ALLOWED_EXT = new Set(['.md', '.txt', '.csv', '.ndjson']);
++
++const INSTRUCTION_BASENAMES = new Set(['claude.md', 'agents.md', 'gemini.md', 'readme.md', 'skill.md']);
++
++const BLOCKED_PREFIXES = [
++  'tools/',
++  'tests/',
++  '.github/',
++  '.swarm/',
++  '.git/',
++  'coordination/review/',
++  'coordination/manifests/',
++  'jobs/',
++];
++
++const norm = p => String(p).replace(/\\/g, '/');
++
++function pathHasDotDot(p) {
++  return norm(p).split('/').includes('..');
++}
++
++function fileExtension(lowerPath) {
++  const base = lowerPath.slice(lowerPath.lastIndexOf('/') + 1);
++  const dot = base.lastIndexOf('.');
++  if (dot <= 0) return '';
++  return base.slice(dot);
++}
++
++function pathHasDotFolderComponent(lower) {
++  return norm(lower).split('/').some(seg => seg.startsWith('.') && seg !== '.');
++}
++
++function instructionBasenameBlocked(lower) {
++  const base = lower.slice(lower.lastIndexOf('/') + 1);
++  if (INSTRUCTION_BASENAMES.has(base)) return true;
++  return base.endsWith('.instructions.md') || base.endsWith('.rules.md');
++}
++
++function folderAllowed(lower) {
++  if (lower === '.project-swarm.json') return false;
++  if (BLOCKED_PREFIXES.some(p => lower === p.slice(0, -1) || lower.startsWith(p))) return false;
++  if (pathHasDotFolderComponent(lower) || instructionBasenameBlocked(lower)) return false;
++  if (/^docs\/state\//.test(lower)) return true;
++  return false;
++}
++
++/** True when `rel` (project-relative, any case) sits in a folder or file family a policy window may name. */
++export function policyFolderAllowed(rel) {
++  return folderAllowed(norm(rel).toLowerCase());
++}
++
++/** True when the filesystem under `root` ignores case (probed by stat of a case-swapped name; platform default when the probe cannot tell). */
++export function fsIsCaseInsensitive(root) {
++  const fallback = process.platform === 'darwin' || process.platform === 'win32';
++  try {
++    const real = fs.realpathSync.native(root);
++    const parts = real.split(path.sep);
++    for (let i = parts.length - 1; i > 0; i -= 1) {
++      const swapped = parts[i].replace(/[A-Za-z]/g, c => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
++      if (swapped === parts[i]) continue;
++      const alt = [...parts.slice(0, i), swapped, ...parts.slice(i + 1)].join(path.sep);
++      try {
++        return fs.statSync(alt).ino === fs.statSync(real).ino;
++      } catch {
++        return false;
++      }
++    }
++  } catch { /* fall through */ }
++  return fallback;
++}
++
++/** One canonical spelling of a project-relative path: resolved against the root, slash-separated, lower-cased on a case-insensitive filesystem. null when it leaves the root. */
++export function canonicalPolicyRel(root, rel) {
++  const raw = norm(rel ?? '');
++  if (!raw) return null;
++  const abs = path.resolve(root, raw);
++  const back = path.relative(path.resolve(root), abs);
++  if (!back || back.startsWith('..') || path.isAbsolute(back)) return null;
++  const out = norm(back);
++  return fsIsCaseInsensitive(root) ? out.toLowerCase() : out;
++}
++
++function extensionAllowed(lower) {
++  return ALLOWED_EXT.has(fileExtension(lower));
++}
++
++/** Request-time: each window entry must be one exact file path (no folder prefix, known extension). */
++export function isPolicyWindowFileEntry(rel) {
++  if (typeof rel !== 'string' || !rel) return false;
++  const raw = norm(rel);
++  if (path.isAbsolute(raw) || pathHasDotDot(raw) || /[*?[{]/.test(raw)) return false;
++  if (raw.endsWith('/') || !raw.includes('/')) return false;
++  const lower = raw.toLowerCase();
++  if (!extensionAllowed(lower)) return false;
++  return folderAllowed(lower);
++}
++
++/**
++ * Write-time: allowed folders, extension allow-list, no symlink hops (lstat), path under root.
++ */
++export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
++  if (typeof rel !== 'string' || !rel) return false;
++  const raw = norm(rel);
++  if (path.isAbsolute(raw) || pathHasDotDot(raw) || /[*?[{]/.test(raw)) return false;
++  if (raw.endsWith('/')) return false;
++  const lower = raw.toLowerCase();
++  if (!extensionAllowed(lower) || !folderAllowed(lower)) return false;
++  if (!root) return true;
++  return policyPathLstatSafe(root, raw) !== null;
++}
++
++/** No-follow open plus fstat: still a regular file with a single link at the moment of the check. */
++function openedPlainFile(abs) {
++  let fd;
++  try {
++    fd = fs.openSync(abs, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
++    const st = fs.fstatSync(fd);
++    return st.isFile() && st.nlink === 1;
++  } catch {
++    return false;
++  } finally {
++    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* closed */ } }
++  }
++}
++
++function policyPathLstatSafe(root, rel) {
++  const p = norm(rel);
++  if (!p || path.isAbsolute(p) || pathHasDotDot(p)) return null;
++  try {
++    const rootReal = fs.realpathSync.native(root);
++    const parts = p.split('/');
++    let prefix = '';
++    for (let n = 0; n < parts.length; n += 1) {
++      prefix = n === 0 ? parts[0] : `${prefix}/${parts[n]}`;
++      const abs = path.join(root, prefix);
++      let lst;
++      try {
++        lst = fs.lstatSync(abs);
++      } catch {
++        if (n === parts.length - 1) return prefix;
++        return null;
++      }
++      if (lst.isSymbolicLink()) return null;
++      if (n < parts.length - 1 && !lst.isDirectory()) return null;
++    }
++    const absFinal = path.join(root, p);
++    let finalLst;
++    try {
++      finalLst = fs.lstatSync(absFinal);
++    } catch {
++      return p;
++    }
++    if (finalLst.isSymbolicLink()) return null;
++    // an existing target must be one plain file with one name: a second hard link would let a write land outside the window
++    if (!finalLst.isFile() || finalLst.nlink > 1) return null;
++    if (!openedPlainFile(absFinal)) return null;
++    const real = fs.realpathSync.native(absFinal);
++    const relToRoot = path.relative(rootReal, real);
++    if (!relToRoot || relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) return null;
++    const canonical = norm(relToRoot);
++    const lowerCanon = canonical.toLowerCase();
++    if (!extensionAllowed(lowerCanon) || !folderAllowed(lowerCanon)) return null;
++    if (canonical !== p) return null;
++    return canonical;
++  } catch {
++    return null;
++  }
++}
++
++/** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE are honoured only under the signed orchestrator test marker (never because of a temp directory). */
++export function machinePolicyJsonPath({ home = os.homedir(), root = null } = {}) {
++  if (root && orchestratorTestHarnessSigned(root)) {
++    const envPath = process.env.SWARM_POLICY_FILE;
++    if (envPath && path.isAbsolute(envPath)) return envPath;
++    if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
++  }
++  return path.join(home, '.config', 'project-swarm', 'policy.json');
++}
++
++/** Standing `swarm merge` policy.json: env overrides only under the signed orchestrator test marker; else project `policy.json` when present, else machine config. */
++export function mergeStandingPolicyJsonPath({ home = os.homedir(), root = null } = {}) {
++  if (root && orchestratorTestHarnessSigned(root)) {
++    const envPath = process.env.SWARM_POLICY_FILE;
++    if (envPath && path.isAbsolute(envPath)) return envPath;
++    if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
++  }
++  if (root) {
++    try {
++      const inRoot = path.join(root, 'policy.json');
++      if (fs.existsSync(inRoot)) return inRoot;
++    } catch { /* fall through */ }
++  }
++  return path.join(home, '.config', 'project-swarm', 'policy.json');
++}
++
++export function policyFilePath(home = os.homedir(), { root = null } = {}) {
++  if (root && orchestratorTestHarnessSigned(root) && process.env.SWARM_CONFIG) {
++    return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
++  }
++  return path.join(home, '.config', 'project-swarm', 'policy.json');
++}
++
++/** Limits from machine policy.json handbuild-auto-approve rule, else defaults. */
++export function policyRateLimits(home = os.homedir(), { root = null } = {}) {
++  const defaults = {
++    maxActionsPerWindow: DEFAULT_MAX_ACTIONS_PER_WINDOW,
++    maxActionsPerDay: DEFAULT_MAX_ACTIONS_PER_DAY,
++    maxFilesPerDay: DEFAULT_MAX_FILES_PER_DAY,
++    maxAutoApproveWindowsPerDay: DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY,
++  };
++  try {
++    const file = policyFilePath(home, { root });
++    if (!file) return defaults;
++    const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
++    const rules = Array.isArray(policy?.rules) ? policy.rules : [];
++    const row = rules.find(r => r?.id === POLICY_ID && r.enabled !== false && r.disabled !== true);
++    if (!row) return defaults;
++    const lim = row?.limits && typeof row.limits === 'object' ? row.limits : {};
++    const n = (k, d) => {
++      const v = Number(lim[k]);
++      return Number.isInteger(v) && v > 0 ? v : d;
++    };
++    const cap = (v, max) => Math.min(v, max);
++    return {
++      maxActionsPerWindow: cap(n('maxActionsPerWindow', defaults.maxActionsPerWindow), POLICY_LIMIT_CEILING_ACTIONS_PER_WINDOW),
++      maxActionsPerDay: cap(n('maxActionsPerDay', defaults.maxActionsPerDay), POLICY_LIMIT_CEILING_ACTIONS_PER_DAY),
++      maxFilesPerDay: cap(n('maxFilesPerDay', defaults.maxFilesPerDay), POLICY_LIMIT_CEILING_FILES_PER_DAY),
++      maxAutoApproveWindowsPerDay: cap(n('maxAutoApproveWindowsPerDay', defaults.maxAutoApproveWindowsPerDay), POLICY_LIMIT_CEILING_WINDOWS_PER_DAY),
++    };
++  } catch {
++    return defaults;
++  }
++}
++
++export function evaluateHandbuildAutoApprove(root, { files, minutes, git }) {
++  if (root && fs.existsSync(path.join(root, AUTO_OFF_FILE))) {
++    return { ok: false, reason: 'kill-switch' };
++  }
++  // file edits only: any requested git operation needs the owner
++  const gitOps = Array.isArray(git) ? git : String(git ?? '').split(',');
++  if (gitOps.some(g => String(g).trim())) return { ok: false, reason: 'git' };
++  const list = Array.isArray(files) ? files : [];
++  if (!list.length || list.length > MAX_POLICY_FILES) return { ok: false, reason: 'files' };
++  const mins = Number(minutes);
++  if (!Number.isInteger(mins) || mins < 1 || mins > MAX_POLICY_MINUTES) return { ok: false, reason: 'minutes' };
++  if (!list.every(f => isPolicyWindowFileEntry(f) && isSwarmAdminHandbuildPath(f, { root }))) {
++    return { ok: false, reason: 'path' };
++  }
++  return {
++    ok: true,
++    policyId: POLICY_ID,
++    policyVersion: POLICY_VERSION,
++    minutes: mins,
++    files: list.map(f => norm(f)),
++  };
++}
++
++export function autoApproveKillSwitchOn(root) {
++  try {
++    return fs.existsSync(path.join(root, AUTO_OFF_FILE));
++  } catch {
++    return true;
++  }
++}
+diff --git a/tools/handbuild.mjs b/tools/handbuild.mjs
+index 43a2789..2e980dc 100644
+--- a/tools/handbuild.mjs
++++ b/tools/handbuild.mjs
+@@ -36,6 +36,28 @@ import {
+   HANDBUILD_SELF_APPROVAL_RULE_ID,
+   swarmChangeShellPolicy,
+ } from './self-approval.mjs';
++import {
++  AUTO_OFF_FILE,
++  STATS_FILE,
++  STATS_INITIALIZED_FILE,
++  POLICY_ID,
++  POLICY_VERSION,
++  evaluateHandbuildAutoApprove,
++  autoApproveKillSwitchOn,
++  policyRateLimits,
++  POLICY_STATS_UNREADABLE,
++  mergeStandingPolicyJsonPath,
++  isSwarmAdminHandbuildPath,
++  canonicalPolicyRel,
++  policyFolderAllowed,
++} from './auto-approve-policy.mjs';
++
++const policyGitAt = (words, start = 0) => {
++  for (let i = start; i < words.length; i += 1) {
++    if (words[i] === 'git') return i;
++  }
++  return -1;
++};
+ export const SCRATCH_DENY_REASON = 'scratch project';
+ 
+ export const GIT_REQUEST_OPS = Object.freeze(['commit', 'push', 'merge', 'deploy', 'force-push', 'branch-D', 'gh']);
+@@ -429,7 +451,35 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
+     return;
+   }
+   if (cmd === 'eval') { buildPolicyOps(args.join(' ')).forEach(o => ops.push(o)); return; }
+-  if (cmd === 'git') {
++  if (cmd === 'ln' || cmd === 'link') {
++    ops.push({ tool: '_link', sub: cmd, args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'cp' && args.some(a => a === '-l' || a === '-s' || a === '--link' || a === '--symbolic-link' || (/^-[A-Za-z]*[ls]/.test(a) && !a.startsWith('--')))) {
++    ops.push({ tool: '_link', sub: 'cp', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'mv') {
++    ops.push({ tool: '_link', sub: 'mv', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'tar' && args.some(a => a === '-x' || a === '--extract' || /^-[A-Za-z]*x/.test(a))) {
++    ops.push({ tool: '_link', sub: 'tar', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'unzip') {
++    ops.push({ tool: '_link', sub: 'unzip', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'rsync') {
++    ops.push({ tool: '_link', sub: 'rsync', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (cmd === 'install') {
++    ops.push({ tool: '_link', sub: 'install', args: args.filter(a => a !== '' && !a.startsWith('-')), opaque: false });
++    return;
++  }
++  if (policyGitAt(plain, k) === k) {
+     let globalOpts = false;
+     let benignGlobalOnly = true;
+     let i = 0;
+@@ -492,8 +542,14 @@ const policyOpsFromPlain = (plain, plainExp, ops) => {
+       const onlyVersion = (args.includes('--version') || args.includes('-v')) && pos.length === 0;
+       const sub = onlyVersion ? '--version' : (prod || pos.length === 0 || args.every(a => a.startsWith('-')) ? 'deploy' : pos[0]);
+       ops.push({ tool: 'vercel', sub, args: sub === 'deploy' ? pos : pos.slice(1), globalOpts, hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: null });
+-    } else if (cmd === 'swarm') {
+-      const pos = args.filter(a => !a.startsWith('-'));
++    } else if (cmd === 'swarm' || cmd === 'node') {
++      let swarmPos = args;
++      if (cmd === 'node') {
++        const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
++        if (scriptAt === -1 || path.basename(args[scriptAt]) !== 'swarm.mjs') return;
++        swarmPos = args.slice(scriptAt + 1);
++      }
++      const pos = swarmPos.filter(a => !a.startsWith('-'));
+       const sub = pos[0] ?? null;
+       const swarmTarget = sub === 'merge' && pos[1] !== undefined ? String(pos[1]) : null;
+       ops.push({ tool: 'swarm', sub, args: pos.slice(1), globalOpts: args.some(a => a.startsWith('-')), hasConfig, flags: args.filter(a => a.startsWith('-')), branch: null, force: false, delete: null, target: swarmTarget });
+@@ -707,19 +763,10 @@ const isFreeReadOnlyGh = (op, command) => {
+ 
+ const swarmConfigDir = home => (process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm'));
+ 
+-const policyFilePath = home => {
+-  const envPath = process.env.SWARM_POLICY_FILE;
+-  if (envPath) {
+-    if (!path.isAbsolute(envPath)) return null;
+-    return envPath;
+-  }
+-  return path.join(swarmConfigDir(home), 'policy.json');
+-};
+-
+ /** True when policy.json enables standing approval for `swarm merge N`. */
+-export const mergeSwarmPrStandingEnabled = (home = os.homedir()) => {
++export const mergeSwarmPrStandingEnabled = (home = os.homedir(), root = null) => {
+   try {
+-    const file = policyFilePath(home);
++    const file = mergeStandingPolicyJsonPath({ home, root });
+     if (!file) return false;
+     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
+     if (!policy || !Array.isArray(policy.rules)) return false;
+@@ -729,8 +776,8 @@ export const mergeSwarmPrStandingEnabled = (home = os.homedir()) => {
+   } catch { return false; }
+ };
+ 
+-const isStandingSwarmMerge = (op, home) => {
+-  if (!mergeSwarmPrStandingEnabled(home)) return false;
++const isStandingSwarmMerge = (op, home, root) => {
++  if (!mergeSwarmPrStandingEnabled(home, root)) return false;
+   if (op.tool !== 'swarm' || op.sub !== 'merge') return false;
+   if (op.globalOpts || op.hasConfig) return false;
+   const flags = op.flags ?? [];
+@@ -874,7 +921,7 @@ const gitAddPaths = (command, root, cwd) => {
+   const paths = [];
+   for (const words of tokenize(command)) {
+     const plain = plainWords(words);
+-    const gi = plain.findIndex(w => path.basename(w) === 'git');
++    const gi = policyGitAt(plain);
+     if (gi === -1) continue;
+     const rest = plain.slice(gi + 1);
+     const ai = rest.indexOf('add');
+@@ -895,7 +942,7 @@ const commitCarriedPaths = (command, root, cwd) => {
+   const paths = [];
+   for (const words of tokenize(command)) {
+     const plain = plainWords(words);
+-    const gi = plain.findIndex(w => path.basename(w) === 'git');
++    const gi = policyGitAt(plain);
+     if (gi === -1) continue;
+     const rest = plain.slice(gi + 1);
+     const ci = rest.indexOf('commit');
+@@ -950,6 +997,7 @@ const ghApiWrite = (command, ops) => {
+ export const STATE_FILE = '.swarm/handbuild/state.json';
+ export const LOG_FILE = '.swarm/handbuild/log.ndjson';
+ export const OFF_FILE = '.swarm/handbuild/off';
++export { AUTO_OFF_FILE, STATS_FILE, POLICY_ID, POLICY_VERSION };
+ export const GUARD_ERRORS_FILE = '.swarm/handbuild/guard-errors.ndjson';
+ export const GUARD_VERSION = 1;
+ export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm diagnose "<question>" or swarm ticket ...)';
+@@ -1211,15 +1259,53 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
+   if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
+   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
+   for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error(`handbuild-git: --git must name one of ${GIT_REQUEST_OPS.join(', ')}`);
++  const policy = evaluateHandbuildAutoApprove(root, { files: list, minutes: mins, git: ops });
++  const limits = policyRateLimits(undefined, { root });
+   return withStateLock(root, () => {
++  ensureHandbuildStatsInitialized(root);
++  const statsForCaps = readHandbuildStatsRaw(root);
++  // policy windows are file edits only: a request that names any git operation waits for the owner
++  const policyOk = policy.ok && ops.length === 0 && !policyRateLimitsExceeded(statsForCaps, null, limits, now(), { countNewWindow: true }).blocked;
+   const state = readState(root);
+   const id = newId(now());
+-  state.requests[id] = { id, kind, reason: why, files: list, git: ops, minutes: mins, status: 'pending', requestedAt: new Date(now()).toISOString(), requestedBy: cleanText(by, 40) };
++  const at = new Date(now()).toISOString();
++  const row = { id, kind, reason: why, files: list, git: ops, minutes: mins, requestedAt: at, requestedBy: cleanText(by, 40) };
++  if (policyOk) {
++    ensureHandbuildStatsInitialized(root);
++    row.status = 'approved';
++    row.git = [];
++    row.decidedAt = at;
++    row.decidedBy = 'policy';
++    row.policyId = policy.policyId;
++    row.policyVersion = policy.policyVersion;
++    row.expiresAt = new Date(now() + policy.minutes * 60000).toISOString();
++    row.autoApproved = true;
++  } else {
++    row.status = 'pending';
++  }
++  state.requests[id] = row;
+   // Old finished requests are dropped so the file stays small.
+   const done = Object.values(state.requests).filter(r => r.status !== 'pending' && r.status !== 'approved').sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt)));
+   for (const r of done.slice(0, Math.max(0, done.length - 50))) delete state.requests[r.id];
+   writeState(root, state);
+   logAction(root, { event: 'request', id, by, files: list, reason: `${kind}: ${why}` }, { now });
++  if (policyOk) {
++    const stats = readHandbuildStatsRaw(root);
++    bumpHandbuildStatsInMemory(stats, 'autoApproved', now());
++    initPolicyWindowStats(stats, id);
++    writeHandbuildStats(root, stats);
++    logAction(root, {
++      event: 'auto-approved',
++      id,
++      by: 'policy',
++      files: list,
++      reason: `${policy.policyId} v${policy.policyVersion}`,
++      policyId: policy.policyId,
++      policyVersion: policy.policyVersion,
++      minutes: policy.minutes,
++      rule: POLICY_ID,
++    }, { now });
++  }
+   return state.requests[id];
+   });
+ }
+@@ -1285,6 +1371,11 @@ export function decideRequest(root, id, choice, { now = Date.now, by = 'owner',
+     ? [ruleNote, `until ${r.expiresAt}`].filter(Boolean).join(' ')
+     : '';
+   logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: approveReason }, { now });
++  if (choice === 'approve' && by === 'owner' && channel !== 'board' && channel !== 'phone' && channel !== 'policy') {
++    const stats = readHandbuildStatsRaw(root);
++    bumpHandbuildStatsInMemory(stats, 'ownerTerminal', now());
++    writeHandbuildStats(root, stats);
++  }
+   return r;
+   });
+ }
+@@ -1304,6 +1395,243 @@ export function applyHandbuildPolicyApproval(root, item, { now = Date.now, polic
+ 
+ export function listRequests(root) { return Object.values(readState(root).requests).sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt))); }
+ 
++function statsDayKey(now = Date.now()) {
++  return new Date(now).toISOString().slice(0, 10);
++}
++
++export function handbuildStatsInitialized(root) {
++  try {
++    const marker = path.join(safeDir(root), path.basename(STATS_INITIALIZED_FILE));
++    return fs.existsSync(marker);
++  } catch {
++    return false;
++  }
++}
++
++function ensureHandbuildStatsInitialized(root) {
++  const dir = safeDir(root);
++  const marker = path.join(dir, path.basename(STATS_INITIALIZED_FILE));
++  const statsPath = path.join(dir, 'stats.json');
++  try {
++    fs.writeFileSync(marker, `${POLICY_ID}\n`, { flag: 'wx', mode: 0o600 });
++    if (!fs.existsSync(statsPath)) fs.writeFileSync(statsPath, '{}\n', { mode: 0o600 });
++  } catch { /* already initialized */ }
++}
++
++function readHandbuildStatsRaw(root) {
++  try {
++    const file = path.join(root, STATS_FILE);
++    if (isLink(file)) return { [POLICY_STATS_UNREADABLE]: true };
++    if (!fs.existsSync(file)) {
++      if (!handbuildStatsInitialized(root)) return {};
++      return { [POLICY_STATS_UNREADABLE]: true };
++    }
++    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
++    if (!data || typeof data !== 'object' || Array.isArray(data)) return { [POLICY_STATS_UNREADABLE]: true };
++    return data;
++  } catch {
++    return { [POLICY_STATS_UNREADABLE]: true };
++  }
++}
++
++function writeHandbuildStats(root, data) {
++  const dir = safeDir(root);
++  ensureHandbuildStatsInitialized(root);
++  const temp = path.join(dir, `stats.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
++  fs.writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
++  fs.renameSync(temp, path.join(dir, 'stats.json'));
++}
++
++function bumpHandbuildStatsInMemory(data, field, now) {
++  const day = statsDayKey(now);
++  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
++  row[field] = (Number(row[field]) || 0) + 1;
++  data[day] = row;
++  return row;
++}
++
++function initPolicyWindowStats(data, approvalId) {
++  if (!data.policyWindows || typeof data.policyWindows !== 'object') data.policyWindows = {};
++  data.policyWindows[approvalId] = { actions: 0, files: 0 };
++}
++
++function policyRateLimitsExceeded(data, approvalId, limits, now, { countNewWindow = false } = {}) {
++  if (data?.[POLICY_STATS_UNREADABLE]) return { blocked: true, reason: 'stats-unreadable' };
++  const day = statsDayKey(now);
++  const dayRow = data[day] && typeof data[day] === 'object' ? data[day] : {};
++  const actionsDay = Number(dayRow.policyActions) || 0;
++  const filesDay = Number(dayRow.policyFiles) || 0;
++  const windowsDay = Number(dayRow.autoApproved) || 0;
++  if (countNewWindow && windowsDay >= limits.maxAutoApproveWindowsPerDay) return { blocked: true, reason: 'daily-windows' };
++  if (actionsDay >= limits.maxActionsPerDay) return { blocked: true, reason: 'daily-actions' };
++  if (filesDay >= limits.maxFilesPerDay) return { blocked: true, reason: 'daily-files' };
++  if (approvalId) {
++    const win = data.policyWindows?.[approvalId];
++    const actionsWin = Number(win?.actions) || 0;
++    if (actionsWin >= limits.maxActionsPerWindow) return { blocked: true, reason: 'window-actions' };
++  }
++  return { blocked: false };
++}
++
++/** Record one policy-guarded allow (file edit or shell write) against rate limits. */
++export function recordPolicyGuardAllow(root, { approvalId, files = [], rule, command }, { now = Date.now, home = os.homedir() } = {}) {
++  const limits = policyRateLimits(home);
++  return withStateLock(root, () => {
++    const data = readHandbuildStatsRaw(root);
++    const blocked = policyRateLimitsExceeded(data, approvalId, limits, now());
++    if (blocked.blocked) return blocked;
++    const day = statsDayKey(now());
++    const dayRow = data[day] && typeof data[day] === 'object' ? data[day] : {};
++    dayRow.policyActions = (Number(dayRow.policyActions) || 0) + 1;
++    dayRow.policyFiles = (Number(dayRow.policyFiles) || 0) + (Array.isArray(files) ? files.length : 0);
++    data[day] = dayRow;
++    if (!data.policyWindows || typeof data.policyWindows !== 'object') data.policyWindows = {};
++    const win = data.policyWindows[approvalId] && typeof data.policyWindows[approvalId] === 'object'
++      ? data.policyWindows[approvalId]
++      : { actions: 0, files: 0 };
++    win.actions = (Number(win.actions) || 0) + 1;
++    win.files = (Number(win.files) || 0) + (Array.isArray(files) ? files.length : 0);
++    data.policyWindows[approvalId] = win;
++    writeHandbuildStats(root, data);
++    for (const f of files) {
++      if (!isSwarmAdminHandbuildPath(f, { root })) {
++        return { blocked: true, reason: 'policy-path' };
++      }
++    }
++    logAction(root, {
++      event: 'policy-allowed',
++      id: approvalId,
++      by: 'policy',
++      files,
++      command: cleanText(command, 300),
++      rule,
++    }, { now });
++    return { blocked: false };
++  });
++}
++
++/** Increment per-day { autoApproved, ownerTerminal } counters. */
++export function bumpHandbuildStats(root, field, { now = Date.now } = {}) {
++  if (field !== 'autoApproved' && field !== 'ownerTerminal') return;
++  return withStateLock(root, () => {
++    ensureHandbuildStatsInitialized(root);
++    const data = readHandbuildStatsRaw(root);
++    if (data?.[POLICY_STATS_UNREADABLE]) return;
++    bumpHandbuildStatsInMemory(data, field, now());
++    writeHandbuildStats(root, data);
++    return data[statsDayKey(now())];
++  });
++}
++
++export function readHandbuildStats(root, { now = Date.now } = {}) {
++  const data = readHandbuildStatsRaw(root);
++  const day = statsDayKey(now());
++  const row = data[day] && typeof data[day] === 'object' ? data[day] : {};
++  return {
++    day,
++    autoApproved: Number(row.autoApproved) || 0,
++    ownerTerminal: Number(row.ownerTerminal) || 0,
++    policyActions: Number(row.policyActions) || 0,
++    policyFiles: Number(row.policyFiles) || 0,
++    killSwitch: autoApproveKillSwitchOn(root),
++    policyId: POLICY_ID,
++    policyVersion: POLICY_VERSION,
++  };
++}
++
++/** `swarm handbuild stats --json` body (callable from CLI when wired). */
++export function handbuildStatsJson(root, { now = Date.now } = {}) {
++  return JSON.stringify(readHandbuildStats(root, { now }));
++}
++
++/**
++ * Policy auto-approve windows: exact file list, frozen path rules, rate limits, kill switch.
++ * Returns null when no policy approval applies; otherwise { ok, reason, rule, approvalId }.
++ */
++const normPolicyRel = rel => String(rel ?? '').replace(/\\/g, '/');
++
++/** True when this policy row names `rel` in any way the guard's matcher or a canonical (resolved, case-folded) comparison would accept. */
++function policyRowCovers(root, row, rel) {
++  if (matchesFile(row.files, rel)) return true;
++  const want = canonicalPolicyRel(root, rel);
++  if (want === null) return false;
++  return (row.files ?? []).some(f => canonicalPolicyRel(root, f) === want);
++}
++
++function pickPolicyApproval(policyApprovals, fileRels = [], root = null) {
++  if (!policyApprovals.length || !fileRels.length) return null;
++  const want = [...new Set(fileRels.map(normPolicyRel))];
++  const full = policyApprovals.filter(a => {
++    if (!root) {
++      const listed = (a.files ?? []).map(normPolicyRel);
++      return want.every(f => listed.includes(f));
++    }
++    const listed = (a.files ?? []).map(f => canonicalPolicyRel(root, f));
++    return want.every(f => { const c = canonicalPolicyRel(root, f); return c !== null && listed.includes(c); });
++  });
++  if (full.length === 1) return full[0];
++  if (full.length > 1) return null;
++  return null;
++}
++
++export function handbuildPolicyGuardCheck(root, {
++  approvals,
++  home = os.homedir(),
++  now = Date.now,
++  files: guardFiles = [],
++} = {}) {
++  const ts = typeof now === 'function' ? now() : now;
++  const policyApprovals = (approvals ?? []).filter(a => a?.policyId && a.status === 'approved');
++  if (!policyApprovals.length) return null;
++  const fileRels = (guardFiles ?? []).map(normPolicyRel).filter(Boolean);
++  if (!fileRels.length) return null;
++  return withStateLock(root, () => {
++    const used = pickPolicyApproval(policyApprovals, fileRels, root);
++    if (!used) {
++      return { ok: false, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)`, approvalId: policyApprovals[0]?.id };
++    }
++    if (autoApproveKillSwitchOn(root)) {
++      return { ok: false, reason: `${DENY_ADVICE} (blocked: policy kill-switch)`, approvalId: used.id };
++    }
++    const limits = policyRateLimits(home, { root });
++    const stats = readHandbuildStatsRaw(root);
++    const exceeded = policyRateLimitsExceeded(stats, used.id, limits, ts);
++    if (exceeded.blocked) {
++      return { ok: false, reason: `${DENY_ADVICE} (blocked: policy rate limit ${exceeded.reason})`, approvalId: used.id };
++    }
++    for (const f of fileRels) {
++      // one spelling only: a path the window covers under another spelling (case, ./, ..) is a mismatch and is denied
++      const listedExact = (used.files ?? []).map(normPolicyRel);
++      if (!listedExact.includes(f) || canonicalPolicyRel(root, f) === null) {
++        return {
++          ok: false,
++          reason: `${DENY_ADVICE} (blocked: policy path ${f} does not match the window spelling)`,
++          approvalId: used.id,
++          rule: 'policy-path',
++        };
++      }
++      if (!isSwarmAdminHandbuildPath(f, { root })) {
++        return {
++          ok: false,
++          reason: `${DENY_ADVICE} (blocked: policy path ${f})`,
++          approvalId: used.id,
++          rule: 'policy-path',
++        };
++      }
++      const listed = (used.files ?? []).map(normPolicyRel);
++      if (!listed.includes(f)) {
++        return {
++          ok: false,
++          reason: `${DENY_ADVICE} (blocked: file not in policy window)`,
++          approvalId: used.id,
++          rule: 'policy-path',
++        };
++      }
++    }
++    return { ok: true, approvalId: used.id, rule: POLICY_ID };
++  });
++}
++
+ /** The live approvals (approved and not expired). */
+ export function activeApprovals(root, now = Date.now()) { return listRequests(root).filter(r => r.status === 'approved' && Date.parse(r.expiresAt) > now); }
+ 
+@@ -1352,8 +1680,43 @@ const orchestratorSwarmRunWrites = (command, root, cwd) => {
+ const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || isSwarmRunRecord(r) || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
+ const swarmRecordReason = rel => `Hand-build guard: ${rel} is swarm run state (only swarm commands may write it); no approval covers it.`;
+ // Outside the checkout too: the install (the guard's own scripts) and the user's own Claude settings could switch the hooks off.
+-export const protectedAbsolute = (home = os.homedir()) => [path.join(home, '.project-swarm'), path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.local.json'), ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : [])];
+-const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.startsWith(`${prefix}/`));
++export const protectedAbsolute = (home = os.homedir()) => {
++  const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
++  const xdgGit = path.join(xdgConfig, 'git');
++  return [
++    path.join(home, '.project-swarm'),
++    path.join(home, '.claude', 'settings.json'),
++    path.join(home, '.claude', 'settings.local.json'),
++    path.join(home, '.ssh', 'config'),
++    path.join(home, '.ssh', 'known_hosts'),
++    path.join(home, '.ssh', 'authorized_keys'),
++    path.join(home, '.ssh', 'rc'),
++    path.join(home, '.gitconfig'),
++    path.join(home, '.git-credentials'),
++    path.join(home, '.gitattributes'),
++    path.join(xdgGit, 'config'),
++    path.join(xdgGit, 'attributes'),
++    path.join(xdgGit, 'ignore'),
++    path.join(home, '.zshrc'),
++    path.join(home, '.zprofile'),
++    path.join(home, '.bashrc'),
++    path.join(home, '.bash_profile'),
++    path.join(home, '.profile'),
++    path.join(home, '.zshenv'),
++    ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : []),
++  ];
++};
++const absFold = abs => {
++  const resolved = path.resolve(abs);
++  return (process.platform === 'darwin' || process.platform === 'win32') ? resolved.toLowerCase() : resolved;
++};
++const underAbs = (abs, list) => {
++  const a = absFold(abs);
++  return list.some(prefix => {
++    const p = absFold(prefix);
++    return a === p || a.startsWith(`${p}${path.sep}`);
++  });
++};
+ const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
+ 
+ /** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */
+@@ -1378,7 +1741,73 @@ const orchestratorModeBlockedOps = command => {
+   return false;
+ };
+ 
++const sessionProtectedHandbuildRel = rel => {
++  if (rel === null || rel === undefined) return false;
++  const norm = String(rel).replace(/\\/g, '/').toLowerCase();
++  const hb = '.swarm/handbuild';
++  if (norm === hb || norm.startsWith(`${hb}/`)) return true;
++  return norm === '.git' || norm.startsWith('.git/');
++};
++
++export function applyPolicyGuardedAllow(root, {
++  command = '',
++  files = [],
++  allowResult,
++  now,
++  h,
++  approvals,
++  finishBash = d => d,
++  skipPolicyGuard = false,
++}) {
++  if (!allowResult?.allow) return finishBash(allowResult);
++  if (skipPolicyGuard) return finishBash(allowResult);
++  const policyRows = (approvals ?? []).filter(a => a.policyId);
++  const approvalIsPolicyRow = policyRows.some(a => a.id === allowResult.approval);
++  if (approvalIsPolicyRow && !(files?.length)) {
++    return finishBash({
++      allow: false,
++      files: files ?? [],
++      reason: `${DENY_ADVICE} (blocked: policy window requires named files)`,
++    });
++  }
++  if (policyRows.length && autoApproveKillSwitchOn(root) && approvalIsPolicyRow) {
++    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: policy kill-switch)` });
++  }
++  // the full policy check runs whenever the covering approval is a policy row or any policy row covers a path (matcher or canonical spelling), not only on an exact string match
++  const coveringIsPolicy = files.length > 0 && approvalIsPolicyRow;
++  const touchesPolicyFiles = coveringIsPolicy || files.some(f => policyRows.some(a => policyRowCovers(root, a, f)));
++  if (!policyRows.length || !touchesPolicyFiles) return finishBash(allowResult);
++  const check = handbuildPolicyGuardCheck(root, {
++    approvals: policyRows,
++    home: h,
++    now: typeof now === 'function' ? now() : now,
++    files,
++  });
++  if (check && !check.ok) {
++    return finishBash({ allow: false, files, reason: check.reason });
++  }
++  const policyRow = pickPolicyApproval(policyRows, files, root);
++  if (!policyRow) {
++    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)` });
++  }
++  const rec = recordPolicyGuardAllow(root, {
++    approvalId: policyRow.id,
++    files,
++    rule: check?.rule ?? POLICY_ID,
++    command,
++  }, { now, home: h });
++  if (rec?.blocked) {
++    return finishBash({
++      allow: false,
++      files,
++      reason: `${DENY_ADVICE} (blocked: policy rate limit ${rec.reason})`,
++    });
++  }
++  return finishBash(allowResult);
++}
++
+ const orchestratorModeProtectedWriteRel = (rel, root) => {
++  if (sessionProtectedHandbuildRel(rel)) return true;
+   if (rel === null || rel === undefined) return false;
+   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
+   const tail = [];
+@@ -1447,12 +1876,18 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     if (op === 'gh-api-write') return 'gh';
+     return op;
+   };
+-  const covers = (rels, gitOps = []) => {
++  const policyWindowsActive = approvals.some(a => a.policyId);
++  const policyWindowPath = rel => policyWindowsActive && (policyFolderAllowed(rel) || approvals.some(a => a.policyId && policyRowCovers(root, a, rel)));
++  const covers =(rels, gitOps = []) => {
+     // every file and every git operation must be covered by one live approval
+     for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
+-    const gitCovered = op => approvals.some(a => a.git.includes(approvalGitOp(op)) || (op === 'add' && a.git.includes('commit')));
++    const gitPool = (policyWindowsActive && gitOps.length)
++      ? approvals.filter(a => !a.policyId)
++      : approvals;
++    const gitCovered = op => gitPool.some(a => a.git.includes(approvalGitOp(op)) || (op === 'add' && a.git.includes('commit')));
+     for (const op of gitOps) if (!gitCovered(op)) return { ok: false, missing: `git ${approvalGitOp(op)}` };
+-    const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
++    const used = gitPool.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)))
++      ?? approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => gitCovered(op)));
+     return { ok: true, approval: used?.id };
+   };
+   if (WRITE_TOOLS.includes(tool)) {
+@@ -1460,6 +1895,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+       const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
+       const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
+       const rel = insideProject(root, raw);
++      if (rel !== null && sessionProtectedHandbuildRel(rel)) {
++        return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
++      }
+       if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) return omDeny([rel]);
+       return { allow: true };
+     }
+@@ -1472,6 +1910,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     if (rel === null && typeof raw === 'string' && raw && underAbs(absRaw, protectedAbsolute(h)) && !isClaudeMemoryPathOutside(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
+     if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
+     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
++    if (rel !== null && sessionProtectedHandbuildRel(rel)) {
++      return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
++    }
+     if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) {
+       return omDeny([rel]);
+     }
+@@ -1479,10 +1920,26 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
+     if (rel !== null && produced.has(rel)) {
+       const c = covers([rel]);
+-      return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
++      if (!c.ok) return { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
++      return applyPolicyGuardedAllow(root, {
++        files: [rel],
++        allowResult: { allow: true, files: [rel], approval: c.approval },
++        now,
++        h,
++        cwd,
++        approvals,
++      });
+     }
+     const c = covers([rel]);
+-    return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
++    if (!c.ok) return { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
++    return applyPolicyGuardedAllow(root, {
++      files: [rel],
++      allowResult: { allow: true, files: [rel], approval: c.approval },
++      now,
++      h,
++      cwd,
++      approvals,
++    });
+   }
+   if (tool === 'Bash') {
+     const finishBash = decision => applyOrchestratorMode(decision);
+@@ -1560,15 +2017,127 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     let pushNeedsCarryCheck = false;
+     const chatMergeCandidates = [];
+     let standingMergeAllow = false;
++    const policyWindowsLive = approvals.some(a => a.policyId);
++    if (policyWindowsLive) {
++      for (const words of tokenize(ti.command)) {
++        const plain = plainWords(words);
++        for (const verb of ['cp', 'mv']) {
++          const vi = plain.indexOf(verb);
++          if (vi === -1) continue;
++          const ops = plain.slice(vi + 1).filter(a => a && !a.startsWith('-'));
++          if (ops.length < 2) continue;
++          const dest = resolveCmdPath(ops[ops.length - 1], root, cwd);
++          if (!dest || !policyWindowPath(dest)) continue;
++          for (const src of ops.slice(0, -1)) {
++            const srel = resolveCmdPath(src, root, cwd);
++            if (srel && (isProtected(srel) || sessionProtectedHandbuildRel(srel))) {
++              return finishBash({
++                allow: false,
++                files: [dest],
++                reason: `Hand-build guard: ${verb} onto a policy window path from a protected source (${srel}) belongs to the owner; no approval covers it.`,
++              });
++            }
++            const absSrc = expandPath(src, { root, cwd, home: h });
++            if (absSrc && underAbs(absSrc, protectedAbsolute(h))) {
++              return finishBash({
++                allow: false,
++                files: [dest],
++                reason: `Hand-build guard: ${verb} onto a policy window path from a protected path (${src}) belongs to the owner; no approval covers it.`,
++              });
++            }
++          }
++        }
++        const si = plain.indexOf('sed');
++        if (si !== -1) {
++          const rest = plain.slice(si + 1);
++          const inPlace = rest.some(a => /^-[A-Za-z]*i/.test(a) || a === '--in-place' || a.startsWith('--in-place='));
++          if (inPlace) {
++            for (const w of rest) {
++              if (!w || w.startsWith('-')) continue;
++              const rel = resolveCmdPath(w, root, cwd);
++              if (rel && policyWindowPath(rel) && isProtected(rel)) {
++                return finishBash({
++                  allow: false,
++                  files: [rel],
++                  reason: `Hand-build guard: sed -i on a protected policy window path (${rel}) belongs to the owner; no approval covers it.`,
++                });
++              }
++            }
++          }
++        }
++        const teeAt = plain.indexOf('tee');
++        if (teeAt !== -1) {
++          for (const w of plain.slice(teeAt + 1).filter(a => a && !a.startsWith('-'))) {
++            const rel = resolveCmdPath(w, root, cwd);
++            if (rel && policyWindowPath(rel)) {
++              const hasProtectedSrc = plain.slice(0, teeAt).some(s => {
++                const srel = resolveCmdPath(s, root, cwd);
++                return (srel && (isProtected(srel) || sessionProtectedHandbuildRel(srel)))
++                  || (expandPath(s, { root, cwd, home: h }) && underAbs(expandPath(s, { root, cwd, home: h }), protectedAbsolute(h)));
++              });
++              if (hasProtectedSrc) {
++                return finishBash({
++                  allow: false,
++                  files: [rel],
++                  reason: `Hand-build guard: tee onto a policy window path from a protected source belongs to the owner; no approval covers it.`,
++                });
++              }
++            }
++          }
++        }
++      }
++    }
+     for (const op of policyOps) {
+       if (op.opaque) { policyGitOps.push('commit'); continue; }
++      if (op.tool === '_link') {
++        const operands = op.args ?? [];
++        const policyWindowSources = () => {
++          const s = new Set();
++          for (const row of approvals.filter(a => a.policyId)) {
++            for (const f of row.files ?? []) {
++              const c = canonicalPolicyRel(root, f);
++              if (c) s.add(c);
++            }
++          }
++          return s;
++        };
++        const allowedWindow = policyWindowSources();
++        const hits = [];
++        const pushHit = rel => { if (rel) hits.push(rel); };
++        if ((op.sub === 'ln' || op.sub === 'link' || op.sub === 'cp') && operands.length >= 2) {
++          pushHit(resolveCmdPath(operands[operands.length - 1], root, cwd));
++        } else if (op.sub === 'mv' && operands.length >= 2) {
++          const dest = resolveCmdPath(operands[operands.length - 1], root, cwd);
++          if (dest && policyWindowPath(dest)) {
++            for (const src of operands.slice(0, -1)) {
++              const srel = resolveCmdPath(src, root, cwd);
++              const canon = srel !== null ? canonicalPolicyRel(root, srel) : null;
++              if (canon === null || !allowedWindow.has(canon)) pushHit(dest);
++            }
++          }
++        } else {
++          for (const w of operands) pushHit(resolveCmdPath(w, root, cwd));
++        }
++        const blocked = [...new Set(hits.filter(rel => rel !== null && policyWindowPath(rel)))];
++        if (blocked.length) {
++          return finishBash({
++            allow: false,
++            files: blocked,
++            reason: `Hand-build guard: ${op.sub} into a policy window path (${blocked[0]}) belongs to the owner; no approval covers it.`,
++          });
++        }
++        continue;
++      }
+       if (op.tool === 'git') {
+         if (op.sub === 'fetch') {
+           if (!isFreeGitFetch(op, root)) policyGitOps.push('config');
+           continue;
+         }
+         if (READ_GIT_SUBS.has(op.sub)) {
+-          if (!isFreeReadGit(op)) policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
++          if (!isFreeReadGit(op)) {
++            policyGitOps.push(op.sub === 'diff' && (op.flags ?? []).some(f => f.startsWith('--output')) ? 'output' : 'config');
++            continue;
++          }
+           continue;
+         }
+         if (isReadOnlyGitSub(op.sub, op.rest ?? [])) continue;
+@@ -1610,9 +2179,33 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+           continue;
+         }
+         if (op.sub === 'switch' || op.sub === 'checkout') {
++          if (policyWindowsLive) {
++            for (const p of op.args ?? []) {
++              const rel = resolveCmdPath(p, root, cwd);
++              if (rel && policyWindowPath(rel)) {
++                return finishBash({
++                  allow: false,
++                  files: [rel],
++                  reason: `Hand-build guard: git ${op.sub} of a policy window path (${rel}) belongs to the owner; no approval covers it.`,
++                });
++              }
++            }
++          }
+           if (isFreeGitSwitchCheckout(op, root, revParseCommitFn) || isFreeGitRestorePaths(op, root)) continue;
+         }
+         if (op.sub === 'restore') {
++          if (policyWindowsLive) {
++            for (const p of op.args ?? []) {
++              const rel = resolveCmdPath(p, root, cwd);
++              if (rel && policyWindowPath(rel)) {
++                return finishBash({
++                  allow: false,
++                  files: [rel],
++                  reason: `Hand-build guard: git restore of a policy window path (${rel}) belongs to the owner; no approval covers it.`,
++                });
++              }
++            }
++          }
+           if (isFreeGitRestorePaths(op, root)) continue;
+         }
+         if (op.sub) policyGitOps.push(op.sub);
+@@ -1628,7 +2221,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+         policyGitOps.push('deploy');
+       } else if (op.tool === 'swarm') {
+         if (op.sub === 'merge') {
+-          if (isStandingSwarmMerge(op, h)) {
++          if (isStandingSwarmMerge(op, h, root)) {
+             standingMergeAllow = true;
+             continue;
+           }
+@@ -1638,6 +2231,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+       }
+     }
+     if (ghApiWrite(ti.command, policyOps) && !policyGitOps.includes('gh')) policyGitOps.push('gh');
++    const policyGitOpsNeedingApproval = () => policyGitOps;
+     if (policyGitOps.includes('gh-pr-merge')) {
+       return finishBash({ allow: false, files: [], reason: GH_PR_MERGE_BLOCKED });
+     }
+@@ -1646,21 +2240,43 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     if (chatMergeOk) {
+       for (let i = policyGitOps.length - 1; i >= 0; i -= 1) if (policyGitOps[i] === 'swarm-merge') policyGitOps.splice(i, 1);
+     }
+-    if (policyGitOps.length && !covers([], policyGitOps).ok) {
++    if (policyGitOpsNeedingApproval().length && !covers([], policyGitOpsNeedingApproval()).ok) {
+       if (policyGitOps.includes('swarm-merge')) {
+         return finishBash({ allow: false, files: [], reason: MERGE_BLOCKED_REASON });
+       }
+       const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
+       return finishBash({ allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` });
+     }
++    const swarmMergeAllow = standingMergeAllow || chatMergeOk;
+     const finishAllow = result => {
+-      if (chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
+-      const out = standingMergeAllow ? { ...result, standing: 'merge-swarm-pr' } : result;
+-      return finishBash(out);
++      const out = applyPolicyGuardedAllow(root, {
++        command: ti.command,
++        files: result.files ?? [],
++        allowResult: result,
++        now,
++        h,
++        approvals,
++        finishBash,
++        skipPolicyGuard: swarmMergeAllow && policyOps.length === 1 && policyOps[0]?.tool === 'swarm' && policyOps[0]?.sub === 'merge',
++      });
++      if (out.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
++      if (out.allow && standingMergeAllow) return finishBash({ ...out, standing: 'merge-swarm-pr' });
++      return out;
+     };
+     if (!writesAnything(a)) {
+-      const gitCover = policyGitOps.length ? covers([], policyGitOps) : null;
+-      return finishAllow(gitCover?.ok && gitCover.approval ? { allow: true, approval: gitCover.approval } : { allow: true });
++      const needGit = policyGitOpsNeedingApproval();
++      if (needGit.length) {
++        const gitCover = covers([], needGit);
++        if (!gitCover.ok) {
++          if (policyGitOps.includes('swarm-merge')) {
++            return finishBash({ allow: false, files: [], reason: MERGE_BLOCKED_REASON });
++          }
++          const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
++          return finishBash({ allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` });
++        }
++        return finishAllow({ allow: true, approval: gitCover.approval });
++      }
++      return finishAllow({ allow: true });
+     }
+     if (a.dynamic || a.inline || a.unknown) {
+       const need = [a.dynamic ? 'a dynamic shell command' : null, a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
+@@ -1673,7 +2289,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+       const added = [];
+       let everything = false;
+       for (const words of tokenize(ti.command)) {
+-        const gi = words.findIndex(w => path.basename(w) === 'git');
++        const gi = policyGitAt(words);
+         if (gi === -1) continue;
+         const rest = words.slice(gi + 1);
+         const ai = rest.indexOf('add');
+@@ -1709,8 +2325,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
+     const mvApprovals = mvTrackedSourcesNeedingApproval(ti.command, { root, cwd, home: h }, produced);
+     const needsFileApproval = a.writes.filter(w => !writeFree(w) && !scratchDests.has(w) && !mvUntrackedFree.has(w));
+     const fileRels = [...new Set([...needsFileApproval, ...mvApprovals, ...staged.filter(f => !stagedCarryOk(f)), ...addNeedsApproval])];
+-    if (policyGitOps.length) {
+-      const c = covers(fileRels, policyGitOps);
++    if (policyGitOpsNeedingApproval().length) {
++      const c = covers(fileRels, policyGitOpsNeedingApproval());
+       if (c.ok) return finishAllow({ allow: true, files: [...a.writes, ...staged], approval: c.approval });
+       if (policyGitOps.includes('swarm-merge')) {
+         return finishBash({ allow: false, files: a.writes, reason: MERGE_BLOCKED_REASON });
+diff --git a/tools/self-approval.mjs b/tools/self-approval.mjs
+index b8a42fe..54d74d5 100644
+--- a/tools/self-approval.mjs
++++ b/tools/self-approval.mjs
+@@ -31,7 +31,7 @@ export const CHANGE_RECORD_DENY_REASON = changeRecordDenyReason({ token: '--yes'
+ 
+ export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
+ 
+-export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help']);
++export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help', 'stats']);
+ 
+ const handbuildOwnerDenyReason = ({ verb, token, position }) => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: matched "${token}" at executable position ${position} (orchestrator sessions cannot run handbuild ${verb}; owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
+ 
+@@ -160,17 +160,19 @@ const SWARM_INLINE = /\b(?:node|python3?)\b[\s\S]*\bswarm\b[\s\S]*\b(?:decide|ha
+ const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
+ 
+ const SAFE_SWARM = [
++  /\bswarm\s+handbuild\s+list\b/,
+   /\bhandbuild\s+request\b/,
+   /\bhandbuild\s+status\b/,
+   /\bhandbuild\s+show\b/,
+   /\bhandbuild\s+list\b/,
+   /\bhandbuild\s+log\b/,
+   /\bhandbuild\s+check\b/,
++  /\b(?:swarm\s+)?handbuild\s+stats(?:\s|$)/,
+   /\bhandbuild\s+help\b/,
+   /\bhandbuild\s*(--help|-h)\b/,
+   /\bswarm\s+change\b(?!.*\s--yes(?:\s|$|=))/,
+   /\bswarm\.mjs\b[\s\S]*\bchange\b(?!.*\s--yes(?:\s|$|=))/,
+-  /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|help)\b/,
++  /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|stats|help)\b/,
+   /\bswarm\s+go\b/,
+   /\bswarm\s+run\b/,
+   /\bswarm\s+tickets\b/,
+@@ -864,7 +866,10 @@ function fullCommandHasStaticMarker(commandText) {
+ function surfaceHasStaticMarker(surface) {
+   if (!surface) return false;
+   if (swarmChangeOrchestratorCommandAllowed(surface)) return false;
+-  if (SAFE_SWARM.some(re => re.test(surface))) return false;
++  if (SAFE_SWARM.some(re => {
++    const anchored = new RegExp(`^(?:${re.source})$`, re.flags.replace(/g/g, ''));
++    return anchored.test(surface);
++  })) return false;
+   return STATIC_MARKERS.some(re => re.test(surface));
+ }
+ 
+@@ -908,7 +913,10 @@ function commandWordsInlineInterpreterRisky(words) {
+ 
+ function matchesNormalized(normalized, rawText = '', { skipSafeSwarm = false } = {}) {
+   if (!normalized) return false;
+-  if (!skipSafeSwarm && SAFE_SWARM.some(re => re.test(normalized))) return false;
++  if (!skipSafeSwarm && SAFE_SWARM.some(re => {
++    const anchored = new RegExp(`^(?:${re.source})$`, re.flags.replace(/g/g, ''));
++    return anchored.test(normalized);
++  })) return false;
+   if (rawText && tmuxOrchestratorMarker(rawText)) return true;
+   return false;
+ }
+diff --git a/tools/shell-writes.mjs b/tools/shell-writes.mjs
+index 93c61f0..15c619d 100644
+--- a/tools/shell-writes.mjs
++++ b/tools/shell-writes.mjs
+@@ -804,6 +804,19 @@ export function swarmHandbuildVerbFromPlain(plain) {
+   return null;
+ }
+ 
++function handbuildTokenPlain(words) {
++  const plain = [];
++  for (let i = 0; i < words.length; i += 1) {
++    if (['>', '>>', '>|', '>&', '&>', '<', '<<<', '<<'].includes(words[i])) {
++      if (words[i] !== '<<') i += 1;
++      continue;
++    }
++    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
++    plain.push(words[i]);
++  }
++  return plain;
++}
++
+ export function plainSetsHandbuildSelfApproval(plain) {
+   const verb = swarmHandbuildVerbFromPlain(plain);
+   if (verb !== null && HANDBUILD_OWNER_VERBS.has(verb)) return true;
