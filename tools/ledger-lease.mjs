@@ -3,22 +3,21 @@
  * Ticket work leases with monotonic fencing tokens (single machine, no network).
  *
  * Lease records live in `.swarm/project/leases.json` (sibling to `tickets.json`), keyed by ticket id.
- * Mutations take `.swarm/project/leases.lock` then, when `tickets.json` changes, `.swarm/project/scope-go.lock`
- * (same order as the rest of the ledger tooling; O_CREAT|O_EXCL; stale locks older than ten minutes are removed).
+ * Lease mutations take the shared `leases` autopilot lock (PID liveness); ticket ledger writes use
+ * `withLock` from scope-commands.mjs (same `scope-go.lock` path as the rest of the ledger tooling).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { readLedger, writeLedger } from './tickets.mjs';
+import { acquireAutopilotLock } from './autopilot-lock.mjs';
+import { withLock } from './scope-commands.mjs';
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
 export const DEFAULT_LEASE_TTL_MS = 60_000;
-const LOCK_STALE_MS = 10 * 60 * 1000;
 const STORE_VERSION = 1;
-const LOCK_ATTEMPTS = 48;
-const LOCK_RETRY_MS = 10;
 
 export const leasesPath = root => path.join(root, '.swarm', 'project', 'leases.json');
 
@@ -111,97 +110,30 @@ async function writeLeases(root, store) {
   }
 }
 
-function makeLockNonce() {
-  return randomBytes(16).toString('hex');
-}
-
-async function readLockNonce(lockFile) {
-  try {
-    return (await fs.readFile(lockFile, 'utf8')).trim();
-  } catch {
-    return null;
-  }
-}
-
-async function sleep(ms) {
-  await new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function removeStaleLockBestEffort(lockPath) {
-  try {
-    await fs.rm(lockPath, { force: true });
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      // ignore other errors; next O_EXCL attempt is the safety boundary
-    }
-  }
-}
-
-/** @internal Exported for lock-discipline tests. */
-export async function releaseExclusiveLock(lockPath, expectedNonce) {
-  const current = await readLockNonce(lockPath);
-  if (current !== expectedNonce) return false;
-  try {
-    await fs.rm(lockPath, { force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** @internal Exported for lock-discipline tests. */
-export async function acquireExclusiveLock(lockPath, { busyMessage } = {}) {
-  const message = busyMessage ?? 'lock is busy; try again';
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-    try {
-      const handle = await fs.open(
-        lockPath,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
-        0o600,
-      );
-      const ourNonce = makeLockNonce();
-      await handle.writeFile(ourNonce);
-      return { handle, ourNonce };
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lockPath).catch(() => null);
-      if (!stat || Date.now() - stat.mtimeMs <= LOCK_STALE_MS) {
-        if (attempt + 1 >= LOCK_ATTEMPTS) {
-          throw fail('lease-busy', message);
-        }
-        await sleep(LOCK_RETRY_MS);
-        continue;
-      }
-      await removeStaleLockBestEffort(lockPath);
-    }
-  }
-  throw fail('lease-busy', message);
-}
-
-async function withExclusiveLock(lockPath, busyMessage, fn) {
-  const { handle, ourNonce } = await acquireExclusiveLock(lockPath, { busyMessage });
+async function withLeaseLock(root, fn) {
+  const release = await acquireAutopilotLock(root, { name: 'leases' });
   try {
     return await fn();
   } finally {
-    await handle.close().catch(() => {});
-    await releaseExclusiveLock(lockPath, ourNonce);
+    await release();
   }
 }
 
-async function withLeaseLock(root, fn) {
-  const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const lock = path.join(dir, 'leases.lock');
-  return withExclusiveLock(lock, 'another lease mutation is in progress; try again', fn);
-}
-
-async function withScopeGoLock(root, fn) {
-  const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const lock = path.join(dir, 'scope-go.lock');
-  return withExclusiveLock(lock, 'ticket ledger is busy; try again', fn);
+/** Same retry discipline as `lockedUpdate` in scope-commands.mjs. */
+async function withScopeLedgerLock(root, fn) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      return await withLock(root, fn);
+    } catch (error) {
+      if (error.code !== 'scope-busy' || attempt === 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  }
+  return null;
 }
 
 async function withLeaseAndScopeGoLock(root, fn) {
-  return withLeaseLock(root, () => withScopeGoLock(root, fn));
+  return withLeaseLock(root, () => withScopeLedgerLock(root, fn));
 }
 
 function nextFencingToken(store, ticketId) {

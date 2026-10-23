@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createLedger, writeLedger, readLedger } from '../tools/tickets.mjs';
+import { withLock } from '../tools/scope-commands.mjs';
 import {
   claim,
   renew,
@@ -16,8 +17,6 @@ import {
   readLeases,
   leasesPath,
   DEFAULT_LEASE_TTL_MS,
-  acquireExclusiveLock,
-  releaseExclusiveLock,
 } from '../tools/ledger-lease.mjs';
 
 const scope = { name: 'P', version: 1, hash: 'a'.repeat(64) };
@@ -47,6 +46,8 @@ async function project(t, status = 'ready') {
   }));
   return root;
 }
+
+const BUSY_OR_HELD = new Set(['lease-held', 'leases-running', 'scope-busy']);
 
 test('claim, renew, and release with fencing tokens', async t => {
   let now = Date.now();
@@ -128,7 +129,7 @@ test('two concurrent claims yield exactly one holder', async t => {
   const rejected = results.filter(r => r.status === 'rejected');
   assert.equal(fulfilled.length, 1);
   assert.equal(rejected.length, 1);
-  assert.ok(['lease-held', 'lease-busy'].includes(rejected[0].reason.code));
+  assert.ok(BUSY_OR_HELD.has(rejected[0].reason.code));
 
   const store = await readLeases(root);
   const active = Object.values(store.leases);
@@ -145,106 +146,6 @@ test('leases persist under .swarm/project/leases.json', async t => {
   const parsed = JSON.parse(text);
   assert.equal(parsed.leases['T-0172'].holderId, 'node-a');
   assert.ok(parsed.maxToken['T-0172'] >= 1);
-});
-
-const LOCK_STALE_MS = 10 * 60 * 1000;
-
-function leaseLockFile(root) {
-  return path.join(root, '.swarm', 'project', 'leases.lock');
-}
-
-function scopeGoLockFile(root) {
-  return path.join(root, '.swarm', 'project', 'scope-go.lock');
-}
-
-async function touchStale(file) {
-  const staleMs = Date.now() - LOCK_STALE_MS - 60_000;
-  await fs.utimes(file, staleMs / 1000, staleMs / 1000);
-}
-
-/** Same exclusive lock discipline as `swarm go --scope` (scope-commands.mjs). */
-async function withScopeGoLockLikeCli(root, fn) {
-  const lock = scopeGoLockFile(root);
-  let handle = null;
-  for (let attempt = 0; attempt < 2 && !handle; attempt += 1) {
-    try {
-      handle = await fs.open(lock, fsSync.constants.O_WRONLY | fsSync.constants.O_CREAT | fsSync.constants.O_EXCL | fsSync.constants.O_NOFOLLOW, 0o600);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
-      else throw error;
-    }
-  }
-  if (!handle) throw new Error('could not take scope-go.lock');
-  try {
-    return await fn();
-  } finally {
-    await handle.close().catch(() => {});
-    await fs.rm(lock, { force: true });
-  }
-}
-
-test('two simultaneous stale-takeover attempts yield exactly one O_EXCL holder', async t => {
-  const root = await project(t);
-  const lock = leaseLockFile(root);
-  await fs.mkdir(path.dirname(lock), { recursive: true });
-  await fs.writeFile(lock, `dead:${randomBytes(8).toString('hex')}`);
-  await touchStale(lock);
-
-  const results = await Promise.allSettled([
-    acquireExclusiveLock(lock, { busyMessage: 'busy' }),
-    acquireExclusiveLock(lock, { busyMessage: 'busy' }),
-  ]);
-
-  const acquired = results.filter(r => r.status === 'fulfilled');
-  const blocked = results.filter(r => r.status === 'rejected');
-  assert.equal(acquired.length, 1, 'exactly one caller wins O_EXCL after stale rm ping-pong');
-  assert.equal(blocked.length, 1);
-  assert.equal(blocked[0].reason.code, 'lease-busy');
-
-  const { handle, ourNonce } = acquired[0].value;
-  assert.equal((await fs.readFile(lock, 'utf8')).trim(), ourNonce);
-  await handle.close();
-  await releaseExclusiveLock(lock, ourNonce);
-  assert.equal(await fs.readFile(lock, 'utf8').catch(() => null), null);
-});
-
-test('release does not remove lock when another nonce has taken over', async t => {
-  const root = await project(t);
-  const lock = leaseLockFile(root);
-  await fs.mkdir(path.dirname(lock), { recursive: true });
-
-  const { handle, ourNonce } = await acquireExclusiveLock(lock, { busyMessage: 'busy' });
-  const successorNonce = randomBytes(16).toString('hex');
-  await fs.writeFile(lock, successorNonce);
-  await handle.close();
-
-  const removed = await releaseExclusiveLock(lock, ourNonce);
-  assert.equal(removed, false);
-  assert.equal((await fs.readFile(lock, 'utf8')).trim(), successorNonce);
-});
-
-test('stale lease lock takeover with nonce check yields one holder', async t => {
-  const root = await project(t);
-  const lock = leaseLockFile(root);
-  await fs.writeFile(lock, `stale:${randomBytes(8).toString('hex')}`);
-  await touchStale(lock);
-
-  const results = await Promise.allSettled([
-    claim(root, 'T-0172', 'node-a', { now: Date.now(), ttlMs: 30_000 }),
-    claim(root, 'T-0172', 'node-b', { now: Date.now(), ttlMs: 30_000 }),
-  ]);
-  const fulfilled = results.filter(r => r.status === 'fulfilled');
-  const rejected = results.filter(r => r.status === 'rejected');
-  assert.equal(fulfilled.length, 1);
-  assert.equal(rejected.length, 1);
-  assert.ok(['lease-held', 'lease-busy'].includes(rejected[0].reason.code));
-
-  assert.equal(await fs.readFile(lock, 'utf8').catch(() => null), null);
-  const store = await readLeases(root);
-  assert.equal(Object.keys(store.leases).length, 1);
-  assert.equal(store.leases['T-0172'].holderId, fulfilled[0].value.holderId);
 });
 
 test('malformed leases.json throws lease-corrupt instead of resetting', async t => {
@@ -294,7 +195,7 @@ test('lease claim and scope-go ticket write do not lose each other', async t => 
 
   const [claimResult] = await Promise.all([
     claim(root, 'T-0172', 'worker', { now, ttlMs: 60_000 }),
-    withScopeGoLockLikeCli(root, async () => {
+    withLock(root, async () => {
       const ledger = await readLedger(root);
       ledger.tickets[0].title = marker;
       await writeLedger(root, ledger);
@@ -306,6 +207,10 @@ test('lease claim and scope-go ticket write do not lose each other', async t => 
   assert.equal(ledger.tickets[0].status, 'running');
   assert.equal(claimResult.holderId, 'worker');
 });
+
+function scopeGoLockFile(root) {
+  return path.join(root, '.swarm', 'project', 'scope-go.lock');
+}
 
 test('claim samples now after lock so long waits do not use stale expiry', async t => {
   let now = Date.now();

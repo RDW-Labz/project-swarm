@@ -3704,7 +3704,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
 }
 
 // One `swarm go --scope` at a time: an exclusive lock file; a lock older than ten minutes is taken over.
-async function withLock(root, fn) {
+export async function withLock(root, fn) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const lock = path.join(dir, 'scope-go.lock');
   let handle = null;
