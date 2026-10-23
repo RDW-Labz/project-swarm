@@ -8,6 +8,37 @@ import { buildTicketContext } from './ticket-context.mjs';
 import { verifyJobFields, managedChecks } from './verify-config.mjs';
 import { qualityChecksForJobs } from './quality-checks.mjs';
 import { routingFor } from './escalation.mjs';
+import { API_AGENTS } from './api-adapters.mjs';
+
+function isApiTextContext(contextEnv, file) {
+  if (typeof contextEnv?.isApiTextFile === 'function') return contextEnv.isApiTextFile(file);
+  return contextEnv?.exists?.(file) ?? false;
+}
+
+function adjustApiLaneContext(job, contextEnv, ticketId, { mockupPaths, mockupRequired }, warnings, laneModels) {
+  if (job.shell === true) return;
+  const apiRouted = API_AGENTS.includes(job.agent) || job.agent === 'auto';
+  if (!apiRouted) return;
+  const mockups = new Set(mockupPaths.filter(p => (job.context ?? []).includes(p)));
+  const nonText = (job.context ?? []).filter(p => !isApiTextContext(contextEnv, p));
+  if (!nonText.length) return;
+  if (mockupRequired && nonText.some(p => mockups.has(p))) {
+    job.agent = 'cursor';
+    delete job.maxOutputTokens;
+    delete job.cacheContext;
+    const model = laneModels?.cursor?.model;
+    if (typeof model === 'string' && model) job.model = model;
+    else delete job.model;
+    warnings.push(`${ticketId}: routed to cursor so screen mockup files remain readable`);
+    return;
+  }
+  for (const p of nonText) {
+    job.context = job.context.filter(x => x !== p);
+    job.prompt += `\nThe file ${p} is on disk at that path for shell workers; it was omitted from API context because it is not UTF-8 text.`;
+    warnings.push(`${ticketId}: dropped non-text context ${p} for API lane`);
+  }
+  if (job.cacheContext) job.cacheContext = job.cacheContext.filter(p => job.context.includes(p));
+}
 
 // Lockfiles by package manager: a ticket that writes another manager's lockfile is refused.
 const LOCKFILES={npm:['package-lock.json','npm-shrinkwrap.json'],pnpm:['pnpm-lock.yaml'],yarn:['yarn.lock'],bun:['bun.lockb','bun.lock']};
@@ -180,7 +211,7 @@ export function ticketsToManifest(tickets,opts={}){
     let context=expandTicketRefs([...(t.context||[]),...(t.contracts||[])],[...byId.values()]);
     if(contract&&!context.includes(contract))context.push(contract);
     // Automatic context: shared project files first (cached), then the files this kind of ticket needs.
-    let autoShared=[],kind=null,mockupAdded=false;
+    let autoShared=[],kind=null,mockupAdded=false,mockupPaths=[];
     if(contextEnv){
       const reqText=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]).join('\n');
       const built=buildTicketContext({allTickets:[...byId.values()],ticket:{...t,context:expandTicketRefs(t.context||[],[...byId.values()]),requirements:reqText},scope,exists:contextEnv.exists,sizes:contextEnv.sizes,profileContext:contextEnv.profileContext,listFiles:contextEnv.listFiles,limits:contextEnv.limits});
@@ -189,7 +220,7 @@ export function ticketsToManifest(tickets,opts={}){
       // Only the filtered paths reach the job (the ticket's own context, contracts and tests went through the same filter); the manifest contract only if it passes it.
       context=[...new Set([...built.shared,...built.context,...(contract&&contextEnv.exists(contract)?[contract]:[])].filter(p=>!outputs.includes(p)))];
       // A UI ticket sees the mockups of the screens it renders.
-      for(const id of t.screens||[]){const m=contextEnv.screenMockups?.[id];if(m&&contextEnv.existsMockup?.(m)&&!context.includes(m)){context.push(m);mockupAdded=true;}}
+      for(const id of t.screens||[]){const m=contextEnv.screenMockups?.[id];if(m&&contextEnv.existsMockup?.(m)&&!context.includes(m)){context.push(m);mockupPaths.push(m);mockupAdded=true;}}
       for(const r of contextEnv.rejected||[])if(!warnings.some(w=>w.includes('context path refused: '+r)))warnings.push(t.id+': context path refused: '+r+' (protected or secret file)');
     }
     const vfields=verify?verifyJobFields(t,verify):null;
@@ -210,6 +241,15 @@ export function ticketsToManifest(tickets,opts={}){
       if(!context.includes(f))context.push(f);
     }
     context=context.filter(p=>!outputs.includes(p));
+    const namedTests=new Set((t.tests||[]).filter(f=>typeof f==='string'&&f));
+    if(contextEnv){
+      context=context.filter(p=>{
+        if(!namedTests.has(p))return true;
+        if(contextEnv.exists(p))return true;
+        warnings.push(t.id+': context '+p+' is a ticket test output not in the repo yet; omitted from context');
+        return false;
+      });
+    }
     const shared=[...new Set([...autoShared,...(t.contracts||[]),...(contract?[contract]:[])])].filter(p=>context.includes(p)).sort().slice(0,10);
     // Lesson 39: a ticket may delete exactly the files it names; the worker must be able to delete in place and must see them.
     const deletes=(t.deletes||[]).filter(f=>typeof f==='string'&&f&&!f.endsWith('/'));
@@ -265,6 +305,7 @@ export function ticketsToManifest(tickets,opts={}){
         if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}
       }
     }
+    if(contextEnv)adjustApiLaneContext(job,contextEnv,t.id,{mockupPaths,mockupRequired:mockupAdded},warnings,laneModels);
     return job;
   }).filter(Boolean);
   const manifest={version:1,concurrency:maxJobs||64};
