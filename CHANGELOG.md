@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.6
+
+Held tickets stay out of Needs you, and the first wide wave.
+- **Board:** tickets in review or todo status no longer leak into Needs you.
+- **Local lane:** swarm tunnel add, status and remove manage an auto-reconnecting launchd SSH tunnel; a down tunnel pauses the endpoint.
+- **Scope:** swarm scope gate --list and --fix-owners show and resolve the ticket-manager findings.
+- **Runner:** cacheContext is never empty or stale; scratch cleanup cannot fail a finished job; the pre-push guard checks the pushed range; integrate flags outputs it did not write; ticket ids come in per-machine blocks (T-0179); decisions waiting over an hour also go out as a phone notification.
+
 ## 1.167.5
 
 Wide waves now start for tickets that list their own tests.
