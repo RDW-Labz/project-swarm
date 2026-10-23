@@ -104,7 +104,10 @@ test('push range: new non-routing commit is refused and only that file is named'
   const ref = pushRef(root, branch);
   const result = runPrePush(root, ref);
   assert.equal(result.ok, false);
-  assert.match(result.message, new RegExp(badRel.replace(/\./g, '\\.')));
+  assert.match(
+    result.message,
+    new RegExp(badRel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  );
   for (let i = 0; i < 10; i += 1) {
     assert.doesNotMatch(result.message, new RegExp(`legacy-${i}`));
   }
