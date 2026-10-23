@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.3
+
+New files are no longer refused as typos.
+- **Splitter:** a new write path never errors on similarity alone (warning only), and Next.js files, dynamic route folders, route groups, parallel slots, workflow files and test files are known conventions with no warning.
+- **Local lane:** any OpenAI-compatible endpoint (such as dev2) is a worker lane with a Keychain key, per-endpoint slots, loopback-only for sensitive jobs and no redirects on the key request.
+
 ## 1.167.2
 
 Work now spreads across lanes.
