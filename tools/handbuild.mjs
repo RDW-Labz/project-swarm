@@ -1720,26 +1720,23 @@ export function applyPolicyGuardedAllow(root, {
   now,
   h,
   approvals,
-  finishBash = d => d,
-  skipPolicyGuard = false,
 }) {
-  if (!allowResult?.allow) return finishBash(allowResult);
-  if (skipPolicyGuard) return finishBash(allowResult);
+  if (!allowResult?.allow) return allowResult;
   const policyRows = (approvals ?? []).filter(a => a.policyId);
   const approvalIsPolicyRow = policyRows.some(a => a.id === allowResult.approval);
   if (approvalIsPolicyRow && !(files?.length)) {
-    return finishBash({
+    return {
       allow: false,
       files: files ?? [],
       reason: `${DENY_ADVICE} (blocked: policy window requires named files)`,
-    });
+    };
   }
   if (policyRows.length && autoApproveKillSwitchOn(root) && approvalIsPolicyRow) {
-    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: policy kill-switch)` });
+    return { allow: false, files, reason: `${DENY_ADVICE} (blocked: policy kill-switch)` };
   }
   const coveringIsPolicy = files.length > 0 && approvalIsPolicyRow;
   const touchesPolicyFiles = coveringIsPolicy || files.some(f => policyRows.some(a => policyRowCovers(root, a, f)));
-  if (!policyRows.length || !touchesPolicyFiles) return finishBash(allowResult);
+  if (!policyRows.length || !touchesPolicyFiles) return allowResult;
   const check = handbuildPolicyGuardCheck(root, {
     approvals: policyRows,
     home: h,
@@ -1747,19 +1744,19 @@ export function applyPolicyGuardedAllow(root, {
     files,
   });
   if (check && !check.ok) {
-    return finishBash({ allow: false, files, reason: check.reason });
+    return { allow: false, files, reason: check.reason };
   }
   const policyRow = pickPolicyApproval(policyRows, files, root);
   if (!policyRow) {
-    return finishBash({ allow: false, files, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)` });
+    return { allow: false, files, reason: `${DENY_ADVICE} (blocked: ambiguous policy window)` };
   }
   for (const f of files) {
     if (!isSwarmAdminHandbuildPath(f, { root })) {
-      return finishBash({
+      return {
         allow: false,
         files,
         reason: `${DENY_ADVICE} (blocked: policy path ${f})`,
-      });
+      };
     }
   }
   const rec = recordPolicyGuardAllow(root, {
@@ -1769,17 +1766,17 @@ export function applyPolicyGuardedAllow(root, {
     command,
   }, { now, home: h });
   if (rec?.blocked) {
-    return finishBash({
+    return {
       allow: false,
       files,
       reason: `${DENY_ADVICE} (blocked: policy rate limit ${rec.reason})`,
-    });
+    };
   }
   if (allowResult?.allow && files?.length) {
     const ts = typeof now === 'function' ? now() : now;
     queuePolicyWriteVerify(root, files, { now: ts });
   }
-  return finishBash(allowResult);
+  return allowResult;
 }
 
 /** The live approvals (approved and not expired). */
@@ -2243,24 +2240,10 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       const label = policyOpDenyLabel(policyGitOps, ti.command, policyOps);
       return finishBash({ allow: false, files: [], reason: `${DENY_ADVICE} (blocked: ${label})` });
     }
-    const swarmMergeAllow = standingMergeAllow || chatMergeOk;
     const finishAllow = result => {
-      const out = applyPolicyGuardedAllow(root, {
-        command: ti.command,
-        files: result.files ?? [],
-        allowResult: result,
-        now,
-        h,
-        approvals,
-        finishBash,
-        skipPolicyGuard: swarmMergeAllow && policyOps.length === 1 && policyOps[0]?.tool === 'swarm' && policyOps[0]?.sub === 'merge',
-      });
-      if (out.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
-      if (out.allow && standingMergeAllow) return finishBash({ ...out, standing: 'merge-swarm-pr' });
-      if (out.allow && out.approval && handbuildRowIsPolicy(approvals.find(a => a.id === out.approval))) {
-        return finishBash({ allow: false, files: result.files ?? [], reason: `${DENY_ADVICE} (blocked: policy window does not cover shell commands)` });
-      }
-      return out;
+      if (result.allow && chatMergeOk && mergeOps[0]?.target) tryConsumeChatMerge(root, mergeOps[0].target, now());
+      if (result.allow && standingMergeAllow) return finishBash({ ...result, standing: 'merge-swarm-pr' });
+      return finishBash(result);
     };
     if (!writesAnything(a)) {
       const gitCover = policyGitOps.length ? covers([], policyGitOps) : null;

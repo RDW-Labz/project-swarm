@@ -655,7 +655,6 @@ test('applyPolicyGuardedAllow denies policy row with empty files', async t => {
     now: T0,
     h: os.homedir(),
     approvals: [req],
-    finishBash: d => d,
   });
   assert.equal(out.allow, false);
   assert.match(out.reason, /named files/);
