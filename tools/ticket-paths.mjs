@@ -9,6 +9,77 @@ const WRITE_FIELDS = ['files'];
 const OUTPUT_TEST_FIELDS = ['tests'];
 const DELETE_FIELDS = ['deletes'];
 
+const NEXT_SPECIAL_BASENAMES = new Set([
+  'page',
+  'layout',
+  'loading',
+  'error',
+  'global-error',
+  'not-found',
+  'template',
+  'default',
+  'route',
+  'middleware',
+  'proxy',
+  'instrumentation',
+  'opengraph-image',
+  'twitter-image',
+  'icon',
+  'apple-icon',
+  'sitemap',
+  'robots',
+  'manifest',
+]);
+
+const NEXT_SPECIAL_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.md', '.mdx']);
+
+function isDynamicPathSegment(segment) {
+  return (
+    /^\[[^\]]+\]$/.test(segment)
+    || /^\[\.\.\.[^\]]+\]$/.test(segment)
+    || /^\[\[\.\.\.[^\]]+\]\]$/.test(segment)
+  );
+}
+
+function isRouteGroupSegment(segment) {
+  return segment.startsWith('(') && segment.endsWith(')') && segment.length > 2;
+}
+
+function isParallelRouteSegment(segment) {
+  return segment.startsWith('@') && segment.length > 1;
+}
+
+/** True for Next.js conventions, workflows, tests, and other paths that are routinely created new. */
+export function isConventionPath(p) {
+  const want = normTicketPath(p);
+  if (!want) return false;
+
+  const parts = want.split('/');
+  const base = parts[parts.length - 1];
+
+  if (parts.includes('__tests__')) return true;
+
+  if (parts.length >= 3 && parts[0] === '.github' && parts[1] === 'workflows') {
+    const ext = path.posix.extname(base).toLowerCase();
+    if (ext === '.yml' || ext === '.yaml') return true;
+  }
+
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const segment = parts[i];
+    if (isDynamicPathSegment(segment) || isRouteGroupSegment(segment) || isParallelRouteSegment(segment)) {
+      return true;
+    }
+  }
+
+  if (/\.(test|spec)\.[^/]+$/i.test(base)) return true;
+
+  const ext = path.posix.extname(base).toLowerCase();
+  const stem = ext ? base.slice(0, -ext.length) : base;
+  if (NEXT_SPECIAL_EXTENSIONS.has(ext) && NEXT_SPECIAL_BASENAMES.has(stem)) return true;
+
+  return false;
+}
+
 export function normTicketPath(p) {
   return String(p).split('\\').join('/').replace(/^\.\//, '');
 }
@@ -168,7 +239,7 @@ export function formatTicketPathRefusal(ticketId, err) {
 
 export function formatTicketPathWarning(ticketId, warn) {
   if (warn.code === 'similar-new-file') {
-    return `${ticketId}: ${warn.path} similar-new-file (near ${warn.suggestion})`;
+    return `${ticketId}: ${warn.path} new file (warning only); similar-new-file (near ${warn.suggestion})`;
   }
   return `${ticketId}: ${warn.path} ${warn.message ?? warn.code ?? 'warning'}`;
 }
@@ -216,27 +287,16 @@ export function validateTicketPaths(ticket, { repoFiles = [], exists, root = nul
     if (existsInRepo) continue;
 
     if (kind === 'write') {
-      const suggestion = likelyTypo(ticketPath, repoFiles);
-      if (suggestion) {
-        const dist = levenshteinDistance(
-          normTicketPath(ticketPath).toLowerCase(),
-          normTicketPath(suggestion).toLowerCase(),
-        );
-        const limit = typoDistanceLimit(ticketPath);
-        const payload = {
-          field,
-          path: ticketPath,
-          suggestion,
-          message: `${field} path not in repo: ${ticketPath} (did you mean ${suggestion}?)`,
-        };
-        if (dist >= limit) {
+      if (!isConventionPath(ticketPath)) {
+        const suggestion = likelyTypo(ticketPath, repoFiles);
+        if (suggestion) {
           warnings.push({
             code: 'similar-new-file',
-            ...payload,
+            field,
+            path: ticketPath,
+            suggestion,
             message: `${field} path not in repo: ${ticketPath} (similar to existing ${suggestion})`,
           });
-        } else {
-          errors.push({ ...payload, reason: 'likely typo' });
         }
       }
       continue;
