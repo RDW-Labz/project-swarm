@@ -445,7 +445,6 @@ function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
   const next = jobs.map(job => {
     const add = suggested?.[job.id];
     if (!add?.length) return job;
-    if ((ticketsById.get(job.id)?.tests ?? []).length) return job;
     const outputs = new Set(job.outputs ?? []);
     const context = [...(job.context ?? [])];
     const seen = new Set(context);
