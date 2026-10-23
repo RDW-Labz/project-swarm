@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.167.5
+
+Wide waves now start for tickets that list their own tests.
+- **Wave prep:** a ticket that lists its own tests no longer skips the cover for tests that mention its files in passing (T-0068 and every ticket touching tools/swarm.mjs); the tests go to context up to 25 and the rest to ignoreTests.
+
 ## 1.167.4
 
 The project page no longer goes blank, and wide waves start.
