@@ -126,6 +126,102 @@ function machineSlots(override) {
   return Number.isInteger(configured) && configured > 0 ? configured : 8;
 }
 
+const TICKET_ID_CEILING = 9000;
+
+function ticketIdNumber(id) {
+  const match = /^T-(\d+)$/.exec(String(id ?? ''));
+  return match ? Number(match[1]) : null;
+}
+
+function formatTicketId(n) {
+  return `T-${String(n).padStart(4, '0')}`;
+}
+
+export function parseTicketIdBlock(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const start = Number(raw.start);
+  const end = raw.end === undefined ? TICKET_ID_CEILING - 1 : Number(raw.end);
+  if (!Number.isInteger(start) || start < 1 || start >= TICKET_ID_CEILING) return null;
+  if (!Number.isInteger(end) || end < start || end >= TICKET_ID_CEILING) return null;
+  return { start, end };
+}
+
+function ticketIdBlockFromLocalConfig() {
+  try {
+    const config = loadLocalConfig();
+    const raw = config?.ticketIdBlock ?? config?.machine?.ticketIdBlock;
+    return parseTicketIdBlock(raw);
+  } catch { return null; }
+}
+
+function peerTicketsLedgerPathFromLocalConfig() {
+  try {
+    const config = loadLocalConfig();
+    const raw = config?.peerTicketsLedger ?? config?.peerLedger ?? config?.machine?.peerTicketsLedger;
+    return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+  } catch { return null; }
+}
+
+function idNumberInBlock(n, block) {
+  return n >= block.start && n <= block.end;
+}
+
+function ticketIdBlockLabel(block) {
+  return `${formatTicketId(block.start)} through ${formatTicketId(block.end)}`;
+}
+
+export function resolveIngestStartAt(existing, block) {
+  if (!block) {
+    return existing
+      ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1
+      : 1;
+  }
+  const nums = (existing?.tickets ?? [])
+    .map(t => ticketIdNumber(t.id))
+    .filter(n => n !== null && n < TICKET_ID_CEILING && idNumberInBlock(n, block));
+  const next = nums.length ? Math.max(...nums) + 1 : block.start;
+  return Math.max(next, block.start);
+}
+
+function countIngestItems(lists) {
+  return (lists ?? []).reduce((sum, entry) => sum + (entry.items?.length ?? 0), 0);
+}
+
+export function validateIngestTicketIds({ startAt, itemCount, block, peerIds, peerPath }) {
+  if (!itemCount) return null;
+  const last = startAt + itemCount - 1;
+  if (last >= TICKET_ID_CEILING) {
+    return 'too many tickets: ids T-9000 and up are reserved for day 0 tickets';
+  }
+  if (block && (startAt < block.start || last > block.end)) {
+    const attempted = itemCount === 1
+      ? formatTicketId(startAt)
+      : `${formatTicketId(startAt)} through ${formatTicketId(last)}`;
+    return `ticket-id-block: cannot mint ${attempted}; this machine is configured for ticket ids ${ticketIdBlockLabel(block)}`;
+  }
+  if (peerIds?.size) {
+    for (let n = startAt; n <= last; n += 1) {
+      const id = formatTicketId(n);
+      if (peerIds.has(id)) {
+        const where = peerPath ? ` at ${peerPath}` : '';
+        return `ticket-id-collision: ${id} already exists in peer tickets ledger${where}`;
+      }
+    }
+  }
+  return null;
+}
+
+async function loadPeerTicketIds(peerPath) {
+  try {
+    const text = await fs.readFile(peerPath, 'utf8');
+    const ledger = JSON.parse(text);
+    return new Set((ledger?.tickets ?? []).map(t => t.id).filter(id => /^T-\d+$/.test(id)));
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', `peer tickets ledger not found at ${peerPath}`);
+    throw fail('ticket-id-collision', `cannot read peer tickets ledger at ${peerPath}: ${error.message}`);
+  }
+}
+
 function longestWaveChain(tickets) {
   const active = (tickets ?? []).filter(t => t && t.status !== 'cancelled' && t.status !== 'proposed');
   const ids = new Set(active.map(t => t.id));
@@ -1261,7 +1357,18 @@ function evaluateSplitIngest({
   machineConcurrency,
   ticketPatches,
   guardNotes,
+  ticketIdBlock,
+  peerTicketIds,
+  peerTicketsLedgerPath,
 }) {
+  const idFatal = validateIngestTicketIds({
+    startAt,
+    itemCount: countIngestItems(lists),
+    block: ticketIdBlock,
+    peerIds: peerTicketIds,
+    peerPath: peerTicketsLedgerPath,
+  });
+  if (idFatal) return { fatal: idFatal };
   const built = ticketsFromStageLists(lists, scope, { startAt, packageManager, ledger: existing, rootFiles: [...rootFiles] });
   let tickets = built.tickets.map(ticket => {
     const patch = ticketPatches.get(ticket.id);
@@ -1720,7 +1827,10 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
   const rootFileNotes = [];
   const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
   const profile = await readProfile(root);
-  const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
+  const ticketIdBlock = ticketIdBlockFromLocalConfig();
+  const peerTicketsLedgerPath = peerTicketsLedgerPathFromLocalConfig();
+  const peerTicketIds = peerTicketsLedgerPath ? await loadPeerTicketIds(peerTicketsLedgerPath) : null;
+  const startAt = resolveIngestStartAt(existing, ticketIdBlock);
   const repoFiles = await listTrackedRepoFiles(root);
   const acceptNewPaths = new Set(parseAcceptNewPaths(flags['accept-new-path']));
   const maxRepairs = parseMaxRepairs(flags);
@@ -1756,9 +1866,12 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
       machineConcurrency: deps.machineConcurrency,
       ticketPatches,
       guardNotes: ingestGuardNotes,
+      ticketIdBlock,
+      peerTicketIds,
+      peerTicketsLedgerPath,
     });
     if (evaluated.fatal) return { tickets: [], issues: [{ code: 'fatal', reason: evaluated.fatal }], fatal: evaluated.fatal };
-    const ticketCount = evaluated.built.tickets.length + evaluated.built.rejected.length;
+    const ticketCount = countIngestItems(workingLists);
     if (startAt + ticketCount > 9000) {
       return { tickets: [], issues: [{ code: 'fatal', reason: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' }], fatal: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' };
     }
@@ -1884,7 +1997,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     : [];
 
   const fatal = validate().fatal;
-  if (fatal && fatal.startsWith('split refused: --wire')) return out(fatal, 1);
+  if (fatal) return out(fatal, 1);
 
   if (!loopResult.tickets.length) {
     return out([
@@ -3504,6 +3617,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {
     if (error.code && /^(scope|ticket|ledger|approval)/.test(error.code)) return out(`${error.code}: ${error.message}`, 1);
+    if (error.code === 'ticket-id-collision') return out(error.message, 1);
     throw error;
   }
 }
