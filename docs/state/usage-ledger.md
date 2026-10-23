@@ -165,11 +165,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-23 | - | review-aa9: FAIL. File-edit-only rebuild; scope narrower than brief (docs/state only; md/txt/csv/ndj | claude | opus | pass | 99,890 | $0.86 |
-| 2026-10-23 | - | review-aa10: FAIL. File-tool path is largely hardened (exact entries, per-component lstat, O_NOFOLLO | claude | opus | pass | 55,516 | $0.52 |
-| 2026-10-23 | - | review-aa11: FAIL. File-tool window path largely sound (exact docs/state entries, lstat per componen | claude | opus | pass | 89,993 | $0.51 |
-| 2026-10-23 | - | aav5: complete | cursor | composer-2.5 | pass | - | subscription |
-| 2026-10-23 | - | review-aa12: Twelfth review FAIL. File-tool window path is sound in the diff (exact docs/state entri | claude | opus | pass | 88,572 | $0.47 |
 
 ## Daily summary
 
@@ -187,6 +182,4 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 4 | 4 | 0 | 333,971 | $2.36 |
-| 2026-10-23 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 166 | 151 | 15 | 15,045,346 | $29.03 (incl. estimates) |
+| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
