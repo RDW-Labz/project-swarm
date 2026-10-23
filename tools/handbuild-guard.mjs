@@ -120,6 +120,8 @@ function runParentGuard(raw, truncated) {
         if (root && !fs.existsSync(path.join(root, OFF_FILE))) {
           logAction(root, { event: 'blocked', by: 'guard', tool: 'unknown', reason: 'the hook input was too large for the guard to read' });
           writeDeny('Hand-build guard: this tool call is too large for the guard to read, so it is refused. Write a ticket instead, or split the change.');
+        } else if (!root && raw.trim()) {
+          writeDeny(GUARD_ERROR_DENY_REASON);
         }
         process.exit(0);
         return;
@@ -129,12 +131,12 @@ function runParentGuard(raw, truncated) {
       try {
         input = JSON.parse(raw);
       } catch (e) {
-        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, e);
+        if (raw.trim()) finishDenyCrash(fromEnv ?? rootForLog, toolForLog, e);
         else process.exit(0);
         return;
       }
       if (!input || typeof input !== 'object') {
-        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
+        if (raw.trim()) finishDenyCrash(fromEnv ?? rootForLog, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
         else process.exit(0);
         return;
       }
@@ -203,8 +205,18 @@ if (process.argv.includes(DECIDE_ARG)) {
 } else {
   let raw = '';
   let truncated = false;
+  const stdinWatch = setTimeout(() => {
+    finishDenyTimeout(null, 'unknown');
+  }, guardTimeoutMs());
+  stdinWatch.unref();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; else truncated = true; });
-  process.stdin.on('error', e => finishDenyCrash(null, 'unknown', e));
-  process.stdin.on('end', () => runParentGuard(raw, truncated));
+  process.stdin.on('error', e => {
+    clearTimeout(stdinWatch);
+    finishDenyCrash(null, 'unknown', e);
+  });
+  process.stdin.on('end', () => {
+    clearTimeout(stdinWatch);
+    runParentGuard(raw, truncated);
+  });
 }

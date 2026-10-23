@@ -18,17 +18,58 @@ export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
 const GIT_COMMIT_MSG_OPTS = new Set(['-m', '-F', '-C', '-c', '--message', '--author', '--date']);
 
-/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless the owner added `.swarm/orchestrator-mode/off`. Worker workspaces, scratch/test roots, and worktrees are exempt. Requires `CLAUDE_PROJECT_DIR` to match `root` (orchestrator sessions only). */
-export function orchestratorModeEnabled(root, cwd = root) {
-  if (!root || isWorkerCwd(cwd)) return false;
-  const scratchOpts = { strict: true, home: os.homedir() };
-  if (isScratchRoot(root, scratchOpts) || isScratchRoot(cwd, scratchOpts)) return false;
-  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
-  if (!fromEnv) return false;
+const swarmProjectMarkers = projectRoot => {
   try {
-    if (fs.realpathSync.native(fromEnv) !== fs.realpathSync.native(root)) return false;
-    if (!fs.existsSync(path.join(root, '.swarm'))) return false;
-    return !fs.existsSync(path.join(root, ORCHESTRATOR_MODE_OFF_FILE));
+    const r = fs.realpathSync.native(projectRoot);
+    return fs.existsSync(path.join(r, '.swarm')) || fs.existsSync(path.join(r, '.git'));
+  } catch { return false; }
+};
+
+const scratchOrchestratorExempt = (root, cwd) => {
+  const scratchOpts = { strict: true, home: os.homedir() };
+  const rootScratch = isScratchRoot(root, scratchOpts);
+  const cwdScratch = isScratchRoot(cwd, scratchOpts);
+  if (!rootScratch && !cwdScratch) return false;
+  if (process.env.SWARM_OMODE_SCRATCH_EXEMPT === '1') return true;
+  if (process.env.NODE_ENV === 'test' || process.env.SWARM_TEST_TMP) return true;
+  return false;
+};
+
+const runIdFromWorkerCwd = (root, cwd) => {
+  try {
+    const rootReal = fs.realpathSync.native(root);
+    const cwdReal = fs.realpathSync.native(cwd);
+    const rel = path.relative(rootReal, cwdReal);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    const norm = rel.split(path.sep).join('/');
+    const m = norm.match(/^\.swarm\/(?:workspaces|worktrees)\/([^/]+)(?:\/|$)/);
+    return m?.[1] ?? null;
+  } catch { return null; }
+};
+
+/** True when `cwd` is a swarm worker workspace backed by run state under `.swarm/runs/<id>/`. */
+export function isVerifiedSwarmWorkerCwd(root, cwd) {
+  const runId = runIdFromWorkerCwd(root, cwd);
+  if (!runId) return false;
+  try {
+    const runDir = path.join(fs.realpathSync.native(root), '.swarm', 'runs', runId);
+    return fs.existsSync(path.join(runDir, 'state.json')) || fs.existsSync(path.join(runDir, 'manifest.json'));
+  } catch { return false; }
+}
+
+const orchestratorWorkerSessionExempt = (root, cwd) => {
+  if (isVerifiedSwarmWorkerCwd(root, cwd)) return true;
+  if (process.env.SWARM_TEST_TMP && isWorkerCwd(cwd)) return true;
+  return false;
+};
+
+/** Orchestrator mode is on by default at a swarm project root (`.swarm/` or `.git/`) unless the owner added `.swarm/orchestrator-mode/off`. Worker sessions (verified workspace cwd) and scratch/test roots (test harness only) are exempt. Session type and project root come from `root`, not from orchestrator `cd` targets. */
+export function orchestratorModeEnabled(root, cwd = root) {
+  if (!root || !swarmProjectMarkers(root)) return false;
+  if (scratchOrchestratorExempt(root, cwd)) return false;
+  if (orchestratorWorkerSessionExempt(root, cwd)) return false;
+  try {
+    return !fs.existsSync(path.join(fs.realpathSync.native(root), ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
 }
 
@@ -1433,7 +1474,66 @@ const omNodeRunsInstallSwarm = args => {
   } catch { return false; }
 };
 
-const omSwarmInvocation = (cmd, args) => cmd === 'swarm' || (cmd === 'node' && omNodeRunsInstallSwarm(args));
+const OM_SWARM_ALLOWED_TOP = new Set([
+  'status', 'brief', 'board', 'watch', 'jobs', 'tickets', 'run', 'integrate', 'merge', 'update', 'note',
+  'version', 'doctor', 'rollup', 'scope', 'msg', 'diagnose', 'go', 'change', 'handbuild', 'ticket', 'ask',
+  'decision', 'handoff', 'lesson', 'backlog', 'time', 'decide',
+]);
+const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
+
+const omSwarmArgsAfterGlobals = args => {
+  let i = 0;
+  while (i < args.length) {
+    const a = String(args[i]).toLowerCase();
+    if (a === '--root') { i += 2; continue; }
+    if (a.startsWith('--root=')) { i += 1; continue; }
+    if (a.startsWith('-')) { i += 1; continue; }
+    break;
+  }
+  return { i, sub: (args[i] ?? '').toLowerCase(), rest: args.slice(i + 1) };
+};
+
+const omSwarmScopeReadOnly = rest => {
+  const lower = rest.map(w => String(w).toLowerCase());
+  if (lower.some(a => a === '--yes' || a.startsWith('--yes='))) return false;
+  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
+  if (!verb || ['show', 'list', 'status', 'read', 'check', 'help'].includes(verb)) return true;
+  return false;
+};
+
+const omSwarmSubcommandAllowed = args => {
+  const { sub, rest } = omSwarmArgsAfterGlobals(args);
+  if (!sub || OM_SWARM_DENIED_TOP.has(sub)) return false;
+  if (!OM_SWARM_ALLOWED_TOP.has(sub)) return false;
+  if (sub === 'handbuild') {
+    const verb = String(rest[0] ?? '').toLowerCase();
+    if (!verb || verb === '--help' || verb.startsWith('-')) return true;
+    if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
+    return SWARM_HANDBUILD_FILE_OPS.has(verb);
+  }
+  if (sub === 'change') {
+    const lower = rest.map(w => String(w).toLowerCase());
+    return !lower.some(a => a === '--yes' || a.startsWith('--yes='));
+  }
+  if (sub === 'scope') return omSwarmScopeReadOnly(rest);
+  if (sub === 'run' || sub === 'integrate' || sub === 'merge' || sub === 'update') return true;
+  if (sub === 'jobs' || sub === 'board' || sub === 'watch' || sub === 'brief' || sub === 'status') return true;
+  if (sub === 'tickets') return true;
+  if (sub === 'msg' || sub === 'note' || sub === 'diagnose' || sub === 'ticket' || sub === 'ask') return true;
+  if (sub === 'version' || sub === 'doctor' || sub === 'rollup' || sub === 'go') return true;
+  if (sub === 'decision' || sub === 'handoff' || sub === 'lesson' || sub === 'backlog' || sub === 'time' || sub === 'decide') return true;
+  return false;
+};
+
+const omSwarmInvocation = (cmd, args) => {
+  if (cmd === 'swarm') return omSwarmSubcommandAllowed(args);
+  if (cmd === 'node' && omNodeRunsInstallSwarm(args)) {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt === -1) return false;
+    return omSwarmSubcommandAllowed(args.slice(scriptAt + 1));
+  }
+  return false;
+};
 
 const omPlainWords = words => {
   const plain = [];

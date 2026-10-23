@@ -1349,6 +1349,29 @@ const ORCHESTRATOR_MODE_PRESERVE_DENY = new Set([
   'handbuild-change-record',
 ]);
 
+const orchestratorModeBlockedOps = command => {
+  for (const op of buildPolicyOps(command)) {
+    if (op.tool === 'git' && (op.sub === 'commit' || op.sub === 'push')) return true;
+    if (op.tool === 'gh' && (op.sub === 'pr create' || op.sub === 'pr merge' || op.ghPrMerge)) return true;
+  }
+  return false;
+};
+
+const orchestratorModeProtectedWriteRel = (rel, root) => {
+  if (rel === null || rel === undefined) return false;
+  let abs;
+  try {
+    abs = fs.realpathSync.native(path.isAbsolute(rel) ? rel : path.join(root, rel));
+  } catch {
+    abs = path.join(root, rel);
+  }
+  const inside = insideProject(root, abs);
+  const norm = String(inside ?? rel).replace(/\\/g, '/').toLowerCase();
+  if (norm === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || norm === OFF_FILE.toLowerCase()) return true;
+  if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
+  return false;
+};
+
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit } = {}) {
   applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
@@ -1358,16 +1381,21 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;
     if (decision.reason === ORCHESTRATOR_COMMAND_TOO_LONG_REASON) return decision;
+    if (decision.reason === GH_PR_MERGE_BLOCKED || decision.reason === MERGE_BLOCKED_REASON) return decision;
+    if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
+    if (orchestratorModeBlockedOps(ti.command)) return omDeny(decision.files ?? []);
     if (decision.allow) {
-      if (decision.approval) return decision;
+      if (decision.approval) {
+        if (decision.files?.length) return decision;
+        if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
+        return omDeny(decision.files ?? []);
+      }
       if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
       return omDeny(decision.files ?? []);
     }
-    if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
     if (decision.reason?.startsWith('Hand-build guard:') && /belongs to the owner|session transcripts|swarm run state|deletes outside|too large|force push to a protected branch/.test(decision.reason)) {
       return decision;
     }
-    if (decision.reason === GH_PR_MERGE_BLOCKED || decision.reason === MERGE_BLOCKED_REASON) return decision;
     if (decision.reason?.includes(DENY_ADVICE)) return decision;
     if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(decision.files ?? []);
     return decision;
@@ -1401,11 +1429,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel === null && typeof raw === 'string' && raw && underAbs(absRaw, protectedAbsolute(h)) && !isClaudeMemoryPathOutside(absRaw, h)) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
     if (rel !== null && isSwarmRunRecord(rel)) return { allow: false, files: [rel], reason: swarmRecordReason(rel) };
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
-    if (omActive && rel !== null) {
-      const rlow = rel.replace(/\\/g, '/');
-      if (rlow === ORCHESTRATOR_MODE_OFF_FILE || rlow === OFF_FILE) {
-        return omDeny([rel]);
-      }
+    if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) {
+      return omDeny([rel]);
     }
     if (rel === null || AllowRel(rel)) return { allow: true };
     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };

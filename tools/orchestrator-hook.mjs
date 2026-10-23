@@ -182,9 +182,12 @@ if (process.argv[2] === RECORD_WORKER) {
   process.exit(0);
 } else {
   let raw = '';
+  const stdinWatch = setTimeout(() => process.exit(0), RECORD_TIMEOUT_MS);
+  stdinWatch.unref();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; });
   process.stdin.on('end', () => {
+    clearTimeout(stdinWatch);
     child_process.spawnSync(process.execPath, [hookScriptPathForSpawn, RECORD_WORKER, kind], {
       input: raw,
       env: { ...process.env },
@@ -195,5 +198,8 @@ if (process.argv[2] === RECORD_WORKER) {
     });
     process.exit(0);
   });
-  process.stdin.on('error', () => process.exit(0));
+  process.stdin.on('error', () => {
+    clearTimeout(stdinWatch);
+    process.exit(0);
+  });
 }
