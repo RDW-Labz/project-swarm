@@ -906,7 +906,8 @@ const readRunState = async (root, runId) => {
 /** Wave summary: only report committed when integrate post-write verification passed. */
 export function scopeWaveDisplayStatus(goResult) {
   if (!goResult) return 'unknown';
-  if (goResult.status === 'committed' && !goResult.integrate?.integrationOutputsVerified) return 'integrated';
+  const unverified = goResult.integrate?.integrateUnverified;
+  if (goResult.status === 'committed' && (unverified?.length || !goResult.integrate?.integrationOutputsVerified)) return 'integrated';
   return goResult.status;
 }
 
@@ -2556,12 +2557,11 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
   const state = await readRunState(root, rest[0]);
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
-    const manifestText = await readText(path.join(root, '.swarm', 'runs', rest[0], 'manifest.json'));
-    if (manifestText) {
-      const { verifyRecordedIntegrationOnTree } = await import('./swarm.mjs');
-      const manifest = JSON.parse(manifestText);
-      const mismatches = await verifyRecordedIntegrationOnTree(root, rest[0], state, manifest, {});
-      if (mismatches.length) return out(`integrate-no-op: ${mismatches[0]} differs from the job output; run swarm integrate ${rest[0]} again`, 1);
+    const integrateUnverified = Array.isArray(state.integrateUnverified) ? state.integrateUnverified : [];
+    const unverifiedByJob = new Map();
+    for (const entry of integrateUnverified) {
+      if (!entry || typeof entry.job !== 'string' || typeof entry.path !== 'string') continue;
+      if (!unverifiedByJob.has(entry.job)) unverifiedByJob.set(entry.job, entry.path);
     }
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));
     const queue = state.mergeQueue;
@@ -2702,6 +2702,14 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      const unverifiedPath = unverifiedByJob.get(t.id);
+      if (unverifiedPath) {
+        const note = `integrate wrote nothing for ${unverifiedPath}: run swarm integrate ${rest[0]} again or fix by hand`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'integrate-unverified', id: t.id, path: unverifiedPath, run: rest[0], by: 'sync' });
+        unverified.push(`${t.id} (${note})`);
+        continue;
+      }
       let syncCheck;
       try {
         syncCheck = await runSyncCheck(t, { exists: syncExists, readFile: syncReadFile });

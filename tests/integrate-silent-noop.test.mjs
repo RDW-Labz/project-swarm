@@ -55,6 +55,7 @@ test('stale workspace matching the tree cannot integrate as a silent no-op', asy
   assert.equal(await fs.readFile(path.join(root, TARGET), 'utf8'), intended);
   const after = await readState(root, run.id);
   assert.ok(after.integrationOutputsVerified);
+  assert.deepEqual(after.integrateUnverified, []);
 });
 
 test('recorded integration without tree bytes is cleared and re-integrated', async t => {
@@ -71,4 +72,21 @@ test('recorded integration without tree bytes is cleared and re-integrated', asy
   const result = await integrateRun(root, run.id, { noChecks: true });
   assert.equal(result.status, 'integrated');
   assert.equal(await fs.readFile(path.join(root, TARGET), 'utf8'), intended);
+});
+
+test('integrateUnverified and a warning when on-disk bytes differ from the job output after integrate', async t => {
+  const root = await fixture(t);
+  const stale = 'assert driver.title == "offline-old"\\n';
+  const run = await runManifest(root, {
+    ...manifest,
+    preChecks: [[process.execPath, '-e', `require('fs').writeFileSync('${TARGET}', ${JSON.stringify(stale)})`]],
+  }, { fetchImpl: async () => workerReply() });
+  assert.equal(run.status, 'complete', run.jobs?.[0]?.error ?? run.error);
+  const result = await integrateRun(root, run.id, { noChecks: true });
+  assert.equal(result.status, 'integrated');
+  assert.deepEqual(result.integrateUnverified, [{ job: job.id, path: TARGET }]);
+  assert.ok((result.warnings ?? []).some(w => w === `integrate-no-op: ${TARGET} differs from the job output (${job.id})`));
+  assert.equal(await fs.readFile(path.join(root, TARGET), 'utf8'), stale);
+  const after = await readState(root, run.id);
+  assert.deepEqual(after.integrateUnverified, result.integrateUnverified);
 });
