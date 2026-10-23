@@ -45,7 +45,7 @@ async function fixture(t, { tickets, approved = true, history = [], journal = []
   await fs.writeFile(path.join(root, '.swarm/project/journal.ndjson'), journal.map(event => JSON.stringify(event)).join('\n') + (journal.length ? '\n' : ''));
   await fs.writeFile(path.join(root, '.swarm/project/tickets.log'), log.map(event => JSON.stringify(event)).join('\n') + (log.length ? '\n' : ''));
   await fs.writeFile(historyFile, history.map(event => JSON.stringify(event)).join('\n') + (history.length ? '\n' : ''));
-  return { root, historyFile, projectId: 'project-fixture' };
+  return { root, historyFile, projectId: 'project-fixture', discoverWorktrees: false };
 }
 
 test('percent, requirements, stages and left buckets exclude cancelled and proposed tickets', async t => {
@@ -147,7 +147,7 @@ test('finished requires covered requirements, e2e green and a current merge', as
 test('missing ledger, scope, journal and history never throws and records notes', async t => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'build-progress-missing-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const p = await buildProgress({ root, projectId: 'missing', now: NOW, historyFile: path.join(root, 'missing-history.ndjson') });
+  const p = await buildProgress({ root, projectId: 'missing', now: NOW, historyFile: path.join(root, 'missing-history.ndjson'), discoverWorktrees: false });
   assert.equal(p.percent.requirements, null);
   assert.equal(p.eta, null);
   assert.equal(p.spend, null);

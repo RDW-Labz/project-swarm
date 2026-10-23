@@ -26,7 +26,10 @@
     "tests/concurrency-guard.test.mjs"
    ],
    "timeoutMs": 2400000,
-   "ignoreTests": [],
+   "ignoreTests": [
+    "tests/board-accuracy-percent.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
    "ignoreTestsReason": "build progress tests in context; full suite before merge"
   }
  ]
