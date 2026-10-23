@@ -166,6 +166,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-23 | - | review-aa9: FAIL. File-edit-only rebuild; scope narrower than brief (docs/state only; md/txt/csv/ndj | claude | opus | pass | 99,890 | $0.86 |
+| 2026-10-23 | - | review-aa10: FAIL. File-tool path is largely hardened (exact entries, per-component lstat, O_NOFOLLO | claude | opus | pass | 55,516 | $0.52 |
 
 ## Daily summary
 
@@ -183,5 +184,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| 2026-10-23 | claude | 1 | 1 | 0 | 99,890 | $0.86 |
-| **total** | all | 162 | 147 | 15 | 14,811,265 | $27.53 (incl. estimates) |
+| 2026-10-23 | claude | 2 | 2 | 0 | 155,406 | $1.38 |
+| **total** | all | 163 | 148 | 15 | 14,866,781 | $28.05 (incl. estimates) |
