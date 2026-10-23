@@ -109,16 +109,18 @@ test('ingest refuses a directory path used as context (lessons/swarm)', async ()
   await assert.rejects(fs.access(path.join(root, '.swarm/project/tickets.json')));
 });
 
-test('ingest refuses a typo and suggests the real tracked file', async () => {
+test('ingest accepts a similar new write path with new file (warning only)', async () => {
   const root = await project(['tools/scope-commands.mjs', 'src/base.mjs']);
   await fakeRun(root, 'r1', [
     okItem({ files: ['tools/scope-comands.mjs'], context: ['tools/scope-commands.mjs'] }),
   ]);
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
-  assert.equal(result.exitCode, 1);
-  assert.match(result.stdout, /tools\/scope-comands\.mjs likely typo/);
-  assert.match(result.stdout, /closest real path: tools\/scope-commands\.mjs/);
-  await assert.rejects(fs.access(path.join(root, '.swarm/project/tickets.json')));
+  assert.equal(result.exitCode, 0, result.stdout);
+  assert.match(result.stdout, /new file \(warning only\)/);
+  assert.match(result.stdout, /similar-new-file/);
+  assert.match(result.stdout, /tools\/scope-comands\.mjs/);
+  assert.match(result.stdout, /tools\/scope-commands\.mjs/);
+  await fs.access(path.join(root, '.swarm/project/tickets.json'));
 });
 
 test('ingest refuses a missing context path', async () => {

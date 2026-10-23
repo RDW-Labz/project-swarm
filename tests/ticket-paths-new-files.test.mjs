@@ -117,17 +117,19 @@ test('ingest accepts a similar new output with a similar-new-file warning', asyn
   ]);
   const result = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
   assert.equal(result.exitCode, 0, result.stdout);
+  assert.match(result.stdout, /new file \(warning only\)/);
   assert.match(result.stdout, /similar-new-file/);
   assert.match(result.stdout, /warm_boi_tiles\.py/);
   assert.match(result.stdout, /warm_ten_mile\.py/);
 });
 
-test('--accept-new-path overrides only the named refused path', async () => {
+test('--accept-new-path overrides only the named refused read path', async () => {
   const root = await project(['src/base.mjs', 'tools/scope-commands.mjs']);
   await fakeRun(root, 'r1', [
     okItem({
-      files: ['tools/scope-comands.mjs', 'tools/scope-commandss.mjs'],
+      files: ['src/base.mjs'],
       context: ['src/base.mjs'],
+      contracts: ['tools/scope-comands.mjs', 'tools/scope-commandss.mjs'],
     }),
   ]);
   const partial = await runScopeCommand(root, 'scope', [

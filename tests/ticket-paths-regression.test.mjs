@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   validateTicketPaths,
   formatTicketPathRefusal,
+  formatTicketPathWarning,
   pathIsDirectory,
   closestRepoPath,
+  isConventionPath,
 } from '../tools/ticket-paths.mjs';
 
 const REPO = [
@@ -31,7 +33,7 @@ test('regression: lessons/swarm is a directory, not a context file', () => {
   assert.match(formatTicketPathRefusal('T-0220', r.errors[0]), /^T-0220: lessons\/swarm is a directory/);
 });
 
-test('regression: scope-comands typo suggests scope-commands.mjs', () => {
+test('regression: scope-comands write path warns similar-new-file instead of refusing', () => {
   const ticket = {
     id: 'T-0036',
     files: ['tools/scope-comands.mjs'],
@@ -41,11 +43,31 @@ test('regression: scope-comands typo suggests scope-commands.mjs', () => {
     deletes: [],
   };
   const r = validateTicketPaths(ticket, { repoFiles: REPO });
+  assert.equal(r.ok, true);
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.warnings.length, 1);
+  assert.equal(r.warnings[0].code, 'similar-new-file');
+  assert.equal(r.warnings[0].suggestion, 'tools/scope-commands.mjs');
+  const line = formatTicketPathWarning('T-0036', r.warnings[0]);
+  assert.match(line, /new file \(warning only\)/);
+  assert.match(line, /tools\/scope-commands\.mjs/);
+});
+
+test('regression: delete-field typo on scope-comands is still refused', () => {
+  const r = validateTicketPaths(
+    {
+      id: 'T-0037',
+      files: [],
+      context: [],
+      contracts: [],
+      tests: [],
+      deletes: ['tools/scope-comands.mjs'],
+    },
+    { repoFiles: REPO },
+  );
   assert.equal(r.ok, false);
+  assert.equal(r.errors[0].reason, 'likely typo');
   assert.equal(r.errors[0].suggestion, 'tools/scope-commands.mjs');
-  const line = formatTicketPathRefusal('T-0036', r.errors[0]);
-  assert.match(line, /tools\/scope-comands\.mjs likely typo/);
-  assert.match(line, /closest real path: tools\/scope-commands\.mjs/);
 });
 
 test('pathIsDirectory matches tracked children without listing the folder itself', () => {
@@ -104,6 +126,38 @@ test('regression: a far miss on context has no closest-path suggestion', () => {
 
 test('regression: closestRepoPath does not suggest package.json for unrelated paths', () => {
   assert.equal(closestRepoPath('docs/x.md', REPO), null);
+});
+
+test('regression: convention write paths never warn even when similar files exist', () => {
+  const repo = [
+    ...REPO,
+    'app/shop/loading.tsx',
+    'app/shop/page.tsx',
+    '.github/workflows/ci.yml',
+  ];
+  const cases = [
+    'app/dashboard/loading.tsx',
+    'app/[shopSlug]/page.tsx',
+    'app/(shop)/loading.tsx',
+    '.github/workflows/deploy.yml',
+  ];
+  for (const file of cases) {
+    assert.equal(isConventionPath(file), true, file);
+    const r = validateTicketPaths(
+      {
+        id: 'T-CONV',
+        files: [file],
+        context: [],
+        contracts: [],
+        tests: [],
+        deletes: [],
+      },
+      { repoFiles: repo },
+    );
+    assert.equal(r.ok, true, file);
+    assert.equal(r.errors.length, 0, file);
+    assert.equal(r.warnings.length, 0, file);
+  }
 });
 
 test('regression: on edits only newly added paths are validated', () => {
