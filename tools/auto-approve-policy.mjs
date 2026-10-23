@@ -434,13 +434,15 @@ export function gitRepoLocalConfigSafe(root, { cwd = root, home = os.homedir() }
   }
 }
 
-function policyGitConfigOriginTrusted(origin, root, home) {
+function policyGitConfigOriginTrusted(origin, root, home, cwd = root) {
   const raw = String(origin ?? '').replace(/^file:/, '');
   if (!raw) return false;
   try {
     const homeReal = fs.realpathSync.native(home);
-    const workReal = fs.realpathSync.native(root);
-    const resolved = fs.realpathSync.native(raw);
+    const workReal = fs.realpathSync.native(cwd ?? root);
+    const resolved = path.isAbsolute(raw)
+      ? fs.realpathSync.native(raw)
+      : fs.realpathSync.native(path.join(workReal, raw));
     if (resolved === path.join(homeReal, '.gitconfig')) return true;
     const xdg = process.env.XDG_CONFIG_HOME || path.join(homeReal, '.config');
     if (resolved === path.join(fs.realpathSync.native(xdg), 'git', 'config')) return true;
@@ -458,12 +460,14 @@ function policyGitConfigOriginTrusted(origin, root, home) {
 export function gitEffectiveConfigSafe(root, { cwd = root, home = os.homedir(), env = process.env } = {}) {
   try {
     const work = cwd ?? root;
-    const runEnv = { ...env, HOME: home, GIT_CONFIG_SYSTEM: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
+    const runEnv = { ...env, HOME: home };
     for (const k of Object.keys(runEnv)) {
       if (k === 'HOME') continue;
       if (k.startsWith('GIT_')) delete runEnv[k];
     }
     runEnv.HOME = home;
+    runEnv.GIT_CONFIG_SYSTEM = os.devNull;
+    runEnv.GIT_CONFIG_NOSYSTEM = '1';
     const raw = execFileSync('git', ['config', '--show-origin', '--list'], {
       cwd: work,
       encoding: 'utf8',
@@ -475,7 +479,7 @@ export function gitEffectiveConfigSafe(root, { cwd = root, home = os.homedir(), 
       const tab = line.indexOf('\t');
       if (tab === -1) return false;
       const origin = line.slice(0, tab);
-      if (!policyGitConfigOriginTrusted(origin, root, home)) continue;
+      if (!policyGitConfigOriginTrusted(origin, root, home, work)) continue;
       const rest = line.slice(tab + 1);
       const eq = rest.indexOf('=');
       const key = eq === -1 ? rest : rest.slice(0, eq);

@@ -58,6 +58,27 @@ import {
 import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
 import { cleanupTestProject } from './_isolate-config.mjs';
 
+/** Drop inherited GIT_* so policy unit tests match a clean owner session (_isolate-config sets benign GIT_CONFIG_GLOBAL). */
+function sanitizeInheritedPolicyGitEnv() {
+  const home = process.env.HOME;
+  const expectedGlobal = path.join(home, '.gitconfig');
+  const harness = new Set(['GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'GIT_ASKPASS']);
+  for (const k of Object.keys(process.env)) {
+    if (!k.startsWith('GIT_')) continue;
+    if (harness.has(k)) continue;
+    if (k === 'GIT_CONFIG_GLOBAL') {
+      const g = process.env.GIT_CONFIG_GLOBAL;
+      if (!g) { delete process.env[k]; continue; }
+      if (path.resolve(g) === path.resolve(expectedGlobal)) continue;
+      try {
+        if (fsSync.realpathSync.native(g) === fsSync.realpathSync.native(expectedGlobal)) continue;
+      } catch { /* non-default */ }
+    }
+    delete process.env[k];
+  }
+}
+sanitizeInheritedPolicyGitEnv();
+
 const exec = promisify(execFile);
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
 const T0 = () => Date.UTC(2026, 9, 22, 12, 0, 0);
