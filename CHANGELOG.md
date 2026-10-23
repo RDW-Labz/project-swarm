@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.7
+
+Approvals no longer idle for hours.
+- **Auto-approve:** owner policy windows can auto-approve file edits under docs/state (exact files, plain text, caps, kill switch, post-write checks); shell commands and git stay owner-only.
+- **Approvals:** a decision or approval waiting over an hour also goes out as a phone notification.
+- **Fields:** the cross-machine field report and the per-machine ticket id blocks.
+
 ## 1.167.6
 
 Held tickets stay out of Needs you, and the first wide wave.
