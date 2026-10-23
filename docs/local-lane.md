@@ -74,9 +74,20 @@ security add-generic-password -s project-swarm -a local.dev2 -w
 
 ```bash
 swarm doctor local
+swarm doctor local --probe-local
+swarm doctor local --probe-local --verify-key
 ```
 
-For each endpoint, the parent runs `GET /v1/models` through `baseUrl` with a **5 s** timeout, and reports model id, latency, slot count, and reachability. It does not hang on a dead tunnel.
+`swarm doctor local` is configuration-only. With **`--probe-local`**, the parent runs unauthenticated `GET /v1/models` through each endpoint’s `baseUrl` with a **5 s** timeout (no API key is sent). It reports model id, latency, slot count, HTTP status, and reachability without hanging on a dead tunnel.
+
+| HTTP response | Reachable | Meaning |
+|---------------|-----------|---------|
+| **2xx** | yes | Server up; models list verified (`status: ok`, `liveVerified: true`). |
+| **401 / 403** | yes | Server up; bearer required (`status: ok-auth-required`, `liveVerified: false`). Routing does **not** pause the endpoint. |
+| **404 / 405** | yes | Server up; no models route (`status: ok-unverified`, `liveVerified: false`). |
+| **5xx**, timeout, connection error | no | Unreachable (`status: unreachable`). |
+
+With **`--verify-key`**, after the unauthenticated probe the parent reads the Keychain (or `linuxEnv`) bearer at call time and sends one authenticated `GET /v1/models` per endpoint (`redirect: error`). A **2xx** sets `liveVerified: true`; **401** is reported as **key rejected** (the secret is never printed). Use this to confirm dev2 over a tunnel when the unauthenticated probe only sees 401.
 
 ## Routing
 
