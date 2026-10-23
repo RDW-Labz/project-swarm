@@ -1,5 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+/** Meta for `swarm scope` subcommands (paired with SCOPE_SUBCOMMANDS in scope-commands.mjs). */
+export const SCOPE_SUBCOMMAND_META = {
+  gate: {
+    what: 'Lists ticket-manager scope gate findings or chains duplicate file owners with dependsOn.',
+    when: 'When scope approve warns about the ticket-manager gate and you need the full finding list.',
+    example: 'swarm scope gate --list',
+    cost: 'local',
+    approval: false,
+  },
+};
+
 export const FORGET_USAGE = `Usage: swarm forget PATH... [--dry-run] [--missing] [--scratch] [--yes]
        --dry-run  List what would be forgotten without changing the registry.
        --missing  Forget every registered project whose folder no longer exists.
@@ -131,6 +142,7 @@ export function contextCommands(snapshot, plan) {
   }
   if (plan && plan.present) {
     out.push({ label: 'List tickets', command: 'swarm tickets' });
+    out.push({ label: 'List scope gate findings', command: 'swarm scope gate --list' });
     if (runId) {
       out.push({ label: 'Sync scope after integration', command: `swarm scope sync ${runId} --integrated` });
     }
