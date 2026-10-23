@@ -231,7 +231,9 @@ test('hand-build approval bypasses orchestrator mode for named writes', async t 
     minutes: 30,
   }, { now: () => T0 });
   decideRequest(root, r.id, 'approve', { now: () => T0 });
-  assert.equal(bash('sed -i "" s/a/b/ src/a.ts', root).allow, true);
+  const d = bash('sed -i "" s/a/b/ src/a.ts', root);
+  assert.equal(d.allow, false);
+  assert.ok(omReason(d));
 });
 
 test('orchestratorModeShellPolicy wrapper', async t => {
@@ -338,7 +340,7 @@ test('orchestrator mode: cannot write orchestrator-mode off via Edit', async t =
   }
 });
 
-test('orchestratorModeEnabled: strict scratch on /test/ root and tests cwd', async t => {
+test('orchestratorModeEnabled: scratch exempt env no longer disables mode', async t => {
   const testTmp = process.env.SWARM_TEST_TMP;
   assert.ok(testTmp, 'SWARM_TEST_TMP');
   const testRoot = path.join(testTmp, 'test', `swarm-om-${Date.now()}`);
@@ -353,10 +355,10 @@ test('orchestratorModeEnabled: strict scratch on /test/ root and tests cwd', asy
   process.env.CLAUDE_PROJECT_DIR = testRoot;
   process.env.SWARM_OMODE_SCRATCH_EXEMPT = '1';
   try {
-    assert.equal(orchestratorModeEnabled(testRoot, testRoot), false);
+    assert.equal(orchestratorModeEnabled(testRoot, testRoot), true);
     const testsCwd = path.join(testRoot, 'tests');
     await fs.mkdir(testsCwd, { recursive: true });
-    assert.equal(orchestratorModeEnabled(testRoot, testsCwd), false);
+    assert.equal(orchestratorModeEnabled(testRoot, testsCwd), true);
   } finally {
     if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;

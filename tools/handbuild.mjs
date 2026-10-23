@@ -1036,6 +1036,9 @@ export function logGuardError(root, { kind, tool, error }, { now = Date.now } = 
 
 const applyGuardTestFault = root => {
   if (!isGuardTestMode(root)) return;
+  try {
+    if (fs.existsSync(path.join(root, OFF_FILE))) return;
+  } catch { /* best effort */ }
   if (process.env.SWARM_GUARD_TEST_FAULT === 'throw') throw new Error('SWARM_GUARD_TEST_THROW');
   if (process.env.SWARM_GUARD_TEST_FAULT === 'spin') {
     for (;;) { /* test-only CPU hang */ }
@@ -1047,13 +1050,12 @@ const applyGuardTestFault = root => {
 export function runGuardDecisionForHook(input, { root, cwd } = {}) {
   const tool = input.tool_name;
   const sessionCwd = cwd ?? input.cwd;
-  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
-  const enforceOrchestratorMode = !(fromEnv && String(fromEnv).trim() && fs.existsSync(fromEnv))
-    && Boolean(orchestratorResolvedRoot(sessionCwd));
+  const projectRoot = root ?? orchestratorResolvedRoot(sessionCwd);
+  const enforceOrchestratorMode = Boolean(projectRoot && orchestratorModeEnabled(projectRoot, sessionCwd));
   const decision = guardDecision({
     tool,
     toolInput: input.tool_input,
-    root,
+    root: projectRoot,
     cwd: sessionCwd,
     enforceOrchestratorMode,
   });
@@ -1378,15 +1380,22 @@ const orchestratorModeBlockedOps = command => {
 
 const orchestratorModeProtectedWriteRel = (rel, root) => {
   if (rel === null || rel === undefined) return false;
-  let abs;
   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
-  try {
-    abs = fs.realpathSync.native(candidate);
-  } catch {
+  const tail = [];
+  let cur = candidate;
+  let abs = candidate;
+  for (let i = 0; i < 64; i += 1) {
     try {
-      abs = fs.realpathSync.native(path.dirname(candidate));
+      abs = path.join(fs.realpathSync.native(cur), ...tail);
+      break;
     } catch {
-      abs = candidate;
+      tail.unshift(path.basename(cur));
+      const up = path.dirname(cur);
+      if (up === cur) {
+        abs = path.resolve(candidate);
+        break;
+      }
+      cur = up;
     }
   }
   const inside = insideProject(root, abs);
@@ -1396,13 +1405,19 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
   return false;
 };
 
-export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = false } = {}) {
+export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
   applyGuardTestFault(root);
   const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
   const h = home ?? os.homedir();
+  const resolvedRoot = root ?? orchestratorResolvedRoot(cwd);
   const fromEnv = process.env.CLAUDE_PROJECT_DIR;
-  const orchestratorSession = Boolean(fromEnv && String(fromEnv).trim() && fs.existsSync(fromEnv));
-  const omActive = orchestratorSession && orchestratorModeEnabled(root, cwd);
+  const orchestratorSession = Boolean(fromEnv && String(fromEnv).trim() && fs.existsSync(String(fromEnv).trim()));
+  const omActive = enforceOrchestratorMode !== undefined
+    ? Boolean(enforceOrchestratorMode)
+    : (orchestratorSession && orchestratorModeEnabled(resolvedRoot, cwd));
+  let handbuildOff = false;
+  try { handbuildOff = fs.existsSync(path.join(resolvedRoot ?? root ?? '', OFF_FILE)); } catch { handbuildOff = false; }
+  if (handbuildOff && !omActive) return { allow: true };
   const omDeny = (files = []) => ({ allow: false, files, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID });
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;
@@ -1411,11 +1426,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
     if (orchestratorModeBlockedOps(ti.command)) return omDeny(decision.files ?? []);
     if (decision.allow) {
-      if (decision.approval) {
-        if (decision.files?.length) return decision;
-        if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
-        return omDeny(decision.files ?? []);
-      }
       if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
       return omDeny(decision.files ?? []);
     }
@@ -1446,6 +1456,13 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     return { ok: true, approval: used?.id };
   };
   if (WRITE_TOOLS.includes(tool)) {
+    if (handbuildOff) {
+      const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
+      const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
+      const rel = insideProject(root, raw);
+      if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) return omDeny([rel]);
+      return { allow: true };
+    }
     const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
     // a relative path means relative to the folder the session is in
     const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
@@ -1469,6 +1486,25 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   }
   if (tool === 'Bash') {
     const finishBash = decision => applyOrchestratorMode(decision);
+    if (handbuildOff) {
+      if (omActive && orchestratorCommandTooLong(ti.command)) {
+        return finishBash({
+          allow: false,
+          files: [],
+          reason: ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
+          ruleId: ORCHESTRATOR_MODE_RULE_ID,
+        });
+      }
+      if (omActive) {
+        const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+        const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
+          .filter(rel => orchestratorModeProtectedWriteRel(rel, root));
+        if (protectedWrites.length) return omDeny(protectedWrites);
+        if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
+        if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(a.writes ?? []);
+      }
+      return { allow: true };
+    }
     if (omActive && orchestratorCommandTooLong(ti.command)) {
       return finishBash({
         allow: false,

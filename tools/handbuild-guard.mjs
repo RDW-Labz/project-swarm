@@ -4,8 +4,8 @@
 // approval, answers with a deny and the reason (what to do instead); otherwise it prints nothing. It is small and fast: it runs before every edit and shell command.
 // If the guard itself crashes or hits its watchdog, it fails closed: deny with GUARD_ERROR_DENY_REASON (never silently allow).
 import * as child_process from 'node:child_process';
-import { projectRootOf, buildEvent, appendEvent } from './orchestrator-events.mjs';
-import { analyzeShell } from './shell-writes.mjs';
+import { projectRootOf, buildEvent, appendEvent, WRITE_TOOLS } from './orchestrator-events.mjs';
+import { analyzeShell, initOrchestratorModeTrustedBins, swarmProjectMarkers } from './shell-writes.mjs';
 import {
   guardDecision,
   logAction,
@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const GUARDED_TOOLS = new Set(['Bash', 'Edit', 'Write', 'NotebookEdit']);
+const GUARDED_TOOLS = new Set([...WRITE_TOOLS, 'Bash']);
 const DECIDE_ARG = '--guard-decide';
 
 const swarmLayoutAt = dir => {
@@ -48,6 +48,8 @@ const guardChildEnv = () => ({ ...process.env });
 const scriptPath = (() => {
   try { return fs.realpathSync.native(fileURLToPath(import.meta.url)); } catch { return fileURLToPath(import.meta.url); }
 })();
+
+initOrchestratorModeTrustedBins();
 
 const writeDeny = reason => {
   const hookOut = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason };
@@ -151,13 +153,17 @@ function runParentGuard(raw, truncated) {
       try {
         input = JSON.parse(raw);
       } catch (e) {
-        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, e);
-        else process.exit(0);
+        const rootGuess = resolveHandbuildProjectRoot(process.cwd());
+        if (raw.trim() && (fromEnv || (rootGuess && swarmProjectMarkers(rootGuess)))) {
+          finishDenyCrash(fromEnv ?? rootGuess, toolForLog, e);
+        } else process.exit(0);
         return;
       }
       if (!input || typeof input !== 'object') {
-        if (fromEnv) finishDenyCrash(fromEnv, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
-        else process.exit(0);
+        const rootGuess = resolveHandbuildProjectRoot(process.cwd());
+        if (raw.trim() && (fromEnv || (rootGuess && swarmProjectMarkers(rootGuess)))) {
+          finishDenyCrash(fromEnv ?? rootGuess, toolForLog, { name: 'TypeError', message: 'hook input is not an object' });
+        } else process.exit(0);
         return;
       }
 
@@ -169,10 +175,6 @@ function runParentGuard(raw, truncated) {
         root = resolveHandbuildProjectRoot(input.cwd);
         rootForLog = root;
         if (!root) {
-          process.exit(0);
-          return;
-        }
-        if (fs.existsSync(path.join(root, OFF_FILE))) {
           process.exit(0);
           return;
         }

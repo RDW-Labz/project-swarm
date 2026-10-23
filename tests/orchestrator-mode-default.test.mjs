@@ -163,20 +163,6 @@ test('worker workspace and scratch tmp cwd are not subject to orchestrator mode'
   });
   assert.equal(dWs.allow, true);
 
-  const testTmp = process.env.SWARM_TEST_TMP;
-  assert.ok(testTmp, 'SWARM_TEST_TMP from isolate config');
-  const scratchCwd = path.join(testTmp, 'tmp', 'orchestrator-worker');
-  await fs.mkdir(scratchCwd, { recursive: true });
-  process.env.SWARM_OMODE_SCRATCH_EXEMPT = '1';
-  assert.equal(orchestratorModeEnabled(root, scratchCwd), false);
-  const dScratch = guardDecision({
-    tool: 'Bash',
-    toolInput: { command: 'node -e 1' },
-    root,
-    cwd: scratchCwd,
-    now: () => T0,
-  });
-  assert.equal(dScratch.allow, true);
   } finally {
     if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
