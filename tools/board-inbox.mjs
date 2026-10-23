@@ -7,7 +7,7 @@ import path from 'node:path';
 import { collectInbox } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
 import { readLedger, isApproved } from './tickets.mjs';
-import { readPhoneConfig, readPhoneState, phoneDir } from './phone.mjs';
+import { readPhoneConfig, readPhoneState, phoneDir, syncPhone } from './phone.mjs';
 import { sanitizeText } from './journal.mjs';
 import { isScratchRoot } from './scratch-roots.mjs';
 import { isProtectedTopic } from './board-action-guard.mjs';
@@ -123,10 +123,17 @@ function phoneRecordScratch(rec, scratchOpts) {
   return isScratchRoot(root, { strict: true, ...scratchOpts });
 }
 
-export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner } = {}) {
+export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner, phoneSyncDeps = null } = {}) {
   const scratchOpts = { env, home: env.HOME ?? home };
   const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
   const config = await readPhoneConfig(phoneDirectory).catch(() => null);
+  if (phoneSyncDeps && config?.enabled) {
+    await syncPhone({
+      dir: phoneDirectory,
+      deps: { ...phoneSyncDeps, now: phoneSyncDeps.now ?? (() => now) },
+      dryRun: Boolean(phoneSyncDeps.dryRun),
+    }).catch(() => {});
+  }
   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
   const asked = new Map();
   for (const rec of Object.values(state.issues)) if (rec && (rec.status === 'open' || rec.status === 'confirming')) asked.set(rec.key, rec);
@@ -168,6 +175,7 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
         mine.push({ kind: 'proposed-ticket', id: txt(t.id, 20), title: txt(t.title, TITLE_MAX), since: t.createdAt ?? ledger.updatedAt ?? null, unblocks: 0, steps: 0, choices: null, origin: txt(t.origin, 20), filesNamed: (t.files ?? []).length > 0, ...stepsOf(nextFor({ kind: 'proposed-ticket', id: t.id, files: (t.files ?? []).length > 0 }, project.root)), fyi: false, phone: phoneOf(phone, now) });
       }
       for (const t of ledger?.tickets ?? []) {
+        if (t.status !== 'blocked') continue;
         if (!ticketReleaseAllowed(t, ledger)) continue;
         if (t.status === 'blocked' && t.blockReason === 'deps') continue;
         if (t.status === 'blocked' && t.blockReason !== 'deps' && !t.holdQuestion) continue;

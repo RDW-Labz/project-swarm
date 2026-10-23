@@ -1,0 +1,63 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "probefix2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Opus review of the local probe change (PASS with two medium findings): (1) tools/local-lane.mjs healthCache.set(item.name, item.reachable) marks an endpoint healthy on 401, 403, 404 or 405, including a 403 or 404 from an unrelated service or proxy on that port, and a 401 after --verify-key already showed the key is wrong. Fix: when keyStatus is rejected set the cache to unhealthy; count only 401 and 403 as 'up, wants a key' (drop 404 and 405 from reachable so an unrelated service is not treated as a model server), and when a keyed verification succeeded (2xx) mark it verified. Also make the router's sensitive-job rule (tools/router.mjs and the executor guard in tools/api-adapters.mjs) depend only on the endpoint's loopback host and never on the health result: add a test that a sensitive job is never routed to a non-loopback endpoint even when health says reachable. (2) verifyLocalEndpointKey must itself refuse before reading the key, returning key-blocked and sending nothing, unless the endpoint baseUrl is https or a loopback http address (127.0.0.1, [::1], localhost); add a test with a non-loopback http endpoint proving the Keychain reader is never called and no request is made. Update docs/local-lane.md. Keep all local lane, tunnel and router tests passing.",
+   "context": [
+    "tools/local-lane.mjs",
+    "tools/api-adapters.mjs",
+    "docs/local-lane.md",
+    "tests/local-lane.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/tunnel.test.mjs",
+    "tests/router.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tools/router.mjs",
+    "tests/local-lane-probe.test.mjs"
+   ],
+   "outputs": [
+    "tools/local-lane.mjs",
+    "docs/local-lane.md",
+    "tests/local-lane-probe.test.mjs",
+    "tools/router.mjs",
+    "tools/api-adapters.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/best-of-adapter.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-n.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-y-adapters.test.mjs",
+    "tests/gpu-lineup.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/multi-edit.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/review-structured-verdict.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ],
+   "ignoreTestsReason": "local lane and router tests in context; full suite before merge"
+  }
+ ]
+}

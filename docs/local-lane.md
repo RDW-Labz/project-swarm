@@ -74,9 +74,22 @@ security add-generic-password -s project-swarm -a local.dev2 -w
 
 ```bash
 swarm doctor local
+swarm doctor local --probe-local
+swarm doctor local --probe-local --verify-key
 ```
 
-For each endpoint, the parent runs `GET /v1/models` through `baseUrl` with a **5 s** timeout, and reports model id, latency, slot count, and reachability. It does not hang on a dead tunnel.
+`swarm doctor local` is configuration-only. With **`--probe-local`**, the parent runs unauthenticated `GET /v1/models` through each endpoint’s `baseUrl` with a **5 s** timeout (no API key is sent). It reports model id, latency, slot count, HTTP status, and reachability without hanging on a dead tunnel.
+
+| HTTP response | Reachable | Meaning |
+|---------------|-----------|---------|
+| **2xx** | yes | Server up; models list verified (`status: ok`, `liveVerified: true`). |
+| **401 / 403** | yes | OpenAI-compatible server up; bearer required (`status: ok-auth-required`, `liveVerified: false`). Routing does **not** pause the endpoint. |
+| **404 / 405** | no | Not treated as a model server (another process or proxy on the port); `status: ok-unverified`, not reachable for routing or health cache. |
+| **5xx**, timeout, connection error | no | Unreachable (`status: unreachable`). |
+
+With **`--verify-key`**, after the unauthenticated probe the parent may read the Keychain (or `linuxEnv`) bearer and send one authenticated `GET /v1/models` per endpoint (`redirect: error`), but **only** when `baseUrl` is **https** or **http** on loopback (`127.0.0.1`, `[::1]`, `localhost`). Plain **http** to any other host is **key-blocked**: no credential read and no request. A **2xx** sets `liveVerified: true` and marks the endpoint healthy; **401** is **key rejected** and marks the endpoint **unhealthy** in the router health cache (the secret is never printed). Use this to confirm dev2 over a tunnel when the unauthenticated probe only sees 401.
+
+**Sensitive jobs** (`sensitive` not `false`) are routed and executed only against **loopback** `baseUrl` values, regardless of probe reachability or endpoint health. Non-loopback HTTPS endpoints remain available for jobs explicitly marked `sensitive: false`.
 
 ## Routing
 

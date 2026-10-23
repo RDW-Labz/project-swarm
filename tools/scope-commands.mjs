@@ -49,7 +49,14 @@ import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
-import { allowedPathsForAcceptance, filterProvableAcceptance, ownersOfPath, pathsInAcceptanceText, provabilityOfAcceptanceLine } from './acceptance-provable.mjs';
+import {
+  allowedPathsForAcceptance,
+  filterProvableAcceptance,
+  ownersOfPath,
+  pathsInAcceptanceText,
+  provabilityOfAcceptanceLine,
+  wireAcceptancePathDependencies,
+} from './acceptance-provable.mjs';
 import { isSensitiveTicket } from './sensitive-ticket.mjs';
 import { syncCheckForTicket } from './ticket-sync-checks.mjs';
 import { runManagersScopeGate } from './manager-commands.mjs';
@@ -58,7 +65,13 @@ import {
   duplicateOwnerDependsOnFixes,
 } from './managers/ticket-manager/scope-integrity.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
-import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, normTicketPath } from './ticket-paths.mjs';
+import {
+  applyTicketPathWiring,
+  validateTicketPaths,
+  formatTicketPathRefusal,
+  formatTicketPathWarning,
+  normTicketPath,
+} from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
 import { parseUncovered } from './uncovered-tests.mjs';
 import { suggestIgnoreTests } from './context-check.mjs';
@@ -124,6 +137,160 @@ function machineSlots(override) {
     configured = config?.machineConcurrency ?? config?.machine?.concurrency ?? config?.lanes?.machineConcurrency;
   } catch { /* an absent or invalid local config uses the safe fallback */ }
   return Number.isInteger(configured) && configured > 0 ? configured : 8;
+}
+
+const TICKET_ID_CEILING = 9000;
+
+function ticketIdNumber(id) {
+  const match = /^T-(\d+)$/.exec(String(id ?? ''));
+  return match ? Number(match[1]) : null;
+}
+
+function formatTicketId(n) {
+  return `T-${String(n).padStart(4, '0')}`;
+}
+
+export function parseTicketIdBlock(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const start = Number(raw.start);
+  const end = raw.end === undefined ? TICKET_ID_CEILING - 1 : Number(raw.end);
+  if (!Number.isInteger(start) || start < 1 || start >= TICKET_ID_CEILING) return null;
+  if (!Number.isInteger(end) || end < start || end >= TICKET_ID_CEILING) return null;
+  return { start, end };
+}
+
+function readLocalConfigForIngest() {
+  try {
+    return loadLocalConfig();
+  } catch (error) {
+    throw fail('ticket-id-block', `cannot read local config: ${error.message}`);
+  }
+}
+
+function ticketIdBlockFromConfig(config) {
+  const top = config?.ticketIdBlock;
+  const machine = config?.machine?.ticketIdBlock;
+  // Top-level ticketIdBlock wins; machine.ticketIdBlock applies only when the top-level key is absent.
+  const raw = top !== undefined && top !== null ? top : machine;
+  if (raw === undefined || raw === null) return null;
+  const block = parseTicketIdBlock(raw);
+  if (!block) {
+    throw fail(
+      'ticket-id-block',
+      'invalid ticketIdBlock in local config: start must be an integer from 1 through 8999 and end must be an integer from start through 8998',
+    );
+  }
+  return block;
+}
+
+function peerTicketsLedgerRawFromConfig(config) {
+  if (config?.peerTicketsLedger !== undefined && config?.peerTicketsLedger !== null) {
+    return { raw: config.peerTicketsLedger, label: 'peerTicketsLedger' };
+  }
+  if (config?.peerLedger !== undefined && config?.peerLedger !== null) {
+    return { raw: config.peerLedger, label: 'peerLedger' };
+  }
+  if (config?.machine?.peerTicketsLedger !== undefined && config?.machine?.peerTicketsLedger !== null) {
+    return { raw: config.machine.peerTicketsLedger, label: 'machine.peerTicketsLedger' };
+  }
+  return null;
+}
+
+function resolvePeerTicketsLedgerPath(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw fail('ticket-id-collision', 'invalid peer tickets ledger in local config: must be a non-empty path to an existing file');
+  }
+  let resolved = path.resolve(raw.trim());
+  try {
+    resolved = realpathSync(resolved);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot access peer tickets ledger: ${error.message}`);
+  }
+  const st = lstatSync(resolved);
+  if (!st.isFile()) {
+    throw fail('ticket-id-collision', 'peer tickets ledger path is not a regular file');
+  }
+  return resolved;
+}
+
+function peerTicketsLedgerPathFromConfig(config) {
+  const entry = peerTicketsLedgerRawFromConfig(config);
+  if (!entry) return null;
+  try {
+    return resolvePeerTicketsLedgerPath(entry.raw);
+  } catch (error) {
+    if (error.code === 'ticket-id-collision') throw error;
+    throw fail('ticket-id-collision', `invalid ${entry.label} in local config: ${error.message}`);
+  }
+}
+
+function idNumberInBlock(n, block) {
+  return n >= block.start && n <= block.end;
+}
+
+function ticketIdBlockLabel(block) {
+  return `${formatTicketId(block.start)} through ${formatTicketId(block.end)}`;
+}
+
+export function resolveIngestStartAt(existing, block) {
+  if (!block) {
+    return existing
+      ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1
+      : 1;
+  }
+  const nums = (existing?.tickets ?? [])
+    .map(t => ticketIdNumber(t.id))
+    .filter(n => n !== null && n < TICKET_ID_CEILING && idNumberInBlock(n, block));
+  const next = nums.length ? Math.max(...nums) + 1 : block.start;
+  return Math.max(next, block.start);
+}
+
+function countIngestItems(lists) {
+  return (lists ?? []).reduce((sum, entry) => sum + (entry.items?.length ?? 0), 0);
+}
+
+export function validateIngestTicketIds({ startAt, itemCount, block, peerIds, peerPath }) {
+  if (!itemCount) return null;
+  const last = startAt + itemCount - 1;
+  if (last >= TICKET_ID_CEILING) {
+    return 'too many tickets: ids T-9000 and up are reserved for day 0 tickets';
+  }
+  if (block && (startAt < block.start || last > block.end)) {
+    const attempted = itemCount === 1
+      ? formatTicketId(startAt)
+      : `${formatTicketId(startAt)} through ${formatTicketId(last)}`;
+    return `ticket-id-block: cannot mint ${attempted}; this machine is configured for ticket ids ${ticketIdBlockLabel(block)}`;
+  }
+  if (peerIds) {
+    for (let n = startAt; n <= last; n += 1) {
+      const id = formatTicketId(n);
+      if (peerIds.has(id)) {
+        return `ticket-id-collision: ${id} already exists in peer tickets ledger`;
+      }
+    }
+  }
+  return null;
+}
+
+async function loadPeerTicketIds(validatedPeerPath) {
+  let text;
+  try {
+    text = await fs.readFile(validatedPeerPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fail('ticket-id-collision', 'peer tickets ledger file not found');
+    throw fail('ticket-id-collision', `cannot read peer tickets ledger: ${error.message}`);
+  }
+  let ledger;
+  try {
+    ledger = JSON.parse(text);
+  } catch (error) {
+    throw fail('ticket-id-collision', `peer tickets ledger is not valid JSON: ${error.message}`);
+  }
+  if (!Array.isArray(ledger?.tickets)) {
+    throw fail('ticket-id-collision', 'peer tickets ledger must contain a tickets array');
+  }
+  return new Set(ledger.tickets.map(t => t.id).filter(id => /^T-\d+$/.test(id)));
 }
 
 function longestWaveChain(tickets) {
@@ -263,11 +430,12 @@ function ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths = new Set
   const usedAcceptPaths = new Set();
   const allowedContext = contextReachableOutputs(tickets);
   for (const t of tickets) {
-    const check = validateTicketPaths(t, { repoFiles, root });
-    for (const warn of check.warnings ?? []) {
-      warnings.push(formatTicketPathWarning(t.id, warn));
+    const wired = applyTicketPathWiring(t, tickets, { repoFiles, root });
+    for (const note of wired.notes ?? []) warnings.push(note);
+    for (const warn of wired.warnings ?? []) {
+      warnings.push(typeof warn === 'string' ? warn : formatTicketPathWarning(t.id, warn));
     }
-    for (const err of check.errors) {
+    for (const err of wired.errors) {
       if (err.field === 'context' && allowedContext.has(`${t.id}\0${err.path}`)) continue;
       const norm = normTicketPath(err.path);
       if (acceptNewPaths.has(norm)) {
@@ -903,6 +1071,14 @@ const readRunState = async (root, runId) => {
   return state;
 };
 
+/** Wave summary: only report committed when integrate post-write verification passed. */
+export function scopeWaveDisplayStatus(goResult) {
+  if (!goResult) return 'unknown';
+  const unverified = goResult.integrate?.integrateUnverified;
+  if (goResult.status === 'committed' && (unverified?.length || !goResult.integrate?.integrationOutputsVerified)) return 'integrated';
+  return goResult.status;
+}
+
 function splitPrompt(scope, stage, only, layout = '', wire = null, existing = null) {
   const reqs = scope.requirements.filter(r => r.stage === stage.id && (!only || only.has(r.id)));
   const lines = [
@@ -1261,7 +1437,18 @@ function evaluateSplitIngest({
   machineConcurrency,
   ticketPatches,
   guardNotes,
+  ticketIdBlock,
+  peerTicketIds,
+  peerTicketsLedgerPath,
 }) {
+  const idFatal = validateIngestTicketIds({
+    startAt,
+    itemCount: countIngestItems(lists),
+    block: ticketIdBlock,
+    peerIds: peerTicketIds,
+    peerPath: peerTicketsLedgerPath,
+  });
+  if (idFatal) return { fatal: idFatal };
   const built = ticketsFromStageLists(lists, scope, { startAt, packageManager, ledger: existing, rootFiles: [...rootFiles] });
   let tickets = built.tickets.map(ticket => {
     const patch = ticketPatches.get(ticket.id);
@@ -1272,7 +1459,7 @@ function evaluateSplitIngest({
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
   tickets = applySplitIngestGuards(tickets, existing?.tickets ?? [], { profile, repoFiles, notes: built.notes, rejected, guardNotes });
-  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], tickets, built.copiedAcceptanceIds);
+  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], tickets, built.copiedAcceptanceIds, repoFiles);
   built.notes.push(...acceptanceCheck.notes);
 
   if (flags.wire && tickets.some(t => t.integration !== true)) {
@@ -1539,7 +1726,7 @@ async function defaultRunSplit(root, manifest) {
   return run;
 }
 
-function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds) {
+function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds, repoFiles = []) {
   const allTickets = [...existingTickets, ...builtTickets].filter(ticket => ticket?.status !== 'cancelled');
   const env = contextEnvFor(root, profile);
   const integrationByRequirement = new Set(
@@ -1548,6 +1735,7 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
   const reqLookup = new Map((scope.requirements ?? []).map(requirement => [requirement.id, requirement]));
   const refusals = [];
   const notes = [];
+  const acceptWarnings = [];
 
   for (const ticket of builtTickets) {
     const copied = copiedAcceptanceIds.has(ticket.id);
@@ -1573,7 +1761,8 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
       allTickets,
       requirements,
     });
-    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets });
+    wireAcceptancePathDependencies(ticket, allTickets, repoFiles, { notes, warnings: acceptWarnings });
+    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets, repoFiles });
     for (const dropped of filtered.dropped) {
       const offending = pathsInAcceptanceText(dropped.line).find(ref => !provabilityOfAcceptanceLine({ line: ref, ticket, allowed, allTickets }).provable);
       const named = offending ?? pathsInAcceptanceText(dropped.line)[0] ?? 'unknown path';
@@ -1581,6 +1770,7 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
       refusals.push(`${ticket.id}: acceptance line ${dropped.n} names ${named}, owned by ${owners.join(', ') || 'nobody'}`);
     }
   }
+  notes.push(...acceptWarnings.map((line) => `warning: ${line}`));
   return { refusals, notes };
 }
 
@@ -1720,7 +1910,11 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
   const rootFileNotes = [];
   const rootFiles = await rootFilesForProject(root, { scope, scopeText: text, notes: rootFileNotes });
   const profile = await readProfile(root);
-  const startAt = existing ? Math.max(0, ...existing.tickets.filter(t => t.id < 'T-9000').map(t => Number(t.id.slice(2)))) + 1 : 1;
+  const ingestConfig = readLocalConfigForIngest();
+  const ticketIdBlock = ticketIdBlockFromConfig(ingestConfig);
+  const peerTicketsLedgerPath = peerTicketsLedgerPathFromConfig(ingestConfig);
+  const peerTicketIds = peerTicketsLedgerPath ? await loadPeerTicketIds(peerTicketsLedgerPath) : null;
+  const startAt = resolveIngestStartAt(existing, ticketIdBlock);
   const repoFiles = await listTrackedRepoFiles(root);
   const acceptNewPaths = new Set(parseAcceptNewPaths(flags['accept-new-path']));
   const maxRepairs = parseMaxRepairs(flags);
@@ -1756,9 +1950,12 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
       machineConcurrency: deps.machineConcurrency,
       ticketPatches,
       guardNotes: ingestGuardNotes,
+      ticketIdBlock,
+      peerTicketIds,
+      peerTicketsLedgerPath,
     });
     if (evaluated.fatal) return { tickets: [], issues: [{ code: 'fatal', reason: evaluated.fatal }], fatal: evaluated.fatal };
-    const ticketCount = evaluated.built.tickets.length + evaluated.built.rejected.length;
+    const ticketCount = countIngestItems(workingLists);
     if (startAt + ticketCount > 9000) {
       return { tickets: [], issues: [{ code: 'fatal', reason: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' }], fatal: 'too many tickets: ids T-9000 and up are reserved for day 0 tickets' };
     }
@@ -1884,7 +2081,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     : [];
 
   const fatal = validate().fatal;
-  if (fatal && fatal.startsWith('split refused: --wire')) return out(fatal, 1);
+  if (fatal) return out(fatal, 1);
 
   if (!loopResult.tickets.length) {
     return out([
@@ -2549,6 +2746,12 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
   const state = await readRunState(root, rest[0]);
   if (flags.integrated === true) {
     if (!state.integratedAt) return out(`run ${rest[0]} is not integrated yet; run swarm integrate ${rest[0]} first`, 1);
+    const integrateUnverified = Array.isArray(state.integrateUnverified) ? state.integrateUnverified : [];
+    const unverifiedByJob = new Map();
+    for (const entry of integrateUnverified) {
+      if (!entry || typeof entry.job !== 'string' || typeof entry.path !== 'string') continue;
+      if (!unverifiedByJob.has(entry.job)) unverifiedByJob.set(entry.job, entry.path);
+    }
     const finished = new Set((state.jobs ?? []).filter(j => j.status === 'complete').map(j => j.id));
     const queue = state.mergeQueue;
     const integrated = queue ? new Set((queue.integrated ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.job))) : null;
@@ -2688,6 +2891,14 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (integrated && !integrated.has(t.id)) { notIntegrated.push(t.id); continue; }
+      const unverifiedPath = unverifiedByJob.get(t.id);
+      if (unverifiedPath) {
+        const note = `integrate wrote nothing for ${unverifiedPath}: run swarm integrate ${rest[0]} again or fix by hand`;
+        await setTicketField(root, t.id, 'retryNote', note.slice(0, 600));
+        await appendLog(root, { event: 'integrate-unverified', id: t.id, path: unverifiedPath, run: rest[0], by: 'sync' });
+        unverified.push(`${t.id} (${note})`);
+        continue;
+      }
       let syncCheck;
       try {
         syncCheck = await runSyncCheck(t, { exists: syncExists, readFile: syncReadFile });
@@ -3052,8 +3263,10 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const v = validateTicket(next);
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
       const repoFiles = await listTrackedRepoFiles(root);
-      const pathCheck = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket });
-      if (!pathCheck.ok) return out(`refused:\n${pathCheck.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
+      const pathPreview = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket, allTickets: fresh.tickets });
+      if (!pathPreview.ok) {
+        return out(`refused:\n${pathPreview.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
+      }
       const problems = [];
       const moved = [];
       const sources = [];
@@ -3095,6 +3308,11 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
       const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer ${moved.every(f => sources.some(x => (x.files ?? []).includes(f))) ? 'writes' : 'owns'} ${moved.length > 1 ? 'them' : 'it'}${sources.some(x => x.status === 'done') ? `; ${sources.filter(x => x.status === 'done').map(x => x.id).join(', ')} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
       if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
+      const pathWiring = applyTicketPathWiring(next, fresh.tickets, { repoFiles, root, priorTicket: ticket });
+      const pathNoteText = [
+        ...(pathWiring.notes ?? []),
+        ...(pathWiring.warnings ?? []).map((warn) => (typeof warn === 'string' ? warn : formatTicketPathWarning(ticket.id, warn))),
+      ];
       const wasApproved = isApproved(fresh);
       fresh.tickets = fresh.tickets.map(x => {
         if (x.id === ticket.id) return next;
@@ -3108,7 +3326,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
       if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
-      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${pathNoteText.length ? `\n${pathNoteText.map(note => `note: ${note}`).join('\n')}` : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
@@ -3504,6 +3722,7 @@ export async function runScopeCommand(root, command, args, deps = {}) {
     return bad(verb ? `unknown scope command: ${verb}` : 'scope needs a command');
   } catch (error) {
     if (error.code && /^(scope|ticket|ledger|approval)/.test(error.code)) return out(`${error.code}: ${error.message}`, 1);
+    if (error.code === 'ticket-id-collision' || error.code === 'ticket-id-block') return out(error.message, 1);
     throw error;
   }
 }

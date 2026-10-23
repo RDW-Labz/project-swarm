@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.167.8
+
+The local lane takes work, and tickets no longer park on files they create.
+- **Local lane:** a key-less probe that gets 401 or 403 means the endpoint is up and wants a key, so dev2 over a tunnel is routed instead of being marked unreachable; swarm doctor local --probe-local --verify-key checks the Keychain key without printing it.
+- **Splitter:** a path a ticket owns (files, tests of any ticket type, contracts it writes, new sources) is never reported as missing; a read owned by another ticket adds the dependency instead of parking; acceptance globs and foreign files add dependencies.
+
+## 1.167.7
+
+Approvals no longer idle for hours.
+- **Auto-approve:** owner policy windows can auto-approve file edits under docs/state (exact files, plain text, caps, kill switch, post-write checks); shell commands and git stay owner-only.
+- **Approvals:** a decision or approval waiting over an hour also goes out as a phone notification.
+- **Fields:** the cross-machine field report and the per-machine ticket id blocks.
+
+## 1.167.6
+
+Held tickets stay out of Needs you, and the first wide wave.
+- **Board:** tickets in review or todo status no longer leak into Needs you.
+- **Local lane:** swarm tunnel add, status and remove manage an auto-reconnecting launchd SSH tunnel; a down tunnel pauses the endpoint.
+- **Scope:** swarm scope gate --list and --fix-owners show and resolve the ticket-manager findings.
+- **Runner:** cacheContext is never empty or stale; scratch cleanup cannot fail a finished job; the pre-push guard checks the pushed range; integrate flags outputs it did not write; ticket ids come in per-machine blocks (T-0179); decisions waiting over an hour also go out as a phone notification.
+
 ## 1.167.5
 
 Wide waves now start for tickets that list their own tests.

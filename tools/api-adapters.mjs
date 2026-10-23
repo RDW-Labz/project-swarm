@@ -573,8 +573,10 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     // Last line of defence behind the router and validation: a rented server never sees a job that is not explicitly sensitive: false.
     if (job.agent === 'rented' && job.sensitive !== false) fail('sensitive-provider: the rented lane only runs jobs marked sensitive: false');
     if (job.agent === 'local' && job.sensitive !== false) {
-      const endpointUrl = config.endpoints?.find(ep => ep.name === config.endpointName)?.baseUrl ?? config.endpoint;
-      if (!isLoopbackLocalBaseUrl(endpointUrl)) fail('sensitive-provider: the local lane only runs sensitive jobs against loopback endpoints');
+      const resolved = config.endpoints?.find(ep => ep.name === config.endpointName);
+      if (!resolved || !isLoopbackLocalBaseUrl(resolved.baseUrl)) {
+        fail('sensitive-provider: the local lane only runs sensitive jobs against loopback endpoints');
+      }
     }
     if (!config.configured) {
       // Field lesson #222: named before anything is sent — the env var this agent reads, plus

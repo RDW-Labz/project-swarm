@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardInbox, inboxText } from '../tools/board-inbox.mjs';
-import { writePhoneConfig } from '../tools/phone.mjs';
+import { writePhoneConfig, syncPhone, readPhoneState, waitingLongEnoughForPhoneNotify, PHONE_NOTIFY_WAIT_MS } from '../tools/phone.mjs';
 import { projectId } from '../tools/projects.mjs';
 import { appendEvent } from '../tools/journal.mjs';
 import { createLedger, writeLedger } from '../tools/tickets.mjs';
@@ -81,6 +81,59 @@ test('the panel lists what waits in each project: decisions, human tasks, blocke
   assert.equal(by('b-1').command, `swarm --root ${w.B.root} resolve b-1`, 'a blocker can always be dismissed');
   assert.match(by('b-1').next, /Read the message, fix the cause, then dismiss it/);
   assert.equal(inbox.items[0].id, 'h-dns', 'the item that unblocks the most comes first within a project');
+});
+
+test('T-0182: a decision waiting less than an hour does not open a phone issue; one waiting longer does; an open issue is not duplicated', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  const phoneDirectory = path.join(home, 'phone');
+  await writePhoneConfig(phoneDirectory, { repo: 'o/r', owner: 'me', owners: ['me'], enabled: true });
+  await fs.writeFile(path.join(phoneDirectory, 'state.json'), JSON.stringify({ repo: 'o/r', issues: {} }));
+  const youngSince = new Date(NOW - 30 * 60 * 1000).toISOString();
+  const oldSince = new Date(NOW - PHONE_NOTIFY_WAIT_MS - 5 * 60 * 1000).toISOString();
+  assert.equal(waitingLongEnoughForPhoneNotify({ since: youngSince }, NOW), false);
+  assert.equal(waitingLongEnoughForPhoneNotify({ since: oldSince }, NOW), true);
+  const decisionItem = (id, since) => ({
+    key: `${A.root}|decision|${id}`,
+    root: A.root,
+    projectName: 'a',
+    kind: 'decision',
+    itemId: id,
+    title: 'Pick one',
+    options: ['yes', 'no'],
+    default: 'yes',
+    secondStep: false,
+    since,
+  });
+  const gh = (() => {
+    let nextNumber = 1;
+    return async (args, { input } = {}) => {
+      const [cmd, ...rest] = args;
+      if (cmd === 'api' && rest[0] === '-X' && rest[1] === 'POST' && /\/issues$/.test(rest[2])) {
+        const number = nextNumber++;
+        return JSON.stringify({ number });
+      }
+      if (cmd === 'api' && /\/issues\/\d+\/comments/.test(rest[0])) return '[]';
+      return null;
+    };
+  })();
+  const deps = {
+    gh,
+    items: async () => [decisionItem('young', youngSince), decisionItem('old', oldSince)],
+    now: () => NOW,
+    runSwarm: async () => ({ ok: true, text: '' }),
+    decideInbox: async () => ({ ok: true, text: '' }),
+  };
+  const first = await syncPhone({ dir: phoneDirectory, deps });
+  assert.equal(first.ok, true);
+  const state = await readPhoneState(phoneDirectory, 'o/r');
+  const byId = Object.fromEntries(Object.values(state.issues).map(r => [r.itemId, r]));
+  assert.equal(byId.young, undefined, 'young item stays off the phone');
+  assert.equal(byId.old?.status, 'open');
+  assert.equal(first.created.length, 2, 'stale decision plus panic button');
+  const second = await syncPhone({ dir: phoneDirectory, deps });
+  assert.equal(second.created.length, 0, 'repeat sync does not duplicate');
+  assert.equal(Object.values(state.issues).filter(r => r.key === `${A.root}|decision|old`).length, 1);
 });
 
 test('phone: an item that was also asked on the phone says so, with its state and expiry; the panic button is not an item; the phone summary counts open and confirming questions', async t => {
@@ -306,6 +359,26 @@ test('held tickets: a manual block without a hold question stays off Needs you; 
   assert.deepEqual(held.map(i => i.id), ['T-0201']);
   assert.equal(held[0].text, question);
   assert.equal(held[0].command, `swarm --root ${A.root} tickets T-0201 --release`);
+});
+
+test('held tickets: review and todo are not held-ticket Needs-you items (only blocked tickets are)', async t => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  await writeLedger(A.root, createLedger({
+    scope,
+    tickets: [
+      tk('T-0300', 'review'),
+      tk('T-0301', 'todo'),
+      tk('T-0302', 'blocked', { blockReason: 'manual', holdQuestion: 'Release when ready?' }),
+    ],
+  }));
+  const inbox = await boardInbox({ projects: [A], now: NOW, collect: async () => [], ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null), phoneDirectory: path.join(home, 'none') });
+  const held = inbox.items.filter(i => i.kind === 'held-ticket');
+  assert.deepEqual(held.map(i => i.id), ['T-0302']);
+  assert.equal(inbox.items.some(i => i.id === 'T-0300'), false);
+  assert.equal(inbox.items.some(i => i.id === 'T-0301'), false);
 });
 
 test('feedback 5: test and temp projects are left out by default (lanes, totals, inbox, history) with a switch to show them, and a count of what is hidden', async t => {

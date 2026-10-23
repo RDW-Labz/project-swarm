@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "probefix",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Bug: the local lane health probe (tools/local-lane.mjs around lines 205-230) sends GET /v1/models WITHOUT the key by design and treats only response.ok as reachable, so a perfectly healthy endpoint that requires a bearer token answers 401 and the lane is reported unreachable: swarm doctor local --probe-local says unreachable with httpStatus 401, and the health tracker pauses the endpoint, so the router never sends any job to the local lane (the owner's dev2 over a tunnel is up and answers 401 without a key, 200 with the Keychain key). Fix: a response of 401 or 403 means the server is up and wants authentication: report status 'ok-auth-required' (reachable true, liveVerified false, httpStatus kept) and do not pause the endpoint; 2xx stays 'ok' (reachable true); 404/405 also count as reachable but unverified (some servers have no /v1/models); 5xx, timeouts and connection errors stay unreachable. Never send the key in the probe. Add an optional keyed verification used only by 'swarm doctor local --probe-local --verify-key' that reads the Keychain key at call time with the existing helper, sends it to the configured baseUrl only with redirect error, and reports liveVerified true on 2xx and a clear 'key rejected' on 401 without printing the key. Tests in tests/local-lane-probe.test.mjs with a fake fetch for 200, 401, 403, 404, 500, timeout and the keyed verify. Update docs/local-lane.md (Doctor section). Keep tests/local-lane.test.mjs, tests/local-lane-review.test.mjs, tests/tunnel.test.mjs and tests/router.test.mjs passing.",
+   "context": [
+    "tools/local-lane.mjs",
+    "tools/api-adapters.mjs",
+    "docs/local-lane.md",
+    "tests/local-lane.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/tunnel.test.mjs",
+    "tests/router.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/local-lane.mjs",
+    "docs/local-lane.md",
+    "tests/local-lane-probe.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/kickoff.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "ignoreTestsReason": "local lane and router tests in context; full suite before merge"
+  }
+ ]
+}

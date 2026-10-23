@@ -222,9 +222,24 @@ function isFastForward(root, remoteSha, localSha) {
   }
 }
 
-function diffFilesForPush(root, localSha) {
+function diffFilesForPush(root, localSha, remoteSha) {
   try {
-    return execFileSync('git', ['diff', '--name-only', `origin/main...${localSha}`], { cwd: root, encoding: 'utf8', timeout: 15_000 })
+    const local = String(localSha ?? '').trim();
+    if (!local) return null;
+    let from;
+    if (isDeleteSha(remoteSha)) {
+      from = execFileSync('git', ['merge-base', 'origin/main', local], { cwd: root, encoding: 'utf8', timeout: 15_000 }).trim();
+    } else {
+      const remote = String(remoteSha ?? '').trim();
+      if (!remote) return null;
+      if (isFastForward(root, remote, local)) {
+        from = remote;
+      } else {
+        from = execFileSync('git', ['merge-base', remote, local], { cwd: root, encoding: 'utf8', timeout: 15_000 }).trim();
+      }
+    }
+    if (!from) return null;
+    return execFileSync('git', ['diff', '--name-only', from, local], { cwd: root, encoding: 'utf8', timeout: 15_000 })
       .split('\n')
       .filter(Boolean);
   } catch {
@@ -284,7 +299,7 @@ export function checkPrePush({ root, env, refs, readBlob, approvals }) {
 
       if (isDeleteSha(localSha)) continue;
 
-      const files = diffFilesForPush(root, localSha);
+      const files = diffFilesForPush(root, localSha, remoteSha);
       if (files === null) {
         return { ok: false, message: 'Hand-build guard: could not list files in this push against origin/main; refusing the push.' };
       }

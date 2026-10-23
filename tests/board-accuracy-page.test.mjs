@@ -435,9 +435,10 @@ async function oracleNeedYou(fixture, now = NOW) {
     }
   }
   for (const t of ledger.tickets ?? []) {
+    if (t.status !== 'blocked') continue;
     if (!(await releaseAllowedFromDisk(t, ledger))) continue;
-    if (t.status === 'blocked' && t.blockReason === 'deps') continue;
-    if (t.status === 'blocked' && t.blockReason !== 'deps' && !t.holdQuestion) continue;
+    if (t.blockReason === 'deps') continue;
+    if (t.blockReason !== 'deps' && !t.holdQuestion) continue;
     items.push({
       id: t.id,
       title: await inboxTitle(t.holdQuestion ?? t.title),

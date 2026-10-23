@@ -197,20 +197,59 @@ export function pathIsDirectory(wanted, repoFiles, root = null) {
   return false;
 }
 
-function isOutputTestPath(ticketPath, ticket) {
+/** Paths this ticket creates (files, tests, and contracts it also lists in files). */
+export function ticketOwnedPaths(ticket) {
   const files = new Set((ticket?.files ?? []).map(normTicketPath));
-  return files.has(normTicketPath(ticketPath));
+  const out = new Set();
+  for (const p of files) out.add(p);
+  for (const p of (ticket?.tests ?? []).map(normTicketPath).filter(Boolean)) out.add(p);
+  for (const p of (ticket?.contracts ?? []).map(normTicketPath).filter(Boolean)) {
+    if (files.has(p)) out.add(p);
+  }
+  return out;
 }
 
 function fieldKind(field, ticketPath, ticket) {
   if (DELETE_FIELDS.includes(field)) return 'delete';
   if (WRITE_FIELDS.includes(field)) return 'write';
-  if (field === 'tests') {
-    if (isOutputTestPath(ticketPath, ticket)) return 'write';
-    if (ticket?.type === 'test') return 'read';
-    return 'write';
+  if (field === 'tests') return 'write';
+  if (field === 'contracts') {
+    const owned = ticketOwnedPaths(ticket);
+    if (owned.has(normTicketPath(ticketPath))) return 'write';
   }
   return 'read';
+}
+
+function transitiveDependencies(ticketId, tickets) {
+  const byId = new Map((tickets ?? []).filter(Boolean).map((t) => [t.id, t]));
+  const out = new Set();
+  const stack = [...(byId.get(ticketId)?.dependsOn ?? [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (!byId.has(id) || out.has(id)) continue;
+    out.add(id);
+    for (const d of byId.get(id)?.dependsOn ?? []) stack.push(d);
+  }
+  return out;
+}
+
+/** True when making `ticketId` depend on `ownerId` would close a cycle. */
+export function addingDepCreatesCycle(ticketId, ownerId, tickets) {
+  if (!ticketId || !ownerId || ticketId === ownerId) return true;
+  return transitiveDependencies(ownerId, tickets).has(ticketId);
+}
+
+/** Ticket ids that own `wanted` among active ledger tickets (files and tests outputs). */
+export function ownersOfTicketPath(wanted, tickets) {
+  const want = normTicketPath(wanted);
+  const owners = new Set();
+  for (const t of tickets ?? []) {
+    if (!t?.id) continue;
+    for (const p of ticketOwnedPaths(t)) {
+      if (p === want) owners.add(t.id);
+    }
+  }
+  return [...owners].sort();
 }
 
 function likelyTypo(wanted, repoFiles) {
@@ -250,10 +289,20 @@ export function formatTicketPathWarning(ticketId, warn) {
  *   priorTicket: on edits, only paths newly added to each list are validated
  * @returns {{ ok: boolean, errors: object[], warnings: object[] }}
  */
-export function validateTicketPaths(ticket, { repoFiles = [], exists, root = null, priorTicket = null } = {}) {
+/**
+ * @param {object} ticket
+ * @param {{ repoFiles?: string[], exists?: (path: string) => boolean, root?: string|null, priorTicket?: object|null, allTickets?: object[] }} options
+ *   allTickets: when set, read paths owned by another ticket become autoDependencies instead of errors
+ * @returns {{ ok: boolean, errors: object[], warnings: object[], autoDependencies?: object[], contextDrops?: object[] }}
+ */
+export function validateTicketPaths(ticket, { repoFiles = [], exists, root = null, priorTicket = null, allTickets = null } = {}) {
   const repoSet = new Set(trackedFiles(repoFiles));
   const errors = [];
   const warnings = [];
+  const autoDependencies = [];
+  const contextDrops = [];
+  const ledger = Array.isArray(allTickets) ? allTickets : [];
+  const selfOwned = ticketOwnedPaths(ticket);
   for (const { field, path: ticketPath } of listTicketPaths(ticket)) {
     if (!shouldValidatePath(field, ticketPath, priorTicket)) continue;
 
@@ -303,6 +352,36 @@ export function validateTicketPaths(ticket, { repoFiles = [], exists, root = nul
     }
 
     if (priorTicket) continue;
+
+    const normPath = normTicketPath(ticketPath);
+    if (selfOwned.has(normPath)) continue;
+
+    const owners = ledger.length ? ownersOfTicketPath(normPath, ledger).filter((id) => id !== ticket.id) : [];
+    if (owners.length && ledger.length) {
+      const ownerId = owners[0];
+      if (addingDepCreatesCycle(ticket.id, ownerId, ledger)) {
+        if (field === 'context') {
+          contextDrops.push({
+            field,
+            path: ticketPath,
+            ownerId,
+            message: `dropped context ${ticketPath}: dependency on ${ownerId} would create a cycle`,
+          });
+        } else {
+          warnings.push({
+            code: 'path-dep-cycle',
+            field,
+            path: ticketPath,
+            ownerId,
+            message: `${field} path ${ticketPath} owned by ${ownerId} but adding that dependency would cycle`,
+          });
+        }
+        continue;
+      }
+      autoDependencies.push({ field, path: ticketPath, ownerId });
+      continue;
+    }
+
     const suggestion = likelyTypo(ticketPath, repoFiles);
     errors.push({
       field,
@@ -314,5 +393,40 @@ export function validateTicketPaths(ticket, { repoFiles = [], exists, root = nul
         : `${field} path not in repo: ${ticketPath}`,
     });
   }
-  return { ok: errors.length === 0, errors, warnings };
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    autoDependencies,
+    contextDrops,
+  };
+}
+
+/**
+ * Apply validateTicketPaths auto-dependencies and context drops to a ticket (mutates ticket).
+ * @returns {{ ok: boolean, errors: object[], warnings: object[], notes: string[] }}
+ */
+export function applyTicketPathWiring(ticket, allTickets, options = {}) {
+  const notes = [];
+  const check = validateTicketPaths(ticket, { ...options, allTickets });
+  const warnings = [...(check.warnings ?? [])];
+  for (const drop of check.contextDrops ?? []) {
+    if (drop.field === 'context') {
+      ticket.context = (ticket.context ?? []).filter((p) => normTicketPath(p) !== normTicketPath(drop.path));
+      warnings.push({
+        code: 'context-dropped',
+        field: 'context',
+        path: drop.path,
+        message: drop.message,
+      });
+    }
+  }
+  for (const { ownerId, path } of check.autoDependencies ?? []) {
+    const deps = new Set(ticket.dependsOn ?? []);
+    if (!deps.has(ownerId)) {
+      ticket.dependsOn = [...deps, ownerId];
+      notes.push(`${ticket.id}: added dependency on ${ownerId} (owns ${path})`);
+    }
+  }
+  return { ok: check.ok, errors: check.errors, warnings, notes };
 }

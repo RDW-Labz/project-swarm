@@ -7,6 +7,7 @@ import {
   LOCAL_MODEL_PREFIX,
   parseLocalModel,
   localEndpointsForJob,
+  isLoopbackLocalBaseUrl,
   createLocalEndpointPauseTracker,
   gateLocalEndpointsBeforeRoute,
   mergeLocalEndpointHealth,
@@ -74,6 +75,8 @@ function needsAnthropicSonnet(job, failures = {}) {
   return (failures.anthropic ?? 0) >= 1;
 }
 
+const localEndpointRoutable = (job, ep) => job?.sensitive === false || isLoopbackLocalBaseUrl(ep.baseUrl);
+
 const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ state: 'ok' }), localEndpoints = null) => {
   if (agent === 'local') {
     const configured = lanes.local?.endpoints ?? [];
@@ -82,10 +85,10 @@ const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ s
       if (!endpoints.length) return null;
       const wanted = parseLocalModel(job.model);
       if (wanted) {
-        const exact = endpoints.find(ep => ep.name === wanted && endpointHealth(ep.name).state !== 'paused');
+        const exact = endpoints.find(ep => ep.name === wanted && localEndpointRoutable(job, ep) && endpointHealth(ep.name).state !== 'paused');
         return exact ? `${LOCAL_MODEL_PREFIX}${exact.name}` : null;
       }
-      const pick = endpoints.find(ep => endpointHealth(ep.name).state !== 'paused');
+      const pick = endpoints.find(ep => localEndpointRoutable(job, ep) && endpointHealth(ep.name).state !== 'paused');
       return pick ? `${LOCAL_MODEL_PREFIX}${pick.name}` : null;
     }
     return typeof lanes.local?.model === 'string' ? lanes.local.model : null;
