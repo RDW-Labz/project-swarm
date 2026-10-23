@@ -49,7 +49,14 @@ import { execFile } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
-import { allowedPathsForAcceptance, filterProvableAcceptance, ownersOfPath, pathsInAcceptanceText, provabilityOfAcceptanceLine } from './acceptance-provable.mjs';
+import {
+  allowedPathsForAcceptance,
+  filterProvableAcceptance,
+  ownersOfPath,
+  pathsInAcceptanceText,
+  provabilityOfAcceptanceLine,
+  wireAcceptancePathDependencies,
+} from './acceptance-provable.mjs';
 import { isSensitiveTicket } from './sensitive-ticket.mjs';
 import { syncCheckForTicket } from './ticket-sync-checks.mjs';
 import { runManagersScopeGate } from './manager-commands.mjs';
@@ -58,7 +65,13 @@ import {
   duplicateOwnerDependsOnFixes,
 } from './managers/ticket-manager/scope-integrity.mjs';
 import { securityReviewReason, securityReviewManifest, parseReviewVerdicts, filesHash, readReviewRecords, writeReviewRecords } from './security-review.mjs';
-import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, normTicketPath } from './ticket-paths.mjs';
+import {
+  applyTicketPathWiring,
+  validateTicketPaths,
+  formatTicketPathRefusal,
+  formatTicketPathWarning,
+  normTicketPath,
+} from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
 import { parseUncovered } from './uncovered-tests.mjs';
 import { suggestIgnoreTests } from './context-check.mjs';
@@ -417,11 +430,12 @@ function ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths = new Set
   const usedAcceptPaths = new Set();
   const allowedContext = contextReachableOutputs(tickets);
   for (const t of tickets) {
-    const check = validateTicketPaths(t, { repoFiles, root });
-    for (const warn of check.warnings ?? []) {
-      warnings.push(formatTicketPathWarning(t.id, warn));
+    const wired = applyTicketPathWiring(t, tickets, { repoFiles, root });
+    for (const note of wired.notes ?? []) warnings.push(note);
+    for (const warn of wired.warnings ?? []) {
+      warnings.push(typeof warn === 'string' ? warn : formatTicketPathWarning(t.id, warn));
     }
-    for (const err of check.errors) {
+    for (const err of wired.errors) {
       if (err.field === 'context' && allowedContext.has(`${t.id}\0${err.path}`)) continue;
       const norm = normTicketPath(err.path);
       if (acceptNewPaths.has(norm)) {
@@ -1445,7 +1459,7 @@ function evaluateSplitIngest({
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
   tickets = applySplitIngestGuards(tickets, existing?.tickets ?? [], { profile, repoFiles, notes: built.notes, rejected, guardNotes });
-  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], tickets, built.copiedAcceptanceIds);
+  const acceptanceCheck = ingestAcceptanceChecks(root, scope, profile, existing?.tickets ?? [], tickets, built.copiedAcceptanceIds, repoFiles);
   built.notes.push(...acceptanceCheck.notes);
 
   if (flags.wire && tickets.some(t => t.integration !== true)) {
@@ -1712,7 +1726,7 @@ async function defaultRunSplit(root, manifest) {
   return run;
 }
 
-function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds) {
+function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTickets, copiedAcceptanceIds, repoFiles = []) {
   const allTickets = [...existingTickets, ...builtTickets].filter(ticket => ticket?.status !== 'cancelled');
   const env = contextEnvFor(root, profile);
   const integrationByRequirement = new Set(
@@ -1721,6 +1735,7 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
   const reqLookup = new Map((scope.requirements ?? []).map(requirement => [requirement.id, requirement]));
   const refusals = [];
   const notes = [];
+  const acceptWarnings = [];
 
   for (const ticket of builtTickets) {
     const copied = copiedAcceptanceIds.has(ticket.id);
@@ -1746,7 +1761,8 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
       allTickets,
       requirements,
     });
-    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets });
+    wireAcceptancePathDependencies(ticket, allTickets, repoFiles, { notes, warnings: acceptWarnings });
+    const filtered = filterProvableAcceptance({ ticket, allowed, allTickets, repoFiles });
     for (const dropped of filtered.dropped) {
       const offending = pathsInAcceptanceText(dropped.line).find(ref => !provabilityOfAcceptanceLine({ line: ref, ticket, allowed, allTickets }).provable);
       const named = offending ?? pathsInAcceptanceText(dropped.line)[0] ?? 'unknown path';
@@ -1754,6 +1770,7 @@ function ingestAcceptanceChecks(root, scope, profile, existingTickets, builtTick
       refusals.push(`${ticket.id}: acceptance line ${dropped.n} names ${named}, owned by ${owners.join(', ') || 'nobody'}`);
     }
   }
+  notes.push(...acceptWarnings.map((line) => `warning: ${line}`));
   return { refusals, notes };
 }
 
@@ -3246,8 +3263,10 @@ async function editTicketFiles(root, ledger, rest, flags) {
       const v = validateTicket(next);
       if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
       const repoFiles = await listTrackedRepoFiles(root);
-      const pathCheck = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket });
-      if (!pathCheck.ok) return out(`refused:\n${pathCheck.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
+      const pathPreview = validateTicketPaths(next, { repoFiles, root, priorTicket: ticket, allTickets: fresh.tickets });
+      if (!pathPreview.ok) {
+        return out(`refused:\n${pathPreview.errors.map(err => `  ${formatTicketPathRefusal(ticket.id, err)}`).join('\n')}`, 1);
+      }
       const problems = [];
       const moved = [];
       const sources = [];
@@ -3289,6 +3308,11 @@ async function editTicketFiles(root, ledger, rest, flags) {
       if (problems.length) return out(`refused:\n${problems.map(x => `  ${x}`).join('\n')}`, 1);
       const summary = [...Object.keys(changes), ...(acceptanceEdit ? ['acceptance'] : [])].map(k => `  ${k}: ${(ticket[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}  ->  ${(next[k] ?? []).join(k === 'acceptance' ? ' | ' : ', ') || 'none'}`).join('\n') + (moved.length ? `\n  moves from ${takeFrom}: ${moved.join(', ')} (${takeFrom} no longer ${moved.every(f => sources.some(x => (x.files ?? []).includes(f))) ? 'writes' : 'owns'} ${moved.length > 1 ? 'them' : 'it'}${sources.some(x => x.status === 'done') ? `; ${sources.filter(x => x.status === 'done').map(x => x.id).join(', ')} is done and its tests are not re-run for ${moved.length > 1 ? 'them' : 'it'}` : ''})` : '');
       if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${isApproved(fresh) ? ' (the approval is renewed over the new lists)' : ''}.`);
+      const pathWiring = applyTicketPathWiring(next, fresh.tickets, { repoFiles, root, priorTicket: ticket });
+      const pathNoteText = [
+        ...(pathWiring.notes ?? []),
+        ...(pathWiring.warnings ?? []).map((warn) => (typeof warn === 'string' ? warn : formatTicketPathWarning(ticket.id, warn))),
+      ];
       const wasApproved = isApproved(fresh);
       fresh.tickets = fresh.tickets.map(x => {
         if (x.id === ticket.id) return next;
@@ -3302,7 +3326,7 @@ async function editTicketFiles(root, ledger, rest, flags) {
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: touched, before: Object.fromEntries(touched.map(k => [k, ticket[k] ?? []])), after: Object.fromEntries(touched.map(k => [k, next[k] ?? []])), reapproved: wasApproved });
       if (moved.length) await appendLog(root, { event: 'file-move', by: 'owner', from: takeFromList.length === 1 ? takeFromList[0] : takeFromList, to: ticket.id, files: moved, fromStatus: sources.length === 1 ? sources[0].status : Object.fromEntries(sources.map(x => [x.id, x.status])), reapproved: wasApproved });
       await refreshPlan(root);
-      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the new lists).' : ''}${pathNoteText.length ? `\n${pathNoteText.map(note => `note: ${note}`).join('\n')}` : ''}${rootFileNotes.length ? `\n${rootFileNotes.map(note => `note: ${note}`).join('\n')}` : ''}`);
     });
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
