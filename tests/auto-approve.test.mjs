@@ -150,6 +150,21 @@ function policyJsonPath() {
   return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
 }
 
+/** Replace file contents on a new inode (Linux often reuses inodes after rm+write). */
+async function replaceFileWithNewInode(filePath, content) {
+  const dir = path.dirname(filePath);
+  const temp = path.join(dir, `.inode-replace-${process.pid}-${Date.now()}`);
+  const beforeInode = fsSync.statSync(filePath).ino;
+  await fs.writeFile(temp, content);
+  await fs.rename(temp, filePath);
+  const afterInode = fsSync.statSync(filePath).ino;
+  assert.notEqual(
+    beforeInode,
+    afterInode,
+    `expected replace via rename to change inode for ${filePath} (before=${beforeInode}, after=${afterInode})`,
+  );
+}
+
 test('exact window entries: folder and extensionless paths rejected', async t => {
   const root = await tempRepo(t);
   assert.equal(isPolicyWindowFileEntry('docs/state/'), false);
@@ -674,9 +689,9 @@ test('post-write verification engages kill switch when inode changes', async t =
   windowRequest(root);
   const allowed = guardWrite(root, PLAN);
   assert.equal(allowed.allow, true);
-  const before = fsSync.readFileSync(path.join(root, PLAN), 'utf8');
-  await fs.rm(path.join(root, PLAN));
-  await fs.writeFile(path.join(root, PLAN), `${before}# replaced\n`);
+  const planPath = path.join(root, PLAN);
+  const before = fsSync.readFileSync(planPath, 'utf8');
+  await replaceFileWithNewInode(planPath, `${before}# replaced\n`);
   const verify = verifyPolicyWriteQueue(root, { now: T0 });
   assert.equal(verify.ok, false);
   assert.ok(fsSync.existsSync(path.join(root, HB_AUTO_OFF)));
