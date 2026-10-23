@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome, criticalPathLength } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import {
   ROOT_RULES,
@@ -554,6 +554,7 @@ function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
         changed = true;
       }
     }
+    normalizeCacheContext(updated);
     return updated;
   });
   return changed ? next : jobs;
@@ -604,6 +605,7 @@ export async function finalizeScopeWaveManifest(manifest, { validate, tickets, w
   const limit = Math.max(50, (manifest.jobs?.length ?? 0) * 4 + 10);
   for (let pass = 0; pass < limit; pass += 1) {
     try {
+      for (const job of manifest.jobs ?? []) normalizeCacheContext(job);
       await validate(manifest);
       return { manifest, parked, unroutable };
     } catch (error) {

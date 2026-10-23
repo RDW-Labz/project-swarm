@@ -10,6 +10,21 @@ import { qualityChecksForJobs } from './quality-checks.mjs';
 import { routingFor } from './escalation.mjs';
 import { API_AGENTS } from './api-adapters.mjs';
 
+/** Keep cacheContext aligned with job.context and the anthropic/auto lane rules. */
+export function normalizeCacheContext(job) {
+  if (!job) return job;
+  if (job.agent !== 'anthropic' && job.agent !== 'auto') {
+    delete job.cacheContext;
+    return job;
+  }
+  const context = new Set(job.context ?? []);
+  if (!job.cacheContext) return job;
+  const kept = [...new Set(job.cacheContext)].filter(p => context.has(p)).sort().slice(0, 10);
+  if (kept.length) job.cacheContext = kept;
+  else delete job.cacheContext;
+  return job;
+}
+
 function isApiTextContext(contextEnv, file) {
   if (typeof contextEnv?.isApiTextFile === 'function') return contextEnv.isApiTextFile(file);
   return contextEnv?.exists?.(file) ?? false;
@@ -37,7 +52,7 @@ function adjustApiLaneContext(job, contextEnv, ticketId, { mockupPaths, mockupRe
     job.prompt += `\nThe file ${p} is on disk at that path for shell workers; it was omitted from API context because it is not UTF-8 text.`;
     warnings.push(`${ticketId}: dropped non-text context ${p} for API lane`);
   }
-  if (job.cacheContext) job.cacheContext = job.cacheContext.filter(p => job.context.includes(p));
+  normalizeCacheContext(job);
 }
 
 // Lockfiles by package manager: a ticket that writes another manager's lockfile is refused.
@@ -306,6 +321,7 @@ export function ticketsToManifest(tickets,opts={}){
       }
     }
     if(contextEnv)adjustApiLaneContext(job,contextEnv,t.id,{mockupPaths,mockupRequired:mockupAdded},warnings,laneModels);
+    normalizeCacheContext(job);
     return job;
   }).filter(Boolean);
   const manifest={version:1,concurrency:maxJobs||64};
