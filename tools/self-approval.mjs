@@ -160,6 +160,7 @@ const SWARM_INLINE = /\b(?:node|python3?)\b[\s\S]*\bswarm\b[\s\S]*\b(?:decide|ha
 const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
 
 const SAFE_SWARM = [
+  /\bswarm\s+handbuild\s+list\b/,
   /\bhandbuild\s+request\b/,
   /\bhandbuild\s+status\b/,
   /\bhandbuild\s+show\b/,

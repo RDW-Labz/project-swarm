@@ -2980,6 +2980,14 @@ async function mainInner() {
     if(out.exitCode)process.exitCode=out.exitCode;
     return;
   }
+  if(args[0]==='handbuild'&&args[1]==='git'){
+    const {runHandbuildGitCli}=await import('./auto-approve-policy.mjs');
+    const res=runHandbuildGitCli(root,args.slice(2),{cwd:process.cwd()});
+    if(res.stderr)process.stderr.write(res.stderr);
+    if(res.stdout)process.stdout.write(res.stdout);
+    if(res.exitCode)process.exitCode=res.exitCode;
+    return;
+  }
   if(args[0]==='handbuild'){
     const {runHandbuildCommand}=await import('./handbuild-commands.mjs');
     const res=await runHandbuildCommand(root,args.slice(1),{installRoot:ownRoot});

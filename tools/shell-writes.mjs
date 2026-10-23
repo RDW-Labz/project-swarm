@@ -804,6 +804,81 @@ export function swarmHandbuildVerbFromPlain(plain) {
   return null;
 }
 
+function handbuildTokenPlain(words) {
+  const plain = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>', '<', '<<<', '<<'].includes(words[i])) {
+      if (words[i] !== '<<') i += 1;
+      continue;
+    }
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
+  }
+  return plain;
+}
+
+/** Git argv after a strict installed `swarm handbuild git` invocation, or null. */
+export function policyHandbuildGitArgsFromCommand(commandText) {
+  const segments = tokenize(String(commandText ?? ''));
+  if (segments.length !== 1) return null;
+  const words = segments[0];
+  if (words.piped) return null;
+  const plain = executablePlainWordsForHandbuild(handbuildTokenPlain(words));
+  const { index, envSplit } = skipToHandbuildProgram(plain);
+  if (envSplit !== undefined) return policyHandbuildGitArgsFromCommand(envSplit);
+  if (index >= plain.length) return null;
+  const rawCmd = plain[index];
+  const cmd = path.basename(rawCmd);
+  const args = plain.slice(index + 1);
+  const handbuildGitFromPos = pos => {
+    if ((pos[0] ?? '').toLowerCase() !== 'handbuild' || (pos[1] ?? '').toLowerCase() !== 'git') return null;
+    return pos.slice(2);
+  };
+  if (cmd === 'swarm') {
+    if (!omSwarmCommandWordOk(rawCmd)) return null;
+    let i = 0;
+    while (i < args.length) {
+      const a = args[i];
+      if (a === '--root') {
+        if (i + 1 >= args.length) return null;
+        i += 2;
+        continue;
+      }
+      if (a.startsWith('--root=')) { i += 1; continue; }
+      if (a.startsWith('-')) return null;
+      break;
+    }
+    return handbuildGitFromPos(args.slice(i));
+  }
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+    if (scriptAt === -1 || scriptAt !== 0) return null;
+    let swarmOk = omNodeRunsInstallSwarm(args);
+    if (!swarmOk) {
+      const script = args[scriptAt];
+      try {
+        const abs = fs.realpathSync.native(path.isAbsolute(script) ? script : path.resolve(script));
+        swarmOk = abs.includes(`${path.sep}tools${path.sep}swarm.mjs`);
+      } catch { swarmOk = false; }
+    }
+    if (!swarmOk) return null;
+    let i = scriptAt + 1;
+    while (i < args.length) {
+      const a = args[i];
+      if (a === '--root') {
+        if (i + 1 >= args.length) return null;
+        i += 2;
+        continue;
+      }
+      if (a.startsWith('--root=')) { i += 1; continue; }
+      if (a.startsWith('-')) return null;
+      break;
+    }
+    return handbuildGitFromPos(args.slice(i));
+  }
+  return null;
+}
+
 export function plainSetsHandbuildSelfApproval(plain) {
   const verb = swarmHandbuildVerbFromPlain(plain);
   if (verb !== null && HANDBUILD_OWNER_VERBS.has(verb)) return true;
@@ -1701,6 +1776,10 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
     const verb = String(rest[0] ?? '').toLowerCase();
     if (!verb || verb === '--help' || verb.startsWith('-')) return true;
     if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
+    if (verb === 'git') {
+      const gitArgs = rest.slice(1);
+      return gitArgs.length > 0 && omGitInvocationAllowed(gitArgs);
+    }
     return SWARM_HANDBUILD_FILE_OPS.has(verb);
   }
   if (sub === 'change') {

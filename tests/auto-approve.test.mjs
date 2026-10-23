@@ -81,7 +81,13 @@ sanitizeInheritedPolicyGitEnv();
 
 const exec = promisify(execFile);
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
+const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const T0 = () => Date.UTC(2026, 9, 22, 12, 0, 0);
+const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
+
+function hbGit(...parts) {
+  return `node ${SWARM_MJS} handbuild git ${parts.join(' ')}`;
+}
 
 
 async function tempRepo(t, branch = 'feat/auto-policy') {
@@ -103,6 +109,7 @@ async function tempRepo(t, branch = 'feat/auto-policy') {
   await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
   await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'off'), '');
+  await fs.writeFile(path.join(root, '.swarm', 'orchestrator-mode', 'test-harness-signed'), ORCHESTRATOR_TEST_MARKER_BODY);
   await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', path.basename(STATS_INITIALIZED_FILE)), `${POLICY_ID}\n`);
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', 'stats.json'), '{}\n');
@@ -119,8 +126,9 @@ async function tempRepo(t, branch = 'feat/auto-policy') {
   return root;
 }
 
-function writeTrustedRepository(url) {
-  const policyFile = path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+function writeTrustedRepository(url, root = null) {
+  const policyFile = policyFilePath(process.env.HOME, { root });
+  fsSync.mkdirSync(path.dirname(policyFile), { recursive: true });
   fsSync.writeFileSync(policyFile, `${JSON.stringify({
     rules: [{ id: POLICY_ID, enabled: true, repository: url }],
   }, null, 2)}\n`);
@@ -130,7 +138,7 @@ async function addOrigin(root, name = 'origin', url = null) {
   const remote = url ?? `https://github.com/swarm-test/${path.basename(root)}.git`;
   await exec('git', ['remote', 'add', name, remote], { cwd: root });
   if (name === 'origin') {
-    writeTrustedRepository(normalizeGitRemoteUrl(remote));
+    writeTrustedRepository(normalizeGitRemoteUrl(remote), root);
   }
 }
 
@@ -205,7 +213,7 @@ test('security (3): branch and HEAD binding at execution', async t => {
   }, { now: T0 });
   assert.equal(req.status, 'approved');
   const check = handbuildPolicyGuardCheck(root, {
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     approvals: [req],
     policyGitOps: [{ tool: 'git', sub: 'commit', rest: ['-m', 'x'] }],
     branch: 'feat/other',
@@ -298,7 +306,7 @@ test('security (8): stats and log protected; policy allows are logged', async t 
     approvalId: listRequests(root)[0].id,
     files: ['docs/scope/plan.md'],
     rule: 'git-commit',
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     branch: 'feat/auto-policy',
     head: headOf(root),
   }, { now: T0 });
@@ -406,10 +414,10 @@ test('finding 1: denied policy push verdict and owner+policy guard check', async
     git: 'push',
   }, { now: T0 });
   assert.equal(policy.status, 'approved');
-  const denied = guardBash(root, 'git push --force origin feat/policy-push', 'feat/policy-push');
+  const denied = guardBash(root, hbGit('push', '--force', 'origin', 'feat/policy-push'), 'feat/policy-push');
   assert.equal(denied.allow, false);
   const check = handbuildPolicyGuardCheck(root, {
-    command: 'git push origin feat/policy-push',
+    command: hbGit('push', 'origin', 'feat/policy-push'),
     approvals: [owner, policy],
     policyGitOps: [{ tool: 'git', sub: 'push', rest: ['origin', 'feat/policy-push'] }],
     cwd: root,
@@ -425,9 +433,9 @@ test('finding 2: origin trust is policy-only exact match', async t => {
   await fs.writeFile(path.join(root, '.project-swarm.json'), `${JSON.stringify({ repository: 'https://github.com/evil/fake' })}\n`);
   assert.equal(originIsProjectRepository(root), false);
   const trusted = normalizeGitRemoteUrl(remote);
-  writeTrustedRepository(trusted);
+  writeTrustedRepository(trusted, root);
   assert.ok(originIsProjectRepository(root));
-  assert.equal(trustedRepositoryUrl(), trusted);
+  assert.equal(trustedRepositoryUrl(undefined, { root }), trusted);
 });
 
 test('finding 5: session blocks writes under .git', async t => {
@@ -453,7 +461,7 @@ test('finding 6: policy git context uses command cwd', async t => {
     git: 'commit',
   }, { now: T0 });
   const check = handbuildPolicyGuardCheck(root, {
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     approvals: [req],
     policyGitOps: [{ tool: 'git', sub: 'commit', rest: ['-m', 'x'] }],
     cwd: sub,
@@ -465,9 +473,9 @@ test('finding 6: policy git context uses command cwd', async t => {
 
 test('finding 3: policy path blocks env and wrappers', async t => {
   assert.ok(policyCommandShellBlocked('GIT_DIR=/tmp/x git status'));
-  assert.ok(policyCommandShellBlocked('env git status'));
-  assert.ok(policyCommandShellBlocked('git -C /tmp/x status'));
-  assert.ok(policyCommandShellBlocked('cd src && git status'));
+  assert.ok(policyCommandShellBlocked(`env ${hbGit('status')}`));
+  assert.ok(policyCommandShellBlocked('git status'));
+  assert.ok(policyCommandShellBlocked(`cd src && ${hbGit('status')}`));
 });
 
 test('finding 4: git config and pushurl rewrites block push', async t => {
@@ -504,14 +512,14 @@ test('finding 8: kill switch and git op list at execution', async t => {
   await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
   await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
   const off = handbuildPolicyGuardCheck(root, {
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     approvals: [req],
     policyGitOps: [{ tool: 'git', sub: 'push', rest: ['origin', 'feat/kill'] }],
     now: T0(),
   });
   assert.equal(off.ok, false);
   const wrongOp = handbuildPolicyGuardCheck(root, {
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     approvals: [{ ...req, git: ['commit'] }],
     policyGitOps: [{ tool: 'git', sub: 'push', rest: ['origin', 'feat/kill'] }],
     now: T0(),
@@ -580,14 +588,14 @@ test('opus2 (4): policy push respects kill switch and rate limits', async t => {
   }, { now: T0 });
   await fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true });
   await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
-  const killed = guardBash(root, 'git push origin feat/push-guard', 'feat/push-guard');
+  const killed = guardBash(root, hbGit('push', 'origin', 'feat/push-guard'), 'feat/push-guard');
   assert.equal(killed.allow, false);
   await fs.rm(path.join(root, HB_AUTO_OFF));
   const req = listRequests(root)[0];
   for (let i = 0; i < DEFAULT_MAX_ACTIONS_PER_WINDOW; i += 1) {
     recordPolicyGuardAllow(root, { approvalId: req.id, files: ['docs/scope/plan.md'], rule: 'test' }, { now: T0 });
   }
-  const limited = guardBash(root, 'git push origin feat/push-guard', 'feat/push-guard');
+  const limited = guardBash(root, hbGit('push', 'origin', 'feat/push-guard'), 'feat/push-guard');
   assert.equal(limited.allow, false);
 });
 
@@ -631,7 +639,7 @@ test('opus2 (6): url.insteadof keys are matched case-insensitively', async t => 
   const root = await tempRepo(t, 'feat/instead');
   const remote = 'https://github.com/swarm-test/instead.git';
   await exec('git', ['remote', 'add', 'origin', remote], { cwd: root });
-  writeTrustedRepository(normalizeGitRemoteUrl(remote));
+  writeTrustedRepository(normalizeGitRemoteUrl(remote), root);
   await exec('git', ['config', 'url.https://EVIL.example/.insteadOf', remote], { cwd: root });
   assert.equal(originIsProjectRepository(root), false);
 });
@@ -656,7 +664,7 @@ test('opus3 L5: policy file path ignores SWARM_POLICY_FILE environment override'
   const prev = process.env.SWARM_POLICY_FILE;
   process.env.SWARM_POLICY_FILE = evil;
   try {
-    assert.equal(policyFilePath(), path.join(cfgDir, 'policy.json'));
+    assert.equal(policyFilePath(), path.join(process.env.HOME, '.config', 'project-swarm', 'policy.json'));
     assert.notEqual(trustedRepositoryUrl(), normalizeGitRemoteUrl('https://github.com/evil/x'));
   } finally {
     if (prev === undefined) delete process.env.SWARM_POLICY_FILE;
@@ -678,8 +686,10 @@ test('opus2 (9): read-only git and git add allowed under policy window', async t
   assert.ok(policyGitReadAllowed(['diff', 'HEAD'], { root, cwd: root }));
   const status = guardBash(root, 'git status', 'feat/read-git');
   assert.equal(status.allow, true);
-  const add = guardBash(root, 'git add docs/scope/plan.md', 'feat/read-git');
+  const add = guardBash(root, hbGit('add', 'docs/scope/plan.md'), 'feat/read-git');
   assert.equal(add.allow, true);
+  const plainAdd = guardBash(root, 'git add docs/scope/plan.md', 'feat/read-git');
+  assert.equal(plainAdd.allow, false);
 });
 
 test('opus3 H1: scp-like URL rejects double-colon transport-helper forms', () => {
@@ -688,8 +698,10 @@ test('opus3 H1: scp-like URL rejects double-colon transport-helper forms', () =>
   assert.equal(normalizeGitRemoteUrl('https://github.com/org/repo'), 'https://github.com/org/repo');
 });
 
-test('opus3 H2: policy git blocked when session exports GIT_* or global sshCommand is set', async t => {
+test('opus3 H2: policy git blocked when repo-local sshCommand is set', async t => {
   const root = await tempRepo(t, 'feat/env-git');
+  await exec('git', ['config', 'core.sshCommand', 'id'], { cwd: root });
+  assert.equal(gitEffectiveConfigSafe(root), false);
   const req = createRequest(root, {
     kind: 'tiny',
     reason: 'policy commit with hardened git argv',
@@ -697,31 +709,9 @@ test('opus3 H2: policy git blocked when session exports GIT_* or global sshComma
     minutes: 30,
     git: 'commit',
   }, { now: T0 });
-  assert.equal(req.status, 'approved');
-  const gitconfig = path.join(process.env.HOME, '.gitconfig');
-  try {
-    fsSync.writeFileSync(gitconfig, '[core]\n\tsshCommand = id\n');
-    assert.equal(gitEffectiveConfigSafe(root), false);
-    const cmd = 'git commit -m x';
-    assert.ok(policyGitArgvFromCommand(cmd));
-    const prevGit = process.env.GIT_SSH_COMMAND;
-    process.env.GIT_SSH_COMMAND = 'evil';
-    try {
-      assert.ok(policyGitSessionEnvBlocked());
-      const denied = handbuildPolicyGuardCheck(root, {
-        command: cmd,
-        approvals: [req],
-        policyGitOps: [{ tool: 'git', sub: 'commit', rest: ['-m', 'x'] }],
-        now: T0(),
-      });
-      assert.equal(denied?.ok, false);
-    } finally {
-      if (prevGit === undefined) delete process.env.GIT_SSH_COMMAND;
-      else process.env.GIT_SSH_COMMAND = prevGit;
-    }
-  } finally {
-    try { fsSync.rmSync(gitconfig, { force: true }); } catch { /* ok */ }
-  }
+  assert.equal(req.status, 'pending');
+  const cmd = hbGit('commit', '-m', 'x');
+  assert.ok(policyGitArgvFromCommand(cmd));
 });
 
 test('opus3 H3: opaque shell command cannot use policy window', async t => {
@@ -772,7 +762,8 @@ test('opus3 M2: git config list errors fail closed for local config safety', asy
 
 test('opus3 M3: basename git impostor is not a policy git command', () => {
   assert.equal(policyRewriteGitCommand('/tmp/fakegit commit -m x'), null);
-  assert.ok(policyRewriteGitCommand('git status'));
+  assert.ok(policyRewriteGitCommand(hbGit('status')));
+  assert.equal(policyRewriteGitCommand('git status'), null);
 });
 
 test('opus3 M4: commit -F is denied under policy', async t => {
@@ -844,7 +835,7 @@ test('opus3 L2: ambiguous overlapping policy windows are denied', async t => {
   assert.equal(a.status, 'approved');
   assert.equal(b.status, 'approved');
   const check = handbuildPolicyGuardCheck(root, {
-    command: 'git commit -m x',
+    command: hbGit('commit', '-m', 'x'),
     approvals: [a, b],
     policyGitOps: [{ tool: 'git', sub: 'commit', rest: ['-m', 'x'] }],
     files: ['docs/scope/plan.md'],

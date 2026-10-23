@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { isScratchRoot } from './scratch-roots.mjs';
-import { tokenize } from './shell-writes.mjs';
+import { tokenize, policyHandbuildGitArgsFromCommand, orchestratorTestHarnessSigned } from './shell-writes.mjs';
 
 export const POLICY_ID = 'swarm-admin-handbuild';
 export const POLICY_VERSION = 2;
@@ -41,7 +41,7 @@ export function policyBranchAllowed(branch) {
   return BRANCH_SWARM.test(b) || BRANCH_FEAT.test(b);
 }
 
-const CODE_EXT = new Set(['.mjs', '.js', '.ts', '.tsx', '.jsx', '.cjs', '.py', '.go', '.rs', '.java', '.rb', '.php', '.sh', '.bash', '.zsh']);
+const CODE_EXT = new Set(['.mjs', '.js', '.ts', '.tsx', '.jsx', '.cjs', '.py', '.go', '.rs', '.java', '.rb', '.php', '.sh', '.bash', '.zsh', '.html', '.svg', '.mdx', '.mts', '.ps1']);
 
 function pathHasDotDot(p) {
   return norm(p).split('/').includes('..');
@@ -90,12 +90,26 @@ function deepestExistingRel(root, raw) {
   const p = norm(raw);
   if (!p || path.isAbsolute(p) || pathHasDotDot(p)) return null;
   const parts = p.split('/');
-  for (let n = parts.length; n >= 1; n -= 1) {
-    const prefix = parts.slice(0, n).join('/');
-    const resolved = realpathUnderRoot(root, prefix);
-    if (resolved !== null && resolved === prefix) return resolved;
+  let prefix = '';
+  try {
+    const rootReal = fs.realpathSync.native(root);
+    for (let n = 0; n < parts.length; n += 1) {
+      prefix = n === 0 ? parts[0] : `${prefix}/${parts[n]}`;
+      const abs = path.join(root, prefix);
+      if (!fs.existsSync(abs)) break;
+      const lst = fs.lstatSync(abs);
+      if (lst.isSymbolicLink()) return null;
+      const real = fs.realpathSync.native(abs);
+      const expected = path.join(rootReal, prefix);
+      if (real !== expected) return null;
+      if (n === parts.length - 1) return prefix;
+      const next = path.join(root, parts.slice(0, n + 2).join('/'));
+      if (!fs.existsSync(next)) return prefix;
+    }
+  } catch {
+    return null;
   }
-  return null;
+  return prefix || null;
 }
 
 export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
@@ -126,12 +140,34 @@ export function isSwarmAdminHandbuildPath(rel, { root } = {}) {
 
 const ALLOWED_GIT_OPS = new Set(['commit', 'push', 'switch']);
 
-function swarmConfigDir(home) {
-  return process.env.SWARM_CONFIG ? path.dirname(process.env.SWARM_CONFIG) : path.join(home, '.config', 'project-swarm');
+function isTempProjectRootForPolicy(root) {
+  if (!root) return false;
+  try {
+    const real = fs.realpathSync.native(root);
+    const tmp = fs.realpathSync.native(os.tmpdir());
+    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
+  } catch {
+    return false;
+  }
 }
 
-export function policyFilePath(home = os.homedir()) {
-  return path.join(swarmConfigDir(home), 'policy.json');
+/** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE only with signed harness or temp merge tests. */
+export function machinePolicyJsonPath({ home = os.homedir(), root = null, allowPolicyFile = false } = {}) {
+  const signed = root && orchestratorTestHarnessSigned(root);
+  const tempMerge = root && isTempProjectRootForPolicy(root);
+  if (signed || tempMerge || allowPolicyFile) {
+    const envPath = process.env.SWARM_POLICY_FILE;
+    if (envPath && path.isAbsolute(envPath)) return envPath;
+    if (signed && process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+  }
+  return path.join(home, '.config', 'project-swarm', 'policy.json');
+}
+
+export function policyFilePath(home = os.homedir(), { root = null } = {}) {
+  if (root && orchestratorTestHarnessSigned(root) && process.env.SWARM_CONFIG) {
+    return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+  }
+  return path.join(home, '.config', 'project-swarm', 'policy.json');
 }
 
 export function policyGitConfigAbsPaths(home = os.homedir(), env = process.env) {
@@ -140,7 +176,7 @@ export function policyGitConfigAbsPaths(home = os.homedir(), env = process.env) 
 }
 
 /** Limits from machine policy.json handbuild-auto-approve rule, else defaults. */
-export function policyRateLimits(home = os.homedir()) {
+export function policyRateLimits(home = os.homedir(), { root = null } = {}) {
   const defaults = {
     maxActionsPerWindow: DEFAULT_MAX_ACTIONS_PER_WINDOW,
     maxActionsPerDay: DEFAULT_MAX_ACTIONS_PER_DAY,
@@ -148,11 +184,12 @@ export function policyRateLimits(home = os.homedir()) {
     maxAutoApproveWindowsPerDay: DEFAULT_MAX_AUTO_APPROVE_WINDOWS_PER_DAY,
   };
   try {
-    const file = policyFilePath(home);
+    const file = policyFilePath(home, { root });
     if (!file) return defaults;
     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
     const rules = Array.isArray(policy?.rules) ? policy.rules : [];
     const row = rules.find(r => r?.id === POLICY_ID && r.enabled !== false && r.disabled !== true);
+    if (!row) return defaults;
     const lim = row?.limits && typeof row.limits === 'object' ? row.limits : {};
     const n = (k, d) => {
       const v = Number(lim[k]);
@@ -171,13 +208,14 @@ export function policyRateLimits(home = os.homedir()) {
 }
 
 /** Trusted clone URL from owner machine policy.json only (not project files). */
-export function trustedRepositoryUrl(home = os.homedir()) {
+export function trustedRepositoryUrl(home = os.homedir(), { root = null } = {}) {
   try {
-    const file = policyFilePath(home);
+    const file = policyFilePath(home, { root });
     if (!file) return null;
     const policy = JSON.parse(fs.readFileSync(file, 'utf8'));
     const rules = Array.isArray(policy?.rules) ? policy.rules : [];
     const row = rules.find(r => r?.id === POLICY_ID && r.enabled !== false && r.disabled !== true);
+    if (!row) return null;
     const raw = row?.repository ?? row?.repo ?? row?.git?.url ?? row?.remote?.url;
     if (typeof raw !== 'string' || !raw.trim()) return null;
     return normalizeGitRemoteUrl(raw);
@@ -186,23 +224,48 @@ export function trustedRepositoryUrl(home = os.homedir()) {
   }
 }
 
+const POLICY_GIT_PIN_CANDIDATES = ['/usr/bin/git', '/opt/homebrew/bin/git', '/usr/local/bin/git'];
+
 const POLICY_GIT_CONFIG_OVERRIDES = [
   '-c', 'core.fsmonitor=false',
-  '-c', 'core.hooksPath=/nonexistent',
+  '-c', 'core.hooksPath=/dev/null',
   '-c', 'credential.helper=',
+  '-c', 'core.sshCommand=ssh',
+  '-c', 'protocol.ext.allow=never',
 ];
 
-export function policyGitEnv(home = os.homedir()) {
-  const env = {
+export function resolvePinnedPolicyGitExecutable() {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const candidate of POLICY_GIT_PIN_CANDIDATES) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const real = fs.realpathSync.native(candidate);
+      if (path.basename(real) !== 'git') continue;
+      const st = fs.statSync(real);
+      if (!st.isFile()) continue;
+      const mode = st.mode;
+      if (mode & 0o022) continue;
+      if (st.uid !== 0 && (uid === null || st.uid !== uid)) continue;
+      return real;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+export function buildPolicyGitExecEnv() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-policy-git-home-'));
+  return {
+    PATH: '/usr/bin:/bin',
     HOME: home,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
     GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
   };
-  if (process.env.PATH) env.PATH = process.env.PATH;
-  if (process.env.TMPDIR) env.TMPDIR = process.env.TMPDIR;
-  if (process.env.TEMP) env.TEMP = process.env.TEMP;
-  return env;
+}
+
+export function policyGitEnv() {
+  return buildPolicyGitExecEnv();
 }
 
 const POLICY_GIT_ENV_HARNESS = new Set(['GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM', 'GIT_TERMINAL_PROMPT', 'GIT_ASKPASS']);
@@ -227,21 +290,9 @@ export function policyGitSessionEnvBlocked(env = process.env, home = os.homedir(
   return false;
 }
 
-/** First `git` executable on PATH whose basename is exactly `git` (not a symlink alias name). */
-export function resolveTrustedPolicyGitExecutable({ home = os.homedir(), pathEnv = process.env.PATH } = {}) {
-  const delim = path.delimiter;
-  for (const dir of String(pathEnv ?? '').split(delim).filter(Boolean)) {
-    if (!path.isAbsolute(dir)) continue;
-    const candidate = path.join(dir, 'git');
-    try {
-      if (!fs.existsSync(candidate)) continue;
-      if (path.basename(candidate) !== 'git') continue;
-      const real = fs.realpathSync.native(candidate);
-      if (path.basename(real) !== 'git') continue;
-      return real;
-    } catch { /* try next */ }
-  }
-  return null;
+/** @deprecated use resolvePinnedPolicyGitExecutable */
+export function resolveTrustedPolicyGitExecutable() {
+  return resolvePinnedPolicyGitExecutable();
 }
 
 function shellQuoteWord(w) {
@@ -250,46 +301,43 @@ function shellQuoteWord(w) {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Exact argv for a single-segment policy git command (trusted git + hardened -c overrides + subcommand args). */
-export function policyGitArgvFromCommand(command, { home = os.homedir() } = {}) {
-  const text = String(command ?? '');
-  if (!text.trim()) return null;
-  const segments = tokenize(text);
-  if (segments.length !== 1 || segments[0].piped) return null;
-  const words = segments[0];
-  let i = 0;
-  while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i += 1;
-  const trusted = resolveTrustedPolicyGitExecutable({ home });
+/** Exact argv for `swarm handbuild git …` (pinned git + hardened -c overrides + subcommand args). */
+export function policyGitArgvFromCommand(command) {
+  const gitArgs = policyHandbuildGitArgsFromCommand(command);
+  if (!gitArgs?.length) return null;
+  const trusted = resolvePinnedPolicyGitExecutable();
   if (!trusted) return null;
-  let gi = words.findIndex((w, idx) => idx >= i && w === 'git');
-  if (gi === -1) gi = words.findIndex((w, idx) => idx >= i && w === trusted);
-  if (gi === -1) return null;
-  if (words.slice(0, gi).some(w => POLICY_SHELL_WRAPPERS.has(w) || w === 'cd')) return null;
-  let gitArgs = words.slice(gi + 1);
-  while (gitArgs.length && (gitArgs[0] === '-c' || gitArgs[0] === '--config')) {
-    if (gitArgs[0] === '-c' && gitArgs.length < 2) return null;
-    gitArgs.splice(0, gitArgs[0] === '-c' ? 2 : 1);
-  }
+  const sub = gitArgs[0];
+  if (!sub || sub.startsWith('-')) return null;
   const configFlat = [];
   for (let c = 0; c < POLICY_GIT_CONFIG_OVERRIDES.length; c += 2) {
     configFlat.push(POLICY_GIT_CONFIG_OVERRIDES[c], POLICY_GIT_CONFIG_OVERRIDES[c + 1]);
   }
-  const sub = gitArgs[0];
-  if (!sub || sub.startsWith('-')) return null;
   return [trusted, ...configFlat, ...gitArgs];
 }
 
-/** Canonical shell line for policy git (same hardened argv the session must run). */
-export function policyRewriteGitCommand(command, opts = {}) {
-  const argv = policyGitArgvFromCommand(command, opts);
-  if (!argv) return null;
-  return argv.map(shellQuoteWord).join(' ');
+export function policyHandbuildGitCommandAllowed(command) {
+  return policyGitArgvFromCommand(command) !== null;
 }
 
-export function policyGitExec(root, gitArgs, { cwd = root, home = os.homedir() } = {}) {
+/** Canonical shell line for policy git (`swarm handbuild git …`). */
+export function policyRewriteGitCommand(command) {
+  const gitArgs = policyHandbuildGitArgsFromCommand(command);
+  if (!gitArgs?.length) return null;
+  return ['swarm', 'handbuild', 'git', ...gitArgs.map(shellQuoteWord)].join(' ');
+}
+
+export function policyGitExec(root, gitArgs, { cwd = root } = {}) {
   const work = cwd ?? root;
+  const trusted = resolvePinnedPolicyGitExecutable();
+  if (!trusted) throw new Error('policy-git-missing');
   const args = [...POLICY_GIT_CONFIG_OVERRIDES, ...gitArgs];
-  return execFileSync('git', args, { cwd: work, encoding: 'utf8', timeout: 3000, env: policyGitEnv(home) });
+  const env = buildPolicyGitExecEnv();
+  try {
+    return execFileSync(trusted, args, { cwd: work, encoding: 'utf8', timeout: 3000, env });
+  } finally {
+    try { fs.rmSync(env.HOME, { recursive: true, force: true }); } catch { /* ok */ }
+  }
 }
 
 export function evaluateHandbuildAutoApprove(root, { files, minutes, git }) {
@@ -457,43 +505,13 @@ function policyGitConfigOriginTrusted(origin, root, home, cwd = root) {
   }
 }
 
-export function gitEffectiveConfigSafe(root, { cwd = root, home = os.homedir(), env = process.env } = {}) {
-  try {
-    const work = cwd ?? root;
-    const runEnv = { ...env, HOME: home };
-    for (const k of Object.keys(runEnv)) {
-      if (k === 'HOME') continue;
-      if (k.startsWith('GIT_')) delete runEnv[k];
-    }
-    runEnv.HOME = home;
-    runEnv.GIT_CONFIG_SYSTEM = os.devNull;
-    runEnv.GIT_CONFIG_NOSYSTEM = '1';
-    const raw = execFileSync('git', ['config', '--show-origin', '--list'], {
-      cwd: work,
-      encoding: 'utf8',
-      timeout: 3000,
-      env: runEnv,
-    });
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      const tab = line.indexOf('\t');
-      if (tab === -1) return false;
-      const origin = line.slice(0, tab);
-      if (!policyGitConfigOriginTrusted(origin, root, home, work)) continue;
-      const rest = line.slice(tab + 1);
-      const eq = rest.indexOf('=');
-      const key = eq === -1 ? rest : rest.slice(0, eq);
-      if (!repoLocalConfigKeyAllowed(key)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
+export function gitEffectiveConfigSafe(root, { cwd = root } = {}) {
+  return gitRepoLocalConfigSafe(root, { cwd });
 }
 
 export function originIsProjectRepository(root, { cwd = root, home = os.homedir() } = {}) {
   try {
-    const trusted = trustedRepositoryUrl(home);
+    const trusted = trustedRepositoryUrl(home, { root });
     if (!trusted) return false;
     const remotes = policyGitExec(root, ['remote'], { cwd, home }).split('\n').map(s => s.trim()).filter(Boolean);
     if (!remotes.includes('origin')) return false;
@@ -516,12 +534,16 @@ export function originIsProjectRepository(root, { cwd = root, home = os.homedir(
   }
 }
 
-export function gitPushMappingConfigSafe(root, { cwd = root, home = os.homedir() } = {}) {
+export function gitPushMappingConfigSafe(root, { cwd = root } = {}) {
   try {
-    const push = policyGitExec(root, ['config', '--get', 'remote.origin.push'], { cwd, home }).trim();
-    if (push) return false;
-  } catch { /* defaults ok */ }
-  return true;
+    const push = policyGitExec(root, ['config', '--get', 'remote.origin.push'], { cwd }).trim();
+    return !push;
+  } catch (e) {
+    if (e?.status === 1) return true;
+    const msg = String(e?.stderr ?? e?.message ?? e);
+    if (/key does not exist|not found|no such key/i.test(msg)) return true;
+    return false;
+  }
 }
 
 export function gitHooksPolicySafe(root, { cwd = root, home = os.homedir() } = {}) {
@@ -563,10 +585,11 @@ export function headDescendsFromGranted(root, grantedHead, { cwd = root, home = 
 
 const POLICY_SHELL_WRAPPERS = new Set(['sudo', 'command', 'time', 'nohup', 'exec', 'env', 'nice', 'builtin', 'xargs', 'stdbuf', 'timeout', 'sh', 'bash', 'zsh']);
 
-/** Refuse env assignments, wrappers, chaining, cd, or git -C/--git-dir/--work-tree on the policy git path. */
+/** Refuse env assignments, wrappers, chaining, cd, or non-policy git on the policy path. */
 export function policyCommandShellBlocked(command) {
   const text = String(command ?? '');
-  if (!text.trim()) return false;
+  if (!text.trim()) return true;
+  if (!policyHandbuildGitCommandAllowed(text)) return true;
   const segments = tokenize(text);
   if (segments.length > 1) return true;
   for (const words of segments) {
@@ -579,15 +602,6 @@ export function policyCommandShellBlocked(command) {
       if (POLICY_SHELL_WRAPPERS.has(w)) return true;
       if (w === 'cd') return true;
       i += 1;
-    }
-    const gi = words.findIndex(w => w === 'git');
-    if (gi === -1) continue;
-    const args = words.slice(gi + 1);
-    let j = 0;
-    while (j < args.length && args[j].startsWith('-') && args[j] !== '--') {
-      const g = args[j];
-      if (g === '-C' || g === '--git-dir' || g === '--work-tree' || g.startsWith('--git-dir=') || g.startsWith('--work-tree=')) return true;
-      j += g.includes('=') ? 1 : (g === '-C' ? 2 : 1);
     }
   }
   return false;
@@ -664,15 +678,13 @@ export function parseGitInvocation(args) {
 }
 
 function policyGitSafetyContext(root, { cwd = root, home = os.homedir() } = {}) {
-  if (policyGitSessionEnvBlocked(process.env, home)) return false;
-  if (!gitEffectiveConfigSafe(root, { cwd, home })) return false;
   if (!gitWorktreePolicyContext(root, { cwd, home }).ok) return false;
   if (!gitHooksPolicySafe(root, { cwd, home })) return false;
   if (!gitRepoLocalConfigSafe(root, { cwd, home })) return false;
   return true;
 }
 
-const POLICY_READ_GIT_SUBS = new Set(['status', 'diff', 'log', 'show']);
+const POLICY_READ_GIT_SUBS = new Set(['status', 'diff', 'log']);
 
 export function policyGitReadAllowed(args, { root, cwd = root, home = os.homedir() }) {
   const inv = parseGitInvocation(args);
@@ -695,17 +707,32 @@ function policyFileCoversPath(policyFiles, relPath) {
   });
 }
 
+function relPathIsDirectory(root, rel) {
+  try {
+    const st = fs.statSync(path.join(root, rel));
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function policyGitAddAllowed(args, { root, cwd = root, home = os.homedir(), policyFiles } = {}) {
   const inv = parseGitInvocation(args);
   if (inv.sub !== 'add') return false;
   if (!policyGitSafetyContext(root, { cwd, home })) return false;
   if (inv.globalOpts || inv.hasConfig) return false;
   const rest = inv.rest ?? [];
-  if (rest.some(a => ['-A', '--all', '-u', '--update', '.', ':/'].includes(a) || /[*?[{]/.test(a))) return false;
-  const paths = rest.filter(a => a && !a.startsWith('-'));
+  if (rest.some(a => ['-A', '--all', '-u', '--update', '.', ':/', '-f', '--force', '--chmod', '--pathspec-from-file', '--pathspec-file-nul'].includes(a)
+    || a.startsWith('--pathspec-from-file=') || a.startsWith('--chmod=') || /[*?[{]/.test(a) || /\\/.test(a))) return false;
+  const dd = rest.indexOf('--');
+  if (dd === -1) {
+    if (rest.some(a => a.startsWith('-'))) return false;
+  } else if (rest.slice(0, dd).some(a => a.startsWith('-'))) return false;
+  const paths = dd === -1 ? rest.filter(a => a && !a.startsWith('-')) : rest.slice(dd + 1);
   if (!paths.length) return false;
   for (const raw of paths) {
-    if (raw.startsWith(':')) return false;
+    if (raw.startsWith(':') || raw.endsWith('/')) return false;
+    if (relPathIsDirectory(root, raw)) return false;
     if (!isSwarmAdminHandbuildPath(raw, { root })) return false;
     if (!policyFileCoversPath(policyFiles, raw)) return false;
   }
@@ -909,4 +936,42 @@ export function policyGitInvocationRule(args, opts) {
     return { rule: `git-${sub}`, ok: false };
   }
   return null;
+}
+
+function appendHandbuildGitLog(root, entry) {
+  try {
+    const dir = path.join(root, '.swarm', 'handbuild');
+    fs.mkdirSync(dir, { recursive: true });
+    const line = `${JSON.stringify({ at: new Date().toISOString(), event: 'handbuild-git', ...entry })}\n`;
+    fs.appendFileSync(path.join(dir, path.basename(LOG_FILE)), line, { mode: 0o600 });
+  } catch { /* best effort */ }
+}
+
+/** CLI: `swarm handbuild git SUBCOMMAND …` — policy checks and pinned git in one process. */
+export function runHandbuildGitCli(root, gitArgv, { cwd = root } = {}) {
+  const args = Array.isArray(gitArgv) ? gitArgv : [];
+  if (!args.length || args[0].startsWith('-')) {
+    return { exitCode: 2, stderr: 'usage: swarm handbuild git SUBCOMMAND [args]\n' };
+  }
+  const work = cwd ?? root;
+  const branch = branchOf(root, { cwd: work });
+  const verdict = policyGitInvocationRule(args, { root, currentBranch: branch, cwd: work });
+  if (!verdict?.ok) {
+    return { exitCode: 1, stderr: `policy git denied: ${verdict?.rule ?? 'git'}\n` };
+  }
+  const trusted = resolvePinnedPolicyGitExecutable();
+  if (!trusted) return { exitCode: 1, stderr: 'policy git: pinned git executable not found\n' };
+  const execArgs = [...POLICY_GIT_CONFIG_OVERRIDES, ...args];
+  const env = buildPolicyGitExecEnv();
+  try {
+    const out = execFileSync(trusted, execArgs, { cwd: work, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+    appendHandbuildGitLog(root, { argv: args, rule: verdict.rule, branch });
+    return { exitCode: 0, stdout: out };
+  } catch (e) {
+    const stderr = String(e.stderr ?? e.message ?? e);
+    appendHandbuildGitLog(root, { argv: args, rule: verdict.rule, branch, error: stderr.slice(0, 200) });
+    return { exitCode: e.status ?? 1, stderr };
+  } finally {
+    try { fs.rmSync(env.HOME, { recursive: true, force: true }); } catch { /* ok */ }
+  }
 }

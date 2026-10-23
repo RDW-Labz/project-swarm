@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-aa4",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "auto-approval policy for hand-build windows and git push; a bypass lets a session push or rewrite the repo unattended",
+   "type": "review",
+   "prompt": "Fourth static security review of coordination/review/aa-new4.diff (auto-approve windows: tools/auto-approve-policy.mjs and its hooks in tools/handbuild.mjs, tools/self-approval.mjs, tools/shell-writes.mjs). The third review (FAIL) found H: URL normaliser accepted transport-helper URLs (double colon); H: checks ran in a hardened git environment while the real command used the real global config and inherited git environment variables; H: opaque commands skipped the policy guard (no kill switch, shell check or rate limits); M: deleting stats.json reset counters; M: config checks failed open on git errors; M: any binary named git accepted; M: commit -F; M: git add paths unchecked and magic pathspecs; M: symlinked prefix for new files; M: standing merge allow skipped the guard for the whole command; L: unhardened git runs in worktree checks, first live window chosen, --author, code files in docs folders, policy file env override, unanchored SAFE_SWARM pattern. Check each is really fixed and look for NEW bypasses or fail-open paths introduced by the fixes. No exploit commands: class and fix. Verdict PASS or FAIL, ranked findings with severity.",
+   "context": [
+    "coordination/review/aa-new4.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}
