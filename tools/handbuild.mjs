@@ -154,12 +154,8 @@ const isClaudeProjectTranscriptAbs = (abs, home) => {
 };
 
 const isClaudeMemoryPathOutside = (abs, home) => {
-  const resolved = path.resolve(abs);
-  const memRoot = path.join(home, '.claude', 'memory');
-  const memRel = path.relative(memRoot, resolved);
-  if (memRel && !memRel.startsWith('..') && !path.isAbsolute(memRel)) return true;
   const base = path.join(home, '.claude', 'projects');
-  const rel = path.relative(base, resolved);
+  const rel = path.relative(base, path.resolve(abs));
   if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
   const parts = rel.split(path.sep);
   return parts.length >= 2 && parts[1] === 'memory';
@@ -1230,9 +1226,9 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
   if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
   const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
   for (const g of ops) if (!GIT_REQUEST_OPS.includes(g)) throw Error(`handbuild-git: --git must name one of ${GIT_REQUEST_OPS.join(', ')}`);
+  return withStateLock(root, () => {
   const policy = evaluateHandbuildAutoApprove(root, { files: list, minutes: mins, git: ops });
   const limits = policyRateLimits(undefined, { root });
-  return withStateLock(root, () => {
   ensureHandbuildStatsInitialized(root);
   const statsForCaps = readHandbuildStatsRaw(root);
   const policyOk = policy.ok && ops.length === 0 && !policyRateLimitsExceeded(statsForCaps, null, limits, now(), { countNewWindow: true }).blocked;
@@ -1248,6 +1244,7 @@ export function createRequest(root, { kind, reason, files, minutes, git }, { now
     row.decidedBy = 'policy';
     row.policyId = policy.policyId;
     row.policyVersion = policy.policyVersion;
+    row.policyWindow = true;
     row.expiresAt = new Date(now() + policy.minutes * 60000).toISOString();
     row.autoApproved = true;
   } else {
@@ -1519,9 +1516,10 @@ export function readHandbuildStats(root, { now = Date.now } = {}) {
 }
 
 function readPolicyWriteVerifyQueue(root) {
+  const file = path.join(root, POLICY_VERIFY_FILE);
+  if (isLink(file)) return { error: 'symlink-queue' };
   try {
-    const file = path.join(root, POLICY_VERIFY_FILE);
-    if (isLink(file) || !fs.existsSync(file)) return [];
+    if (!fs.existsSync(file)) return { rows: [] };
     const lines = fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean);
     const out = [];
     for (const line of lines) {
@@ -1530,9 +1528,9 @@ function readPolicyWriteVerifyQueue(root) {
         if (row && typeof row.rel === 'string') out.push(row);
       } catch { /* skip */ }
     }
-    return out;
+    return { rows: out };
   } catch {
-    return [];
+    return { error: 'unreadable-queue' };
   }
 }
 
@@ -1566,62 +1564,97 @@ export function queuePolicyWriteVerify(root, fileRels, { now = Date.now } = {}) 
   const list = [...new Set((fileRels ?? []).map(normPolicyRel).filter(Boolean))];
   if (!list.length) return;
   const ts = typeof now === 'function' ? now() : now;
-  const rows = readPolicyWriteVerifyQueue(root);
-  for (const rel of list) {
-    const abs = path.join(root, rel);
-    let row = { rel, at: new Date(ts).toISOString() };
-    try {
-      const st = fs.lstatSync(abs);
-      row = { ...row, inode: st.ino, dev: st.dev, nlink: st.nlink };
-    } catch { /* new file: verify after create */ }
-    rows.push(row);
-  }
-  writePolicyWriteVerifyQueue(root, rows);
+  withStateLock(root, () => {
+    const read = readPolicyWriteVerifyQueue(root);
+    if (read.error) {
+      engagePolicyIntegrityKill(root, `policy write verify queue ${read.error}`, { now: ts });
+      return;
+    }
+    const rows = read.rows;
+    for (const rel of list) {
+      const abs = path.join(root, rel);
+      let row = { rel, at: new Date(ts).toISOString() };
+      try {
+        const st = fs.lstatSync(abs);
+        row = { ...row, inode: st.ino, dev: st.dev, nlink: st.nlink };
+      } catch {
+        row.absentAtAllow = true;
+        try {
+          const parent = path.dirname(abs);
+          const pst = fs.lstatSync(parent);
+          row = { ...row, parentInode: pst.ino, parentDev: pst.dev };
+        } catch { /* verify will fail closed */ }
+      }
+      rows.push(row);
+    }
+    writePolicyWriteVerifyQueue(root, rows);
+  });
 }
 
 export function verifyPolicyWriteQueue(root, { now = Date.now } = {}) {
-  const queue = readPolicyWriteVerifyQueue(root);
-  if (!queue.length) return { ok: true };
-  let rootReal;
-  try { rootReal = fs.realpathSync.native(root); } catch {
-    engagePolicyIntegrityKill(root, 'project root unreadable', { now });
-    return { ok: false };
-  }
-  for (const item of queue) {
-    const rel = normPolicyRel(item.rel);
-    const abs = path.join(root, rel);
-    let st;
-    try {
-      st = fs.lstatSync(abs);
-    } catch {
-      engagePolicyIntegrityKill(root, `missing policy window file ${rel}`, { now });
-      return { ok: false, rel };
+  const ts = typeof now === 'function' ? now() : now;
+  return withStateLock(root, () => {
+    const read = readPolicyWriteVerifyQueue(root);
+    if (read.error) {
+      engagePolicyIntegrityKill(root, `policy write verify queue ${read.error}`, { now: ts });
+      return { ok: false };
     }
-    if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) {
-      engagePolicyIntegrityKill(root, `policy window file ${rel} is not a plain regular file`, { now });
-      return { ok: false, rel };
+    const queue = read.rows;
+    if (!queue.length) return { ok: true };
+    let rootReal;
+    try { rootReal = fs.realpathSync.native(root); } catch {
+      engagePolicyIntegrityKill(root, 'project root unreadable', { now: ts });
+      return { ok: false };
     }
-    if (item.inode !== undefined && (st.ino !== item.inode || st.dev !== item.dev)) {
-      engagePolicyIntegrityKill(root, `policy window file ${rel} changed identity after allow`, { now });
-      return { ok: false, rel };
+    for (const item of queue) {
+      const rel = normPolicyRel(item.rel);
+      const abs = path.join(root, rel);
+      if (item.absentAtAllow) {
+        try {
+          const parent = path.dirname(abs);
+          const pst = fs.lstatSync(parent);
+          if (item.parentInode !== undefined && (pst.ino !== item.parentInode || pst.dev !== item.parentDev)) {
+            engagePolicyIntegrityKill(root, `policy window parent for ${rel} changed after allow`, { now: ts });
+            return { ok: false, rel };
+          }
+        } catch {
+          engagePolicyIntegrityKill(root, `policy window parent for ${rel} unreadable after allow`, { now: ts });
+          return { ok: false, rel };
+        }
+      }
+      let st;
+      try {
+        st = fs.lstatSync(abs);
+      } catch {
+        engagePolicyIntegrityKill(root, `missing policy window file ${rel}`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (st.isSymbolicLink() || !st.isFile() || st.nlink !== 1) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} is not a plain regular file`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (item.inode !== undefined && (st.ino !== item.inode || st.dev !== item.dev)) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} changed identity after allow`, { now: ts });
+        return { ok: false, rel };
+      }
+      let real;
+      try { real = fs.realpathSync.native(abs); } catch {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} realpath failed`, { now: ts });
+        return { ok: false, rel };
+      }
+      const relReal = normPolicyRel(path.relative(rootReal, real));
+      if (!relReal || relReal.startsWith('..') || !relReal.startsWith('docs/state/')) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} left docs/state`, { now: ts });
+        return { ok: false, rel };
+      }
+      if (!isSwarmAdminHandbuildPath(rel, { root })) {
+        engagePolicyIntegrityKill(root, `policy window file ${rel} failed post-write policy check`, { now: ts });
+        return { ok: false, rel };
+      }
     }
-    let real;
-    try { real = fs.realpathSync.native(abs); } catch {
-      engagePolicyIntegrityKill(root, `policy window file ${rel} realpath failed`, { now });
-      return { ok: false, rel };
-    }
-    const relReal = normPolicyRel(path.relative(rootReal, real));
-    if (!relReal || relReal.startsWith('..') || !relReal.startsWith('docs/state/')) {
-      engagePolicyIntegrityKill(root, `policy window file ${rel} left docs/state`, { now });
-      return { ok: false, rel };
-    }
-    if (!isSwarmAdminHandbuildPath(rel, { root })) {
-      engagePolicyIntegrityKill(root, `policy window file ${rel} failed post-write policy check`, { now });
-      return { ok: false, rel };
-    }
-  }
-  writePolicyWriteVerifyQueue(root, []);
-  return { ok: true };
+    writePolicyWriteVerifyQueue(root, []);
+    return { ok: true };
+  });
 }
 
 export function handbuildStatsJson(root, { now = Date.now } = {}) {
@@ -1661,7 +1694,7 @@ export function handbuildPolicyGuardCheck(root, {
   files: guardFiles = [],
 } = {}) {
   const ts = typeof now === 'function' ? now() : now;
-  const policyApprovals = (approvals ?? []).filter(a => a?.policyId && a.status === 'approved');
+  const policyApprovals = (approvals ?? []).filter(a => a?.policyWindow === true && a.status === 'approved');
   if (!policyApprovals.length) return null;
   const fileRels = (guardFiles ?? []).map(normPolicyRel).filter(Boolean);
   if (!fileRels.length) return null;
@@ -1722,7 +1755,7 @@ export function applyPolicyGuardedAllow(root, {
   approvals,
 }) {
   if (!allowResult?.allow) return allowResult;
-  const policyRows = (approvals ?? []).filter(a => a.policyId);
+  const policyRows = (approvals ?? []).filter(a => a.policyWindow === true);
   const approvalIsPolicyRow = policyRows.some(a => a.id === allowResult.approval);
   if (approvalIsPolicyRow && !(files?.length)) {
     return {
@@ -1841,6 +1874,13 @@ export const protectedAbsolute = (home = os.homedir()) => {
     path.join(home, '.claude', 'settings.local.json'),
     path.join(home, '.claude', 'hooks'),
     path.join(home, '.claude', 'plugins'),
+    path.join(home, '.claude', 'commands'),
+    path.join(home, '.claude', 'agents'),
+    path.join(home, '.claude', 'skills'),
+    path.join(home, '.claude', 'CLAUDE.md'),
+    path.join(home, '.netrc'),
+    path.join(defaultConfig, 'zsh'),
+    path.join(home, '.bash_logout'),
     path.join(home, '.ssh'),
     path.join(home, '.gitconfig'),
     path.join(home, '.npmrc'),
@@ -1866,6 +1906,13 @@ export const protectedAbsolute = (home = os.homedir()) => {
     paths.add(path.join(xdgEnv, 'git'));
     paths.add(path.join(xdgEnv, 'fish'));
     paths.add(path.join(xdgEnv, 'gh'));
+    paths.add(path.join(xdgEnv, 'zsh'));
+  }
+  const zdot = process.env.ZDOTDIR;
+  if (zdot) {
+    for (const name of ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout']) {
+      paths.add(path.join(zdot, name));
+    }
   }
   return [...paths];
 };
@@ -1897,7 +1944,7 @@ const underAbs = (abs, list) => {
   });
 };
 
-const handbuildRowIsPolicy = a => Boolean(a?.policyId || a?.autoApproved);
+const handbuildRowIsPolicy = a => Boolean(a?.policyWindow);
 const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
 
 /** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */

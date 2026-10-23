@@ -921,12 +921,22 @@ export function analyzeShell(command, { root, cwd = root, home = process.env.HOM
     }
     try { return fs.realpathSync.native(cur); } catch { return path.resolve(absPath); }
   };
-  const isProtectedAbs = r => [r.abs, r.real].filter(Boolean).some(abs => protectedAbs.some(prefix => {
-    const a = resolveProtectedReal(abs).toLowerCase();
-    const pre = resolveProtectedReal(prefix).toLowerCase();
-    // the protected path, what lies under it, and the folders that contain it (removing or moving them removes it)
-    return a === pre || a.startsWith(`${pre}/`) || (pre.startsWith(`${a}/`) && a !== '/');
-  }));
+  const protectedPathForms = abs => {
+    const resolved = path.resolve(abs);
+    const text = resolved.toLowerCase();
+    let real = text;
+    try { real = resolveProtectedReal(resolved).toLowerCase(); } catch { /* text only */ }
+    return text === real ? [text] : [text, real];
+  };
+  const protectedPrefixMatches = (abs, prefix) => {
+    for (const a of protectedPathForms(abs)) {
+      for (const pre of protectedPathForms(prefix)) {
+        if (a === pre || a.startsWith(`${pre}/`) || (pre.startsWith(`${a}/`) && a !== '/')) return true;
+      }
+    }
+    return false;
+  };
+  const isProtectedAbs = r => [r.abs, r.real].filter(Boolean).some(abs => protectedAbs.some(prefix => protectedPrefixMatches(abs, prefix)));
   const globPatternUnknown = (raw, expands = false) => {
     if (!/[*?\[{]/.test(String(raw))) return false;
     const fixed = String(raw).replace(/[*?\[{].*$/, '');

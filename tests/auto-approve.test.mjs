@@ -48,6 +48,7 @@ import {
   applyPolicyGuardedAllow,
   verifyPolicyWriteQueue,
   POLICY_INTEGRITY_ALERT_FILE,
+  POLICY_VERIFY_FILE,
 } from '../tools/handbuild.mjs';
 import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
 import { isSelfApprovalCommand } from '../tools/self-approval.mjs';
@@ -319,6 +320,44 @@ test('session cannot write XDG_CONFIG_HOME project-swarm when set', async t => {
   }
 });
 
+test('protected home gitconfig via symlink to the real dotfile is blocked', async t => {
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const real = path.join(home, '.gitconfig');
+  await fs.writeFile(real, '[user]\n');
+  const link = path.join(home, 'gitconfig-via-link');
+  await fs.symlink(real, link);
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${link}` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
+});
+
+test('protected install folder reached through a symlink prefix is blocked', async t => {
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const realInstall = path.join(home, 'project-swarm-install-real');
+  await fs.mkdir(path.join(realInstall, 'current', 'tools'), { recursive: true });
+  const linkInstall = path.join(home, '.project-swarm');
+  try { await fs.rm(linkInstall, { recursive: true, force: true }); } catch { /* absent */ }
+  await fs.symlink(realInstall, linkInstall);
+  const target = path.join(linkInstall, 'current', 'tools', 'handbuild-guard.mjs');
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${target}` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
+});
+
 test('protected home path via symlink is blocked', async t => {
   const root = await tempRepo(t);
   const home = process.env.HOME;
@@ -494,6 +533,7 @@ test('createRequest auto-approves admin window', async t => {
   assert.equal(r.status, 'approved');
   assert.equal(r.policyId, POLICY_ID);
   assert.equal(r.autoApproved, true);
+  assert.equal(r.policyWindow, true);
   const log = (await fs.readFile(path.join(root, LOG_FILE), 'utf8')).trim().split('\n').map(l => JSON.parse(l));
   assert.ok(log.some(e => e.event === 'auto-approved'));
   assert.equal(readHandbuildStats(root, { now: T0 }).autoApproved, 1);
@@ -577,6 +617,41 @@ test('decideRequest ownerTerminal bump skips write when stats are unreadable', a
   decideRequest(root, pending.id, 'approve', { now: T0, by: 'owner', channel: 'computer' });
   const raw = await fs.readFile(path.join(root, STATS_FILE), 'utf8');
   assert.equal(raw, 'not-json');
+});
+
+test('symlinked policy verify queue engages kill switch', async t => {
+  const root = await tempRepo(t);
+  const q = path.join(root, POLICY_VERIFY_FILE);
+  await fs.mkdir(path.dirname(q), { recursive: true });
+  await fs.symlink(path.join(root, 'docs', 'state'), q);
+  const verify = verifyPolicyWriteQueue(root, { now: T0 });
+  assert.equal(verify.ok, false);
+  assert.ok(fsSync.existsSync(path.join(root, HB_AUTO_OFF)));
+});
+
+test('kill switch blocks policy row writes but not owner-approved files', async t => {
+  const root = await tempRepo(t);
+  windowRequest(root);
+  await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
+  assert.equal(guardWrite(root, PLAN).allow, false);
+  const ownerPath = 'docs/design/owner-note.md';
+  await fs.writeFile(path.join(root, ownerPath), '# x\n');
+  const pending = createRequest(root, {
+    kind: 'tiny',
+    reason: 'owner approved design note edit',
+    files: ownerPath,
+    minutes: 30,
+  }, { now: T0 });
+  decideRequest(root, pending.id, 'approve', { now: T0 });
+  const d = guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: path.join(root, ownerPath), content: '# y\n' },
+    root,
+    cwd: root,
+    now: T0,
+  });
+  assert.equal(d.allow, true);
+  assert.notEqual(pending.policyWindow, true);
 });
 
 test('post-write verification engages kill switch when inode changes', async t => {

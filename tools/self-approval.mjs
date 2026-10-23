@@ -31,7 +31,7 @@ export const CHANGE_RECORD_DENY_REASON = changeRecordDenyReason({ token: '--yes'
 
 export const SELF_APPROVAL_REASON = `Hand-build guard [${HANDBUILD_SELF_APPROVAL_RULE_ID}]: approving or denying a hand-build, or switching the guard off, is the owner's alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.`;
 
-export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help', 'stats']);
+export const HANDBUILD_ORCHESTRATOR_VERBS = new Set(['request', 'status', 'list', 'show', 'log', 'check', 'help']);
 
 const handbuildOwnerDenyReason = ({ verb, token, position }) => `Hand-build guard [${HANDBUILD_OWNER_RULE_ID}]: matched "${token}" at executable position ${position} (orchestrator sessions cannot run handbuild ${verb}; owner-only: approve, deny, on, off, install, uninstall, and swarm decide handbuild-ID approve|deny).`;
 
@@ -160,19 +160,17 @@ const SWARM_INLINE = /\b(?:node|python3?)\b[\s\S]*\bswarm\b[\s\S]*\b(?:decide|ha
 const HAND_BUILD_GUARD_SCRIPT = /^tools\/handbuild[^/]*\.mjs$/i;
 
 const SAFE_SWARM = [
-  /\bswarm\s+handbuild\s+list\b/,
   /\bhandbuild\s+request\b/,
   /\bhandbuild\s+status\b/,
   /\bhandbuild\s+show\b/,
   /\bhandbuild\s+list\b/,
   /\bhandbuild\s+log\b/,
   /\bhandbuild\s+check\b/,
-  /\b(?:swarm\s+)?handbuild\s+stats(?:\s|$)/,
   /\bhandbuild\s+help\b/,
   /\bhandbuild\s*(--help|-h)\b/,
   /\bswarm\s+change\b(?!.*\s--yes(?:\s|$|=))/,
   /\bswarm\.mjs\b[\s\S]*\bchange\b(?!.*\s--yes(?:\s|$|=))/,
-  /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|stats|help)\b/,
+  /\bswarm\.mjs\b[\s\S]*\bhandbuild\s+(?:request|status|show|list|log|check|help)\b/,
   /\bswarm\s+go\b/,
   /\bswarm\s+run\b/,
   /\bswarm\s+tickets\b/,

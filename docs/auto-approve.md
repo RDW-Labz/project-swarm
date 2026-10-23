@@ -52,4 +52,14 @@ Only the owner can disable policy auto-approve by creating **`.swarm/handbuild/a
 
 ## Deviations from main
 
-None for git, merge, or Bash policy coverage.
+Compared to `origin/main` guard behavior (git, merge, and Bash policy coverage are unchanged).
+
+| Hunk | Narrows / widens | Why |
+| --- | --- | --- |
+| Chat-merge token (`recordChatMerge` / `tryConsumeChatMerge`) is consumed only when `swarm merge` is actually allowed | Narrows | Prevents burning a one-shot merge allowance on a denied command. |
+| Standing `merge-swarm-pr` tag on allow only when the standing rule enabled the merge | Narrows | Avoids labeling a merge as policy-standing when another path allowed it. |
+| `covers()` ignores policy-window rows (`policyWindow: true`); only owner approvals satisfy file/git coverage | Narrows | Policy windows never substitute for owner git or out-of-window file approvals. |
+| Session protection of `.swarm/handbuild` and `.git` (including when hand-build is off) | Narrows | Guard state and git metadata stay owner-only even with orchestrator mode or approvals. |
+| Extended `protectedAbsolute` list (machine policy config, ssh, shell dotfiles, Claude config paths except project memory, install dirs, etc.) | Narrows | Blocks orchestrator shell writes to owner-controlled paths outside the repo. |
+
+Nothing in this list widens what main allows.
