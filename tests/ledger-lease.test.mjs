@@ -11,6 +11,7 @@ import {
   release,
   sweepExpiredLeases,
   readLeases,
+  leasesPath,
   DEFAULT_LEASE_TTL_MS,
 } from '../tools/ledger-lease.mjs';
 import { createLedger, readLedger, writeLedger } from '../tools/tickets.mjs';
@@ -128,4 +129,72 @@ test('sweepExpiredLeases with nothing expired is a no-op', async t => {
   assert.deepEqual(result.swept, []);
   const ledger = await readLedger(root);
   assert.equal(ledger.tickets[0].status, 'running');
+});
+
+async function writeCorruptLeases(root, store) {
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  await fs.writeFile(leasesPath(root), JSON.stringify(store));
+}
+
+test('corrupt leases.json rejects claim, renew, and release with leases-corrupt', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const t0 = Date.now();
+  const leased = await claim(root, id, 'node-a', { now: t0, leaseTtlMs: 60_000 });
+
+  await writeCorruptLeases(root, {
+    version: 2,
+    leases: {},
+    maxTokenByTicket: {},
+  });
+  await assert.rejects(() => claim(root, id, 'node-b', { now: t0 + 1, leaseTtlMs: 60_000 }), err => err.code === 'leases-corrupt');
+  await assert.rejects(() => renew(root, id, leased.fencingToken, { now: t0 + 1 }), err => err.code === 'leases-corrupt');
+  await assert.rejects(() => release(root, id, leased.fencingToken, { now: t0 + 1 }), err => err.code === 'leases-corrupt');
+
+  await writeCorruptLeases(root, {
+    version: 1,
+    leases: {},
+    maxTokenByTicket: { [id]: '5' },
+  });
+  await assert.rejects(() => claim(root, id, 'node-b', { now: t0 + 1, leaseTtlMs: 60_000 }), err => err.code === 'leases-corrupt');
+
+  await writeCorruptLeases(root, {
+    version: 1,
+    leases: {
+      [id]: { ticketId: id, holderId: 'node-a', fencingToken: 1 },
+    },
+    maxTokenByTicket: { [id]: 1 },
+  });
+  await assert.rejects(() => renew(root, id, 1, { now: t0 + 1, leaseTtlMs: 60_000 }), err => err.code === 'leases-corrupt');
+});
+
+test('claim rejects invalid holderId and leaseTtlMs', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const t0 = Date.now();
+  await assert.rejects(() => claim(root, id, '', { now: t0, leaseTtlMs: 60_000 }), err => err.code === 'invalid-holder-id');
+  await assert.rejects(() => claim(root, id, 'bad id', { now: t0, leaseTtlMs: 60_000 }), err => err.code === 'invalid-holder-id');
+  await assert.rejects(() => claim(root, id, 'node-a', { now: t0, leaseTtlMs: 0 }), err => err.code === 'invalid-lease-ttl');
+  await assert.rejects(() => claim(root, id, 'node-a', { now: t0, leaseTtlMs: 1.5 }), err => err.code === 'invalid-lease-ttl');
+});
+
+test('sweepExpiredLeases reconciles lease and ticket status mismatches', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const t0 = Date.now();
+  const ttl = 60_000;
+  await claim(root, id, 'node-a', { now: t0, leaseTtlMs: ttl });
+
+  let ledger = await readLedger(root);
+  ledger.tickets[0].status = 'done';
+  await writeLedger(root, ledger);
+  await sweepExpiredLeases(root, { now: t0 + 1000 });
+  const store = await readLeases(root);
+  assert.equal(store.leases[id], undefined);
+
+  const root2 = await tmp(t);
+  const id2 = await seed(root2, { status: 'running' });
+  await sweepExpiredLeases(root2, { now: t0 });
+  ledger = await readLedger(root2);
+  assert.equal(ledger.tickets[0].status, 'ready');
 });

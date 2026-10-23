@@ -8,24 +8,103 @@ import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 
 export const DEFAULT_LEASE_TTL_MS = 15 * 60 * 1000;
 
+const HOLDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const TICKET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
 export const leasesPath = root => path.join(root, '.swarm', 'project', 'leases.json');
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function isPositiveSafeInteger(value) {
+  return Number.isInteger(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER;
+}
+
+function assertLeasesCorrupt(message) {
+  throw fail('leases-corrupt', message);
+}
+
+function validateTicketIdField(ticketId, context) {
+  if (typeof ticketId !== 'string' || !TICKET_ID_PATTERN.test(ticketId)) {
+    assertLeasesCorrupt(`invalid ticketId ${context}`);
+  }
+}
+
+export function validateHolderId(holderId) {
+  if (typeof holderId !== 'string' || !HOLDER_ID_PATTERN.test(holderId)) {
+    throw fail('invalid-holder-id', 'holderId must be a non-empty alphanumeric string (dash/underscore allowed)');
+  }
+}
+
+export function validateLeaseTtlMs(leaseTtlMs) {
+  if (!Number.isFinite(leaseTtlMs) || !Number.isInteger(leaseTtlMs) || leaseTtlMs <= 0) {
+    throw fail('invalid-lease-ttl', 'leaseTtlMs must be a positive finite integer');
+  }
+}
+
+function validateLeaseRecord(lease, ticketIdKey) {
+  if (!isPlainObject(lease)) assertLeasesCorrupt(`lease for ${ticketIdKey} is not an object`);
+  validateTicketIdField(lease.ticketId, `in lease ${ticketIdKey}`);
+  if (lease.ticketId !== ticketIdKey) {
+    assertLeasesCorrupt(`lease ticketId mismatch for key ${ticketIdKey}`);
+  }
+  if (typeof lease.holderId !== 'string' || !HOLDER_ID_PATTERN.test(lease.holderId)) {
+    assertLeasesCorrupt(`invalid holderId in lease ${ticketIdKey}`);
+  }
+  if (!Number.isInteger(lease.fencingToken) || lease.fencingToken <= 0 || lease.fencingToken > Number.MAX_SAFE_INTEGER) {
+    assertLeasesCorrupt(`invalid fencingToken in lease ${ticketIdKey}`);
+  }
+  if (typeof lease.expiresAt !== 'string' || !Number.isFinite(Date.parse(lease.expiresAt))) {
+    assertLeasesCorrupt(`invalid expiresAt in lease ${ticketIdKey}`);
+  }
+}
+
+export function validateLeaseStore(store) {
+  if (!isPlainObject(store)) assertLeasesCorrupt('leases store root is not an object');
+  if (store.version !== 1) assertLeasesCorrupt('leases store version must be 1');
+  if (!isPlainObject(store.leases)) assertLeasesCorrupt('leases must be a plain object');
+  if (!isPlainObject(store.maxTokenByTicket)) assertLeasesCorrupt('maxTokenByTicket must be a plain object');
+  for (const [ticketId, token] of Object.entries(store.maxTokenByTicket)) {
+    validateTicketIdField(ticketId, 'in maxTokenByTicket');
+    if (!isPositiveSafeInteger(token)) {
+      assertLeasesCorrupt(`maxTokenByTicket[${ticketId}] must be a positive safe integer`);
+    }
+  }
+  for (const [ticketId, lease] of Object.entries(store.leases)) {
+    validateTicketIdField(ticketId, 'in leases');
+    validateLeaseRecord(lease, ticketId);
+  }
+}
 
 export function emptyLeaseStore() {
   return { version: 1, leases: {}, maxTokenByTicket: {} };
 }
 
 export async function readLeases(root) {
+  let raw;
   try {
-    return JSON.parse(await fs.readFile(leasesPath(root), 'utf8'));
+    raw = await fs.readFile(leasesPath(root), 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return emptyLeaseStore();
     throw error;
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    assertLeasesCorrupt('leases.json is not valid JSON');
+  }
+  validateLeaseStore(parsed);
+  return parsed;
 }
 
 export async function writeLeases(root, store) {
+  validateLeaseStore(store);
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, 'leases.json');
   await assertRegularOrMissing(file);
@@ -48,7 +127,12 @@ function leaseActive(lease, now) {
 }
 
 function issueToken(store, ticketId) {
-  const prev = store.maxTokenByTicket[ticketId] ?? 0;
+  const prev = store.maxTokenByTicket[ticketId];
+  if (prev === undefined) {
+    const token = 1;
+    store.maxTokenByTicket[ticketId] = token;
+    return token;
+  }
   const token = prev + 1;
   store.maxTokenByTicket[ticketId] = token;
   return token;
@@ -60,7 +144,13 @@ function findTicket(ledger, ticketId) {
   return ticket;
 }
 
+const TERMINAL_TICKET_STATUSES = new Set(['done', 'cancelled']);
+
+// claim persists leases.json then tickets.json. If writeLedger fails after writeLeases
+// succeeds, the files can disagree until a later claim/release/sweep reconciles them.
 export async function claim(root, ticketId, holderId, { now = Date.now(), leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+  validateHolderId(holderId);
+  validateLeaseTtlMs(leaseTtlMs);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
     const ledger = await readLedger(root);
@@ -85,6 +175,7 @@ export async function claim(root, ticketId, holderId, { now = Date.now(), leaseT
 }
 
 export async function renew(root, ticketId, fencingToken, { now = Date.now(), leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+  validateLeaseTtlMs(leaseTtlMs);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
     const ledger = await readLedger(root);
@@ -103,6 +194,8 @@ export async function renew(root, ticketId, fencingToken, { now = Date.now(), le
   }
 }
 
+// release persists leases.json then tickets.json; partial failure can leave mismatched state
+// until sweepExpiredLeases or another lease operation reconciles ticket status vs leases.
 export async function release(root, ticketId, fencingToken, { now = Date.now() } = {}) {
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
@@ -124,6 +217,8 @@ export async function release(root, ticketId, fencingToken, { now = Date.now() }
   }
 }
 
+// Sweeps expired leases and reconciles lease/ticket drift (e.g. dual-write partial failure,
+// terminal ticket status with a still-active lease, or running ticket with no active lease).
 export async function sweepExpiredLeases(root, { now = Date.now() } = {}) {
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
@@ -131,14 +226,35 @@ export async function sweepExpiredLeases(root, { now = Date.now() } = {}) {
     if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
     const store = await readLeases(root);
     const swept = [];
+    let changed = false;
+
     for (const [ticketId, lease] of Object.entries(store.leases)) {
-      if (leaseActive(lease, now)) continue;
-      delete store.leases[ticketId];
-      swept.push(ticketId);
+      if (!leaseActive(lease, now)) {
+        delete store.leases[ticketId];
+        swept.push(ticketId);
+        changed = true;
+        const ticket = ledger.tickets.find(t => t.id === ticketId);
+        if (ticket?.status === 'running') ticket.status = 'ready';
+        continue;
+      }
       const ticket = ledger.tickets.find(t => t.id === ticketId);
-      if (ticket?.status === 'running') ticket.status = 'ready';
+      if (ticket && TERMINAL_TICKET_STATUSES.has(ticket.status)) {
+        delete store.leases[ticketId];
+        swept.push(ticketId);
+        changed = true;
+      }
     }
-    if (!swept.length) return { swept: [] };
+
+    for (const ticket of ledger.tickets) {
+      if (ticket.status !== 'running') continue;
+      const lease = store.leases[ticket.id];
+      if (!leaseActive(lease, now)) {
+        ticket.status = 'ready';
+        changed = true;
+      }
+    }
+
+    if (!changed) return { swept: [] };
     ledger.updatedAt = new Date(now).toISOString();
     await writeLeases(root, store);
     await writeLedger(root, ledger);
