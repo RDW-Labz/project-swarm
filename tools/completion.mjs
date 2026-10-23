@@ -67,6 +67,7 @@ export const COMMANDS = [
   command('phone', 'Answer decisions and approve proposed tickets from your phone through a private GitHub repo (GitHub app notifications).', 'none', '--repo --dry-run'),
   command('policy', 'Machine auto-approve policy: init, show, validate, path, check, run.', 'none', '--facts'),
   command('time', 'Log your own hours on this project (private; used for quotes), and the automatic estimate.', 'none', '--date --through --days'),
+  command('tunnel', 'managed SSH tunnels for the local lane', 'none', '--host --key --local-port --remote-port --remote-host'),
   command('quote', 'Cost, time and hours ranges for a scope from similar finished projects (price blank until rate and margin are set).', 'none', '--rate --margin --name --charged --change-orders --gpu-hours --backfill'),
   command('report', 'Weekly client progress report from the scope and the ticket progress (files only, a draft you approve).', 'none', '--client --since --preview --approve --status'),
   command('errors', 'Production errors become proposed tickets: pull (vercel logs), ingest, list, show, ignore, resolve, digest.', 'none', '--dry-run --status --reason --no-write'),
