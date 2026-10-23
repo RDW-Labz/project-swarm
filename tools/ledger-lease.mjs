@@ -111,12 +111,20 @@ async function writeLeases(root, store) {
 }
 
 async function withLeaseLock(root, fn) {
-  const release = await acquireAutopilotLock(root, { name: 'leases' });
-  try {
-    return await fn();
-  } finally {
-    await release();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const release = await acquireAutopilotLock(root, { name: 'leases' });
+      try {
+        return await fn();
+      } finally {
+        await release();
+      }
+    } catch (error) {
+      if (error.code !== 'leases-running' || attempt === 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
   }
+  return null;
 }
 
 /** Same retry discipline as `lockedUpdate` in scope-commands.mjs. */

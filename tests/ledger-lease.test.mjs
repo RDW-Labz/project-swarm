@@ -18,6 +18,7 @@ import {
   leasesPath,
   DEFAULT_LEASE_TTL_MS,
 } from '../tools/ledger-lease.mjs';
+import { acquireAutopilotLock } from '../tools/autopilot-lock.mjs';
 
 const scope = { name: 'P', version: 1, hash: 'a'.repeat(64) };
 const baseTicket = {
@@ -211,6 +212,16 @@ test('lease claim and scope-go ticket write do not lose each other', async t => 
 function scopeGoLockFile(root) {
   return path.join(root, '.swarm', 'project', 'scope-go.lock');
 }
+
+test('withLeaseLock retries leases-running contention instead of failing immediately', async t => {
+  const root = await project(t);
+  const hold = await acquireAutopilotLock(root, { name: 'leases' });
+  const claimPromise = claim(root, 'T-0172', 'retry-worker', { now: Date.now(), ttlMs: 60_000 });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await hold();
+  const claimed = await claimPromise;
+  assert.equal(claimed.holderId, 'retry-worker');
+});
 
 test('claim samples now after lock so long waits do not use stale expiry', async t => {
   let now = Date.now();

@@ -41,6 +41,61 @@ test('a lock left by a dead process, or an unreadable one, is cleared', async t 
   await (await acquireAutopilotLock(root, { pid: 6 }))();
 });
 
+test('two concurrent acquisitions in the same process exclude each other', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  const isAlive = () => true;
+  const results = await Promise.allSettled([
+    acquireAutopilotLock(root, { pid: 42, isAlive }),
+    acquireAutopilotLock(root, { pid: 42, isAlive }),
+  ]);
+  const fulfilled = results.filter(r => r.status === 'fulfilled');
+  const rejected = results.filter(r => r.status === 'rejected');
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.code, 'autopilot-running');
+  await fulfilled[0].value();
+});
+
+test('a temp lock file without a linked final path is not mistaken for the live lock', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  const dir = path.join(root, '.swarm/project');
+  await fs.writeFile(
+    path.join(dir, `autopilot.lock.${process.pid}.abc123.tmp`),
+    `${JSON.stringify({ pid: 1, token: 'pending', startedAt: new Date().toISOString() })}\n`,
+  );
+  await assert.rejects(fs.stat(lockFile(root)));
+  const release = await acquireAutopilotLock(root, { pid: 2, isAlive: () => true });
+  const owner = JSON.parse(await fs.readFile(lockFile(root), 'utf8'));
+  assert.equal(owner.pid, 2);
+  assert.ok(typeof owner.token === 'string' && owner.token.length > 0);
+  await release();
+});
+
+test('an empty final lock file still yields at most one live holder under contention', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  await fs.writeFile(lockFile(root), '');
+  const results = await Promise.allSettled([
+    acquireAutopilotLock(root, { pid: 1, isAlive: () => true }),
+    acquireAutopilotLock(root, { pid: 2, isAlive: () => true }),
+  ]);
+  const fulfilled = results.filter(r => r.status === 'fulfilled');
+  assert.equal(fulfilled.length, 1);
+  await fulfilled[0].value();
+});
+
+test('release only removes the lock when the token matches this acquisition', async t => {
+  const root = await tmp(t);
+  const release = await acquireAutopilotLock(root, { pid: 7, isAlive: () => true });
+  const saved = JSON.parse(await fs.readFile(lockFile(root), 'utf8'));
+  await fs.writeFile(lockFile(root), JSON.stringify({ pid: 7, token: 'other-token', startedAt: saved.startedAt }));
+  await release();
+  assert.equal(JSON.parse(await fs.readFile(lockFile(root), 'utf8')).token, 'other-token');
+  await (await acquireAutopilotLock(root, { pid: 9, isAlive: () => false }))();
+});
+
 test('a release never removes a lock that another process took over; a symlinked lock is refused', async t => {
   const root = await tmp(t);
   const release = await acquireAutopilotLock(root, { pid: 7 });
