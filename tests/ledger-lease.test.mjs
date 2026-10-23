@@ -13,6 +13,9 @@ import {
   readLeases,
   leasesPath,
   DEFAULT_LEASE_TTL_MS,
+  MAX_LEASE_TTL_MS,
+  validateLeaseStore,
+  issueToken,
 } from '../tools/ledger-lease.mjs';
 import { createLedger, readLedger, writeLedger } from '../tools/tickets.mjs';
 
@@ -176,6 +179,88 @@ test('claim rejects invalid holderId and leaseTtlMs', async t => {
   await assert.rejects(() => claim(root, id, 'bad id', { now: t0, leaseTtlMs: 60_000 }), err => err.code === 'invalid-holder-id');
   await assert.rejects(() => claim(root, id, 'node-a', { now: t0, leaseTtlMs: 0 }), err => err.code === 'invalid-lease-ttl');
   await assert.rejects(() => claim(root, id, 'node-a', { now: t0, leaseTtlMs: 1.5 }), err => err.code === 'invalid-lease-ttl');
+});
+
+const validLease = (ticketId, fencingToken, expiresAt) => ({
+  ticketId,
+  holderId: 'node-a',
+  fencingToken,
+  expiresAt,
+});
+
+test('validateLeaseStore rejects lease fencingToken above maxTokenByTicket', () => {
+  const id = 'T-9001';
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  assert.throws(
+    () =>
+      validateLeaseStore({
+        version: 1,
+        leases: { [id]: validLease(id, 5, expiresAt) },
+        maxTokenByTicket: { [id]: 2 },
+      }),
+    err => err.code === 'leases-corrupt',
+  );
+  assert.throws(
+    () =>
+      validateLeaseStore({
+        version: 1,
+        leases: { [id]: validLease(id, 3, expiresAt) },
+        maxTokenByTicket: {},
+      }),
+    err => err.code === 'leases-corrupt',
+  );
+});
+
+test('issueToken advances past lease fencingToken when maxTokenByTicket lags', () => {
+  const id = 'T-9001';
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const store = {
+    version: 1,
+    leases: { [id]: validLease(id, 5, expiresAt) },
+    maxTokenByTicket: { [id]: 2 },
+  };
+  const token = issueToken(store, id);
+  assert.equal(token, 6);
+  assert.equal(store.maxTokenByTicket[id], 6);
+});
+
+test('claim renew release and sweep reject invalid now and oversized leaseTtlMs', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const t0 = Date.now();
+  const leased = await claim(root, id, 'node-a', { now: t0, leaseTtlMs: 60_000 });
+  const overTtl = MAX_LEASE_TTL_MS + 1;
+
+  for (const fn of [
+    () => claim(root, id, 'node-b', { now: NaN, leaseTtlMs: 60_000 }),
+    () => claim(root, id, 'node-b', { now: t0, leaseTtlMs: overTtl }),
+    () => renew(root, id, leased.fencingToken, { now: Infinity, leaseTtlMs: 60_000 }),
+    () => renew(root, id, leased.fencingToken, { now: t0, leaseTtlMs: overTtl }),
+    () => release(root, id, leased.fencingToken, { now: 'bad' }),
+    () => sweepExpiredLeases(root, { now: null }),
+  ]) {
+    await assert.rejects(fn, err => err.code === 'invalid-now' || err.code === 'invalid-lease-ttl');
+  }
+});
+
+test('sweepExpiredLeases removes active lease when ticket is missing from ledger', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const orphanId = 'T-orphan';
+  const t0 = Date.now();
+  const ttl = 60_000;
+  await claim(root, id, 'node-a', { now: t0, leaseTtlMs: ttl });
+
+  const store = await readLeases(root);
+  store.leases[orphanId] = validLease(orphanId, 1, new Date(t0 + ttl).toISOString());
+  store.maxTokenByTicket[orphanId] = 1;
+  await writeCorruptLeases(root, store);
+
+  const result = await sweepExpiredLeases(root, { now: t0 + 1000 });
+  assert.ok(result.swept.includes(orphanId));
+  const after = await readLeases(root);
+  assert.equal(after.leases[orphanId], undefined);
+  assert.ok(after.leases[id]);
 });
 
 test('sweepExpiredLeases reconciles lease and ticket status mismatches', async t => {

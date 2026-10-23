@@ -7,6 +7,8 @@ import { readLedger, writeLedger } from './tickets.mjs';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 
 export const DEFAULT_LEASE_TTL_MS = 15 * 60 * 1000;
+/** Maximum lease duration (24 hours). Longer TTLs risk Date overflow and unbounded lock retention. */
+export const MAX_LEASE_TTL_MS = 24 * 60 * 60 * 1000;
 
 const HOLDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const TICKET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -45,6 +47,15 @@ export function validateLeaseTtlMs(leaseTtlMs) {
   if (!Number.isFinite(leaseTtlMs) || !Number.isInteger(leaseTtlMs) || leaseTtlMs <= 0) {
     throw fail('invalid-lease-ttl', 'leaseTtlMs must be a positive finite integer');
   }
+  if (leaseTtlMs > MAX_LEASE_TTL_MS) {
+    throw fail('invalid-lease-ttl', `leaseTtlMs must not exceed ${MAX_LEASE_TTL_MS} ms (24 hours)`);
+  }
+}
+
+export function validateNow(now) {
+  if (!Number.isFinite(now) || !Number.isInteger(now)) {
+    throw fail('invalid-now', 'now must be a finite integer timestamp in milliseconds');
+  }
 }
 
 function validateLeaseRecord(lease, ticketIdKey) {
@@ -78,6 +89,12 @@ export function validateLeaseStore(store) {
   for (const [ticketId, lease] of Object.entries(store.leases)) {
     validateTicketIdField(ticketId, 'in leases');
     validateLeaseRecord(lease, ticketId);
+    const maxTok = store.maxTokenByTicket[ticketId];
+    if (!isPositiveSafeInteger(maxTok) || maxTok < lease.fencingToken) {
+      assertLeasesCorrupt(
+        `maxTokenByTicket[${ticketId}] must exist and be >= lease fencingToken ${lease.fencingToken}`,
+      );
+    }
   }
 }
 
@@ -126,14 +143,11 @@ function leaseActive(lease, now) {
   return Boolean(lease?.expiresAt && Date.parse(lease.expiresAt) > now);
 }
 
-function issueToken(store, ticketId) {
-  const prev = store.maxTokenByTicket[ticketId];
-  if (prev === undefined) {
-    const token = 1;
-    store.maxTokenByTicket[ticketId] = token;
-    return token;
-  }
-  const token = prev + 1;
+export function issueToken(store, ticketId) {
+  const storedMaxToken = store.maxTokenByTicket[ticketId];
+  const existingLease = store.leases[ticketId];
+  const base = Math.max(storedMaxToken ?? 0, existingLease?.fencingToken ?? 0);
+  const token = base + 1;
   store.maxTokenByTicket[ticketId] = token;
   return token;
 }
@@ -149,6 +163,7 @@ const TERMINAL_TICKET_STATUSES = new Set(['done', 'cancelled']);
 // claim persists leases.json then tickets.json. If writeLedger fails after writeLeases
 // succeeds, the files can disagree until a later claim/release/sweep reconciles them.
 export async function claim(root, ticketId, holderId, { now = Date.now(), leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+  validateNow(now);
   validateHolderId(holderId);
   validateLeaseTtlMs(leaseTtlMs);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
@@ -175,6 +190,7 @@ export async function claim(root, ticketId, holderId, { now = Date.now(), leaseT
 }
 
 export async function renew(root, ticketId, fencingToken, { now = Date.now(), leaseTtlMs = DEFAULT_LEASE_TTL_MS } = {}) {
+  validateNow(now);
   validateLeaseTtlMs(leaseTtlMs);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
@@ -197,6 +213,7 @@ export async function renew(root, ticketId, fencingToken, { now = Date.now(), le
 // release persists leases.json then tickets.json; partial failure can leave mismatched state
 // until sweepExpiredLeases or another lease operation reconciles ticket status vs leases.
 export async function release(root, ticketId, fencingToken, { now = Date.now() } = {}) {
+  validateNow(now);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
     const ledger = await readLedger(root);
@@ -220,6 +237,7 @@ export async function release(root, ticketId, fencingToken, { now = Date.now() }
 // Sweeps expired leases and reconciles lease/ticket drift (e.g. dual-write partial failure,
 // terminal ticket status with a still-active lease, or running ticket with no active lease).
 export async function sweepExpiredLeases(root, { now = Date.now() } = {}) {
+  validateNow(now);
   const releaseLock = await acquireAutopilotLock(root, { name: 'leases' });
   try {
     const ledger = await readLedger(root);
@@ -238,7 +256,13 @@ export async function sweepExpiredLeases(root, { now = Date.now() } = {}) {
         continue;
       }
       const ticket = ledger.tickets.find(t => t.id === ticketId);
-      if (ticket && TERMINAL_TICKET_STATUSES.has(ticket.status)) {
+      if (!ticket) {
+        delete store.leases[ticketId];
+        swept.push(ticketId);
+        changed = true;
+        continue;
+      }
+      if (TERMINAL_TICKET_STATUSES.has(ticket.status)) {
         delete store.leases[ticketId];
         swept.push(ticketId);
         changed = true;
