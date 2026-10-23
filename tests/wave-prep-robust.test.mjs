@@ -10,7 +10,7 @@ import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
 import { parseScope } from '../tools/scope.mjs';
 import { validateProject } from '../tools/swarm.mjs';
 import { validateManifest } from '../tools/swarm/core-31.mjs';
-import { contextEnvFor, finalizeScopeWaveManifest, WAVE_PREP_IGNORE_TESTS_REASON } from '../tools/scope-commands.mjs';
+import { contextEnvFor, finalizeScopeWaveManifest } from '../tools/scope-commands.mjs';
 import { scopeLoop } from '../tools/scope-loop.mjs';
 
 const SCOPE_MD = `# Scope
@@ -65,7 +65,7 @@ async function validateManifestProject(root, manifest) {
   await validateProject(root, copy);
 }
 
-test('auto-fills ignoreTests for uncovered references when the ticket names no tests', async (t) => {
+test('adds referencing tests to job context for uncovered references when the ticket names no tests', async (t) => {
   const root = await project(t);
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.mkdir(path.join(root, 'tests'), { recursive: true });
@@ -87,9 +87,10 @@ test('auto-fills ignoreTests for uncovered references when the ticket names no t
     root,
   });
   const job = manifest.jobs[0];
-  assert.equal(job.ignoreTestsReason, WAVE_PREP_IGNORE_TESTS_REASON);
-  assert.ok((job.ignoreTests ?? []).length >= 8);
-  assert.ok(job.ignoreTests.every((p) => p.startsWith('tests/ref-')));
+  for (let i = 0; i < 8; i += 1) {
+    assert.ok(job.context.includes(`tests/ref-${i}.test.mjs`));
+  }
+  assert.equal(job.ignoreTests, undefined);
 });
 
 test('does not auto-fill ignoreTests when the ticket lists its own tests', async (t) => {

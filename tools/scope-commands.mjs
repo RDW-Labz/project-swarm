@@ -58,7 +58,8 @@ import { validateTicketPaths, formatTicketPathRefusal, formatTicketPathWarning, 
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
 import { parseUncovered } from './uncovered-tests.mjs';
 import { suggestIgnoreTests } from './context-check.mjs';
-import { decodeContext } from './api-adapters.mjs';
+import { API_AGENTS, decodeContext } from './api-adapters.mjs';
+import { CONTEXT_TOTAL_CAP } from './swarm/patterns.mjs';
 
 export const SCOPE_USAGE = [
   'Usage: swarm scope new [--type web-portal] [--out FILE] [--answers FILE]   (an interview that writes the scope: no model, no cost; --answers takes the same answers as JSON)',
@@ -428,18 +429,61 @@ export function contextEnvFor(root, profile) {
 export const WAVE_PREP_IGNORE_TESTS_REASON = 'tests that reference these files in passing are covered by the full suite run before merge';
 
 const UNCOVERED_TEST_REFERENCES_HEADER = 'Uncovered test references';
+const WAVE_PREP_CONTEXT_TESTS_MAX = 25;
 
-function applySuggestedIgnoreTests(jobs, suggested, ticketsById) {
+function wavePrepContextBytes(context, root) {
+  if (!root) return 0;
+  let total = 0;
+  for (const file of context ?? []) {
+    try { total += statSync(path.join(root, file)).size; } catch { /* missing */ }
+  }
+  return total;
+}
+
+function applyUncoveredTestReferences(jobs, suggested, ticketsById, root) {
   let changed = false;
   const next = jobs.map(job => {
     const add = suggested?.[job.id];
     if (!add?.length) return job;
     if ((ticketsById.get(job.id)?.tests ?? []).length) return job;
-    const prior = new Set(job.ignoreTests ?? []);
-    const merged = [...new Set([...prior, ...add])].sort().slice(0, 1000);
-    if (merged.length === prior.size && job.ignoreTestsReason === WAVE_PREP_IGNORE_TESTS_REASON) return job;
-    changed = true;
-    return { ...job, ignoreTests: merged, ignoreTestsReason: WAVE_PREP_IGNORE_TESTS_REASON };
+    const outputs = new Set(job.outputs ?? []);
+    const context = [...(job.context ?? [])];
+    const seen = new Set(context);
+    const pending = [...new Set(add)].filter(test => !seen.has(test) && !outputs.has(test)).sort();
+    if (!pending.length) return job;
+    const forIgnore = [];
+    let contextAdds = 0;
+    let apiBytes = wavePrepContextBytes(context, root);
+    const usesApiCap = Boolean(root && API_AGENTS.includes(job.agent));
+    for (const test of pending) {
+      if (contextAdds >= WAVE_PREP_CONTEXT_TESTS_MAX) {
+        forIgnore.push(test);
+        continue;
+      }
+      let testBytes = 0;
+      if (root) {
+        try { testBytes = statSync(path.join(root, test)).size; } catch { testBytes = 0; }
+      }
+      if (usesApiCap && apiBytes + testBytes > CONTEXT_TOTAL_CAP) {
+        forIgnore.push(test);
+        continue;
+      }
+      context.push(test);
+      seen.add(test);
+      contextAdds += 1;
+      apiBytes += testBytes;
+      changed = true;
+    }
+    let updated = changed ? { ...job, context } : job;
+    if (forIgnore.length) {
+      const prior = new Set(updated.ignoreTests ?? []);
+      const merged = [...new Set([...prior, ...forIgnore])].sort().slice(0, 1000);
+      if (merged.length !== prior.size || updated.ignoreTestsReason !== WAVE_PREP_IGNORE_TESTS_REASON) {
+        updated = { ...updated, ignoreTests: merged, ignoreTestsReason: WAVE_PREP_IGNORE_TESTS_REASON };
+        changed = true;
+      }
+    }
+    return updated;
   });
   return changed ? next : jobs;
 }
@@ -506,7 +550,7 @@ export async function finalizeScopeWaveManifest(manifest, { validate, tickets, w
       const suggested = error?.details?.suggestedIgnoreTests;
       if (suggested || String(error.message ?? '').startsWith(UNCOVERED_TEST_REFERENCES_HEADER)) {
         const map = suggested ?? suggestIgnoreTests(parseUncovered(error.message));
-        const nextJobs = applySuggestedIgnoreTests(manifest.jobs, map, ticketsById);
+        const nextJobs = applyUncoveredTestReferences(manifest.jobs, map, ticketsById, root);
         if (nextJobs !== manifest.jobs) {
           manifest.jobs = nextJobs;
           continue;
