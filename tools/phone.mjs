@@ -20,6 +20,16 @@ import { sanitizeText } from './journal.mjs';
 export const phoneDir = (env = process.env, home = os.homedir()) => env.SWARM_PHONE_DIR || path.join(home, '.project-swarm', 'phone');
 export const EXPIRY_MS = 24 * 3600000;
 export const WORD_EXPIRY_MS = 3600000;
+// Decisions and proposed tickets only become phone issues after this long with no owner answer (see syncPhone).
+export const PHONE_NOTIFY_WAIT_MS = 60 * 60 * 1000;
+
+export function waitingLongEnoughForPhoneNotify(item, nowMs = Date.now()) {
+  const since = item?.since;
+  if (since === null || since === undefined || since === '') return true;
+  const t = Date.parse(since);
+  if (!Number.isFinite(t)) return true;
+  return nowMs - t > PHONE_NOTIFY_WAIT_MS;
+}
 export const MAX_NEW_PER_SYNC = 10;
 export const MAX_OPEN = 30;
 const MAX_WRONG_WORDS = 3;
@@ -136,11 +146,11 @@ export function phoneItems({ projectName, root, inbox, proposed }) {
     const raw = it.choices.map(String);
     if (raw.length > 9 || raw.some(c => !c || c !== clean(c, 40) || c.startsWith('-')) || !SAFE_ID.test(String(it.id))) continue;
     const options = raw;
-    items.push({ key: `${root}|decision|${it.id}`, root, projectName, kind: 'decision', itemId: String(it.id), title: clean(it.title), options, default: it.default === undefined ? null : String(it.default), secondStep: SECOND_STEP.test(`${it.title} ${options.join(' ')}`) });
+    items.push({ key: `${root}|decision|${it.id}`, root, projectName, kind: 'decision', itemId: String(it.id), title: clean(it.title), options, default: it.default === undefined ? null : String(it.default), secondStep: SECOND_STEP.test(`${it.title} ${options.join(' ')}`), since: it.since ?? null });
   }
   for (const t of proposed) {
     if (t.status !== 'proposed' || !(t.files ?? []).length || !TICKET_ID.test(String(t.id))) continue;
-    items.push({ key: `${root}|ticket|${t.id}`, root, projectName, kind: 'ticket', itemId: String(t.id), title: clean(t.title), options: [], files: t.files.slice(0, 5).map(f => clean(f, 80)), secondStep: Boolean(t.sensitive) || t.risk === 'high' || (t.files ?? []).some(f => SECOND_STEP.test(f)) || SECOND_STEP.test(t.title ?? '') });
+    items.push({ key: `${root}|ticket|${t.id}`, root, projectName, kind: 'ticket', itemId: String(t.id), title: clean(t.title), options: [], files: t.files.slice(0, 5).map(f => clean(f, 80)), secondStep: Boolean(t.sensitive) || t.risk === 'high' || (t.files ?? []).some(f => SECOND_STEP.test(f)) || SECOND_STEP.test(t.title ?? ''), since: t.createdAt ?? null });
   }
   return items;
 }
@@ -278,7 +288,7 @@ async function syncUnlocked({ dir, deps, dryRun }) {
   const have = new Set(open.map(r => r.key));
   // A question that was answered, declined, locked or failed is not asked again; an expired one may be asked again, but not in the same sync that expired it.
   const settled = new Set(['answered', 'declined', 'locked', 'failed']);
-  const wanted = items.filter(i => !have.has(i.key) && !Object.values(state.issues).some(r => r.key === i.key && (settled.has(r.status) || (r.status === 'expired' && report.expired.includes(String(r.number))))));
+  const wanted = items.filter(i => waitingLongEnoughForPhoneNotify(i, now()) && !have.has(i.key) && !Object.values(state.issues).some(r => r.key === i.key && (settled.has(r.status) || (r.status === 'expired' && report.expired.includes(String(r.number))))));
   if (!open.some(r => r.kind === 'panic')) wanted.push({ key: 'panic', root: null, projectName: 'all projects', kind: 'panic', itemId: 'panic', title: 'stop all', options: [], secondStep: true });
   let made = 0;
   for (const item of wanted) {
