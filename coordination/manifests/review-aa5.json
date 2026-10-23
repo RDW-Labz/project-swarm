@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "review-aa5",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "auto-approval policy for hand-build windows and git push; a bypass lets a session push or rewrite the repo unattended",
+   "type": "review",
+   "prompt": "Fifth static security review of coordination/review/aa-new5.diff (auto-approve windows, now redesigned: a policy window covers git ONLY through 'swarm handbuild git SUBCOMMAND' which runs a pinned git binary in a clean environment, performs every policy check and the git command atomically in one process; plain git is never covered by a policy window; tools/auto-approve-policy.mjs and the hooks in tools/handbuild.mjs, tools/self-approval.mjs, tools/swarm.mjs). The fourth review (FAIL) found: H hardened git command only logged and never enforced; H system gitconfig never checked and GIT_CONFIG_SYSTEM allowed; H absolute-path git no longer classified as git by the main guard; M symlinked folders for new files; M git add options (pathspec-from-file, -f, --chmod, backslash normalisation); M global remote urls allowed but unchecked; M weak trusted-git check (PATH); M wrong environment checked; M folders and code files in windows; L env overrides of the policy file, stats never initialised, SAFE_SWARM still loose, two checks failing open on git errors, missing policy row crash, ssh config unprotected. Check each is really fixed by the redesign and look for NEW bypasses: the new swarm handbuild git subcommand itself (argument injection into git, option abuse such as --upload-pack, --exec-path, -C, --git-dir, -c, config subcommand, alias expansion, remote helpers, hooks via core.hooksPath or templates, hook scripts in the common git dir, pushing to a different URL than checked), the matcher for the installed swarm path, how the guard treats everything else, TOCTOU between check and run, and any fail-open path. No exploit commands: class and fix. Verdict PASS or FAIL, ranked findings with severity and file and line.",
+   "context": [
+    "coordination/review/aa-new5.diff"
+   ],
+   "outputs": [],
+   "timeoutMs": 1200000
+  }
+ ]
+}

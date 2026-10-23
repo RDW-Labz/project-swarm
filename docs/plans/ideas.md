@@ -79,6 +79,10 @@ Open points: Bedrock limits on tool-use streaming fields differ by model generat
 - A deleted file is not in the security review context (the reviewer sees only its name). Add its pre-delete content.
 - `--take-from` leaves the source ticket's `tests` and `dependsOn` as they were, and a ready source already in an active run's manifest still writes the moved file.
 
+## Parked: git actions under policy
+
+Git auto-approve was removed from hand-build policy v1 (files only). Before it returns, it needs a dedicated security review covering at least: pinned git binary, atomic policy checks in one process, protecting the git common dir, push by literal URL and explicit refspec, staged-file verification, and cwd equals project root.
+
 ## Owner order 2026-10-23: the swarm defines undefined ui screens itself
 
 - When swarm scope approve (or scope check) finds tickets that name a ui screen the profile ui block does not define, the orchestrator defines it automatically under policy instead of raising a card: match the screen id against the repo's design references (docs/design/reference and the files named in the scope), pick the mockup by an unambiguous name or id match, derive the route from the watch/app route table, write the screens entry to the profile ui block, and log the definition in the project journal with the evidence (screen id, mockup path, route, why it matched).
