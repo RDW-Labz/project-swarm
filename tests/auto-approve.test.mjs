@@ -55,6 +55,21 @@ import { isSelfApprovalCommand } from '../tools/self-approval.mjs';
 import { cleanupTestProject } from './_isolate-config.mjs';
 
 const exec = promisify(execFile);
+const GIT_CONFIG_ARGS = [
+  '-c', 'user.name=t',
+  '-c', 'user.email=t@example.com',
+  '-c', 'commit.gpgsign=false',
+  '-c', 'core.hooksPath=/dev/null',
+];
+const GIT_ISOLATED_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_SYSTEM: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+};
+async function git(args, opts = {}) {
+  const env = { ...process.env, ...GIT_ISOLATED_ENV, ...opts.env };
+  return exec('git', [...GIT_CONFIG_ARGS, ...args], { ...opts, env });
+}
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const SHELL_WRITES_SRC = fsSync.readFileSync(new URL('../tools/shell-writes.mjs', import.meta.url), 'utf8');
 const HANDBUILD_SRC = fsSync.readFileSync(new URL('../tools/handbuild.mjs', import.meta.url), 'utf8');
@@ -69,7 +84,7 @@ async function tempRepo(t, { signed = true } = {}) {
     await cleanupTestProject(root);
     await fs.rm(root, { recursive: true, force: true });
   });
-  await exec('git', ['init', '-q', '-b', 'main', root]);
+  await git(['init', '-q', '-b', 'main', root]);
   await fs.mkdir(path.join(root, 'docs', 'scope'), { recursive: true });
   await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
   await fs.mkdir(path.join(root, 'docs', 'state'), { recursive: true });
@@ -82,8 +97,8 @@ async function tempRepo(t, { signed = true } = {}) {
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', path.basename(STATS_INITIALIZED_FILE)), `${POLICY_ID}\n`);
   await fs.writeFile(path.join(root, '.swarm', 'handbuild', 'stats.json'), '{}\n');
   await fs.writeFile(path.join(root, PLAN), '# plan\n');
-  await exec('git', ['add', PLAN], { cwd: root });
-  await exec('git', ['commit', '-q', '-m', 'init', '--author', 't <t@t>'], { cwd: root });
+  await git(['add', PLAN], { cwd: root });
+  await git(['commit', '-q', '-m', 'init', '--author', 't <t@t>'], { cwd: root });
   return root;
 }
 
