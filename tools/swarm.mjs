@@ -3281,6 +3281,14 @@ async function mainInner() {
     if(out.exitCode)process.exitCode=out.exitCode;
     return;
   }
+  if(args[0]==='queue'){
+    root=await fs.realpath(root);
+    const {runQueueCommand}=await import('./queue-commands.mjs');
+    const res=await runQueueCommand(root,args.slice(1),{installRoot:ownRoot});
+    process.stdout.write(res.stdout);
+    if(res.exitCode)process.exitCode=res.exitCode;
+    return;
+  }
   if(args[0]==='status'&&args[1]==='--all'&&args.length===2)args.splice(0,2,'watch','--all','--text');
   if(args[0]==='watch'||args[0]==='gallery'){
     root=await fs.realpath(root);
