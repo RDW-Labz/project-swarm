@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { assertScannedCleanBundle } from './field-push.mjs';
 
 const HASH = /^[a-f0-9]{64}$/;
+const KNOWN_AREAS = new Set(['tool', 'gotchas', 'security', 'release', 'testing', 'workflow']);
+const KNOWN_LANES = new Set(['fast', 'standard', 'slow', 'cheap', 'mid', 'expensive']);
+const KNOWN_LESSON_STATUSES = new Set(['queued', 'built', 'shipped', 'dropped', 'open', 'closed']);
 
 /** Keys that must never appear in a field report (raw customer lesson / bundle content). */
 export const CUSTOMER_CONTENT_KEYS = new Set([
@@ -31,6 +35,18 @@ function bumpCount(map, key) {
   map[label] = (map[label] ?? 0) + 1;
 }
 
+function safeArea(value) {
+  return typeof value === 'string' && KNOWN_AREAS.has(value) ? value : 'other';
+}
+
+function safeLane(value) {
+  return typeof value === 'string' && KNOWN_LANES.has(value) ? value : 'other';
+}
+
+function safeLessonStatus(value) {
+  return typeof value === 'string' && KNOWN_LESSON_STATUSES.has(value) ? value : 'other';
+}
+
 export function lessonMetadataOnly(lesson) {
   const source = asObject(lesson);
   const tags = Array.isArray(source.tags)
@@ -38,8 +54,8 @@ export function lessonMetadataOnly(lesson) {
     : [];
   return {
     id: asString(source.id),
-    area: asString(source.area) || 'other',
-    status: asString(source.status) || 'other',
+    area: safeArea(source.area),
+    status: safeLessonStatus(source.status),
     version: typeof source.version === 'string' ? source.version : null,
     createdAt: typeof source.createdAt === 'string' ? source.createdAt : null,
     ruleLength: finiteNumber(source.ruleLength) ?? 0,
@@ -50,7 +66,7 @@ export function lessonMetadataOnly(lesson) {
 export function runMetadataOnly(run) {
   const source = asObject(run);
   return {
-    lane: asString(source.lane) || 'other',
+    lane: safeLane(source.lane),
     jobs: finiteNumber(source.jobs),
     pass: finiteNumber(source.pass),
     fail: finiteNumber(source.fail),
@@ -82,7 +98,7 @@ function assertBundleReadable(metadata) {
   return true;
 }
 
-async function readBundleFiles(root, source, relativeDir) {
+async function readBundleFiles(root, source, relativeDir, { scan, skippedBundles } = {}) {
   const dir = path.resolve(root, relativeDir);
   let entries;
   try {
@@ -98,28 +114,57 @@ async function readBundleFiles(root, source, relativeDir) {
     try {
       parsed = JSON.parse(await fs.readFile(path.join(dir, entry.name), 'utf8'));
     } catch {
+      skippedBundles?.push({
+        source,
+        file: entry.name,
+        reason: 'field-report-bundle-unparseable',
+      });
       continue;
     }
-    const metadata = bundleMetadataOnly(parsed, { source });
-    if (source === 'inbox' && metadata.scannedClean !== true) continue;
-    if (!assertBundleReadable(metadata)) continue;
+    let clean;
+    try {
+      clean = await assertScannedCleanBundle(parsed, { scan });
+    } catch (error) {
+      skippedBundles?.push({
+        source,
+        file: entry.name,
+        reason: asString(error?.code) || 'field-report-bundle-rejected',
+      });
+      continue;
+    }
+    const metadata = bundleMetadataOnly(clean, { source });
+    if (!assertBundleReadable(metadata)) {
+      skippedBundles?.push({
+        source,
+        file: entry.name,
+        reason: 'field-report-bundle-unreadable',
+      });
+      continue;
+    }
     records.push(metadata);
   }
   return records;
 }
 
-export async function collectFieldBundleMetadata(root) {
-  const inbox = await readBundleFiles(root, 'inbox', path.join('.swarm', 'field', 'inbox'));
-  const exports = await readBundleFiles(root, 'exports', path.join('.swarm', 'field', 'exports'));
-  return [...inbox, ...exports];
+export async function collectFieldBundleMetadata(root, { scan } = {}) {
+  const skippedBundles = [];
+  const inbox = await readBundleFiles(root, 'inbox', path.join('.swarm', 'field', 'inbox'), {
+    scan,
+    skippedBundles,
+  });
+  const exports = await readBundleFiles(root, 'exports', path.join('.swarm', 'field', 'exports'), {
+    scan,
+    skippedBundles,
+  });
+  return { records: [...inbox, ...exports], skippedBundles };
 }
 
-export function aggregateFieldReport(records, { now } = {}) {
+export function aggregateFieldReport(records, { now, skippedBundles = [] } = {}) {
   const bundles = Array.isArray(records) ? records : [];
   const sources = { inbox: 0, exports: 0 };
-  const lessonsByArea = {};
-  const lessonsByStatus = {};
-  const runsByLane = {};
+  const lessonsByArea = Object.create(null);
+  const lessonsByStatus = Object.create(null);
+  const runsByLane = Object.create(null);
   const projects = {};
   let lessonTotal = 0;
   let runTotal = 0;
@@ -127,10 +172,12 @@ export function aggregateFieldReport(records, { now } = {}) {
   let passCount = 0;
   let failCount = 0;
   const exportedAt = [];
+  let bundleCount = 0;
 
   for (const bundle of bundles) {
     const meta = bundleMetadataOnly(bundle, { source: bundle.source });
     if (!assertBundleReadable(meta)) continue;
+    bundleCount++;
     if (meta.source === 'inbox') sources.inbox++;
     else if (meta.source === 'exports') sources.exports++;
     exportedAt.push(meta.exportedAt);
@@ -165,7 +212,8 @@ export function aggregateFieldReport(records, { now } = {}) {
   exportedAt.sort();
   return {
     generatedAt: generatedAt(now),
-    bundleCount: bundles.length,
+    bundleCount,
+    skippedBundles: Array.isArray(skippedBundles) ? skippedBundles : [],
     sources,
     timestamps: {
       earliestExportedAt: exportedAt[0] ?? null,
@@ -187,9 +235,9 @@ export function aggregateFieldReport(records, { now } = {}) {
   };
 }
 
-export async function buildFieldReport(root, { now } = {}) {
-  const records = await collectFieldBundleMetadata(root);
-  return aggregateFieldReport(records, { now });
+export async function buildFieldReport(root, { now, scan } = {}) {
+  const { records, skippedBundles } = await collectFieldBundleMetadata(root, { scan });
+  return aggregateFieldReport(records, { now, skippedBundles });
 }
 
 export async function writeFieldReport(root, report, { dir } = {}) {

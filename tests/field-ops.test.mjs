@@ -134,8 +134,8 @@ test('field report aggregates pushed and local export metadata across machines',
     bundle,
     send: localFieldBundleTransport(dest),
   });
-  const localRecords = await collectFieldBundleMetadata(source);
-  const remoteRecords = await collectFieldBundleMetadata(dest);
+  const { records: localRecords } = await collectFieldBundleMetadata(source);
+  const { records: remoteRecords } = await collectFieldBundleMetadata(dest);
   assert.equal(localRecords.length, 1);
   assert.equal(remoteRecords.length, 1);
   assert.equal(localRecords[0].source, 'exports');
@@ -184,6 +184,120 @@ test('field report never includes raw customer content fields or lesson text', a
     assert.equal(keys.has(key), false, `report must not contain customer content key ${key}`);
   }
   assert.equal(report.lessons.total >= 1, true);
+});
+
+test('field report buckets regex-valid but unknown area and lane as other', async () => {
+  const unknownArea = 'acme-internal-proj';
+  const unknownLane = 'acme-internal-proj';
+  const report = aggregateFieldReport([{
+    source: 'exports',
+    projectId: 'a'.repeat(64),
+    exportedAt: '2026-10-21T15:30:00.000Z',
+    scannedClean: true,
+    lessonCount: 1,
+    runCount: 1,
+    lessons: [{ id: 'L-1', area: unknownArea, status: 'shipped', ruleLength: 0, tags: [] }],
+    runs: [{ lane: unknownLane, jobs: 1, pass: 1, fail: 0, medianMinutes: 1 }],
+  }], { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.lessons.byArea.other, 1);
+  assert.equal(report.lessons.byArea[unknownArea], undefined);
+  assert.equal(report.runs.byLane.other, 1);
+  assert.equal(report.runs.byLane[unknownLane], undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(report.lessons.byArea, unknownArea), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(report.runs.byLane, unknownLane), false);
+});
+
+test('field report buckets unknown area, status, and lane as other in count maps', async () => {
+  const maliciousKey = '__proto__';
+  const report = aggregateFieldReport([{
+    source: 'exports',
+    projectId: 'a'.repeat(64),
+    exportedAt: '2026-10-21T15:30:00.000Z',
+    scannedClean: true,
+    lessonCount: 1,
+    runCount: 1,
+    lessons: [{ id: 'L-1', area: maliciousKey, status: maliciousKey, ruleLength: 0, tags: [] }],
+    runs: [{ lane: maliciousKey, jobs: 1, pass: 1, fail: 0, medianMinutes: 1 }],
+  }], { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.lessons.byArea.other, 1);
+  assert.equal(report.lessons.byArea[maliciousKey], undefined);
+  assert.equal(report.lessons.byStatus.other, 1);
+  assert.equal(report.lessons.byStatus[maliciousKey], undefined);
+  assert.equal(report.runs.byLane.other, 1);
+  assert.equal(report.runs.byLane[maliciousKey], undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(report.lessons.byArea, maliciousKey), false);
+});
+
+test('field report records unparseable bundle files in skippedBundles', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  const exportsDir = path.join(root, '.swarm', 'field', 'exports');
+  await fs.mkdir(exportsDir, { recursive: true });
+  await fs.writeFile(path.join(exportsDir, '2026-10-21-broken.json'), '{ not json\n');
+  await writeFieldExport(root, bundle);
+  const report = await buildFieldReport(root, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 1);
+  assert.equal(report.skippedBundles.length, 1);
+  assert.equal(report.skippedBundles[0].source, 'exports');
+  assert.equal(report.skippedBundles[0].file, '2026-10-21-broken.json');
+  assert.equal(report.skippedBundles[0].reason, 'field-report-bundle-unparseable');
+});
+
+test('field report excludes unscanned export bundles and reports the rejection', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  await writeFieldExport(root, data);
+  const report = await buildFieldReport(root, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 0);
+  assert.equal(report.lessons.total, 0);
+  assert.equal(report.skippedBundles.length, 1);
+  assert.equal(report.skippedBundles[0].source, 'exports');
+  assert.equal(report.skippedBundles[0].reason, 'field-push-not-scanned-clean');
+});
+
+test('field report excludes unscanned inbox bundles and reports the rejection', async () => {
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const inboxDir = path.join(root, '.swarm', 'field', 'inbox');
+  await fs.mkdir(inboxDir, { recursive: true });
+  await fs.writeFile(
+    path.join(inboxDir, `2026-10-21-${data.projectId}.json`),
+    `${JSON.stringify(data)}\n`,
+  );
+  const report = await buildFieldReport(root, { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 0);
+  assert.equal(report.skippedBundles.length, 1);
+  assert.equal(report.skippedBundles[0].source, 'inbox');
+  assert.equal(report.skippedBundles[0].reason, 'field-push-not-scanned-clean');
+});
+
+test('field report bundleCount counts only accepted bundles', async () => {
+  const goodId = 'b'.repeat(64);
+  const report = aggregateFieldReport([
+    {
+      source: 'exports',
+      projectId: goodId,
+      exportedAt: '2026-10-21T15:30:00.000Z',
+      scannedClean: true,
+      lessonCount: 0,
+      runCount: 0,
+      lessons: [],
+      runs: [],
+    },
+    {
+      source: 'exports',
+      projectId: 'not-a-hash',
+      exportedAt: '2026-10-21T15:30:00.000Z',
+      scannedClean: true,
+      lessonCount: 0,
+      runCount: 0,
+      lessons: [],
+      runs: [],
+    },
+  ], { now: new Date('2026-10-22T09:00:00.000Z') });
+  assert.equal(report.bundleCount, 1);
+  assert.equal(report.sources.exports, 1);
 });
 
 test('runFieldReport writes aggregate file and stays metadata-only', async () => {
