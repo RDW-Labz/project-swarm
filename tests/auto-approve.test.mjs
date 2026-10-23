@@ -15,6 +15,7 @@ import {
   isPolicyWindowFileEntry,
   policyFilePath,
   machinePolicyJsonPath,
+  mergeStandingPolicyJsonPath,
   canonicalPolicyRel,
   POLICY_STATS_UNREADABLE,
   AUTO_OFF_FILE,
@@ -40,6 +41,8 @@ import {
   MERGE_BLOCKED_REASON,
   handbuildPolicyGuardCheck,
   recordPolicyGuardAllow,
+  handbuildStatsInitialized,
+  applyPolicyGuardedAllow,
 } from '../tools/handbuild.mjs';
 import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
 import { isSelfApprovalCommand } from '../tools/self-approval.mjs';
@@ -142,12 +145,15 @@ test('allowed paths and blocked areas', async t => {
     PLAN,
     'docs/state/x.csv',
     'docs/state/x.ndjson',
-    'docs/design/note.txt',
-    'coordination/handoff-agent.md',
+    'docs/state/note.txt',
   ]) {
     assert.equal(isSwarmAdminHandbuildPath(f, { root }), true, f);
   }
   for (const f of [
+    'docs/design/note.txt',
+    'coordination/handoff-agent.md',
+    'docs/state/CLAUDE.md',
+    'docs/state/.cursor/rules/x.md',
     'coordination/review/r.md',
     'coordination/manifests/w.json',
     '.project-swarm.json',
@@ -159,16 +165,18 @@ test('allowed paths and blocked areas', async t => {
   }
 });
 
-test('allowed folders narrowed to docs/state and docs/design; json and yaml dropped', async t => {
+test('allowed folders narrowed to docs/state only; instruction, dot-folder, json and yaml dropped', async t => {
   const root = await tempRepo(t);
   for (const f of [
     'docs/scope/plan.md',
     'docs/plans/ideas.md',
+    'docs/design/note.md',
+    'coordination/handoff-agent.md',
     'docs/state/x.json',
     'docs/state/x.yaml',
-    'docs/design/x.yml',
-    'coordination/handoff-agent.json',
-    'coordination/handoff-agent.yaml',
+    'docs/state/AGENTS.md',
+    'docs/state/foo.instructions.md',
+    'docs/state/bar.rules.md',
   ]) {
     assert.equal(isPolicyWindowFileEntry(f), false, f);
     assert.equal(isSwarmAdminHandbuildPath(f, { root }), false, f);
@@ -234,14 +242,49 @@ test('ln and link into a window path are denied while a policy window is live', 
   const root = await tempRepo(t);
   windowRequest(root);
   for (const cmd of [
-    `ln ${PLAN} docs/design/x.md`,
-    `ln -s ../state/plan.md docs/design/x.md`,
-    `link ${PLAN} docs/design/y.md`,
+    `ln ${PLAN} docs/state/x.md`,
+    `ln -s ../state/plan.md docs/state/x.md`,
+    `link ${PLAN} docs/state/y.md`,
     `ln /tmp/somewhere docs/state/new.md`,
   ]) {
     const d = guardBash(root, cmd);
     assert.equal(d.allow, false, cmd);
     assert.match(d.reason, /policy window/, cmd);
+  }
+});
+
+test('cp -l tar unzip rsync install onto window path denied while window live', async t => {
+  const root = await tempRepo(t);
+  await fs.mkdir(path.join(root, 'tools'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tools', 'src.txt'), 'x\n');
+  windowRequest(root);
+  for (const cmd of [
+    `cp -l tools/src.txt ${PLAN}`,
+    `cp -s tools/src.txt docs/state/link.md`,
+    `rsync tools/src.txt ${PLAN}`,
+    `install tools/src.txt ${PLAN}`,
+  ]) {
+    const d = guardBash(root, cmd);
+    assert.equal(d.allow, false, cmd);
+    assert.match(d.reason, /policy window/, cmd);
+  }
+  const tarDeny = guardBash(root, 'tar -xf tools/archive.tar -C docs/state');
+  assert.equal(tarDeny.allow, false);
+});
+
+test('mv cp sed tee onto window path from protected sources denied', async t => {
+  const root = await tempRepo(t);
+  await fs.writeFile(path.join(root, PLAN), '# plan\n');
+  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+  await fs.writeFile(path.join(root, '.claude', 'settings.json'), '{}\n');
+  windowRequest(root);
+  for (const cmd of [
+    `mv .claude/settings.json ${PLAN}`,
+    `cp .claude/settings.json ${PLAN}`,
+  ]) {
+    const d = guardBash(root, cmd);
+    assert.equal(d.allow, false, cmd);
+    assert.match(d.reason, /policy window|protected|belongs to the owner/, cmd);
   }
 });
 
@@ -306,6 +349,19 @@ test('node PATH/swarm.mjs merge reaches the standing-merge gate', async t => {
   });
   assert.equal(standing.allow, true);
   assert.equal(standing.standing, 'merge-swarm-pr');
+});
+
+test('mergeStandingPolicyJsonPath ignores SWARM_POLICY_FILE without signed harness', async t => {
+  const unsigned = await tempRepo(t, { signed: false });
+  const fallback = path.join(os.homedir(), '.config', 'project-swarm', 'policy.json');
+  const prev = process.env.SWARM_POLICY_FILE;
+  process.env.SWARM_POLICY_FILE = path.join(os.tmpdir(), 'evil-merge-policy.json');
+  try {
+    assert.equal(mergeStandingPolicyJsonPath({ home: os.homedir(), root: unsigned }), fallback);
+  } finally {
+    if (prev === undefined) delete process.env.SWARM_POLICY_FILE;
+    else process.env.SWARM_POLICY_FILE = prev;
+  }
 });
 
 test('policy file override needs the signed marker, never a temp directory', async t => {
@@ -421,11 +477,30 @@ test('guard: auto-approved write in window', async t => {
   assert.ok(d.approval);
 });
 
+test('stats bootstrap initializes under lock before first auto-approve', async t => {
+  const root = await tempRepo(t);
+  await fs.rm(path.join(root, '.swarm', 'handbuild', path.basename(STATS_INITIALIZED_FILE)), { force: true });
+  await fs.rm(path.join(root, STATS_FILE), { force: true });
+  assert.equal(handbuildStatsInitialized(root), false);
+  const r = windowRequest(root);
+  assert.equal(r.status, 'approved');
+  assert.equal(handbuildStatsInitialized(root), true);
+  assert.ok(fsSync.existsSync(path.join(root, STATS_FILE)));
+});
+
 test('unreadable stats block auto-approve', async t => {
   const root = await tempRepo(t);
   await fs.writeFile(path.join(root, STATS_FILE), 'not-json');
   const pending = windowRequest(root);
   assert.equal(pending.status, 'pending');
+});
+
+test('bumpHandbuildStats does not persist unreadable flag', async t => {
+  const root = await tempRepo(t);
+  await fs.writeFile(path.join(root, STATS_FILE), 'not-json');
+  bumpHandbuildStats(root, 'ownerTerminal', { now: T0 });
+  const raw = await fs.readFile(path.join(root, STATS_FILE), 'utf8');
+  assert.doesNotMatch(raw, /__policyStatsUnreadable/);
 });
 
 test('missing stats after initialized marker blocks auto-approve', async t => {
@@ -459,6 +534,44 @@ test('kill switch blocks policy write at execution', async t => {
   await fs.rm(path.join(root, HB_AUTO_OFF));
   const check = handbuildPolicyGuardCheck(root, { approvals: [req], files: [PLAN], now: T0() });
   assert.equal(check?.ok, true);
+});
+
+test('kill switch does not block read-only git while policy window is live', async t => {
+  const root = await tempRepo(t);
+  windowRequest(root);
+  await fs.writeFile(path.join(root, HB_AUTO_OFF), '');
+  const d = guardBash(root, 'git status');
+  assert.equal(d.allow, true);
+});
+
+test('applyPolicyGuardedAllow denies policy row with empty files', async t => {
+  const root = await tempRepo(t);
+  const req = windowRequest(root);
+  const out = applyPolicyGuardedAllow(root, {
+    files: [],
+    allowResult: { allow: true, approval: req.id },
+    now: T0,
+    h: os.homedir(),
+    approvals: [req],
+    finishBash: d => d,
+  });
+  assert.equal(out.allow, false);
+  assert.match(out.reason, /named files/);
+});
+
+test('protected home gitconfig compared case-insensitively', async t => {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${home}/.GITCONFIG` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
 });
 
 test('daily auto-approve window cap', async t => {

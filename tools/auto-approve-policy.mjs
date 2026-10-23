@@ -26,6 +26,8 @@ export const POLICY_STATS_UNREADABLE = '__policyStatsUnreadable';
 // Plain notes only: json and yaml are parsed as config by trusted processes, so they never ride a policy window.
 const ALLOWED_EXT = new Set(['.md', '.txt', '.csv', '.ndjson']);
 
+const INSTRUCTION_BASENAMES = new Set(['claude.md', 'agents.md', 'gemini.md', 'readme.md', 'skill.md']);
+
 const BLOCKED_PREFIXES = [
   'tools/',
   'tests/',
@@ -50,11 +52,21 @@ function fileExtension(lowerPath) {
   return base.slice(dot);
 }
 
+function pathHasDotFolderComponent(lower) {
+  return norm(lower).split('/').some(seg => seg.startsWith('.') && seg !== '.');
+}
+
+function instructionBasenameBlocked(lower) {
+  const base = lower.slice(lower.lastIndexOf('/') + 1);
+  if (INSTRUCTION_BASENAMES.has(base)) return true;
+  return base.endsWith('.instructions.md') || base.endsWith('.rules.md');
+}
+
 function folderAllowed(lower) {
   if (lower === '.project-swarm.json') return false;
   if (BLOCKED_PREFIXES.some(p => lower === p.slice(0, -1) || lower.startsWith(p))) return false;
-  if (/^docs\/(?:state|design)\//.test(lower)) return true;
-  if (/^coordination\/handoff[^/]*\.(md|txt|csv|ndjson)$/i.test(lower)) return true;
+  if (pathHasDotFolderComponent(lower) || instructionBasenameBlocked(lower)) return false;
+  if (/^docs\/state\//.test(lower)) return true;
   return false;
 }
 
@@ -181,17 +193,6 @@ function policyPathLstatSafe(root, rel) {
   }
 }
 
-function isTempProjectRootForMergePolicy(root) {
-  if (!root) return false;
-  try {
-    const real = fs.realpathSync.native(root);
-    const tmp = fs.realpathSync.native(os.tmpdir());
-    return real === tmp || real.startsWith(`${tmp}${path.sep}`);
-  } catch {
-    return false;
-  }
-}
-
 /** Machine policy.json path; SWARM_CONFIG / SWARM_POLICY_FILE are honoured only under the signed orchestrator test marker (never because of a temp directory). */
 export function machinePolicyJsonPath({ home = os.homedir(), root = null } = {}) {
   if (root && orchestratorTestHarnessSigned(root)) {
@@ -202,14 +203,18 @@ export function machinePolicyJsonPath({ home = os.homedir(), root = null } = {})
   return path.join(home, '.config', 'project-swarm', 'policy.json');
 }
 
-/** Standing `swarm merge` policy.json: same overrides as machinePolicyJsonPath, plus temp merge fixtures (handbuild-vercel-merge tests). */
+/** Standing `swarm merge` policy.json: env overrides only under the signed orchestrator test marker; else project `policy.json` when present, else machine config. */
 export function mergeStandingPolicyJsonPath({ home = os.homedir(), root = null } = {}) {
-  const signed = root && orchestratorTestHarnessSigned(root);
-  const tempMerge = root && isTempProjectRootForMergePolicy(root);
-  if (signed || tempMerge) {
+  if (root && orchestratorTestHarnessSigned(root)) {
     const envPath = process.env.SWARM_POLICY_FILE;
     if (envPath && path.isAbsolute(envPath)) return envPath;
     if (process.env.SWARM_CONFIG) return path.join(path.dirname(process.env.SWARM_CONFIG), 'policy.json');
+  }
+  if (root) {
+    try {
+      const inRoot = path.join(root, 'policy.json');
+      if (fs.existsSync(inRoot)) return inRoot;
+    } catch { /* fall through */ }
   }
   return path.join(home, '.config', 'project-swarm', 'policy.json');
 }
