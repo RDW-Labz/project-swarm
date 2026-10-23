@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "waveprep3",
+   "agent": "auto",
+   "prompt": "The last wave-prep change (see HEAD commit) breaks tests/dogfood-fixes.test.mjs 'existing project tests that mention a ticket file go into its job context before the wave starts': that test expects the first validation to fail with Uncovered test references and suggestedIgnoreTests, the wave prep to add those tests to the job context and validate a second time (calls === 2). The new automatic ignoreTests filling must not replace that: keep the old behaviour (add the referencing tests to context, up to 25 tests per job and within the context byte cap) and only fall back to filling ignoreTests (with ignoreTestsReason) for the tests that do not fit: when more than 25 tests reference the ticket's files or adding them would exceed the context cap. Make tests/dogfood-fixes.test.mjs pass unchanged, keep tests/wave-prep-robust.test.mjs passing (adjust its expectations only for the small-count case), and keep tests/wave-prep-context.test.mjs, tests/scope-loop.test.mjs, tests/ticket-manifest.test.mjs, tests/scope-commands.test.mjs passing.",
+   "context": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tools/scope-loop.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/ticket-manifest.test.mjs",
+    "tests/scope-commands.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tests/dogfood-fixes.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ],
+   "outputs": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tools/scope-loop.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "tests in context cover wave prep; full suite before merge"
+  }
+ ]
+}
