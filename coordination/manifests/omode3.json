@@ -1,0 +1,62 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omode3",
+   "agent": "auto",
+   "prompt": "Security hardening of orchestrator mode (an Opus adversarial review said DO NOT SHIP). Fix ALL of these in tools/shell-writes.mjs and tools/handbuild.mjs, switching the design to DENY BY DEFAULT with a per-command allowlist of exact options: 1) `git ls-remote --upload-pack=CMD .` and `git grep -O'CMD'` / `--open-files-in-pager=CMD` run arbitrary commands (tested, real). Drop ls-remote; allow git grep only with a small safe option set (-n -i -l -c -e -w -F -E -h -H -I --no-color --count --line-number) and refuse any option not in the set, including any -O/--open-files-in-pager prefix/abbreviation. Do the same exact-option allowlist for every other allowed git subcommand (status, log, diff, show, branch --list, rev-parse, ls-files, ls-tree, merge-base, fetch, worktree list, tag --list, remote -v, config --get): refuse unknown options and all --output/-o/--exec/--upload-pack/--receive-pack/--textconv/--ext-diff style options, long-option abbreviations (git accepts unique prefixes), and any argument starting with ext:: or containing '!'. 2) orchestratorModeEnabled calls isScratchRoot(root)/isScratchRoot(cwd) with the broad check so any path with a tmp/temp/test/tests segment, a .swarm-scratch marker or .project-swarm.json scratch:true turns the mode OFF: use isScratchRoot(x, { strict: true, home: os.homedir() }) (read how strict and home work in tools/projects.mjs) so a project under ~/code/test/app or a cwd of <project>/tests is still guarded, and an orchestrator cannot disable the mode by creating a marker file; only a real worker workspace (isWorkerCwd) and the tests' own temp base are exempt. 3) orchestratorModeCommandAllowed returns true from its catch: make it return false (fail closed; the guard-level fail-open on a crash stays in handbuild-guard.mjs). 4) Block file-writing and program-running forms of allowed commands: sort -o/--output, uniq with an output file operand (allow at most one input operand), find -fprint -fprint0 -fls -ok -okdir -exec -execdir -delete, sed with any w/W/e/r/R command or s///w or s///e flag (allow only sed -n 'N,Mp' / '/re/p' forms), rg/grep --pre/--pre-glob/-f/--file/--exclude-from, cat/head/tail of paths outside the project root or under ~/.ssh ~/.aws ~/.gnupg ~/.config/gh the Keychains folder dotenv files pem and key files (resolve symlinks), jq with --rawfile/--slurpfile/-f/--from-file/--args file ops (allow only jq FILTER [FILES in project]). 5) Command-name tricks: the program is identified by its exact name only through PATH lookup: refuse any command word containing a slash (./git, /usr/bin/node, /x/cat) except the installed swarm entry points already recognised (the exact realpath of ~/.project-swarm/current/tools/swarm.mjs run via `node` and the exact `swarm` binary name); `node <path>/swarm.mjs` must match that exact realpath only, not any path ending in swarm.mjs; refuse sudo/doas/env/command/builtin/exec/eval/source/ . / xargs/timeout/nice/nohup wrappers entirely; refuse VAR=value prefixes before any command except none (refuse all env assignment prefixes, including NODE_OPTIONS=, GIT_*=, GH_HOST=). 6) Read caps really enforced: head/tail only with -n N where N<=200 (refuse -c, -f, -F, --follow, +N forms and combined short flags that include them); every other read command (cat, grep, rg, ls, find, jq, sort, uniq, cut, wc is fine, sed -n) must be followed by a pipe to head -n N<=200 or tail -n N<=200, or be a command whose output is naturally small: allow ls of at most one directory without -R/-r, wc, `git status -s` without cap, `git branch --list`, `git worktree list`, `git rev-parse`, `swarm ...`. Refuse ls -R /, cat of a file with no cap (cat F | head -n 200 is ok), grep -r with no cap. 7) gh: refuse --web/-w anywhere (any spelling, abbreviations --we), refuse `gh pr create` (writes; the swarm opens PRs), refuse gh --watch/-w long-running forms and GH_HOST=; keep read-only view/list/checks/diff/status. Also allow gh api only for a GET of an explicit path with no -X/--method/-f/-F/--input/--field flags and a head cap (reads like `gh api repos/a/b/pulls | head -n 50`). 8) False positives to FIX (legitimate read-only work must pass): a pipe from any allowed read into `ls`/`cat`/`find` is not needed, but allow `cd <dir inside the project> && <allowed command>` (cd is allowed only to paths inside the project root or its worktrees, resolved with realpath), allow `2>&1` and `2>/dev/null` (a redirect of stderr to /dev/null or to stdout is not a write), allow `sed 's/a/b/'` WITHOUT -i and w/e flags when piped to head -n<=200, and `git log --oneline | head -n 50`. Redirects of stdout to a file, tee, >> and here-docs stay refused. 9) Is the off file creatable by an agent? Check that the Write/Edit hand-build rules already deny creating .swarm/orchestrator-mode/off and .swarm/handbuild/off from an orchestrator session; if not, deny it and test. 10) Tests: extend tests/orchestrator-mode.test.mjs and tests/orchestrator-mode-default.test.mjs (drive tools/handbuild-guard.mjs as a subprocess against a temp project) with EVERY attack above as a refusal test (at least 60 cases) and every false-positive fix as an allow test, including a project root path containing /test/ and a cwd named tests. Keep all handbuild, self-approval, shell-writes tests passing. Do not weaken any existing rule.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/handbuild-guard.mjs",
+    "tools/projects.mjs",
+    "tools/orchestrator-events.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ],
+   "ignoreTestsReason": "tests that reference these files in passing are covered by the full suite run before merge"
+  }
+ ]
+}

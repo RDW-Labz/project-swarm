@@ -11,6 +11,10 @@ import {
   swarmChangeFromPlain,
   executablePlainWordsForHandbuild,
   handbuildOwnerMatchInPlain,
+  orchestratorModeCommandAllowed,
+  orchestratorModeEnabled,
+  ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_MODE_RULE_ID,
 } from './shell-writes.mjs';
 
 const executablePlainWords = executablePlainWordsForHandbuild;
@@ -129,6 +133,14 @@ export function swarmChangeShellPolicy(commandText) {
 export function swarmChangeOrchestratorCommandAllowed(commandText) {
   const pol = swarmChangeShellPolicy(commandText);
   return pol.applies && pol.allow;
+}
+
+/** Whether an orchestrator session may run this shell line under orchestrator mode. */
+export function orchestratorModeShellPolicy(commandText, { root, cwd } = {}) {
+  if (!root || !orchestratorModeEnabled(root, cwd)) return { applies: false };
+  const allow = orchestratorModeCommandAllowed(commandText, { root, cwd });
+  if (allow) return { applies: true, allow: true };
+  return { applies: true, allow: false, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID };
 }
 
 const SHELL_CODE_RE = /\b(?:bash|sh|zsh)\s+(?:[^\s|;&]+\s+)*-(?:[A-Za-z]*c|--command)(?:=|\s+)(['"])([\s\S]*?)\1/gi;
