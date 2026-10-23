@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXTRA_CLI_AGENTS, extraCliArgs, extraCliMessage, extraCliEnvironment, parseExtraCli, extraCliDoctor, execViaFile, validateEnvelope, summarizeModels, claudeQuotaSignal } from './cli-adapters.mjs';
 export { detectClaudeQuotaLimit } from './cli-adapters.mjs';
 import { API_AGENTS, apiDoctor, probeLocalProvider, decodeContext, executeApi, applyEdit } from './api-adapters.mjs';
+import { parseLocalModel, isAgencyLocalJob } from './local-lane.mjs';
 import { nonBookkeepingOutputs, defaultMaxOutputTokens, fetchPricing, OPENROUTER_MODELS_URL } from './openrouter.mjs';
 
 import { CODEX_MODEL, requireCodexPlatform, validateReadPaths, resolveReadPaths, codexProfile, codexArgs, codexMessage, resolveCodexEnvelope, parseCodexReply, codexUsage, codexEnvironment, codexDoctor, codexDirtyFiles, git } from './codex-adapter.mjs';
@@ -746,7 +747,20 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         // more than a lane's worth of requests into one batch. Its spend is still reserved and capped in the admission step below.
         const heldInBatch = batchEligible(job, batchPolicyFor(manifest, batchFlag, env, root));
         batchDecisions.set(job.id, heldInBatch);
-        try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]) }); }
+        let localAcquire = null;
+        if (job.agent === 'local') {
+          const endpointName = parseLocalModel(job.model);
+          const endpoint = (lanes.local?.endpoints ?? []).find(item => item.name === endpointName) ?? lanes.local?.endpoints?.[0];
+          if (endpoint) {
+            localAcquire = {
+              endpoint: endpoint.name,
+              slotsLimit: endpoint.slots,
+              agency: isAgencyLocalJob(job, { agencyCall: env.SWARM_AGENCY_CALL === '1' }),
+              agencyConcurrency: lanes.local.agencyConcurrency,
+            };
+          }
+        }
+        try { release = heldInBatch ? async () => {} : await scheduler.acquire(job.agent, { signal: AbortSignal.any([signal, waiting.signal]), local: localAcquire, jobId: job.id }); }
         finally {
           waitingJobs.delete(waiting);
           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }
