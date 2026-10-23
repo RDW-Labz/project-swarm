@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
   evaluateHandbuildAutoApprove,
+  fold,
   isSwarmAdminHandbuildPath,
   isPolicyWindowFileEntry,
   policyFilePath,
@@ -238,54 +239,67 @@ test('hard link to a window file is rejected; non-regular files too', async t =>
   assert.equal(windowRequest(root).status, 'pending');
 });
 
-test('ln and link into a window path are denied while a policy window is live', async t => {
+test('policy window does not auto-approve Bash (policy row is file tools only)', async t => {
   const root = await tempRepo(t);
-  windowRequest(root);
-  for (const cmd of [
-    `ln ${PLAN} docs/state/x.md`,
-    `ln -s ../state/plan.md docs/state/x.md`,
-    `link ${PLAN} docs/state/y.md`,
-    `ln /tmp/somewhere docs/state/new.md`,
-  ]) {
-    const d = guardBash(root, cmd);
-    assert.equal(d.allow, false, cmd);
-    assert.match(d.reason, /policy window/, cmd);
-  }
+  const req = windowRequest(root);
+  assert.equal(req.policyId, POLICY_ID);
+  const d = guardBash(root, 'echo x > docs/state/not-listed.md');
+  assert.equal(d.allow, false);
+  assert.doesNotMatch(d.reason, /policy window/i);
+  assert.match(d.reason, /write a ticket instead|blocked: writes/);
 });
 
-test('cp -l tar unzip rsync install onto window path denied while window live', async t => {
+test('fold() path rules: case and NFKC; non-ASCII path components rejected', async t => {
   const root = await tempRepo(t);
-  await fs.mkdir(path.join(root, 'tools'), { recursive: true });
-  await fs.writeFile(path.join(root, 'tools', 'src.txt'), 'x\n');
-  windowRequest(root);
-  for (const cmd of [
-    `cp -l tools/src.txt ${PLAN}`,
-    `cp -s tools/src.txt docs/state/link.md`,
-    `rsync tools/src.txt ${PLAN}`,
-    `install tools/src.txt ${PLAN}`,
-  ]) {
-    const d = guardBash(root, cmd);
-    assert.equal(d.allow, false, cmd);
-    assert.match(d.reason, /policy window/, cmd);
-  }
-  const tarDeny = guardBash(root, 'tar -xf tools/archive.tar -C docs/state');
-  assert.equal(tarDeny.allow, false);
+  assert.equal(fold('docs/state/PLAN.md'), fold('docs/state/plan.md'));
+  assert.equal(isPolicyWindowFileEntry('docs/state/plan.md'), true);
+  assert.equal(isPolicyWindowFileEntry('docs/state/plan$.md'), false);
+  assert.equal(isSwarmAdminHandbuildPath('docs/state/usage-ledger.md', { root }), false);
+  assert.equal(evaluateHandbuildAutoApprove(root, { files: ['docs/state/eval-scores.ndjson'], minutes: 30 }).ok, false);
 });
 
-test('mv cp sed tee onto window path from protected sources denied', async t => {
+test('session cannot write ~/.config/project-swarm (policy.json and siblings)', async t => {
   const root = await tempRepo(t);
-  await fs.writeFile(path.join(root, PLAN), '# plan\n');
-  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
-  await fs.writeFile(path.join(root, '.claude', 'settings.json'), '{}\n');
-  windowRequest(root);
-  for (const cmd of [
-    `mv .claude/settings.json ${PLAN}`,
-    `cp .claude/settings.json ${PLAN}`,
-  ]) {
-    const d = guardBash(root, cmd);
-    assert.equal(d.allow, false, cmd);
-    assert.match(d.reason, /policy window|protected|belongs to the owner/, cmd);
-  }
+  const home = process.env.HOME;
+  const cfg = path.join(home, '.config', 'project-swarm', 'policy.json');
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${cfg}` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
+});
+
+test('session cannot write arbitrary file under ~/.ssh', async t => {
+  const root = await tempRepo(t);
+  const home = process.env.HOME;
+  const d = guardDecision({
+    tool: 'Bash',
+    toolInput: { command: `echo x > ${home}/.ssh/id_ed25519` },
+    root,
+    cwd: root,
+    now: T0,
+    home,
+  });
+  assert.equal(d.allow, false);
+});
+
+test('recordPolicyGuardAllow skips stats when final path check fails', async t => {
+  const root = await tempRepo(t);
+  const req = windowRequest(root);
+  await fs.writeFile(path.join(root, STATS_FILE), JSON.stringify({}));
+  const before = JSON.parse(await fs.readFile(path.join(root, STATS_FILE), 'utf8'));
+  const rec = recordPolicyGuardAllow(root, {
+    approvalId: req.id,
+    files: ['docs/state/evil.mjs'],
+    rule: 'test',
+  }, { now: T0 });
+  assert.equal(rec.blocked, true);
+  const after = JSON.parse(await fs.readFile(path.join(root, STATS_FILE), 'utf8'));
+  assert.deepEqual(after, before);
 });
 
 test('opaque command without a policy window needs a commit-level approval', async t => {
