@@ -10,7 +10,7 @@ import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
 import { parseScope } from '../tools/scope.mjs';
 import { validateProject } from '../tools/swarm.mjs';
 import { validateManifest } from '../tools/swarm/core-31.mjs';
-import { contextEnvFor, finalizeScopeWaveManifest } from '../tools/scope-commands.mjs';
+import { contextEnvFor, finalizeScopeWaveManifest, WAVE_PREP_IGNORE_TESTS_REASON } from '../tools/scope-commands.mjs';
 import { scopeLoop } from '../tools/scope-loop.mjs';
 
 const SCOPE_MD = `# Scope
@@ -93,7 +93,7 @@ test('adds referencing tests to job context for uncovered references when the ti
   assert.equal(job.ignoreTests, undefined);
 });
 
-test('does not auto-fill ignoreTests when the ticket lists its own tests', async (t) => {
+test('covers referencing tests when the ticket lists its own tests too', async (t) => {
   const root = await project(t);
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.mkdir(path.join(root, 'tests'), { recursive: true });
@@ -110,16 +110,55 @@ test('does not auto-fill ignoreTests when the ticket lists its own tests', async
   manifest.jobs[0].agent = 'anthropic';
   manifest.jobs[0].model = 'claude-haiku-5-5';
   const warnings = [];
-  await assert.rejects(
-    () => finalizeScopeWaveManifest(manifest, {
-      validate: (m) => validateManifestProject(root, m),
-      tickets: [ticket],
-      warnings,
-      root,
-    }),
-    /Uncovered test references/,
-  );
-  assert.equal(manifest.jobs[0].ignoreTests, undefined);
+  await finalizeScopeWaveManifest(manifest, {
+    validate: (m) => validateManifestProject(root, m),
+    tickets: [ticket],
+    warnings,
+    root,
+  });
+  const job = manifest.jobs[0];
+  assert.ok(job.outputs.includes('tests/new.test.mjs'));
+  assert.ok(job.context.includes('tests/other.test.mjs'));
+  assert.equal(job.ignoreTests, undefined);
+});
+
+test('caps context at 25 referencing tests and routes the rest to ignoreTests when the ticket has its own tests', async (t) => {
+  const root = await project(t);
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tests'), { recursive: true });
+  await fs.writeFile(path.join(root, 'src/widget.mjs'), 'export const widget = 1;\n');
+  for (let i = 0; i < 300; i += 1) {
+    await fs.writeFile(
+      path.join(root, `tests/ref-${String(i).padStart(3, '0')}.test.mjs`),
+      `import '../src/widget.mjs';\nimport test from 'node:test';\ntest('ref ${i}', () => {});\n`,
+    );
+  }
+  assert.equal(git(root, 'add', '.').status, 0);
+  assert.equal(git(root, 'commit', '-qm', 'refs').status, 0);
+  const ownTest = 'tests/new.test.mjs';
+  const ticket = baseTicket('T-0106', {
+    files: ['src/widget.mjs'],
+    tests: [ownTest],
+    context: ['src/widget.mjs'],
+  });
+  const { manifest } = ticketsToManifest([ticket], { scope, contextEnv: contextEnvFor(root, null) });
+  manifest.jobs[0].agent = 'anthropic';
+  manifest.jobs[0].model = 'claude-haiku-5-5';
+  const warnings = [];
+  await finalizeScopeWaveManifest(manifest, {
+    validate: (m) => validateManifestProject(root, m),
+    tickets: [ticket],
+    warnings,
+    root,
+  });
+  const job = manifest.jobs[0];
+  assert.ok(job.outputs.includes(ownTest));
+  assert.ok(!job.context.includes(ownTest));
+  const refInContext = job.context.filter((p) => /^tests\/ref-\d{3}\.test\.mjs$/.test(p));
+  assert.equal(refInContext.length, 25);
+  assert.equal(job.ignoreTests?.length, 275);
+  assert.equal(job.ignoreTestsReason, WAVE_PREP_IGNORE_TESTS_REASON);
+  await validateManifestProject(root, manifest);
 });
 
 test('drops a not-yet-created ticket test from context but keeps it as an output', () => {
