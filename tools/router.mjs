@@ -3,7 +3,7 @@
 import { isBookkeepingJob } from './openrouter.mjs';
 import { prefersLocalLane } from './job-types.mjs';
 import { LANE_AGENTS } from './lanes.mjs';
-import { LOCAL_MODEL_PREFIX, parseLocalModel } from './local-lane.mjs';
+import { LOCAL_MODEL_PREFIX, parseLocalModel, isLoopbackLocalBaseUrl } from './local-lane.mjs';
 
 // Lanes that only ever get jobs marked `sensitive: false`. validateManifest also refuses a sensitive job
 // on these; the router checks too, so a sensitive job is never even a candidate.
@@ -39,10 +39,16 @@ function knownLane(agent) {
   return agent === 'local' || LANE_AGENTS.includes(agent);
 }
 
-function localConfigured(lanes, job, endpointHealth) {
+function localEndpointsForJob(lanes, job) {
   const endpoints = lanes.local?.endpoints ?? [];
-  if (endpoints.length > 0) {
-    return laneModel(job, 'local', lanes, {}, endpointHealth) !== null;
+  if (job.sensitive === false) return endpoints;
+  return endpoints.filter(ep => isLoopbackLocalBaseUrl(ep.baseUrl));
+}
+
+function localConfigured(lanes, job, endpointHealth) {
+  const endpoints = localEndpointsForJob(lanes, job);
+  if ((lanes.local?.endpoints ?? []).length > 0) {
+    return laneModel(job, 'local', lanes, {}, endpointHealth, endpoints) !== null;
   }
   return typeof lanes.local?.model === 'string';
 }
@@ -67,10 +73,12 @@ function needsAnthropicSonnet(job, failures = {}) {
   return (failures.anthropic ?? 0) >= 1;
 }
 
-const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ state: 'ok' })) => {
+const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ state: 'ok' }), localEndpoints = null) => {
   if (agent === 'local') {
-    const endpoints = lanes.local?.endpoints ?? [];
-    if (endpoints.length > 0) {
+    const configured = lanes.local?.endpoints ?? [];
+    const endpoints = localEndpoints ?? localEndpointsForJob(lanes, job);
+    if (configured.length > 0) {
+      if (!endpoints.length) return null;
       const wanted = parseLocalModel(job.model);
       if (wanted) {
         const exact = endpoints.find(ep => ep.name === wanted && endpointHealth(ep.name).state !== 'paused');

@@ -10,7 +10,8 @@ export const DEFAULT_AGENCY_CONCURRENCY = 1;
 export const AGENCY_JOB_TYPES = Object.freeze(['diagnose', 'test', 'docs']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
 const NAME_RE = /^[a-z][a-z0-9][a-z0-9._-]{0,39}$/;
-const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
+export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', '[::1]', 'localhost']);
+const LOOPBACK = new Set(LOOPBACK_HOSTS);
 const FORBIDDEN_ENDPOINT_KEYS = /^(apiKey|api_key|key|token|password|secret|bearer)$/i;
 const ENDPOINT_KEYS = new Set(['name', 'baseUrl', 'model', 'slots', 'keychain', 'linuxEnv']);
 
@@ -166,6 +167,10 @@ export function countLocalSlots(store, { endpoint = null, agencyOnly = false } =
     if (endpoint !== null && slot.localEndpoint !== endpoint) return false;
     return true;
   }).length;
+}
+
+export function isLoopbackLocalBaseUrl(baseUrl) {
+  try { return LOOPBACK.has(new URL(baseUrl).hostname); } catch { return false; }
 }
 
 export function localSlotRoom(store, { endpoint, slotsLimit, agency, agencyConcurrency }) {

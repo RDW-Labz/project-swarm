@@ -72,6 +72,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
       if (!LANE_AGENTS.includes(agent)) throw invalid(agent, 'agent', 'is unknown');
       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
       for (const [field, value] of Object.entries(override)) {
+        if (agent === 'local' && LOCAL_LANE_FIELDS.includes(field)) continue;
         if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field)) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
         if (field === 'backoff') {
           if (!object(value)) throw invalid(agent, field, 'must be an object');
@@ -347,18 +348,20 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
     }
     if (take === 0) return { granted: [], reason: machineLimited ? 'machine-full' : 'full', inFlight: slots.length };
     const granted = [];
+    const localFor = index => (Array.isArray(local) ? local[index] ?? null : local);
     for (let n = 0; n < take; n += 1) {
-      if (agent === 'local' && local?.endpoint) {
-        const room = localSlotRoom(store, {
-          endpoint: local.endpoint,
-          slotsLimit: local.slotsLimit ?? concurrency,
-          agency: Boolean(local.agency),
-          agencyConcurrency: local.agencyConcurrency ?? 1,
+      const localMeta = localFor(n);
+      if (agent === 'local' && localMeta?.endpoint) {
+        const room = localSlotRoom({ slots: { local: slots } }, {
+          endpoint: localMeta.endpoint,
+          slotsLimit: localMeta.slotsLimit ?? concurrency,
+          agency: Boolean(localMeta.agency),
+          agencyConcurrency: localMeta.agencyConcurrency ?? 1,
         });
         if (room < 1) break;
       }
       let slot = { id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId, ...(machine?.project ? { project: String(machine.project) } : {}) };
-      if (agent === 'local' && local?.endpoint) slot = attachLocalSlotMeta(slot, { endpoint: local.endpoint, agency: Boolean(local.agency) });
+      if (agent === 'local' && localMeta?.endpoint) slot = attachLocalSlotMeta(slot, { endpoint: localMeta.endpoint, agency: Boolean(localMeta.agency) });
       slots.push(slot);
       granted.push(slot.id);
     }
@@ -608,8 +611,7 @@ export class LaneScheduler {
       }
       if (!waiters.length) break;
       let claim;
-      const localWaiter = waiters.find(waiter => waiter.local);
-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive, local: localWaiter?.local ?? null }); }
+      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, machine: this.shared.machine, now: this.now, isAlive: this.shared.isAlive, local: selected === 'local' ? waiters.map(waiter => waiter.local ?? null) : null }); }
       catch (error) {
         for (const waiter of waiters) {
           const index = lane.queue.indexOf(waiter);

@@ -8,7 +8,7 @@ import { loadRentedConfig, readRentedKey, balancedFetch } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
 import {
-  loadLocalLaneConfig, resolveLocalEndpoint, readLocalCredential, mapLocalUsage, doctorLocal,
+  loadLocalLaneConfig, resolveLocalEndpoint, readLocalCredential, mapLocalUsage, doctorLocal, isLoopbackLocalBaseUrl,
 } from './local-lane.mjs';
 // The job's contract and acceptance tests, added to the task text when the manifest gives them (the rented lane requires both).
 const contractBlock = job => `${Array.isArray(job.acceptance) && job.acceptance.length ? `\n\nAcceptance tests (your files must make these pass):\n${job.acceptance.map(item => `- ${item}`).join('\n')}` : ''}`;
@@ -132,8 +132,8 @@ export function apiDoctor(agent, env = process.env) {
 // Opt-in health only: never send credentials, project content, or model prompts.
 // Remote HTTPS origins and cloud keys remain configuration-only, even with opt-in.
 export async function probeLocalProvider(agent,env=process.env,{timeoutMs=1500,fetchImpl=fetch}={}){
- const report=apiDoctor(agent,env),url=new URL(report.endpoint);
  if(agent==='local')return doctorLocal(env,{fetchImpl,timeoutMs:Math.min(Math.max(timeoutMs,1),5000)});
+ const report=apiDoctor(agent,env),url=new URL(report.endpoint);
  if(!['ollama','lambda'].includes(agent)||!['127.0.0.1','[::1]','localhost'].includes(url.hostname))return report;
  url.pathname=agent==='ollama'?'/api/tags':'/v1/models';
  const controller=new AbortController();
@@ -555,6 +555,10 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
     const config = apiConfiguration(job.agent, env, { readKey, readAnthropic, readLocal, model: job.model });
     // Last line of defence behind the router and validation: a rented server never sees a job that is not explicitly sensitive: false.
     if (job.agent === 'rented' && job.sensitive !== false) fail('sensitive-provider: the rented lane only runs jobs marked sensitive: false');
+    if (job.agent === 'local' && job.sensitive !== false) {
+      const endpointUrl = config.endpoints?.find(ep => ep.name === config.endpointName)?.baseUrl ?? config.endpoint;
+      if (!isLoopbackLocalBaseUrl(endpointUrl)) fail('sensitive-provider: the local lane only runs sensitive jobs against loopback endpoints');
+    }
     if (!config.configured) {
       // Field lesson #222: named before anything is sent — the env var this agent reads, plus
       // (openrouter only, the one adapter with a keychain fallback) the exact keychain item and
