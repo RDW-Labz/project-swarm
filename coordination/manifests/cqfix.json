@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "cqfix",
+   "agent": "auto",
+   "tier": "cheap",
+   "prompt": "CodeQL alert js/incomplete-sanitization (Incomplete string escaping or encoding) at tests/githook-push-range.test.mjs line 107. Rewrite that line so every occurrence is escaped correctly (use a regex with the global flag, or a helper that escapes backslashes first and then the quote characters, or avoid manual escaping by passing the value as an argument array or environment variable) without changing what the test checks. Make the test pass and keep it free of the alert pattern.",
+   "context": [
+    "tests/githook-push-range.test.mjs",
+    "tools/githook-check.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/githook-push-range.test.mjs"
+   ],
+   "timeoutMs": 900000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "single test file edit"
+  }
+ ]
+}
