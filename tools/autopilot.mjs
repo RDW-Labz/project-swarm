@@ -915,6 +915,9 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
           ok = false;
           result = String(error?.message ?? error).slice(0, RESULT_LIMIT);
         }
+        if (ok && waveTickets.length > 1) {
+          await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave` }, { incidental: true });
+        }
         await write({ kind: 'action', action: 'start-ready', reason, result });
         actions.push({ action: 'start-ready', ok, result, reason });
       }

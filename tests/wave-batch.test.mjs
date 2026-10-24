@@ -33,7 +33,7 @@ test('planWaveBatch never exceeds slots', () => {
   assert.equal(planWaveBatch(ready, { slots: 4 }).length, 4);
 });
 
-test('autopilot batches under-filled waves and logs the Events note', async t => {
+test('autopilot fills free slots in one pass and logs the Events note when batching', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wave-batch-autopilot-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
@@ -72,5 +72,7 @@ test('autopilot batches under-filled waves and logs the Events note', async t =>
   const step = await autopilotStep(root, deps, { now: () => NOW, memory: { startReadyLastAt: null } });
   assert.equal(step.actions.some(a => a.action === 'start-ready' && a.ok), true);
   assert.equal(deps.lastStart?.ticketIds?.length, 4);
-  assert.ok(journal.some(e => e.kind === 'note' && /batched 4 tickets into one wave because waves were under-filled/.test(e.text)));
+  assert.equal(deps.lastStart?.maxJobs, 4);
+  assert.equal(deps.lastStart?.batched, true);
+  assert.ok(journal.some(e => e.kind === 'note' && /batched 4 tickets into one wave/.test(e.text)));
 });
