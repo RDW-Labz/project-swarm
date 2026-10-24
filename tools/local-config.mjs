@@ -60,6 +60,79 @@ export function loadLocalConfig({ env = process.env, home = env.HOME || os.homed
   let text;
   try { text = fs.readFileSync(file, 'utf8'); }
   catch { return {}; }
-  try { return JSON.parse(text); }
+  let parsed;
+  try { parsed = JSON.parse(text); }
   catch { throw Error(`invalid swarm config: ${file}`); }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.autopilot !== undefined) {
+    const errors = validateAutopilotBlock(parsed.autopilot, { label: 'autopilot' });
+    if (errors.length) throw Error(`invalid swarm config: ${file}: ${errors.join('; ')}`);
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+/** Hard ceiling for autopilot `maxJobs` (matches go --scope batch size). */
+export const AUTOPILOT_MAX_JOBS_CEILING = 64;
+
+const AUTOPILOT_KEYS = new Set(['skipSkeleton', 'maxJobs']);
+
+export function validateAutopilotBlock(raw, { label = 'autopilot' } = {}) {
+  const errors = [];
+  if (raw === undefined) return errors;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push(`${label}: must be an object`);
+    return errors;
+  }
+  for (const key of Object.keys(raw)) {
+    if (!AUTOPILOT_KEYS.has(key)) errors.push(`${label}.${key}: unknown key`);
+  }
+  if (raw.skipSkeleton !== undefined) {
+    const v = raw.skipSkeleton;
+    if (v !== true && v !== false && v !== 'auto') {
+      errors.push(`${label}.skipSkeleton: must be true, false, or "auto"`);
+    }
+  }
+  if (raw.maxJobs !== undefined) {
+    const n = Number(raw.maxJobs);
+    if (!Number.isInteger(n) || n < 1) errors.push(`${label}.maxJobs: must be a positive integer`);
+    else if (n > AUTOPILOT_MAX_JOBS_CEILING) {
+      errors.push(`${label}.maxJobs: must be at most ${AUTOPILOT_MAX_JOBS_CEILING}`);
+    }
+  }
+  return errors;
+}
+
+function sanitizeAutopilotLayer(layer, { label = 'autopilot' } = {}) {
+  if (layer === undefined || layer === null) return null;
+  const errors = validateAutopilotBlock(layer, { label });
+  if (errors.length) return { layer: null, errors };
+  const out = {};
+  if (layer.skipSkeleton !== undefined) out.skipSkeleton = layer.skipSkeleton;
+  if (layer.maxJobs !== undefined) out.maxJobs = layer.maxJobs;
+  return { layer: Object.keys(out).length ? out : null, errors: [] };
+}
+
+/**
+ * Resolved start-ready wave settings from machine and project `autopilot` blocks.
+ * `skipSkeleton` is the flag to pass to go --scope; `maxJobs` is capped at 64 and at `freeSlots` when set.
+ */
+export function resolveAutopilotStartReady({
+  machine = null,
+  project = null,
+  freeSlots = null,
+  doneTicketCount = 0,
+} = {}) {
+  const machineSan = sanitizeAutopilotLayer(machine, { label: 'machine.autopilot' });
+  const projectSan = sanitizeAutopilotLayer(project, { label: 'project.autopilot' });
+  const m = machineSan?.layer;
+  const p = projectSan?.layer;
+  const skipMode = p?.skipSkeleton ?? m?.skipSkeleton ?? 'auto';
+  let skipSkeleton = false;
+  if (skipMode === true) skipSkeleton = true;
+  else if (skipMode === 'auto') skipSkeleton = Number(doneTicketCount) >= 10;
+  let maxJobs = p?.maxJobs ?? m?.maxJobs;
+  if (maxJobs === undefined) maxJobs = Number.isInteger(freeSlots) && freeSlots > 0 ? freeSlots : 1;
+  if (!Number.isInteger(maxJobs) || maxJobs < 1) maxJobs = 1;
+  maxJobs = Math.min(AUTOPILOT_MAX_JOBS_CEILING, maxJobs);
+  if (Number.isInteger(freeSlots) && freeSlots > 0) maxJobs = Math.min(maxJobs, freeSlots);
+  return { skipSkeleton, maxJobs };
 }
