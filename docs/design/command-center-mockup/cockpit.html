@@ -109,9 +109,99 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      justify-content: flex-end;
-      padding-bottom: 4px;
+      justify-content: flex-start;
+      padding-bottom: 2px;
       border-bottom: 1px solid var(--line-soft);
+    }
+
+    @media (min-width: 721px) {
+      .band-header {
+        position: relative;
+      }
+      .band-header > .illus-banner {
+        position: absolute;
+        top: 2px;
+        right: 0;
+        left: auto;
+        max-width: min(52%, 520px);
+        margin: 0;
+        padding: 2px 6px;
+        font-size: 0.42rem;
+        line-height: 1.15;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .band-header .app-nav .nav-stats,
+      .band-header .app-nav .nav-crumb,
+      .band-header .app-nav .nav-actions { display: none; }
+      .band-header .app-nav {
+        min-height: 0;
+        border-bottom: 0;
+        background: none;
+      }
+      .band-header .nav-actions .btn-pill:last-child { display: none; }
+      .band-header .app-nav {
+        padding: 2px 0;
+        margin-bottom: 1px;
+        gap: 4px 10px;
+      }
+      .band-header .nav-stats { font-size: 0.5rem; }
+      .band-header .brand { font-size: 0.72rem; }
+      .band-header .nav-crumb {
+        font-size: 0.48rem;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .band-header .nav-actions .btn-pill {
+        min-height: 32px;
+        padding: 0 8px;
+        font-size: 0.5rem;
+      }
+      .band-header .illus-banner {
+        margin: 0 0 2px;
+        padding: 3px 8px;
+        font-size: 0.48rem;
+        line-height: 1.2;
+      }
+      .band-header .cockpit-nav {
+        padding: 1px 0;
+        margin-bottom: 1px;
+        font-size: clamp(0.5rem, 1.1vh, 0.62rem);
+      }
+      .band-header .category-bar {
+        margin-top: 3px;
+        padding-top: 2px;
+      }
+      .band-header .category-links {
+        margin-bottom: 2px;
+        font-size: 0.5rem;
+        gap: 4px 8px;
+      }
+      .band-header .category-meter { height: 3px; }
+      .band-header .cockpit-hero .tagline { display: none; }
+      .band-header .cockpit-nav {
+        padding: 0;
+        margin-bottom: 0;
+        border-bottom: 0;
+      }
+      .band-header .header-hero-pack {
+        gap: 2px 8px;
+        align-items: end;
+      }
+      .category-bar--hero-mobile { display: none; }
+      .category-bar--stage {
+        margin: 0 0 2px;
+        padding: 2px 0 0;
+        flex: none;
+      }
+      .category-bar--stage .category-links {
+        margin-bottom: 2px;
+        font-size: 0.5rem;
+      }
+      .category-bar--stage .category-meter { height: 3px; }
+      .band-header .scan-live--header {
+        font-size: clamp(0.5rem, 1.1vh, 0.62rem);
+      }
     }
 
     .band-main {
@@ -150,9 +240,9 @@
     .bottom-loops .loop-steps {
       font-size: 0.58rem;
       line-height: 1.35;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
     }
 
     .bottom-loops .loop-head {
@@ -187,7 +277,15 @@
       padding: 5px 6px;
       font-size: 0.58rem;
       gap: 3px;
+      border-top-width: 3px;
+      border-top-style: solid;
     }
+    .band-bottom .stream-card--accent-teal { border-top-color: #5ec4b8; }
+    .band-bottom .stream-card--accent-blue { border-top-color: #6ab8ff; }
+    .band-bottom .stream-card--accent-gold { border-top-color: #e8b84a; }
+    .band-bottom .stream-card--accent-white { border-top-color: #f2ece4; }
+    .band-bottom .stream-card--accent-pink { border-top-color: #e87898; }
+    .band-bottom .stream-card--accent-green { border-top-color: #5ee08a; }
 
     .band-bottom .stream-title {
       font-size: 0.62rem;
@@ -206,15 +304,16 @@
       overflow: hidden;
     }
 
-    .band-bottom .stack-head { margin-bottom: 4px; }
+    .band-bottom .stack-head { margin-bottom: 2px; flex: none; }
 
     .band-bottom .stack-title {
-      font-size: clamp(1.1rem, 2.2vh, 1.45rem);
+      font-size: clamp(0.85rem, 1.6vh, 1.05rem);
       margin: 0;
       line-height: 1;
       text-transform: uppercase;
       letter-spacing: -0.02em;
     }
+    .band-bottom .stack-sub { display: none; }
 
     .band-bottom .stack-metrics {
       margin-top: 4px;
@@ -230,14 +329,49 @@
     }
 
     .band-bottom .metric-tile--opus { border-top-color: var(--cockpit-orange); }
-    .band-bottom .metric-tile--skills { border-top-color: #a89068; }
-    .band-bottom .metric-tile--engines { border-top-color: var(--info); }
-    .band-bottom .metric-tile--taste { border-top-color: var(--accent); }
-    .band-bottom .metric-tile--broll { border-top-color: var(--bad); }
-    .band-bottom .metric-tile--web { border-top-color: var(--fg); }
+    .band-bottom .metric-tile--skills { border-top-color: #c4a574; }
+    .band-bottom .metric-tile--engines { border-top-color: #6ab8ff; }
+    .band-bottom .metric-tile--taste { border-top-color: #5ee08a; }
+    .band-bottom .metric-tile--broll { border-top-color: #e86a6a; }
+    .band-bottom .metric-tile--web { border-top-color: #f2ece4; }
 
-    .band-bottom .metric-tile .m-val { font-size: 0.95rem; }
-    .band-bottom .stack-foot { margin-top: 4px; font-size: 0.5rem; }
+    .band-bottom .metric-tile .m-val { font-size: 0.72rem; line-height: 1; }
+    .band-bottom .stack-block {
+      display: grid;
+      grid-template-rows: auto auto auto;
+      min-height: 0;
+      overflow: hidden;
+      align-content: start;
+    }
+    .band-bottom .stack-metrics {
+      margin-bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(2, auto);
+      gap: 2px;
+      overflow: hidden;
+    }
+    .band-bottom .metric-tile {
+      padding: 2px 2px 3px;
+      min-width: 0;
+      max-height: 26px;
+      overflow: hidden;
+    }
+    .band-bottom .metric-tile .m-label {
+      font-size: 0.42rem;
+      margin-bottom: 1px;
+    }
+    .band-bottom .stack-foot {
+      margin-top: 2px;
+      padding-top: 4px;
+      flex: none;
+      font-size: 0.48rem;
+      line-height: 1.25;
+      border-top: 1px solid var(--line-soft);
+      background: linear-gradient(180deg, rgba(15, 13, 18, 0.98), rgba(15, 13, 18, 1));
+      position: relative;
+      z-index: 2;
+    }
     .band-bottom .stack-sub { margin-top: 2px; font-size: 0.52rem; }
 
     .cockpit-footnote {
@@ -287,7 +421,7 @@
       border-bottom: none;
     }
 
-    .cockpit-hero h1 { font-size: clamp(1.35rem, 3.2vh, 2.35rem); }
+    .cockpit-hero h1 { font-size: clamp(1.35rem, 5vh, 2.1rem); }
     .cockpit-hero .tagline { margin-top: 2px; font-size: clamp(0.62rem, 1.4vh, 0.82rem); }
     .category-bar { margin-top: 4px; padding-top: 4px; }
     .category-links { margin-bottom: 4px; font-size: 0.56rem; }
@@ -422,6 +556,12 @@
     .view-tabs [role="tab"]:focus-visible { outline: none; box-shadow: var(--ring); }
 
     @media (max-width: 720px) {
+      .category-bar--stage { display: none; }
+      .category-bar--hero-mobile {
+        display: block;
+        margin-top: 6px;
+        padding-top: 6px;
+      }
       body {
         height: auto;
         max-height: none;
@@ -452,17 +592,58 @@
       .ticket-col--phone { gap: 6px; }
       .ticket-col--phone .ticket-row { margin-left: 0 !important; margin-right: 0 !important; }
       .mascot-stage--phone {
-        width: min(72vw, 280px);
-        height: min(58vw, 220px);
-        margin: 8px auto;
+        width: min(100%, calc(100vw - 28px));
+        height: min(36vw, 168px);
+        max-width: 100%;
+        margin: 6px auto;
+        overflow: hidden;
       }
       .mascot-stage--phone .mascot-pixel {
-        width: 132px;
-        height: 108px;
-        transform: scale(2.2);
+        width: 88px;
+        height: 72px;
+        transform: translateX(-50%) scale(1.72);
         transform-origin: center bottom;
+        filter: none;
       }
-      .now-panel--phone { max-width: 100%; }
+      .now-panel--phone {
+        max-width: 100%;
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .stage-center--phone {
+        width: 100%;
+        min-width: 0;
+        gap: 6px;
+      }
+      .phone-now-rows {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        width: 100%;
+        min-width: 0;
+      }
+      .phone-now-loops {
+        display: grid;
+        gap: 4px;
+        width: 100%;
+        min-width: 0;
+      }
+      .phone-now-loops .loop-block {
+        margin: 0;
+        padding: 6px 8px;
+      }
+      .phone-now-loops .loop-steps {
+        font-size: 0.58rem;
+        line-height: 1.35;
+        white-space: normal;
+      }
+      .phone-panel[data-active="true"]#phone-now {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
       .stream-section--phone { margin: 10px 0; }
       .stack-block--phone { margin-top: 10px; }
       .app-nav { flex-wrap: wrap; }
@@ -492,16 +673,22 @@
     .cockpit-hero h1 {
       margin: 0;
       display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 8px 12px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0;
       font-family: "Arial Narrow", "Helvetica Neue", system-ui, sans-serif;
-      font-size: clamp(1.85rem, 4.2vw, 3.1rem);
+      font-size: 2.85vh;
       font-weight: 900;
       font-stretch: condensed;
       letter-spacing: -0.03em;
-      line-height: 0.95;
+      line-height: 0.88;
       text-transform: uppercase;
+      min-height: 5.1vh;
+      justify-content: center;
+    }
+    .cockpit-hero .headline-line {
+      display: block;
+      max-width: 100%;
     }
     .cockpit-hero .headline-num {
       font-family: var(--mono);
@@ -551,7 +738,7 @@
     .meter-engines { background: var(--info); }
     .meter-taste { background: var(--accent); }
     .meter-broll { background: var(--bad); }
-    .meter-web { background: var(--fg); opacity: 0.85; }
+    .meter-web { background: var(--fg); }
     .scan-live {
       margin-top: 10px;
       display: flex;
@@ -618,7 +805,22 @@
       justify-content: space-evenly;
       overflow: hidden;
     }
+    .ticket-col--left {
+      padding-right: 6px;
+    }
     .ticket-col--right .ticket-row { margin-left: auto; }
+    .ticket-col--right .ticket-name {
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .ticket-col--right .ticket-sub {
+      color: #7ecfc4;
+      opacity: 1;
+    }
+    .ticket-col--right .ticket-badge {
+      opacity: 0.92;
+      color: var(--cockpit-orange);
+    }
 
     .ticket-search {
       margin-bottom: 4px;
@@ -752,7 +954,7 @@
       border: 1px solid var(--cockpit-orange-dim);
       border-radius: var(--r-sm);
       padding: 4px 10px;
-      margin-bottom: 2px;
+      margin-bottom: 10px;
       background: rgba(0, 0, 0, 0.35);
       flex: none;
       position: relative;
@@ -775,11 +977,11 @@
     .mascot-stage {
       position: relative;
       width: min(100%, 280px);
-      height: min(28vh, 220px);
-      margin: 0;
+      height: min(26vh, 200px);
+      margin: 4px 0 0;
       flex: 1 1 auto;
-      min-height: 120px;
-      max-height: 220px;
+      min-height: 108px;
+      max-height: 200px;
       pointer-events: none;
       overflow: visible;
       z-index: 2;
@@ -836,7 +1038,10 @@
       width: 88px;
       height: 72px;
       z-index: 2;
-      filter: drop-shadow(0 8px 20px rgba(201, 120, 74, 0.4));
+      filter: none;
+      shape-rendering: crispEdges;
+      outline: 1px solid rgba(26, 18, 14, 0.85);
+      outline-offset: 1px;
     }
     @media (prefers-reduced-motion: reduce) {
       .mascot-orbit-dot, .glitch-text { animation: none !important; }
@@ -919,6 +1124,9 @@
       font-size: 0.72rem;
       line-height: 1.6;
       color: var(--muted);
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
     }
     .loop-steps .step { color: var(--fg); }
     .loop-steps .step--live { color: var(--accent); }
@@ -1100,8 +1308,25 @@
     @media (max-width: 390px) {
       body { overflow-x: hidden; }
       .shell > * { min-width: 0; }
+      .shell { padding: 0 8px 10px; }
       .scan-live { justify-content: flex-start; }
       .now-title { font-size: 1.1rem; }
+      .view-tabs [role="tab"] {
+        min-height: 44px;
+        padding: 8px 4px;
+        font-size: 0.62rem;
+      }
+      .mascot-stage--phone {
+        height: min(34vw, 150px);
+      }
+      .mascot-stage--phone .mascot-pixel {
+        transform: translateX(-50%) scale(1.58);
+      }
+      .phone-now-loops .loop-head { font-size: 0.52rem; margin-bottom: 2px; }
+      .phone-now-rows .ticket-row {
+        font-size: 0.62rem;
+        min-height: 40px;
+      }
     }
   </style>
 </head>
@@ -1167,11 +1392,14 @@
 
       <header class="cockpit-hero">
         <h1>
-          <span class="headline-num num" title="source field: motionScan.repoTotal">20</span>
-          <span class="headline-text">GitHub repos</span>
+          <span class="headline-line">
+            <span class="headline-num num" title="source field: motionScan.repoTotal">20</span>
+            GitHub
+          </span>
+          <span class="headline-line">repos</span>
         </h1>
         <p class="tagline">To turn your Opus 5.5 into a f*cking motion empire</p>
-        <div class="category-bar">
+        <div class="category-bar category-bar--hero-mobile" aria-hidden="false">
           <div class="category-links" aria-label="Category filters">
             <span>Opus 5.5</span><span class="sep">/</span>
             <span>Skills</span><span class="sep">/</span>
@@ -1216,6 +1444,24 @@
       <div class="phone-panel" id="phone-stack" role="tabpanel" aria-labelledby="tab-stack" data-active="false"></div>
 
       <div class="band-main desktop-only-stage">
+      <div class="category-bar category-bar--stage">
+        <div class="category-links" aria-label="Category filters">
+          <span>Opus 5.5</span><span class="sep">/</span>
+          <span>Skills</span><span class="sep">/</span>
+          <span>Engines</span><span class="sep">/</span>
+          <span>Taste</span><span class="sep">/</span>
+          <span>B-roll</span><span class="sep">/</span>
+          <span>Web</span>
+        </div>
+        <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+          <span class="meter-opus" style="--w:3"></span>
+          <span class="meter-skills" style="--w:7"></span>
+          <span class="meter-engines" style="--w:4"></span>
+          <span class="meter-taste" style="--w:2"></span>
+          <span class="meter-broll" style="--w:1"></span>
+          <span class="meter-web" style="--w:3"></span>
+        </div>
+      </div>
       <section class="stage-wrap" aria-label="Ticket flow stage">
         <div class="ticket-search">
           <label for="ticket-filter">Search tickets</label>
@@ -1232,22 +1478,22 @@
             </div>
             <div class="mascot-stage" aria-hidden="true">
               <div class="mascot-orbit"><span class="mascot-orbit-dot"></span></div>
-              <svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot">
+              <svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot" shape-rendering="crispEdges">
                 <rect x="6" y="0" width="10" height="2" fill="#c9784a"/>
                 <rect x="4" y="2" width="14" height="2" fill="#c9784a"/>
                 <rect x="3" y="4" width="3" height="2" fill="#f5e6dc"/>
                 <rect x="16" y="4" width="3" height="2" fill="#f5e6dc"/>
-                <rect x="5" y="4" width="12" height="4" fill="#d48452"/>
+                <rect x="5" y="4" width="12" height="4" fill="#c9784a"/>
                 <rect x="7" y="6" width="2" height="2" fill="#1a120e"/>
                 <rect x="13" y="6" width="2" height="2" fill="#1a120e"/>
                 <rect x="4" y="8" width="14" height="3" fill="#c9784a"/>
-                <rect x="2" y="9" width="2" height="4" fill="#a86040"/>
-                <rect x="18" y="9" width="2" height="4" fill="#a86040"/>
+                <rect x="2" y="9" width="2" height="4" fill="#c9784a"/>
+                <rect x="18" y="9" width="2" height="4" fill="#c9784a"/>
                 <rect x="6" y="11" width="3" height="2" fill="#8a5238"/>
                 <rect x="13" y="11" width="3" height="2" fill="#8a5238"/>
                 <rect x="5" y="13" width="12" height="2" fill="#c9784a"/>
-                <rect x="7" y="15" width="3" height="2" fill="#a86040"/>
-                <rect x="12" y="15" width="3" height="2" fill="#a86040"/>
+                <rect x="7" y="15" width="3" height="2" fill="#8a5238"/>
+                <rect x="12" y="15" width="3" height="2" fill="#8a5238"/>
               </svg>
               <div class="mascot-shadow"></div>
             </div>
@@ -1490,7 +1736,7 @@
         '<path d="M2.5 6.2 5 8.7 9.5 3.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>';
 
       function stairInset(n) {
-        return Math.round(Math.max(0, 5.5 - Math.abs(n - 5.5)) * 7);
+        return Math.min(24, Math.round(Math.max(0, 5.5 - Math.abs(n - 5.5)) * 4.5));
       }
 
       function catClass(badge) {
@@ -1611,6 +1857,25 @@
         var nowPanel = nowClone.querySelector('.now-panel');
         if (nowPanel) nowPanel.classList.add('now-panel--phone');
         phoneNow.appendChild(nowClone);
+
+        var loopsSrc = document.querySelector('.bottom-loops');
+        if (loopsSrc) {
+          var loopsPhone = loopsSrc.cloneNode(true);
+          loopsPhone.classList.add('phone-now-loops');
+          phoneNow.appendChild(loopsPhone);
+        }
+
+        var phoneNowRows = document.createElement('div');
+        phoneNowRows.className = 'phone-now-rows';
+        phoneNowRows.setAttribute('aria-label', 'Highlighted tickets');
+        tickets.filter(function (t) {
+          return t.state === 'active' || t.state === 'pending' || t.n >= 17;
+        }).forEach(function (t) {
+          var wrap = document.createElement('div');
+          wrap.innerHTML = rowHtml(t);
+          phoneNowRows.appendChild(wrap.firstChild);
+        });
+        phoneNow.appendChild(phoneNowRows);
       }
 
       if (phoneStream) {

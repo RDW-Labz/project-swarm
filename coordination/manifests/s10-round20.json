@@ -1,0 +1,55 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "cc20hive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/hive.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "Fix docs/design/command-center-mockup/hive.html (shared.css only if needed). 1) Cards (worst item, 1.5): every card body must render real rows: asks, out, fails (labelled, with title attributes naming the source field) and a p() progress bar, in readable 12-13px mono; no empty black bodies; header band, 3 rows, bar. 2) Phone at 390px: the ring and the curved text must fit inside the viewport (scale the ring to 78vw and clip), cards in a single full-width column with full bodies below the ring, no clipping at the right edge, no empty ring-only screen. 3) Streams: replace thick straight rays with thin curved bezier particle swarms (dozens of tiny dots per link with fading comet tails, additive blending, 1px lines under 0.15 alpha, ending at each card edge). 4) Ring: fix the curved textPath so the text is not garbled, mirrored or overlapping (one arc, letter-spacing, no overlap with the ring stroke), add a dashed inner ring and tick marks, remove the full-stage pink background wash (keep the near-black stage with a faint radial glow only around the ring). 5) Footer panels: no overlaps (sample badge off the chart, latency tooltip not over text), no clipped text; compact but fully readable. Round 19 independent grader scored Hive 2.6 and Cockpit 3.1 (target 4.5 on every item). Keep everything that already works (fits 1440x900 with no scroll, stage geometry, no external requests, ASCII only, reduced-motion still frames, labelled numbers, one illustrative-values banner). Fix exactly the listed problems, then compare your screenshot-sized result against the reference image yourself before finishing.",
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/board.test.mjs",
+    "tests/field-lessons-batch-ai-runtime.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-integrity.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/split-repair.test.mjs"
+   ]
+  },
+  {
+   "id": "cc20cock",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "prompt": "Fix docs/design/command-center-mockup/cockpit.html. 1) Phone at 390px: scale the sprite to fit, nothing clipped at the right edge, the NOW pane filled with the now-loading box, the rows and the loops (no more than 25 percent empty space), tabs 44px. 2) Header: make the headline large (two lines, heavy condensed, about 6vh) and fully visible at the top of a 1440x900 screenshot, not cropped. 3) Footer and stack: the WEB tile must not overlap its footnote; loop text must not be truncated with an ellipsis (wrap it); stream card top-border colours at full saturation. 4) Entity: flatten the shading toward the target (flat block-pixel style with a thin outline, orbit ring and floor shadow) and give it room under the title box. 5) Left-column row tags must not clip at the centre; right-column text contrast raised to match the left. Round 19 independent grader scored Hive 2.6 and Cockpit 3.1 (target 4.5 on every item). Keep everything that already works (fits 1440x900 with no scroll, stage geometry, no external requests, ASCII only, reduced-motion still frames, labelled numbers, one illustrative-values banner). Fix exactly the listed problems, then compare your screenshot-sized result against the reference image yourself before finishing.",
+   "ignoreTests": []
+  }
+ ]
+}

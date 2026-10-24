@@ -71,6 +71,10 @@ body.cc-body {
   -webkit-text-size-adjust: 100%;
 }
 
+body.hive-body.cc-body {
+  background: var(--bg);
+}
+
 body.hive-body {
   height: 100vh;
   max-height: 100vh;
@@ -170,27 +174,34 @@ body.hive-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  padding-bottom: 36px;
 }
 
 .hive-footer {
   position: absolute;
   left: 8px;
-  right: min(300px, 42vw);
-  bottom: 2px;
+  right: 8px;
+  bottom: 4px;
   margin: 0;
-  padding: 0;
-  font-size: 8px;
+  padding: 4px 0 0;
+  font-size: 9px;
+  line-height: 1.35;
   flex: none;
   pointer-events: none;
   z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  justify-content: space-between;
+  max-width: calc(100% - 16px);
 }
 
 .hive-panels-wrap .hive-toolgate-callout {
   position: absolute;
   right: 8px;
-  bottom: 6px;
+  bottom: 34px;
   z-index: 8;
-  max-width: min(280px, 38vw);
+  max-width: min(260px, 36vw);
   pointer-events: none;
 }
 
@@ -479,9 +490,7 @@ body.hive-body {
   height: 100%;
   border-radius: var(--r-lg);
   border: 1px solid var(--line-soft);
-  background:
-    radial-gradient(circle at 50% 50%, rgba(255, 45, 122, .1), transparent 48%),
-    linear-gradient(180deg, #0a0a10, #060608);
+  background: linear-gradient(180deg, #0a0a10, #060608);
   overflow: hidden;
   padding: 0;
 }
@@ -513,17 +522,19 @@ body.hive-body {
 
 .hive-ring-text {
   position: absolute;
-  inset: -28%;
-  width: 156%;
-  height: 156%;
-  left: -28%;
-  top: -28%;
+  inset: -8%;
+  width: 116%;
+  height: 116%;
+  left: -8%;
+  top: -8%;
+  overflow: visible;
+  pointer-events: none;
 }
 
-.hive-ring-text text {
-  fill: rgba(255, 255, 255, .35);
-  font-size: 9px;
-  letter-spacing: .22em;
+.hive-ring-text .hive-orbit-label {
+  fill: rgba(255, 255, 255, .42);
+  font-size: 7.5px;
+  letter-spacing: .28em;
   text-transform: uppercase;
   font-family: var(--mono);
 }
@@ -685,24 +696,25 @@ body.hive-body {
 }
 
 .hive-node-bd {
-  padding: 4px 8px 6px;
-  font-size: 10px;
+  padding: 5px 8px 7px;
+  font-family: var(--mono);
+  font-size: 12px;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 52px;
   overflow: hidden;
 }
 
 .hive-kv {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px 8px;
+  gap: 3px 8px;
   align-items: baseline;
 }
 
 .hive-kv dt {
   margin: 0;
   color: var(--faint);
-  font-size: 9px;
+  font-size: 12px;
   text-transform: lowercase;
 }
 
@@ -710,15 +722,17 @@ body.hive-body {
   margin: 0;
   text-align: right;
   font-weight: 600;
+  font-size: 13px;
 }
 
 .hive-meter {
-  margin-top: 4px;
+  margin-top: 5px;
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 4px;
   align-items: center;
-  font-size: 9px;
+  font-size: 12px;
+  font-family: var(--mono);
 }
 
 .hive-meter .track {
@@ -825,6 +839,26 @@ body.hive-body {
 
 .hive-panels .mini-chart {
   height: 36px;
+  display: block;
+  margin: 4px 0 6px;
+}
+
+.hive-panels .term-block .term-prompt + .mini-chart {
+  margin-top: 6px;
+}
+
+.hive-panels #chart-latency {
+  margin-bottom: 8px;
+}
+
+.hive-panels .term-prompt--chart-caption {
+  margin-top: 2px;
+  clear: both;
+}
+
+.hive-panels .term-prompt--chart-caption .sample-badge {
+  margin-left: 8px;
+  vertical-align: middle;
 }
 
 .hive-panels .lane-row {
@@ -1161,12 +1195,13 @@ body.motion-off .brand-glitch {
     left: auto;
     top: auto;
     transform: none;
-    margin: 8px auto 10px;
-    width: 80vw;
-    height: 80vw;
-    max-width: 80vw;
-    max-height: 80vw;
+    margin: 6px auto 8px;
+    width: 78vw;
+    height: 78vw;
+    max-width: 78vw;
+    max-height: 78vw;
     flex: none;
+    overflow: hidden;
   }
 
   .hive-stage.hive-phone #hive-nodes {
@@ -1174,11 +1209,13 @@ body.motion-off .brand-glitch {
     inset: auto;
     flex: 1;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: 8px;
     align-content: start;
-    padding: 0 6px 8px;
+    padding: 0 4px 10px;
     pointer-events: auto;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .hive-stage.hive-phone .hive-node {
@@ -1208,6 +1245,7 @@ body.motion-off .brand-glitch {
 @media (max-width: 390px) {
   .hive-shell {
     padding: 8px 8px 12px;
+    overflow-x: hidden;
   }
 
   .hive-chrome-top {
@@ -1220,5 +1258,40 @@ body.motion-off .brand-glitch {
   .hive-chrome,
   .hive-stat-strip {
     min-width: 0;
+    max-width: 100%;
+  }
+
+  .hive-stage.hive-phone {
+    overflow-x: hidden;
+    clip-path: inset(0);
+  }
+
+  .hive-stage.hive-phone .hive-core-ui {
+    width: 78vw;
+    height: 78vw;
+    max-width: min(78vw, calc(100vw - 24px));
+    max-height: min(78vw, calc(100vw - 24px));
+  }
+
+  .hive-stage.hive-phone .hive-node {
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .hive-panels-wrap .hive-toolgate-callout {
+    max-width: 100%;
+    bottom: auto;
+    position: relative;
+    margin: 8px 0 4px;
+  }
+
+  .hive-footer {
+    position: relative;
+    margin-top: 6px;
+    font-size: 9px;
+  }
+
+  .hive-panels {
+    padding-bottom: 8px;
   }
 }

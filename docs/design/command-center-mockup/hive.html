@@ -61,11 +61,24 @@
       <div class="hive-core-ui" id="hive-core-ui">
         <svg class="hive-ring-text" viewBox="0 0 200 200" aria-hidden="true">
           <defs>
-            <path id="orbit" d="M 100, 100 m -88, 0 a 88,88 0 1,1 176,0 a 88,88 0 1,1 -176,0"/>
+            <path id="hive-orbit-arc" fill="none" d="M 34 118 A 66 66 0 1 1 166 118"/>
           </defs>
-          <text>
-            <textPath href="#orbit" startOffset="1%">
-              answer before you spend - answer before you spend - answer before you spend -
+          <g class="hive-ring-ticks">
+            <circle cx="100" cy="100" r="78" fill="none" stroke="rgba(255,255,255,0.14)" stroke-width="1" stroke-dasharray="4 7"/>
+            <g stroke="rgba(255,255,255,0.35)" stroke-width="1">
+              <line x1="100" y1="22" x2="100" y2="30"/>
+              <line x1="100" y1="170" x2="100" y2="178"/>
+              <line x1="22" y1="100" x2="30" y2="100"/>
+              <line x1="170" y1="100" x2="178" y2="100"/>
+              <line x1="45" y1="45" x2="51" y2="51"/>
+              <line x1="155" y1="45" x2="149" y2="51"/>
+              <line x1="45" y1="155" x2="51" y2="149"/>
+              <line x1="155" y1="155" x2="149" y2="149"/>
+            </g>
+          </g>
+          <text class="hive-orbit-label">
+            <textPath href="#hive-orbit-arc" startOffset="4%">
+              answer before you spend
             </textPath>
           </text>
         </svg>
@@ -109,7 +122,7 @@
           <div class="term-block hive-term-block">
             <p class="term-prompt">~/app $ claude --model opus</p>
             <canvas class="mini-chart" id="chart-fps" width="360" height="40" aria-label="Forks per second sample chart"></canvas>
-            <p class="term-prompt">
+            <p class="term-prompt term-prompt--chart-caption">
               <span class="lbl">forks per second (peak):</span>
               <span class="num" title="throughput.forksPerSecondPeak">42</span>
               <span class="sample-badge">sample</span>
@@ -189,7 +202,7 @@
             </div>
           </div>
           <canvas class="mini-chart" id="chart-latency" width="360" height="40" aria-label="Decision latency sample chart"></canvas>
-          <p class="term-prompt hive-term-prompt">
+          <p class="term-prompt hive-term-prompt term-prompt--chart-caption">
             <span class="lbl">decision latency (sample curve)</span>
           </p>
         </section>
@@ -217,71 +230,71 @@
           meter: 94, meterLabel: 'p(risk)', meterTitle: 'project.toolgate.riskProbability' },
         { id: '02', name: 'switchboard', lane: 'route', tag: 'ROUTE', side: 'left', slot: 1,
           fields: [
-            ['hooks', '3', 'project.switchboard.hookCount'],
-            ['lane', 'haiku', 'project.switchboard.lanePick'],
-            ['state', 'armed', 'project.switchboard.state']
+            ['asks', '3 hooks', 'project.switchboard.hookCount'],
+            ['out', 'haiku lane', 'project.switchboard.lanePick'],
+            ['fails', 'armed', 'project.switchboard.state']
           ],
           meter: 68, meterLabel: 'p(route)', meterTitle: 'project.switchboard.routeConfidence' },
         { id: '03', name: 'spending-effort', lane: 'route', tag: 'ROUTE', side: 'left', slot: 2,
           fields: [
-            ['budget', 'sample cap', 'project.spendingEffort.budgetLabel'],
-            ['burn', 'low', 'project.spendingEffort.burnRate'],
-            ['queue', 'idle', 'project.spendingEffort.queueState']
+            ['asks', 'sample cap', 'project.spendingEffort.budgetLabel'],
+            ['out', 'low burn', 'project.spendingEffort.burnRate'],
+            ['fails', 'idle queue', 'project.spendingEffort.queueState']
           ],
           meter: 22, meterLabel: 'p(spend)', meterTitle: 'project.spendingEffort.spendPressure' },
         { id: '04', name: 'winnow', lane: 'context', tag: 'CONTEXT', side: 'left', slot: 3,
           fields: [
-            ['kept', '14 lines', 'project.winnow.keptLines'],
-            ['dropped', '59%', 'project.compaction.staleDroppedPct'],
-            ['mode', 'verbatim', 'project.winnow.mode']
+            ['asks', '14 lines', 'project.winnow.keptLines'],
+            ['out', 'verbatim', 'project.winnow.mode'],
+            ['fails', '59% drop', 'project.compaction.staleDroppedPct']
           ],
-          meter: 59, meterLabel: 'p(keep)', meterTitle: 'project.winnow.keepRatio', sampleOnField: 'kept' },
+          meter: 59, meterLabel: 'p(keep)', meterTitle: 'project.winnow.keepRatio', sampleOnField: 'asks' },
         { id: '05', name: 'fast-jev-compaction', lane: 'context', tag: 'CONTEXT', side: 'left', slot: 4,
           fields: [
-            ['ratio', '59%', 'project.compaction.staleDroppedPct'],
-            ['lines', '14 kept', 'project.winnow.keptLines'],
-            ['speed', '< 0.5s', 'project.compaction.latency']
+            ['asks', '59% ratio', 'project.compaction.staleDroppedPct'],
+            ['out', '14 kept', 'project.winnow.keptLines'],
+            ['fails', '< 0.5s', 'project.compaction.latency']
           ],
           meter: 74, meterLabel: 'p(compact)', meterTitle: 'project.compaction.ratio' },
         { id: '06', name: 'canny', lane: 'control', tag: 'CONTROL', side: 'right', slot: 0,
           fields: [
-            ['gates', '1 ring', 'project.canny.ringCount'],
-            ['repos', '10', 'project.canny.repoCount'],
-            ['state', 'armed', 'project.canny.state']
+            ['asks', '1 ring', 'project.canny.ringCount'],
+            ['out', '10 repos', 'project.canny.repoCount'],
+            ['fails', 'armed', 'project.canny.state']
           ],
           meter: 88, meterLabel: 'p(ring)', meterTitle: 'project.canny.ringHealth' },
         { id: '07', name: 'medula', lane: 'control', tag: 'CONTROL', side: 'right', slot: 1,
           fields: [
-            ['held', '11', 'project.medula.heldCount'],
-            ['forks', '4,485', 'project.medula.forksSeen'],
-            ['you', 'waiting', 'project.medula.ownerState']
+            ['asks', '11 held', 'project.medula.heldCount'],
+            ['out', '4,485 forks', 'project.medula.forksSeen'],
+            ['fails', 'waiting', 'project.medula.ownerState']
           ],
           meter: 41, meterLabel: 'p(hold)', meterTitle: 'project.medula.holdPressure' },
         { id: '08', name: 'jewwire', lane: 'safety', tag: 'SAFETY', side: 'right', slot: 2,
           fields: [
-            ['wires', 'sample', 'project.jewwire.wireCount'],
-            ['deny', '11', 'project.jewwire.denyCount'],
-            ['mode', 'closed', 'project.jewwire.failMode']
+            ['asks', 'sample wires', 'project.jewwire.wireCount'],
+            ['out', '11 deny', 'project.jewwire.denyCount'],
+            ['fails', 'closed', 'project.jewwire.failMode']
           ],
           meter: 91, meterLabel: 'p(wire)', meterTitle: 'project.jewwire.tripRate' },
         { id: '09', name: 'skillranker', lane: 'route', tag: 'ROUTE', side: 'right', slot: 3,
           fields: [
-            ['rank', 'sample', 'project.skillranker.rankLabel'],
-            ['skills', '12', 'project.skillranker.skillCount'],
-            ['lane', 'route', 'project.skillranker.lane']
+            ['asks', 'sample rank', 'project.skillranker.rankLabel'],
+            ['out', '12 skills', 'project.skillranker.skillCount'],
+            ['fails', 'route lane', 'project.skillranker.lane']
           ],
           meter: 55, meterLabel: 'p(rank)', meterTitle: 'project.skillranker.confidence' },
         { id: '10', name: 'wakegate', lane: 'control', tag: 'CONTROL', side: 'right', slot: 4,
           fields: [
-            ['skipped', '32', 'project.wakegate.llmWakesSkipped'],
-            ['saved', '64%', 'project.wakegate.wakeSavingsPct'],
-            ['state', 'on', 'project.wakegate.state']
+            ['asks', '32 skipped', 'project.wakegate.llmWakesSkipped'],
+            ['out', '64% saved', 'project.wakegate.wakeSavingsPct'],
+            ['fails', 'on', 'project.wakegate.state']
           ],
           meter: 64, meterLabel: 'p(skip)', meterTitle: 'project.wakegate.skipRatio' }
       ];
 
-      const SLOT_TOPS = [5, 24, 43, 62, 81];
-      const PARTICLES_PER_STREAM = 128;
+      const SLOT_TOPS = [3, 18, 33, 48, 63];
+      const PARTICLES_PER_STREAM = 56;
       const LANE_RGB = {
         safety: [255, 77, 141],
         route: [94, 184, 255],
@@ -430,7 +443,9 @@
             const slot = entry.node.slot;
             const topPct = SLOT_TOPS[slot];
             entry.el.style.top = topPct + '%';
-            entry.el.style.height = '14%';
+            entry.el.style.height = '15%';
+            entry.el.style.minHeight = '82px';
+            entry.el.style.maxHeight = '17%';
             if (side === 'left') {
               entry.el.style.left = '2%';
               entry.el.style.right = 'auto';
@@ -516,13 +531,13 @@
       }
 
       function drawRingHalo(cx, cy, ringR, time) {
-        const bloom = ctx.createRadialGradient(cx, cy, ringR * 0.35, cx, cy, ringR * 2.4);
-        bloom.addColorStop(0, 'rgba(255,45,122,0.14)');
-        bloom.addColorStop(0.45, 'rgba(255,45,122,0.32)');
+        const bloom = ctx.createRadialGradient(cx, cy, ringR * 0.5, cx, cy, ringR * 1.55);
+        bloom.addColorStop(0, 'rgba(255,45,122,0.1)');
+        bloom.addColorStop(0.55, 'rgba(255,45,122,0.05)');
         bloom.addColorStop(1, 'rgba(255,45,122,0)');
         ctx.fillStyle = bloom;
         ctx.beginPath();
-        ctx.arc(cx, cy, ringR * 2.4, 0, Math.PI * 2);
+        ctx.arc(cx, cy, ringR * 1.55, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.save();
@@ -573,10 +588,13 @@
           const rgb = LANE_RGB[entry.node.lane];
           const ringX = geom.cx + Math.cos(entry.angle) * geom.ringR;
           const ringY = geom.cy + Math.sin(entry.angle) * geom.ringR;
-          const from = cardAnchor(entry, geom);
-          const to = { x: ringX, y: ringY };
+          const from = { x: ringX, y: ringY };
+          const to = cardAnchor(entry, geom);
           if (geom.phone) {
-            const ctrl = { x: from.x, y: (from.y + to.y) * 0.5 };
+            const ctrl = {
+              x: (from.x + to.x) * 0.5 + (to.x - from.x) * 0.15,
+              y: (from.y + to.y) * 0.42
+            };
             streams.push({ from, ctrl, to, rgb, phone: true });
             return;
           }
@@ -585,7 +603,7 @@
           const len = Math.hypot(nx, ny) || 1;
           const bend = Math.min(geom.ringR * 0.45, 72);
           const ctrl = {
-            x: (from.x + to.x) / 2 + (nx / len) * bend * (entry.node.side === 'left' ? 1 : -1),
+            x: (from.x + to.x) / 2 + (nx / len) * bend * (entry.node.side === 'left' ? -1 : 1),
             y: (from.y + to.y) / 2 + (ny / len) * bend * 0.35
           };
           streams.push({ from, ctrl, to, rgb, phone: false });
@@ -593,32 +611,38 @@
         return streams;
       }
 
-      function drawStaticPaths(streams) {
+      function drawGuidePaths(streams) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
         streams.forEach(function (s) {
-          ctx.strokeStyle = 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.18)';
-          ctx.lineWidth = s.phone ? 2 : 3;
+          ctx.strokeStyle = 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.1)';
+          ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(s.from.x, s.from.y);
           ctx.quadraticCurveTo(s.ctrl.x, s.ctrl.y, s.to.x, s.to.y);
           ctx.stroke();
         });
+        ctx.restore();
       }
 
       function drawStreams(geom, time, frozen) {
         const streams = buildStreams(geom);
-        const animateParticles = motionOn() && !geom.phone && !frozen;
+        const animateParticles = motionOn() && !frozen;
 
-        drawStaticPaths(streams);
+        drawGuidePaths(streams);
 
         if (!animateParticles) {
           streams.forEach(function (s, idx) {
-            const t = 0.28 + (idx % 7) * 0.09;
-            const pt = bezierPoint(s.from, s.ctrl, s.to, t);
             const rgb = s.rgb;
-            ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.85)';
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, s.phone ? 2.2 : 2.8, 0, Math.PI * 2);
-            ctx.fill();
+            const dots = 5;
+            for (let d = 0; d < dots; d++) {
+              const t = 0.12 + (idx % 5) * 0.04 + d * 0.14;
+              const pt = bezierPoint(s.from, s.ctrl, s.to, Math.min(0.98, t));
+              ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (0.35 + d * 0.1) + ')';
+              ctx.beginPath();
+              ctx.arc(pt.x, pt.y, 1.2, 0, Math.PI * 2);
+              ctx.fill();
+            }
           });
           return;
         }
@@ -644,32 +668,25 @@
             continue;
           }
           const rgb = p.stream.rgb;
-          const trailLen = 0.16;
-          const steps = 7;
+          const trailLen = 0.14;
+          const steps = 9;
           for (let k = 0; k < steps; k++) {
             const t1 = Math.max(0, p.t - (k / steps) * trailLen);
             const t0 = Math.max(0, p.t - ((k + 1) / steps) * trailLen);
             const a = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t0);
             const b = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t1);
-            const fade = (1 - k / steps) * 0.72;
-            const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-            grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (fade * 0.2) + ')');
-            grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fade + ')');
-            ctx.strokeStyle = grad;
-            ctx.lineWidth = p.spark ? 2.6 : 1.6;
+            const fade = (1 - k / steps) * 0.55;
+            ctx.strokeStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + Math.min(0.14, fade * 0.22) + ')';
+            ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
           }
           const pt = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, p.t);
-          const head = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, p.size * 2.6);
-          head.addColorStop(0, 'rgba(255,255,255,0.98)');
-          head.addColorStop(0.3, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.9)');
-          head.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
-          ctx.fillStyle = head;
+          ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.92)';
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, p.size * 2.4, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, p.spark ? 1.4 : 1.1, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
