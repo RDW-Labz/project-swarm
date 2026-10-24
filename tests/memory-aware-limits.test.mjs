@@ -92,7 +92,7 @@ describe('readAvailableMemory injectable exec', () => {
       exec: async () => 'garbage',
       os: { platform: () => 'darwin', freemem: () => 4 * 1024 ** 3 },
     });
-    assert.equal(r.availRamGb, 0);
+    assert.equal(r.availRamGb, null);
     assert.equal(r.swapUsedGb, 0);
     assert.equal(r.pressureUnknown, true);
     assert.equal(r.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
@@ -113,7 +113,7 @@ describe('memoryPressureLevel', () => {
     assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 1.5 }, 'linux'), 'soft');
     assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 0.5 }, 'linux'), 'ok');
     assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 0.5 }, 'darwin'), 'ok');
-    assert.equal(memoryPressureLevel({ pressureUnknown: true, availRamGb: 0 }), 'ok');
+    assert.equal(memoryPressureLevel({ pressureUnknown: true, availRamGb: null }), 'ok');
   });
 });
 
