@@ -1,0 +1,39 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fix12",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/board-keepalive.mjs",
+    "tools/merge-guard.mjs",
+    "tools/ledger-backup.mjs",
+    "tools/state-guard.mjs",
+    "tests/board-keepalive.test.mjs"
+   ],
+   "outputs": [
+    "tools/board-keepalive.mjs",
+    "tools/merge-guard.mjs",
+    "tools/ledger-backup.mjs",
+    "tools/state-guard.mjs",
+    "tests/board-keepalive.test.mjs",
+    "tests/fix-1167-12.test.mjs"
+   ],
+   "prompt": "Fix three bugs found right after release 1.167.11, each with a test that uses the REAL fs (temp dir, real FileHandle), not only fakes. 1 HIGH tools/board-keepalive.mjs: the identity file is read through a FileHandle and the code calls handle.fstat(), which does not exist on Node FileHandle (the method is handle.stat()). The first run works (no file yet) and every restart crashes with 'handle.fstat is not a function', so the board service never comes back with the same link. Use handle.stat() everywhere a FileHandle is statted in this file (and check tools/state-guard.mjs, tools/ledger-backup.mjs for the same mistake and fix it there too). Make the injectable fs fakes in the existing tests expose stat() the way a real FileHandle does (keep fstat out of the fakes) and add a test that runs loadOrCreateBoardIdentity twice against a real temp directory and checks that the second call returns the same token and port and that the file mode stays 0600. 2 MEDIUM tools/merge-guard.mjs: the remote branch delete through gh api must treat HTTP 404 (reference already deleted, GitHub auto-delete after merge) as success and return status merged; on PR #349 the PR merged but swarm merge printed merge-failed 'Reference does not exist (HTTP 404)'. Any other failure of that delete still must not turn a completed merge into merge-failed (report it as a warning field instead and keep status merged, since the merge itself succeeded). 3 LOW tools/ledger-backup.mjs: pruneIncompleteSnapshots removes staging folders (names containing .staging-) older than one hour by reading the key folder directly. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/guard-backup-fixes.test.mjs",
+    "tests/guard-backup-fixes4.test.mjs",
+    "tests/ledger-backup.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/merge-guard.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/state-guard.test.mjs"
+   ]
+  }
+ ]
+}

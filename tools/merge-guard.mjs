@@ -35,6 +35,11 @@ const parseJson = (r) => {
 };
 const firstLine = (r, fallback) => String(r.stderr ?? '').trim().split('\n')[0] || fallback;
 
+function ghApiDeleteNotFound(r) {
+  const blob = `${String(r.stderr ?? '')}\n${String(r.stdout ?? '')}`;
+  return /\b404\b/.test(blob) || /Reference does not exist/i.test(blob);
+}
+
 const GREEN_RUN = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 const PENDING_CTX = new Set(['PENDING', 'EXPECTED']);
 
@@ -304,10 +309,13 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
   const mg = await gh(mergeArgs);
   if (mg.code !== 0) return mergeFailed(firstLine(mg, 'gh pr merge failed'));
 
+  let remoteBranchDeleteWarning;
   if (keepLocalHeadBranch && view.isCrossRepository === false) {
     const refPath = `repos/${repoName}/git/refs/heads/${encodeRefPath(view.headRefName)}`;
     const del = await gh(['api', '-X', 'DELETE', refPath]);
-    if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
+    if (del.code !== 0 && !ghApiDeleteNotFound(del)) {
+      remoteBranchDeleteWarning = firstLine(del, 'remote branch delete failed');
+    }
   }
 
   const after = await gh(['pr', 'view', n, ...repoArgs, '--json', 'state']);
@@ -326,6 +334,7 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
     requiredChecks,
     localUpdate: local,
     ...(keepLocalHeadBranch ? { localBranch: 'kept' } : {}),
+    ...(remoteBranchDeleteWarning ? { warning: remoteBranchDeleteWarning } : {}),
   };
 }
 

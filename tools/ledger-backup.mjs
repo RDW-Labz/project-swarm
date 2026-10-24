@@ -147,10 +147,27 @@ async function newestSnapshotMeta(fs, keyDir) {
 }
 
 async function pruneIncompleteSnapshots(fs, keyDir, nowMs) {
-  const ids = await listSnapshotIds(fs, keyDir);
   const cutoff = nowMs - INCOMPLETE_SNAPSHOT_MAX_AGE_MS;
-  for (const id of ids) {
-    const snapDir = path.join(keyDir, id);
+  let names;
+  try {
+    names = await fs.readdir(keyDir);
+  } catch (e) {
+    if (e.code === 'ENOENT') return;
+    throw e;
+  }
+  for (const name of names) {
+    const snapDir = path.join(keyDir, name);
+    if (isStagingSnapshotName(name)) {
+      let mtime = 0;
+      try {
+        mtime = (await fs.stat(snapDir)).mtimeMs;
+      } catch { /* */ }
+      if (mtime && mtime < cutoff) {
+        await fs.rm(snapDir, { recursive: true, force: true });
+      }
+      continue;
+    }
+    if (name === 'daily' || name.startsWith('.')) continue;
     const metaPath = path.join(snapDir, 'meta.json');
     try {
       await readMeta(fs, metaPath);

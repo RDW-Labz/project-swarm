@@ -3,6 +3,10 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp } from 'node:fs/promises';
 import {
   loadOrCreateBoardIdentity,
   boardIdentityPath,
@@ -70,6 +74,25 @@ function makeMemFs(seed = {}) {
     },
     async rm(file) {
       files.delete(file);
+    },
+    async open(file) {
+      const entry = files.get(file);
+      if (!entry || entry.symlink) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      const self = this;
+      return {
+        async stat() {
+          return await self.stat(file);
+        },
+        async readFile(opts = {}) {
+          const text = entry.content;
+          return opts.encoding ? text : Buffer.from(text);
+        },
+        async close() {},
+      };
     },
   };
 }
@@ -179,4 +202,28 @@ test('identity file is never created world-readable', async () => {
   assert.equal(entry.mode & 0o777, 0o600);
   const tmp = [...d.fs.files.keys()].find(f => f.includes('.tmp'));
   if (tmp) assert.equal(d.fs.files.get(tmp).mode & 0o777, 0o600);
+});
+
+test('real fs: second load reuses identity and keeps mode 0600', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'board-id-'));
+  const identityFile = boardIdentityPath(dir);
+  const alwaysFree = async () => true;
+  const first = await loadOrCreateBoardIdentity({
+    dir,
+    fs,
+    randomBytes,
+    isPortFree: alwaysFree,
+  });
+  const st1 = await fs.stat(identityFile);
+  assert.equal(st1.mode & 0o777, 0o600);
+  const second = await loadOrCreateBoardIdentity({
+    dir,
+    fs,
+    randomBytes,
+    isPortFree: alwaysFree,
+  });
+  assert.equal(second.token, first.token);
+  assert.equal(second.port, first.port);
+  const st2 = await fs.stat(identityFile);
+  assert.equal(st2.mode & 0o777, 0o600);
 });

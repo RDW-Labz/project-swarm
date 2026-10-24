@@ -119,7 +119,7 @@ async function readIdentityViaFd(file, { fs, uid, warn }) {
     return { kind: 'untrusted' };
   }
   try {
-    const st = await handle.fstat();
+    const st = await handle.stat();
     if (typeof st.isFile === 'function' ? !st.isFile() : !st.isFile) {
       warn('board identity: not a regular file; creating a new identity');
       return { kind: 'untrusted' };
