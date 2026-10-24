@@ -9,7 +9,7 @@ import os from 'node:os';
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup';
+const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
 
 async function realExec(command, args, { cwd } = {}) {
   try {
@@ -128,9 +128,9 @@ export function parseGitWorktreeListPorcelain(text) {
   return worktrees;
 }
 
-function worktreeListTrustworthy(stdout) {
+export function worktreeListTrustworthy(stdout) {
   const text = String(stdout ?? '');
-  if (!text.trim()) return true;
+  if (!text.trim()) return false;
   const blocks = text.split('\n\n').filter((b) => b.trim());
   for (const block of blocks) {
     const lines = block.split('\n');
@@ -304,18 +304,10 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
   const mg = await gh(mergeArgs);
   if (mg.code !== 0) return mergeFailed(firstLine(mg, 'gh pr merge failed'));
 
-  if (keepLocalHeadBranch) {
-    let isCrossRepository = false;
-    const cr = await gh(['pr', 'view', n, ...repoArgs, '--json', 'isCrossRepository']);
-    if (cr.code === 0) {
-      const cross = parseJson(cr);
-      if (isObj(cross) && cross.isCrossRepository === true) isCrossRepository = true;
-    }
-    if (!isCrossRepository) {
-      const refPath = `repos/${repoName}/git/refs/heads/${encodeRefPath(view.headRefName)}`;
-      const del = await gh(['api', '-X', 'DELETE', refPath]);
-      if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
-    }
+  if (keepLocalHeadBranch && view.isCrossRepository === false) {
+    const refPath = `repos/${repoName}/git/refs/heads/${encodeRefPath(view.headRefName)}`;
+    const del = await gh(['api', '-X', 'DELETE', refPath]);
+    if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
   }
 
   const after = await gh(['pr', 'view', n, ...repoArgs, '--json', 'state']);

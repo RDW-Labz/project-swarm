@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rev5a",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/merge-guard.mjs",
+    "tools/state-guard.mjs",
+    "tools/ledger-backup.mjs"
+   ],
+   "outputs": [
+    "tools/merge-guard.mjs",
+    "tools/state-guard.mjs",
+    "tools/ledger-backup.mjs",
+    "tests/guard-backup-fixes4.test.mjs"
+   ],
+   "prompt": "Fix five review findings, each with a test in tests/guard-backup-fixes4.test.mjs (temp dirs and injected fakes only). 1 MEDIUM tools/merge-guard.mjs: add isCrossRepository to the PR_FIELDS of the first pr view and delete the remote branch with gh api ONLY when view.isCrossRepository === false (a failed or unparsable value, or true, means skip the delete, never assume same-repo); drop the separate extra pr view call if it becomes redundant. 3 LOW empty output from git worktree list is not trustworthy (git always lists the main worktree): return untrustworthy so the local branch is kept. 2 MEDIUM tools/state-guard.mjs pointerHasLedger: return false only on ENOENT; any other read or parse error of .project-swarm.json returns true (refuse). 5 LOW after opening the deletions log with O_NOFOLLOW use handle.chmod(0o600) on the handle, not a chmod by path. 4 LOW tools/ledger-backup.mjs: if the rename of a staging folder fails remove the staging folder, and leave any name containing .staging- out of listSnapshotIds and out of dedupe and latest. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/guard-backup-fixes.test.mjs",
+    "tests/ledger-backup.test.mjs",
+    "tests/merge-guard.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/state-guard.test.mjs"
+   ]
+  }
+ ]
+}

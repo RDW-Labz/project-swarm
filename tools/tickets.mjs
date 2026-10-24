@@ -217,8 +217,22 @@ export async function readLedger(root) {
 }
 
 let backupLedgerForWrite = backupLedger;
-export function setBackupLedgerForWrite(fn) { backupLedgerForWrite = fn; }
+export function setBackupLedgerForWrite(fn) {
+  if (process.env.NODE_ENV !== 'test' && process.env.NODE_TEST_CONTEXT == null) {
+    throw new Error('setBackupLedgerForWrite is only available in tests');
+  }
+  backupLedgerForWrite = fn;
+}
 export function resetBackupLedgerForWrite() { backupLedgerForWrite = backupLedger; }
+
+const SYSTEM_TEMP_ROOTS = ['/tmp', '/private/tmp', '/private/var/folders'];
+
+function isUnderSystemTempRoot(resolvedPath) {
+  for (const root of SYSTEM_TEMP_ROOTS) {
+    if (resolvedPath === root || resolvedPath.startsWith(root + path.sep)) return true;
+  }
+  return false;
+}
 
 async function ledgerBackupAfterWrite(root) {
   if (process.env.PROJECT_SWARM_NO_LEDGER_BACKUP) return;
@@ -227,12 +241,14 @@ async function ledgerBackupAfterWrite(root) {
     try {
       const real = await fs.realpath(root);
       const tmpBase = await fs.realpath(os.tmpdir());
-      let homeReal;
-      try { homeReal = await fs.realpath(os.homedir()); } catch { homeReal = path.resolve(os.homedir()); }
-      const inTmp = real === tmpBase || real.startsWith(tmpBase + path.sep);
-      const tmpEqualsOrContainsHome =
-        tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
-      if (inTmp && !tmpEqualsOrContainsHome) return;
+      if (isUnderSystemTempRoot(tmpBase)) {
+        let homeReal;
+        try { homeReal = await fs.realpath(os.homedir()); } catch { homeReal = path.resolve(os.homedir()); }
+        const inTmp = real === tmpBase || real.startsWith(tmpBase + path.sep);
+        const tmpEqualsOrContainsHome =
+          tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
+        if (inTmp && !tmpEqualsOrContainsHome) return;
+      }
     } catch { /* best effort */ }
   }
   let timer;

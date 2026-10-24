@@ -167,9 +167,10 @@ function memoryPressurePlatform(platform, machine) {
 
 export function memoryPressureLevel(machine, platform) {
   if (machine?.pressureUnknown) return 'ok';
-  if (machine?.availRamGb === null) return 'ok';
+  if (machine && 'availRamGb' in machine && machine.availRamGb == null) return 'ok';
+  const avail = machine?.availRamGb ?? machine?.freeRamGb;
+  if (avail == null) return 'ok';
   const plat = memoryPressurePlatform(platform, machine);
-  const avail = machine.availRamGb ?? machine.freeRamGb ?? 0;
   const swapUsed = machine.swapUsedGb ?? 0;
   const swapTotal = machine.swapTotalGb ?? 0;
   const swapRatio = swapTotal > 0 ? swapUsed / swapTotal : 0;

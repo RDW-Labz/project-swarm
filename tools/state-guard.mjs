@@ -95,15 +95,22 @@ async function registryMatches(resolved, roots, fsImpl) {
 async function pointerHasLedger(dir, fsImpl) {
   const file = path.join(dir, '.project-swarm.json');
   try {
-    const data = JSON.parse(await fsImpl.readFile(file, 'utf8'));
+    const text = await fsImpl.readFile(file, 'utf8');
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return true;
+    }
     if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
     const ledger = data.ledger;
     if (ledger === undefined || ledger === null || ledger === false) return false;
     if (typeof ledger === 'string') return ledger.trim().length > 0;
     if (typeof ledger === 'object') return Object.keys(ledger).length > 0;
     return Boolean(ledger);
-  } catch {
-    return false;
+  } catch (err) {
+    if (isENOENT(err)) return false;
+    return true;
   }
 }
 
@@ -155,11 +162,11 @@ export async function recordDeletion({ dir, caller, outcome, home, now = () => n
     const flags = fssync.constants.O_WRONLY | fssync.constants.O_APPEND | fssync.constants.O_CREAT | fssync.constants.O_NOFOLLOW;
     const handle = await fsImpl.open(file, flags, 0o600);
     try {
+      await handle.chmod(0o600).catch(() => {});
       await handle.writeFile(line);
     } finally {
       await handle.close();
     }
-    try { fssync.chmodSync(file, 0o600); } catch { /* best effort */ }
   } catch { /* never throws */ }
 }
 

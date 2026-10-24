@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
-import { promises as defaultFs } from 'node:fs';
+import { promises as defaultFs, rmSync } from 'node:fs';
 import { isSecretPath } from './state-backup.mjs';
 import { projectSwarmHome } from './state-guard.mjs';
 
@@ -120,6 +120,10 @@ async function readMeta(fs, metaPath) {
   return m;
 }
 
+function isStagingSnapshotName(name) {
+  return String(name).includes('.staging-');
+}
+
 async function listSnapshotIds(fs, keyDir) {
   let names;
   try {
@@ -128,7 +132,7 @@ async function listSnapshotIds(fs, keyDir) {
     if (e.code === 'ENOENT') return [];
     throw e;
   }
-  return names.filter((n) => n !== 'daily' && !n.startsWith('.')).sort();
+  return names.filter((n) => n !== 'daily' && !n.startsWith('.') && !isStagingSnapshotName(n)).sort();
 }
 
 async function newestSnapshotMeta(fs, keyDir) {
@@ -261,7 +265,18 @@ export async function backupLedger(root, { reason = 'manual', home, now = Date.n
       await copyFileAtomic(fs, abs, path.join(stagingDir, name));
     }
     await writeAtomic(fs, path.join(stagingDir, 'meta.json'), Buffer.from(JSON.stringify(meta, null, 2) + '\n'));
-    await fs.rename(stagingDir, snapDir);
+    try {
+      await fs.rename(stagingDir, snapDir);
+    } catch (e) {
+      try {
+        await fs.rm(stagingDir, { recursive: true, force: true });
+      } catch {
+        try {
+          rmSync(stagingDir, { recursive: true, force: true });
+        } catch { /* best effort */ }
+      }
+      throw e;
+    }
 
     await updateDailyCopy(fs, keyDir, snapDir, ms);
     await pruneChangeSnapshots(fs, keyDir);
