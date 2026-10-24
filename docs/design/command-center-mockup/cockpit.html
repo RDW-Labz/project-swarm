@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Command Center — Cockpit (mockup)</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    :root {
+      --bg: #07060a;
+      --bg-glow: #120e14;
+      --card: #0f0d12;
+      --card-2: #141118;
+      --line: #2a2430;
+      --line-soft: #1c1820;
+      --fg: #f2ece4;
+      --muted: #9a9288;
+      --faint: #5c564e;
+      --accent: #5ee08a;
+      --accent-ink: #0a1a10;
+      --warn: #e8b84a;
+      --bad: #e86a6a;
+      --info: #6ab8ff;
+      --lav: #c49bff;
+      --haiku: #7dd3fc;
+      --sonnet: #a78bfa;
+      --opus: #e8956a;
+      --codex: #86efac;
+      --cursor: #f472b6;
+      --gpu: #fbbf24;
+      --claude: #fb923c;
+      --other: #94a3b8;
+      --r-sm: 8px;
+      --r: 12px;
+      --r-lg: 16px;
+      --pill: 999px;
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      --dur-fast: 120ms;
+      --dur: 220ms;
+      --dur-slow: 480ms;
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      --ring: 0 0 0 2px rgba(200, 160, 255, 0.55);
+      --cockpit-warm: #1a120e;
+      --cockpit-orange: #c9784a;
+      --cockpit-orange-dim: #8a5238;
+      --cockpit-teal: #5ec4b8;
+      --cockpit-pink: #e87898;
+      --tap: 44px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font, system-ui, sans-serif);
+      background:
+        radial-gradient(ellipse 120% 80% at 50% -20%, rgba(201, 120, 74, 0.12), transparent 55%),
+        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(94, 196, 184, 0.06), transparent 50%),
+        var(--bg, #07060a);
+      color: var(--fg, #f2ece4);
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+
+    .skip { position: absolute; left: -9999px; }
+    .skip:focus { left: 8px; top: 8px; z-index: 99; padding: 8px 12px; background: var(--card); border-radius: var(--r-sm); }
+
+    .shell { max-width: 1440px; margin: 0 auto; padding: 0 16px 32px; }
+
+    /* —— App chrome —— */
+    .app-nav {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line-soft);
+      margin-bottom: 8px;
+      background: linear-gradient(180deg, rgba(15, 13, 18, 0.95), transparent);
+    }
+    .brand {
+      font-style: italic;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--cockpit-pink);
+      font-size: 1.05rem;
+    }
+    .nav-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .nav-stats .pair { display: inline-flex; gap: 4px; align-items: baseline; }
+    .nav-stats .val { color: var(--fg); font-variant-numeric: tabular-nums; }
+    .nav-crumb {
+      flex: 1 1 200px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .nav-crumb strong { color: var(--fg); font-weight: 600; }
+    .nav-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+    .btn-pill {
+      min-height: var(--tap);
+      padding: 0 14px;
+      border-radius: var(--pill);
+      border: 1px solid var(--line);
+      background: var(--card-2);
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      cursor: default;
+    }
+    .btn-pill:focus-visible { outline: none; box-shadow: var(--ring); }
+    .btn-pill--accent { border-color: var(--cockpit-orange-dim); color: var(--cockpit-orange); }
+
+    /* —— View tabs (phone) —— */
+    .view-tabs {
+      display: none;
+      gap: 0;
+      margin: 12px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .view-tabs [role="tab"] {
+      flex: 1;
+      min-height: var(--tap);
+      border: 0;
+      background: var(--card);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .view-tabs [role="tab"][aria-selected="true"] {
+      background: var(--card-2);
+      color: var(--fg);
+      box-shadow: inset 0 -2px 0 var(--cockpit-orange);
+    }
+    .view-tabs [role="tab"]:focus-visible { outline: none; box-shadow: var(--ring); }
+
+    .panel-hive { display: none; }
+    .panel-cockpit { display: block; }
+
+    @media (max-width: 480px) {
+      .view-tabs { display: flex; }
+      .panel-hive[data-active="true"] { display: block; }
+      .panel-cockpit[data-active="false"] { display: none; }
+      .panel-hive[data-active="false"] { display: none; }
+      .panel-cockpit[data-active="true"] { display: block; }
+    }
+
+    /* —— Hive stub (phone tab) —— */
+    .hive-stub {
+      padding: 16px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--line);
+      background: var(--card);
+    }
+    .hive-stub h2 { margin: 0 0 8px; font-size: 1.1rem; }
+    .hive-stub p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+    /* —— Cockpit header —— */
+    .cockpit-nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 14px 0 10px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--cockpit-teal);
+      border-bottom: 1px solid var(--line-soft);
+      margin-bottom: 12px;
+    }
+    .cockpit-hero h1 {
+      margin: 0;
+      font-size: clamp(1.75rem, 4vw, 2.75rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    .cockpit-hero .tagline {
+      margin: 8px 0 0;
+      font-size: clamp(0.85rem, 2vw, 1.05rem);
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      letter-spacing: 0.04em;
+    }
+    .category-bar {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+    .category-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .category-links a, .category-links span {
+      color: inherit;
+      text-decoration: none;
+    }
+    .category-links .sep { color: var(--faint); }
+    .category-meter {
+      display: flex;
+      height: 6px;
+      border-radius: var(--pill);
+      overflow: hidden;
+      background: var(--line-soft);
+    }
+    .category-meter span { flex: var(--w, 1); min-width: 4px; }
+    .meter-opus { background: var(--cockpit-orange); }
+    .meter-skills { background: #a89068; }
+    .meter-engines { background: var(--info); }
+    .meter-taste { background: var(--accent); }
+    .meter-broll { background: var(--bad); }
+    .meter-web { background: var(--fg); opacity: 0.85; }
+    .scan-live {
+      margin-top: 10px;
+      display: flex;
+      justify-content: flex-end;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    /* —— Stage —— */
+    .stage-wrap {
+      position: relative;
+      margin: 20px 0;
+      padding: 20px 8px 24px;
+      border-radius: var(--r-lg);
+      background:
+        linear-gradient(180deg, var(--cockpit-warm), var(--card)),
+        repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px),
+        repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px);
+      border: 1px solid var(--line);
+    }
+    .stage-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(140px, 220px) minmax(0, 1fr);
+      gap: 8px 12px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .stage-grid { grid-template-columns: 1fr; }
+      .stage-center { order: -1; }
+      .ticket-col { max-width: 100%; }
+    }
+
+    .ticket-col { display: flex; flex-direction: column; gap: 6px; }
+    .ticket-col--right .ticket-row { margin-left: auto; max-width: 100%; }
+
+    .ticket-search {
+      margin-bottom: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .ticket-search label {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .ticket-search input {
+      min-height: var(--tap);
+      padding: 0 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      width: 100%;
+    }
+    .ticket-search input:focus-visible { outline: none; box-shadow: var(--ring); }
+
+    .ticket-row {
+      display: grid;
+      grid-template-columns: 36px 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      min-height: var(--tap);
+      padding: 6px 10px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--cockpit-orange-dim);
+      background: rgba(12, 10, 14, 0.75);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      max-width: 280px;
+      transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast);
+    }
+    .ticket-row[data-hidden="true"] { display: none; }
+    .ticket-row--done { opacity: 0.72; }
+    .ticket-row--active {
+      opacity: 1;
+      border-color: var(--fg);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+    }
+    .ticket-row--pending { opacity: 0.45; border-style: dashed; }
+    .ticket-idx {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: rgba(201, 120, 74, 0.25);
+      color: var(--cockpit-orange);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .ticket-main { min-width: 0; }
+    .ticket-name {
+      display: block;
+      font-weight: 600;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ticket-sub { color: var(--cockpit-teal); font-size: 0.65rem; opacity: 0.85; }
+    .ticket-badge {
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      opacity: 0.75;
+      letter-spacing: 0.04em;
+    }
+    .ticket-mark { color: var(--cockpit-orange); font-size: 0.85rem; }
+
+    .stage-center {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      padding: 8px 0 0;
+    }
+    .entity-label {
+      border: 1px solid var(--cockpit-orange-dim);
+      border-radius: var(--r-sm);
+      padding: 8px 16px;
+      margin-bottom: 8px;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    .entity-label h2 {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      letter-spacing: 0.12em;
+    }
+    .entity-label p {
+      margin: 4px 0 0;
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      letter-spacing: 0.06em;
+    }
+    .rings {
+      position: absolute;
+      width: 200px;
+      height: 100px;
+      bottom: 48px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .rings svg { width: 100%; height: 100%; }
+    .ring-path {
+      fill: none;
+      stroke: var(--cockpit-orange);
+      stroke-width: 1;
+      opacity: 0.35;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .ring-path--outer { animation: ring-pulse var(--dur-slow) var(--ease) infinite alternate; }
+    }
+    @keyframes ring-pulse {
+      from { opacity: 0.25; stroke-width: 1; }
+      to { opacity: 0.5; stroke-width: 1.5; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ring-path, .glitch-text { animation: none !important; }
+    }
+
+    .opus-sprite {
+      font-family: var(--mono);
+      font-size: 8px;
+      line-height: 1;
+      letter-spacing: 0;
+      color: var(--cockpit-orange);
+      margin: 12px 0 8px;
+      text-shadow: 0 8px 24px rgba(201, 120, 74, 0.35);
+      white-space: pre;
+    }
+    .flow-connector {
+      position: absolute;
+      width: 40%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5));
+      top: 55%;
+      right: -8%;
+      opacity: 0.4;
+    }
+
+    /* —— Now panel —— */
+    .now-panel {
+      margin: 0 auto;
+      max-width: 320px;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: var(--r);
+      border: 1px solid var(--line);
+      background: rgba(8, 8, 12, 0.9);
+      text-align: left;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+    .now-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      font-size: 0.62rem;
+      color: var(--info);
+    }
+    .now-progress .val { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .now-repo { color: var(--muted); }
+    .now-title {
+      margin: 4px 0;
+      font-size: 1.35rem;
+      font-weight: 800;
+      font-family: var(--font);
+      letter-spacing: -0.02em;
+    }
+    .glitch-text {
+      position: relative;
+      display: inline-block;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .glitch-text--on { animation: glitch-idle 4s steps(2) infinite; }
+    }
+    @keyframes glitch-idle {
+      0%, 92%, 100% { text-shadow: none; }
+      93% { text-shadow: 1px 0 var(--bad), -1px 0 var(--info); }
+      95% { text-shadow: -1px 0 var(--bad), 1px 0 var(--info); }
+    }
+    .now-desc { color: var(--muted); margin: 0 0 8px; font-size: 0.68rem; }
+    .now-handoff { color: var(--lav); font-size: 0.65rem; }
+    .now-handoff strong { color: var(--fg); font-weight: 600; }
+
+    /* —— Loops —— */
+    .loop-block {
+      margin: 20px 0;
+      padding: 14px 16px;
+      border-radius: var(--r);
+      border: 1px solid var(--cockpit-orange-dim);
+      background: var(--card);
+    }
+    .loop-block--swarm { border-color: var(--line); margin-bottom: 8px; }
+    .loop-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+    }
+    .loop-head .title { color: var(--cockpit-orange); letter-spacing: 0.08em; }
+    .loop-block--swarm .loop-head .title { color: var(--cockpit-pink); }
+    .loop-head .tag { color: var(--muted); }
+    .loop-steps {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+    .loop-steps .step { color: var(--fg); }
+    .loop-steps .step--live { color: var(--accent); }
+    .loop-steps .sep { color: var(--faint); margin: 0 4px; }
+
+    /* —— Streams —— */
+    .stream-section { margin: 24px 0; }
+    .stream-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+    }
+    .stream-head--worker { color: var(--cockpit-pink); }
+    .stream-head--render { color: var(--cockpit-orange); }
+    .stream-count { color: var(--muted); }
+    .stream-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 520px) {
+      .stream-grid { grid-template-columns: 1fr; }
+    }
+    .stream-card {
+      padding: 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: var(--card-2);
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      min-height: 88px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stream-card--accent-teal { border-top: 3px solid var(--cockpit-teal); }
+    .stream-card--accent-blue { border-top: 3px solid var(--info); }
+    .stream-card--accent-gold { border-top: 3px solid var(--warn); }
+    .stream-card--accent-white { border-top: 3px solid var(--fg); }
+    .stream-card--accent-pink { border-top: 3px solid var(--cockpit-pink); }
+    .stream-card--accent-green { border-top: 3px solid var(--accent); }
+    .stream-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .stream-id { color: var(--faint); font-variant-numeric: tabular-nums; }
+    .stream-title { font-weight: 700; color: var(--fg); flex: 1; }
+    .stream-status { text-transform: uppercase; font-size: 0.58rem; color: var(--cockpit-pink); }
+    .stream-meta { color: var(--muted); }
+    .stream-bar {
+      height: 3px;
+      border-radius: var(--pill);
+      background: var(--line-soft);
+      margin-top: auto;
+    }
+    .stream-bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      width: var(--pct, 70%);
+      background: var(--bar, var(--cockpit-teal));
+    }
+
+    /* —— Stack —— */
+    .stack-block {
+      margin-top: 28px;
+      padding: 18px 16px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--cockpit-orange-dim);
+      background: linear-gradient(135deg, var(--cockpit-warm), var(--card));
+    }
+    .stack-head { margin-bottom: 14px; }
+    .stack-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+    }
+    .stack-title {
+      margin: 4px 0 0;
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 800;
+    }
+    .stack-sub {
+      margin: 6px 0 0;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .stack-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .metric-tile {
+      flex: 1 1 72px;
+      min-width: 64px;
+      padding: 10px 8px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.25);
+      text-align: center;
+    }
+    .metric-tile--active { border-color: var(--fg); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12); }
+    .metric-tile .m-label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.52rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .metric-tile .m-val {
+      font-family: var(--mono);
+      font-size: 1.25rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
+    }
+    .metric-tile--opus { border-color: rgba(201, 120, 74, 0.5); }
+    .metric-tile--opus .m-label { color: var(--cockpit-orange); }
+    .metric-tile--skills .m-label { color: #a89068; }
+    .metric-tile--engines .m-label { color: var(--info); }
+    .metric-tile--taste .m-label { color: var(--accent); }
+    .metric-tile--broll .m-label { color: var(--bad); }
+    .metric-tile--web .m-label { color: var(--fg); }
+    .stack-foot {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      color: var(--faint);
+    }
+    .stack-foot .handle { color: var(--cockpit-pink); }
+
+    .num-label {
+      font-family: var(--mono);
+      font-size: 0.55rem;
+      text-transform: uppercase;
+      color: var(--faint);
+      letter-spacing: 0.04em;
+    }
+    .num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to cockpit</a>
+  <div class="shell">
+    <header class="app-nav" aria-label="Swarm Watch chrome">
+      <div class="brand" aria-hidden="true">Swarm Watch</div>
+      <div class="nav-stats" role="status" aria-live="polite">
+        <span class="pair">
+          <span class="num-label">projects active label</span>
+          <span class="val num" title="source field: board.projectsActive">sample</span>
+          <span class="num-label">of cap</span>
+          <span class="val num" title="source field: board.projectsCap">sample</span>
+        </span>
+        <span class="pair">
+          <span class="num-label">agents running</span>
+          <span class="val num" title="source field: board.agentsRunning">sample</span>
+        </span>
+        <span class="pair">
+          <span class="num-label">done 24h</span>
+          <span class="val num" title="source field: board.done24h">sample</span>
+        </span>
+        <span class="pair">
+          <span class="num-label">need you</span>
+          <span class="val num" title="source field: inbox.needYouCount">sample</span>
+        </span>
+      </div>
+      <div class="nav-crumb">
+        <span class="num-label">breadcrumb</span>
+        The Hive <strong>project-swarm</strong>
+      </div>
+      <div class="nav-actions">
+        <button type="button" class="btn-pill btn-pill--accent" aria-current="page">Command Center</button>
+        <button type="button" class="btn-pill">Search</button>
+      </div>
+    </header>
+
+    <div class="view-tabs" role="tablist" aria-label="Command Center views">
+      <button type="button" role="tab" id="tab-hive" aria-controls="panel-hive" aria-selected="false">Hive</button>
+      <button type="button" role="tab" id="tab-cockpit" aria-controls="main" aria-selected="true">Cockpit</button>
+    </div>
+
+    <section class="panel-hive hive-stub" id="panel-hive" role="tabpanel" aria-labelledby="tab-hive" data-active="false" hidden>
+      <h2>The Hive</h2>
+      <p>Phone tab stub: vertical project list and Needs you first. Open the Cockpit tab for the motion scan mockup.</p>
+      <p>
+        <span class="num-label">tickets total label</span>
+        <span class="num" title="source field: ledger.ticketTotal">sample</span>
+      </p>
+    </section>
+
+    <main class="panel-cockpit" id="main" role="tabpanel" aria-labelledby="tab-cockpit" data-active="true">
+      <nav class="cockpit-nav" aria-label="Cockpit breadcrumb">
+        <span>
+          <span class="num-label">owner handle</span> N01ennn
+          <span class="sep"> / </span>
+          <span class="num-label">scan lane</span> Opus 5.5 motion
+          <span class="sep"> / </span>
+          <span class="num-label">scan type</span> GitHub scan
+        </span>
+        <span>
+          <span class="num-label">repo total</span>
+          <span class="num" title="source field: motionScan.repoTotal">sample</span>
+          <span class="sep"> / </span>
+          <span class="num-label">director model</span> Opus 5.5
+          <span class="sep"> / </span>
+          <span class="num-label">scan month</span>
+          <span class="num" title="source field: motionScan.periodLabel">sample</span>
+        </span>
+      </nav>
+
+      <header class="cockpit-hero">
+        <h1>
+          <span class="num-label">repo total headline</span>
+          <span class="num" title="source field: motionScan.repoTotal">sample</span>
+          GitHub repos
+        </h1>
+        <p class="tagline">To turn your Opus 5.5 into a motion empire</p>
+        <div class="category-bar">
+          <div class="category-links" aria-label="Category filters">
+            <span>Opus 5.5</span><span class="sep">/</span>
+            <span>Skills</span><span class="sep">/</span>
+            <span>Engines</span><span class="sep">/</span>
+            <span>Taste</span><span class="sep">/</span>
+            <span>B-roll</span><span class="sep">/</span>
+            <span>Web</span>
+          </div>
+          <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+            <span class="meter-opus" style="--w:3"></span>
+            <span class="meter-skills" style="--w:7"></span>
+            <span class="meter-engines" style="--w:4"></span>
+            <span class="meter-taste" style="--w:2"></span>
+            <span class="meter-broll" style="--w:1"></span>
+            <span class="meter-web" style="--w:3"></span>
+          </div>
+          <div class="scan-live">
+            <span class="num-label">live scan progress</span>
+            <span class="num" title="source field: motionScan.completedCount">sample</span>
+            of
+            <span class="num" title="source field: motionScan.repoTotal">sample</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="stage-wrap" aria-label="Ticket flow stage">
+        <div class="ticket-search">
+          <label for="ticket-filter">Search tickets</label>
+          <input id="ticket-filter" type="search" placeholder="Filter repos by name" autocomplete="off" aria-describedby="ticket-filter-hint">
+          <span id="ticket-filter-hint" class="num-label">filters static sample rows only</span>
+        </div>
+        <div class="stage-grid">
+          <div class="ticket-col ticket-col--left" id="tickets-left" aria-label="Tickets one through ten"></div>
+
+          <div class="stage-center">
+            <div class="entity-label">
+              <h2>Opus 5.5</h2>
+              <p>Motion director · Skills + engines</p>
+            </div>
+            <div class="rings" aria-hidden="true">
+              <svg viewBox="0 0 200 100" focusable="false">
+                <ellipse class="ring-path ring-path--outer" cx="100" cy="78" rx="92" ry="22"></ellipse>
+                <ellipse class="ring-path" cx="100" cy="82" rx="72" ry="16"></ellipse>
+                <ellipse class="ring-path" cx="100" cy="86" rx="52" ry="11"></ellipse>
+              </svg>
+            </div>
+            <pre class="opus-sprite" aria-label="Opus orchestrator sprite (ASCII)">   .------.
+   |[]  []|
+   |  __  |
+  /| |  | |\
+  | +-+ +-+ |
+  | |     | |
+  + +-----+ +
+    +  +  +</pre>
+            <div class="flow-connector" aria-hidden="true"></div>
+            <aside class="now-panel" aria-label="Now loading panel">
+              <div class="now-head">
+                <span>Now loading</span>
+                <span class="now-progress">
+                  <span class="num-label">index</span>
+                  <span class="val num" title="source field: motionScan.activeIndex">sample</span>
+                  /
+                  <span class="num-label">total</span>
+                  <span class="val num" title="source field: motionScan.repoTotal">sample</span>
+                </span>
+              </div>
+              <div class="now-repo">motiondivision /</div>
+              <div class="now-title glitch-text glitch-text--on">motion</div>
+              <p class="now-desc">Motion itself, formerly Framer Motion</p>
+              <p class="now-handoff">
+                Opus 5.5 gets &gt; <strong>the Motion library</strong>
+              </p>
+            </aside>
+          </div>
+
+          <div class="ticket-col ticket-col--right" id="tickets-right" aria-label="Tickets eleven through twenty"></div>
+        </div>
+      </section>
+
+      <section class="loop-block loop-block--swarm" aria-label="Swarm loop (context)">
+        <div class="loop-head">
+          <span class="title">The swarm loop</span>
+          <span class="tag">Ledger in, merged PR out</span>
+        </div>
+        <p class="loop-steps">
+          <span class="step">you approve the scope</span><span class="sep">&gt;</span>
+          <span class="step">the split makes tickets</span><span class="sep">&gt;</span>
+          <span class="step">workers build in waves</span><span class="sep">&gt;</span>
+          <span class="step">checks gate every merge</span><span class="sep">&gt;</span>
+          <span class="step">the PR merges</span><span class="sep">&gt;</span>
+          <span class="step step--live">the ledger marks it done</span>
+        </p>
+      </section>
+
+      <section class="loop-block" aria-label="The motion loop">
+        <div class="loop-head">
+          <span class="title">The motion loop</span>
+          <span class="tag">Code in, MP4 out</span>
+        </div>
+        <p class="loop-steps">
+          <span class="step">you write the brief</span><span class="sep">&gt;</span>
+          <span class="step">Opus 5.5 storyboards</span><span class="sep">&gt;</span>
+          <span class="step">a skill sets timing + camera</span><span class="sep">&gt;</span>
+          <span class="step">an engine renders the MP4</span><span class="sep">&gt;</span>
+          <span class="step">Opus checks its own frames</span>
+        </p>
+      </section>
+
+      <section class="stream-section" aria-label="Worker stream">
+        <div class="stream-head stream-head--worker">
+          <span>// Worker stream / latest finished tickets</span>
+          <span class="stream-count">
+            <span class="num-label">visible count</span>
+            <span class="num" title="source field: workerStream.visibleCount">sample</span>
+            latest
+          </span>
+        </div>
+        <div class="stream-grid">
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id">
+                <span class="num-label">ticket id</span>
+                <span class="num" title="source field: workerStream.items[0].ticketId">sample</span>
+              </span>
+              <span class="stream-title">build-owns-tests rules</span>
+              <span class="stream-status">Newest</span>
+            </div>
+            <span class="stream-meta">Finished &gt; sample ago</span>
+            <div class="stream-bar"><span style="--pct:88%;--bar:var(--cockpit-pink)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-teal">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[1].ticketId">sample</span></span>
+              <span class="stream-title">manifest checks in CI</span>
+              <span class="stream-status" style="color:var(--cockpit-teal)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; sample ago</span>
+            <div class="stream-bar"><span style="--pct:100%;--bar:var(--cockpit-teal)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-blue">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[2].ticketId">sample</span></span>
+              <span class="stream-title">wave prep routing</span>
+              <span class="stream-status" style="color:var(--info)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; sample ago</span>
+            <div class="stream-bar"><span style="--pct:76%;--bar:var(--info)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-gold">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[3].ticketId">sample</span></span>
+              <span class="stream-title">scope command meta</span>
+              <span class="stream-status" style="color:var(--warn)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; sample ago</span>
+            <div class="stream-bar"><span style="--pct:64%;--bar:var(--warn)"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="stream-section" aria-label="Render stream">
+        <div class="stream-head stream-head--render">
+          <span>// Render stream / what each repo hands to Opus 5.5</span>
+          <span class="stream-count">
+            <span class="num-label">visible count</span>
+            <span class="num" title="source field: renderStream.visibleCount">sample</span>
+            latest
+          </span>
+        </div>
+        <div class="stream-grid">
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[0].nodeIndex">sample</span></span>
+              <span class="stream-title">motion</span>
+              <span class="stream-status" style="color:var(--warn)">Web</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; the Motion library</span>
+            <div class="stream-bar"><span style="--pct:92%;--bar:var(--fg)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[1].nodeIndex">sample</span></span>
+              <span class="stream-title">motion-dev-animations-skill</span>
+              <span class="stream-status" style="color:var(--warn)">Web</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; web animation</span>
+            <div class="stream-bar"><span style="--pct:80%;--bar:var(--fg)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-pink">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[2].nodeIndex">sample</span></span>
+              <span class="stream-title">motion-graphics</span>
+              <span class="stream-status" style="color:var(--bad)">B-roll</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; B-roll from transcript</span>
+            <div class="stream-bar"><span style="--pct:55%;--bar:var(--cockpit-pink)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-green">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[3].nodeIndex">sample</span></span>
+              <span class="stream-title">awesome-motion-design-agent-skills</span>
+              <span class="stream-status" style="color:var(--accent)">Taste</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; a map of the field</span>
+            <div class="stream-bar"><span style="--pct:48%;--bar:var(--accent)"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="stack-block" aria-label="Motion stack">
+        <div class="stack-head">
+          <div class="stack-label">Motion stack</div>
+          <h2 class="stack-title">
+            <span class="num" title="source field: motionStack.repoTotal">sample</span>
+            repos
+          </h2>
+          <p class="stack-sub">Opus 5.5 / skills / engines / taste / b-roll / web</p>
+        </div>
+        <div class="stack-metrics">
+          <div class="metric-tile metric-tile--opus">
+            <span class="m-label">Opus 5.5</span>
+            <span class="m-val num" title="source field: motionStack.counts.opus">sample</span>
+          </div>
+          <div class="metric-tile metric-tile--skills">
+            <span class="m-label">Skills</span>
+            <span class="m-val num" title="source field: motionStack.counts.skills">sample</span>
+          </div>
+          <div class="metric-tile metric-tile--engines">
+            <span class="m-label">Engines</span>
+            <span class="m-val num" title="source field: motionStack.counts.engines">sample</span>
+          </div>
+          <div class="metric-tile metric-tile--taste">
+            <span class="m-label">Taste</span>
+            <span class="m-val num" title="source field: motionStack.counts.taste">sample</span>
+          </div>
+          <div class="metric-tile metric-tile--broll">
+            <span class="m-label">B-roll</span>
+            <span class="m-val num" title="source field: motionStack.counts.broll">sample</span>
+          </div>
+          <div class="metric-tile metric-tile--web metric-tile--active">
+            <span class="m-label">Web</span>
+            <span class="m-val num" title="source field: motionStack.counts.web">sample</span>
+          </div>
+        </div>
+        <div class="stack-foot">
+          <span>All links in the post — check each repo before you install.</span>
+          <span class="handle">@N01ennn</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      var tickets = [
+        { n: 1, repo: 'claude-motion', sub: 'whaleyxbt', badge: 'Skills', state: 'done' },
+        { n: 2, repo: 'motion-graphics-skills', sub: 'howseen-ai', badge: 'Opus 5.5', state: 'done' },
+        { n: 3, repo: 'motion-graphics', sub: 'charlie947', badge: 'B-roll', state: 'done' },
+        { n: 4, repo: 'motion-dev-animations-skill', sub: 'motiondivision', badge: 'Web', state: 'done' },
+        { n: 5, repo: 'awesome-motion-design-agent-skills', sub: 'sample-owner', badge: 'Taste', state: 'done' },
+        { n: 6, repo: 'remotion-templates', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 7, repo: 'motion-canvas-skills', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 8, repo: 'rive-motion-kit', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 9, repo: 'lottie-pipeline', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 10, repo: 'gsap-recipes', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 11, repo: 'after-effects-scripts', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 12, repo: 'blender-motion', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 13, repo: 'ffmpeg-motion', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 14, repo: 'storyboard-skill', sub: 'sample-owner', badge: 'Opus 5.5', state: 'done' },
+        { n: 15, repo: 'camera-rig-skill', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 16, repo: 'motion-taste-pack', sub: 'sample-owner', badge: 'Taste', state: 'done' },
+        { n: 17, repo: 'web-gl-transitions', sub: 'sample-owner', badge: 'Web', state: 'done' },
+        { n: 18, repo: 'broll-cut-skill', sub: 'sample-owner', badge: 'B-roll', state: 'done' },
+        { n: 19, repo: 'motion', sub: 'motiondivision', badge: 'Web', state: 'active' },
+        { n: 20, repo: 'pending-slot', sub: 'unassigned', badge: 'Pending', state: 'pending' }
+      ];
+
+      function rowHtml(t) {
+        var cls = 'ticket-row ticket-row--' + t.state;
+        var mark = t.state === 'done' ? 'v' : (t.state === 'active' ? '*' : 'o');
+        return (
+          '<button type="button" class="' + cls + '" data-repo="' + t.repo.toLowerCase() + '" ' +
+          'title="source field: motionScan.nodes[' + (t.n - 1) + '].index sample">' +
+          '<span class="ticket-idx" title="source field: motionScan.nodes[' + (t.n - 1) + '].index">' +
+          '<span class="num-label">idx</span> <span class="num">sample</span></span>' +
+          '<span class="ticket-main">' +
+          '<span class="ticket-name">' + t.repo + '</span>' +
+          '<span class="ticket-sub">' + t.sub + '</span></span>' +
+          '<span class="ticket-badge">' + t.badge + '</span>' +
+          '<span class="ticket-mark" aria-hidden="true">' + mark + '</span>' +
+          '</button>'
+        );
+      }
+
+      var left = document.getElementById('tickets-left');
+      var right = document.getElementById('tickets-right');
+      tickets.forEach(function (t) {
+        var el = document.createElement('div');
+        el.innerHTML = rowHtml(t);
+        var btn = el.firstChild;
+        if (t.n <= 10) left.appendChild(btn);
+        else right.appendChild(btn);
+      });
+
+      var input = document.getElementById('ticket-filter');
+      input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        document.querySelectorAll('.ticket-row').forEach(function (btn) {
+          var show = !q || btn.getAttribute('data-repo').indexOf(q) !== -1;
+          btn.setAttribute('data-hidden', show ? 'false' : 'true');
+        });
+      });
+
+      var tabHive = document.getElementById('tab-hive');
+      var tabCockpit = document.getElementById('tab-cockpit');
+      var panelHive = document.getElementById('panel-hive');
+      var panelCockpit = document.getElementById('main');
+
+      function selectTab(which) {
+        var hive = which === 'hive';
+        tabHive.setAttribute('aria-selected', hive ? 'true' : 'false');
+        tabCockpit.setAttribute('aria-selected', hive ? 'false' : 'true');
+        panelHive.dataset.active = hive ? 'true' : 'false';
+        panelCockpit.dataset.active = hive ? 'false' : 'true';
+        panelHive.hidden = !hive;
+        panelCockpit.hidden = hive;
+      }
+
+      tabHive.addEventListener('click', function () { selectTab('hive'); });
+      tabCockpit.addEventListener('click', function () { selectTab('cockpit'); });
+
+      tabHive.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowRight') { e.preventDefault(); tabCockpit.focus(); selectTab('cockpit'); }
+      });
+      tabCockpit.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); tabHive.focus(); selectTab('hive'); }
+      });
+    })();
+  </script>
+</body>
+</html>

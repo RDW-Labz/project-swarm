@@ -5,11 +5,13 @@
 ```text
 Project Swarm brief
 Goal: none
-Done: none
+Done:
+  - run 1792875550293-833e09a0 integrated, 2 files
+  - run 1792875196984-a733a9b7 integrated, 1 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792415686129-b359f989 --queue
+  1. swarm inspect 1792875196984-a733a9b7 --results
   2. swarm "describe the goal in one sentence"
   3. swarm status
 Rules:
@@ -19,3 +21,44 @@ Rules:
   - Workers run on the installed runner; update the runner only after the owner merges.
   - Record decisions with swarm note "<text>".
 ```
+
+Pending approvals:
+- blocker failed-1792797907880-0207f6f8 21h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792799164025-77015cdc 21h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792791281210-3f0b5adc 23h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- owner-decision approve-co001-final 24h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792785769763-a5ddac51 24h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792785605062-2c3e9b27 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792784756684-f6cf750c 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S10-T-0351 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792766283201-bba38c87 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- owner-decision approve-co001-split 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S10-T-0333 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S10-T-0312 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0285 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0286 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0287 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0288 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0289 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S9-T-0284 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792733914448-9b7b7849 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792739556062-ee907779 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792740702318-45fe032e 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker failed-1792741346409-2d4fee76 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792739406131-0c19addf 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792739491504-ed1d8133 37h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker split-park-S1-T-0226 42h branch (no branch) /Users/bean/project-swarm
+- blocker split-park-S1-T-0226 42h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792618361836-41e05e85 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-575f4d93 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-0aa96f6b 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618723546-ed0c23b2 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618943558-b1eacc9e 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792635375937-7fdc332b 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker security-1792687365474-0f0a07d2-locallane 2d branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-m8G2uR/base
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-paz2xd/base
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
+- unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
+
+Generated at: 2026-10-24T21:04:24.985Z

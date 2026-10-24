@@ -165,6 +165,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-24 | - | ccmockhive: Build a static, self-contained mockup of the Command Center HIVE view as one HTML file, | cursor | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-24 | - | ccmockcock: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-24 | - | ccmockhive: Hive canvas streams: curved quadratic paths, spark heads, ring halo dust; static frame w | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -182,4 +185,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-24 | cursor | 3 | 2 | 1 | 0 | subscription |
+| **total** | all | 164 | 148 | 16 | 14,711,375 | $26.67 (incl. estimates) |
