@@ -111,7 +111,7 @@ test('startScope spawns detached swarm go --scope and unrefs', async () => {
   assert.equal(out.result, 'started go --scope (pid 4242)');
   assert.equal(spawnCalls.length, 1);
   assert.equal(spawnCalls[0].execPath, process.execPath);
-  assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope']);
+  assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope', '--max-jobs', '1']);
   assert.equal(spawnCalls[0].opts.detached, true);
   assert.deepEqual(spawnCalls[0].opts.stdio, 'ignore');
   assert.equal(spawnCalls[0].opts.env.TEST_ENV, '1');
