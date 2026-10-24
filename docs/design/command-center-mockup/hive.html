@@ -419,6 +419,7 @@
           meter.appendChild(val);
           bd.appendChild(meter);
         }
+        card.appendChild(bd);
         card.style.setProperty('--card-glow', LANE_GLOW[node.lane]);
         mount.appendChild(card);
         nodeEls.push({ node: node, el: card });

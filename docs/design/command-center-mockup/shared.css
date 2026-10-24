@@ -712,7 +712,7 @@ body.hive-body {
 .hive-kv {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px 8px;
+  gap: 0 8px;
   align-items: baseline;
   flex: 0 0 auto;
 }
@@ -735,7 +735,7 @@ body.hive-body {
 
 .hive-meter {
   margin-top: auto;
-  padding-top: 6px;
+  padding-top: 3px;
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 4px;
