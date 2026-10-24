@@ -140,7 +140,7 @@ test('startScope does not spawn under hard memory pressure when memoryAware', as
   const { deps, spawnCalls } = makeDeps({
     injected: {
       memoryAware: true,
-      readMachine: async () => ({ memTotal: 1e9, memAvailable: 1 }),
+      readMachine: async () => ({ availRamGb: 1, swapUsedGb: 0, swapTotalGb: 8, cores: 8 }),
     },
   });
   const out = await deps.startScope({ root: ROOT });

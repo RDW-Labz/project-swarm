@@ -5,12 +5,23 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { constants as fsConstants } from 'node:fs';
 import {
+  DARWIN_MEMORY_PROBE_UNKNOWN_WARNING,
+  DARWIN_SYSCTL_PATH,
+  DARWIN_VM_STAT_PATH,
   defaultMemoryExec,
   memoryPressureLevel,
+  parseDarwinVmStatAndSwap,
   readAvailableMemory,
+  readMachine,
 } from '../tools/autotune.mjs';
-import { applyNodeTestConcurrency } from '../tools/machine-limit.mjs';
+import {
+  applyNodeTestConcurrency,
+  MEMORY_HARD_WAIT_MS,
+  MEMORY_POLL_MS,
+} from '../tools/machine-limit.mjs';
+import { runChecks } from '../tools/swarm/core-31.mjs';
 import {
   loadOrCreateBoardIdentity,
   boardIdentityPath,
@@ -55,14 +66,66 @@ describe('readAvailableMemory default exec', () => {
     if (process.platform === 'linux') assert.match(meminfo, /MemAvailable/);
   });
 
-  it('falls back to freemem when default path fails', async () => {
+  it('uses pressure-unknown on darwin when probes fail (not freemem)', async () => {
     const r = await readAvailableMemory({
       platform: 'darwin',
       exec: async () => { throw new Error('fail'); },
       os: { platform: () => 'darwin', freemem: () => 3 * 1024 ** 3 },
     });
+    assert.equal(r.pressureUnknown, true);
+    assert.equal(r.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
+    assert.equal(memoryPressureLevel(r, 'darwin'), 'ok');
+    assert.equal(r.swapUsedGb, 0);
+  });
+
+  it('keeps vm_stat when sysctl swap probe fails on darwin', async () => {
+    const r = await readAvailableMemory({
+      platform: 'darwin',
+      exec: async (cmd) => {
+        if (cmd === 'vm_stat') return DARWIN_VM_STAT;
+        if (cmd === 'sysctl') throw new Error('sysctl denied');
+        throw new Error(`unexpected ${cmd}`);
+      },
+    });
+    const expected = parseDarwinVmStatAndSwap(DARWIN_VM_STAT, '');
+    assert.ok(expected);
+    assert.equal(r.availRamGb, expected.availRamGb);
+    assert.equal(r.swapUsedGb, 0);
+  });
+
+  it('falls back to freemem on linux when default path fails', async () => {
+    const r = await readAvailableMemory({
+      platform: 'linux',
+      exec: async () => { throw new Error('fail'); },
+      os: { platform: () => 'linux', freemem: () => 3 * 1024 ** 3 },
+    });
     assert.equal(r.availRamGb, 3);
     assert.equal(r.swapUsedGb, 0);
+    assert.equal(r.pressureUnknown, undefined);
+  });
+
+  it('defaultMemoryExec uses absolute darwin binary paths', () => {
+    assert.equal(DARWIN_VM_STAT_PATH, '/usr/bin/vm_stat');
+    assert.equal(DARWIN_SYSCTL_PATH, '/usr/sbin/sysctl');
+  });
+});
+
+describe('readMachine probe metadata', () => {
+  it('passes darwin pressure-unknown through readMachine', async () => {
+    const m = await readMachine({
+      platform: 'darwin',
+      exec: async () => { throw new Error('fail'); },
+      os: {
+        platform: () => 'darwin',
+        freemem: () => 1,
+        totalmem: () => 16 * 1024 ** 3,
+        cpus: () => [{ times: { idle: 1, user: 0 } }],
+      },
+      measureCpu: async () => 0,
+    });
+    assert.equal(m.pressureUnknown, true);
+    assert.equal(m.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
+    assert.equal(memoryPressureLevel(m, 'darwin'), 'ok');
   });
 });
 
@@ -72,6 +135,36 @@ describe('memoryPressureLevel darwin', () => {
     assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 3, swapTotalGb: 4 }, 'darwin'), 'ok');
     assert.equal(memoryPressureLevel({ availRamGb: 2.5 }, 'darwin'), 'hard');
     assert.equal(memoryPressureLevel({ availRamGb: 16, swapUsedGb: 9 }, 'darwin'), 'soft');
+  });
+});
+
+describe('runChecks hard memory wait', () => {
+  it('waits at most 60s in 15s polls before running node --test', async () => {
+    assert.equal(MEMORY_HARD_WAIT_MS, 60_000);
+    assert.equal(MEMORY_POLL_MS, 15_000);
+    const sleeps = [];
+    let reads = 0;
+    const spawnImpl = () => ({
+      stdout: { on() {} },
+      stderr: { on() {} },
+      on(event, cb) {
+        if (event === 'close') queueMicrotask(() => cb(0));
+      },
+    });
+    const readMachineFn = async () => {
+      reads += 1;
+      return { availRamGb: reads < 5 ? 1 : 10, swapUsedGb: 0, cores: 8 };
+    };
+    const checkArgv = [process.execPath, '--test', '--test-concurrency=8', 'ok.mjs'];
+    await runChecks(ROOT, [{
+      name: 'tests',
+      argv: checkArgv,
+    }], [], [], spawnImpl, {
+      readMachine: readMachineFn,
+      memoryPressureSleep: ms => { sleeps.push(ms); },
+    });
+    assert.deepEqual(sleeps, [15_000, 15_000, 15_000, 15_000]);
+    assert.equal(reads, 5);
   });
 });
 
@@ -109,6 +202,7 @@ describe('board identity port bookmark', () => {
       async open(file, flags) {
         const entry = files.get(file);
         if (!entry) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        entry.lastOpenFlags = flags;
         return {
           async fstat() {
             return { mode: entry.mode ?? 0o100600, uid: entry.uid ?? UID, isFile: () => true };
@@ -143,6 +237,41 @@ describe('board identity port bookmark', () => {
       () => loadOrCreateBoardIdentity({ dir, fs, randomBytes: n => Buffer.alloc(n, 1), port: 52000, uid: UID }),
       err => err.code === 'board-port-mismatch',
     );
+  });
+
+  it('opens identity with O_NONBLOCK so a FIFO cannot block', async () => {
+    const dir = '/cfg/.project-swarm';
+    const file = boardIdentityPath(dir);
+    const fs = makeMemFs({
+      [file]: { content: `{"token":"${'d'.repeat(48)}","port":51058}\n`, mode: 0o100600, uid: UID },
+    });
+    await loadOrCreateBoardIdentity({
+      dir,
+      fs,
+      randomBytes: n => Buffer.alloc(n, 1),
+      uid: UID,
+      isPortFree: async () => true,
+    });
+    const entry = fs.files.get(file);
+    assert.ok(entry.lastOpenFlags & fsConstants.O_NONBLOCK);
+  });
+
+  it('refuses to write when config directory is not owned by the user', async () => {
+    const dir = '/cfg/.project-swarm';
+    const file = boardIdentityPath(dir);
+    const fs = makeMemFs();
+    fs.files.set(dir, { mode: 0o40700, uid: UID + 1 });
+    await assert.rejects(
+      () => loadOrCreateBoardIdentity({
+        dir,
+        fs,
+        randomBytes: n => Buffer.alloc(n, 1),
+        uid: UID,
+        isPortFree: async () => true,
+      }),
+      err => err.code === 'board-config-dir-untrusted',
+    );
+    assert.equal(fs.files.has(file), false);
   });
 
   it('reuses saved port when --port matches', async () => {

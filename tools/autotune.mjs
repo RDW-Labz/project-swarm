@@ -8,16 +8,21 @@ import { resolveConfigPath } from './local-config.mjs';
 
 const execFileAsync = promisify(execFile);
 const MEMORY_EXEC_TIMEOUT_MS = 2000;
+export const DARWIN_VM_STAT_PATH = '/usr/bin/vm_stat';
+export const DARWIN_SYSCTL_PATH = '/usr/sbin/sysctl';
+
+export const DARWIN_MEMORY_PROBE_UNKNOWN_WARNING =
+  'darwin memory probe failed; treating pressure as unknown';
 
 /** Production memory probe: fixed argv, no shell. Injectable `exec` overrides for tests. */
 export async function defaultMemoryExec(cmd, args = []) {
   if (cmd === 'vm_stat') {
-    const { stdout } = await execFileAsync('vm_stat', [], { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    const { stdout } = await execFileAsync(DARWIN_VM_STAT_PATH, [], { timeout: MEMORY_EXEC_TIMEOUT_MS });
     return stdout;
   }
   if (cmd === 'sysctl') {
     const sysctlArgs = args.length ? args : ['-n', 'vm.swapusage'];
-    const { stdout } = await execFileAsync('sysctl', sysctlArgs, { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    const { stdout } = await execFileAsync(DARWIN_SYSCTL_PATH, sysctlArgs, { timeout: MEMORY_EXEC_TIMEOUT_MS });
     return stdout;
   }
   if (cmd === 'read' && args[0] === '/proc/meminfo') {
@@ -111,20 +116,38 @@ export async function readAvailableMemory({
 } = {}) {
   const plat = platform ?? (typeof os.platform === 'function' ? os.platform() : undefined);
   const run = typeof exec === 'function' ? exec : defaultMemoryExec;
-  if (plat) {
+  if (plat === 'darwin') {
+    let vmStatText;
     try {
-      if (plat === 'darwin') {
-        const vmStatText = await run('vm_stat');
-        const swapText = typeof exec === 'function'
+      vmStatText = await run('vm_stat');
+    } catch {
+      vmStatText = null;
+    }
+    if (vmStatText != null) {
+      let swapText = '';
+      try {
+        swapText = typeof exec === 'function'
           ? await run('sysctl', ['vm.swapusage'])
           : await run('sysctl', ['-n', 'vm.swapusage']);
-        const parsed = parseDarwinVmStatAndSwap(vmStatText, swapText);
-        if (parsed) return parsed;
-      } else if (plat === 'linux') {
-        const meminfoText = await run('read', ['/proc/meminfo']);
-        const parsed = parseLinuxMeminfo(meminfoText);
-        if (parsed) return parsed;
+      } catch {
+        swapText = '';
       }
+      const parsed = parseDarwinVmStatAndSwap(vmStatText, swapText);
+      if (parsed) return parsed;
+    }
+    return {
+      availRamGb: 0,
+      swapUsedGb: 0,
+      swapTotalGb: 0,
+      pressureUnknown: true,
+      warning: DARWIN_MEMORY_PROBE_UNKNOWN_WARNING,
+    };
+  }
+  if (plat === 'linux') {
+    try {
+      const meminfoText = await run('read', ['/proc/meminfo']);
+      const parsed = parseLinuxMeminfo(meminfoText);
+      if (parsed) return parsed;
     } catch {
       /* fall through */
     }
@@ -136,11 +159,11 @@ export async function readAvailableMemory({
 function memoryPressurePlatform(platform, machine) {
   if (platform != null) return platform;
   if (machine?.platform != null) return machine.platform;
-  if (process.env.NODE_TEST_CONTEXT) return 'linux';
   return nodeOs.platform();
 }
 
 export function memoryPressureLevel(machine, platform) {
+  if (machine?.pressureUnknown) return 'ok';
   const plat = memoryPressurePlatform(platform, machine);
   const avail = machine.availRamGb ?? machine.freeRamGb ?? 0;
   const swapUsed = machine.swapUsedGb ?? 0;
@@ -189,6 +212,8 @@ export async function readMachine({
   const totalRamGb = os.totalmem() / GB;
   const swapUsedGb = mem.swapUsedGb;
   const swapTotalGb = mem.swapTotalGb;
+  const pressureUnknown = mem.pressureUnknown === true;
+  const memoryProbeWarning = mem.warning;
   let cpuPercent;
   if (measureCpu) {
     cpuPercent = await measureCpu(os, now);
@@ -210,6 +235,8 @@ export async function readMachine({
     swapUsedGb,
     swapTotalGb,
     cpuPercent,
+    ...(pressureUnknown ? { pressureUnknown: true } : {}),
+    ...(memoryProbeWarning ? { warning: memoryProbeWarning } : {}),
   };
 }
 

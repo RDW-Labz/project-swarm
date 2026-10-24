@@ -173,6 +173,7 @@ test('readyAutopilotDeps skeleton auto uses done ticket count from ledger', asyn
   await fs.writeFile(path.join(root, '.project-swarm.json'), `${JSON.stringify({ install: '/x', version: '1' })}\n`);
   const done = Array.from({ length: 10 }, (_, i) => doneTicket(`D-${i}`));
   const deps = readyAutopilotDeps(root, {
+    memoryAware: false,
     env: process.env,
     spawnImpl: () => ({ pid: 1, unref() {}, once() {} }),
     selfPid: 0,

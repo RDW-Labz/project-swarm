@@ -65,7 +65,12 @@ async function ensureConfigDirSecure(dir, { fs, uid }) {
   } catch {
     return;
   }
-  if (st.uid !== uid) return;
+  if (st.uid !== uid) {
+    throw Object.assign(
+      new Error('board keep-up: config directory not owned by you'),
+      { code: 'board-config-dir-untrusted' },
+    );
+  }
   const mode = st.mode & 0o777;
   if (mode !== 0o700 && typeof fs.chmod === 'function') {
     await fs.chmod(dir, 0o700);
@@ -98,7 +103,10 @@ async function readIdentityViaFd(file, { fs, uid, warn }) {
   }
   let handle;
   try {
-    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
   } catch (error) {
     if (error?.code === 'ENOENT') return { kind: 'missing' };
     warn('board identity: unreadable; creating a new identity');

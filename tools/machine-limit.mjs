@@ -19,6 +19,9 @@ export {
 } from './autotune.mjs';
 
 export const MAX_MACHINE_CONCURRENCY = 256;
+/** Total wait before running node --test under sustained hard memory pressure. */
+export const MEMORY_HARD_WAIT_MS = 60 * 1000;
+export const MEMORY_POLL_MS = 15_000;
 const TUNER_MIN = MEMORY_PRESSURE_FLOOR;
 const TUNER_MAX = 64;
 const STATE_VERSION = 1;

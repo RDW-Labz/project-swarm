@@ -18,6 +18,8 @@ import { readMachine } from '../autotune.mjs';
 import {
   applyNodeTestConcurrency,
   isNodeTestCommand,
+  MEMORY_HARD_WAIT_MS,
+  MEMORY_POLL_MS,
   memoryPressureLevel,
   testConcurrencyFor,
 } from '../machine-limit.mjs';
@@ -527,9 +529,6 @@ export function parseFinalJson(text) {
   }
   return lastTopLevelObject(text);
 }
-
-const MEMORY_HARD_WAIT_MS = 5 * 60 * 1000;
-const MEMORY_POLL_MS = 15_000;
 
 export async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null, readMachine: readMachineFn = readMachine, memoryPressureSleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
