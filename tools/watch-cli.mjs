@@ -52,12 +52,13 @@ import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { createDeployTracker } from './deploy-status.mjs';
 import { runnerVersion } from './runner-version.mjs';
+import { loadOrCreateBoardIdentity } from './board-keepalive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
 const LIVE = new Set(['running', 'queued']);
 
-export const WATCH_USAGE = 'Usage: swarm watch [RUN] [--all [--text|--json]] [--tui] [--open] [--json]\n       swarm gallery list | approve ID... | comment ID "text" | tickets [ID...]\n';
+export const WATCH_USAGE = 'Usage: swarm watch [RUN] [--all [--text|--json] [--keep-up [--port N]]] [--tui] [--open] [--json]\n       swarm gallery list | approve ID... | comment ID "text" | tickets [ID...]\n';
 
 async function readJson(file) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch { return null; }
@@ -212,9 +213,18 @@ export function runSnapshotLoader(root, runId) {
 const planLoader = root => async () => buildPlanSnapshot(await readLedger(root).catch(() => null));
 
 function parseWatchArgs(args) {
-  const opts = { all: false, tui: false, open: false, json: false, text: false, run: null };
-  for (const arg of args) {
+  const opts = { all: false, keepUp: false, port: null, tui: false, open: false, json: false, text: false, run: null };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--all') opts.all = true;
+    else if (arg === '--keep-up') opts.keepUp = true;
+    else if (arg === '--port') {
+      const next = args[++i];
+      if (!next || !/^\d+$/.test(next)) return { error: 'Invalid --port (use a number 1-65535)' };
+      const port = Number(next);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: 'Invalid --port (use a number 1-65535)' };
+      opts.port = port;
+    }
     else if (arg === '--tui') opts.tui = true;
     else if (arg === '--open') opts.open = true;
     else if (arg === '--json') opts.json = true;
@@ -223,6 +233,9 @@ function parseWatchArgs(args) {
     else if (opts.run === null && RUN_ID_RE.test(arg)) opts.run = arg;
     else return { error: `Invalid argument: ${arg}` };
   }
+  if (opts.keepUp && !opts.all) return { error: '--keep-up requires --all' };
+  if (opts.keepUp && (opts.text || opts.json || opts.tui)) return { error: '--keep-up cannot be used with --text, --json, or --tui' };
+  if (opts.port != null && !opts.keepUp) return { error: '--port requires --keep-up' };
   return opts;
 }
 
@@ -832,7 +845,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // Starts the board server in this process and records its address for run pages that want to go back to it.
 // `remote` ({ port, token, hosts, login }): the board `swarm remote` keeps up behind tailscale serve. It is not the board run pages go back to, so it records no address,
 // and it does not stop when idle.
-export async function startBoardServer({ env = process.env, root, remote, registry = null, now = Date.now } = {}) {
+export async function startBoardServer({ env = process.env, root, remote, keepUp = null, registry = null, now = Date.now } = {}) {
   const api = createBoardApi({ env, remote, now });
   backfillHistory({ env }).catch(() => {});
   const server = createWatchServer({
@@ -847,7 +860,11 @@ export async function startBoardServer({ env = process.env, root, remote, regist
     contextCommands,
     assetDir: path.join(here, 'watch-assets'),
     deltaFile: path.join(here, 'watch-delta.mjs'),
-    ...(remote ? {
+    ...(keepUp ? {
+      port: keepUp.port,
+      token: keepUp.token,
+      idleMs: Infinity,
+    } : remote ? {
       port: remote.port,
       token: remote.token,
       remote: { hosts: remote.hosts, login: remote.login },
@@ -912,6 +929,40 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
   if (opts.all && opts.json) return { stdout: `${JSON.stringify(await safeBoard(), null, 2)}\n`, exitCode: 0 };
   if (opts.all && (opts.text || opts.tui)) return { stdout: await boardText(), exitCode: 0 };
+  if (opts.all && opts.keepUp) {
+    let identity;
+    try {
+      identity = await loadOrCreateBoardIdentity({
+        dir: path.dirname(boardFile(process.env)),
+        fs,
+        randomBytes,
+        port: opts.port,
+      });
+    } catch (error) {
+      return { stdout: `${error.message}\n`, exitCode: 1 };
+    }
+    const watchArgv = ['watch', '--all', '--keep-up', ...(opts.port != null ? ['--port', String(opts.port)] : []), ...(opts.open ? ['--open'] : [])];
+    const board = await startBoardServer({
+      env: process.env,
+      root,
+      keepUp: identity,
+      registry: {
+        argv: watchArgv,
+        cwd: process.cwd(),
+        env: safeEnvSubset(process.env),
+        explicitBackground: true,
+        ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
+      },
+    });
+    write(`Swarm Watch board (stay-up, every project on this machine)\n${board.url}\nRead-only on 127.0.0.1 only. This URL stays the same across restarts. Does not stop when idle. Ctrl-C stops it now. (See docs/board.md for launchd.)\n`);
+    if (opts.open) openUrl(board.url);
+    const stop = () => { board.server.close(); board.api.close(); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    await board.server.done;
+    await board.api.close();
+    return { stdout: '', exitCode: 0 };
+  }
   if (opts.all) {
     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
     const watchArgv = ['watch', '--all', ...(opts.open ? ['--open'] : []), ...(opts.tui ? ['--tui'] : []), ...(opts.text ? ['--text'] : [])];

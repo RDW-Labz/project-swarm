@@ -5,10 +5,21 @@ import {
   createTuner,
   defaultLimit,
   describe,
+  memoryPressureLevel,
+  projectedMemoryJobCap,
+  DEFAULT_JOB_MEMORY_GB,
+  MEMORY_PRESSURE_FLOOR,
+} from './autotune.mjs';
+
+export {
+  memoryPressureLevel,
+  projectedMemoryJobCap,
+  DEFAULT_JOB_MEMORY_GB,
+  MEMORY_PRESSURE_FLOOR,
 } from './autotune.mjs';
 
 export const MAX_MACHINE_CONCURRENCY = 256;
-const TUNER_MIN = 4;
+const TUNER_MIN = MEMORY_PRESSURE_FLOOR;
 const TUNER_MAX = 64;
 const STATE_VERSION = 1;
 
@@ -32,6 +43,13 @@ function stateLimitInBounds(state) {
   return Number.isInteger(limit) && limit >= TUNER_MIN && limit <= TUNER_MAX;
 }
 
+function jobMemoryGbFromConfig(config = {}) {
+  const raw = config.jobMemoryGb ?? config.machine?.jobMemoryGb;
+  if (raw === undefined || raw === '') return DEFAULT_JOB_MEMORY_GB;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_JOB_MEMORY_GB;
+}
+
 /** @returns {string[]} */
 export function validateMachineLimitConfig(config = {}) {
   const errors = [];
@@ -46,6 +64,101 @@ export function validateMachineLimitConfig(config = {}) {
     errors.push('machineConcurrency must be a positive integer or auto');
   }
   return errors;
+}
+
+export function testConcurrencyFor(machine) {
+  const level = memoryPressureLevel(machine);
+  if (level === 'hard') return 1;
+  if (level === 'soft') return 2;
+  const cores = machine.cores ?? 1;
+  return Math.min(4, Math.floor(cores / 2));
+}
+
+export function effectiveMachineLimit({ limit, machine = {}, config = {} } = {}) {
+  const jobMemoryGb = jobMemoryGbFromConfig(config);
+  const projectionCap = projectedMemoryJobCap(machine, jobMemoryGb);
+  const pressure = memoryPressureLevel(machine);
+  let effective = limit;
+  if (Number.isFinite(projectionCap)) {
+    effective = Math.min(effective, projectionCap > 0 ? projectionCap : MEMORY_PRESSURE_FLOOR);
+  }
+  if (pressure === 'hard') {
+    effective = Math.min(effective, MEMORY_PRESSURE_FLOOR);
+  }
+  return { effective, pressure, projectionCap, jobMemoryGb };
+}
+
+export function memoryPressureHoldLine(machine) {
+  const avail = machine.availRamGb ?? machine.freeRamGb ?? 0;
+  const swapUsed = machine.swapUsedGb ?? 0;
+  const swapTotal = machine.swapTotalGb ?? 0;
+  return `held by memory pressure: ${avail.toFixed(1)} GB available, swap ${swapUsed.toFixed(1)}/${swapTotal.toFixed(1)} GB used`;
+}
+
+/**
+ * How many jobs may start in this batch given resolved limit, running count, and live machine stats.
+ */
+export function jobStartsForBatch({
+  limit,
+  running = 0,
+  machine = {},
+  config = {},
+  log = () => {},
+} = {}) {
+  const pressure = memoryPressureLevel(machine);
+  if (pressure === 'hard') {
+    log(memoryPressureHoldLine(machine));
+    return { starts: 0, pressure, effectiveLimit: MEMORY_PRESSURE_FLOOR };
+  }
+  const { effective, projectionCap } = effectiveMachineLimit({ limit, machine, config });
+  const headroom = Math.max(0, effective - running);
+  return { starts: headroom, pressure, effectiveLimit: effective, projectionCap };
+}
+
+/** True when argv is a `node` invocation that runs the built-in test runner. */
+export function isNodeTestCommand(argv) {
+  if (!Array.isArray(argv) || argv.length === 0) return false;
+  const bin = String(argv[0]);
+  const base = bin.includes('/') ? bin.slice(bin.lastIndexOf('/') + 1) : bin;
+  if (base !== 'node') return false;
+  return argv.includes('--test');
+}
+
+/**
+ * Add or replace `--test-concurrency=N` for node --test commands only.
+ */
+export function applyNodeTestConcurrency(argv, concurrency) {
+  if (!isNodeTestCommand(argv)) return argv;
+  const n = Number(concurrency);
+  if (!Number.isInteger(n) || n < 1) return argv;
+  const next = [...argv];
+  const idx = next.findIndex(arg => arg === '--test-concurrency' || arg.startsWith('--test-concurrency='));
+  if (idx >= 0) {
+    if (next[idx].includes('=')) next[idx] = `--test-concurrency=${n}`;
+    else if (idx + 1 < next.length) next[idx + 1] = String(n);
+    else next.push(String(n));
+  } else {
+    next.push(`--test-concurrency=${n}`);
+  }
+  return next;
+}
+
+/**
+ * Merge-queue / profile verify: resolve limit, read pressure, set test concurrency on node --test only.
+ */
+export function gateVerifyArgvWithMemory({
+  argv,
+  config = {},
+  state = null,
+  machine = {},
+  env = {},
+} = {}) {
+  const resolved = resolveMachineLimit({ config, state, machine, env });
+  const limit = resolved.limit ?? defaultLimit(machine);
+  const { effective } = effectiveMachineLimit({ limit, machine, config });
+  const testConcurrency = testConcurrencyFor(machine);
+  void effective;
+  return applyNodeTestConcurrency(argv, testConcurrency);
 }
 
 export function resolveMachineLimit({ config = {}, state = null, machine = {}, env = {} } = {}) {
@@ -120,6 +233,7 @@ export function tickAutotune({
   inUse = 0,
   waiting = 0,
   rateLimitedLanes = [],
+  config = {},
   now = Date.now(),
 } = {}) {
   const lanes = Array.isArray(rateLimitedLanes) ? rateLimitedLanes : [];
@@ -129,10 +243,19 @@ export function tickAutotune({
   const laneCaps = laneCapsFromState(state, { now });
   for (const lane of lanes) laneCaps.onRateLimit(lane);
 
-  const tuner = createTuner({ limit: baseLimit, min: TUNER_MIN, max: TUNER_MAX });
-  const { limit, reason, capped } = tuner.tune({
+  const jobMemoryGb = jobMemoryGbFromConfig(config);
+  const tuner = createTuner({
+    limit: baseLimit,
+    min: TUNER_MIN,
+    max: TUNER_MAX,
+    jobMemoryGb,
+  });
+  const { limit, reason, capped, memoryPressure, projectionCap } = tuner.tune({
     cpuPercent: machine.cpuPercent ?? 0,
     freeRamGb: machine.freeRamGb ?? 0,
+    availRamGb: machine.availRamGb ?? machine.freeRamGb ?? 0,
+    swapUsedGb: machine.swapUsedGb ?? 0,
+    swapTotalGb: machine.swapTotalGb ?? 0,
     inUse,
     waiting,
     rateLimitedLanes: lanes,
@@ -149,6 +272,8 @@ export function tickAutotune({
     limit,
     reason,
     capped,
+    memoryPressure,
+    projectionCap,
     laneCaps,
     inUse,
     cpuPercent: machine.cpuPercent,
