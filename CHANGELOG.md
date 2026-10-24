@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.11
+
+The swarm limits itself by real memory and never deletes a checkout that holds its state.
+- **Memory:** the machine limit reads available memory and swap (vm_stat and sysctl on macOS, meminfo on Linux), holds new job starts at hard pressure, shrinks wide waves at soft pressure, and lowers the node test concurrency of the merge-queue gate (never raises a configured value).
+- **Board:** swarm watch --all --keep-up never stops when idle and keeps one token and port across restarts (identity file in the config folder, mode 0600).
+- **Ledger:** every ledger write is backed up outside the checkout (newest 50 plus a daily copy for 90 days); swarm backup ledger now, list and restore bring it back.
+- **Guard:** gc, scratch cleanup and swarm merge refuse to delete or detach a checkout that holds swarm state, and log every deletion attempt to deletions.log.
+
 ## 1.167.10
 
 Autopilot starts wide waves by default.
