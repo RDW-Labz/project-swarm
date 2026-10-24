@@ -50,7 +50,6 @@ function makeExec(routes) {
 const PROTECTION = 'gh api repos/octo/repo/branches/main/protection/required_status_checks';
 const REMOTE = 'git remote get-url origin';
 const WORKTREE = 'git worktree list --porcelain';
-const CROSS_REPO = 'gh pr view 123 --json isCrossRepository';
 const REMOTE_DELETE_FEAT = 'gh api -X DELETE repos/octo/repo/git/refs/heads/feat';
 
 function encodeRefPath(refName) {
@@ -69,9 +68,11 @@ function prListKey(baseBranch) {
   return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
 }
 
+const PR_VIEW_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+
 const KEY = {
   repo: 'gh repo view --json defaultBranchRef,nameWithOwner',
-  view: 'gh pr view 123 --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup',
+  view: `gh pr view 123 --json ${PR_VIEW_FIELDS}`,
   after: 'gh pr view 123 --json state',
   merge: 'gh pr merge 123 --squash --delete-branch --match-head-commit abc123',
   mergeKeepLocal: 'gh pr merge 123 --squash --match-head-commit abc123',
@@ -85,6 +86,7 @@ function prView(over = {}) {
     headRefName: 'feat',
     headRefOid: 'abc123',
     statusCheckRollup: GREEN,
+    isCrossRepository: false,
     ...over,
   };
 }
@@ -101,7 +103,6 @@ function routes(o = {}, root = '/repo') {
     [PROTECTION]: o.protection ?? fail('404 Not Found'),
     [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
     [WORKTREE]: o.worktree ?? ok(worktreePorcelain(root)),
-    [CROSS_REPO]: o.crossRepo ?? json({ isCrossRepository: false }),
     [deleteKey]: o.remoteDelete ?? ok(''),
     'git rev-parse --is-inside-work-tree': ok('true\n'),
     'git status --porcelain': ok(o.porcelain ?? ''),
@@ -500,10 +501,8 @@ test('runMerge: unparsable worktree list keeps local branch and deletes remote r
   ]);
   assert.ok(!merges[0].args.includes('--delete-branch'));
 
-  const cross = calls.filter(
-    (c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view' && c.args.includes('isCrossRepository'),
-  );
-  assert.equal(cross.length, 1);
+  const prViews = calls.filter((c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view');
+  assert.ok(prViews.some((c) => c.args.includes('--json') && c.args.includes(PR_VIEW_FIELDS)));
 
   const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X' && c.args[2] === 'DELETE');
   assert.equal(deletes.length, 1);
@@ -555,18 +554,29 @@ test('runMerge: cross-repository PR keeps local branch without remote ref delete
   const { exec, calls } = makeExec(routes({
     keepLocalHeadBranch: true,
     worktree: fail('worktree list failed'),
-    crossRepo: json({ isCrossRepository: true }),
+    view: { isCrossRepository: true },
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'merged');
   assert.equal(r.localBranch, 'kept');
   assert.ok(!mergeCalls(calls)[0].args.includes('--delete-branch'));
   assert.equal(
-    calls.filter(
-      (c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view' && c.args.includes('isCrossRepository'),
-    ).length,
-    1,
+    calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X').length,
+    0,
   );
+});
+
+test('runMerge: missing isCrossRepository skips remote ref delete when local branch is kept', async () => {
+  const view = prView();
+  delete view.isCrossRepository;
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+    rawView: json(view),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
   assert.equal(
     calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X').length,
     0,

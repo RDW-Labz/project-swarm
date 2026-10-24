@@ -65,15 +65,15 @@ test('finding 3: worktree list failure keeps local head branch', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup': {
+      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+          isCrossRepository: false,
         }),
         stderr: '',
       },
-      'gh pr view 1 --repo o/r --json isCrossRepository': { code: 0, stdout: JSON.stringify({ isCrossRepository: false }), stderr: '' },
       'gh pr list --repo o/r --base feat --state open --json number': { code: 0, stdout: '[]', stderr: '' },
       'gh pr merge 1 --repo o/r --squash --match-head-commit abc': { code: 0, stdout: '', stderr: '' },
       'gh api -X DELETE repos/o/r/git/refs/heads/feat': { code: 0, stdout: '', stderr: '' },
@@ -143,15 +143,15 @@ test('finding 6: head ref segments encoded separately', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup': {
+      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'release/1.0', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+          isCrossRepository: false,
         }),
         stderr: '',
       },
-      'gh pr view 2 --repo o/r --json isCrossRepository': { code: 0, stdout: JSON.stringify({ isCrossRepository: false }), stderr: '' },
       'gh pr list --repo o/r --base release/1.0 --state open --json number': { code: 0, stdout: '[]', stderr: '' },
       'gh pr merge 2 --repo o/r --squash --match-head-commit abc': { code: 0, stdout: '', stderr: '' },
       'gh api -X DELETE repos/o/r/git/refs/heads/release/1.0': { code: 0, stdout: '', stderr: '' },
@@ -192,15 +192,15 @@ test('finding 7: cross-repository PR skips remote delete', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup': {
+      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+          isCrossRepository: true,
         }),
         stderr: '',
       },
-      'gh pr view 3 --repo o/r --json isCrossRepository': { code: 0, stdout: JSON.stringify({ isCrossRepository: true }), stderr: '' },
       'gh pr list --repo o/r --base feat --state open --json number': { code: 0, stdout: '[]', stderr: '' },
       'gh pr merge 3 --repo o/r --squash --match-head-commit abc': { code: 0, stdout: '', stderr: '' },
       'gh pr view 3 --repo o/r --json state': { code: 0, stdout: JSON.stringify({ state: 'MERGED' }), stderr: '' },
