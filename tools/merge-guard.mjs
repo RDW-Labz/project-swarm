@@ -128,9 +128,26 @@ export function parseGitWorktreeListPorcelain(text) {
   return worktrees;
 }
 
+function worktreeListTrustworthy(stdout) {
+  const text = String(stdout ?? '');
+  if (!text.trim()) return true;
+  const blocks = text.split('\n\n').filter((b) => b.trim());
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const hasWorktree = lines.some((l) => l.startsWith('worktree '));
+    if (!hasWorktree) return false;
+  }
+  return true;
+}
+
+function encodeRefPath(refName) {
+  return String(refName).split('/').map((seg) => encodeURIComponent(seg)).join('/');
+}
+
 async function headBranchCheckedOutInStateHolder(root, headBranch, { exec, holdsSwarmStateFn = holdsSwarmState, registryFile, fs: fsImpl } = {}) {
   const listed = await exec('git', ['worktree', 'list', '--porcelain'], { cwd: root });
-  if (listed.code !== 0) return false;
+  if (listed.code !== 0) return true;
+  if (!worktreeListTrustworthy(listed.stdout)) return true;
   const ref = `refs/heads/${headBranch}`;
   for (const wt of parseGitWorktreeListPorcelain(listed.stdout)) {
     if (wt.branch !== ref || !wt.path) continue;
@@ -288,9 +305,17 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
   if (mg.code !== 0) return mergeFailed(firstLine(mg, 'gh pr merge failed'));
 
   if (keepLocalHeadBranch) {
-    const refPath = `repos/${repoName}/git/refs/heads/${encodeURIComponent(view.headRefName)}`;
-    const del = await gh(['api', '-X', 'DELETE', refPath]);
-    if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
+    let isCrossRepository = false;
+    const cr = await gh(['pr', 'view', n, ...repoArgs, '--json', 'isCrossRepository']);
+    if (cr.code === 0) {
+      const cross = parseJson(cr);
+      if (isObj(cross) && cross.isCrossRepository === true) isCrossRepository = true;
+    }
+    if (!isCrossRepository) {
+      const refPath = `repos/${repoName}/git/refs/heads/${encodeRefPath(view.headRefName)}`;
+      const del = await gh(['api', '-X', 'DELETE', refPath]);
+      if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
+    }
   }
 
   const after = await gh(['pr', 'view', n, ...repoArgs, '--json', 'state']);

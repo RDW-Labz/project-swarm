@@ -652,6 +652,22 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
     for (const name of heavy) {
       const target = path.join(row.path, name);
       try {
+        if (name === 'worktrees') {
+          let entries = [];
+          try { entries = await fs.readdir(target); } catch { continue; }
+          for (const ent of entries) {
+            const child = path.join(target, ent);
+            if (await holdsSwarmState(child, { fs: guardCtx.fsImpl, registryFile: guardCtx.registryFile })) {
+              await logCheckoutDeletionAttempt(child, 'gc.applyOldRunWorktrees', 'refused', guardCtx);
+              continue;
+            }
+            await logCheckoutDeletionAttempt(child, 'gc.applyOldRunWorktrees', 'allowed', guardCtx);
+            const bytes = await pathBytes(child, { duImpl }) ?? 0;
+            await fs.rm(child, { recursive: true, force: true });
+            bytesFreed += bytes;
+          }
+          continue;
+        }
         const bytes = await pathBytes(target, { duImpl }) ?? 0;
         await fs.rm(target, { recursive: true, force: true });
         bytesFreed += bytes;

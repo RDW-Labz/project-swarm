@@ -1,0 +1,35 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "revfix4a",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/state-guard.mjs",
+    "tools/ledger-backup.mjs",
+    "tools/merge-guard.mjs",
+    "tools/tickets.mjs",
+    "tools/gc.mjs",
+    "tests/state-guard.test.mjs",
+    "tests/ledger-backup.test.mjs"
+   ],
+   "outputs": [
+    "tools/state-guard.mjs",
+    "tools/ledger-backup.mjs",
+    "tools/merge-guard.mjs",
+    "tools/gc.mjs",
+    "tests/guard-backup-fixes.test.mjs"
+   ],
+   "prompt": "Fix 18 review findings, each with a test in tests/guard-backup-fixes.test.mjs (temp dirs and injected fakes only). tools/state-guard.mjs: 1 HIGH only ENOENT means no state here; any other error from access, readdir or reading the registry (EACCES, ELOOP, parse failure) makes holdsSwarmState return true (refuse, fail closed). 2 HIGH compare with fs.realpath on both sides (macOS /var vs /private/var, symlinks); a realpath failure other than ENOENT refuses. 4 MEDIUM also refuse when any registry root starts with the resolved dir plus the path separator (a parent of a project). 16 LOW open deletions.log with O_APPEND|O_NOFOLLOW (mode 0600). 15 LOW share one projectSwarmHome helper (trim, resolve, used by both state-guard.mjs and ledger-backup.mjs). tools/merge-guard.mjs: 3 HIGH if git worktree list fails or is unparsable, treat the branch as checked out in a state-holding worktree (keep the local branch, use the gh api delete). 6 MEDIUM encode each ref segment: headRefName.split('/').map(encodeURIComponent).join('/'), never encode the slash. 7 MEDIUM add isCrossRepository to the PR fields and skip the gh api delete when it is true (a fork branch must never delete a base branch of the same name). tools/gc.mjs: 5 MEDIUM the old-run cleanup that deletes jobs, worktrees and artifacts must call the guard on each entry under worktrees before deleting it and skip state holders. tools/ledger-backup.mjs: 8 MEDIUM write meta.json LAST (or build the snapshot in a .tmp folder and rename into place) so a crash never leaves a snapshot that looks complete; dedupe and restore latest ignore snapshots without a valid meta. 9 MEDIUM restore hashes the snapshot tickets.json against meta.ledgerSha256 before copying anything. 10 MEDIUM restore --into: lstat the target, .swarm and .swarm/project, refuse symlinks, and confirm the realpath stays under realpath(target). 13 LOW validate --from KEY against ^[A-Za-z0-9._-]+$ with no .. 14 LOW prune incomplete snapshot folders (no meta) older than one hour. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/merge-guard.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

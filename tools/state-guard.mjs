@@ -21,29 +21,75 @@ function resolveDir(dir) {
   return path.resolve(dir);
 }
 
-async function fileExists(fsImpl, file) {
+function isENOENT(err) {
+  return err && (err.code === 'ENOENT' || err.errno === -2);
+}
+
+async function realpathResolved(fsImpl, dir) {
+  try {
+    return await fsImpl.realpath(dir);
+  } catch (err) {
+    if (isENOENT(err)) return resolveDir(dir);
+    throw err;
+  }
+}
+
+async function pathAccessible(fsImpl, file) {
   try {
     await fsImpl.access(file);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    if (isENOENT(err)) return false;
+    throw err;
   }
 }
 
 async function readRegistryRoots(registryFile, fsImpl) {
+  let text;
   try {
-    const text = await fsImpl.readFile(registryFile, 'utf8');
-    const data = JSON.parse(text);
-    const rows = Array.isArray(data) ? data : Array.isArray(data?.projects) ? data.projects : [];
-    const roots = [];
-    for (const row of rows) {
-      if (typeof row === 'string') roots.push(resolveDir(row));
-      else if (row && typeof row.root === 'string') roots.push(resolveDir(row.root));
-    }
-    return roots;
-  } catch {
-    return [];
+    text = await fsImpl.readFile(registryFile, 'utf8');
+  } catch (err) {
+    if (isENOENT(err)) return [];
+    throw err;
   }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('registry-parse-failed');
+  }
+  const rows = Array.isArray(data) ? data : Array.isArray(data?.projects) ? data.projects : [];
+  const roots = [];
+  for (const row of rows) {
+    if (typeof row === 'string') roots.push(resolveDir(row));
+    else if (row && typeof row.root === 'string') roots.push(resolveDir(row.root));
+  }
+  return roots;
+}
+
+async function registryMatches(resolved, roots, fsImpl) {
+  let resolvedReal;
+  try {
+    resolvedReal = await realpathResolved(fsImpl, resolved);
+  } catch {
+    return true;
+  }
+  const prefix = `${resolvedReal}${path.sep}`;
+  for (const root of roots) {
+    let rootReal;
+    try {
+      rootReal = await fsImpl.realpath(root);
+    } catch (err) {
+      if (isENOENT(err)) {
+        rootReal = resolveDir(root);
+      } else {
+        return true;
+      }
+    }
+    if (rootReal === resolvedReal) return true;
+    if (rootReal.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 async function pointerHasLedger(dir, fsImpl) {
@@ -63,18 +109,29 @@ async function pointerHasLedger(dir, fsImpl) {
 
 export async function holdsSwarmState(dir, { fs: fsImpl = fs, registryFile } = {}) {
   const resolved = resolveDir(dir);
-  if (await fileExists(fsImpl, path.join(resolved, '.swarm', 'project', 'tickets.json'))) return true;
-  const runsDir = path.join(resolved, '.swarm', 'runs');
   try {
-    const entries = await fsImpl.readdir(runsDir);
-    if (entries.some(name => name && name !== '.' && name !== '..')) return true;
-  } catch { /* no runs */ }
-  if (registryFile) {
-    const roots = await readRegistryRoots(registryFile, fsImpl);
-    if (roots.some(root => root === resolved)) return true;
+    if (await pathAccessible(fsImpl, path.join(resolved, '.swarm', 'project', 'tickets.json'))) return true;
+    const runsDir = path.join(resolved, '.swarm', 'runs');
+    try {
+      const entries = await fsImpl.readdir(runsDir);
+      if (entries.some(name => name && name !== '.' && name !== '..')) return true;
+    } catch (err) {
+      if (!isENOENT(err)) return true;
+    }
+    if (registryFile) {
+      let roots;
+      try {
+        roots = await readRegistryRoots(registryFile, fsImpl);
+      } catch {
+        return true;
+      }
+      if (await registryMatches(resolved, roots, fsImpl)) return true;
+    }
+    if (await pointerHasLedger(resolved, fsImpl)) return true;
+    return false;
+  } catch {
+    return true;
   }
-  if (await pointerHasLedger(resolved, fsImpl)) return true;
-  return false;
 }
 
 export async function assertNotStateHolder(dir, caller, options = {}) {
@@ -95,7 +152,13 @@ export async function recordDeletion({ dir, caller, outcome, home, now = () => n
       caller,
       outcome,
     })}\n`;
-    await fsImpl.appendFile(file, line, { flag: 'a', mode: 0o600 });
+    const flags = fssync.constants.O_WRONLY | fssync.constants.O_APPEND | fssync.constants.O_CREAT | fssync.constants.O_NOFOLLOW;
+    const handle = await fsImpl.open(file, flags, 0o600);
+    try {
+      await handle.writeFile(line);
+    } finally {
+      await handle.close();
+    }
     try { fssync.chmodSync(file, 0o600); } catch { /* best effort */ }
   } catch { /* never throws */ }
 }

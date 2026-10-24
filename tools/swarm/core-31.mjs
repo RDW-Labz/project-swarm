@@ -587,25 +587,27 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
     let memoryPressureWarning = null;
     let memoryProbeWarning = null;
     if (check.name === 'tests' && isNodeTestCommand(runArgv)) {
-      let machine = await readMachineFn();
-      if (machine?.warning) {
-        logMemoryProbeWarningOnce(machine.warning);
-        memoryProbeWarning = machine.warning;
-      }
-      let pressure = memoryPressureLevel(machine);
-      if (pressure === 'hard') {
-        const deadline = Date.now() + MEMORY_HARD_WAIT_MS;
-        const maxPolls = Math.ceil(MEMORY_HARD_WAIT_MS / MEMORY_POLL_MS);
-        let polls = 0;
-        while (pressure === 'hard' && polls < maxPolls && Date.now() < deadline) {
-          await memoryPressureSleep(MEMORY_POLL_MS);
-          polls += 1;
-          machine = await readMachineFn();
-          pressure = memoryPressureLevel(machine);
+      try {
+        let machine = await readMachineFn();
+        if (machine?.warning) {
+          logMemoryProbeWarningOnce(machine.warning);
+          memoryProbeWarning = machine.warning;
         }
-        if (pressure === 'hard') memoryPressureWarning = 'ran under memory pressure';
-      }
-      runArgv = applyNodeTestConcurrency(runArgv, testConcurrencyFor(machine));
+        let pressure = memoryPressureLevel(machine);
+        if (pressure === 'hard') {
+          const deadline = Date.now() + MEMORY_HARD_WAIT_MS;
+          const maxPolls = Math.ceil(MEMORY_HARD_WAIT_MS / MEMORY_POLL_MS);
+          let polls = 0;
+          while (pressure === 'hard' && polls < maxPolls && Date.now() < deadline) {
+            await memoryPressureSleep(MEMORY_POLL_MS);
+            polls += 1;
+            machine = await readMachineFn();
+            pressure = memoryPressureLevel(machine);
+          }
+          if (pressure === 'hard') memoryPressureWarning = 'ran under memory pressure';
+        }
+        runArgv = applyNodeTestConcurrency(runArgv, testConcurrencyFor(machine));
+      } catch { /* memory gate skipped when probe fails */ }
     }
     // repeat runs the same check up to `repeat` times and stops at the first non-passing run.
     const repeat = check.repeat ?? 1;

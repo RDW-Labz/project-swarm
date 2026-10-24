@@ -216,23 +216,39 @@ export async function readLedger(root) {
   }
 }
 
+let backupLedgerForWrite = backupLedger;
+export function setBackupLedgerForWrite(fn) { backupLedgerForWrite = fn; }
+export function resetBackupLedgerForWrite() { backupLedgerForWrite = backupLedger; }
+
 async function ledgerBackupAfterWrite(root) {
   if (process.env.PROJECT_SWARM_NO_LEDGER_BACKUP) return;
   const explicitHome = process.env.PROJECT_SWARM_HOME;
   if (!explicitHome) {
     try {
       const real = await fs.realpath(root);
-      const tmpBase = path.resolve(os.tmpdir());
-      if (real === tmpBase || real.startsWith(tmpBase + path.sep)) return;
+      const tmpBase = await fs.realpath(os.tmpdir());
+      let homeReal;
+      try { homeReal = await fs.realpath(os.homedir()); } catch { homeReal = path.resolve(os.homedir()); }
+      const inTmp = real === tmpBase || real.startsWith(tmpBase + path.sep);
+      const tmpEqualsOrContainsHome =
+        tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
+      if (inTmp && !tmpEqualsOrContainsHome) return;
     } catch { /* best effort */ }
   }
-  const cap = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+  let timer;
+  const cap = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), 5000);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  });
   try {
     await Promise.race([
-      backupLedger(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
+      backupLedgerForWrite(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
       cap,
     ]);
   } catch { /* ignored */ }
+  finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export async function writeLedger(root, ledger) {

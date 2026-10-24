@@ -4,18 +4,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { promises as defaultFs } from 'node:fs';
 import { isSecretPath } from './state-backup.mjs';
+import { projectSwarmHome } from './state-guard.mjs';
 
 const META_VERSION = 1;
+const BACKUP_KEY_RE = /^[A-Za-z0-9._-]+$/;
+const INCOMPLETE_SNAPSHOT_MAX_AGE_MS = 60 * 60 * 1000;
 const MAX_CHANGE_SNAPSHOTS = 50;
 const DAILY_RETENTION_DAYS = 90;
 const FIXED_NAMES = new Set(['tickets.json', 'tickets.log', 'brain-ledger.ndjson', 'backlog.json']);
 const SECURITY_KEY_RE = /security[-_]?key/i;
 
 export function swarmHome(env = process.env) {
-  if (typeof env.PROJECT_SWARM_HOME === 'string' && env.PROJECT_SWARM_HOME) {
-    return env.PROJECT_SWARM_HOME;
-  }
-  return path.join(os.homedir(), '.project-swarm');
+  return projectSwarmHome(os.homedir(), env);
 }
 
 export function ledgerBackupsRoot(home = swarmHome()) {
@@ -133,11 +133,32 @@ async function listSnapshotIds(fs, keyDir) {
 
 async function newestSnapshotMeta(fs, keyDir) {
   const ids = await listSnapshotIds(fs, keyDir);
-  if (!ids.length) return null;
-  try {
-    return { id: ids[ids.length - 1], meta: await readMeta(fs, path.join(keyDir, ids[ids.length - 1], 'meta.json')) };
-  } catch {
-    return null;
+  for (let i = ids.length - 1; i >= 0; i--) {
+    try {
+      const meta = await readMeta(fs, path.join(keyDir, ids[i], 'meta.json'));
+      return { id: ids[i], meta };
+    } catch { /* incomplete */ }
+  }
+  return null;
+}
+
+async function pruneIncompleteSnapshots(fs, keyDir, nowMs) {
+  const ids = await listSnapshotIds(fs, keyDir);
+  const cutoff = nowMs - INCOMPLETE_SNAPSHOT_MAX_AGE_MS;
+  for (const id of ids) {
+    const snapDir = path.join(keyDir, id);
+    const metaPath = path.join(snapDir, 'meta.json');
+    try {
+      await readMeta(fs, metaPath);
+    } catch {
+      let mtime = 0;
+      try {
+        mtime = (await fs.stat(snapDir)).mtimeMs;
+      } catch { /* */ }
+      if (mtime && mtime < cutoff) {
+        await fs.rm(snapDir, { recursive: true, force: true });
+      }
+    }
   }
 }
 
@@ -220,7 +241,8 @@ export async function backupLedger(root, { reason = 'manual', home, now = Date.n
     const ms = typeof now === 'function' ? now() : now;
     const id = snapshotId(ledgerSha256, ms);
     const snapDir = path.join(keyDir, id);
-    await mkdirPrivate(fs, snapDir);
+    const stagingDir = `${snapDir}.staging-${randomBytes(4).toString('hex')}`;
+    await mkdirPrivate(fs, stagingDir);
 
     const counts = ledgerCounts(ledger);
     const meta = {
@@ -234,15 +256,17 @@ export async function backupLedger(root, { reason = 'manual', home, now = Date.n
       approvedHash: counts.approvedHash,
       ledgerVersion: counts.version,
     };
-    await writeAtomic(fs, path.join(snapDir, 'meta.json'), Buffer.from(JSON.stringify(meta, null, 2) + '\n'));
 
     for (const { name, abs } of sources) {
-      await copyFileAtomic(fs, abs, path.join(snapDir, name));
+      await copyFileAtomic(fs, abs, path.join(stagingDir, name));
     }
+    await writeAtomic(fs, path.join(stagingDir, 'meta.json'), Buffer.from(JSON.stringify(meta, null, 2) + '\n'));
+    await fs.rename(stagingDir, snapDir);
 
     await updateDailyCopy(fs, keyDir, snapDir, ms);
     await pruneChangeSnapshots(fs, keyDir);
     await pruneDaily(fs, keyDir, ms);
+    await pruneIncompleteSnapshots(fs, keyDir, ms);
 
     return { ok: true, skipped: false, key, id, ledgerSha256 };
   } catch (e) {
@@ -294,9 +318,45 @@ export async function listLedgerBackups(root, { home, all = false, fs = defaultF
 
 async function resolveSnapshotId(fs, keyDir, idOrLatest) {
   const ids = await listSnapshotIds(fs, keyDir);
-  if (!ids.length) return null;
-  if (!idOrLatest || idOrLatest === 'latest') return ids[ids.length - 1];
-  return ids.includes(idOrLatest) ? idOrLatest : null;
+  const complete = [];
+  for (const id of ids) {
+    try {
+      await readMeta(fs, path.join(keyDir, id, 'meta.json'));
+      complete.push(id);
+    } catch { /* skip incomplete */ }
+  }
+  if (!complete.length) return null;
+  if (!idOrLatest || idOrLatest === 'latest') return complete[complete.length - 1];
+  return complete.includes(idOrLatest) ? idOrLatest : null;
+}
+
+function validateBackupKey(key) {
+  return typeof key === 'string' && BACKUP_KEY_RE.test(key) && !key.includes('..');
+}
+
+async function assertRestoreTargetSafe(targetRoot, fs) {
+  const targetReal = await fs.realpath(targetRoot);
+  const check = async (rel) => {
+    const abs = path.join(targetRoot, rel);
+    let st;
+    try {
+      st = await fs.lstat(abs);
+    } catch (e) {
+      if (e.code === 'ENOENT') return;
+      throw e;
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error('restore target symlink refused');
+    }
+    const real = await fs.realpath(abs);
+    const prefix = `${targetReal}${path.sep}`;
+    if (real !== targetReal && !real.startsWith(prefix)) {
+      throw new Error('restore target escapes base');
+    }
+  };
+  await check('.swarm');
+  await check(path.join('.swarm', 'project'));
+  return targetReal;
 }
 
 export function ledgerFilesNonEmpty(root, fs = defaultFs) {
@@ -318,6 +378,9 @@ export async function restoreLedgerSnapshot(
   const stages = [];
   const targetRoot = into ?? root;
   const homeDir = home ?? swarmHome();
+  if (fromKey !== undefined && !validateBackupKey(fromKey)) {
+    return { ok: false, reason: 'invalid --from key', stages };
+  }
   const key = fromKey ?? await ledgerBackupKey(root, fs);
   const keyDir = path.join(ledgerBackupsRoot(homeDir), key);
   const snapId = await resolveSnapshotId(fs, keyDir, id);
@@ -329,6 +392,25 @@ export async function restoreLedgerSnapshot(
     meta = await readMeta(fs, path.join(snapDir, 'meta.json'));
   } catch {
     return { ok: false, reason: 'snapshot meta missing', stages };
+  }
+
+  const snapTickets = path.join(snapDir, 'tickets.json');
+  try {
+    const snapBytes = await fs.readFile(snapTickets);
+    const snapHash = createHash('sha256').update(snapBytes).digest('hex');
+    if (snapHash !== meta.ledgerSha256) {
+      return { ok: false, reason: 'snapshot ledger hash mismatch', stages };
+    }
+  } catch {
+    return { ok: false, reason: 'snapshot tickets missing', stages };
+  }
+
+  if (into) {
+    try {
+      await assertRestoreTargetSafe(targetRoot, fs);
+    } catch (e) {
+      return { ok: false, reason: String(e?.message ?? e), stages };
+    }
   }
 
   const hasLedger = await ledgerFilesNonEmpty(targetRoot, fs);
