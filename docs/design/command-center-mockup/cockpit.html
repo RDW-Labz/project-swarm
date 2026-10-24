@@ -79,7 +79,7 @@
       height: 100vh;
       max-height: 100vh;
       display: grid;
-      grid-template-rows: 9vh minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
       gap: 0;
     }
 
@@ -87,7 +87,7 @@
       min-height: 0;
       min-width: 0;
       display: grid;
-      grid-template-rows: minmax(0, 1fr) 24vh auto;
+      grid-template-rows: minmax(0, 1fr) minmax(22vh, 24vh) auto;
       gap: 0;
       overflow: hidden;
     }
@@ -104,104 +104,76 @@
     }
 
     .band-header {
+      flex: none;
       min-height: 0;
-      max-height: 9vh;
-      overflow: hidden;
+      overflow: visible;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
-      padding-bottom: 2px;
+      padding: 6px 0 8px;
       border-bottom: 1px solid var(--line-soft);
     }
 
     @media (min-width: 721px) {
       .band-header {
         position: relative;
+        padding: 8px 0 10px;
       }
       .band-header > .illus-banner {
         position: absolute;
-        top: 2px;
+        top: 4px;
         right: 0;
         left: auto;
-        max-width: min(52%, 520px);
+        max-width: min(48%, 480px);
         margin: 0;
-        padding: 2px 6px;
-        font-size: 0.42rem;
-        line-height: 1.15;
+        padding: 4px 8px;
+        font-size: 0.5rem;
+        line-height: 1.2;
         z-index: 2;
         pointer-events: none;
       }
-      .band-header .app-nav .nav-stats,
-      .band-header .app-nav .nav-crumb,
-      .band-header .app-nav .nav-actions { display: none; }
-      .band-header .app-nav {
+      .band-header .app-nav { display: none; }
+      .band-header .cockpit-nav {
+        padding: 0 0 6px;
+        margin: 0;
+        border-bottom: 0;
+        font-size: 0.62rem;
+        color: var(--muted);
+        text-transform: none;
+      }
+      .band-header .cockpit-nav .num-label { color: var(--faint); }
+      .band-header .cockpit-hero .tagline {
+        display: block;
+        margin: 4px 0 0;
+        font-size: clamp(0.75rem, 1.4vw, 0.95rem);
+      }
+      .band-header .cockpit-hero h1 {
+        font-size: clamp(3.5rem, 4.8vw, 4.25rem);
+        font-weight: 800;
+        color: #fff;
         min-height: 0;
-        border-bottom: 0;
-        background: none;
+        line-height: 0.92;
       }
-      .band-header .nav-actions .btn-pill:last-child { display: none; }
-      .band-header .app-nav {
-        padding: 2px 0;
-        margin-bottom: 1px;
-        gap: 4px 10px;
-      }
-      .band-header .nav-stats { font-size: 0.5rem; }
-      .band-header .brand { font-size: 0.72rem; }
-      .band-header .nav-crumb {
-        font-size: 0.48rem;
-        flex: 1 1 auto;
-        min-width: 0;
-      }
-      .band-header .nav-actions .btn-pill {
-        min-height: 32px;
-        padding: 0 8px;
-        font-size: 0.5rem;
-      }
-      .band-header .illus-banner {
-        margin: 0 0 2px;
-        padding: 3px 8px;
-        font-size: 0.48rem;
-        line-height: 1.2;
-      }
-      .band-header .cockpit-nav {
-        padding: 1px 0;
-        margin-bottom: 1px;
-        font-size: clamp(0.5rem, 1.1vh, 0.62rem);
-      }
-      .band-header .category-bar {
-        margin-top: 3px;
-        padding-top: 2px;
-      }
-      .band-header .category-links {
-        margin-bottom: 2px;
-        font-size: 0.5rem;
-        gap: 4px 8px;
-      }
-      .band-header .category-meter { height: 3px; }
-      .band-header .cockpit-hero .tagline { display: none; }
-      .band-header .cockpit-nav {
-        padding: 0;
-        margin-bottom: 0;
-        border-bottom: 0;
-      }
+      .band-header .cockpit-hero .headline-num { color: #fff; }
       .band-header .header-hero-pack {
-        gap: 2px 8px;
+        gap: 6px 16px;
         align-items: end;
       }
       .category-bar--hero-mobile { display: none; }
-      .category-bar--stage {
-        margin: 0 0 2px;
-        padding: 2px 0 0;
-        flex: none;
+      .category-bar--header {
+        margin: 8px 0 0;
+        padding: 8px 0 0;
+        border-top: 1px solid var(--line-soft);
       }
-      .category-bar--stage .category-links {
-        margin-bottom: 2px;
-        font-size: 0.5rem;
+      .category-bar--header .category-links {
+        margin-bottom: 6px;
+        font-size: 0.58rem;
       }
-      .category-bar--stage .category-meter { height: 3px; }
+      .category-bar--header .category-meter { height: 6px; }
       .band-header .scan-live--header {
-        font-size: clamp(0.5rem, 1.1vh, 0.62rem);
+        font-size: 0.68rem;
       }
+      .band-main .category-bar--stage { display: none; }
     }
 
     .band-main {
@@ -235,6 +207,8 @@
     .bottom-loops .loop-block {
       margin: 0;
       padding: 5px 8px;
+      overflow: visible;
+      min-height: 0;
     }
 
     .bottom-loops .loop-steps {
@@ -273,11 +247,11 @@
     }
 
     .band-bottom .stream-card {
-      min-height: 0;
-      padding: 5px 6px;
+      min-height: 52px;
+      padding: 8px 8px 6px;
       font-size: 0.58rem;
-      gap: 3px;
-      border-top-width: 3px;
+      gap: 4px;
+      border-top-width: 6px;
       border-top-style: solid;
     }
     .band-bottom .stream-card--accent-teal { border-top-color: #5ec4b8; }
@@ -323,22 +297,36 @@
     }
 
     .band-bottom .metric-tile {
-      padding: 4px 3px;
-      border-top-width: 3px;
+      padding: 8px 6px 10px;
+      min-width: 0;
+      border: 2px solid var(--line);
+      border-top-width: 4px;
       border-top-style: solid;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: var(--r-sm);
+      text-align: center;
+      overflow: visible;
     }
 
-    .band-bottom .metric-tile--opus { border-top-color: var(--cockpit-orange); }
-    .band-bottom .metric-tile--skills { border-top-color: #c4a574; }
-    .band-bottom .metric-tile--engines { border-top-color: #6ab8ff; }
-    .band-bottom .metric-tile--taste { border-top-color: #5ee08a; }
-    .band-bottom .metric-tile--broll { border-top-color: #e86a6a; }
-    .band-bottom .metric-tile--web { border-top-color: #f2ece4; }
+    .band-bottom .metric-tile--opus { border-color: rgba(201, 120, 74, 0.55); border-top-color: var(--cockpit-orange); }
+    .band-bottom .metric-tile--skills { border-color: rgba(168, 144, 104, 0.5); border-top-color: #c4a574; }
+    .band-bottom .metric-tile--engines { border-color: rgba(106, 184, 255, 0.45); border-top-color: #6ab8ff; }
+    .band-bottom .metric-tile--taste { border-color: rgba(94, 224, 138, 0.45); border-top-color: #5ee08a; }
+    .band-bottom .metric-tile--broll { border-color: rgba(232, 106, 106, 0.45); border-top-color: #e86a6a; }
+    .band-bottom .metric-tile--web { border-color: rgba(242, 236, 228, 0.35); border-top-color: #f2ece4; }
 
-    .band-bottom .metric-tile .m-val { font-size: 0.72rem; line-height: 1; }
+    .band-bottom .metric-tile .m-label {
+      font-size: 0.48rem;
+      margin-bottom: 2px;
+    }
+    .band-bottom .metric-tile .m-val {
+      font-size: clamp(1.75rem, 2.8vh, 2rem);
+      line-height: 1;
+      font-weight: 800;
+    }
     .band-bottom .stack-block {
       display: grid;
-      grid-template-rows: auto auto auto;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       min-height: 0;
       overflow: hidden;
       align-content: start;
@@ -347,30 +335,26 @@
       margin-bottom: 0;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      grid-template-rows: repeat(2, auto);
-      gap: 2px;
-      overflow: hidden;
-    }
-    .band-bottom .metric-tile {
-      padding: 2px 2px 3px;
-      min-width: 0;
-      max-height: 26px;
-      overflow: hidden;
-    }
-    .band-bottom .metric-tile .m-label {
-      font-size: 0.42rem;
-      margin-bottom: 1px;
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      flex: 1;
+      min-height: 0;
+      overflow: visible;
     }
     .band-bottom .stack-foot {
-      margin-top: 2px;
-      padding-top: 4px;
+      margin-top: 6px;
+      padding-top: 6px;
       flex: none;
       font-size: 0.48rem;
-      line-height: 1.25;
+      line-height: 1.3;
       border-top: 1px solid var(--line-soft);
-      background: linear-gradient(180deg, rgba(15, 13, 18, 0.98), rgba(15, 13, 18, 1));
       position: relative;
       z-index: 2;
+    }
+    .band-bottom .stream-bar {
+      height: 5px;
+      margin-top: auto;
+      flex: none;
     }
     .band-bottom .stack-sub { margin-top: 2px; font-size: 0.52rem; }
 
@@ -556,12 +540,15 @@
     .view-tabs [role="tab"]:focus-visible { outline: none; box-shadow: var(--ring); }
 
     @media (max-width: 720px) {
+      .category-bar--header { display: none; }
       .category-bar--stage { display: none; }
       .category-bar--hero-mobile {
         display: block;
-        margin-top: 6px;
-        padding-top: 6px;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line-soft);
       }
+      .category-bar--hero-mobile .category-meter { height: 6px; }
       body {
         height: auto;
         max-height: none;
@@ -572,13 +559,51 @@
       .shell {
         height: auto;
         max-height: none;
-        grid-template-rows: auto auto 1fr auto;
+        grid-template-rows: auto minmax(0, 1fr);
         padding: 0 10px 12px;
       }
-      .band-header { overflow: visible; }
+      .band-header {
+        overflow: visible;
+        padding-bottom: 4px;
+      }
+      .band-header .app-nav {
+        display: none;
+      }
+      .band-header > .illus-banner {
+        display: none;
+      }
+      .band-header .header-hero-pack {
+        grid-template-columns: 1fr;
+      }
+      .band-header .scan-live--header {
+        text-align: left;
+        align-self: start;
+        margin-top: 6px;
+      }
+      .band-header .cockpit-hero h1 {
+        font-size: clamp(1.75rem, 8vw, 2.25rem);
+        color: #fff;
+        min-height: 0;
+      }
+      .band-header .cockpit-nav {
+        font-size: 0.58rem;
+        padding-bottom: 4px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--muted);
+        text-transform: none;
+      }
       .band-main { overflow: visible; }
       .band-bottom { display: none; }
-      .view-tabs { display: flex; }
+      .view-tabs {
+        display: flex;
+        position: sticky;
+        top: 0;
+        z-index: 12;
+        margin: 0 0 10px;
+        background: var(--bg);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+      }
       .phone-panel { display: none; min-width: 0; }
       .phone-panel[data-active="true"] { display: block; }
       .panel-cockpit {
@@ -591,19 +616,46 @@
       .stage-wrap--phone { margin-top: 8px; }
       .ticket-col--phone { gap: 6px; }
       .ticket-col--phone .ticket-row { margin-left: 0 !important; margin-right: 0 !important; }
-      .mascot-stage--phone {
-        width: min(100%, calc(100vw - 28px));
-        height: min(36vw, 168px);
+      .stage-center--phone {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+        padding: 0;
+      }
+      .stage-center--phone .entity-label {
+        order: 1;
+        align-self: center;
+        margin: 0;
+        padding: 4px 12px;
         max-width: 100%;
-        margin: 6px auto;
+      }
+      .stage-center--phone .entity-label h2 { font-size: 0.62rem; }
+      .stage-center--phone .entity-label p { font-size: 0.48rem; }
+      .mascot-stage--phone {
+        order: 2;
+        width: 100%;
+        max-width: 100%;
+        height: 120px;
+        margin: 0 auto;
         overflow: hidden;
+        flex: none;
       }
       .mascot-stage--phone .mascot-pixel {
         width: 88px;
         height: 72px;
-        transform: translateX(-50%) scale(1.72);
+        transform: translateX(-50%) scale(1.35);
         transform-origin: center bottom;
         filter: none;
+      }
+      .now-panel--phone {
+        order: 3;
+        margin: 0;
+        max-width: 100%;
+        width: 100%;
       }
       .now-panel--phone {
         max-width: 100%;
@@ -629,14 +681,24 @@
         width: 100%;
         min-width: 0;
       }
+      .phone-now-loops {
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+      }
       .phone-now-loops .loop-block {
         margin: 0;
-        padding: 6px 8px;
+        padding: 8px 10px;
+        width: 100%;
+        max-width: 100%;
+        overflow: visible;
       }
       .phone-now-loops .loop-steps {
         font-size: 0.58rem;
-        line-height: 1.35;
+        line-height: 1.4;
         white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
       }
       .phone-panel[data-active="true"]#phone-now {
         display: flex;
@@ -658,14 +720,14 @@
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
-      gap: 10px 16px;
-      padding: 10px 0 8px;
+      gap: 6px 12px;
+      padding: 0 0 8px;
       font-family: var(--mono);
-      font-size: clamp(0.72rem, 1.6vw, 0.88rem);
-      text-transform: uppercase;
-      color: var(--cockpit-teal);
-      border-bottom: 1px solid var(--line-soft);
-      margin-bottom: 10px;
+      font-size: clamp(0.62rem, 1.2vw, 0.72rem);
+      text-transform: none;
+      color: var(--muted);
+      border-bottom: 0;
+      margin-bottom: 6px;
       font-variant-numeric: tabular-nums;
     }
     .cockpit-nav .sep { color: var(--faint); margin: 0 6px; }
@@ -1168,19 +1230,19 @@
       flex-direction: column;
       gap: 6px;
     }
-    .stream-card--accent-teal { border-top: 3px solid var(--cockpit-teal); }
-    .stream-card--accent-blue { border-top: 3px solid var(--info); }
-    .stream-card--accent-gold { border-top: 3px solid var(--warn); }
-    .stream-card--accent-white { border-top: 3px solid var(--fg); }
-    .stream-card--accent-pink { border-top: 3px solid var(--cockpit-pink); }
-    .stream-card--accent-green { border-top: 3px solid var(--accent); }
+    .stream-card--accent-teal { border-top: 6px solid var(--cockpit-teal); }
+    .stream-card--accent-blue { border-top: 6px solid var(--info); }
+    .stream-card--accent-gold { border-top: 6px solid var(--warn); }
+    .stream-card--accent-white { border-top: 6px solid var(--fg); }
+    .stream-card--accent-pink { border-top: 6px solid var(--cockpit-pink); }
+    .stream-card--accent-green { border-top: 6px solid var(--accent); }
     .stream-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
     .stream-id { color: var(--faint); font-variant-numeric: tabular-nums; }
     .stream-title { font-weight: 700; color: var(--fg); flex: 1; }
     .stream-status { text-transform: uppercase; font-size: 0.58rem; color: var(--cockpit-pink); }
     .stream-meta { color: var(--muted); }
     .stream-bar {
-      height: 3px;
+      height: 5px;
       border-radius: var(--pill);
       background: var(--line-soft);
       margin-top: auto;
@@ -1307,20 +1369,46 @@
 
     @media (max-width: 390px) {
       body { overflow-x: hidden; }
-      .shell > * { min-width: 0; }
-      .shell { padding: 0 8px 10px; }
+      .shell > * { min-width: 0; max-width: 100%; }
+      .shell { padding: 0 8px 10px; width: 100%; }
+      .panel-cockpit,
+      .phone-panel,
+      .phone-panel[data-active="true"] {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+      }
       .scan-live { justify-content: flex-start; }
       .now-title { font-size: 1.1rem; }
       .view-tabs [role="tab"] {
         min-height: 44px;
-        padding: 8px 4px;
-        font-size: 0.62rem;
+        min-width: 0;
+        padding: 8px 2px;
+        font-size: 0.58rem;
       }
       .mascot-stage--phone {
-        height: min(34vw, 150px);
+        height: 108px;
       }
       .mascot-stage--phone .mascot-pixel {
-        transform: translateX(-50%) scale(1.58);
+        transform: translateX(-50%) scale(1.28);
+      }
+      .stream-section--phone .stream-card {
+        min-height: 96px;
+        border-top-width: 6px;
+      }
+      .stack-block--phone .stack-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .stack-block--phone .metric-tile {
+        padding: 10px 8px;
+        border: 2px solid var(--line);
+        border-top-width: 4px;
+      }
+      .stack-block--phone .metric-tile .m-val {
+        font-size: 1.75rem;
       }
       .phone-now-loops .loop-head { font-size: 0.52rem; margin-bottom: 2px; }
       .phone-now-rows .ticket-row {
@@ -1427,6 +1515,25 @@
           <span class="num" title="source field: motionScan.repoTotal">20</span>
         </span>
       </div>
+      </div>
+
+      <div class="category-bar category-bar--header" aria-hidden="false">
+        <div class="category-links" aria-label="Category filters">
+          <span>Opus 5.5</span><span class="sep">/</span>
+          <span>Skills</span><span class="sep">/</span>
+          <span>Engines</span><span class="sep">/</span>
+          <span>Taste</span><span class="sep">/</span>
+          <span>B-roll</span><span class="sep">/</span>
+          <span>Web</span>
+        </div>
+        <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+          <span class="meter-opus" style="--w:3"></span>
+          <span class="meter-skills" style="--w:7"></span>
+          <span class="meter-engines" style="--w:4"></span>
+          <span class="meter-taste" style="--w:2"></span>
+          <span class="meter-broll" style="--w:1"></span>
+          <span class="meter-web" style="--w:3"></span>
+        </div>
       </div>
     </header>
 

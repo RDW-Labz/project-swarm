@@ -96,6 +96,10 @@
         </div>
       </div>
       <div id="hive-nodes" class="hive-nodes"></div>
+      <aside class="hive-toolgate-callout" id="hive-toolgate-callout" aria-label="Toolgate session sample">
+        <span class="lbl">last toolgate session (sample)</span>
+        toolgate: rm -rf ./ -- deny
+      </aside>
     </section>
 
     <div class="hive-panels-wrap">
@@ -207,10 +211,6 @@
           </p>
         </section>
       </div>
-      <aside class="hive-toolgate-callout" id="hive-toolgate-callout" aria-label="Toolgate session sample">
-        <span class="lbl">last toolgate session (sample)</span>
-        toolgate: rm -rf ./ -- deny
-      </aside>
       <footer class="cc-footer hive-footer">
         <span>simulation - illustrative values - sample fields only</span>
         <span class="motto">opus thinks. jev decides. code enforces.</span>
@@ -293,7 +293,12 @@
           meter: 64, meterLabel: 'p(skip)', meterTitle: 'project.wakegate.skipRatio' }
       ];
 
-      const SLOT_TOPS = [3, 18, 33, 48, 63];
+      const CARD_GAP_PCT = 1.5;
+      const CARD_HEIGHT_PCT = (100 - 4 * CARD_GAP_PCT) / 5;
+      const SLOT_TOPS = [0, 1, 2, 3, 4].map(function (i) {
+        return i * (CARD_HEIGHT_PCT + CARD_GAP_PCT);
+      });
+      const COLUMN_INSET = { 0: 2, 1: 4.5, 2: 7, 3: 4.5, 4: 2 };
       const PARTICLES_PER_STREAM = 56;
       const LANE_RGB = {
         safety: [255, 77, 141],
@@ -441,17 +446,17 @@
           nodeEls.forEach(function (entry) {
             const side = entry.node.side;
             const slot = entry.node.slot;
-            const topPct = SLOT_TOPS[slot];
-            entry.el.style.top = topPct + '%';
-            entry.el.style.height = '15%';
-            entry.el.style.minHeight = '82px';
-            entry.el.style.maxHeight = '17%';
+            const inset = COLUMN_INSET[slot] != null ? COLUMN_INSET[slot] : 2;
+            entry.el.style.top = SLOT_TOPS[slot] + '%';
+            entry.el.style.height = CARD_HEIGHT_PCT + '%';
+            entry.el.style.minHeight = '';
+            entry.el.style.maxHeight = '';
             if (side === 'left') {
-              entry.el.style.left = '2%';
+              entry.el.style.left = inset + '%';
               entry.el.style.right = 'auto';
               entry.el.style.width = '21%';
             } else {
-              entry.el.style.right = '2%';
+              entry.el.style.right = inset + '%';
               entry.el.style.left = 'auto';
               entry.el.style.width = '21%';
             }
