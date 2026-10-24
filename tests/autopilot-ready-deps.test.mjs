@@ -30,6 +30,7 @@ function makeDeps(overrides = {}) {
   };
   const injected = {
     env: { TEST_ENV: '1' },
+    memoryAware: false,
     spawnImpl,
     selfPid: 1000,
     liveBusyMarkers: async () => overrides.markers ?? [],
@@ -133,6 +134,18 @@ test('startScope passes cwd as the resolved project root', async () => {
   const { deps, spawnCalls } = makeDeps();
   await deps.startScope({ root: './relative-root' });
   assert.equal(spawnCalls[0].opts.cwd, path.resolve('./relative-root'));
+});
+
+test('startScope does not spawn under hard memory pressure when memoryAware', async () => {
+  const { deps, spawnCalls } = makeDeps({
+    injected: {
+      memoryAware: true,
+      readMachine: async () => ({ memTotal: 1e9, memAvailable: 1 }),
+    },
+  });
+  const out = await deps.startScope({ root: ROOT });
+  assert.deepEqual(out, { ok: true, result: 'held-memory' });
+  assert.equal(spawnCalls.length, 0);
 });
 
 test('sameRoot is false for non-string roots and matches symlinked paths', async t => {
