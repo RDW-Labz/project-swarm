@@ -46,6 +46,7 @@ function ticketFiles(ticket) {
 /** Dependency bundle for autopilot start-ready (live runs, busy markers, cap, go --scope). */
 export function readyAutopilotDeps(projectRoot, {
   env = process.env,
+  memoryAware = true,
   spawnImpl,
   selfPid = process.pid,
   liveBusyMarkers,
@@ -56,7 +57,6 @@ export function readyAutopilotDeps(projectRoot, {
   readMachine: readMachineImpl = readMachine,
   log = line => process.stderr.write(`${line}\n`),
 } = {}) {
-  const memoryAware = env === process.env;
   const rootForMarkers = projectRoot;
 
   async function allTickets(root) {
@@ -114,7 +114,8 @@ export function readyAutopilotDeps(projectRoot, {
       if (!memoryAware) return settings;
       let config = {};
       try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
-      const hw = await readMachineImpl();
+      let hw;
+      try { hw = await readMachineImpl(); } catch { return settings; }
       const ceiling = Number.isInteger(settings?.maxJobs) && settings.maxJobs > 0 ? settings.maxJobs : 1;
       const { effective } = effectiveMachineLimit({ limit: ceiling, machine: hw, config });
       return { ...settings, maxJobs: Math.min(ceiling, effective) };
@@ -126,13 +127,16 @@ export function readyAutopilotDeps(projectRoot, {
       if (memoryAware) {
         let config = {};
         try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
-        const hw = await readMachineImpl();
-        if (memoryPressureLevel(hw) === 'hard') {
+        let hw;
+        try { hw = await readMachineImpl(); } catch { hw = null; }
+        if (hw && memoryPressureLevel(hw) === 'hard') {
           log(memoryPressureHoldLine(hw));
           return { ok: true, result: 'held-memory' };
         }
-        const { effective } = effectiveMachineLimit({ limit: jobs, machine: hw, config });
-        jobs = Math.min(jobs, effective);
+        if (hw) {
+          const { effective } = effectiveMachineLimit({ limit: jobs, machine: hw, config });
+          jobs = Math.min(jobs, effective);
+        }
       }
       const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
       if (skipSkeleton) args.push('--skip-skeleton');

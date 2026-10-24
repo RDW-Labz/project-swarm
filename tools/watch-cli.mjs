@@ -52,7 +52,7 @@ import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { createDeployTracker } from './deploy-status.mjs';
 import { runnerVersion } from './runner-version.mjs';
-import { loadOrCreateBoardIdentity } from './board-keepalive.mjs';
+import { loadOrCreateBoardIdentity, portBusyError, DEFAULT_KEEPUP_PORT } from './board-keepalive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -924,7 +924,11 @@ export async function startBoardServer({ env = process.env, root, remote, keepUp
   return { server, api, url, cleaned };
 }
 
-export async function runWatchCommand(root, args, { write = text => process.stdout.write(text) } = {}) {
+export async function runWatchCommand(root, args, {
+  write = text => process.stdout.write(text),
+  startBoardServer: startBoard = startBoardServer,
+  loadOrCreateBoardIdentity: loadIdentity = loadOrCreateBoardIdentity,
+} = {}) {
   const opts = parseWatchArgs(args);
   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
   if (opts.all && opts.json) return { stdout: `${JSON.stringify(await safeBoard(), null, 2)}\n`, exitCode: 0 };
@@ -932,7 +936,7 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
   if (opts.all && opts.keepUp) {
     let identity;
     try {
-      identity = await loadOrCreateBoardIdentity({
+      identity = await loadIdentity({
         dir: path.dirname(boardFile(process.env)),
         fs,
         randomBytes,
@@ -942,18 +946,27 @@ export async function runWatchCommand(root, args, { write = text => process.stdo
       return { stdout: `${error.message}\n`, exitCode: 1 };
     }
     const watchArgv = ['watch', '--all', '--keep-up', ...(opts.port != null ? ['--port', String(opts.port)] : []), ...(opts.open ? ['--open'] : [])];
-    const board = await startBoardServer({
-      env: process.env,
-      root,
-      keepUp: identity,
-      registry: {
-        argv: watchArgv,
-        cwd: process.cwd(),
-        env: safeEnvSubset(process.env),
-        explicitBackground: true,
-        ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
-      },
-    });
+    let board;
+    try {
+      board = await startBoard({
+        env: process.env,
+        root,
+        keepUp: identity,
+        registry: {
+          argv: watchArgv,
+          cwd: process.cwd(),
+          env: safeEnvSubset(process.env),
+          explicitBackground: true,
+          ...registryModeFields(serverMode({ explicitBackground: true }), { explicitBackground: true }),
+        },
+      });
+    } catch (error) {
+      if (error?.code === 'EADDRINUSE') {
+        const port = identity?.port ?? opts.port ?? DEFAULT_KEEPUP_PORT;
+        return { stdout: `${portBusyError(port).message}\n`, exitCode: 1 };
+      }
+      throw error;
+    }
     write(`Swarm Watch board (stay-up, every project on this machine)\n${board.url}\nRead-only on 127.0.0.1 only. This URL stays the same across restarts. Does not stop when idle. Ctrl-C stops it now. (See docs/board.md for launchd.)\n`);
     if (opts.open) openUrl(board.url);
     const stop = () => { board.server.close(); board.api.close(); };

@@ -127,18 +127,35 @@ export function isNodeTestCommand(argv) {
 /**
  * Add or replace `--test-concurrency=N` for node --test commands only.
  */
+function existingTestConcurrency(argv) {
+  const idx = argv.findIndex(arg => arg === '--test-concurrency' || arg.startsWith('--test-concurrency='));
+  if (idx < 0) return null;
+  const token = argv[idx];
+  if (token.includes('=')) {
+    const v = Number(token.slice(token.indexOf('=') + 1));
+    return Number.isFinite(v) ? v : null;
+  }
+  if (idx + 1 < argv.length) {
+    const v = Number(argv[idx + 1]);
+    return Number.isFinite(v) ? v : null;
+  }
+  return null;
+}
+
 export function applyNodeTestConcurrency(argv, concurrency) {
   if (!isNodeTestCommand(argv)) return argv;
   const n = Number(concurrency);
   if (!Number.isInteger(n) || n < 1) return argv;
+  const existing = existingTestConcurrency(argv);
+  const target = existing != null ? Math.min(existing, n) : n;
   const next = [...argv];
   const idx = next.findIndex(arg => arg === '--test-concurrency' || arg.startsWith('--test-concurrency='));
   if (idx >= 0) {
-    if (next[idx].includes('=')) next[idx] = `--test-concurrency=${n}`;
-    else if (idx + 1 < next.length) next[idx + 1] = String(n);
-    else next.push(String(n));
+    if (next[idx].includes('=')) next[idx] = `--test-concurrency=${target}`;
+    else if (idx + 1 < next.length) next[idx + 1] = String(target);
+    else next.push(String(target));
   } else {
-    next.push(`--test-concurrency=${n}`);
+    next.push(`--test-concurrency=${target}`);
   }
   return next;
 }

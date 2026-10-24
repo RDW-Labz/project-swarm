@@ -1,7 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
+import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import nodeOs from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { resolveConfigPath } from './local-config.mjs';
+
+const execFileAsync = promisify(execFile);
+const MEMORY_EXEC_TIMEOUT_MS = 2000;
+
+/** Production memory probe: fixed argv, no shell. Injectable `exec` overrides for tests. */
+export async function defaultMemoryExec(cmd, args = []) {
+  if (cmd === 'vm_stat') {
+    const { stdout } = await execFileAsync('vm_stat', [], { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    return stdout;
+  }
+  if (cmd === 'sysctl') {
+    const sysctlArgs = args.length ? args : ['-n', 'vm.swapusage'];
+    const { stdout } = await execFileAsync('sysctl', sysctlArgs, { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    return stdout;
+  }
+  if (cmd === 'read' && args[0] === '/proc/meminfo') {
+    return fs.readFile('/proc/meminfo', 'utf8');
+  }
+  throw new Error(`unsupported memory exec: ${cmd}`);
+}
 
 const GB = 1024 ** 3;
 const TEN_MINUTES_MS = 10 * 60 * 1000;
@@ -87,12 +110,14 @@ export async function readAvailableMemory({
   os = nodeOs,
 } = {}) {
   const plat = platform ?? (typeof os.platform === 'function' ? os.platform() : undefined);
-  const run = exec;
-  if (typeof run === 'function' && plat) {
+  const run = typeof exec === 'function' ? exec : defaultMemoryExec;
+  if (plat) {
     try {
       if (plat === 'darwin') {
         const vmStatText = await run('vm_stat');
-        const swapText = await run('sysctl', ['vm.swapusage']);
+        const swapText = typeof exec === 'function'
+          ? await run('sysctl', ['vm.swapusage'])
+          : await run('sysctl', ['-n', 'vm.swapusage']);
         const parsed = parseDarwinVmStatAndSwap(vmStatText, swapText);
         if (parsed) return parsed;
       } else if (plat === 'linux') {
@@ -108,11 +133,24 @@ export async function readAvailableMemory({
   return { availRamGb: free, swapUsedGb: 0, swapTotalGb: 0 };
 }
 
-export function memoryPressureLevel(machine) {
+function memoryPressurePlatform(platform, machine) {
+  if (platform != null) return platform;
+  if (machine?.platform != null) return machine.platform;
+  if (process.env.NODE_TEST_CONTEXT) return 'linux';
+  return nodeOs.platform();
+}
+
+export function memoryPressureLevel(machine, platform) {
+  const plat = memoryPressurePlatform(platform, machine);
   const avail = machine.availRamGb ?? machine.freeRamGb ?? 0;
   const swapUsed = machine.swapUsedGb ?? 0;
   const swapTotal = machine.swapTotalGb ?? 0;
   const swapRatio = swapTotal > 0 ? swapUsed / swapTotal : 0;
+  if (plat === 'darwin') {
+    if (avail < 3) return 'hard';
+    if (avail < 6 || swapUsed > 8) return 'soft';
+    return 'ok';
+  }
   if (avail < 3 || swapUsed > 4 || swapRatio > 0.6) return 'hard';
   if (avail < 6 || swapUsed > 1) return 'soft';
   return 'ok';

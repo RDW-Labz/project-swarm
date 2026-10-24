@@ -2,6 +2,7 @@
 // Stable loopback port and token for `swarm watch --all --keep-up` (launchd / phone bookmark).
 import net from 'node:net';
 import path from 'node:path';
+import { constants as fsConstants } from 'node:fs';
 
 export const BOARD_IDENTITY_BASENAME = 'board-identity.json';
 export const DEFAULT_KEEPUP_PORT = 51058;
@@ -45,7 +46,7 @@ export async function defaultIsPortFree(port) {
   });
 }
 
-function portBusyError(port, { saved = false, file = null } = {}) {
+export function portBusyError(port, { saved = false, file = null } = {}) {
   const where = saved && file ? ` (saved in ${file})` : '';
   const hint = saved
     ? 'stop the other process or remove the identity file'
@@ -54,6 +55,74 @@ function portBusyError(port, { saved = false, file = null } = {}) {
     new Error(`board keep-up: port ${port} is already in use${where}; ${hint}`),
     { code: 'board-port-busy' },
   );
+}
+
+async function ensureConfigDirSecure(dir, { fs, uid }) {
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  let st;
+  try {
+    st = await fs.stat(dir);
+  } catch {
+    return;
+  }
+  if (st.uid !== uid) return;
+  const mode = st.mode & 0o777;
+  if (mode !== 0o700 && typeof fs.chmod === 'function') {
+    await fs.chmod(dir, 0o700);
+  }
+}
+
+async function readIdentityViaFd(file, { fs, uid, warn }) {
+  if (typeof fs.open !== 'function') {
+    let st;
+    try {
+      st = await fs.stat(file);
+    } catch {
+      return { kind: 'untrusted' };
+    }
+    if (st.uid !== uid) {
+      warn('board identity: file not owned by you; creating a new identity');
+      return { kind: 'untrusted' };
+    }
+    if ((st.mode & 0o777) !== 0o600) {
+      warn('board identity: unsafe file mode; creating a new identity');
+      return { kind: 'untrusted' };
+    }
+    let text = '';
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch {
+      return { kind: 'unreadable', text: '' };
+    }
+    return { kind: 'trusted-legacy', text };
+  }
+  let handle;
+  try {
+    handle = await fs.open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { kind: 'missing' };
+    warn('board identity: unreadable; creating a new identity');
+    return { kind: 'untrusted' };
+  }
+  try {
+    const st = await handle.fstat();
+    if (typeof st.isFile === 'function' ? !st.isFile() : !st.isFile) {
+      warn('board identity: not a regular file; creating a new identity');
+      return { kind: 'untrusted' };
+    }
+    if (st.uid !== uid) {
+      warn('board identity: file not owned by you; creating a new identity');
+      return { kind: 'untrusted' };
+    }
+    if ((st.mode & 0o777) !== 0o600) {
+      warn('board identity: unsafe file mode; creating a new identity');
+      return { kind: 'untrusted' };
+    }
+    const text = await handle.readFile({ encoding: 'utf8' });
+    return { kind: 'trusted', text };
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 async function trustIdentityFile(file, { fs, uid, warn }) {
@@ -69,26 +138,21 @@ async function trustIdentityFile(file, { fs, uid, warn }) {
     warn('board identity: refused symlink; creating a new identity');
     return { kind: 'untrusted' };
   }
-  let st;
-  try {
-    st = await fs.stat(file);
-  } catch {
-    warn('board identity: unreadable; creating a new identity');
-    return { kind: 'untrusted' };
-  }
-  if (st.uid !== uid) {
-    warn('board identity: file not owned by you; creating a new identity');
-    return { kind: 'untrusted' };
-  }
-  if ((st.mode & 0o777) !== 0o600) {
-    warn('board identity: unsafe file mode; creating a new identity');
-    return { kind: 'untrusted' };
-  }
-  return { kind: 'trusted' };
+  const viaFd = await readIdentityViaFd(file, { fs, uid, warn });
+  if (viaFd.kind === 'missing') return { kind: 'missing' };
+  if (viaFd.kind === 'untrusted' || viaFd.kind === 'unreadable') return { kind: 'untrusted' };
+  return { kind: 'trusted', text: viaFd.text };
 }
 
-async function writeIdentityAtomic(file, identity, { fs, dir, randomBytes }) {
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+function portMismatchError(savedPort, requestedPort) {
+  return Object.assign(
+    new Error(`board keep-up: saved identity uses port ${savedPort}; --port ${requestedPort} would break the bookmark (omit --port to reuse ${savedPort})`),
+    { code: 'board-port-mismatch' },
+  );
+}
+
+async function writeIdentityAtomic(file, identity, { fs, dir, randomBytes, uid }) {
+  await ensureConfigDirSecure(dir, { fs, uid });
   const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   await fs.writeFile(tmp, `${JSON.stringify(identity)}\n`, { mode: 0o600, flag: 'wx' });
   await fs.rename(tmp, file);
@@ -112,14 +176,12 @@ export async function loadOrCreateBoardIdentity({
   const trust = await trustIdentityFile(file, { fs, uid, warn });
 
   if (trust.kind === 'trusted') {
-    let text = '';
-    try {
-      text = await fs.readFile(file, 'utf8');
-    } catch {
-      warn('board identity: unreadable; creating a new identity');
-    }
-    const saved = parseIdentityText(text);
+    const saved = parseIdentityText(trust.text);
     if (saved) {
+      if (requestedPort != null && requestedPort !== '') {
+        const req = resolvePort(requestedPort);
+        if (req !== saved.port) throw portMismatchError(saved.port, req);
+      }
       if (!(await isPortFree(saved.port))) throw portBusyError(saved.port, { saved: true, file });
       return saved;
     }
@@ -134,6 +196,6 @@ export async function loadOrCreateBoardIdentity({
   if (!(await isPortFree(port))) throw portBusyError(port);
   const token = randomBytes(24).toString('hex');
   const identity = { token, port };
-  await writeIdentityAtomic(file, identity, { fs, dir, randomBytes });
+  await writeIdentityAtomic(file, identity, { fs, dir, randomBytes, uid });
   return identity;
 }

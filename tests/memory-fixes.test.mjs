@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: Apache-2.0
+import './_isolate-config.mjs';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, it } from 'node:test';
+import {
+  defaultMemoryExec,
+  memoryPressureLevel,
+  readAvailableMemory,
+} from '../tools/autotune.mjs';
+import { applyNodeTestConcurrency } from '../tools/machine-limit.mjs';
+import {
+  loadOrCreateBoardIdentity,
+  boardIdentityPath,
+  portBusyError,
+} from '../tools/board-keepalive.mjs';
+import { readyAutopilotDeps } from '../tools/autopilot-ready-deps.mjs';
+import {
+  autopilotStep,
+  startReadyCooldownOpen,
+  START_READY_HOLD_BACKOFF_MS,
+} from '../tools/autopilot.mjs';
+import { runWatchCommand } from '../tools/watch-cli.mjs';
+
+const ROOT = '/tmp/memory-fixes-root';
+const UID = 502;
+
+const DARWIN_VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               1000.
+Pages inactive:                          20000.
+Pages speculative:                         500.
+Pages purgeable:                           250.
+`;
+const DARWIN_SWAP = 'total = 8.00G  used = 2.50G  free = 5.50G  (encrypted)';
+const LINUX_MEMINFO = `MemTotal:       32768000 kB
+MemAvailable:    8388608 kB
+SwapTotal:       4194304 kB
+SwapFree:        3145728 kB
+`;
+
+describe('readAvailableMemory default exec', () => {
+  it('uses defaultMemoryExec when exec is omitted', async () => {
+    const r = await readAvailableMemory({
+      platform: 'darwin',
+      os: { platform: () => 'darwin', freemem: () => 1 },
+    });
+    if (process.platform === 'darwin') {
+      assert.ok(r.availRamGb > 0);
+    } else {
+      assert.equal(r.availRamGb, 1 / 1024 ** 3);
+    }
+    const meminfo = await defaultMemoryExec('read', ['/proc/meminfo']).catch(() => null);
+    if (process.platform === 'linux') assert.match(meminfo, /MemAvailable/);
+  });
+
+  it('falls back to freemem when default path fails', async () => {
+    const r = await readAvailableMemory({
+      platform: 'darwin',
+      exec: async () => { throw new Error('fail'); },
+      os: { platform: () => 'darwin', freemem: () => 3 * 1024 ** 3 },
+    });
+    assert.equal(r.availRamGb, 3);
+    assert.equal(r.swapUsedGb, 0);
+  });
+});
+
+describe('memoryPressureLevel darwin', () => {
+  it('ignores swap-only hard triggers on darwin', () => {
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 5 }, 'darwin'), 'ok');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 3, swapTotalGb: 4 }, 'darwin'), 'ok');
+    assert.equal(memoryPressureLevel({ availRamGb: 2.5 }, 'darwin'), 'hard');
+    assert.equal(memoryPressureLevel({ availRamGb: 16, swapUsedGb: 9 }, 'darwin'), 'soft');
+  });
+});
+
+describe('applyNodeTestConcurrency lowers only', () => {
+  it('never raises an existing lower concurrency cap', () => {
+    const argv = ['node', '--test', 'suite.mjs', '--test-concurrency=8'];
+    const out = applyNodeTestConcurrency(argv, 2);
+    assert.ok(out.includes('--test-concurrency=2'));
+    const kept = applyNodeTestConcurrency(argv, 16);
+    assert.ok(kept.includes('--test-concurrency=8'));
+  });
+});
+
+describe('board identity port bookmark', () => {
+  function makeMemFs(seed = {}) {
+    const files = new Map(Object.entries(seed));
+    return {
+      files,
+      async mkdir() {},
+      async chmod() {},
+      async lstat(file) {
+        const entry = files.get(file);
+        if (!entry) {
+          const err = new Error('ENOENT');
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return { isSymbolicLink: () => Boolean(entry.symlink) };
+      },
+      async stat(file) {
+        const entry = files.get(file);
+        if (!entry) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return { mode: entry.mode ?? 0o100600, uid: entry.uid ?? UID, isFile: () => true };
+      },
+      async open(file, flags) {
+        const entry = files.get(file);
+        if (!entry) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return {
+          async fstat() {
+            return { mode: entry.mode ?? 0o100600, uid: entry.uid ?? UID, isFile: () => true };
+          },
+          async readFile() { return entry.content; },
+          async close() {},
+        };
+      },
+      async readFile(file) {
+        return files.get(file)?.content ?? (() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); })();
+      },
+      async writeFile(file, content, { mode, flag } = {}) {
+        if (flag === 'wx' && files.has(file)) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+        files.set(file, { content, mode: (mode ?? 0o600) | 0o100000, uid: UID });
+      },
+      async rename(from, to) {
+        const entry = files.get(from);
+        files.delete(from);
+        files.set(to, entry);
+      },
+      async rm(file) { files.delete(file); },
+    };
+  }
+
+  it('rejects a conflicting --port when identity already exists', async () => {
+    const dir = '/cfg/.project-swarm';
+    const file = boardIdentityPath(dir);
+    const fs = makeMemFs({
+      [file]: { content: `{"token":"${'a'.repeat(48)}","port":51058}\n`, mode: 0o100600, uid: UID },
+    });
+    await assert.rejects(
+      () => loadOrCreateBoardIdentity({ dir, fs, randomBytes: n => Buffer.alloc(n, 1), port: 52000, uid: UID }),
+      err => err.code === 'board-port-mismatch',
+    );
+  });
+
+  it('reuses saved port when --port matches', async () => {
+    const dir = '/cfg/.project-swarm';
+    const file = boardIdentityPath(dir);
+    const fs = makeMemFs({
+      [file]: { content: `{"token":"${'b'.repeat(48)}","port":51058}\n`, mode: 0o100600, uid: UID },
+    });
+    const out = await loadOrCreateBoardIdentity({
+      dir,
+      fs,
+      randomBytes: n => Buffer.alloc(n, 1),
+      port: 51058,
+      uid: UID,
+      isPortFree: async () => true,
+    });
+    assert.equal(out.port, 51058);
+    assert.equal(out.token, 'b'.repeat(48));
+  });
+});
+
+describe('autopilot held-memory backoff', () => {
+  it('records hold timestamp and blocks cooldown for 60s', () => {
+    const memory = {};
+    const t0 = 1_000_000;
+    assert.equal(startReadyCooldownOpen(memory, t0), true);
+    memory.startReadyHoldAt = t0;
+    assert.equal(startReadyCooldownOpen(memory, t0 + START_READY_HOLD_BACKOFF_MS - 1), false);
+    assert.equal(startReadyCooldownOpen(memory, t0 + START_READY_HOLD_BACKOFF_MS), true);
+  });
+
+  it('writes held-memory start-ready as incidental', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memfix-autopilot-'));
+    await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+    const journal = [];
+    const memory = {};
+    const deps = {
+      readJournal: async () => journal,
+      appendEvent: async (_root, event) => { journal.push(event); return event; },
+      loadRuns: async () => [{ id: 'r1', status: 'complete', integrated: true, jobCount: 1 }],
+      readPlan: async () => null,
+      readyTickets: async () => [{ id: 't1', status: 'ready', files: ['a.ts'] }],
+      pendingApprovals: async () => [],
+      liveRuns: async () => [],
+      busyMarkers: async () => [],
+      capRoom: async () => true,
+      workerSlots: async () => ({ max: 4, free: 2 }),
+      readTickets: async () => [{ id: 't1', status: 'ready' }],
+      autopilotStartReadySettings: async () => ({ maxJobs: 2, skipSkeleton: false }),
+      startScope: async () => ({ ok: true, result: 'held-memory' }),
+    };
+    const step = await autopilotStep(root, deps, { now: () => 5_000, memory });
+    assert.equal(memory.startReadyHoldAt, 5_000);
+    assert.ok(!step.stepWroteJournal);
+    assert.ok(step.actions.some(a => a.action === 'start-ready' && a.result === 'held-memory'));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+});
+
+describe('watch keep-up EADDRINUSE', () => {
+  it('prints board port-busy message and exits 1', async () => {
+    const err = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
+    const identity = { port: 51058, token: 'c'.repeat(48) };
+    const out = await runWatchCommand(ROOT, ['--all', '--keep-up'], {
+      write: () => {},
+      loadOrCreateBoardIdentity: async () => identity,
+      startBoardServer: async () => { throw err; },
+    });
+    assert.equal(out.exitCode, 1);
+    assert.match(out.stdout, /board keep-up: port .* already in use/);
+    assert.equal(out.stdout.trim(), portBusyError(identity.port).message);
+  });
+});
+
+describe('readyAutopilotDeps machine reader errors', () => {
+  it('does not hold when readMachine throws', async () => {
+    let spawned = false;
+    const deps = readyAutopilotDeps(ROOT, {
+      spawnImpl: () => { spawned = true; return { unref() {}, once() {} }; },
+      readMachine: async () => { throw new Error('probe failed'); },
+      readTickets: async () => [],
+      readPending: async () => [],
+      listLiveRuns: async () => [],
+      liveBusyMarkers: async () => [],
+      checkProjectCap: async () => true,
+    });
+    const out = await deps.startScope({ root: ROOT, maxJobs: 4 });
+    assert.equal(spawned, true);
+    assert.notEqual(out.result, 'held-memory');
+  });
+});
+
+describe('memoryAware option', () => {
+  it('defaults on so injected env still caps jobs', async () => {
+    let seenArgs = null;
+    const deps = readyAutopilotDeps(ROOT, {
+      env: { SWARM_HOME: '/tmp/fake-home' },
+      spawnImpl: (cmd, args) => {
+        seenArgs = args;
+        return { unref() {}, once(event, cb) { if (event !== 'error') queueMicrotask(() => cb?.()); } };
+      },
+      readMachine: async () => ({ availRamGb: 5, swapUsedGb: 0, swapTotalGb: 8, cores: 16 }),
+      readTickets: async () => [],
+      readPending: async () => [],
+      listLiveRuns: async () => [],
+      liveBusyMarkers: async () => [],
+      checkProjectCap: async () => true,
+    });
+    await deps.startScope({ root: ROOT, maxJobs: 16 });
+    const idx = seenArgs.indexOf('--max-jobs');
+    assert.ok(Number(seenArgs[idx + 1]) < 16);
+  });
+
+  it('can be turned off explicitly', async () => {
+    let seenArgs = null;
+    const deps = readyAutopilotDeps(ROOT, {
+      memoryAware: false,
+      spawnImpl: (cmd, args) => {
+        seenArgs = args;
+        return { unref() {}, once(event, cb) { if (event !== 'error') queueMicrotask(() => cb?.()); } };
+      },
+      readMachine: async () => ({ availRamGb: 2, swapUsedGb: 0, swapTotalGb: 8, cores: 8 }),
+      readTickets: async () => [],
+      readPending: async () => [],
+      listLiveRuns: async () => [],
+      liveBusyMarkers: async () => [],
+      checkProjectCap: async () => true,
+    });
+    await deps.startScope({ root: ROOT, maxJobs: 8 });
+    const idx = seenArgs.indexOf('--max-jobs');
+    assert.equal(seenArgs[idx + 1], '8');
+  });
+});
