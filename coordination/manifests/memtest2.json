@@ -1,0 +1,14 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memtest2",
+   "agent": "cursor", "model": "composer-2.5",
+   "tier": "cheap",
+   "context": ["tests/autopilot-wide-waves.test.mjs"],
+   "outputs": ["tests/autopilot-wide-waves.test.mjs"],
+   "prompt": "In tests/autopilot-wide-waves.test.mjs the test 'startScope argv includes --max-jobs and --skip-skeleton when allowed' fails on a loaded machine, because readyAutopilotDeps now reads real memory by default and holds the start. Pass memoryAware: false in the options of every readyAutopilotDeps(...) call in this file that exercises startScope. Change nothing else; do not weaken any assertion."
+  }
+ ]
+}

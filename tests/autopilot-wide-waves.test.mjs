@@ -144,6 +144,7 @@ test('capRoom false prevents start-ready', async t => {
 test('startScope argv includes --max-jobs and --skip-skeleton when allowed', async () => {
   const spawnCalls = [];
   const deps = readyAutopilotDeps('/tmp/wide-project', {
+    memoryAware: false,
     env: {},
     spawnImpl: (execPath, args, opts) => {
       spawnCalls.push({ execPath, args, opts });
