@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "flaky500b",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Make the test '500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily' in tests/lanes-run.test.mjs deterministic under load. Do NOT run it 30 times; run it at most 3 times. Known causes in the test body (read it): (a) it is declared with timeout 60000 and ends with assert.ok(Date.now() - start < 60000): wall-clock assertions that fail when the full suite loads the machine; (b) servedDuringPause counts requests served within a real-time window of PAUSE_MS (2000 ms) after the gemini 402, which can pass entirely before another provider is served when the machine is busy; (c) each fake request sleeps 5 ms in real time and 500 jobs with retries need many seconds. Fixes: remove both wall-clock assertions and set the test timeout to 180000; make the pause check event based: record the sequence number of requests (a counter incremented in fetchImpl) at the moment the 402 is returned and count requests of other agents served before the gemini pause is lifted, where 'lifted' is observed as the first later gemini request, instead of comparing Date.now() to pausedAt + PAUSE_MS; keep the invariants (caps never exceeded, 499 complete, job 2 failed, every tenth job retried once, peaks, workspaces prepared lazily at most 28). If tests/spend.test.mjs has a concurrency test that is timing based and flaky, fix it the same way, otherwise leave it. Test-only changes. Report the result of 3 runs.",
+   "context": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs",
+    "tools/lanes.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "test-only change; full suite before merge"
+  }
+ ]
+}
