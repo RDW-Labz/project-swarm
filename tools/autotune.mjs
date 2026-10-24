@@ -14,19 +14,19 @@ export const DARWIN_SYSCTL_PATH = '/usr/sbin/sysctl';
 export const DARWIN_MEMORY_PROBE_UNKNOWN_WARNING =
   'darwin memory probe failed; treating pressure as unknown';
 
-/** Production memory probe: fixed argv, no shell. Injectable `exec` overrides for tests. */
-export async function defaultMemoryExec(cmd, args = []) {
+/** Production memory probe: fixed argv, no shell. Injectable `execFile` / `fs` for tests. */
+export async function defaultMemoryExec(cmd, args = [], { execFile = execFileAsync, fs: fsImpl = fs } = {}) {
   if (cmd === 'vm_stat') {
-    const { stdout } = await execFileAsync(DARWIN_VM_STAT_PATH, [], { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    const { stdout } = await execFile(DARWIN_VM_STAT_PATH, [], { timeout: MEMORY_EXEC_TIMEOUT_MS });
     return stdout;
   }
   if (cmd === 'sysctl') {
     const sysctlArgs = args.length ? args : ['-n', 'vm.swapusage'];
-    const { stdout } = await execFileAsync(DARWIN_SYSCTL_PATH, sysctlArgs, { timeout: MEMORY_EXEC_TIMEOUT_MS });
+    const { stdout } = await execFile(DARWIN_SYSCTL_PATH, sysctlArgs, { timeout: MEMORY_EXEC_TIMEOUT_MS });
     return stdout;
   }
   if (cmd === 'read' && args[0] === '/proc/meminfo') {
-    return fs.readFile('/proc/meminfo', 'utf8');
+    return fsImpl.readFile('/proc/meminfo', 'utf8');
   }
   throw new Error(`unsupported memory exec: ${cmd}`);
 }
@@ -116,9 +116,12 @@ export async function readAvailableMemory({
   platform,
   exec,
   os = nodeOs,
+  defaultMemoryExecOptions,
 } = {}) {
   const plat = platform ?? (typeof os.platform === 'function' ? os.platform() : undefined);
-  const run = typeof exec === 'function' ? exec : defaultMemoryExec;
+  const run = typeof exec === 'function'
+    ? exec
+    : (cmd, args) => defaultMemoryExec(cmd, args, defaultMemoryExecOptions);
   if (plat === 'darwin') {
     let vmStatText;
     try {

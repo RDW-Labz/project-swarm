@@ -150,21 +150,30 @@ test('parseGitWorktreeListPorcelain reads branch lines', () => {
 });
 
 test('runMerge omits --delete-branch when head branch worktree holds state', async t => {
+  const mergeRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-root-'));
   const wtRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-wt-'));
+  t.after(() => fs.rm(mergeRoot, { recursive: true, force: true }));
   t.after(() => fs.rm(wtRoot, { recursive: true, force: true }));
   await fs.mkdir(path.join(wtRoot, '.swarm', 'project'), { recursive: true });
   await fs.writeFile(path.join(wtRoot, '.swarm', 'project', 'tickets.json'), '{}');
-  const porcelain = `worktree ${wtRoot}\nbranch refs/heads/feat\n\n`;
+  const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\nworktree ${wtRoot}\nbranch refs/heads/feat\n\n`;
+  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+  const prViewBody = {
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    baseRefName: 'main',
+    headRefName: 'feat',
+    headRefOid: 'abc123',
+    isCrossRepository: false,
+    statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
   const calls = [];
   const exec = async (command, args, opts = {}) => {
     calls.push({ command, args: [...args], cwd: opts.cwd });
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }), stderr: '' },
-      'gh pr view 123 --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup': { code: 0, stdout: JSON.stringify({
-        state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc123',
-        statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-      }), stderr: '' },
+      [`gh pr view 123 --json ${prViewFields}`]: { code: 0, stdout: JSON.stringify(prViewBody), stderr: '' },
       'gh pr list --repo octo/repo --base feat --state open --json number': { code: 0, stdout: '[]', stderr: '' },
       'gh pr merge 123 --squash --match-head-commit abc123': { code: 0, stdout: '', stderr: '' },
       'gh api repos/octo/repo/branches/main/protection/required_status_checks': { code: 1, stdout: '', stderr: '404' },
@@ -181,30 +190,42 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
     if (!routes[key]) return { code: 1, stdout: '', stderr: 'unexpected ' + key };
     return routes[key];
   };
-  const r = await runMerge('/repo', ['123'], { exec, sleep: async () => {}, home: process.env.HOME });
+  const r = await runMerge(mergeRoot, ['123'], { exec, sleep: async () => {}, home: process.env.HOME });
   assert.equal(r.status, 'merged');
   assert.equal(r.localBranch, 'kept');
   const mergeCall = calls.find(c => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'merge');
   assert.ok(mergeCall);
   assert.equal(mergeCall.args.includes('--delete-branch'), false);
-  assert.ok(calls.some(c => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X'));
+  assert.ok(calls.some(c => c.command === 'gh' && c.args.includes('-X') && c.args.includes('DELETE')));
+  const wtList = calls.find(c => c.command === 'git' && c.args[0] === 'worktree');
+  assert.equal(wtList.cwd, mergeRoot);
 });
 
-test('runMerge uses --delete-branch when no state-holding worktree on head branch', async () => {
+test('runMerge uses --delete-branch when no state-holding worktree on head branch', async t => {
+  const mergeRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-root2-'));
+  t.after(() => fs.rm(mergeRoot, { recursive: true, force: true }));
+  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+  const prViewBody = {
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    baseRefName: 'main',
+    headRefName: 'feat',
+    headRefOid: 'abc123',
+    isCrossRepository: false,
+    statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
+  const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\n`;
   const calls = [];
   const exec = async (command, args, opts = {}) => {
     calls.push({ command, args: [...args], cwd: opts.cwd });
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }), stderr: '' },
-      'gh pr view 123 --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup': { code: 0, stdout: JSON.stringify({
-        state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc123',
-        statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-      }), stderr: '' },
+      [`gh pr view 123 --json ${prViewFields}`]: { code: 0, stdout: JSON.stringify(prViewBody), stderr: '' },
       'gh pr list --repo octo/repo --base feat --state open --json number': { code: 0, stdout: '[]', stderr: '' },
       'gh pr merge 123 --squash --delete-branch --match-head-commit abc123': { code: 0, stdout: '', stderr: '' },
       'gh pr view 123 --json state': { code: 0, stdout: JSON.stringify({ state: 'MERGED' }), stderr: '' },
-      'git worktree list --porcelain': { code: 0, stdout: '', stderr: '' },
+      'git worktree list --porcelain': { code: 0, stdout: porcelain, stderr: '' },
       'git rev-parse --is-inside-work-tree': { code: 0, stdout: 'true\n', stderr: '' },
       'git remote get-url origin': { code: 0, stdout: 'git@github.com:octo/repo.git\n', stderr: '' },
       'git status --porcelain': { code: 0, stdout: '', stderr: '' },
@@ -215,9 +236,10 @@ test('runMerge uses --delete-branch when no state-holding worktree on head branc
     if (!routes[key]) return { code: 1, stdout: '', stderr: 'unexpected ' + key };
     return routes[key];
   };
-  const r = await runMerge('/repo', ['123'], { exec, sleep: async () => {} });
+  const r = await runMerge(mergeRoot, ['123'], { exec, sleep: async () => {} });
   assert.equal(r.status, 'merged');
   assert.equal(r.localBranch, undefined);
   const mergeCall = calls.find(c => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'merge');
   assert.ok(mergeCall.args.includes('--delete-branch'));
+  assert.equal(calls.some(c => c.command === 'gh' && c.args.includes('-X') && c.args.includes('DELETE')), false);
 });

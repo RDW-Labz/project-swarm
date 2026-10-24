@@ -58,17 +58,43 @@ SwapFree:        3145728 kB
 
 describe('readAvailableMemory default exec', () => {
   it('uses defaultMemoryExec when exec is omitted', async () => {
-    const r = await readAvailableMemory({
+    const execFileCalls = [];
+    const fakeExecFile = async (file, args, opts) => {
+      execFileCalls.push({ file, args, opts });
+      if (file === DARWIN_VM_STAT_PATH) return { stdout: DARWIN_VM_STAT };
+      if (file === DARWIN_SYSCTL_PATH) return { stdout: `${DARWIN_SWAP}\n` };
+      throw new Error(`unexpected execFile ${file}`);
+    };
+    const rDarwin = await readAvailableMemory({
       platform: 'darwin',
       os: { platform: () => 'darwin', freemem: () => 1 },
+      defaultMemoryExecOptions: { execFile: fakeExecFile },
     });
-    if (process.platform === 'darwin') {
-      assert.ok(r.availRamGb > 0);
-    } else {
-      assert.equal(r.availRamGb, 1 / 1024 ** 3);
-    }
-    const meminfo = await defaultMemoryExec('read', ['/proc/meminfo']).catch(() => null);
-    if (process.platform === 'linux') assert.match(meminfo, /MemAvailable/);
+    const expectedDarwin = parseDarwinVmStatAndSwap(DARWIN_VM_STAT, `${DARWIN_SWAP}\n`);
+    assert.ok(expectedDarwin);
+    assert.equal(rDarwin.availRamGb, expectedDarwin.availRamGb);
+    assert.equal(execFileCalls.length, 2);
+    assert.equal(execFileCalls[0].file, '/usr/bin/vm_stat');
+    assert.deepEqual(execFileCalls[0].args, []);
+    assert.equal(execFileCalls[1].file, '/usr/sbin/sysctl');
+    assert.deepEqual(execFileCalls[1].args, ['-n', 'vm.swapusage']);
+
+    const readPaths = [];
+    const fakeFs = {
+      readFile: async (p, enc) => {
+        readPaths.push(p);
+        assert.equal(enc, 'utf8');
+        return LINUX_MEMINFO;
+      },
+    };
+    const rLinux = await readAvailableMemory({
+      platform: 'linux',
+      os: { platform: () => 'linux', freemem: () => 1 },
+      defaultMemoryExecOptions: { fs: fakeFs },
+    });
+    assert.deepEqual(readPaths, ['/proc/meminfo']);
+    assert.equal(rLinux.availRamGb, 8);
+    assert.equal(rLinux.swapUsedGb, 1);
   });
 
   it('uses pressure-unknown on darwin when probes fail (not freemem)', async () => {

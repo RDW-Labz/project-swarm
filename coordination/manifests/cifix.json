@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "cifix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/merge-guard.mjs",
+    "tools/autotune.mjs",
+    "tests/state-guard.test.mjs",
+    "tests/memory-fixes.test.mjs"
+   ],
+   "outputs": [
+    "tests/state-guard.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tools/autotune.mjs"
+   ],
+   "prompt": "Three tests fail on CI (Linux and macOS runners) but pass locally; fix only the tests. 1) tests/state-guard.test.mjs, 'runMerge omits --delete-branch when head branch worktree holds state' and 'runMerge uses --delete-branch when no state-holding worktree on head branch' (around line 152): tools/merge-guard.mjs now requires the first gh pr view to carry isCrossRepository exactly false before it deletes a remote branch, and treats an empty or unparsable git worktree list as untrustworthy; the fakes in these two tests must return isCrossRepository: false in the PR view JSON and a healthy non-empty git worktree list --porcelain block (one block for the test root; for the 'holds state' test a second block for the head branch worktree directory that really contains .swarm/project/tickets.json in a temp dir), and must not depend on the real cwd or the real repo; assert exactly what merge-guard does now. 2) tests/memory-fixes.test.mjs, suite 'readAvailableMemory default exec' (test 'uses defaultMemoryExec when exec is omitted', around line 59): it must not depend on the host platform or on real vm_stat, sysctl or /proc: inject platform and a fake exec or a fake child_process execFile function (as defaultMemoryExec allows) and assert that, with no exec given, the default exec is used with the absolute paths /usr/bin/vm_stat and /usr/sbin/sysctl on darwin and reads /proc/meminfo through fs on linux, using injected fakes only. Change nothing in tools/ (if the code gives no injection point for the default exec, add the smallest injection option in tools/autotune.mjs and say so). Run both files with node --test and make them pass on this macOS host, and reason through that they would also pass on Linux (no host-specific files).",
+   "ignoreTests": [
+    "tests/autotune.test.mjs",
+    "tests/guard-backup-fixes2.test.mjs",
+    "tests/guard-backup-fixes5.test.mjs",
+    "tests/memory-aware-limits.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}
