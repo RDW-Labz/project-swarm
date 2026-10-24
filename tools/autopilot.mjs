@@ -909,7 +909,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
           ok = out?.ok !== false;
           if (ok) {
             result = out?.result ?? 'ok';
-            memory.startReadyLastAt = nowMs;
+            if (result !== 'held-memory') memory.startReadyLastAt = nowMs;
           } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
         } catch (error) {
           ok = false;

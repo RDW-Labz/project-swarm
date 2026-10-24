@@ -14,6 +14,13 @@ import { nonBookkeepingOutputs } from '../openrouter.mjs';
 import { looseKillCommands } from '../process-guard.mjs';
 import { resolveToolchainBin } from '../ship.mjs';
 import { resolveBudget } from '../spend.mjs';
+import { readMachine } from '../autotune.mjs';
+import {
+  applyNodeTestConcurrency,
+  isNodeTestCommand,
+  memoryPressureLevel,
+  testConcurrencyFor,
+} from '../machine-limit.mjs';
 import { zeroTestGuard } from '../zero-tests.mjs';
 import { expandCheckArgv, expandRootArgv } from './checks.mjs';
 import { promptPathCovered } from './context.mjs';
@@ -521,7 +528,10 @@ export function parseFinalJson(text) {
   return lastTopLevelObject(text);
 }
 
-export async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null } = {}) {
+const MEMORY_HARD_WAIT_MS = 5 * 60 * 1000;
+const MEMORY_POLL_MS = 15_000;
+
+export async function runChecks(root, checks, integratedFiles, newFiles, spawnImpl, { baseCommit, noFlakeCheck = false, portBase, preChecks = [], extraEnv = {}, env: parentEnv = process.env, gitImpl = git, affected = null, readMachine: readMachineFn = readMachine, memoryPressureSleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   // Field lesson #160: the root's .swarm/env.json (extraEnv) reaches every check, never PATH/HOME.
   const env = portBase != null || Object.keys(extraEnv).length ? { ...parentEnv, ...extraEnv, ...(portBase != null ? { SWARM_PORT_BASE: String(portBase) } : {}) } : parentEnv;
   const results = [];
@@ -566,7 +576,25 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
       }
       resolvedProgram = resolved.path;
     }
-    const runArgv = resolvedProgram ? [resolvedProgram, ...argv.slice(1)] : argv;
+    let runArgv = resolvedProgram ? [resolvedProgram, ...argv.slice(1)] : argv;
+    let memoryPressureWarning = null;
+    if (check.name === 'tests' && isNodeTestCommand(runArgv)) {
+      let machine = await readMachineFn();
+      let pressure = memoryPressureLevel(machine);
+      if (pressure === 'hard') {
+        const deadline = Date.now() + MEMORY_HARD_WAIT_MS;
+        const maxPolls = Math.ceil(MEMORY_HARD_WAIT_MS / MEMORY_POLL_MS);
+        let polls = 0;
+        while (pressure === 'hard' && polls < maxPolls && Date.now() < deadline) {
+          await memoryPressureSleep(MEMORY_POLL_MS);
+          polls += 1;
+          machine = await readMachineFn();
+          pressure = memoryPressureLevel(machine);
+        }
+        if (pressure === 'hard') memoryPressureWarning = 'ran under memory pressure';
+      }
+      runArgv = applyNodeTestConcurrency(runArgv, testConcurrencyFor(machine));
+    }
     // repeat runs the same check up to `repeat` times and stops at the first non-passing run.
     const repeat = check.repeat ?? 1;
     let result, runs = 0, failedFile, outputWindow = '', swarmLineCount = 0;
@@ -590,6 +618,7 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
     if (swarmLineCount) result.swarmLineCount = swarmLineCount;
     // A test check that passed but ran no test is a failure (the wrong runner for these files looks green).
     result = zeroTestGuard(check, result);
+    if (memoryPressureWarning) result = { ...result, warning: memoryPressureWarning };
     if (affectedMode) { result.mode = 'affected'; result.affectedTests = affectedMode.tests; }
     // Field lesson #239: the orchestrator's own run outside the sandbox is the truth — a check
     // whose output shows it never really ran (macOS denying a nested sandbox_apply call) is tagged

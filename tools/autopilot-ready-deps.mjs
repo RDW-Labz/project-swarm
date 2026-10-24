@@ -3,8 +3,14 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readMachine } from './autotune.mjs';
 import { listRequests } from './handbuild.mjs';
 import { loadLocalConfig, resolveAutopilotStartReady } from './local-config.mjs';
+import {
+  effectiveMachineLimit,
+  memoryPressureHoldLine,
+  memoryPressureLevel,
+} from './machine-limit.mjs';
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
@@ -47,7 +53,10 @@ export function readyAutopilotDeps(projectRoot, {
   checkProjectCap,
   readTickets,
   readPending,
+  readMachine: readMachineImpl = readMachine,
+  log = line => process.stderr.write(`${line}\n`),
 } = {}) {
+  const memoryAware = env === process.env;
   const rootForMarkers = projectRoot;
 
   async function allTickets(root) {
@@ -92,8 +101,8 @@ export function readyAutopilotDeps(projectRoot, {
     },
 
     async autopilotStartReadySettings(root, { freeSlots } = {}) {
-      let machine = null;
-      try { machine = loadLocalConfig({ env })?.autopilot ?? null; } catch { machine = null; }
+      let autopilotCfg = null;
+      try { autopilotCfg = loadLocalConfig({ env })?.autopilot ?? null; } catch { autopilotCfg = null; }
       let project = null;
       try {
         const pointer = JSON.parse(await fsPromises.readFile(path.join(path.resolve(root), '.project-swarm.json'), 'utf8'));
@@ -101,12 +110,30 @@ export function readyAutopilotDeps(projectRoot, {
       } catch { project = null; }
       const tickets = await allTickets(root);
       const doneTicketCount = (Array.isArray(tickets) ? tickets : []).filter(t => t?.status === 'done').length;
-      return resolveAutopilotStartReady({ machine, project, freeSlots, doneTicketCount });
+      const settings = resolveAutopilotStartReady({ machine: autopilotCfg, project, freeSlots, doneTicketCount });
+      if (!memoryAware) return settings;
+      let config = {};
+      try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
+      const hw = await readMachineImpl();
+      const ceiling = Number.isInteger(settings?.maxJobs) && settings.maxJobs > 0 ? settings.maxJobs : 1;
+      const { effective } = effectiveMachineLimit({ limit: ceiling, machine: hw, config });
+      return { ...settings, maxJobs: Math.min(ceiling, effective) };
     },
 
     async startScope({ root, maxJobs, skipSkeleton = false }) {
       const cwd = path.resolve(root);
-      const jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
+      let jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
+      if (memoryAware) {
+        let config = {};
+        try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
+        const hw = await readMachineImpl();
+        if (memoryPressureLevel(hw) === 'hard') {
+          log(memoryPressureHoldLine(hw));
+          return { ok: true, result: 'held-memory' };
+        }
+        const { effective } = effectiveMachineLimit({ limit: jobs, machine: hw, config });
+        jobs = Math.min(jobs, effective);
+      }
       const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
       if (skipSkeleton) args.push('--skip-skeleton');
       try {
