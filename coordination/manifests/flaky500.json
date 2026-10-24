@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "flaky500",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "The test '500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare lazily' in tests/lanes-run.test.mjs fails intermittently under load (it fails in about half of the local full-suite runs and breaks the merge-queue test gate of the wide waves: 'tests # fail 1, origin pre-existing'). Make it deterministic without weakening what it asserts: find what is timing dependent (real timers, setTimeout-based fake adapter delays, wall-clock expectations on peak concurrency or elapsed time, ordering of 429 retries, a fixed small sleep waiting for lazy prepare) and replace it with injectable clocks, explicit synchronisation (promises resolved by the test, a barrier or a counter) and assertions on counts and invariants (never above the cap, every job eventually done, 429 retried N times, lazy prepare called only for started jobs) rather than on elapsed milliseconds. Run the test file 30 times in a row, and 10 times while the machine is loaded (run it alongside another busy node process), and show zero failures. Also look in tests/spend.test.mjs for the concurrency test the mini reported as flaky ('unrelated flaky concurrency test in spend.test.mjs') and fix it the same way if it is timing based. Test-only changes.",
+   "context": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs",
+    "tools/lanes.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/lanes-run.test.mjs",
+    "tests/spend.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "test-only change; full suite before merge"
+  }
+ ]
+}
