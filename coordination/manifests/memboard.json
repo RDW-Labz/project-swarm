@@ -1,0 +1,72 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "memlimit",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "tools/autotune.mjs",
+    "tools/machine-limit.mjs",
+    "tests/autotune.test.mjs",
+    "tests/machine-limit.test.mjs"
+   ],
+   "outputs": [
+    "tools/autotune.mjs",
+    "tools/machine-limit.mjs",
+    "tests/autotune.test.mjs",
+    "tests/machine-limit.test.mjs",
+    "tests/memory-aware-limits.test.mjs"
+   ],
+   "prompt": "A wide wave plus the test gate ran this Mac out of memory and it rebooted. Make the machine limit memory-aware, with real available memory and swap, and make every heavy consumer obey it. 1) In tools/autotune.mjs readMachine: os.freemem() is wrong on macOS (it ignores reclaimable cache). Add readAvailableMemory({platform, exec, os}) that on darwin parses vm_stat (free + inactive + speculative + purgeable pages, page size from the header) and swap from sysctl vm.swapusage, on linux reads MemAvailable and SwapFree/SwapTotal from /proc/meminfo, and falls back to os.freemem() when parsing fails. readMachine returns availRamGb, swapUsedGb, swapTotalGb besides the old fields (keep freeRamGb meaning available memory so old callers work). Make the exec injectable so tests need no real commands. 2) Pressure levels: ok, soft, hard. hard = available under 3 GB or swap used over 4 GB or over 60 percent of swap total; soft = available under 6 GB or swap used over 1 GB. The tuner backs off at soft (limit times 0.75, floor 2) and drops to the floor at hard; it never steps up above soft. Back off BEFORE pressure: also project memory per running job (about 0.6 GB each, configurable machine.jobMemoryGb) and cap the limit at floor((available minus 3) divided by jobMemoryGb). 3) Add testConcurrencyFor(machine) in tools/machine-limit.mjs returning 1 at hard, 2 at soft, else min(4, cores/2), and export it. 4) Wire it in: find where a wave (swarm go --scope --wave, --max-jobs and the concurrency of the run) and autopilot start jobs and where the merge-queue test gate runs the profile verify command, and make both read resolveMachineLimit and the pressure level: starting jobs is capped by the limit minus running jobs, at hard no new job starts (log one line: held by memory pressure, with the numbers), and the gate passes the computed test concurrency by replacing or adding a --test-concurrency=N argument for node --test commands only (never for other commands). Re-check pressure right before each batch of starts and before each gate run. 5) Tests in tests/memory-aware-limits.test.mjs: vm_stat and /proc/meminfo parsing from fixture text, the pressure levels, the projection cap, testConcurrencyFor, and the wiring (a fake machine at hard starts zero jobs; at soft the cap shrinks). No real process or machine reads in tests. 6) docs/memory-limits.md (new file): a short page with the thresholds and the config keys. Keep existing tests passing; adapt tests/autotune.test.mjs and tests/machine-limit.test.mjs only where the contract changed.",
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
+  },
+  {
+   "id": "boardkeep",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "tools/watch-cli.mjs",
+    "tools/watch-server.mjs"
+   ],
+   "outputs": [
+    "tools/watch-cli.mjs",
+    "tools/board-keepalive.mjs",
+    "tests/board-keepalive.test.mjs",
+    "docs/board.md"
+   ],
+   "prompt": "Add a stay-up mode to the board so a launchd service keeps one link and one phone bookmark. New flag: swarm watch --all --keep-up [--port N]. In this mode: 1) the board never stops when idle (idleMs Infinity, the same as the remote board uses); 2) the token and the port persist across restarts: tools/board-keepalive.mjs exports loadOrCreateBoardIdentity({dir, fs, randomBytes, port}) which reads board-identity.json from the user config directory (same place the other per-user files live; mode 0600, directory 0700, written atomically through a temp file and rename), creates 24 random bytes of hex for the token and picks the port (default 51058, or --port, or the saved one) on first run, and reuses both on every later start; a corrupt, wrong-mode, symlinked or non-owned file is replaced with a fresh identity and a warning line, never trusted; 3) if the saved port is taken by something else, fail with a clear message instead of picking another port (the bookmark must stay valid); 4) bind to 127.0.0.1 only, as today; 5) the printed link is stable. Use the existing fixed port and token options of the watch server (see how swarm remote starts the board with port, token and idleMs Infinity) and do not weaken any auth check. Tests in tests/board-keepalive.test.mjs with an injected fs and random source: first run creates, second run reuses the same token and port, corrupt file replaced, bad mode replaced, symlink refused, port busy fails, the file is never created world-readable. docs/board.md: a short Stay-up section with the launchd setup line. Do not log the token anywhere except the one printed link.",
+   "ignoreTests": [
+    "tests/board-accuracy-activity.test.mjs",
+    "tests/board-inbox.test.mjs",
+    "tests/board-live.test.mjs",
+    "tests/board-nav.test.mjs",
+    "tests/board-no-money.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/board-page.test.mjs",
+    "tests/board-projects-filter.test.mjs",
+    "tests/board-run-federation.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gallery-tickets.test.mjs",
+    "tests/machine-share.test.mjs",
+    "tests/remote.test.mjs",
+    "tests/restart-any-server.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/server-record-version.test.mjs",
+    "tests/server-restart-review.test.mjs",
+    "tests/server-restart-round2.test.mjs",
+    "tests/server-restart-round3.test.mjs",
+    "tests/server-restart.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/update-pending-round3.test.mjs",
+    "tests/watch-leftovers.test.mjs",
+    "tests/watch-ui.test.mjs"
+   ]
+  }
+ ]
+}
