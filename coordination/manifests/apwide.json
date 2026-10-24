@@ -1,0 +1,67 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "apwide",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Autopilot must start wide waves by default. Today tools/autopilot.mjs start-ready (around lines 850-915) starts ONE ticket per pass (startable.slice(0, 1)) and only batches (planWaveBatch) after three consecutive under-filled runs (underfilledWaves), and tools/autopilot-ready-deps.mjs startScope spawns plain 'swarm go --scope' ignoring the chosen ticket ids, so the wave width is left to go --scope, which is held to one ticket by the skeleton gate (skeleton-first rule in docs/ci-hooks.md) and by its default job cap. Required behaviour: (1) On every pass where start-ready fires, start ALL startable tickets up to the free worker slots (use deps.workerSlots free, else max; also respect the project cap room and the per-lane caps as before): replace the one-per-pass and 'batch after 3 under-filled runs' logic with direct planWaveBatch over every startable ticket limited to the free slots (keep planWaveBatch's conflict rules: tickets sharing files stay in sequence, held ids and dependencies respected); delete the underfilled counters if nothing else uses them (check tools/board-data.mjs idle detection before removing shared helpers; if the board uses underfilledWaves for its 'waves of 1' warning keep that helper and only stop autopilot from depending on it). (2) startScope must pass the wave on: spawn 'swarm --root R go --scope --max-jobs N' with N = the planned batch size (and --skip-skeleton when allowed, see 3) so the spawned run really starts those tickets. (3) Skeleton gate: a new config section autopilot in the machine or project config (look at how other autopilot settings such as interval are read, for example tools/local-config.mjs and the profile reader) with skipSkeleton: true | false | 'auto' (default 'auto') and maxJobs (default: the free slots, hard ceiling 64). 'auto' means skip the skeleton gate once the project has at least 10 tickets in done status (the day-0 purpose of the skeleton is over), and keep it for a fresh project; validate the settings (reject unknown keys, non-integer maxJobs, values over the ceiling) like other config blocks. (4) Document in docs/autopilot.md (find the existing autopilot doc; add a 'Wide waves' section) and in the changelog entry text I will add at release time nothing is needed now. Tests in tests/autopilot-wide-waves.test.mjs using the existing autopilot test helpers (see tests/autopilot-start-ready.test.mjs and tests/autopilot-ready-deps tests): 12 ready independent tickets with 8 free slots start 8 in one pass in one startScope call with maxJobs 8; tickets sharing a file are not started together; skeleton auto: 10 done tickets means --skip-skeleton is passed, fresh project (0 done) does not pass it; config skipSkeleton false never passes it and true always does; maxJobs from config is respected and capped at 64; a live run, busy marker or no cap room still prevents a start; the spawned argv contains --max-jobs and (when allowed) --skip-skeleton. Update existing autopilot tests that asserted the one-ticket-per-pass rule (tests/autopilot-start-ready.test.mjs, tests/autopilot-quiet-poll.test.mjs and any other) to the new rule. Keep every other autopilot, board and scope test passing.",
+   "context": [
+    "tools/autopilot.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/projects-autopilot.mjs",
+    "tools/local-config.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/local-config.mjs",
+    "docs/autopilot.md",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot.test.mjs"
+   ],
+   "timeoutMs": 3600000,
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/config-private-names.test.mjs",
+    "tests/field-lessons-batch-m2.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/sandbox-tmp.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/verify-orb.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ],
+   "ignoreTestsReason": "autopilot tests in context; full suite before merge"
+  }
+ ]
+}

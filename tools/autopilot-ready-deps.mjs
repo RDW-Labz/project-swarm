@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listRequests } from './handbuild.mjs';
+import { loadLocalConfig, resolveAutopilotStartReady } from './local-config.mjs';
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
@@ -48,7 +50,13 @@ export function readyAutopilotDeps(projectRoot, {
 } = {}) {
   const rootForMarkers = projectRoot;
 
+  async function allTickets(root) {
+    return readTickets(root);
+  }
+
   return {
+    readTickets: allTickets,
+
     async readyTickets(root) {
       const tickets = await readTickets(root);
       const list = Array.isArray(tickets) ? tickets : [];
@@ -83,10 +91,26 @@ export function readyAutopilotDeps(projectRoot, {
       return capped == null;
     },
 
-    async startScope({ root }) {
-      const cwd = path.resolve(root);
+    async autopilotStartReadySettings(root, { freeSlots } = {}) {
+      let machine = null;
+      try { machine = loadLocalConfig({ env })?.autopilot ?? null; } catch { machine = null; }
+      let project = null;
       try {
-        const child = spawnImpl(process.execPath, [swarmEntry, '--root', cwd, 'go', '--scope'], {
+        const pointer = JSON.parse(await fsPromises.readFile(path.join(path.resolve(root), '.project-swarm.json'), 'utf8'));
+        project = pointer?.autopilot ?? null;
+      } catch { project = null; }
+      const tickets = await allTickets(root);
+      const doneTicketCount = (Array.isArray(tickets) ? tickets : []).filter(t => t?.status === 'done').length;
+      return resolveAutopilotStartReady({ machine, project, freeSlots, doneTicketCount });
+    },
+
+    async startScope({ root, maxJobs, skipSkeleton = false }) {
+      const cwd = path.resolve(root);
+      const jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
+      const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
+      if (skipSkeleton) args.push('--skip-skeleton');
+      try {
+        const child = spawnImpl(process.execPath, args, {
           detached: true,
           stdio: 'ignore',
           env,

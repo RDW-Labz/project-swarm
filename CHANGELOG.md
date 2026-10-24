@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.10
+
+Autopilot starts wide waves by default.
+- **Autopilot:** every pass starts all startable tickets up to the free slots (tickets that share files stay in sequence), passes --max-jobs and an automatic skeleton skip once the project has 10 done tickets; the autopilot config section has skipSkeleton (true, false or auto) and maxJobs (ceiling 64).
+- **Routing:** lane pass rates are read from the project being routed, not from the process directory.
+- **Tests:** the 500-job lane test no longer depends on wall-clock time.
+
 ## 1.167.9
 
 Ticket jobs can finally run on the local lane.

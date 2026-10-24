@@ -66,6 +66,9 @@ function scopeDeps(overrides = {}) {
     liveRuns: async () => (typeof overrides.liveRuns === 'function' ? await overrides.liveRuns() : overrides.liveRuns ?? []),
     busyMarkers: async () => (typeof overrides.busyMarkers === 'function' ? await overrides.busyMarkers() : overrides.busyMarkers ?? []),
     capRoom: async () => (typeof overrides.capRoom === 'function' ? await overrides.capRoom() : overrides.capRoom ?? true),
+    workerSlots: async () => (typeof overrides.workerSlots === 'function' ? await overrides.workerSlots() : overrides.workerSlots ?? { max: 8, free: 8 }),
+    readTickets: async () => tickets,
+    autopilotStartReadySettings: async () => overrides.waveSettings ?? { skipSkeleton: false, maxJobs: 8 },
     ...overrides.deps,
   });
   deps.startScope = async arg => {
@@ -122,19 +125,29 @@ test('pickReadyTickets holds when a concrete approval path matches a ticket glob
 test('starts go --scope once when ready tickets exist and nothing runs', async t => {
   const root = await tempRoot(t);
   const journal = [];
+  const tickets = [ticket('T-1', ['src/x.ts'])];
   const deps = fakeDeps({
     journal,
     runs: [],
-    readyTickets: async () => [ticket('T-1', ['src/x.ts'])],
+    readyTickets: async () => tickets,
+    readTickets: async () => tickets,
     pendingApprovals: async () => [],
     liveRuns: async () => [],
     busyMarkers: async () => [],
     capRoom: async () => true,
-    startScope: async ({ root: r }) => { deps.calls.push(['startScope', { root: r }]); return { ok: true, result: 'started' }; },
+    workerSlots: async () => ({ max: 8, free: 8 }),
+    autopilotStartReadySettings: async () => ({ skipSkeleton: false, maxJobs: 8 }),
+    startScope: async arg => { deps.calls.push(['startScope', arg]); return { ok: true, result: 'started' }; },
   });
   const step = await autopilotStep(root, deps, { now: () => NOW });
   assert.equal(callsNamed(deps, 'startScope').length, 1);
-  assert.deepEqual(callsNamed(deps, 'startScope')[0][1], { root });
+  assert.deepEqual(callsNamed(deps, 'startScope')[0][1], {
+    root,
+    ticketIds: ['T-1'],
+    maxJobs: 1,
+    skipSkeleton: false,
+    batched: false,
+  });
   assert.equal(step.actions.filter(a => a.action === 'start-ready').length, 1);
   assert.equal(step.actions[0].ok, true);
   const event = journal.find(e => e.kind === 'action' && e.action === 'start-ready');

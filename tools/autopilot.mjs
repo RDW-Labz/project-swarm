@@ -7,7 +7,6 @@ import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
 import { filterGeneratedStatus } from './generated-state.mjs';
-import { underfilledWaves } from './board-data.mjs';
 import { planWaveBatch } from './wave-batch.mjs';
 import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
 import { noteAutopilotStep } from './orchestrator-context.mjs';
@@ -876,36 +875,48 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         if (typeof deps.workerSlots === 'function') {
           try { workerSlots = await deps.workerSlots(root); } catch { workerSlots = null; }
         }
-        const slots = Number.isInteger(workerSlots?.free) ? workerSlots.free
+        const freeSlots = Number.isInteger(workerSlots?.free) ? workerSlots.free
           : (Number.isInteger(workerSlots?.max) ? workerSlots.max : null);
-        const recentCounts = typeof deps.recentJobCounts === 'function'
-          ? await safe(() => deps.recentJobCounts(root), null)
-          : runs.slice(-6).map(runJobCount);
-        const underfilled = slots !== null && underfilledWaves(Array.isArray(recentCounts) ? recentCounts : [], slots);
-        const doneTicketIds = new Set((Array.isArray(ticketList) ? ticketList : []).filter(t => t?.status === 'done').map(t => t.id));
+        let doneTicketIds = new Set();
+        if (typeof deps.readTickets === 'function') {
+          const allTickets = await safe(() => deps.readTickets(root), []);
+          doneTicketIds = new Set((Array.isArray(allTickets) ? allTickets : []).filter(t => t?.status === 'done').map(t => t.id));
+        } else {
+          doneTicketIds = new Set((Array.isArray(ticketList) ? ticketList : []).filter(t => t?.status === 'done').map(t => t.id));
+        }
         const heldIds = new Set((held ?? []).map(t => t.id));
-        const batch = underfilled && slots > 1 && startable.length >= slots
-          ? planWaveBatch(startable, { slots, doneTicketIds, heldIds })
-          : startable.slice(0, 1);
-        const waveTickets = batch.length ? batch : startable.slice(0, 1);
+        let waveSettings = { skipSkeleton: false, maxJobs: freeSlots ?? 1 };
+        if (typeof deps.autopilotStartReadySettings === 'function') {
+          waveSettings = await safe(() => deps.autopilotStartReadySettings(root, { freeSlots }), waveSettings);
+        }
+        const slotLimit = Number.isInteger(waveSettings?.maxJobs) && waveSettings.maxJobs > 0
+          ? waveSettings.maxJobs
+          : (Number.isInteger(freeSlots) && freeSlots > 0 ? freeSlots : 1);
+        const waveTickets = planWaveBatch(startable, { slots: slotLimit, doneTicketIds, heldIds });
         const ids = waveTickets.map(t => t.id).slice(0, 8);
         const reason = `${startable.length} startable ticket(s)${ids.length ? `: ${ids.join(', ')}` : ''}`;
         let ok = true;
         let result = 'ok';
         try {
           if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
-          const out = await deps.startScope({ root, ticketIds: waveTickets.map(t => t.id), batched: waveTickets.length > 1 });
+          const out = await deps.startScope({
+            root,
+            ticketIds: waveTickets.map(t => t.id),
+            maxJobs: waveTickets.length || slotLimit,
+            skipSkeleton: waveSettings?.skipSkeleton === true,
+            batched: waveTickets.length > 1,
+          });
           ok = out?.ok !== false;
           if (ok) {
             result = out?.result ?? 'ok';
             memory.startReadyLastAt = nowMs;
-            if (waveTickets.length > 1) {
-              await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave because waves were under-filled` });
-            }
           } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
         } catch (error) {
           ok = false;
           result = String(error?.message ?? error).slice(0, RESULT_LIMIT);
+        }
+        if (ok && waveTickets.length > 1) {
+          await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave` }, { incidental: true });
         }
         await write({ kind: 'action', action: 'start-ready', reason, result });
         actions.push({ action: 'start-ready', ok, result, reason });
