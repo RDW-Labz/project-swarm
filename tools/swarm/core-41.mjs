@@ -18,9 +18,25 @@ import { bytesAt, expandContextGlobs, parseFinalJson, validateManifest, write } 
 import { mutantCheckSpec } from './mutants.mjs';
 import { ASK_ROUTE_INVALID, ID, MAX_FILE, SANDBOX_CANNOT_START_RE, TIERS, UV_LOCK_PATH_SOURCE_RE } from './patterns.mjs';
 import { isWorktreeWriter } from './workspace.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+const routingRootStore = new AsyncLocalStorage();
+
+/** Propagate a project root to pickJobRoute when callers cannot pass options.root (legacy internal paths). */
+export function runWithRoutingRoot(root, fn) {
+  const resolved = typeof root === 'string' && root ? path.resolve(root) : root;
+  return routingRootStore.run(resolved, fn);
+}
+
+function routingRootFor(options = {}) {
+  if (options.root != null && options.root !== '') return options.root;
+  const stored = routingRootStore.getStore();
+  if (stored != null && stored !== '') return stored;
+  return undefined;
+}
 
 async function recordIntegratedHashes(root, state, paths) {
   const merged = { ...(state.integratedHashes && typeof state.integratedHashes === 'object' && !Array.isArray(state.integratedHashes) ? state.integratedHashes : {}) };
@@ -462,7 +478,8 @@ export async function privateNamesDispatchGuard(root, manifest, { exec = execFil
 }
 
 function pickJobRoute(job, lanes, options = {}) {
-  const passFailures = options.passRateFailures ?? passRateFailuresFor(options.root ?? process.cwd());
+  const root = routingRootFor(options);
+  const passFailures = options.passRateFailures ?? passRateFailuresFor(root);
   const failures = { ...(options.failures ?? {}) };
   for (const agent of new Set([...Object.keys(lanes ?? {}), ...Object.keys(options.failures ?? {}), ...Object.keys(passFailures ?? {})])) {
     failures[agent] = Math.max(options.failures?.[agent] ?? 0, passFailures?.[agent] ?? 0);
