@@ -1,0 +1,60 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "localcache",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Bug found while checking why the local (dev2) lane never took a ticket: ticket jobs carry cacheContext (shared context files for prompt caching), and the router's candidate check (pickJobRoute in tools/swarm/core-41.mjs runs validateManifest on the candidate with agent local) fails with 'Job T-0153: cacheContext is for the anthropic lane (agent anthropic or auto)' (tools/swarm/core-31.mjs around line 424-426), so the local lane is silently rejected for every ticket job and the work goes to Anthropic. Fix: cacheContext is accepted on the local lane too (the local adapter simply ignores it: confirm executeApi for agent local does not send cache_control and does not break on the field; if it uses anthropicUserContent for local make sure no cache_control block is produced for local). Keep refusing cacheContext for CLI agents (cursor, codex, claude, hermes etc.). Make withoutApiOnlyFields/the CLI stripping consistent with API_AGENTS including local. Tests in tests/local-lane-cache-context.test.mjs: validateManifest accepts a local job with cacheContext; validateProject on a test-type ticket job with cacheContext and a configured local endpoint routes to local (use the existing fixtures of tests/local-lane.test.mjs); the local request body contains no cache_control; a cursor job with cacheContext is still refused. Keep tests/local-lane*.test.mjs, tests/api-workers.test.mjs, tests/anthropic-lane.test.mjs, tests/ticket-manifest.test.mjs and tests/cache-context-normalize.test.mjs passing.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/swarm/patterns.mjs",
+    "tools/api-adapters.mjs",
+    "tools/local-lane.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/cache-context-normalize.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/swarm/patterns.mjs",
+    "tools/api-adapters.mjs",
+    "tests/local-lane-cache-context.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/best-of-adapter.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-n.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-y-adapters.test.mjs",
+    "tests/gpu-lineup.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/ignore-tests-reason.test.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/multi-edit.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/review-structured-verdict.test.mjs",
+    "tests/run-cleanup.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ],
+   "ignoreTestsReason": "local lane tests in context; full suite before merge"
+  }
+ ]
+}

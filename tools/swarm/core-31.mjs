@@ -423,7 +423,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     if (job.acceptance !== undefined && (!Array.isArray(job.acceptance) || job.acceptance.length > 20 || job.acceptance.some(item => typeof item !== 'string' || !item.trim() || item.length > 300))) fail(`Job ${job.id}: acceptance must be a list of at most 20 non-empty strings of at most 300 characters`, 'acceptance-invalid');
     if (job.cacheContext !== undefined) {
       if (!Array.isArray(job.cacheContext) || !job.cacheContext.length || job.cacheContext.length > 10 || job.cacheContext.some(file => typeof file !== 'string' || !(job.context ?? []).includes(file)) || new Set(job.cacheContext).size !== job.cacheContext.length) fail(`Job ${job.id}: cacheContext must be 1-10 unique paths that are also in context`, 'cache-context-invalid');
-      if (!['anthropic', 'auto'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for the anthropic lane (agent anthropic or auto)`, 'cache-context-invalid');
+      if (!['anthropic', 'auto', 'local'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for API lanes that honor prompt caching (agent anthropic, local, or auto)`, 'cache-context-invalid');
     }
     if (job.allowProtectedContext !== undefined && (typeof job.allowProtectedContext !== 'string' || !job.allowProtectedContext.trim() || job.allowProtectedContext.length > 200)) fail(`Job ${job.id}: allowProtectedContext must be a reason of 1-200 characters`, 'allow-protected-context-invalid');
   }

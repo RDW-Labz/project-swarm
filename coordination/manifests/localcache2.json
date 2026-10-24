@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "localcache2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "In tests/phase14.test.mjs the test 'cacheContext is only for Anthropic jobs, 1-10 unique paths that are in context' fails because the local lane now also accepts cacheContext (it is ignored there). Update only that test: rename it to say cacheContext is for the Anthropic and local lanes, assert that anthropic, auto and local jobs accept a valid cacheContext, that CLI agents (cursor, codex, claude, hermes) are still refused, and keep the 1-10 unique paths in context assertions. Test-only change.",
+   "context": [
+    "tests/phase14.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tools/swarm/core-31.mjs"
+   ],
+   "outputs": [
+    "tests/phase14.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [],
+   "ignoreTestsReason": "local lane tests in context; full suite before merge"
+  }
+ ]
+}
