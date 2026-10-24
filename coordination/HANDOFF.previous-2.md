@@ -6,6 +6,7 @@
 Project Swarm brief
 Goal: none
 Done:
+  - run 1792875550293-833e09a0 integrated, 2 files
   - run 1792875196984-a733a9b7 integrated, 1 files
 Running: none
 Needs the owner: none
@@ -27,7 +28,7 @@ Pending approvals:
 - blocker integrate-checkout-1792791281210-3f0b5adc 23h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
 - owner-decision approve-co001-final 24h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
 - blocker integrate-checkout-1792785769763-a5ddac51 24h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
-- blocker integrate-checkout-1792785605062-2c3e9b27 24h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
+- blocker integrate-checkout-1792785605062-2c3e9b27 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
 - blocker integrate-checkout-1792784756684-f6cf750c 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
 - blocker split-park-S10-T-0351 25h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
 - blocker integrate-checkout-1792766283201-bba38c87 30h branch swarm/wide-wave /Users/bean/.project-swarm-scratch/widewave
@@ -60,4 +61,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-24T20:58:48.237Z
+Generated at: 2026-10-24T21:04:24.985Z

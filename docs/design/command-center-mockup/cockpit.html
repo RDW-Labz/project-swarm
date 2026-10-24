@@ -68,7 +68,41 @@
     .skip { position: absolute; left: -9999px; }
     .skip:focus { left: 8px; top: 8px; z-index: 99; padding: 8px 12px; background: var(--card); border-radius: var(--r-sm); }
 
-    .shell { max-width: 1440px; margin: 0 auto; padding: 0 16px 32px; }
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 16px 20px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .sample-badge {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 0 5px;
+      border-radius: var(--pill);
+      border: 1px solid var(--line);
+      background: #1a181c;
+      color: var(--faint);
+      font-size: 0.5rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      vertical-align: middle;
+    }
+
+    .illus-banner {
+      margin: 0 0 10px;
+      padding: 8px 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line-soft);
+      background: rgba(12, 10, 14, 0.85);
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
 
     /* —— App chrome —— */
     .app-nav {
@@ -91,14 +125,23 @@
     .nav-stats {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px 14px;
+      gap: 8px 12px;
       font-family: var(--mono);
       font-size: 0.68rem;
       text-transform: uppercase;
       color: var(--muted);
+      min-width: 0;
+      flex: 1 1 200px;
     }
-    .nav-stats .pair { display: inline-flex; gap: 4px; align-items: baseline; }
+    .nav-stats .pair {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px 6px;
+      align-items: baseline;
+      max-width: 100%;
+    }
     .nav-stats .val { color: var(--fg); font-variant-numeric: tabular-nums; }
+    .nav-stats .slash { color: var(--faint); margin: 0 2px; }
     .nav-crumb {
       flex: 1 1 200px;
       font-family: var(--mono);
@@ -152,7 +195,7 @@
     .panel-hive { display: none; }
     .panel-cockpit { display: block; }
 
-    @media (max-width: 480px) {
+    @media (max-width: 520px) {
       .view-tabs { display: flex; }
       .panel-hive[data-active="true"] { display: block; }
       .panel-cockpit[data-active="false"] { display: none; }
@@ -175,29 +218,46 @@
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
-      gap: 8px;
-      padding: 14px 0 10px;
+      gap: 10px 16px;
+      padding: 10px 0 8px;
       font-family: var(--mono);
-      font-size: 0.7rem;
+      font-size: clamp(0.72rem, 1.6vw, 0.88rem);
       text-transform: uppercase;
       color: var(--cockpit-teal);
       border-bottom: 1px solid var(--line-soft);
-      margin-bottom: 12px;
+      margin-bottom: 10px;
+      font-variant-numeric: tabular-nums;
     }
+    .cockpit-nav .sep { color: var(--faint); margin: 0 6px; }
+    .cockpit-nav .nav-block { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; min-width: 0; }
     .cockpit-hero h1 {
       margin: 0;
-      font-size: clamp(1.75rem, 4vw, 2.75rem);
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      line-height: 1.05;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 12px;
+      font-family: "Arial Narrow", "Helvetica Neue", system-ui, sans-serif;
+      font-size: clamp(1.85rem, 4.2vw, 3.1rem);
+      font-weight: 900;
+      font-stretch: condensed;
+      letter-spacing: -0.03em;
+      line-height: 0.95;
+      text-transform: uppercase;
+    }
+    .cockpit-hero .headline-num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
     }
     .cockpit-hero .tagline {
-      margin: 8px 0 0;
-      font-size: clamp(0.85rem, 2vw, 1.05rem);
-      font-weight: 700;
+      margin: 6px 0 0;
+      font-size: clamp(0.78rem, 2.2vw, 1.15rem);
+      font-weight: 800;
       text-transform: uppercase;
       color: var(--cockpit-orange);
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
+      line-height: 1.2;
+      max-width: 42rem;
     }
     .category-bar {
       margin-top: 16px;
@@ -236,42 +296,62 @@
     .scan-live {
       margin-top: 10px;
       display: flex;
+      flex-wrap: wrap;
       justify-content: flex-end;
+      align-items: baseline;
+      gap: 10px 14px;
       font-family: var(--mono);
-      font-size: 0.68rem;
+      font-size: clamp(0.68rem, 1.5vw, 0.82rem);
       text-transform: uppercase;
       color: var(--muted);
+      font-variant-numeric: tabular-nums;
     }
+    .scan-live-label {
+      color: var(--cockpit-teal);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+    }
+    .scan-live-count {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      color: var(--fg);
+      font-weight: 700;
+    }
+    .scan-of { color: var(--faint); font-weight: 600; }
 
     /* —— Stage —— */
     .stage-wrap {
       position: relative;
-      margin: 20px 0;
-      padding: 20px 8px 24px;
+      margin: 10px 0;
+      padding: 12px 6px 14px;
       border-radius: var(--r-lg);
       background:
         linear-gradient(180deg, var(--cockpit-warm), var(--card)),
         repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px),
         repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px);
       border: 1px solid var(--line);
+      min-width: 0;
     }
     .stage-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(140px, 220px) minmax(0, 1fr);
-      gap: 8px 12px;
-      align-items: start;
+      grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) minmax(0, 1fr);
+      gap: 2px 6px;
+      align-items: center;
     }
     @media (max-width: 900px) {
-      .stage-grid { grid-template-columns: 1fr; }
+      .stage-grid { grid-template-columns: 1fr; gap: 10px; }
       .stage-center { order: -1; }
       .ticket-col { max-width: 100%; }
+      .ticket-col--left .ticket-row,
+      .ticket-col--right .ticket-row { margin-left: 0 !important; margin-right: 0 !important; }
     }
 
-    .ticket-col { display: flex; flex-direction: column; gap: 6px; }
-    .ticket-col--right .ticket-row { margin-left: auto; max-width: 100%; }
+    .ticket-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .ticket-col--right .ticket-row { margin-left: auto; }
 
     .ticket-search {
-      margin-bottom: 10px;
+      margin-bottom: 6px;
       display: flex;
       flex-direction: column;
       gap: 4px;
@@ -297,17 +377,18 @@
 
     .ticket-row {
       display: grid;
-      grid-template-columns: 36px 1fr auto auto;
-      gap: 8px;
+      grid-template-columns: 32px minmax(0, 1fr) auto 18px;
+      gap: 6px;
       align-items: center;
-      min-height: var(--tap);
-      padding: 6px 10px;
+      min-height: 34px;
+      padding: 4px 8px;
       border-radius: var(--r-sm);
       border: 1px solid var(--cockpit-orange-dim);
       background: rgba(12, 10, 14, 0.75);
       font-family: var(--mono);
-      font-size: 0.72rem;
-      max-width: 280px;
+      font-size: 0.66rem;
+      width: 100%;
+      max-width: 100%;
       transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast);
     }
     .ticket-row[data-hidden="true"] { display: none; }
@@ -323,14 +404,17 @@
       align-items: center;
       justify-content: center;
       width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: rgba(201, 120, 74, 0.25);
+      height: 26px;
+      flex: none;
+      border-radius: 4px;
+      background: rgba(201, 120, 74, 0.22);
       color: var(--cockpit-orange);
       font-weight: 700;
+      font-size: 0.62rem;
       font-variant-numeric: tabular-nums;
+      line-height: 1;
     }
-    .ticket-main { min-width: 0; }
+    .ticket-main { min-width: 0; overflow: hidden; }
     .ticket-name {
       display: block;
       font-weight: 600;
@@ -338,6 +422,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      max-width: 100%;
     }
     .ticket-sub { color: var(--cockpit-teal); font-size: 0.65rem; opacity: 0.85; }
     .ticket-badge {
@@ -347,7 +432,27 @@
       opacity: 0.75;
       letter-spacing: 0.04em;
     }
-    .ticket-mark { color: var(--cockpit-orange); font-size: 0.85rem; }
+    .ticket-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      flex: none;
+      color: var(--cockpit-orange);
+    }
+    .ticket-check {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+    .ticket-mark--live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(94, 224, 138, 0.65);
+    }
 
     .stage-center {
       display: flex;
@@ -355,7 +460,9 @@
       align-items: center;
       text-align: center;
       position: relative;
-      padding: 8px 0 0;
+      padding: 0;
+      min-width: 0;
+      z-index: 1;
     }
     .entity-label {
       border: 1px solid var(--cockpit-orange-dim);
@@ -378,57 +485,72 @@
       color: var(--cockpit-orange);
       letter-spacing: 0.06em;
     }
-    .rings {
-      position: absolute;
-      width: 200px;
-      height: 100px;
-      bottom: 48px;
-      left: 50%;
-      transform: translateX(-50%);
+    .mascot-stage {
+      position: relative;
+      width: 148px;
+      height: 118px;
+      margin: 4px 0 6px;
+      flex: none;
       pointer-events: none;
     }
-    .rings svg { width: 100%; height: 100%; }
-    .ring-path {
-      fill: none;
-      stroke: var(--cockpit-orange);
-      stroke-width: 1;
-      opacity: 0.35;
+    .mascot-shadow {
+      position: absolute;
+      left: 12%;
+      right: 12%;
+      bottom: 2px;
+      height: 14px;
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), transparent 70%);
+      border-radius: 50%;
+    }
+    .mascot-orbit {
+      position: absolute;
+      left: -12%;
+      right: -12%;
+      bottom: 18px;
+      height: 36px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 50%;
+      transform: perspective(120px) rotateX(58deg);
+      box-shadow: 0 0 12px rgba(201, 120, 74, 0.15);
+    }
+    .mascot-orbit-dot {
+      position: absolute;
+      top: 50%;
+      left: 8%;
+      width: 6px;
+      height: 6px;
+      margin: -3px 0 0 -3px;
+      border-radius: 50%;
+      background: #f5f5f5;
+      box-shadow: 0 0 6px rgba(255, 255, 255, 0.7);
     }
     @media (prefers-reduced-motion: no-preference) {
-      .ring-path--outer { animation: ring-pulse var(--dur-slow) var(--ease) infinite alternate; }
+      .mascot-orbit-dot { animation: orbit-dot 5s linear infinite; }
     }
-    @keyframes ring-pulse {
-      from { opacity: 0.25; stroke-width: 1; }
-      to { opacity: 0.5; stroke-width: 1.5; }
+    @keyframes orbit-dot {
+      0% { left: 8%; top: 50%; }
+      25% { left: 50%; top: 8%; }
+      50% { left: 92%; top: 50%; }
+      75% { left: 50%; top: 92%; }
+      100% { left: 8%; top: 50%; }
+    }
+    .mascot-pixel {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      width: 88px;
+      height: 72px;
+      filter: drop-shadow(0 6px 16px rgba(201, 120, 74, 0.35));
     }
     @media (prefers-reduced-motion: reduce) {
-      .ring-path, .glitch-text { animation: none !important; }
-    }
-
-    .opus-sprite {
-      font-family: var(--mono);
-      font-size: 8px;
-      line-height: 1;
-      letter-spacing: 0;
-      color: var(--cockpit-orange);
-      margin: 12px 0 8px;
-      text-shadow: 0 8px 24px rgba(201, 120, 74, 0.35);
-      white-space: pre;
-    }
-    .flow-connector {
-      position: absolute;
-      width: 40%;
-      height: 2px;
-      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5));
-      top: 55%;
-      right: -8%;
-      opacity: 0.4;
+      .mascot-orbit-dot, .glitch-text { animation: none !important; }
     }
 
     /* —— Now panel —— */
     .now-panel {
       margin: 0 auto;
-      max-width: 320px;
+      max-width: min(320px, 100%);
       width: 100%;
       padding: 12px 14px;
       border-radius: var(--r);
@@ -474,8 +596,8 @@
 
     /* —— Loops —— */
     .loop-block {
-      margin: 20px 0;
-      padding: 14px 16px;
+      margin: 8px 0;
+      padding: 10px 12px;
       border-radius: var(--r);
       border: 1px solid var(--cockpit-orange-dim);
       background: var(--card);
@@ -505,7 +627,7 @@
     .loop-steps .sep { color: var(--faint); margin: 0 4px; }
 
     /* —— Streams —— */
-    .stream-section { margin: 24px 0; }
+    .stream-section { margin: 10px 0; }
     .stream-head {
       display: flex;
       flex-wrap: wrap;
@@ -567,8 +689,8 @@
 
     /* —— Stack —— */
     .stack-block {
-      margin-top: 28px;
-      padding: 18px 16px;
+      margin-top: 10px;
+      padding: 12px 14px;
       border-radius: var(--r-lg);
       border: 1px solid var(--cockpit-orange-dim);
       background: linear-gradient(135deg, var(--cockpit-warm), var(--card));
@@ -666,6 +788,51 @@
       clip: rect(0, 0, 0, 0);
       border: 0;
     }
+
+    .cockpit-footnote {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line-soft);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    @media (max-height: 920px) and (min-width: 901px) {
+      .category-bar { margin-top: 10px; padding-top: 8px; }
+      .loop-steps { font-size: 0.66rem; line-height: 1.45; }
+      .stream-card { min-height: 64px; padding: 8px; }
+      .metric-tile { padding: 6px 4px; }
+      .metric-tile .m-val { font-size: 1.05rem; }
+      .ticket-row { min-height: 30px; }
+      .mascot-stage { height: 104px; margin-bottom: 4px; }
+      .entity-label { padding: 6px 12px; margin-bottom: 4px; }
+    }
+
+    @media (max-width: 390px) {
+      .shell { padding: 0 10px 16px; }
+      .app-nav { gap: 8px; padding: 10px 0; }
+      .nav-actions { width: 100%; margin-left: 0; }
+      .nav-actions .btn-pill { flex: 1; }
+      .cockpit-hero h1 { font-size: 1.45rem; }
+      .cockpit-hero .tagline { font-size: 0.72rem; letter-spacing: 0.04em; }
+      .scan-live { justify-content: flex-start; }
+      .stage-wrap { padding: 10px 4px; margin: 8px 0; }
+      .ticket-row {
+        min-height: var(--tap);
+        font-size: 0.68rem;
+        grid-template-columns: 30px minmax(0, 1fr) auto 20px;
+      }
+      .now-title { font-size: 1.15rem; }
+      .stream-card { min-height: 72px; }
+      .mascot-stage { width: 132px; height: 108px; }
+      .mascot-pixel { width: 76px; height: 64px; }
+    }
   </style>
 </head>
 <body>
@@ -675,22 +842,23 @@
       <div class="brand" aria-hidden="true">Swarm Watch</div>
       <div class="nav-stats" role="status" aria-live="polite">
         <span class="pair">
-          <span class="num-label">projects active label</span>
-          <span class="val num" title="source field: board.projectsActive">sample</span>
-          <span class="num-label">of cap</span>
-          <span class="val num" title="source field: board.projectsCap">sample</span>
+          <span class="num-label">projects active</span>
+          <span class="val num" title="source field: board.projectsActive">4</span>
+          <span class="slash">/</span>
+          <span class="num-label">cap</span>
+          <span class="val num" title="source field: board.projectsCap">7</span>
         </span>
         <span class="pair">
           <span class="num-label">agents running</span>
-          <span class="val num" title="source field: board.agentsRunning">sample</span>
+          <span class="val num" title="source field: board.agentsRunning">0<span class="sample-badge">sample</span></span>
         </span>
         <span class="pair">
           <span class="num-label">done 24h</span>
-          <span class="val num" title="source field: board.done24h">sample</span>
+          <span class="val num" title="source field: board.done24h">0<span class="sample-badge">sample</span></span>
         </span>
         <span class="pair">
           <span class="num-label">need you</span>
-          <span class="val num" title="source field: inbox.needYouCount">sample</span>
+          <span class="val num" title="source field: inbox.needYouCount">0<span class="sample-badge">sample</span></span>
         </span>
       </div>
       <div class="nav-crumb">
@@ -712,38 +880,39 @@
       <h2>The Hive</h2>
       <p>Phone tab stub: vertical project list and Needs you first. Open the Cockpit tab for the motion scan mockup.</p>
       <p>
-        <span class="num-label">tickets total label</span>
-        <span class="num" title="source field: ledger.ticketTotal">sample</span>
+        <span class="num-label">tickets total</span>
+        <span class="num" title="source field: ledger.ticketTotal">20</span>
       </p>
     </section>
 
     <main class="panel-cockpit" id="main" role="tabpanel" aria-labelledby="tab-cockpit" data-active="true">
+      <p class="illus-banner" role="note">Illustrative values — counts mirror the motion scan post unless tagged sample; compaction and context peaks labelled below.</p>
+
       <nav class="cockpit-nav" aria-label="Cockpit breadcrumb">
-        <span>
-          <span class="num-label">owner handle</span> N01ennn
-          <span class="sep"> / </span>
-          <span class="num-label">scan lane</span> Opus 5.5 motion
-          <span class="sep"> / </span>
-          <span class="num-label">scan type</span> GitHub scan
+        <span class="nav-block">
+          <span class="num-label">owner</span> N01ennn
+          <span class="sep">/</span>
+          <span class="num-label">lane</span> Opus 5.5 motion
+          <span class="sep">/</span>
+          <span class="num-label">scan</span> GitHub scan
         </span>
-        <span>
-          <span class="num-label">repo total</span>
-          <span class="num" title="source field: motionScan.repoTotal">sample</span>
-          <span class="sep"> / </span>
-          <span class="num-label">director model</span> Opus 5.5
-          <span class="sep"> / </span>
-          <span class="num-label">scan month</span>
-          <span class="num" title="source field: motionScan.periodLabel">sample</span>
+        <span class="nav-block">
+          <span class="num-label">repos</span>
+          <span class="num" title="source field: motionScan.repoTotal">20</span>
+          <span class="sep">/</span>
+          <span class="num-label">director</span> Opus 5.5
+          <span class="sep">/</span>
+          <span class="num-label">period</span>
+          <span class="num" title="source field: motionScan.periodLabel">2026.10</span>
         </span>
       </nav>
 
       <header class="cockpit-hero">
         <h1>
-          <span class="num-label">repo total headline</span>
-          <span class="num" title="source field: motionScan.repoTotal">sample</span>
-          GitHub repos
+          <span class="headline-num num" title="source field: motionScan.repoTotal">20</span>
+          <span class="headline-text">GitHub repos</span>
         </h1>
-        <p class="tagline">To turn your Opus 5.5 into a motion empire</p>
+        <p class="tagline">To turn your Opus 5.5 into a f*cking motion empire</p>
         <div class="category-bar">
           <div class="category-links" aria-label="Category filters">
             <span>Opus 5.5</span><span class="sep">/</span>
@@ -762,10 +931,12 @@
             <span class="meter-web" style="--w:3"></span>
           </div>
           <div class="scan-live">
-            <span class="num-label">live scan progress</span>
-            <span class="num" title="source field: motionScan.completedCount">sample</span>
-            of
-            <span class="num" title="source field: motionScan.repoTotal">sample</span>
+            <span class="scan-live-label">Live scan</span>
+            <span class="scan-live-count">
+              <span class="num" title="source field: motionScan.completedCount">19</span>
+              <span class="scan-of">of</span>
+              <span class="num" title="source field: motionScan.repoTotal">20</span>
+            </span>
           </div>
         </div>
       </header>
@@ -784,31 +955,34 @@
               <h2>Opus 5.5</h2>
               <p>Motion director · Skills + engines</p>
             </div>
-            <div class="rings" aria-hidden="true">
-              <svg viewBox="0 0 200 100" focusable="false">
-                <ellipse class="ring-path ring-path--outer" cx="100" cy="78" rx="92" ry="22"></ellipse>
-                <ellipse class="ring-path" cx="100" cy="82" rx="72" ry="16"></ellipse>
-                <ellipse class="ring-path" cx="100" cy="86" rx="52" ry="11"></ellipse>
+            <div class="mascot-stage" aria-hidden="true">
+              <div class="mascot-orbit"><span class="mascot-orbit-dot"></span></div>
+              <svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot">
+                <rect x="6" y="0" width="10" height="2" fill="#c9784a"/>
+                <rect x="4" y="2" width="14" height="2" fill="#c9784a"/>
+                <rect x="3" y="4" width="3" height="2" fill="#f5e6dc"/>
+                <rect x="16" y="4" width="3" height="2" fill="#f5e6dc"/>
+                <rect x="5" y="4" width="12" height="4" fill="#d48452"/>
+                <rect x="7" y="6" width="2" height="2" fill="#1a120e"/>
+                <rect x="13" y="6" width="2" height="2" fill="#1a120e"/>
+                <rect x="4" y="8" width="14" height="3" fill="#c9784a"/>
+                <rect x="2" y="9" width="2" height="4" fill="#a86040"/>
+                <rect x="18" y="9" width="2" height="4" fill="#a86040"/>
+                <rect x="6" y="11" width="3" height="2" fill="#8a5238"/>
+                <rect x="13" y="11" width="3" height="2" fill="#8a5238"/>
+                <rect x="5" y="13" width="12" height="2" fill="#c9784a"/>
+                <rect x="7" y="15" width="3" height="2" fill="#a86040"/>
+                <rect x="12" y="15" width="3" height="2" fill="#a86040"/>
               </svg>
+              <div class="mascot-shadow"></div>
             </div>
-            <pre class="opus-sprite" aria-label="Opus orchestrator sprite (ASCII)">   .------.
-   |[]  []|
-   |  __  |
-  /| |  | |\
-  | +-+ +-+ |
-  | |     | |
-  + +-----+ +
-    +  +  +</pre>
-            <div class="flow-connector" aria-hidden="true"></div>
             <aside class="now-panel" aria-label="Now loading panel">
               <div class="now-head">
                 <span>Now loading</span>
                 <span class="now-progress">
-                  <span class="num-label">index</span>
-                  <span class="val num" title="source field: motionScan.activeIndex">sample</span>
-                  /
-                  <span class="num-label">total</span>
-                  <span class="val num" title="source field: motionScan.repoTotal">sample</span>
+                  <span class="val num" title="source field: motionScan.activeIndex">19</span>
+                  <span class="scan-of">/</span>
+                  <span class="val num" title="source field: motionScan.repoTotal">20</span>
                 </span>
               </div>
               <div class="now-repo">motiondivision /</div>
@@ -857,8 +1031,8 @@
         <div class="stream-head stream-head--worker">
           <span>// Worker stream / latest finished tickets</span>
           <span class="stream-count">
-            <span class="num-label">visible count</span>
-            <span class="num" title="source field: workerStream.visibleCount">sample</span>
+            <span class="num-label">showing</span>
+            <span class="num" title="source field: workerStream.visibleCount">4</span>
             latest
           </span>
         </div>
@@ -866,40 +1040,39 @@
           <article class="stream-card stream-card--accent-white">
             <div class="stream-top">
               <span class="stream-id">
-                <span class="num-label">ticket id</span>
-                <span class="num" title="source field: workerStream.items[0].ticketId">sample</span>
+                <span class="num" title="source field: workerStream.items[0].ticketId">T-041<span class="sample-badge">sample</span></span>
               </span>
               <span class="stream-title">build-owns-tests rules</span>
               <span class="stream-status">Newest</span>
             </div>
-            <span class="stream-meta">Finished &gt; sample ago</span>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
             <div class="stream-bar"><span style="--pct:88%;--bar:var(--cockpit-pink)"></span></div>
           </article>
           <article class="stream-card stream-card--accent-teal">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: workerStream.items[1].ticketId">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[1].ticketId">T-038<span class="sample-badge">sample</span></span></span>
               <span class="stream-title">manifest checks in CI</span>
               <span class="stream-status" style="color:var(--cockpit-teal)">Done</span>
             </div>
-            <span class="stream-meta">Finished &gt; sample ago</span>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
             <div class="stream-bar"><span style="--pct:100%;--bar:var(--cockpit-teal)"></span></div>
           </article>
           <article class="stream-card stream-card--accent-blue">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: workerStream.items[2].ticketId">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[2].ticketId">T-035<span class="sample-badge">sample</span></span></span>
               <span class="stream-title">wave prep routing</span>
               <span class="stream-status" style="color:var(--info)">Done</span>
             </div>
-            <span class="stream-meta">Finished &gt; sample ago</span>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
             <div class="stream-bar"><span style="--pct:76%;--bar:var(--info)"></span></div>
           </article>
           <article class="stream-card stream-card--accent-gold">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: workerStream.items[3].ticketId">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[3].ticketId">T-031<span class="sample-badge">sample</span></span></span>
               <span class="stream-title">scope command meta</span>
               <span class="stream-status" style="color:var(--warn)">Done</span>
             </div>
-            <span class="stream-meta">Finished &gt; sample ago</span>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
             <div class="stream-bar"><span style="--pct:64%;--bar:var(--warn)"></span></div>
           </article>
         </div>
@@ -909,15 +1082,15 @@
         <div class="stream-head stream-head--render">
           <span>// Render stream / what each repo hands to Opus 5.5</span>
           <span class="stream-count">
-            <span class="num-label">visible count</span>
-            <span class="num" title="source field: renderStream.visibleCount">sample</span>
+            <span class="num-label">showing</span>
+            <span class="num" title="source field: renderStream.visibleCount">4</span>
             latest
           </span>
         </div>
         <div class="stream-grid">
           <article class="stream-card stream-card--accent-white">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: renderStream.items[0].nodeIndex">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[0].nodeIndex">19</span></span>
               <span class="stream-title">motion</span>
               <span class="stream-status" style="color:var(--warn)">Web</span>
             </div>
@@ -926,7 +1099,7 @@
           </article>
           <article class="stream-card stream-card--accent-white">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: renderStream.items[1].nodeIndex">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[1].nodeIndex">04</span></span>
               <span class="stream-title">motion-dev-animations-skill</span>
               <span class="stream-status" style="color:var(--warn)">Web</span>
             </div>
@@ -935,7 +1108,7 @@
           </article>
           <article class="stream-card stream-card--accent-pink">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: renderStream.items[2].nodeIndex">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[2].nodeIndex">03</span></span>
               <span class="stream-title">motion-graphics</span>
               <span class="stream-status" style="color:var(--bad)">B-roll</span>
             </div>
@@ -944,7 +1117,7 @@
           </article>
           <article class="stream-card stream-card--accent-green">
             <div class="stream-top">
-              <span class="stream-id"><span class="num" title="source field: renderStream.items[3].nodeIndex">sample</span></span>
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[3].nodeIndex">05</span></span>
               <span class="stream-title">awesome-motion-design-agent-skills</span>
               <span class="stream-status" style="color:var(--accent)">Taste</span>
             </div>
@@ -958,7 +1131,7 @@
         <div class="stack-head">
           <div class="stack-label">Motion stack</div>
           <h2 class="stack-title">
-            <span class="num" title="source field: motionStack.repoTotal">sample</span>
+            <span class="num" title="source field: motionStack.repoTotal">20</span>
             repos
           </h2>
           <p class="stack-sub">Opus 5.5 / skills / engines / taste / b-roll / web</p>
@@ -966,33 +1139,44 @@
         <div class="stack-metrics">
           <div class="metric-tile metric-tile--opus">
             <span class="m-label">Opus 5.5</span>
-            <span class="m-val num" title="source field: motionStack.counts.opus">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.opus">3</span>
           </div>
           <div class="metric-tile metric-tile--skills">
             <span class="m-label">Skills</span>
-            <span class="m-val num" title="source field: motionStack.counts.skills">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.skills">7</span>
           </div>
           <div class="metric-tile metric-tile--engines">
             <span class="m-label">Engines</span>
-            <span class="m-val num" title="source field: motionStack.counts.engines">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.engines">4</span>
           </div>
           <div class="metric-tile metric-tile--taste">
             <span class="m-label">Taste</span>
-            <span class="m-val num" title="source field: motionStack.counts.taste">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.taste">2</span>
           </div>
           <div class="metric-tile metric-tile--broll">
             <span class="m-label">B-roll</span>
-            <span class="m-val num" title="source field: motionStack.counts.broll">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.broll">1</span>
           </div>
           <div class="metric-tile metric-tile--web metric-tile--active">
             <span class="m-label">Web</span>
-            <span class="m-val num" title="source field: motionStack.counts.web">sample</span>
+            <span class="m-val num" title="source field: motionStack.counts.web">3</span>
           </div>
         </div>
         <div class="stack-foot">
           <span>All links in the post — check each repo before you install.</span>
           <span class="handle">@N01ennn</span>
         </div>
+      </footer>
+
+      <footer class="cockpit-footnote" aria-label="Data notes">
+        <span>Simulation — illustrative values — sample fields tagged only when not in the scan post.</span>
+        <span>
+          <span class="num-label">compaction kept</span>
+          <span class="num" title="source field: project.compaction.keptLines">14 lines</span>
+          <span class="sep">/</span>
+          <span class="num-label">context peak</span>
+          <span class="num" title="source field: project.context.peakLines">42 peak</span>
+        </span>
       </footer>
     </main>
   </div>
@@ -1022,19 +1206,33 @@
         { n: 20, repo: 'pending-slot', sub: 'unassigned', badge: 'Pending', state: 'pending' }
       ];
 
+      var CHECK_SVG = '<svg class="ticket-check" viewBox="0 0 12 12" focusable="false" aria-hidden="true">' +
+        '<path d="M2.5 6.2 5 8.7 9.5 3.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>';
+
+      function stairInset(n) {
+        return Math.round(Math.max(0, 5.5 - Math.abs(n - 5.5)) * 7);
+      }
+
       function rowHtml(t) {
         var cls = 'ticket-row ticket-row--' + t.state;
-        var mark = t.state === 'done' ? 'v' : (t.state === 'active' ? '*' : 'o');
+        var idx = (t.n < 10 ? '0' : '') + t.n;
+        var mark = '';
+        if (t.state === 'done') {
+          mark = '<span class="ticket-mark">' + CHECK_SVG + '</span>';
+        } else if (t.state === 'active') {
+          mark = '<span class="ticket-mark"><span class="ticket-mark--live"></span></span>';
+        } else {
+          mark = '<span class="ticket-mark" aria-hidden="true">o</span>';
+        }
         return (
-          '<button type="button" class="' + cls + '" data-repo="' + t.repo.toLowerCase() + '" ' +
-          'title="source field: motionScan.nodes[' + (t.n - 1) + '].index sample">' +
-          '<span class="ticket-idx" title="source field: motionScan.nodes[' + (t.n - 1) + '].index">' +
-          '<span class="num-label">idx</span> <span class="num">sample</span></span>' +
+          '<button type="button" class="' + cls + '" data-repo="' + t.repo.toLowerCase() + '" data-idx="' + t.n + '" ' +
+          'title="source field: motionScan.nodes[' + (t.n - 1) + '].repoName">' +
+          '<span class="ticket-idx num" title="source field: motionScan.nodes[' + (t.n - 1) + '].index">' + idx + '</span>' +
           '<span class="ticket-main">' +
           '<span class="ticket-name">' + t.repo + '</span>' +
           '<span class="ticket-sub">' + t.sub + '</span></span>' +
           '<span class="ticket-badge">' + t.badge + '</span>' +
-          '<span class="ticket-mark" aria-hidden="true">' + mark + '</span>' +
+          mark +
           '</button>'
         );
       }
@@ -1045,8 +1243,15 @@
         var el = document.createElement('div');
         el.innerHTML = rowHtml(t);
         var btn = el.firstChild;
-        if (t.n <= 10) left.appendChild(btn);
-        else right.appendChild(btn);
+        var inset = stairInset(t.n <= 10 ? t.n : t.n - 10);
+        if (t.n <= 10) {
+          btn.style.marginLeft = inset + 'px';
+          left.appendChild(btn);
+        } else {
+          btn.style.marginRight = inset + 'px';
+          btn.style.marginLeft = 'auto';
+          right.appendChild(btn);
+        }
       });
 
       var input = document.getElementById('ticket-filter');

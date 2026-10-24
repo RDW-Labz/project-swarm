@@ -12,34 +12,35 @@
       <div class="cc-brand-row">
         <h1 class="cc-brand brand-glitch" aria-label="JEV plus OPUS sample board">
           <span class="jev">JEV</span><span class="plus"> + </span><span class="opus">OPUS</span>
-          <span class="num" title="hive.modelVersion">5.5</span>
-          <span class="sample-badge">sample</span>
+          <span class="ver-script num" title="hive.modelVersion">5.5</span>
         </h1>
         <p class="cc-tagline">
-          Illustrative Command Center hive mockup. Values are labelled samples, not live board data.
+          10 repos - 1 decision ring around the model - every fork answered before opus spends a token
         </p>
       </div>
+      <p class="cc-illus-banner" role="note">
+        Illustrative values: labelled sample fields only, not live board data.
+      </p>
       <div class="cc-strip" role="group" aria-label="Hive summary strip">
         <div class="cc-stat">
           <span class="lbl">repos</span>
-          <span class="val num" title="hive.repos">10<span class="sample-badge">sample</span></span>
+          <span class="val num" title="hive.repos">10</span>
         </div>
         <div class="cc-stat">
           <span class="lbl">ring</span>
-          <span class="val num" title="hive.ringCount">1<span class="sample-badge">sample</span></span>
+          <span class="val num" title="hive.ringCount">1</span>
         </div>
         <div class="cc-stat">
           <span class="lbl">forks</span>
-          <span class="val num bad" title="hive.forksTotal">4,485<span class="sample-badge">sample</span></span>
+          <span class="val num bad" title="hive.forksTotal">4,485</span>
         </div>
         <div class="cc-stat">
           <span class="lbl">held</span>
-          <span class="val num warn" title="hive.heldForYou">11<span class="sample-badge">sample</span></span>
+          <span class="val num warn" title="hive.heldForYou">11</span>
         </div>
         <div class="cc-live" role="status">
           <span class="dot" aria-hidden="true"></span>
           <span>live</span>
-          <span class="sample-badge">sample</span>
         </div>
       </div>
     </header>
@@ -77,60 +78,64 @@
             <div>
               <div class="hive-core-label">the model</div>
               <div class="hive-core-name">opus</div>
-              <div class="hive-core-ver num" title="hive.modelVersion">5.5<span class="sample-badge">sample</span></div>
+              <div class="hive-core-ver num" title="hive.modelVersion">5.5</div>
               <div class="hive-core-status">waiting</div>
               <div class="hive-core-meta">
                 <span class="lbl">tokens on forks:</span>
                 <span class="num" title="hive.opusTokensOnForks">0</span>
-                <span class="sample-badge">sample</span>
               </div>
             </div>
           </div>
         </div>
-        <div id="hive-nodes"></div>
+        <div id="hive-nodes">
+          <aside class="hive-toolgate-callout" id="hive-toolgate-callout" aria-label="Toolgate session sample">
+            <span class="lbl">last toolgate session (sample)</span>
+            toolgate: rm -rf ./ -- deny
+          </aside>
+        </div>
       </div>
     </section>
 
-    <div class="cc-panels">
+    <div class="cc-panels cc-panels--hive">
       <section class="cc-panel" aria-labelledby="panel-log">
         <h2 id="panel-log">session log</h2>
         <ul class="event-log">
           <li>
             <span class="event-tag code">code</span>
             <span>lint ok on sample change set</span>
-            <span class="event-time num" title="eventLog[0].ageSec">12s<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[0].ageSec">12s</span>
           </li>
           <li>
             <span class="event-tag sys">sys</span>
             <span>ring armed for sample repo batch</span>
-            <span class="event-time num" title="eventLog[1].ageSec">28s<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[1].ageSec">28s</span>
           </li>
           <li>
             <span class="event-tag opus">opus</span>
             <span>waiting on jev answers (sample)</span>
-            <span class="event-time num" title="eventLog[2].ageSec">41s<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[2].ageSec">41s</span>
           </li>
           <li>
             <span class="event-tag safety">safety</span>
             <span>toolgate: rm -rf ./ -- deny</span>
-            <span class="event-time num" title="eventLog[3].ageSec">55s<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[3].ageSec">55s</span>
           </li>
           <li>
             <span class="event-tag route">route</span>
             <span>switchboard picked haiku lane (sample)</span>
-            <span class="event-time num" title="eventLog[4].ageSec">72s<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[4].ageSec">72s</span>
           </li>
           <li>
             <span class="event-tag ctx">ctx</span>
-            <span>compaction kept 14 verbatim lines</span>
-            <span class="event-time num" title="eventLog[5].ageSec">88s<span class="sample-badge">sample</span></span>
+            <span>compaction kept <span class="num" title="project.winnow.keptLines">14</span> verbatim lines<span class="sample-badge">sample</span></span>
+            <span class="event-time num" title="eventLog[5].ageSec">88s</span>
           </li>
         </ul>
         <div class="term-block">
           <p class="term-prompt">~/app $ claude --model opus</p>
           <canvas class="mini-chart" id="chart-fps" width="360" height="56" aria-label="Forks per second sample chart"></canvas>
           <p class="term-prompt">
-            <span class="lbl">forks per second:</span>
+            <span class="lbl">forks per second (peak):</span>
             <span class="num" title="throughput.forksPerSecondPeak">42</span>
             <span class="sample-badge">sample</span>
           </p>
@@ -142,7 +147,6 @@
         <p class="gates-hero">
           <span class="num" title="hive.repos">10</span> repos.
           <span class="num" title="hive.ringCount">1</span> ring.
-          <span class="sample-badge">sample</span>
         </p>
         <p class="gates-sub">route - context - safety - control</p>
         <div class="lane-bars" aria-label="Who answered sample bars">
@@ -159,7 +163,7 @@
               jev
             </span>
             <span class="lane-track"><i class="lane-fill jev" style="width:82%"></i></span>
-            <span class="num" title="whoAnswered.jev">4,083<span class="sample-badge">sample</span></span>
+            <span class="num" title="whoAnswered.jev">4,083</span>
           </div>
           <div class="lane-row">
             <span class="name">
@@ -172,7 +176,7 @@
               code
             </span>
             <span class="lane-track"><i class="lane-fill code" style="width:18%"></i></span>
-            <span class="num" title="whoAnswered.code">402<span class="sample-badge">sample</span></span>
+            <span class="num" title="whoAnswered.code">402</span>
           </div>
           <div class="lane-row">
             <span class="name">
@@ -185,25 +189,25 @@
               opus
             </span>
             <span class="lane-track"><i class="lane-fill opus" style="width:12%"></i></span>
-            <span class="num" title="whoAnswered.opus">296<span class="sample-badge">sample</span></span>
+            <span class="num" title="whoAnswered.opus">296</span>
           </div>
         </div>
         <div class="stat-lines">
           <div class="row">
             <span>forks answered</span>
-            <span class="num" title="hive.forksAnswered">4,485<span class="sample-badge">sample</span></span>
+            <span class="num" title="hive.forksAnswered">4,485</span>
           </div>
           <div class="row">
             <span>generated to decide</span>
-            <span><span class="num" title="hive.generatedToDecideTokens">0</span> tokens <span class="sample-badge">sample</span></span>
+            <span><span class="num" title="hive.generatedToDecideTokens">0</span> tokens</span>
           </div>
           <div class="row">
             <span>avg answer</span>
-            <span class="num" title="hive.avgAnswerSec">&lt; 0.5s<span class="sample-badge">sample</span></span>
+            <span class="num" title="hive.avgAnswerSec">&lt; 0.5s</span>
           </div>
           <div class="row">
             <span>held for you</span>
-            <span class="num warn" title="hive.heldForYou">11<span class="sample-badge">sample</span></span>
+            <span class="num warn" title="hive.heldForYou">11</span>
           </div>
         </div>
       </section>
@@ -213,22 +217,22 @@
         <div class="savings-rows">
           <div class="saving-row">
             <span class="lbl">llm wakes skipped</span>
-            <span class="num" title="savings.llmWakesSkipped">32<span class="sample-badge">sample</span></span>
+            <span class="num" title="savings.llmWakesSkipped">32</span>
             <span class="track"><i class="fill" style="width:64%;background:linear-gradient(90deg,#fbbf24,#fb923c)"></i></span>
           </div>
           <div class="saving-row">
             <span class="lbl">stale context dropped</span>
-            <span class="num" title="savings.staleContextDroppedPct">59%<span class="sample-badge">sample</span></span>
+            <span class="num" title="savings.staleContextDroppedPct">59%</span>
             <span class="track"><i class="fill" style="width:59%;background:linear-gradient(90deg,#34d399,#3dd6a5)"></i></span>
           </div>
           <div class="saving-row">
             <span class="lbl">risky calls stopped</span>
-            <span class="num" title="savings.riskyCallsStopped">11<span class="sample-badge">sample</span></span>
+            <span class="num" title="savings.riskyCallsStopped">11</span>
             <span class="track"><i class="fill" style="width:22%;background:linear-gradient(90deg,#fb7185,#f43f5e)"></i></span>
           </div>
           <div class="saving-row">
             <span class="lbl">model calls downgraded</span>
-            <span class="num" title="savings.modelCallsDowngradedPct">46%<span class="sample-badge">sample</span></span>
+            <span class="num" title="savings.modelCallsDowngradedPct">46%</span>
             <span class="track"><i class="fill" style="width:46%;background:linear-gradient(90deg,#60a5fa,#5eb8ff)"></i></span>
           </div>
         </div>
@@ -239,11 +243,11 @@
         <div class="stat-lines">
           <div class="row">
             <span>opus tokens on forks</span>
-            <span class="num" title="hive.opusTokensOnForks">0<span class="sample-badge">sample</span></span>
+            <span class="num" title="hive.opusTokensOnForks">0</span>
           </div>
           <div class="row">
             <span>gates that failed open</span>
-            <span class="num" title="hive.gatesFailedOpen">0<span class="sample-badge">sample</span></span>
+            <span class="num" title="hive.gatesFailedOpen">0</span>
           </div>
         </div>
       </section>
@@ -262,29 +266,75 @@
           fields: [
             ['asks', '7 risk q / call', 'project.toolgate.asksPerCall'],
             ['out', 'allow/ask/deny', 'project.toolgate.policyOut'],
-            ['fails', 'closed', 'project.toolgate.failMode'],
-            ['p(risk)', '.94', 'project.toolgate.riskProbability']
+            ['fails', 'closed', 'project.toolgate.failMode']
           ],
-          meter: 94, session: 'toolgate: rm -rf ./ -- deny (sample)' },
+          meter: 94, meterLabel: 'p(risk)', meterTitle: 'project.toolgate.riskProbability' },
         { id: '02', name: 'switchboard', lane: 'route', tag: 'ROUTE',
-          fields: [['hooks', '3', 'project.switchboard.hookCount']] },
+          fields: [
+            ['hooks', '3', 'project.switchboard.hookCount'],
+            ['lane', 'haiku', 'project.switchboard.lanePick'],
+            ['state', 'armed', 'project.switchboard.state']
+          ],
+          meter: 68, meterLabel: 'p(route)', meterTitle: 'project.switchboard.routeConfidence' },
         { id: '03', name: 'spending-effort', lane: 'route', tag: 'ROUTE',
-          fields: [['budget', 'sample', 'project.spendingEffort.budgetLabel']] },
+          fields: [
+            ['budget', 'sample cap', 'project.spendingEffort.budgetLabel'],
+            ['burn', 'low', 'project.spendingEffort.burnRate'],
+            ['queue', 'idle', 'project.spendingEffort.queueState']
+          ],
+          meter: 22, meterLabel: 'p(spend)', meterTitle: 'project.spendingEffort.spendPressure' },
         { id: '04', name: 'winnow', lane: 'context', tag: 'CONTEXT',
-          fields: [['kept', '14 lines', 'project.winnow.keptLines']] },
+          fields: [
+            ['kept', '14 lines', 'project.winnow.keptLines'],
+            ['dropped', '59%', 'project.compaction.staleDroppedPct'],
+            ['mode', 'verbatim', 'project.winnow.mode']
+          ],
+          meter: 59, meterLabel: 'p(keep)', meterTitle: 'project.winnow.keepRatio', sampleOnField: 'kept' },
         { id: '05', name: 'fast-jev-compaction', lane: 'context', tag: 'CONTEXT',
-          fields: [['ratio', '59%', 'project.compaction.staleDroppedPct']] },
+          fields: [
+            ['ratio', '59%', 'project.compaction.staleDroppedPct'],
+            ['lines', '14 kept', 'project.winnow.keptLines'],
+            ['speed', '< 0.5s', 'project.compaction.latency']
+          ],
+          meter: 74, meterLabel: 'p(compact)', meterTitle: 'project.compaction.ratio' },
         { id: '06', name: 'canny', lane: 'control', tag: 'CONTROL',
-          fields: [['gates', '1 ring', 'project.canny.ringCount']] },
+          fields: [
+            ['gates', '1 ring', 'project.canny.ringCount'],
+            ['repos', '10', 'project.canny.repoCount'],
+            ['state', 'armed', 'project.canny.state']
+          ],
+          meter: 88, meterLabel: 'p(ring)', meterTitle: 'project.canny.ringHealth' },
         { id: '07', name: 'medula', lane: 'control', tag: 'CONTROL',
-          fields: [['held', '11', 'project.medula.heldCount']] },
+          fields: [
+            ['held', '11', 'project.medula.heldCount'],
+            ['forks', '4,485', 'project.medula.forksSeen'],
+            ['you', 'waiting', 'project.medula.ownerState']
+          ],
+          meter: 41, meterLabel: 'p(hold)', meterTitle: 'project.medula.holdPressure' },
         { id: '08', name: 'jewwire', lane: 'safety', tag: 'SAFETY',
-          fields: [['wires', 'sample', 'project.jewwire.wireCount']] },
+          fields: [
+            ['wires', 'sample', 'project.jewwire.wireCount'],
+            ['deny', '11', 'project.jewwire.denyCount'],
+            ['mode', 'closed', 'project.jewwire.failMode']
+          ],
+          meter: 91, meterLabel: 'p(wire)', meterTitle: 'project.jewwire.tripRate' },
         { id: '09', name: 'skillranker', lane: 'route', tag: 'ROUTE',
-          fields: [['rank', 'sample', 'project.skillranker.rankLabel']] },
+          fields: [
+            ['rank', 'sample', 'project.skillranker.rankLabel'],
+            ['skills', '12', 'project.skillranker.skillCount'],
+            ['lane', 'route', 'project.skillranker.lane']
+          ],
+          meter: 55, meterLabel: 'p(rank)', meterTitle: 'project.skillranker.confidence' },
         { id: '10', name: 'wakegate', lane: 'control', tag: 'CONTROL',
-          fields: [['skipped', '32', 'project.wakegate.llmWakesSkipped']] }
+          fields: [
+            ['skipped', '32', 'project.wakegate.llmWakesSkipped'],
+            ['saved', '64%', 'project.wakegate.wakeSavingsPct'],
+            ['state', 'on', 'project.wakegate.state']
+          ],
+          meter: 64, meterLabel: 'p(skip)', meterTitle: 'project.wakegate.skipRatio' }
       ];
+
+      const PARTICLES_PER_STREAM = 150;
 
       const LANE_RGB = {
         safety: [255, 77, 141],
@@ -295,6 +345,7 @@
 
       const stage = document.getElementById('hive-stage');
       const mount = document.getElementById('hive-nodes');
+      const toolgateCallout = document.getElementById('hive-toolgate-callout');
       const canvas = document.getElementById('hive-canvas');
       const ctx = canvas.getContext('2d');
       const pauseBtn = document.getElementById('pause-motion');
@@ -367,35 +418,30 @@
         card.appendChild(hd);
         const bd = el('div', 'hive-node-bd');
         const dl = el('dl', 'hive-kv');
-        (node.fields || []).forEach(function (row) {
+        (node.fields || []).slice(0, 3).forEach(function (row) {
           const dt = el('dt', null, row[0]);
           const dd = el('dd', 'num', row[1]);
           dd.setAttribute('title', row[2]);
-          const badge = el('span', 'sample-badge', 'sample');
-          dd.appendChild(document.createTextNode(' '));
-          dd.appendChild(badge);
+          if (node.sampleOnField && row[0] === node.sampleOnField) {
+            dd.appendChild(document.createTextNode(' '));
+            dd.appendChild(el('span', 'sample-badge', 'sample'));
+          }
           dl.appendChild(dt);
           dl.appendChild(dd);
         });
         bd.appendChild(dl);
         if (node.meter != null) {
           const meter = el('div', 'hive-meter');
-          meter.appendChild(el('span', null, 'p(risk)'));
+          meter.appendChild(el('span', null, node.meterLabel || 'p(load)'));
           const track = el('span', 'track');
           const fill = el('i', 'fill');
           fill.style.width = node.meter + '%';
           track.appendChild(fill);
           meter.appendChild(track);
           const val = el('span', 'num', '.' + String(node.meter).padStart(2, '0'));
-          val.setAttribute('title', 'project.toolgate.riskProbability');
-          val.appendChild(el('span', 'sample-badge', 'sample'));
+          if (node.meterTitle) val.setAttribute('title', node.meterTitle);
           meter.appendChild(val);
           bd.appendChild(meter);
-        }
-        if (node.session) {
-          const line = el('p', 'hive-session-line', node.session);
-          line.setAttribute('title', 'project.toolgate.lastSessionLine');
-          bd.appendChild(line);
         }
         card.appendChild(bd);
         mount.appendChild(card);
@@ -405,29 +451,75 @@
       const particles = [];
       let geomCache = null;
       const sparkles = [];
-      for (let i = 0; i < 48; i++) {
-        sparkles.push({ a: Math.random() * Math.PI * 2, r: 0.82 + Math.random() * 0.14, ph: Math.random() });
+      for (let i = 0; i < 72; i++) {
+        sparkles.push({ a: Math.random() * Math.PI * 2, r: 0.78 + Math.random() * 0.2, ph: Math.random(), spd: 0.0012 + Math.random() * 0.002 });
+      }
+
+      function isPhoneLayout(w) {
+        return w <= 390;
+      }
+
+      function placeToolgateCallout(entry01, geom, phone) {
+        if (!toolgateCallout || !entry01) return;
+        if (phone) {
+          toolgateCallout.style.left = '';
+          toolgateCallout.style.top = '';
+          return;
+        }
+        const cardW = entry01.el.offsetWidth || 280;
+        const cardH = entry01.el.offsetHeight || 160;
+        let left = entry01.x + cardW * 0.55;
+        let top = entry01.y + cardH * 0.35;
+        const pad = 12;
+        const cw = toolgateCallout.offsetWidth || 280;
+        const ch = toolgateCallout.offsetHeight || 56;
+        if (left + cw > geom.w - pad) left = entry01.x - cardW * 0.55 - cw;
+        if (top + ch > geom.h - pad) top = entry01.y - cardH * 0.6;
+        toolgateCallout.style.left = Math.max(pad, left) + 'px';
+        toolgateCallout.style.top = Math.max(pad, top) + 'px';
       }
 
       function layoutNodes() {
         const rect = stage.getBoundingClientRect();
         const w = rect.width;
         const h = rect.height;
+        const phone = isPhoneLayout(w);
+        stage.classList.toggle('hive-phone', phone);
+
         const cx = w * 0.5;
-        const cy = h * (w < 390 ? 0.36 : 0.5);
-        const rx = Math.min(w * 0.38, 280);
-        const ry = w < 390 ? Math.min(h * 0.22, 200) : rx;
-        nodeEls.forEach(function (entry, i) {
-          const angle = -Math.PI / 2 + (i / nodeEls.length) * Math.PI * 2;
-          const x = cx + Math.cos(angle) * rx;
-          const y = cy + Math.sin(angle) * ry;
-          entry.el.style.left = x + 'px';
-          entry.el.style.top = y + 'px';
-          entry.x = x;
-          entry.y = y;
-          entry.angle = angle;
-        });
-        geomCache = { cx, cy, ringR: Math.min(w, h) * (w < 390 ? 0.17 : 0.14) };
+        const cy = phone ? h * 0.2 : h * 0.46;
+        const ringR = Math.min(w, h) * (phone ? 0.14 : 0.12);
+
+        if (phone) {
+          nodeEls.forEach(function (entry) {
+            entry.el.style.left = '';
+            entry.el.style.top = '';
+          });
+          const stageBox = stage.getBoundingClientRect();
+          nodeEls.forEach(function (entry, i) {
+            const box = entry.el.getBoundingClientRect();
+            entry.x = box.left - stageBox.left + box.width / 2;
+            entry.y = box.top - stageBox.top + box.height / 2;
+            entry.angle = -Math.PI / 2 + (i / nodeEls.length) * Math.PI * 2;
+          });
+        } else {
+          const rx = Math.min(w * 0.42, 340);
+          const ry = Math.min(h * 0.4, 300);
+          nodeEls.forEach(function (entry, i) {
+            const angle = -Math.PI / 2 + (i / nodeEls.length) * Math.PI * 2;
+            const x = cx + Math.cos(angle) * rx;
+            const y = cy + Math.sin(angle) * ry;
+            entry.el.style.left = x + 'px';
+            entry.el.style.top = y + 'px';
+            entry.x = x;
+            entry.y = y;
+            entry.angle = angle;
+          });
+        }
+
+        geomCache = { cx, cy, ringR, w, h, phone };
+        const entry01 = nodeEls.find(function (e) { return e.node.id === '01'; });
+        placeToolgateCallout(entry01, geomCache, phone);
         return geomCache;
       }
 
@@ -451,13 +543,14 @@
         };
       }
 
-      function spawnParticle(stream) {
+      function spawnParticle(stream, streamId) {
         particles.push({
           stream: stream,
-          t: 0,
-          speed: 0.004 + Math.random() * 0.006,
-          size: 1.2 + Math.random() * 2.2,
-          spark: Math.random() < 0.35
+          streamId: streamId,
+          t: Math.random() * 0.85,
+          speed: 0.003 + Math.random() * 0.005,
+          size: 1.4 + Math.random() * 2.4,
+          spark: Math.random() < 0.4
         });
       }
 
@@ -481,20 +574,27 @@
       }
 
       function drawRingHalo(cx, cy, ringR, time) {
-        const g = ctx.createRadialGradient(cx, cy, ringR * 0.6, cx, cy, ringR * 2.2);
-        g.addColorStop(0, 'rgba(255,45,122,0.08)');
-        g.addColorStop(0.45, 'rgba(255,45,122,0.22)');
-        g.addColorStop(1, 'rgba(255,45,122,0)');
-        ctx.fillStyle = g;
+        const bloom = ctx.createRadialGradient(cx, cy, ringR * 0.5, cx, cy, ringR * 2.6);
+        bloom.addColorStop(0, 'rgba(255,45,122,0.12)');
+        bloom.addColorStop(0.4, 'rgba(255,45,122,0.28)');
+        bloom.addColorStop(1, 'rgba(255,45,122,0)');
+        ctx.fillStyle = bloom;
         ctx.beginPath();
-        ctx.arc(cx, cy, ringR * 2.2, 0, Math.PI * 2);
+        ctx.arc(cx, cy, ringR * 2.6, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.save();
-        ctx.strokeStyle = 'rgba(255, 90, 150, 0.55)';
-        ctx.lineWidth = 3;
-        ctx.shadowColor = 'rgba(255, 45, 122, 0.9)';
-        ctx.shadowBlur = 18;
+        ctx.strokeStyle = 'rgba(255, 90, 150, 0.45)';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(255, 45, 122, 0.85)';
+        ctx.shadowBlur = 22;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringR * 1.1, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255, 120, 170, 0.75)';
+        ctx.lineWidth = 3.5;
+        ctx.shadowBlur = 28;
         ctx.beginPath();
         ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
         ctx.stroke();
@@ -502,13 +602,18 @@
 
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
+        const orbit = motionOn();
         sparkles.forEach(function (s) {
-          const wobble = motionOn() ? Math.sin(time * 0.001 + s.ph * 6) * 0.02 : 0;
+          if (orbit) s.a += s.spd;
+          const wobble = orbit ? Math.sin(time * 0.001 + s.ph * 6) * 0.025 : 0;
           const rr = ringR * (s.r + wobble);
           const px = cx + Math.cos(s.a) * rr;
           const py = cy + Math.sin(s.a) * rr;
-          ctx.fillStyle = 'rgba(255,255,255,' + (0.15 + s.ph * 0.35) + ')';
-          ctx.fillRect(px, py, 1.2, 1.2);
+          const alpha = 0.2 + s.ph * 0.5;
+          ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+          ctx.beginPath();
+          ctx.arc(px, py, 1.4 + s.ph, 0, Math.PI * 2);
+          ctx.fill();
         });
         ctx.restore();
       }
@@ -560,9 +665,16 @@
         });
         ctx.restore();
 
-        if (!frozen && particles.length < streams.length * 10) {
-          streams.forEach(function (s) {
-            if (Math.random() < 0.35) spawnParticle(s);
+        if (!frozen) {
+          streams.forEach(function (s, si) {
+            let count = 0;
+            for (let j = 0; j < particles.length; j++) {
+              if (particles[j].streamId === si) count++;
+            }
+            while (count < PARTICLES_PER_STREAM) {
+              spawnParticle(s, si);
+              count++;
+            }
           });
         }
 
@@ -572,22 +684,37 @@
           const p = particles[i];
           if (!frozen) p.t += p.speed;
           if (p.t > 1) {
-            particles.splice(i, 1);
+            p.t = 0;
+            if (frozen) particles.splice(i, 1);
             continue;
           }
-          const pt = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, p.t);
-          const tailT = Math.max(0, p.t - 0.08);
-          const tail = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, tailT);
           const rgb = p.stream.rgb;
-          ctx.strokeStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.45)';
-          ctx.lineWidth = p.spark ? 2.5 : 1.4;
+          const trailLen = 0.14;
+          const steps = 6;
+          for (let k = 0; k < steps; k++) {
+            const t1 = Math.max(0, p.t - (k / steps) * trailLen);
+            const t0 = Math.max(0, p.t - ((k + 1) / steps) * trailLen);
+            const a = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t0);
+            const b = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t1);
+            const fade = (1 - k / steps) * 0.55;
+            const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+            grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (fade * 0.15) + ')');
+            grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fade + ')');
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = p.spark ? 2.2 : 1.3;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+          const pt = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, p.t);
+          const head = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, p.size * 2.2);
+          head.addColorStop(0, 'rgba(255,255,255,0.95)');
+          head.addColorStop(0.35, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.85)');
+          head.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
+          ctx.fillStyle = head;
           ctx.beginPath();
-          ctx.moveTo(tail.x, tail.y);
-          ctx.lineTo(pt.x, pt.y);
-          ctx.stroke();
-          ctx.fillStyle = p.spark ? '#fff' : 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.9)';
-          ctx.beginPath();
-          ctx.arc(pt.x, pt.y, p.size, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, p.size * 2.2, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
@@ -608,7 +735,8 @@
         const geom = geomCache || layoutNodes();
         const rect = stage.getBoundingClientRect();
         ctx.clearRect(0, 0, rect.width, rect.height);
-        drawRadar(geom.cx, geom.cy, Math.min(rect.width, rect.height) * 0.46);
+        const radarR = Math.min(rect.width, rect.height) * (geom.phone ? 0.32 : 0.42);
+        drawRadar(geom.cx, geom.cy, radarR);
         drawRingHalo(geom.cx, geom.cy, geom.ringR, time);
         const still = forceStill || !motionOn();
         if (!still) {
