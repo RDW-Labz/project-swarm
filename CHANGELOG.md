@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.167.9
+
+Ticket jobs can finally run on the local lane.
+- **Local lane:** ticket jobs carry cacheContext, which the router's candidate check refused for every agent but anthropic, so the local lane (dev2) was silently rejected for every ticket and the work fell to Anthropic; the local lane now accepts the field and ignores it.
+
 ## 1.167.8
 
 The local lane takes work, and tickets no longer park on files they create.

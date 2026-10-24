@@ -117,9 +117,19 @@ import { autopilotPolicyPass, dispatchPolicyCli, lastTopLevelObject, loadMutants
 import { runnerVersion, swarmVersion } from './runner-version.mjs';
 import { bytesAt, expandContextGlobs, jobWorktreePath, jsonWrite, mutantReviewTexts, parseFinalJson, promptPathsNotInWorkspaceWarnings, runChecks, saveDroppedWrite, validateManifest, write } from './swarm/core-31.mjs';
 import { doctor, editInPlaceOnlyJobs, failedStderrTail, noteRun, snapshotHash, workerKeyGuard } from './swarm/core-32.mjs';
-import { anyOutputExists, claudeProviderLimitGuard, droppedBytesAt, execute, expandJobContext, expandOpenScopes, jobFinalJson, ledgerSettings, loadJobMutantsFile, loadJobResultData, missingDepsWarnings, missingLockPathSourceWarnings, outputsChanged, pendingBaseCheck, pickJobRoute, privateNamesDispatchGuard, readState, recordIntegratedHashes, recoverIntegrationJournal, repairArrayKeyValueJson, reportObject, resolveAskRoute, runJobSetup, runMutant, smokeCheckInSandbox } from './swarm/core-41.mjs';
+import { anyOutputExists, claudeProviderLimitGuard, droppedBytesAt, execute, expandJobContext, expandOpenScopes, jobFinalJson, ledgerSettings, loadJobMutantsFile, loadJobResultData, missingDepsWarnings, missingLockPathSourceWarnings, outputsChanged, pendingBaseCheck, pickJobRoute, privateNamesDispatchGuard, readState, recordIntegratedHashes, recoverIntegrationJournal, repairArrayKeyValueJson, reportObject, resolveAskRoute, runJobSetup, runMutant, runWithRoutingRoot, smokeCheckInSandbox } from './swarm/core-41.mjs';
 import { doctorAll, packagingChangesSince } from './swarm/core-42.mjs';
-import { appendRunLedger, cancelInactiveRun, cancelRun, checkWorkerReport, collectMutants, idleRun, listOrphanWorktrees, prepareJobEnvironment, redcheckCommitRun, runBaseChecks, runChecksForRun, startIntegrationJournal, todaySpendUsd, unroutableJobs, validateProject, waitRun } from './swarm/core-51.mjs';
+import { appendRunLedger, cancelInactiveRun, cancelRun, checkWorkerReport, collectMutants, idleRun, listOrphanWorktrees, prepareJobEnvironment, redcheckCommitRun, runBaseChecks, runChecksForRun, startIntegrationJournal, todaySpendUsd, unroutableJobs as unroutableJobsCore, validateProject as validateProjectCore, waitRun } from './swarm/core-51.mjs';
+
+export async function validateProject(root, manifest, options = {}) {
+  const resolved = await fs.realpath(root);
+  return await runWithRoutingRoot(resolved, async () => await validateProjectCore(resolved, manifest, options));
+}
+
+export async function unroutableJobs(root, manifest, options = {}) {
+  const resolved = await fs.realpath(root);
+  return await runWithRoutingRoot(resolved, async () => await unroutableJobsCore(resolved, manifest, options));
+}
 import { inspectResults, inspectRun, monitorView, onboardReport, planLaneInfo, shipBranch, shipRun, updateInstall } from './swarm/core-52.mjs';
 import { runStats } from './swarm/core-53.mjs';
 import { executeClaudeShellJob, reaskWorkerReport, runMutants, runMutantsCurrentTree, spendGuard, writeRunLedger } from './swarm/core-61.mjs';
@@ -269,7 +279,7 @@ async function runManifestMain(root, manifest, options = {}) {
   const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
   const dispatchJobs = manifest.jobs.map(job => {
     if (job.agent !== 'auto') return job;
-    const route = pickJobRoute(job, runLanes, { contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) });
+    const route = pickJobRoute(job, runLanes, { root, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(job.id) });
     return withoutApiOnlyFields({ ...job, agent: route.agent, model: route.model });
   });
   const scopeWarnings = manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
@@ -720,7 +730,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
       const failures = record.routeFailures ??= {};
       try {
         if (original.agent === 'auto') {
-          record.route = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(original.id) });
+          record.route = pickJobRoute(original, lanes, { root, health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest), editInPlaceOnly: oversize.has(original.id) });
           job = withoutApiOnlyFields({ ...job, agent: record.route.agent, model: record.route.model });
           if (record.capFallbacks?.length) record.capFallbacks[record.capFallbacks.length - 1].to = record.route.agent;
           // The API lanes carry the short report inside their envelope (`result`); the "finish with one JSON line" instruction is for CLI lanes and makes small models drop the files.
@@ -825,7 +835,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
             const capped = job.agent;
             cappedLanes.set(original.id, new Set([...cappedFor(original.id), capped]));
             let next = null;
-            try { next = pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); } catch { /* nothing else can take it */ }
+            try { next = pickJobRoute(original, lanes, { root, health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); } catch { /* nothing else can take it */ }
             if (next && !cappedFor(original.id).has(next.agent)) {
               (record.capFallbacks ??= []).push({ from: capped, to: next.agent, reason: decision.message, at: new Date(now()).toISOString() });
               (state.spendWarnings ??= []).push(`lane-cap-reroute: ${original.id} left ${capped} (${decision.message.split('; resume')[0]}) for ${next.agent}`);
@@ -1204,7 +1214,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           } else { record.status = 'failed'; record.error = `rate-limited: ${result.error ?? job.agent}`; }
         } else if (!result.reportInvalid && original.agent === 'auto' && !['blocked', 'cancelled'].includes(result.status) && (outcome.kind === 'quota-exhausted' || ['failed', 'timeout'].includes(result.status))) {
           if (['failed', 'timeout'].includes(result.status)) failures[job.agent] = (failures[job.agent] ?? 0) + 1;
-          try { pickJobRoute(original, lanes, { health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
+          try { pickJobRoute(original, lanes, { root, health: routeHealth(await today(), original.id), failures, contract: manifest.contract, ready: readyAutoJobs(manifest) }); retry = true; }
           catch (error) { record.status = 'failed'; record.error = error.message; }
         }
         if (outcome.kind === 'quota-exhausted' && !retry) { record.heldReason = 'quota'; record.heldUntil = scheduler.health(job.agent).until; }
@@ -4485,8 +4495,6 @@ export { listOrphanWorktrees } from './swarm/core-51.mjs';
 export { runBaseChecks } from './swarm/core-51.mjs';
 export { runChecksForRun } from './swarm/core-51.mjs';
 export { todaySpendUsd } from './swarm/core-51.mjs';
-export { unroutableJobs } from './swarm/core-51.mjs';
-export { validateProject } from './swarm/core-51.mjs';
 export { waitRun } from './swarm/core-51.mjs';
 export { inspectResults } from './swarm/core-52.mjs';
 export { inspectRun } from './swarm/core-52.mjs';
