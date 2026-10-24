@@ -270,15 +270,17 @@ export function tickAutotune({
     max: TUNER_MAX,
     jobMemoryGb,
   });
+  const pressureUnknown = machine.pressureUnknown === true;
   const { limit, reason, capped, memoryPressure, projectionCap } = tuner.tune({
     cpuPercent: machine.cpuPercent ?? 0,
-    freeRamGb: machine.freeRamGb ?? 0,
-    availRamGb: machine.availRamGb ?? machine.freeRamGb ?? 0,
+    freeRamGb: machine.freeRamGb ?? machine.availRamGb ?? null,
+    availRamGb: machine.availRamGb ?? machine.freeRamGb ?? null,
     swapUsedGb: machine.swapUsedGb ?? 0,
     swapTotalGb: machine.swapTotalGb ?? 0,
     inUse,
     waiting,
     rateLimitedLanes: lanes,
+    pressureUnknown,
   });
 
   const nextState = {

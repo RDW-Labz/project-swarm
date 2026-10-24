@@ -40,6 +40,9 @@ export const DEFAULT_JOB_MEMORY_GB = 0.6;
 export function defaultLimit({ cores, freeRamGb, totalRamGb }) {
   void totalRamGb;
   const byCores = cores * 2;
+  if (freeRamGb == null) {
+    return Math.min(64, Math.max(4, byCores));
+  }
   const byRam = Math.floor((freeRamGb - 4) / 0.5);
   const raw = Math.min(byCores, byRam);
   return Math.min(64, Math.max(4, raw));
@@ -136,7 +139,7 @@ export async function readAvailableMemory({
       if (parsed) return parsed;
     }
     return {
-      availRamGb: 0,
+      availRamGb: null,
       swapUsedGb: 0,
       swapTotalGb: 0,
       pressureUnknown: true,
@@ -180,7 +183,9 @@ export function memoryPressureLevel(machine, platform) {
 }
 
 export function projectedMemoryJobCap(machine, jobMemoryGb = DEFAULT_JOB_MEMORY_GB) {
-  const avail = machine.availRamGb ?? machine.freeRamGb ?? 0;
+  if (machine?.pressureUnknown) return Infinity;
+  const avail = machine.availRamGb ?? machine.freeRamGb;
+  if (avail == null) return Infinity;
   const perJob = jobMemoryGb > 0 ? jobMemoryGb : DEFAULT_JOB_MEMORY_GB;
   return Math.max(0, Math.floor((avail - 3) / perJob));
 }
@@ -240,16 +245,18 @@ export async function readMachine({
   };
 }
 
-function stressReason({ cpuPercent, freeRamGb, rateLimitedLanes, memoryPressure }) {
+function stressReason({ cpuPercent, freeRamGb, rateLimitedLanes, memoryPressure, pressureUnknown }) {
   if (cpuPercent >= 80) return 'cpu';
   if (memoryPressure === 'hard' || memoryPressure === 'soft') return 'ram';
+  if (pressureUnknown) return null;
+  if (freeRamGb == null) return null;
   if (freeRamGb <= 4) return 'ram';
   if (rateLimitedLanes?.length > 0) return 'lane-rate-limit';
   return null;
 }
 
-function cappedNow({ cpuPercent, freeRamGb, rateLimitedLanes, waiting, limit, max, memoryPressure }) {
-  const stress = stressReason({ cpuPercent, freeRamGb, rateLimitedLanes, memoryPressure });
+function cappedNow({ cpuPercent, freeRamGb, rateLimitedLanes, waiting, limit, max, memoryPressure, pressureUnknown }) {
+  const stress = stressReason({ cpuPercent, freeRamGb, rateLimitedLanes, memoryPressure, pressureUnknown });
   if (stress) return stress;
   if (waiting <= 0) return 'no-ready-tickets';
   if (limit >= max) return 'none';
@@ -278,6 +285,7 @@ export function createTuner({
     inUse,
     waiting,
     rateLimitedLanes = [],
+    pressureUnknown = false,
   }) {
     void inUse;
     const lanes = Array.isArray(rateLimitedLanes) ? rateLimitedLanes : [];
@@ -286,11 +294,16 @@ export function createTuner({
       availRamGb: availRamGb ?? freeRamGb,
       swapUsedGb,
       swapTotalGb,
+      ...(pressureUnknown ? { pressureUnknown: true } : {}),
     };
     const memoryPressure = memoryPressureLevel(machine);
     const projectionCap = projectedMemoryJobCap(machine, jobMemoryGb);
-    let workingMax = Math.min(max, projectionCap > 0 ? projectionCap : max);
-    if (projectionCap === 0 && (machine.availRamGb ?? 0) < 3) {
+    const projectionFinite = Number.isFinite(projectionCap);
+    let workingMax = projectionFinite
+      ? Math.min(max, projectionCap > 0 ? projectionCap : max)
+      : max;
+    const availForFloor = machine.availRamGb ?? machine.freeRamGb;
+    if (projectionCap === 0 && availForFloor != null && availForFloor < 3) {
       workingMax = Math.min(workingMax, memoryFloor);
     }
 
@@ -299,6 +312,7 @@ export function createTuner({
       freeRamGb: machine.freeRamGb,
       rateLimitedLanes: lanes,
       memoryPressure,
+      pressureUnknown,
     });
     let reason = 'none';
     let next = limit;
@@ -315,7 +329,7 @@ export function createTuner({
     } else if (
       memoryPressure === 'ok'
       && cpuPercent < 80
-      && machine.freeRamGb > 4
+      && (pressureUnknown || machine.freeRamGb == null || machine.freeRamGb > 4)
       && waiting > 0
       && limit < workingMax
     ) {
@@ -335,6 +349,7 @@ export function createTuner({
       limit,
       max: workingMax,
       memoryPressure,
+      pressureUnknown,
     });
     return { limit, reason, capped, memoryPressure, projectionCap };
   }

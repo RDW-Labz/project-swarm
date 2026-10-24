@@ -14,6 +14,13 @@ import {
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
+let memoryProbeWarningLogged = false;
+
+function logMemoryProbeWarningOnce(warning, log) {
+  if (!warning || memoryProbeWarningLogged) return;
+  memoryProbeWarningLogged = true;
+  log(warning);
+}
 
 function canonicalRoot(root) {
   if (typeof root !== 'string' || !root) return null;
@@ -116,6 +123,7 @@ export function readyAutopilotDeps(projectRoot, {
       try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
       let hw;
       try { hw = await readMachineImpl(); } catch { return settings; }
+      logMemoryProbeWarningOnce(hw?.warning, log);
       const ceiling = Number.isInteger(settings?.maxJobs) && settings.maxJobs > 0 ? settings.maxJobs : 1;
       const { effective } = effectiveMachineLimit({ limit: ceiling, machine: hw, config });
       return { ...settings, maxJobs: Math.min(ceiling, effective) };
@@ -129,6 +137,7 @@ export function readyAutopilotDeps(projectRoot, {
         try { config = loadLocalConfig({ env }) ?? {}; } catch { config = {}; }
         let hw;
         try { hw = await readMachineImpl(); } catch { hw = null; }
+        if (hw) logMemoryProbeWarningOnce(hw.warning, log);
         if (hw && memoryPressureLevel(hw) === 'hard') {
           log(memoryPressureHoldLine(hw));
           return { ok: true, result: 'held-memory' };

@@ -61,9 +61,15 @@ async function ensureConfigDirSecure(dir, { fs, uid }) {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   let st;
   try {
-    st = await fs.stat(dir);
+    st = await fs.lstat(dir);
   } catch {
     return;
+  }
+  if (st.isSymbolicLink?.()) {
+    throw Object.assign(
+      new Error('board keep-up: config directory must not be a symlink'),
+      { code: 'board-config-dir-symlink' },
+    );
   }
   if (st.uid !== uid) {
     throw Object.assign(

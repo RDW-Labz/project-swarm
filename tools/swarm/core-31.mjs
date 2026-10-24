@@ -37,6 +37,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
+let memoryProbeWarningLogged = false;
+
+function logMemoryProbeWarningOnce(warning) {
+  if (!warning || memoryProbeWarningLogged) return;
+  memoryProbeWarningLogged = true;
+  process.stderr.write(`${warning}\n`);
+}
+
 export async function promptPathsNotInWorkspaceWarnings(root, job, context, { trackedFiles = [], resources = [], access = file => fs.access(file) } = {}) {
   const covered = new Set([...trackedFiles, ...context, ...resources]);
   // Only what the manifest declares is checked. A retry note, a reviewer's evidence or an owner comment is quoted into the prompt between <<< and >>> as untrusted prose ("pr-part-*" in a
@@ -577,8 +585,13 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
     }
     let runArgv = resolvedProgram ? [resolvedProgram, ...argv.slice(1)] : argv;
     let memoryPressureWarning = null;
+    let memoryProbeWarning = null;
     if (check.name === 'tests' && isNodeTestCommand(runArgv)) {
       let machine = await readMachineFn();
+      if (machine?.warning) {
+        logMemoryProbeWarningOnce(machine.warning);
+        memoryProbeWarning = machine.warning;
+      }
       let pressure = memoryPressureLevel(machine);
       if (pressure === 'hard') {
         const deadline = Date.now() + MEMORY_HARD_WAIT_MS;
@@ -617,7 +630,9 @@ export async function runChecks(root, checks, integratedFiles, newFiles, spawnIm
     if (swarmLineCount) result.swarmLineCount = swarmLineCount;
     // A test check that passed but ran no test is a failure (the wrong runner for these files looks green).
     result = zeroTestGuard(check, result);
-    if (memoryPressureWarning) result = { ...result, warning: memoryPressureWarning };
+    const checkWarning = [memoryProbeWarning, memoryPressureWarning].filter(Boolean).join('; ')
+      || null;
+    if (checkWarning) result = { ...result, warning: checkWarning };
     if (affectedMode) { result.mode = 'affected'; result.affectedTests = affectedMode.tests; }
     // Field lesson #239: the orchestrator's own run outside the sandbox is the truth — a check
     // whose output shows it never really ran (macOS denying a nested sandbox_apply call) is tagged

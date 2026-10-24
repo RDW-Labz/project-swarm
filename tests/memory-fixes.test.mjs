@@ -18,8 +18,13 @@ import {
 } from '../tools/autotune.mjs';
 import {
   applyNodeTestConcurrency,
+  effectiveMachineLimit,
+  jobStartsForBatch,
   MEMORY_HARD_WAIT_MS,
   MEMORY_POLL_MS,
+  projectedMemoryJobCap,
+  testConcurrencyFor,
+  tickAutotune,
 } from '../tools/machine-limit.mjs';
 import { runChecks } from '../tools/swarm/core-31.mjs';
 import {
@@ -73,6 +78,7 @@ describe('readAvailableMemory default exec', () => {
       os: { platform: () => 'darwin', freemem: () => 3 * 1024 ** 3 },
     });
     assert.equal(r.pressureUnknown, true);
+    assert.equal(r.availRamGb, null);
     assert.equal(r.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
     assert.equal(memoryPressureLevel(r, 'darwin'), 'ok');
     assert.equal(r.swapUsedGb, 0);
@@ -124,8 +130,60 @@ describe('readMachine probe metadata', () => {
       measureCpu: async () => 0,
     });
     assert.equal(m.pressureUnknown, true);
+    assert.equal(m.availRamGb, null);
+    assert.equal(m.freeRamGb, null);
     assert.equal(m.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
     assert.equal(memoryPressureLevel(m, 'darwin'), 'ok');
+  });
+});
+
+describe('unknown memory pressure skips RAM limits', () => {
+  const unknownMachine = {
+    availRamGb: null,
+    freeRamGb: null,
+    pressureUnknown: true,
+    swapUsedGb: 0,
+    swapTotalGb: 0,
+    cores: 16,
+    cpuPercent: 10,
+  };
+
+  it('does not project a job cap from null availability', () => {
+    assert.equal(projectedMemoryJobCap(unknownMachine), Infinity);
+    const { effective, projectionCap, pressure } = effectiveMachineLimit({
+      limit: 32,
+      machine: unknownMachine,
+      config: {},
+    });
+    assert.equal(pressure, 'ok');
+    assert.equal(projectionCap, Infinity);
+    assert.equal(effective, 32);
+  });
+
+  it('testConcurrencyFor and jobStartsForBatch behave like ok pressure', () => {
+    assert.equal(testConcurrencyFor(unknownMachine), 4);
+    const batch = jobStartsForBatch({
+      limit: 16,
+      running: 2,
+      machine: unknownMachine,
+      config: {},
+    });
+    assert.equal(batch.pressure, 'ok');
+    assert.equal(batch.starts, 14);
+    assert.equal(batch.effectiveLimit, 16);
+  });
+
+  it('tickAutotune does not RAM-backoff when pressure is unknown', () => {
+    const out = tickAutotune({
+      state: { version: 1, limit: 20 },
+      machine: unknownMachine,
+      inUse: 0,
+      waiting: 5,
+      config: {},
+    });
+    assert.equal(out.memoryPressure, 'ok');
+    assert.equal(out.capped, 'none');
+    assert.ok(out.limit >= 20);
   });
 });
 
@@ -135,6 +193,44 @@ describe('memoryPressureLevel darwin', () => {
     assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 3, swapTotalGb: 4 }, 'darwin'), 'ok');
     assert.equal(memoryPressureLevel({ availRamGb: 2.5 }, 'darwin'), 'hard');
     assert.equal(memoryPressureLevel({ availRamGb: 16, swapUsedGb: 9 }, 'darwin'), 'soft');
+  });
+});
+
+describe('runChecks memory probe warning', () => {
+  it('logs once and attaches probe warning on the tests check result', async () => {
+    const stderrChunks = [];
+    const stderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk, ...args) => {
+      stderrChunks.push(String(chunk));
+      return stderrWrite(chunk, ...args);
+    };
+    try {
+      const spawnImpl = () => ({
+        stdout: { on() {} },
+        stderr: { on() {} },
+        on(event, cb) {
+          if (event === 'close') queueMicrotask(() => cb(0));
+        },
+      });
+      const machine = {
+        availRamGb: null,
+        freeRamGb: null,
+        pressureUnknown: true,
+        warning: DARWIN_MEMORY_PROBE_UNKNOWN_WARNING,
+        cores: 8,
+      };
+      const { checks } = await runChecks(ROOT, [{
+        name: 'tests',
+        argv: [process.execPath, '--test', 'ok.mjs'],
+      }], [], [], spawnImpl, {
+        readMachine: async () => machine,
+      });
+      assert.equal(checks[0].warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
+      const logged = stderrChunks.join('');
+      assert.equal((logged.match(new RegExp(DARWIN_MEMORY_PROBE_UNKNOWN_WARNING, 'g')) ?? []).length, 1);
+    } finally {
+      process.stderr.write = stderrWrite;
+    }
   });
 });
 
@@ -192,7 +288,11 @@ describe('board identity port bookmark', () => {
           err.code = 'ENOENT';
           throw err;
         }
-        return { isSymbolicLink: () => Boolean(entry.symlink) };
+        return {
+          isSymbolicLink: () => Boolean(entry.symlink),
+          uid: entry.uid ?? UID,
+          mode: entry.mode ?? 0o100600,
+        };
       },
       async stat(file) {
         const entry = files.get(file);
@@ -254,6 +354,22 @@ describe('board identity port bookmark', () => {
     });
     const entry = fs.files.get(file);
     assert.ok(entry.lastOpenFlags & fsConstants.O_NONBLOCK);
+  });
+
+  it('refuses a symlink config directory', async () => {
+    const dir = '/cfg/.project-swarm';
+    const fs = makeMemFs();
+    fs.files.set(dir, { mode: 0o40700, uid: UID, symlink: true });
+    await assert.rejects(
+      () => loadOrCreateBoardIdentity({
+        dir,
+        fs,
+        randomBytes: n => Buffer.alloc(n, 1),
+        uid: UID,
+        isPortFree: async () => true,
+      }),
+      err => err.code === 'board-config-dir-symlink',
+    );
   });
 
   it('refuses to write when config directory is not owned by the user', async () => {
@@ -343,6 +459,39 @@ describe('watch keep-up EADDRINUSE', () => {
     assert.equal(out.exitCode, 1);
     assert.match(out.stdout, /board keep-up: port .* already in use/);
     assert.equal(out.stdout.trim(), portBusyError(identity.port).message);
+  });
+});
+
+describe('readyAutopilotDeps unknown memory pressure', () => {
+  it('does not hold or pin max-jobs when probe pressure is unknown', async () => {
+    const logs = [];
+    let seenArgs = null;
+    const deps = readyAutopilotDeps(ROOT, {
+      log: line => logs.push(line),
+      spawnImpl: (cmd, args) => {
+        seenArgs = args;
+        return { unref() {}, once(event, cb) { if (event !== 'error') queueMicrotask(() => cb?.()); } };
+      },
+      readMachine: async () => ({
+        availRamGb: null,
+        freeRamGb: null,
+        pressureUnknown: true,
+        warning: DARWIN_MEMORY_PROBE_UNKNOWN_WARNING,
+        swapUsedGb: 0,
+        swapTotalGb: 0,
+        cores: 16,
+      }),
+      readTickets: async () => [],
+      readPending: async () => [],
+      listLiveRuns: async () => [],
+      liveBusyMarkers: async () => [],
+      checkProjectCap: async () => true,
+    });
+    const out = await deps.startScope({ root: ROOT, maxJobs: 16 });
+    assert.notEqual(out.result, 'held-memory');
+    const idx = seenArgs.indexOf('--max-jobs');
+    assert.equal(seenArgs[idx + 1], '16');
+    assert.equal(logs.filter(l => l === DARWIN_MEMORY_PROBE_UNKNOWN_WARNING).length, 1);
   });
 });
 
