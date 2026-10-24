@@ -13,6 +13,7 @@ import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
 import { mainWorktreeRoot, worktreeFamily } from './project-spend.mjs';
+import { backupLedger } from './ledger-backup.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
@@ -215,6 +216,25 @@ export async function readLedger(root) {
   }
 }
 
+async function ledgerBackupAfterWrite(root) {
+  if (process.env.PROJECT_SWARM_NO_LEDGER_BACKUP) return;
+  const explicitHome = process.env.PROJECT_SWARM_HOME;
+  if (!explicitHome) {
+    try {
+      const real = await fs.realpath(root);
+      const tmpBase = path.resolve(os.tmpdir());
+      if (real === tmpBase || real.startsWith(tmpBase + path.sep)) return;
+    } catch { /* best effort */ }
+  }
+  const cap = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+  try {
+    await Promise.race([
+      backupLedger(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
+      cap,
+    ]);
+  } catch { /* ignored */ }
+}
+
 export async function writeLedger(root, ledger) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, 'tickets.json');
@@ -231,6 +251,7 @@ export async function writeLedger(root, ledger) {
     await fs.rm(tmp, { force: true });
     throw error;
   }
+  await ledgerBackupAfterWrite(root);
 }
 
 export async function appendLog(root, event) {

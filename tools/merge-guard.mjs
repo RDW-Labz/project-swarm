@@ -2,6 +2,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
+import { holdsSwarmState } from './state-guard.mjs';
+import { projectsFile } from './projects.mjs';
+import os from 'node:os';
 
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
@@ -109,6 +112,33 @@ function sameRepo(url, repoName) {
   return Boolean(m) && `${m[1]}/${m[2]}`.toLowerCase() === String(repoName).toLowerCase();
 }
 
+export function parseGitWorktreeListPorcelain(text) {
+  const worktrees = [];
+  let current = {};
+  for (const line of String(text ?? '').split('\n')) {
+    if (!line) {
+      if (current.path) worktrees.push(current);
+      current = {};
+      continue;
+    }
+    if (line.startsWith('worktree ')) current.path = line.slice('worktree '.length);
+    if (line.startsWith('branch ')) current.branch = line.slice('branch '.length);
+  }
+  if (current.path) worktrees.push(current);
+  return worktrees;
+}
+
+async function headBranchCheckedOutInStateHolder(root, headBranch, { exec, holdsSwarmStateFn = holdsSwarmState, registryFile, fs: fsImpl } = {}) {
+  const listed = await exec('git', ['worktree', 'list', '--porcelain'], { cwd: root });
+  if (listed.code !== 0) return false;
+  const ref = `refs/heads/${headBranch}`;
+  for (const wt of parseGitWorktreeListPorcelain(listed.stdout)) {
+    if (wt.branch !== ref || !wt.path) continue;
+    if (await holdsSwarmStateFn(wt.path, { fs: fsImpl, registryFile })) return true;
+  }
+  return false;
+}
+
 async function localUpdate(root, branch, repoName, exec) {
   const opts = { cwd: root };
   const inside = await exec('git', ['rev-parse', '--is-inside-work-tree'], opts);
@@ -144,7 +174,7 @@ async function localUpdate(root, branch, repoName, exec) {
   return 'pulled';
 }
 
-export async function runMerge(root, args, { exec = realExec, sleep = defaultSleep } = {}) {
+export async function runMerge(root, args, { exec = realExec, sleep = defaultSleep, holdsSwarmState: holdsSwarmStateFn = holdsSwarmState, registryFile, fs: fsImpl, home = os.homedir(), env = process.env } = {}) {
   const refuse = (reason) => ({ status: 'refused', reasons: [reason] });
   const list = Array.isArray(args) ? args.map(String) : [];
   let prArg = null;
@@ -244,8 +274,24 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
   }
 
   const mergeFailed = (reason) => ({ status: 'merge-failed', reason, reasons: [reason] });
-  const mg = await gh(['pr', 'merge', n, ...repoArgs, '--squash', '--delete-branch', '--match-head-commit', String(view.headRefOid)]);
+  const registry = registryFile ?? projectsFile(env, home);
+  const keepLocalHeadBranch = await headBranchCheckedOutInStateHolder(root, view.headRefName, {
+    exec,
+    holdsSwarmStateFn,
+    registryFile: registry,
+    fs: fsImpl,
+  });
+  const mergeArgs = ['pr', 'merge', n, ...repoArgs, '--squash'];
+  if (!keepLocalHeadBranch) mergeArgs.push('--delete-branch');
+  mergeArgs.push('--match-head-commit', String(view.headRefOid));
+  const mg = await gh(mergeArgs);
   if (mg.code !== 0) return mergeFailed(firstLine(mg, 'gh pr merge failed'));
+
+  if (keepLocalHeadBranch) {
+    const refPath = `repos/${repoName}/git/refs/heads/${encodeURIComponent(view.headRefName)}`;
+    const del = await gh(['api', '-X', 'DELETE', refPath]);
+    if (del.code !== 0) return mergeFailed(firstLine(del, 'remote branch delete failed'));
+  }
 
   const after = await gh(['pr', 'view', n, ...repoArgs, '--json', 'state']);
   if (after.code !== 0) return mergeFailed('post-merge state check failed');
@@ -262,6 +308,7 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
     checks: { total: rollup.total, green: rollup.green },
     requiredChecks,
     localUpdate: local,
+    ...(keepLocalHeadBranch ? { localBranch: 'kept' } : {}),
   };
 }
 
