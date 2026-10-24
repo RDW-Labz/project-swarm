@@ -51,19 +51,13 @@ test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare
   }]));
   const jobs = Array.from({ length: 500 }, (_, n) => job(n, ['ollama', 'openai', 'gemini'][n % 3]));
   const active = { ollama: 0, openai: 0, gemini: 0 }, attempts = new Map();
-  // Pause window is event-based: it opens once the 402 on job 2 has been returned and closes at the first
-  // gemini request that STARTS after that. Gemini requests already in flight do not count as a resume.
-  let first = true, reqSeq = 0, pauseSet = false, pauseLifted = false, servedDuringPause = 0;
+  // Isolation during a pause is covered deterministically in tests/lane-pause-isolation.test.mjs.
+  let first = true, reqSeq = 0, pauseSet = false;
   const state = await runManifest(root, manifest(jobs, { lanes }), {
     env, id: 'lane-500',
     fetchImpl: async (url, options) => {
       const seq = ++reqSeq;
       const { agent, n } = requestJob(url, options);
-      const startedPaused = pauseSet && !pauseLifted;
-      if (startedPaused) {
-        if (agent === 'gemini') pauseLifted = true;
-        else servedDuringPause++;
-      }
       assert.ok(++active[agent] <= caps[agent], `${agent} cap exceeded`);
       const attempt = (attempts.get(n) ?? 0) + 1; attempts.set(n, attempt);
       try {
@@ -95,7 +89,6 @@ test('500 API jobs respect lane caps, retry 429s, pause quota lanes, and prepare
   assert.ok(state.peakConcurrency <= 28);
   assert.equal(state.peakConcurrency, state.lanes.peakGlobal);
   assert.ok(pauseSet, 'the 402 was returned');
-  assert.ok(servedDuringPause > 0,'other providers were served during the gemini pause');
 });
 
 test('auto retries OpenRouter twice then falls back to Claude with three recorded attempts', async t => {
