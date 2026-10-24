@@ -49,13 +49,32 @@ function makeExec(routes) {
 
 const PROTECTION = 'gh api repos/octo/repo/branches/main/protection/required_status_checks';
 const REMOTE = 'git remote get-url origin';
+const WORKTREE = 'git worktree list --porcelain';
+const CROSS_REPO = 'gh pr view 123 --json isCrossRepository';
+const REMOTE_DELETE_FEAT = 'gh api -X DELETE repos/octo/repo/git/refs/heads/feat';
+
+function encodeRefPath(refName) {
+  return String(refName).split('/').map((seg) => encodeURIComponent(seg)).join('/');
+}
+
+function remoteDeleteKey(headBranch) {
+  return `gh api -X DELETE repos/octo/repo/git/refs/heads/${encodeRefPath(headBranch)}`;
+}
+
+function worktreePorcelain(root, branch = 'refs/heads/main') {
+  return `worktree ${root}\nbranch ${branch}\n\n`;
+}
+
+function prListKey(baseBranch) {
+  return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
+}
 
 const KEY = {
   repo: 'gh repo view --json defaultBranchRef,nameWithOwner',
   view: 'gh pr view 123 --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup',
   after: 'gh pr view 123 --json state',
-  list: 'gh pr list --repo octo/repo --base feat --state open --json number',
   merge: 'gh pr merge 123 --squash --delete-branch --match-head-commit abc123',
+  mergeKeepLocal: 'gh pr merge 123 --squash --match-head-commit abc123',
 };
 
 function prView(over = {}) {
@@ -70,21 +89,31 @@ function prView(over = {}) {
   };
 }
 
-function routes(o = {}) {
-  return {
+function routes(o = {}, root = '/repo') {
+  const headBranch = o.view?.headRefName ?? 'feat';
+  const deleteKey = remoteDeleteKey(headBranch);
+  const base = {
     [KEY.repo]: json({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }),
     [KEY.view]: o.rawView ?? json(prView(o.view)),
-    [KEY.list]: json(o.list ?? []),
+    [prListKey(headBranch)]: json(o.list ?? []),
     [KEY.merge]: o.merge ?? ok(''),
     [KEY.after]: json(o.after ?? { state: 'MERGED' }),
     [PROTECTION]: o.protection ?? fail('404 Not Found'),
     [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
+    [WORKTREE]: o.worktree ?? ok(worktreePorcelain(root)),
+    [CROSS_REPO]: o.crossRepo ?? json({ isCrossRepository: false }),
+    [deleteKey]: o.remoteDelete ?? ok(''),
     'git rev-parse --is-inside-work-tree': ok('true\n'),
     'git status --porcelain': ok(o.porcelain ?? ''),
     'git fetch origin': ok(''),
     'git checkout main --': ok(''),
     'git pull --ff-only origin main': ok(''),
   };
+  if (o.keepLocalHeadBranch) {
+    base[KEY.mergeKeepLocal] = o.merge ?? ok('');
+    delete base[KEY.merge];
+  }
+  return base;
 }
 
 function mergeCalls(calls) {
@@ -453,4 +482,108 @@ test('runMerge: a dirty work tree skips the local update without failing the mer
   assert.equal(r.status, 'merged');
   assert.ok(String(r.localUpdate).startsWith('skipped:'));
   assert.equal(calls.some((c) => c.command === 'git' && c.args[0] === 'pull'), false);
+});
+
+test('runMerge: unparsable worktree list keeps local branch and deletes remote ref with encoded path', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok('not-a-worktree-block\n\n'),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+
+  const merges = mergeCalls(calls);
+  assert.equal(merges.length, 1);
+  assert.deepEqual(merges[0].args, [
+    'pr', 'merge', '123', '--squash', '--match-head-commit', 'abc123',
+  ]);
+  assert.ok(!merges[0].args.includes('--delete-branch'));
+
+  const cross = calls.filter(
+    (c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view' && c.args.includes('isCrossRepository'),
+  );
+  assert.equal(cross.length, 1);
+
+  const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X' && c.args[2] === 'DELETE');
+  assert.equal(deletes.length, 1);
+  assert.deepEqual(deletes[0].args, [
+    'api', '-X', 'DELETE', 'repos/octo/repo/git/refs/heads/feat',
+  ]);
+});
+
+test('runMerge: failing worktree list keeps local branch and deletes remote ref', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.equal(mergeCalls(calls).length, 1);
+  assert.ok(!mergeCalls(calls)[0].args.includes('--delete-branch'));
+  assert.equal(
+    calls.filter(
+      (c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE' && c.args[3] === 'repos/octo/repo/git/refs/heads/feat',
+    ).length,
+    1,
+  );
+});
+
+test('runMerge: head branch checked out in a state-holding worktree keeps local branch', async () => {
+  const wtPath = '/repo/.swarm/worktrees/wt-1';
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok(worktreePorcelain('/repo', 'refs/heads/main') + worktreePorcelain(wtPath, 'refs/heads/feat')),
+  }));
+  const holdsSwarmState = async (path) => path === wtPath;
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP, holdsSwarmState });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.deepEqual(mergeCalls(calls)[0].args, [
+    'pr', 'merge', '123', '--squash', '--match-head-commit', 'abc123',
+  ]);
+  assert.equal(
+    calls.filter(
+      (c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE' && c.args[3] === 'repos/octo/repo/git/refs/heads/feat',
+    ).length,
+    1,
+  );
+});
+
+test('runMerge: cross-repository PR keeps local branch without remote ref delete', async () => {
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: fail('worktree list failed'),
+    crossRepo: json({ isCrossRepository: true }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(r.localBranch, 'kept');
+  assert.ok(!mergeCalls(calls)[0].args.includes('--delete-branch'));
+  assert.equal(
+    calls.filter(
+      (c) => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'view' && c.args.includes('isCrossRepository'),
+    ).length,
+    1,
+  );
+  assert.equal(
+    calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[1] === '-X').length,
+    0,
+  );
+});
+
+test('runMerge: remote delete encodes each ref segment separately', async () => {
+  const slashBranch = 'feat/with/slash';
+  const { exec, calls } = makeExec(routes({
+    keepLocalHeadBranch: true,
+    worktree: ok('not-a-worktree-block\n\n'),
+    view: { headRefName: slashBranch },
+    list: [],
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE');
+  assert.equal(deletes.length, 1);
+  assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
 });
