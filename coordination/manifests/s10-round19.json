@@ -1,0 +1,54 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "cc19hive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "REBUILD docs/design/command-center-mockup/hive.html from scratch (round 18 regressed: cards overlapped the ring, no visible streams). Geometry spec: the whole page is one 100vw x 100vh grid (min 900px tall design, no page scroll at 1440x900): top stat strip 8vh; stage in the middle (position:relative, fills the rest minus the bottom strip); bottom panels strip 17vh with three compact panels (event log, lanes and savings, throughput chart). Stage: ring centred at 50% / 50%, diameter 40vh, neon double ring with bloom (box-shadow and blur layers), dashed inner ring, curved arc text 'answer before you spend' on the ring via SVG textPath, large italic serif OPUS with script 5.5 in the middle, orbiting spark particles. Ten project cards in ABSOLUTE slots: five in the left column (left:2%, width:21%) and five in the right column (right:2%, width:21%), evenly spaced in the stage height, each about 14% of stage height tall, outlined glow border in the card colour, header band, 3 rows and a p() progress bar; nothing may overlap the ring or each other (check by computing bounding boxes in a tiny inline script during development, not in the file). A full-stage canvas BEHIND the cards draws, for each card, a curved bezier stream from the card's inner edge to the ring edge with 120+ particles per link, comet heads, additive blending (globalCompositeOperation lighter), gradient trails in the card colour; 30 fps; static dots only under prefers-reduced-motion; make the streams clearly visible in a still screenshot taken after 4 seconds (also draw a faint static path under each stream). Put the toolgate popover where it covers nothing (bottom right inside the panels strip). Phone (max-width 720px): vertical stack: stat strip wraps to 2x2, ring 80vw square, cards in a 2-column grid below, panels stacked, canvas streams hidden but the static paths drawn as vertical connectors, 44 px targets. Rounds 17 and 18 scored low (Hive 2.5, Cockpit 2.8 on a 4.5 target); the grader judges screenshots at 1440x900 and 390x844, so EVERYTHING must be visible without scrolling at 1440x900 (nothing cut off below the fold) and at 390 wide there must be no horizontal overflow (set min-width:0 on grid children, one column, overflow-x:hidden on body). Open the reference image and compare yourself before you finish. Keep: no external requests, ASCII only, reduced-motion still frames, labelled numbers (one page-level 'illustrative values' banner and footer note, a 'sample' chip only on numbers not in the target).",
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/board.test.mjs",
+    "tests/field-lessons-batch-ai-runtime.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-integrity.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/split-repair.test.mjs"
+   ]
+  },
+  {
+   "id": "cc19cock",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "prompt": "REBUILD docs/design/command-center-mockup/cockpit.html layout so it fits 1440x900 with no scroll: header band 9vh; then three zones: left column and right column of ticket rows (mirrored staircase indent, row names LEFT-aligned, number chips tinted by category with thick coloured borders, inline-SVG check marks), a centre hero with a mascot at about 3 times the current size (block-pixel creature in CSS or SVG with orbit ring and floor shadow, orbit ring never crossing text) above the now-loading box; below the hero a bottom band of 24vh holding the loop strip, the render stream (coloured top rule, progress bars) and the stack summary tiles with the big '20 REPOS' number and coloured top rules. Phone (max-width 720px): tabbed Cockpit (tabs: Now, Tickets, Stream, Stack), each tab a single column, no horizontal overflow, 44 px targets, header text wraps. Rounds 17 and 18 scored low (Hive 2.5, Cockpit 2.8 on a 4.5 target); the grader judges screenshots at 1440x900 and 390x844, so EVERYTHING must be visible without scrolling at 1440x900 (nothing cut off below the fold) and at 390 wide there must be no horizontal overflow (set min-width:0 on grid children, one column, overflow-x:hidden on body). Open the reference image and compare yourself before you finish. Keep: no external requests, ASCII only, reduced-motion still frames, labelled numbers (one page-level 'illustrative values' banner and footer note, a 'sample' chip only on numbers not in the target).",
+   "ignoreTests": []
+  }
+ ]
+}

@@ -71,6 +71,129 @@ body.cc-body {
   -webkit-text-size-adjust: 100%;
 }
 
+body.hive-body {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  min-height: 900px;
+}
+
+.hive-shell {
+  width: 100vw;
+  height: 100vh;
+  min-height: 900px;
+  max-height: 100vh;
+  display: grid;
+  grid-template-rows: minmax(0, auto) 8vh minmax(0, 1fr) minmax(0, 17vh);
+  gap: 4px;
+  padding: 6px 10px 6px;
+  padding-left: max(10px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.hive-chrome {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.hive-chrome-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.hive-brand {
+  font-size: clamp(20px, 2.8vw, 30px);
+  margin: 0;
+}
+
+.hive-nav {
+  margin: 0;
+  flex-wrap: nowrap;
+}
+
+.hive-illus {
+  padding: 4px 10px;
+  font-size: 10px;
+  max-width: none;
+}
+
+.hive-legend {
+  margin: 0;
+  font-size: 10px;
+  gap: 8px 12px;
+}
+
+.hive-stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
+  min-height: 0;
+  height: 8vh;
+  max-height: 8vh;
+  overflow: hidden;
+}
+
+.hive-stat-strip .cc-stat {
+  flex: 1 1 72px;
+  padding: 4px 8px;
+}
+
+.hive-stat-strip .cc-stat .val {
+  font-size: 18px;
+}
+
+.hive-stat-strip .cc-live {
+  min-height: 44px;
+  padding: 4px 12px;
+  font-size: 11px;
+}
+
+.hive-panels-wrap {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.hive-panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hive-footer {
+  position: absolute;
+  left: 8px;
+  right: min(300px, 42vw);
+  bottom: 2px;
+  margin: 0;
+  padding: 0;
+  font-size: 8px;
+  flex: none;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.hive-panels-wrap .hive-toolgate-callout {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 8;
+  max-width: min(280px, 38vw);
+  pointer-events: none;
+}
+
 .mono,
 .num {
   font-family: var(--mono);
@@ -352,14 +475,15 @@ body.cc-body {
 .hive-stage {
   position: relative;
   width: 100%;
-  min-height: min(56vh, 520px);
+  min-height: 0;
+  height: 100%;
   border-radius: var(--r-lg);
   border: 1px solid var(--line-soft);
   background:
-    radial-gradient(circle at 50% 48%, rgba(255, 45, 122, .08), transparent 42%),
+    radial-gradient(circle at 50% 50%, rgba(255, 45, 122, .1), transparent 48%),
     linear-gradient(180deg, #0a0a10, #060608);
-  overflow: visible;
-  padding: 20px 12px 12px;
+  overflow: hidden;
+  padding: 0;
 }
 
 #hive-canvas {
@@ -369,15 +493,18 @@ body.cc-body {
   height: 100%;
   display: block;
   pointer-events: none;
+  z-index: 1;
 }
 
 .hive-core-ui {
   position: absolute;
   left: 50%;
-  top: 46%;
+  top: 50%;
   transform: translate(-50%, -50%);
-  width: min(36vw, 260px);
-  height: min(36vw, 260px);
+  width: 40vh;
+  height: 40vh;
+  max-width: min(40vh, 52vw);
+  max-height: min(40vh, 68%);
   display: grid;
   place-items: center;
   pointer-events: none;
@@ -403,29 +530,39 @@ body.cc-body {
 
 .hive-core-disk {
   position: relative;
-  width: 100%;
-  height: 100%;
+  width: 72%;
+  height: 72%;
   border-radius: 50%;
   display: grid;
   place-items: center;
   text-align: center;
-  padding: 12px;
+  padding: 8px;
   background: radial-gradient(circle at 40% 30%, #2a1530, #0a060c 68%);
-  border: 2px solid rgba(255, 255, 255, .08);
+  border: 2px solid rgba(255, 255, 255, .1);
   box-shadow:
-    0 0 0 6px rgba(255, 45, 122, .12),
-    0 0 0 18px rgba(255, 45, 122, .18),
-    0 0 48px 8px var(--hive-ring-glow),
-    0 0 120px 24px rgba(255, 45, 122, .22);
+    0 0 0 4px rgba(255, 45, 122, .14),
+    0 0 0 12px rgba(255, 45, 122, .2),
+    0 0 40px 6px var(--hive-ring-glow),
+    0 0 90px 18px rgba(255, 45, 122, .24);
 }
 
 .hive-core-disk::before {
   content: "";
   position: absolute;
-  inset: -14px;
+  inset: -10px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 77, 141, .65);
-  box-shadow: 0 0 24px rgba(255, 45, 122, .5);
+  border: 2px dashed rgba(255, 255, 255, .28);
+  box-shadow: 0 0 20px rgba(255, 45, 122, .45);
+  pointer-events: none;
+}
+
+.hive-core-disk::after {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 77, 141, .55);
+  box-shadow: 0 0 28px rgba(255, 45, 122, .55);
   pointer-events: none;
 }
 
@@ -438,7 +575,7 @@ body.cc-body {
 
 .hive-core-name {
   font-family: var(--font-display);
-  font-size: clamp(40px, 7vw, 64px);
+  font-size: clamp(28px, 5vh, 52px);
   font-style: italic;
   font-weight: 700;
   line-height: .95;
@@ -448,7 +585,7 @@ body.cc-body {
 
 .hive-core-ver {
   font-family: var(--font-script);
-  font-size: clamp(26px, 4.5vw, 36px);
+  font-size: clamp(22px, 3.8vh, 34px);
   font-style: italic;
   color: var(--muted);
   font-weight: 600;
@@ -467,20 +604,22 @@ body.cc-body {
   margin-top: 2px;
 }
 
+.hive-nodes,
 #hive-nodes {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 3;
 }
 
 .hive-node {
   position: absolute;
   z-index: 3;
-  width: min(320px, 28vw);
+  min-width: 0;
   min-height: 44px;
-  transform: translate(-50%, -50%);
-  border-radius: var(--r);
-  border: 1px solid rgba(255, 77, 141, .28);
+  transform: none;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--card-glow, rgba(255, 77, 141, .45));
   background: linear-gradient(180deg, rgba(20, 20, 28, .97), rgba(8, 8, 12, .98));
   padding: 0;
   text-align: left;
@@ -488,18 +627,20 @@ body.cc-body {
   pointer-events: auto;
   box-shadow:
     var(--shadow),
-    0 0 0 1px rgba(255, 255, 255, .04),
-    0 0 18px rgba(255, 45, 122, .12);
+    0 0 0 1px rgba(255, 255, 255, .05),
+    0 0 16px var(--card-glow, rgba(255, 45, 122, .2));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .hive-node.is-focus {
-  width: min(340px, 30vw);
   z-index: 4;
-  border-color: rgba(255, 77, 141, .55);
+  border-width: 2px;
   box-shadow:
     0 10px 32px rgba(0, 0, 0, .55),
-    0 0 0 1px rgba(255, 77, 141, .35),
-    0 0 28px rgba(255, 45, 122, .28);
+    0 0 0 1px rgba(255, 77, 141, .4),
+    0 0 26px var(--card-glow, rgba(255, 45, 122, .35));
 }
 
 .hive-toolgate-callout {
@@ -529,13 +670,14 @@ body.cc-body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: var(--r) var(--r) 0 0;
-  font-size: 12px;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  font-size: 10px;
   font-weight: 700;
   color: #0a0a0c;
-  min-height: 44px;
+  min-height: 28px;
+  flex: none;
 }
 
 .hive-node-hd .idx {
@@ -543,8 +685,11 @@ body.cc-body {
 }
 
 .hive-node-bd {
-  padding: 10px 12px 12px;
-  font-size: 12px;
+  padding: 4px 8px 6px;
+  font-size: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .hive-kv {
@@ -557,7 +702,7 @@ body.cc-body {
 .hive-kv dt {
   margin: 0;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 9px;
   text-transform: lowercase;
 }
 
@@ -568,12 +713,12 @@ body.cc-body {
 }
 
 .hive-meter {
-  margin-top: 8px;
+  margin-top: 4px;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 8px;
+  gap: 4px;
   align-items: center;
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .hive-meter .track {
@@ -644,35 +789,74 @@ body.cc-body {
 }
 
 .cc-panels--hive {
-  gap: 8px;
+  gap: 6px;
 }
 
-@media (min-width: 900px) and (max-height: 920px) {
-  .cc-panels--hive {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+.hive-panels .cc-panel {
+  padding: 6px 8px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hive-event-log {
+  max-height: 52px;
+  gap: 3px;
+  font-size: 9px;
+  overflow: hidden;
+}
+
+.hive-gates-hero {
+  font-size: 14px;
+  margin: 0;
+}
+
+.hive-stat-lines {
+  font-size: 9px;
+  gap: 2px;
+}
+
+.hive-savings-rows {
+  gap: 4px;
+}
+
+.hive-savings-rows .saving-row {
+  font-size: 9px;
+}
+
+.hive-panels .mini-chart {
+  height: 36px;
+}
+
+.hive-panels .lane-row {
+  grid-template-columns: 56px 1fr auto;
+  font-size: 9px;
+  gap: 4px;
+}
+
+.hive-term-block,
+.hive-term-prompt {
+  margin: 0;
+  font-size: 9px;
+}
+
+.hive-panels h2 {
+  font-size: 10px;
+}
+
+@media (max-height: 920px) and (min-width: 721px) {
+  .hive-core-ui {
+    width: min(34vh, 56%);
+    height: min(34vh, 56%);
+    max-width: min(34vh, 48vw);
+    max-height: min(34vh, 56%);
   }
 
-  .cc-panels--hive .cc-panel {
-    padding: 8px 10px;
-    gap: 6px;
+  .hive-chrome {
+    gap: 2px;
   }
 
-  .cc-panels--hive .event-log {
-    max-height: 96px;
-    gap: 4px;
-    font-size: 10px;
-  }
-
-  .cc-panels--hive .mini-chart {
-    height: 44px;
-  }
-
-  .cc-panels--hive .gates-hero {
-    font-size: 18px;
-  }
-
-  .hive-stage {
-    min-height: min(50vh, 460px);
+  .hive-illus {
+    padding: 3px 8px;
   }
 }
 
@@ -927,50 +1111,49 @@ body.motion-off .brand-glitch {
 }
 
 @media (max-width: 1100px) {
-  .cc-panels {
+  .cc-panels:not(.hive-panels) {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 720px) {
-  .hive-stage {
-    min-height: 640px;
+  body.hive-body {
+    height: auto;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 100vh;
   }
 
-  .hive-core-ui {
-    width: min(48vw, 220px);
-    height: min(48vw, 220px);
+  .hive-shell {
+    height: auto;
+    max-height: none;
+    min-height: 100vh;
+    grid-template-rows: auto auto minmax(420px, 1fr) auto;
+    overflow-x: hidden;
   }
 
-  .hive-node {
-    width: min(240px, 44vw);
-  }
-}
-
-@media (max-width: 390px) {
-  .cc-app {
-    padding: 10px 10px 16px;
+  .hive-stat-strip {
+    height: auto;
+    max-height: none;
   }
 
-  .cc-brand-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .cc-strip .cc-stat {
+  .hive-stat-strip .cc-stat {
     flex: 1 1 calc(50% - 8px);
+    min-width: 0;
     min-height: 44px;
   }
 
-  .cc-strip .cc-live {
+  .hive-stat-strip .cc-live {
     flex: 1 1 100%;
   }
 
   .hive-stage.hive-phone {
-    min-height: 720px;
-    padding: 12px 8px 8px;
     display: flex;
     flex-direction: column;
+    align-items: stretch;
+    overflow: visible;
+    min-height: 480px;
   }
 
   .hive-stage.hive-phone .hive-core-ui {
@@ -978,17 +1161,12 @@ body.motion-off .brand-glitch {
     left: auto;
     top: auto;
     transform: none;
-    margin: 4px auto 8px;
-    width: min(72vw, 220px);
-    height: min(72vw, 220px);
+    margin: 8px auto 10px;
+    width: 80vw;
+    height: 80vw;
+    max-width: 80vw;
+    max-height: 80vw;
     flex: none;
-  }
-
-  .hive-stage.hive-phone #hive-canvas {
-    position: absolute;
-    inset: 0;
-    height: 42%;
-    bottom: auto;
   }
 
   .hive-stage.hive-phone #hive-nodes {
@@ -999,30 +1177,48 @@ body.motion-off .brand-glitch {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     align-content: start;
-    margin-top: 4px;
-    overflow: visible;
+    padding: 0 6px 8px;
     pointer-events: auto;
-  }
-
-  .hive-stage.hive-phone #hive-nodes .hive-toolgate-callout {
-    order: -1;
   }
 
   .hive-stage.hive-phone .hive-node {
     position: relative;
     left: auto !important;
     top: auto !important;
-    transform: none;
-    width: 100%;
+    right: auto !important;
+    width: 100% !important;
+    height: auto !important;
     min-width: 0;
+    min-height: 44px;
   }
 
-  .hive-stage.hive-phone .hive-toolgate-callout {
+  .hive-panels-wrap .hive-toolgate-callout {
     position: relative;
-    left: auto !important;
-    top: auto !important;
-    grid-column: 1 / -1;
+    right: auto;
+    bottom: auto;
     max-width: none;
-    margin-bottom: 4px;
+    margin: 6px 0 0;
+  }
+
+  .hive-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 390px) {
+  .hive-shell {
+    padding: 8px 8px 12px;
+  }
+
+  .hive-chrome-top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hive-panels,
+  .hive-stage,
+  .hive-chrome,
+  .hive-stat-strip {
+    min-width: 0;
   }
 }

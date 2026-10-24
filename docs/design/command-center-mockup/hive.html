@@ -6,326 +6,272 @@
   <title>Command Center - Hive (mockup)</title>
   <link rel="stylesheet" href="shared.css">
 </head>
-<body class="cc-body">
-  <div class="cc-app">
-    <header class="cc-top">
-      <div class="cc-brand-row">
-        <h1 class="cc-brand brand-glitch" aria-label="JEV plus OPUS sample board">
+<body class="cc-body hive-body">
+  <div class="hive-shell" id="hive-shell">
+    <header class="hive-chrome">
+      <div class="hive-chrome-top">
+        <h1 class="cc-brand brand-glitch hive-brand" aria-label="JEV plus OPUS sample board">
           <span class="jev">JEV</span><span class="plus"> + </span><span class="opus">OPUS</span>
           <span class="ver-script num" title="hive.modelVersion">5.5</span>
         </h1>
-        <p class="cc-tagline">
-          10 repos - 1 decision ring around the model - every fork answered before opus spends a token
-        </p>
+        <nav class="cc-nav hive-nav" role="tablist" aria-label="Command Center views">
+          <a class="cc-tab" role="tab" aria-current="page" href="hive.html">Hive</a>
+          <a class="cc-tab" role="tab" href="cockpit.html">Cockpit</a>
+          <button type="button" class="cc-btn" id="pause-motion" aria-pressed="false">
+            Pause motion <kbd>p</kbd>
+          </button>
+        </nav>
       </div>
-      <p class="cc-illus-banner" role="note">
+      <p class="cc-illus-banner hive-illus" role="note">
         Illustrative values: labelled sample fields only, not live board data.
       </p>
-      <div class="cc-strip" role="group" aria-label="Hive summary strip">
-        <div class="cc-stat">
-          <span class="lbl">repos</span>
-          <span class="val num" title="hive.repos">10</span>
-        </div>
-        <div class="cc-stat">
-          <span class="lbl">ring</span>
-          <span class="val num" title="hive.ringCount">1</span>
-        </div>
-        <div class="cc-stat">
-          <span class="lbl">forks</span>
-          <span class="val num bad" title="hive.forksTotal">4,485</span>
-        </div>
-        <div class="cc-stat">
-          <span class="lbl">held</span>
-          <span class="val num warn" title="hive.heldForYou">11</span>
-        </div>
-        <div class="cc-live" role="status">
-          <span class="dot" aria-hidden="true"></span>
-          <span>live</span>
-        </div>
+      <div class="cc-legend hive-legend" aria-label="Node lane colours">
+        <span><i style="background:var(--hive-safety)"></i>safety</span>
+        <span><i style="background:var(--hive-route)"></i>route</span>
+        <span><i style="background:var(--hive-context)"></i>context</span>
+        <span><i style="background:var(--hive-control)"></i>control</span>
       </div>
     </header>
 
-    <nav class="cc-nav" role="tablist" aria-label="Command Center views">
-      <a class="cc-tab" role="tab" aria-current="page" href="hive.html">Hive</a>
-      <a class="cc-tab" role="tab" href="cockpit.html">Cockpit</a>
-      <button type="button" class="cc-btn" id="pause-motion" aria-pressed="false">
-        Pause motion <kbd>p</kbd>
-      </button>
-    </nav>
-
-    <div class="cc-legend" aria-label="Node lane colours">
-      <span><i style="background:var(--hive-safety)"></i>safety</span>
-      <span><i style="background:var(--hive-route)"></i>route</span>
-      <span><i style="background:var(--hive-context)"></i>context</span>
-      <span><i style="background:var(--hive-control)"></i>control</span>
+    <div class="hive-stat-strip" role="group" aria-label="Hive summary strip">
+      <div class="cc-stat">
+        <span class="lbl">repos</span>
+        <span class="val num" title="hive.repos">10</span>
+      </div>
+      <div class="cc-stat">
+        <span class="lbl">ring</span>
+        <span class="val num" title="hive.ringCount">1</span>
+      </div>
+      <div class="cc-stat">
+        <span class="lbl">forks</span>
+        <span class="val num bad" title="hive.forksTotal">4,485</span>
+      </div>
+      <div class="cc-stat">
+        <span class="lbl">held</span>
+        <span class="val num warn" title="hive.heldForYou">11</span>
+      </div>
+      <div class="cc-live" role="status">
+        <span class="dot" aria-hidden="true"></span>
+        <span>live</span>
+      </div>
     </div>
 
-    <section class="hive-stage-wrap" aria-label="Hive diagram">
-      <div class="hive-stage" id="hive-stage">
-        <canvas id="hive-canvas" aria-hidden="true"></canvas>
-        <div class="hive-core-ui">
-          <svg class="hive-ring-text" viewBox="0 0 200 200" aria-hidden="true">
-            <defs>
-              <path id="orbit" d="M 100, 100 m -78, 0 a 78,78 0 1,1 156,0 a 78,78 0 1,1 -156,0"/>
-            </defs>
-            <text>
-              <textPath href="#orbit" startOffset="2%">
-                every fork answered before opus spends a token - sample ring copy -
-              </textPath>
-            </text>
-          </svg>
-          <div class="hive-core-disk">
-            <div>
-              <div class="hive-core-label">the model</div>
-              <div class="hive-core-name">opus</div>
-              <div class="hive-core-ver num" title="hive.modelVersion">5.5</div>
-              <div class="hive-core-status">waiting</div>
-              <div class="hive-core-meta">
-                <span class="lbl">tokens on forks:</span>
-                <span class="num" title="hive.opusTokensOnForks">0</span>
-              </div>
+    <section class="hive-stage" id="hive-stage" aria-label="Hive diagram">
+      <canvas id="hive-canvas" aria-hidden="true"></canvas>
+      <div class="hive-core-ui" id="hive-core-ui">
+        <svg class="hive-ring-text" viewBox="0 0 200 200" aria-hidden="true">
+          <defs>
+            <path id="orbit" d="M 100, 100 m -88, 0 a 88,88 0 1,1 176,0 a 88,88 0 1,1 -176,0"/>
+          </defs>
+          <text>
+            <textPath href="#orbit" startOffset="1%">
+              answer before you spend - answer before you spend - answer before you spend -
+            </textPath>
+          </text>
+        </svg>
+        <div class="hive-core-disk">
+          <div class="hive-core-inner">
+            <div class="hive-core-label">the model</div>
+            <div class="hive-core-name">opus</div>
+            <div class="hive-core-ver num" title="hive.modelVersion">5.5</div>
+            <div class="hive-core-status">waiting</div>
+            <div class="hive-core-meta">
+              <span class="lbl">tokens on forks:</span>
+              <span class="num" title="hive.opusTokensOnForks">0</span>
             </div>
           </div>
         </div>
-        <div id="hive-nodes">
-          <aside class="hive-toolgate-callout" id="hive-toolgate-callout" aria-label="Toolgate session sample">
-            <span class="lbl">last toolgate session (sample)</span>
-            toolgate: rm -rf ./ -- deny
-          </aside>
-        </div>
       </div>
+      <div id="hive-nodes" class="hive-nodes"></div>
     </section>
 
-    <div class="cc-panels cc-panels--hive">
-      <section class="cc-panel" aria-labelledby="panel-log">
-        <h2 id="panel-log">session log</h2>
-        <ul class="event-log">
-          <li>
-            <span class="event-tag code">code</span>
-            <span>lint ok on sample change set</span>
-            <span class="event-time num" title="eventLog[0].ageSec">12s</span>
-          </li>
-          <li>
-            <span class="event-tag sys">sys</span>
-            <span>ring armed for sample repo batch</span>
-            <span class="event-time num" title="eventLog[1].ageSec">28s</span>
-          </li>
-          <li>
-            <span class="event-tag opus">opus</span>
-            <span>waiting on jev answers (sample)</span>
-            <span class="event-time num" title="eventLog[2].ageSec">41s</span>
-          </li>
-          <li>
-            <span class="event-tag safety">safety</span>
-            <span>toolgate: rm -rf ./ -- deny</span>
-            <span class="event-time num" title="eventLog[3].ageSec">55s</span>
-          </li>
-          <li>
-            <span class="event-tag route">route</span>
-            <span>switchboard picked haiku lane (sample)</span>
-            <span class="event-time num" title="eventLog[4].ageSec">72s</span>
-          </li>
-          <li>
-            <span class="event-tag ctx">ctx</span>
-            <span>compaction kept <span class="num" title="project.winnow.keptLines">14</span> verbatim lines<span class="sample-badge">sample</span></span>
-            <span class="event-time num" title="eventLog[5].ageSec">88s</span>
-          </li>
-        </ul>
-        <div class="term-block">
-          <p class="term-prompt">~/app $ claude --model opus</p>
-          <canvas class="mini-chart" id="chart-fps" width="360" height="56" aria-label="Forks per second sample chart"></canvas>
-          <p class="term-prompt">
-            <span class="lbl">forks per second (peak):</span>
-            <span class="num" title="throughput.forksPerSecondPeak">42</span>
-            <span class="sample-badge">sample</span>
+    <div class="hive-panels-wrap">
+      <div class="cc-panels cc-panels--hive hive-panels">
+        <section class="cc-panel" aria-labelledby="panel-log">
+          <h2 id="panel-log">session log</h2>
+          <ul class="event-log hive-event-log">
+            <li>
+              <span class="event-tag code">code</span>
+              <span>lint ok on sample change set</span>
+              <span class="event-time num" title="eventLog[0].ageSec">12s</span>
+            </li>
+            <li>
+              <span class="event-tag sys">sys</span>
+              <span>ring armed for sample repo batch</span>
+              <span class="event-time num" title="eventLog[1].ageSec">28s</span>
+            </li>
+            <li>
+              <span class="event-tag safety">safety</span>
+              <span>toolgate: rm -rf ./ -- deny</span>
+              <span class="event-time num" title="eventLog[3].ageSec">55s</span>
+            </li>
+          </ul>
+          <div class="term-block hive-term-block">
+            <p class="term-prompt">~/app $ claude --model opus</p>
+            <canvas class="mini-chart" id="chart-fps" width="360" height="40" aria-label="Forks per second sample chart"></canvas>
+            <p class="term-prompt">
+              <span class="lbl">forks per second (peak):</span>
+              <span class="num" title="throughput.forksPerSecondPeak">42</span>
+              <span class="sample-badge">sample</span>
+            </p>
+          </div>
+        </section>
+
+        <section class="cc-panel" aria-labelledby="panel-gates">
+          <h2 id="panel-gates">lanes and savings</h2>
+          <p class="gates-hero hive-gates-hero">
+            <span class="num" title="hive.repos">10</span> repos.
+            <span class="num" title="hive.ringCount">1</span> ring.
           </p>
-        </div>
-      </section>
+          <div class="lane-bars" aria-label="Who answered sample bars">
+            <div class="lane-row">
+              <span class="name">
+                <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="5" y="6" width="14" height="12" rx="3" fill="#ff4d8d"/>
+                  <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
+                  <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
+                  <rect x="10" y="15" width="4" height="2" fill="#0a0a0c"/>
+                </svg>
+                jev
+              </span>
+              <span class="lane-track"><i class="lane-fill jev" style="width:82%"></i></span>
+              <span class="num" title="whoAnswered.jev">4,083</span>
+            </div>
+            <div class="lane-row">
+              <span class="name">
+                <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="5" y="6" width="14" height="12" rx="3" fill="#3dd6a5"/>
+                  <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
+                  <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
+                </svg>
+                code
+              </span>
+              <span class="lane-track"><i class="lane-fill code" style="width:18%"></i></span>
+              <span class="num" title="whoAnswered.code">402</span>
+            </div>
+            <div class="lane-row">
+              <span class="name">
+                <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="5" y="6" width="14" height="12" rx="3" fill="#60a5fa"/>
+                  <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
+                  <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
+                </svg>
+                opus
+              </span>
+              <span class="lane-track"><i class="lane-fill opus" style="width:12%"></i></span>
+              <span class="num" title="whoAnswered.opus">296</span>
+            </div>
+          </div>
+          <div class="stat-lines hive-stat-lines">
+            <div class="row">
+              <span>forks answered</span>
+              <span class="num" title="hive.forksAnswered">4,485</span>
+            </div>
+            <div class="row">
+              <span>held for you</span>
+              <span class="num warn" title="hive.heldForYou">11</span>
+            </div>
+          </div>
+        </section>
 
-      <section class="cc-panel" aria-labelledby="panel-gates">
-        <h2 id="panel-gates">all gates and who answered</h2>
-        <p class="gates-hero">
-          <span class="num" title="hive.repos">10</span> repos.
-          <span class="num" title="hive.ringCount">1</span> ring.
-        </p>
-        <p class="gates-sub">route - context - safety - control</p>
-        <div class="lane-bars" aria-label="Who answered sample bars">
-          <div class="lane-row">
-            <span class="name">
-              <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="6" width="14" height="12" rx="3" fill="#ff4d8d"/>
-                <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="10" y="15" width="4" height="2" fill="#0a0a0c"/>
-                <rect x="3" y="9" width="2" height="4" fill="#ff8fb8"/>
-                <rect x="19" y="9" width="2" height="4" fill="#ff8fb8"/>
-              </svg>
-              jev
-            </span>
-            <span class="lane-track"><i class="lane-fill jev" style="width:82%"></i></span>
-            <span class="num" title="whoAnswered.jev">4,083</span>
+        <section class="cc-panel" aria-labelledby="panel-saved">
+          <h2 id="panel-saved">throughput</h2>
+          <div class="savings-rows hive-savings-rows">
+            <div class="saving-row">
+              <span class="lbl">llm wakes skipped</span>
+              <span class="num" title="savings.llmWakesSkipped">32</span>
+              <span class="track"><i class="fill" style="width:64%;background:linear-gradient(90deg,#fbbf24,#fb923c)"></i></span>
+            </div>
+            <div class="saving-row">
+              <span class="lbl">stale context dropped</span>
+              <span class="num" title="savings.staleContextDroppedPct">59%</span>
+              <span class="track"><i class="fill" style="width:59%;background:linear-gradient(90deg,#34d399,#3dd6a5)"></i></span>
+            </div>
           </div>
-          <div class="lane-row">
-            <span class="name">
-              <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="6" width="14" height="12" rx="3" fill="#3dd6a5"/>
-                <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="10" y="15" width="4" height="2" fill="#0a0a0c"/>
-              </svg>
-              code
-            </span>
-            <span class="lane-track"><i class="lane-fill code" style="width:18%"></i></span>
-            <span class="num" title="whoAnswered.code">402</span>
-          </div>
-          <div class="lane-row">
-            <span class="name">
-              <svg class="robot-head" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="6" width="14" height="12" rx="3" fill="#60a5fa"/>
-                <rect x="8" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="13" y="10" width="3" height="3" fill="#0a0a0c"/>
-                <rect x="10" y="15" width="4" height="2" fill="#0a0a0c"/>
-              </svg>
-              opus
-            </span>
-            <span class="lane-track"><i class="lane-fill opus" style="width:12%"></i></span>
-            <span class="num" title="whoAnswered.opus">296</span>
-          </div>
-        </div>
-        <div class="stat-lines">
-          <div class="row">
-            <span>forks answered</span>
-            <span class="num" title="hive.forksAnswered">4,485</span>
-          </div>
-          <div class="row">
-            <span>generated to decide</span>
-            <span><span class="num" title="hive.generatedToDecideTokens">0</span> tokens</span>
-          </div>
-          <div class="row">
-            <span>avg answer</span>
-            <span class="num" title="hive.avgAnswerSec">&lt; 0.5s</span>
-          </div>
-          <div class="row">
-            <span>held for you</span>
-            <span class="num warn" title="hive.heldForYou">11</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="cc-panel" aria-labelledby="panel-saved">
-        <h2 id="panel-saved">what it saved</h2>
-        <div class="savings-rows">
-          <div class="saving-row">
-            <span class="lbl">llm wakes skipped</span>
-            <span class="num" title="savings.llmWakesSkipped">32</span>
-            <span class="track"><i class="fill" style="width:64%;background:linear-gradient(90deg,#fbbf24,#fb923c)"></i></span>
-          </div>
-          <div class="saving-row">
-            <span class="lbl">stale context dropped</span>
-            <span class="num" title="savings.staleContextDroppedPct">59%</span>
-            <span class="track"><i class="fill" style="width:59%;background:linear-gradient(90deg,#34d399,#3dd6a5)"></i></span>
-          </div>
-          <div class="saving-row">
-            <span class="lbl">risky calls stopped</span>
-            <span class="num" title="savings.riskyCallsStopped">11</span>
-            <span class="track"><i class="fill" style="width:22%;background:linear-gradient(90deg,#fb7185,#f43f5e)"></i></span>
-          </div>
-          <div class="saving-row">
-            <span class="lbl">model calls downgraded</span>
-            <span class="num" title="savings.modelCallsDowngradedPct">46%</span>
-            <span class="track"><i class="fill" style="width:46%;background:linear-gradient(90deg,#60a5fa,#5eb8ff)"></i></span>
-          </div>
-        </div>
-        <canvas class="mini-chart" id="chart-latency" width="360" height="72" aria-label="Decision latency sample chart"></canvas>
-        <p class="term-prompt">
-          <span class="lbl">decision latency (sample curve)</span>
-        </p>
-        <div class="stat-lines">
-          <div class="row">
-            <span>opus tokens on forks</span>
-            <span class="num" title="hive.opusTokensOnForks">0</span>
-          </div>
-          <div class="row">
-            <span>gates that failed open</span>
-            <span class="num" title="hive.gatesFailedOpen">0</span>
-          </div>
-        </div>
-      </section>
+          <canvas class="mini-chart" id="chart-latency" width="360" height="40" aria-label="Decision latency sample chart"></canvas>
+          <p class="term-prompt hive-term-prompt">
+            <span class="lbl">decision latency (sample curve)</span>
+          </p>
+        </section>
+      </div>
+      <aside class="hive-toolgate-callout" id="hive-toolgate-callout" aria-label="Toolgate session sample">
+        <span class="lbl">last toolgate session (sample)</span>
+        toolgate: rm -rf ./ -- deny
+      </aside>
+      <footer class="cc-footer hive-footer">
+        <span>simulation - illustrative values - sample fields only</span>
+        <span class="motto">opus thinks. jev decides. code enforces.</span>
+      </footer>
     </div>
-
-    <footer class="cc-footer">
-      <span>simulation - illustrative values - sample fields only</span>
-      <span class="motto">opus thinks. jev decides. code enforces.</span>
-    </footer>
   </div>
 
   <script>
     (function () {
       const NODES = [
-        { id: '01', name: 'toolgate', lane: 'safety', tag: 'SAFETY', focus: true,
+        { id: '01', name: 'toolgate', lane: 'safety', tag: 'SAFETY', side: 'left', slot: 0, focus: true,
           fields: [
             ['asks', '7 risk q / call', 'project.toolgate.asksPerCall'],
             ['out', 'allow/ask/deny', 'project.toolgate.policyOut'],
             ['fails', 'closed', 'project.toolgate.failMode']
           ],
           meter: 94, meterLabel: 'p(risk)', meterTitle: 'project.toolgate.riskProbability' },
-        { id: '02', name: 'switchboard', lane: 'route', tag: 'ROUTE',
+        { id: '02', name: 'switchboard', lane: 'route', tag: 'ROUTE', side: 'left', slot: 1,
           fields: [
             ['hooks', '3', 'project.switchboard.hookCount'],
             ['lane', 'haiku', 'project.switchboard.lanePick'],
             ['state', 'armed', 'project.switchboard.state']
           ],
           meter: 68, meterLabel: 'p(route)', meterTitle: 'project.switchboard.routeConfidence' },
-        { id: '03', name: 'spending-effort', lane: 'route', tag: 'ROUTE',
+        { id: '03', name: 'spending-effort', lane: 'route', tag: 'ROUTE', side: 'left', slot: 2,
           fields: [
             ['budget', 'sample cap', 'project.spendingEffort.budgetLabel'],
             ['burn', 'low', 'project.spendingEffort.burnRate'],
             ['queue', 'idle', 'project.spendingEffort.queueState']
           ],
           meter: 22, meterLabel: 'p(spend)', meterTitle: 'project.spendingEffort.spendPressure' },
-        { id: '04', name: 'winnow', lane: 'context', tag: 'CONTEXT',
+        { id: '04', name: 'winnow', lane: 'context', tag: 'CONTEXT', side: 'left', slot: 3,
           fields: [
             ['kept', '14 lines', 'project.winnow.keptLines'],
             ['dropped', '59%', 'project.compaction.staleDroppedPct'],
             ['mode', 'verbatim', 'project.winnow.mode']
           ],
           meter: 59, meterLabel: 'p(keep)', meterTitle: 'project.winnow.keepRatio', sampleOnField: 'kept' },
-        { id: '05', name: 'fast-jev-compaction', lane: 'context', tag: 'CONTEXT',
+        { id: '05', name: 'fast-jev-compaction', lane: 'context', tag: 'CONTEXT', side: 'left', slot: 4,
           fields: [
             ['ratio', '59%', 'project.compaction.staleDroppedPct'],
             ['lines', '14 kept', 'project.winnow.keptLines'],
             ['speed', '< 0.5s', 'project.compaction.latency']
           ],
           meter: 74, meterLabel: 'p(compact)', meterTitle: 'project.compaction.ratio' },
-        { id: '06', name: 'canny', lane: 'control', tag: 'CONTROL',
+        { id: '06', name: 'canny', lane: 'control', tag: 'CONTROL', side: 'right', slot: 0,
           fields: [
             ['gates', '1 ring', 'project.canny.ringCount'],
             ['repos', '10', 'project.canny.repoCount'],
             ['state', 'armed', 'project.canny.state']
           ],
           meter: 88, meterLabel: 'p(ring)', meterTitle: 'project.canny.ringHealth' },
-        { id: '07', name: 'medula', lane: 'control', tag: 'CONTROL',
+        { id: '07', name: 'medula', lane: 'control', tag: 'CONTROL', side: 'right', slot: 1,
           fields: [
             ['held', '11', 'project.medula.heldCount'],
             ['forks', '4,485', 'project.medula.forksSeen'],
             ['you', 'waiting', 'project.medula.ownerState']
           ],
           meter: 41, meterLabel: 'p(hold)', meterTitle: 'project.medula.holdPressure' },
-        { id: '08', name: 'jewwire', lane: 'safety', tag: 'SAFETY',
+        { id: '08', name: 'jewwire', lane: 'safety', tag: 'SAFETY', side: 'right', slot: 2,
           fields: [
             ['wires', 'sample', 'project.jewwire.wireCount'],
             ['deny', '11', 'project.jewwire.denyCount'],
             ['mode', 'closed', 'project.jewwire.failMode']
           ],
           meter: 91, meterLabel: 'p(wire)', meterTitle: 'project.jewwire.tripRate' },
-        { id: '09', name: 'skillranker', lane: 'route', tag: 'ROUTE',
+        { id: '09', name: 'skillranker', lane: 'route', tag: 'ROUTE', side: 'right', slot: 3,
           fields: [
             ['rank', 'sample', 'project.skillranker.rankLabel'],
             ['skills', '12', 'project.skillranker.skillCount'],
             ['lane', 'route', 'project.skillranker.lane']
           ],
           meter: 55, meterLabel: 'p(rank)', meterTitle: 'project.skillranker.confidence' },
-        { id: '10', name: 'wakegate', lane: 'control', tag: 'CONTROL',
+        { id: '10', name: 'wakegate', lane: 'control', tag: 'CONTROL', side: 'right', slot: 4,
           fields: [
             ['skipped', '32', 'project.wakegate.llmWakesSkipped'],
             ['saved', '64%', 'project.wakegate.wakeSavingsPct'],
@@ -334,18 +280,23 @@
           meter: 64, meterLabel: 'p(skip)', meterTitle: 'project.wakegate.skipRatio' }
       ];
 
-      const PARTICLES_PER_STREAM = 150;
-
+      const SLOT_TOPS = [5, 24, 43, 62, 81];
+      const PARTICLES_PER_STREAM = 128;
       const LANE_RGB = {
         safety: [255, 77, 141],
         route: [94, 184, 255],
         context: [61, 214, 165],
         control: [245, 196, 81]
       };
+      const LANE_GLOW = {
+        safety: 'rgba(255, 77, 141, 0.55)',
+        route: 'rgba(94, 184, 255, 0.55)',
+        context: 'rgba(61, 214, 165, 0.55)',
+        control: 'rgba(245, 196, 81, 0.55)'
+      };
 
       const stage = document.getElementById('hive-stage');
       const mount = document.getElementById('hive-nodes');
-      const toolgateCallout = document.getElementById('hive-toolgate-callout');
       const canvas = document.getElementById('hive-canvas');
       const ctx = canvas.getContext('2d');
       const pauseBtn = document.getElementById('pause-motion');
@@ -356,6 +307,17 @@
       let rafId = 0;
       let lastFrame = 0;
       const FRAME_MS = 1000 / 30;
+      let geomCache = null;
+      const particles = [];
+      const sparkles = [];
+      for (let i = 0; i < 64; i++) {
+        sparkles.push({
+          a: Math.random() * Math.PI * 2,
+          r: 0.82 + Math.random() * 0.16,
+          ph: Math.random(),
+          spd: 0.0014 + Math.random() * 0.0022
+        });
+      }
 
       function motionOn() {
         return motionAllowed && !userPaused && !document.hidden;
@@ -371,11 +333,8 @@
       pauseBtn.addEventListener('click', function () {
         userPaused = !userPaused;
         setPauseUi();
-        if (motionOn()) {
-          scheduleFrame();
-        } else {
-          drawFrame(performance.now(), true);
-        }
+        if (motionOn()) scheduleFrame();
+        else drawFrame(performance.now(), true);
       });
 
       document.addEventListener('keydown', function (e) {
@@ -394,11 +353,8 @@
       });
 
       document.addEventListener('visibilitychange', function () {
-        if (document.hidden) {
-          cancelAnimationFrame(rafId);
-        } else if (motionOn()) {
-          scheduleFrame();
-        }
+        if (document.hidden) cancelAnimationFrame(rafId);
+        else if (motionOn()) scheduleFrame();
       });
 
       function el(tag, cls, text) {
@@ -411,6 +367,8 @@
       const nodeEls = [];
       NODES.forEach(function (node) {
         const card = el('article', 'hive-node ' + node.lane + (node.focus ? ' is-focus' : ''));
+        card.dataset.side = node.side;
+        card.dataset.slot = String(node.slot);
         card.setAttribute('aria-label', 'Project ' + node.name);
         const hd = el('div', 'hive-node-hd');
         hd.appendChild(el('span', 'idx', node.id));
@@ -443,84 +401,87 @@
           meter.appendChild(val);
           bd.appendChild(meter);
         }
-        card.appendChild(bd);
+        card.style.setProperty('--card-glow', LANE_GLOW[node.lane]);
         mount.appendChild(card);
         nodeEls.push({ node: node, el: card });
       });
 
-      const particles = [];
-      let geomCache = null;
-      const sparkles = [];
-      for (let i = 0; i < 72; i++) {
-        sparkles.push({ a: Math.random() * Math.PI * 2, r: 0.78 + Math.random() * 0.2, ph: Math.random(), spd: 0.0012 + Math.random() * 0.002 });
-      }
-
       function isPhoneLayout(w) {
-        return w <= 390;
-      }
-
-      function placeToolgateCallout(entry01, geom, phone) {
-        if (!toolgateCallout || !entry01) return;
-        if (phone) {
-          toolgateCallout.style.left = '';
-          toolgateCallout.style.top = '';
-          return;
-        }
-        const cardW = entry01.el.offsetWidth || 280;
-        const cardH = entry01.el.offsetHeight || 160;
-        let left = entry01.x + cardW * 0.55;
-        let top = entry01.y + cardH * 0.35;
-        const pad = 12;
-        const cw = toolgateCallout.offsetWidth || 280;
-        const ch = toolgateCallout.offsetHeight || 56;
-        if (left + cw > geom.w - pad) left = entry01.x - cardW * 0.55 - cw;
-        if (top + ch > geom.h - pad) top = entry01.y - cardH * 0.6;
-        toolgateCallout.style.left = Math.max(pad, left) + 'px';
-        toolgateCallout.style.top = Math.max(pad, top) + 'px';
+        return w <= 720;
       }
 
       function layoutNodes() {
         const rect = stage.getBoundingClientRect();
         const w = rect.width;
         const h = rect.height;
-        const phone = isPhoneLayout(w);
+        const phone = isPhoneLayout(window.innerWidth);
         stage.classList.toggle('hive-phone', phone);
 
-        const cx = w * 0.5;
-        const cy = phone ? h * 0.2 : h * 0.46;
-        const ringR = Math.min(w, h) * (phone ? 0.14 : 0.12);
+        const coreEl = document.getElementById('hive-core-ui');
+        const stageBox = stage.getBoundingClientRect();
+        const coreRect = coreEl.getBoundingClientRect();
+        const cx = coreRect.left - stageBox.left + coreRect.width / 2;
+        const cy = coreRect.top - stageBox.top + coreRect.height / 2;
+        const ringR = coreRect.width / 2;
 
-        if (phone) {
+        if (!phone) {
           nodeEls.forEach(function (entry) {
-            entry.el.style.left = '';
-            entry.el.style.top = '';
-          });
-          const stageBox = stage.getBoundingClientRect();
-          nodeEls.forEach(function (entry, i) {
-            const box = entry.el.getBoundingClientRect();
-            entry.x = box.left - stageBox.left + box.width / 2;
-            entry.y = box.top - stageBox.top + box.height / 2;
-            entry.angle = -Math.PI / 2 + (i / nodeEls.length) * Math.PI * 2;
+            const side = entry.node.side;
+            const slot = entry.node.slot;
+            const topPct = SLOT_TOPS[slot];
+            entry.el.style.top = topPct + '%';
+            entry.el.style.height = '14%';
+            if (side === 'left') {
+              entry.el.style.left = '2%';
+              entry.el.style.right = 'auto';
+              entry.el.style.width = '21%';
+            } else {
+              entry.el.style.right = '2%';
+              entry.el.style.left = 'auto';
+              entry.el.style.width = '21%';
+            }
           });
         } else {
-          const rx = Math.min(w * 0.42, 340);
-          const ry = Math.min(h * 0.4, 300);
-          nodeEls.forEach(function (entry, i) {
-            const angle = -Math.PI / 2 + (i / nodeEls.length) * Math.PI * 2;
-            const x = cx + Math.cos(angle) * rx;
-            const y = cy + Math.sin(angle) * ry;
-            entry.el.style.left = x + 'px';
-            entry.el.style.top = y + 'px';
-            entry.x = x;
-            entry.y = y;
-            entry.angle = angle;
+          nodeEls.forEach(function (entry) {
+            entry.el.style.top = '';
+            entry.el.style.left = '';
+            entry.el.style.right = '';
+            entry.el.style.width = '';
+            entry.el.style.height = '';
           });
         }
 
+        nodeEls.forEach(function (entry, i) {
+          const box = entry.el.getBoundingClientRect();
+          const cxCard = box.left - stageBox.left + box.width / 2;
+          const cyCard = box.top - stageBox.top + box.height / 2;
+          entry.x = cxCard;
+          entry.y = cyCard;
+          entry.angle = Math.atan2(cy - cyCard, cx - cxCard);
+          entry.box = {
+            left: box.left - stageBox.left,
+            top: box.top - stageBox.top,
+            right: box.right - stageBox.left,
+            bottom: box.bottom - stageBox.top,
+            width: box.width,
+            height: box.height
+          };
+        });
+
         geomCache = { cx, cy, ringR, w, h, phone };
-        const entry01 = nodeEls.find(function (e) { return e.node.id === '01'; });
-        placeToolgateCallout(entry01, geomCache, phone);
         return geomCache;
+      }
+
+      function cardAnchor(entry, geom) {
+        const b = entry.box;
+        if (!b) return { x: entry.x, y: entry.y };
+        if (geom.phone) {
+          return { x: b.left + b.width / 2, y: b.top };
+        }
+        if (entry.node.side === 'left') {
+          return { x: b.right - 2, y: b.top + b.height * 0.5 };
+        }
+        return { x: b.left + 2, y: b.top + b.height * 0.5 };
       }
 
       function resizeCanvas() {
@@ -547,54 +508,43 @@
         particles.push({
           stream: stream,
           streamId: streamId,
-          t: Math.random() * 0.85,
-          speed: 0.003 + Math.random() * 0.005,
-          size: 1.4 + Math.random() * 2.4,
-          spark: Math.random() < 0.4
+          t: Math.random() * 0.9,
+          speed: 0.004 + Math.random() * 0.006,
+          size: 1.8 + Math.random() * 2.8,
+          spark: Math.random() < 0.35
         });
       }
 
-      function drawRadar(cx, cy, maxR) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-        ctx.lineWidth = 1;
-        for (let r = 40; r < maxR; r += 36) {
-          ctx.beginPath();
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        for (let a = 0; a < 12; a++) {
-          const ang = (a / 12) * Math.PI * 2;
-          ctx.beginPath();
-          ctx.moveTo(cx, cy);
-          ctx.lineTo(cx + Math.cos(ang) * maxR, cy + Math.sin(ang) * maxR);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
       function drawRingHalo(cx, cy, ringR, time) {
-        const bloom = ctx.createRadialGradient(cx, cy, ringR * 0.5, cx, cy, ringR * 2.6);
-        bloom.addColorStop(0, 'rgba(255,45,122,0.12)');
-        bloom.addColorStop(0.4, 'rgba(255,45,122,0.28)');
+        const bloom = ctx.createRadialGradient(cx, cy, ringR * 0.35, cx, cy, ringR * 2.4);
+        bloom.addColorStop(0, 'rgba(255,45,122,0.14)');
+        bloom.addColorStop(0.45, 'rgba(255,45,122,0.32)');
         bloom.addColorStop(1, 'rgba(255,45,122,0)');
         ctx.fillStyle = bloom;
         ctx.beginPath();
-        ctx.arc(cx, cy, ringR * 2.6, 0, Math.PI * 2);
+        ctx.arc(cx, cy, ringR * 2.4, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.save();
-        ctx.strokeStyle = 'rgba(255, 90, 150, 0.45)';
-        ctx.lineWidth = 2;
-        ctx.shadowColor = 'rgba(255, 45, 122, 0.85)';
-        ctx.shadowBlur = 22;
+        ctx.setLineDash([6, 10]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(cx, cy, ringR * 1.1, 0, Math.PI * 2);
+        ctx.arc(cx, cy, ringR * 0.72, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.strokeStyle = 'rgba(255, 90, 150, 0.5)';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = 'rgba(255, 45, 122, 0.9)';
+        ctx.shadowBlur = 24;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringR * 1.08, 0, Math.PI * 2);
         ctx.stroke();
 
-        ctx.strokeStyle = 'rgba(255, 120, 170, 0.75)';
-        ctx.lineWidth = 3.5;
-        ctx.shadowBlur = 28;
+        ctx.strokeStyle = 'rgba(255, 120, 170, 0.85)';
+        ctx.lineWidth = 4;
+        ctx.shadowBlur = 32;
         ctx.beginPath();
         ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
         ctx.stroke();
@@ -605,145 +555,133 @@
         const orbit = motionOn();
         sparkles.forEach(function (s) {
           if (orbit) s.a += s.spd;
-          const wobble = orbit ? Math.sin(time * 0.001 + s.ph * 6) * 0.025 : 0;
+          const wobble = orbit ? Math.sin(time * 0.001 + s.ph * 6) * 0.02 : 0;
           const rr = ringR * (s.r + wobble);
           const px = cx + Math.cos(s.a) * rr;
           const py = cy + Math.sin(s.a) * rr;
-          const alpha = 0.2 + s.ph * 0.5;
-          ctx.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+          ctx.fillStyle = 'rgba(255,255,255,' + (0.25 + s.ph * 0.55) + ')';
           ctx.beginPath();
-          ctx.arc(px, py, 1.4 + s.ph, 0, Math.PI * 2);
+          ctx.arc(px, py, 1.6 + s.ph * 1.2, 0, Math.PI * 2);
           ctx.fill();
         });
         ctx.restore();
       }
 
-      function drawStreams(geom, time, frozen) {
+      function buildStreams(geom) {
         const streams = [];
         nodeEls.forEach(function (entry) {
           const rgb = LANE_RGB[entry.node.lane];
           const ringX = geom.cx + Math.cos(entry.angle) * geom.ringR;
           const ringY = geom.cy + Math.sin(entry.angle) * geom.ringR;
-          const from = { x: entry.x, y: entry.y };
+          const from = cardAnchor(entry, geom);
           const to = { x: ringX, y: ringY };
+          if (geom.phone) {
+            const ctrl = { x: from.x, y: (from.y + to.y) * 0.5 };
+            streams.push({ from, ctrl, to, rgb, phone: true });
+            return;
+          }
           const nx = -(to.y - from.y);
           const ny = to.x - from.x;
           const len = Math.hypot(nx, ny) || 1;
-          const bend = Math.min(geom.ringR * 0.55, 90);
+          const bend = Math.min(geom.ringR * 0.45, 72);
           const ctrl = {
-            x: (from.x + to.x) / 2 + (nx / len) * bend,
-            y: (from.y + to.y) / 2 + (ny / len) * bend
+            x: (from.x + to.x) / 2 + (nx / len) * bend * (entry.node.side === 'left' ? 1 : -1),
+            y: (from.y + to.y) / 2 + (ny / len) * bend * 0.35
           };
-          streams.push({ from, ctrl, to, rgb, angle: entry.angle });
+          streams.push({ from, ctrl, to, rgb, phone: false });
         });
+        return streams;
+      }
 
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
+      function drawStaticPaths(streams) {
         streams.forEach(function (s) {
-          ctx.strokeStyle = 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.12)';
-          ctx.lineWidth = 10;
+          ctx.strokeStyle = 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.18)';
+          ctx.lineWidth = s.phone ? 2 : 3;
           ctx.beginPath();
           ctx.moveTo(s.from.x, s.from.y);
           ctx.quadraticCurveTo(s.ctrl.x, s.ctrl.y, s.to.x, s.to.y);
           ctx.stroke();
-
-          ctx.strokeStyle = 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.28)';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(s.from.x, s.from.y);
-          ctx.quadraticCurveTo(s.ctrl.x, s.ctrl.y, s.to.x, s.to.y);
-          ctx.stroke();
-
-          const knot = ctx.createRadialGradient(s.to.x, s.to.y, 0, s.to.x, s.to.y, 16);
-          knot.addColorStop(0, 'rgba(255,255,255,0.95)');
-          knot.addColorStop(0.35, 'rgba(' + s.rgb[0] + ',' + s.rgb[1] + ',' + s.rgb[2] + ',0.55)');
-          knot.addColorStop(1, 'rgba(255,45,122,0)');
-          ctx.fillStyle = knot;
-          ctx.beginPath();
-          ctx.arc(s.to.x, s.to.y, 14, 0, Math.PI * 2);
-          ctx.fill();
         });
-        ctx.restore();
+      }
 
-        if (!frozen) {
-          streams.forEach(function (s, si) {
-            let count = 0;
-            for (let j = 0; j < particles.length; j++) {
-              if (particles[j].streamId === si) count++;
-            }
-            while (count < PARTICLES_PER_STREAM) {
-              spawnParticle(s, si);
-              count++;
-            }
+      function drawStreams(geom, time, frozen) {
+        const streams = buildStreams(geom);
+        const animateParticles = motionOn() && !geom.phone && !frozen;
+
+        drawStaticPaths(streams);
+
+        if (!animateParticles) {
+          streams.forEach(function (s, idx) {
+            const t = 0.28 + (idx % 7) * 0.09;
+            const pt = bezierPoint(s.from, s.ctrl, s.to, t);
+            const rgb = s.rgb;
+            ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.85)';
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, s.phone ? 2.2 : 2.8, 0, Math.PI * 2);
+            ctx.fill();
           });
+          return;
         }
+
+        streams.forEach(function (s, si) {
+          let count = 0;
+          for (let j = 0; j < particles.length; j++) {
+            if (particles[j].streamId === si) count++;
+          }
+          while (count < PARTICLES_PER_STREAM) {
+            spawnParticle(s, si);
+            count++;
+          }
+        });
 
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
         for (let i = particles.length - 1; i >= 0; i--) {
           const p = particles[i];
-          if (!frozen) p.t += p.speed;
+          p.t += p.speed;
           if (p.t > 1) {
             p.t = 0;
-            if (frozen) particles.splice(i, 1);
             continue;
           }
           const rgb = p.stream.rgb;
-          const trailLen = 0.14;
-          const steps = 6;
+          const trailLen = 0.16;
+          const steps = 7;
           for (let k = 0; k < steps; k++) {
             const t1 = Math.max(0, p.t - (k / steps) * trailLen);
             const t0 = Math.max(0, p.t - ((k + 1) / steps) * trailLen);
             const a = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t0);
             const b = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, t1);
-            const fade = (1 - k / steps) * 0.55;
+            const fade = (1 - k / steps) * 0.72;
             const grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
-            grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (fade * 0.15) + ')');
+            grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (fade * 0.2) + ')');
             grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fade + ')');
             ctx.strokeStyle = grad;
-            ctx.lineWidth = p.spark ? 2.2 : 1.3;
+            ctx.lineWidth = p.spark ? 2.6 : 1.6;
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
             ctx.stroke();
           }
           const pt = bezierPoint(p.stream.from, p.stream.ctrl, p.stream.to, p.t);
-          const head = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, p.size * 2.2);
-          head.addColorStop(0, 'rgba(255,255,255,0.95)');
-          head.addColorStop(0.35, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.85)');
+          const head = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, p.size * 2.6);
+          head.addColorStop(0, 'rgba(255,255,255,0.98)');
+          head.addColorStop(0.3, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.9)');
           head.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
           ctx.fillStyle = head;
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, p.size * 2.2, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, p.size * 2.4, 0, Math.PI * 2);
           ctx.fill();
         }
         ctx.restore();
-
-        if (frozen) {
-          streams.forEach(function (s, idx) {
-            const t = 0.35 + (idx % 5) * 0.11;
-            const pt = bezierPoint(s.from, s.ctrl, s.to, t);
-            ctx.fillStyle = '#fff';
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
-            ctx.fill();
-          });
-        }
       }
 
       function drawFrame(time, forceStill) {
         const geom = geomCache || layoutNodes();
         const rect = stage.getBoundingClientRect();
         ctx.clearRect(0, 0, rect.width, rect.height);
-        const radarR = Math.min(rect.width, rect.height) * (geom.phone ? 0.32 : 0.42);
-        drawRadar(geom.cx, geom.cy, radarR);
         drawRingHalo(geom.cx, geom.cy, geom.ringR, time);
         const still = forceStill || !motionOn();
-        if (!still) {
-          drawStreams(geom, time, false);
-        } else {
-          drawStreams(geom, time, true);
-        }
+        drawStreams(geom, time, still);
       }
 
       function scheduleFrame() {
@@ -758,6 +696,7 @@
         }
         if (now - lastFrame >= FRAME_MS) {
           lastFrame = now;
+          layoutNodes();
           drawFrame(now, false);
         }
         rafId = requestAnimationFrame(tick);
@@ -770,12 +709,12 @@
         const w = c.width;
         const h = c.height;
         g.clearRect(0, 0, w, h);
-        const bars = 24;
+        const bars = 20;
         for (let i = 0; i < bars; i++) {
-          const bh = 8 + ((i * 17) % 37);
+          const bh = 6 + ((i * 17) % 28);
           const x = 4 + i * ((w - 8) / bars);
           g.fillStyle = colors[i % colors.length];
-          g.fillRect(x, h - bh - 4, (w - 8) / bars - 2, bh);
+          g.fillRect(x, h - bh - 3, (w - 8) / bars - 2, bh);
         }
       }
 
@@ -789,8 +728,8 @@
         g.strokeStyle = '#ff4d8d';
         g.lineWidth = 2;
         g.beginPath();
-        for (let x = 0; x < w; x += 6) {
-          const y = h * 0.5 + Math.sin(x * 0.08) * 14 + Math.sin(x * 0.021) * 10;
+        for (let x = 0; x < w; x += 5) {
+          const y = h * 0.5 + Math.sin(x * 0.08) * 10 + Math.sin(x * 0.021) * 8;
           if (x === 0) g.moveTo(x, y);
           else g.lineTo(x, y);
         }
