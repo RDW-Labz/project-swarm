@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   createTuner,
+  DARWIN_MEMORY_PROBE_UNKNOWN_WARNING,
   memoryPressureLevel,
   parseDarwinVmStatAndSwap,
   parseLinuxMeminfo,
@@ -72,25 +73,47 @@ describe('readAvailableMemory injectable exec', () => {
     assert.equal(r.swapUsedGb, 2.5);
   });
 
-  it('falls back to os.freemem when parsing fails', async () => {
+  it('falls back to os.freemem when parsing fails on linux', async () => {
+    const r = await readAvailableMemory({
+      platform: 'linux',
+      exec: async () => {
+        throw new Error('meminfo unavailable');
+      },
+      os: { platform: () => 'linux', freemem: () => 4 * 1024 ** 3 },
+    });
+    assert.equal(r.availRamGb, 4);
+    assert.equal(r.swapUsedGb, 0);
+    assert.equal(r.pressureUnknown, undefined);
+  });
+
+  it('darwin failed probe returns pressure-unknown (not freemem fallback)', async () => {
     const r = await readAvailableMemory({
       platform: 'darwin',
       exec: async () => 'garbage',
       os: { platform: () => 'darwin', freemem: () => 4 * 1024 ** 3 },
     });
-    assert.equal(r.availRamGb, 4);
+    assert.equal(r.availRamGb, 0);
     assert.equal(r.swapUsedGb, 0);
+    assert.equal(r.pressureUnknown, true);
+    assert.equal(r.warning, DARWIN_MEMORY_PROBE_UNKNOWN_WARNING);
+    assert.equal(memoryPressureLevel(r, 'darwin'), 'ok');
   });
 });
 
 describe('memoryPressureLevel', () => {
   it('classifies hard, soft, and ok', () => {
-    assert.equal(memoryPressureLevel({ availRamGb: 2.5 }), 'hard');
-    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 5 }), 'hard');
-    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 3, swapTotalGb: 4 }), 'hard');
-    assert.equal(memoryPressureLevel({ availRamGb: 5 }), 'soft');
-    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 1.5 }), 'soft');
-    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 0.5 }), 'ok');
+    assert.equal(memoryPressureLevel({ availRamGb: 2.5 }, 'linux'), 'hard');
+    assert.equal(memoryPressureLevel({ availRamGb: 2.5 }, 'darwin'), 'hard');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 5 }, 'linux'), 'hard');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 3, swapTotalGb: 4 }, 'linux'), 'hard');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 5 }, 'darwin'), 'ok');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 9 }, 'darwin'), 'soft');
+    assert.equal(memoryPressureLevel({ availRamGb: 5 }, 'linux'), 'soft');
+    assert.equal(memoryPressureLevel({ availRamGb: 5 }, 'darwin'), 'soft');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 1.5 }, 'linux'), 'soft');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 0.5 }, 'linux'), 'ok');
+    assert.equal(memoryPressureLevel({ availRamGb: 10, swapUsedGb: 0.5 }, 'darwin'), 'ok');
+    assert.equal(memoryPressureLevel({ pressureUnknown: true, availRamGb: 0 }), 'ok');
   });
 });
 
@@ -120,16 +143,19 @@ describe('createTuner memory pressure', () => {
     const soft = createTuner({ limit: 20, min: 4, memoryFloor: 2 });
     const softMachine = {
       cpuPercent: 10,
-      availRamGb: 16,
-      freeRamGb: 16,
-      swapUsedGb: 1.5,
+      availRamGb: 5,
+      freeRamGb: 5,
+      swapUsedGb: 0,
       swapTotalGb: 8,
       inUse: 0,
       waiting: 5,
       rateLimitedLanes: [],
     };
     const first = soft.tune(softMachine);
-    assert.equal(first.limit, 15);
+    assert.equal(first.memoryPressure, 'soft');
+    const projectedCap = projectedMemoryJobCap({ availRamGb: softMachine.availRamGb });
+    const expectedSoftLimit = Math.min(15, projectedCap > 0 ? projectedCap : 15);
+    assert.equal(first.limit, expectedSoftLimit);
     const second = soft.tune({ ...softMachine, waiting: 10 });
     assert.ok(second.limit <= first.limit);
     assert.notEqual(second.limit, 21);
