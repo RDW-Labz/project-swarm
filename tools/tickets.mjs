@@ -13,6 +13,7 @@ import { wiringGaps } from './wiring.mjs';
 import { isExampleFile } from './init-profile.mjs';
 import { isSensitivePath } from './sensitive-paths.mjs';
 import { mainWorktreeRoot, worktreeFamily } from './project-spend.mjs';
+import { backupLedger } from './ledger-backup.mjs';
 
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
@@ -215,6 +216,57 @@ export async function readLedger(root) {
   }
 }
 
+let backupLedgerForWrite = backupLedger;
+export function setBackupLedgerForWrite(fn) {
+  if (process.env.NODE_ENV !== 'test' && process.env.NODE_TEST_CONTEXT == null) {
+    throw new Error('setBackupLedgerForWrite is only available in tests');
+  }
+  backupLedgerForWrite = fn;
+}
+export function resetBackupLedgerForWrite() { backupLedgerForWrite = backupLedger; }
+
+const SYSTEM_TEMP_ROOTS = ['/tmp', '/private/tmp', '/private/var/folders'];
+
+function isUnderSystemTempRoot(resolvedPath) {
+  for (const root of SYSTEM_TEMP_ROOTS) {
+    if (resolvedPath === root || resolvedPath.startsWith(root + path.sep)) return true;
+  }
+  return false;
+}
+
+async function ledgerBackupAfterWrite(root) {
+  if (process.env.PROJECT_SWARM_NO_LEDGER_BACKUP) return;
+  const explicitHome = process.env.PROJECT_SWARM_HOME;
+  if (!explicitHome) {
+    try {
+      const real = await fs.realpath(root);
+      const tmpBase = await fs.realpath(os.tmpdir());
+      if (isUnderSystemTempRoot(tmpBase)) {
+        let homeReal;
+        try { homeReal = await fs.realpath(os.homedir()); } catch { homeReal = path.resolve(os.homedir()); }
+        const inTmp = real === tmpBase || real.startsWith(tmpBase + path.sep);
+        const tmpEqualsOrContainsHome =
+          tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
+        if (inTmp && !tmpEqualsOrContainsHome) return;
+      }
+    } catch { /* best effort */ }
+  }
+  let timer;
+  const cap = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), 5000);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  });
+  try {
+    await Promise.race([
+      backupLedgerForWrite(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
+      cap,
+    ]);
+  } catch { /* ignored */ }
+  finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function writeLedger(root, ledger) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, 'tickets.json');
@@ -231,6 +283,7 @@ export async function writeLedger(root, ledger) {
     await fs.rm(tmp, { force: true });
     throw error;
   }
+  await ledgerBackupAfterWrite(root);
 }
 
 export async function appendLog(root, event) {

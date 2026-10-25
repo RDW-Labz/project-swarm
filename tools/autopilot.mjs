@@ -144,6 +144,7 @@ export function pickReadyTickets({ tickets, approvals }) {
 const MINUTE = 60_000;
 const START_READY_MIN_MS = 120_000;
 const START_READY_STALE_MS = 10 * MINUTE;
+export const START_READY_HOLD_BACKOFF_MS = 60_000;
 const MAX_ACTIONS_PER_RUN = 3;
 const MAX_RUNS = 10;
 const RESULT_LIMIT = 500;
@@ -457,7 +458,9 @@ async function safe(fn, fallback) {
   try { return await fn(); } catch { return fallback; }
 }
 
-function startReadyCooldownOpen(memory, nowMs) {
+export function startReadyCooldownOpen(memory, nowMs) {
+  const holdAt = memory.startReadyHoldAt;
+  if (holdAt != null && Number.isFinite(holdAt) && nowMs - holdAt < START_READY_HOLD_BACKOFF_MS) return false;
   const last = memory.startReadyLastAt;
   if (last == null || !Number.isFinite(last)) return true;
   const elapsed = nowMs - last;
@@ -909,7 +912,8 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
           ok = out?.ok !== false;
           if (ok) {
             result = out?.result ?? 'ok';
-            memory.startReadyLastAt = nowMs;
+            if (result === 'held-memory') memory.startReadyHoldAt = nowMs;
+            else memory.startReadyLastAt = nowMs;
           } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
         } catch (error) {
           ok = false;
@@ -918,7 +922,8 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         if (ok && waveTickets.length > 1) {
           await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave` }, { incidental: true });
         }
-        await write({ kind: 'action', action: 'start-ready', reason, result });
+        const startReadyIncidental = ok && result === 'held-memory';
+        await write({ kind: 'action', action: 'start-ready', reason, result }, { incidental: startReadyIncidental });
         actions.push({ action: 'start-ready', ok, result, reason });
       }
     }

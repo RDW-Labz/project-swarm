@@ -3,7 +3,8 @@ import { git } from './codex-adapter.mjs';
 import { scratchRootDir } from './claude-shell.mjs';
 import { appendEvent, integrateBlockerRunIdFromId } from './journal.mjs';
 import { loadLocalConfig } from './local-config.mjs';
-import { listProjects } from './projects.mjs';
+import { listProjects, projectsFile } from './projects.mjs';
+import { holdsSwarmState, recordDeletion } from './state-guard.mjs';
 import { expectedWorkspaceFor, worktreesBaseFor } from './swarm/core-11.mjs';
 import { readState } from './swarm/core-41.mjs';
 import { resolveWorktree } from './swarm/workspace.mjs';
@@ -247,24 +248,62 @@ async function assertUnderBases(absPath, bases) {
   return false;
 }
 
-async function removeGitWorktree(root, worktreePath, { gitImpl = git } = {}) {
+function gcStateGuardContext(opts = {}) {
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? os.homedir();
+  return {
+    env,
+    home,
+    registryFile: opts.registryFile ?? projectsFile(env, home),
+    fsImpl: opts.fs ?? fs,
+    now: opts.now ?? (() => new Date()),
+  };
+}
+
+async function logCheckoutDeletionAttempt(absPath, caller, outcome, ctx) {
+  await recordDeletion({
+    dir: absPath,
+    caller,
+    outcome,
+    home: ctx.home,
+    env: ctx.env,
+    fs: ctx.fsImpl,
+    now: ctx.now,
+  });
+}
+
+async function removeGitWorktree(root, worktreePath, { gitImpl = git, caller = 'gc.removeGitWorktree', guardCtx } = {}) {
+  if (guardCtx && await holdsSwarmState(worktreePath, { fs: guardCtx.fsImpl, registryFile: guardCtx.registryFile })) {
+    await logCheckoutDeletionAttempt(worktreePath, caller, 'refused', guardCtx);
+    return { skipped: true, reason: 'state-holder', path: worktreePath };
+  }
+  if (guardCtx) await logCheckoutDeletionAttempt(worktreePath, caller, 'allowed', guardCtx);
   try {
     await gitImpl(root, ['worktree', 'remove', '--force', worktreePath]);
   } catch {
     try { await fs.rm(worktreePath, { recursive: true, force: true }); } catch { /* best effort */ }
   }
   try { await gitImpl(root, ['worktree', 'prune']); } catch { /* ignore */ }
+  return { removed: true, path: worktreePath };
 }
 
-async function removePath(root, absPath, bases, { gitImpl, duImpl, runId, dryRun, log }) {
+async function removePath(root, absPath, bases, { gitImpl, duImpl, runId, dryRun, log, caller = 'gc.removePath', guardCtx }) {
   if (!(await assertUnderBases(absPath, bases))) return { skipped: true, reason: 'outside-base', path: absPath, bytesFreed: 0 };
   let st;
   try { st = await fs.lstat(absPath); } catch { return { path: absPath, bytesFreed: 0, missing: true }; }
   if (st.isSymbolicLink()) return { skipped: true, reason: 'symlink', path: absPath, bytesFreed: 0 };
   const bytes = await pathBytes(absPath, { duImpl }) ?? 0;
   if (dryRun) return { path: absPath, bytesFreed: bytes, dryRun: true };
+  if (guardCtx && await holdsSwarmState(absPath, { fs: guardCtx.fsImpl, registryFile: guardCtx.registryFile })) {
+    await logCheckoutDeletionAttempt(absPath, caller, 'refused', guardCtx);
+    return { skipped: true, reason: 'state-holder', path: absPath, bytesFreed: 0 };
+  }
+  if (guardCtx) await logCheckoutDeletionAttempt(absPath, caller, 'allowed', guardCtx);
   const isGit = await fs.access(path.join(absPath, '.git')).then(() => true, () => false);
-  if (isGit) await removeGitWorktree(root, absPath, { gitImpl });
+  if (isGit) {
+    const wtResult = await removeGitWorktree(root, absPath, { gitImpl, caller, guardCtx: null });
+    if (wtResult?.skipped) return { skipped: true, reason: wtResult.reason, path: absPath, bytesFreed: 0 };
+  }
   else await fs.rm(absPath, { recursive: true, force: true });
   if (log && runId) await appendRunCleanupJournal(root, runId, { path: absPath, bytesFreed: bytes });
   return { path: absPath, bytesFreed: bytes };
@@ -296,6 +335,7 @@ export async function cleanupRunWorkspaces(root, id, state, options = {}) {
   const bases = [path.join(root, '.swarm', 'workspaces'), worktreesBase];
   const dryRun = options.dryRun === true;
   const includeWorkspace = options.removeWorkspaceCopies !== false;
+  const guardCtx = gcStateGuardContext(options);
   const removed = [];
   let bytesFreed = 0;
   const seen = new Set();
@@ -304,7 +344,7 @@ export async function cleanupRunWorkspaces(root, id, state, options = {}) {
       const abs = path.resolve(p);
       if (seen.has(abs)) continue;
       seen.add(abs);
-      const result = await removePath(root, abs, bases, { gitImpl: options.gitImpl ?? git, duImpl: options.duImpl, runId: id, dryRun, log: options.log !== false });
+      const result = await removePath(root, abs, bases, { gitImpl: options.gitImpl ?? git, duImpl: options.duImpl, runId: id, dryRun, log: options.log !== false, guardCtx });
       if (!result.skipped && !result.missing) {
         removed.push(result);
         bytesFreed += result.bytesFreed ?? 0;
@@ -476,11 +516,14 @@ export async function collectProjectGcPlan(root, opts = {}) {
     keepRuns = 20,
     nowMs = Date.now(),
     env = process.env,
+    home = os.homedir(),
     includeScratch = false,
     archiveUntracked = false,
     forceUnsafe = false,
     gitImpl = git,
     duImpl,
+    registryFile = projectsFile(env, home),
+    fs: fsDep = fs,
   } = opts;
   const olderThanMs = olderThanDays * 86400000;
   root = await fs.realpath(root);
@@ -572,6 +615,7 @@ export async function collectProjectGcPlan(root, opts = {}) {
       const candidate = path.join(scratchBase, entry.name);
       const mtime = await runMtime(candidate);
       if (nowMs - mtime < olderThanMs) continue;
+      if (await holdsSwarmState(candidate, { fs: fsDep, registryFile })) continue;
       const safety = await worktreeUnsafeToRemove(candidate, { gitImpl, forceUnsafe });
       if (safety.unsafe) continue;
       const bytes = await pathBytes(candidate, { duImpl }) ?? 0;
@@ -591,11 +635,12 @@ function formatTable(rows) {
 
 export async function applyProjectGcPlan(root, plan, opts = {}) {
   const { gitImpl = git, duImpl, forceUnsafe = false } = opts;
+  const guardCtx = gcStateGuardContext(opts);
   if (await projectHasActiveRun(root)) return { skipped: true, reason: 'active-run', bytesFreed: 0 };
   let bytesFreed = 0;
   const removed = [];
   for (const row of [...plan.categories.finishedRuns, ...plan.categories.orphans.filter(o => o.kind !== 'git-metadata')]) {
-    const result = await removePath(root, row.path, plan.bases, { gitImpl, duImpl, dryRun: false, log: false });
+    const result = await removePath(root, row.path, plan.bases, { gitImpl, duImpl, dryRun: false, log: false, guardCtx });
     if (!result.skipped) { bytesFreed += result.bytesFreed ?? 0; removed.push(result); }
   }
   for (const wt of plan.categories.orphans.filter(o => o.kind === 'git-metadata')) {
@@ -607,6 +652,22 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
     for (const name of heavy) {
       const target = path.join(row.path, name);
       try {
+        if (name === 'worktrees') {
+          let entries = [];
+          try { entries = await fs.readdir(target); } catch { continue; }
+          for (const ent of entries) {
+            const child = path.join(target, ent);
+            if (await holdsSwarmState(child, { fs: guardCtx.fsImpl, registryFile: guardCtx.registryFile })) {
+              await logCheckoutDeletionAttempt(child, 'gc.applyOldRunWorktrees', 'refused', guardCtx);
+              continue;
+            }
+            await logCheckoutDeletionAttempt(child, 'gc.applyOldRunWorktrees', 'allowed', guardCtx);
+            const bytes = await pathBytes(child, { duImpl }) ?? 0;
+            await fs.rm(child, { recursive: true, force: true });
+            bytesFreed += bytes;
+          }
+          continue;
+        }
         const bytes = await pathBytes(target, { duImpl }) ?? 0;
         await fs.rm(target, { recursive: true, force: true });
         bytesFreed += bytes;
@@ -615,9 +676,13 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
     removed.push({ path: row.path, bytesFreed: row.bytes });
   }
   for (const row of plan.categories.scratch) {
+    if (await holdsSwarmState(row.path, { fs: guardCtx.fsImpl, registryFile: guardCtx.registryFile })) {
+      await logCheckoutDeletionAttempt(row.path, 'gc.applyScratch', 'refused', guardCtx);
+      continue;
+    }
     const safety = await worktreeUnsafeToRemove(row.path, { gitImpl, forceUnsafe });
     if (safety.unsafe && !forceUnsafe) continue;
-    const result = await removePath(root, row.path, [scratchRootDir({ env: opts.env })], { gitImpl, duImpl, dryRun: false, log: false });
+    const result = await removePath(root, row.path, [scratchRootDir({ env: opts.env })], { gitImpl, duImpl, dryRun: false, log: false, caller: 'gc.applyScratch', guardCtx });
     if (!result.skipped) bytesFreed += result.bytesFreed ?? 0;
   }
   await appendGcLog(root, `${new Date().toISOString()} apply freed=${bytesFreed}`);
@@ -680,7 +745,7 @@ export async function runGc(args, deps = {}) {
     let freed = 0;
     for (const plan of plans) {
       if (plan.skipped) continue;
-      const result = await applyProjectGcPlan(plan.root, plan, { gitImpl: deps.gitImpl, duImpl: deps.duImpl, forceUnsafe, env });
+      const result = await applyProjectGcPlan(plan.root, plan, { gitImpl: deps.gitImpl, duImpl: deps.duImpl, forceUnsafe, env, home: deps.home ?? home });
       freed += result.bytesFreed ?? 0;
     }
     if (json) return { stdout: `${JSON.stringify({ apply: true, bytesFreed: freed, counts, totalBytes: freed })}\n`, exitCode: 0 };

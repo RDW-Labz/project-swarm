@@ -1,0 +1,14 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "memtest3",
+   "agent": "cursor", "model": "composer-2.5",
+   "tier": "cheap",
+   "context": ["tools/autotune.mjs", "tools/machine-limit.mjs", "tests/memory-aware-limits.test.mjs"],
+   "outputs": ["tests/memory-aware-limits.test.mjs"],
+   "prompt": "The contract in tools/autotune.mjs changed (read it first): on darwin a failed probe now returns a pressure-unknown result treated as ok (linux keeps the os.freemem fallback), and darwin pressure is hard only when available RAM is under 3 GB (swap used above 8 GB only makes it soft; the swap ratio test is linux only). Three tests in tests/memory-aware-limits.test.mjs now fail: 'falls back to os.freemem when parsing fails' (use platform linux for the freemem fallback, and add a darwin case asserting the unknown-is-ok result), 'classifies hard, soft, and ok' (split the swap cases by platform: swap-driven hard stays asserted for linux, darwin asserts available-RAM hard and swap-only soft), and the createTuner memory pressure test that depends on it. Update only the expectations that encode the old contract; do not weaken what still holds; change nothing in tools/."
+  }
+ ]
+}

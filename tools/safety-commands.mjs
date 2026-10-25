@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runStopAll, readStopMarker, clearStop, exitCodeFor, formatStopLines } from './stop-all.mjs';
 import { createBackup, listBackups, restoreBackup, verifyBackup } from './state-backup.mjs';
+import { runLedgerCommand } from './ledger-cli.mjs';
 import { checkMigrations, readApprovals, addApproval, validateMigrationsConfig, isMigrationFile, runRoundTrip, MIGRATION_DEFAULTS } from './migration-gate.mjs';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -26,7 +27,7 @@ async function defaultExec(argv, { cwd, timeoutMs = 300000, env } = {}) {
 
 const out = (stdout, exitCode = 0) => ({ stdout: `${stdout}\n`, exitCode });
 const bad = message => out(message, 1);
-const FLAGS = new Set(['--all', '--clear', '--status', '--yes', '--reason', '--note', '--json']);
+const FLAGS = new Set(['--all', '--clear', '--status', '--yes', '--reason', '--note', '--json', '--from', '--into']);
 
 function parse(args) {
   const flags = {};
@@ -35,7 +36,7 @@ function parse(args) {
     const arg = args[i];
     if (arg.startsWith('--')) {
       if (!FLAGS.has(arg)) throw new Error(`unknown flag: ${arg}`);
-      if (arg === '--reason' || arg === '--note') { flags[arg.slice(2)] = args[++i]; if (flags[arg.slice(2)] === undefined) throw new Error(`${arg} needs a value`); } else flags[arg.slice(2)] = true;
+      if (arg === '--reason' || arg === '--note' || arg === '--from' || arg === '--into') { flags[arg.slice(2)] = args[++i]; if (flags[arg.slice(2)] === undefined) throw new Error(`${arg} needs a value`); } else flags[arg.slice(2)] = true;
     } else rest.push(arg);
   }
   return { flags, rest };
@@ -109,6 +110,14 @@ async function stopCommand(root, args, deps) {
 
 async function backupCommand(root, args) {
   const { flags, rest } = parse(args);
+  if (rest[0] === 'ledger') {
+    const ledgerArgs = [...rest.slice(1)];
+    for (const [k, v] of Object.entries(flags)) {
+      if (k === 'json' || k === 'all' || k === 'yes') ledgerArgs.push(`--${k}`);
+      else if (k === 'from' || k === 'into') ledgerArgs.push(`--${k}`, v);
+    }
+    return runLedgerCommand(root, ledgerArgs);
+  }
   if (rest[0] === 'list') {
     const list = await listBackups(root);
     return out(flags.json ? JSON.stringify(list) : (list.map(b => `${b.id}  ${b.files} files  ${b.bytes} bytes  ${b.reason}`).join('\n') || 'no backups'));

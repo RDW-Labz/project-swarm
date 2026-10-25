@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "mgfix2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/merge-guard.mjs",
+    "tests/merge-guard.test.mjs",
+    "tests/guard-backup-fixes.test.mjs"
+   ],
+   "outputs": [
+    "tests/merge-guard.test.mjs",
+    "tests/guard-backup-fixes.test.mjs"
+   ],
+   "prompt": "tools/merge-guard.mjs now asks the first gh pr view for isCrossRepository (PR_FIELDS) and treats a missing or non-false value as 'unknown, skip the remote delete'; an empty git worktree list is untrustworthy (keep the local branch). Many tests now fail: in tests/merge-guard.test.mjs the runMerge tests (happy path with exact arguments, red/pending/no checks, required context missing, protection API error, null PR view, mergeable UNKNOWN retries, stacked PRs, non-default base, merge failure, state not MERGED, remote naming another repository, dirty work tree, and the tests added for worktree-list failure, state-holding worktree, cross-repository, encoded ref segments, and omits --delete-branch when the worktree holds state) and in tests/guard-backup-fixes.test.mjs the tests named 'finding 3', 'finding 6' and 'finding 7'. Read tools/merge-guard.mjs, then update ONLY the tests: every fake PR view JSON that models a normal same-repo PR must include isCrossRepository: false, and the fakes for git worktree list --porcelain must return a non-empty healthy block for the test root (no swarm state) unless the test is about an empty, failing or state-holding list; tests about cross-repository PRs use isCrossRepository: true (no gh api delete) and tests about a missing value assert the remote delete is skipped. Expected behaviour is exactly what tools/merge-guard.mjs does now (do not change tools/). Do not weaken any assertion; keep the tests that check --delete-branch is passed in the healthy case. Run the two files and make them pass."
+  }
+ ]
+}

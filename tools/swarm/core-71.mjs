@@ -18,10 +18,24 @@ import { redcheckRunLocked } from './core-62.mjs';
 import { journalWarning } from './warnings.mjs';
 import { prepareWorktreeLocation, worktreeDiskLowResult, worktreeStatusMap } from './workspace.mjs';
 import { cleanupRunWorkspaces } from '../gc.mjs';
+import { holdsSwarmState, recordDeletion } from '../state-guard.mjs';
+import { projectsFile } from '../projects.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+/** Remove a job worktree checkout unless it holds swarm state (ledger, runs, registry root, pointer ledger). */
+export async function removeWorktreeCheckout(root, worktree, { gitImpl = git, caller = 'removeWorktreeCheckout', env = process.env, home = env?.HOME ?? os.homedir(), registryFile, fs: fsImpl = fs } = {}) {
+  const registry = registryFile ?? projectsFile(env, home);
+  if (await holdsSwarmState(worktree, { fs: fsImpl, registryFile: registry })) {
+    await recordDeletion({ dir: worktree, caller, outcome: 'refused', home, env, fs: fsImpl });
+    return { skipped: true, reason: 'state-holder', path: worktree };
+  }
+  await recordDeletion({ dir: worktree, caller, outcome: 'allowed', home, env, fs: fsImpl });
+  await gitImpl(root, ['worktree', 'remove', '--force', worktree]);
+  return { removed: true, path: worktree };
+}
 
 /** Best-effort removal of per-job OS scratch; failures are recorded, never job status. */
 export async function cleanupJobScratchDir(scratchDir, result, env = process.env) {
@@ -201,7 +215,10 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
       keepWorktree = true;
       if (result) result.keptWorkspace = worktree;
     }
-    if (added && !keepWorktree) await gitImpl(root, ['worktree', 'remove', '--force', worktree]);
+    if (added && !keepWorktree) {
+      const wtRemove = await removeWorktreeCheckout(root, worktree, { gitImpl, caller: 'executeCodexJob', env: options.env ?? process.env });
+      if (wtRemove.skipped && result) result.worktreeRemoveSkipped = wtRemove;
+    }
   }
 }
 
