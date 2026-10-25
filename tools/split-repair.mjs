@@ -192,21 +192,6 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
     }
   }
 
-  for (const filePath of ticket.files ?? []) {
-    const norm = normTicketPath(filePath);
-    if (!norm || exists(norm)) continue;
-    const owners = ownersOfTicketPath(norm, allTickets).filter(id => id !== ticket.id);
-    if (!owners.length) continue;
-    const ownerId = pickPathOwner(owners, allTickets);
-    if (!ownerId || addingDepCreatesCycle(ticket.id, ownerId, allTickets)) continue;
-    const deps = new Set(ticket.dependsOn ?? []);
-    if (!deps.has(ownerId)) {
-      ticket.dependsOn = [...deps, ownerId];
-      addNote(ticket.id, 'path-dependency', `dependsOn ${ownerId} for output ${norm} owned elsewhere`);
-      changed = true;
-    }
-  }
-
   const filesBeforeWiring = JSON.stringify(ticket.files ?? []);
   const wiring = applyTicketPathWiring(ticket, allTickets, { ...pathOptions, exists, allTickets });
   if (JSON.stringify(ticket.files ?? []) !== filesBeforeWiring) sensitivePathsTouched = true;

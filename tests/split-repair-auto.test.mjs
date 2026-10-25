@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { repairTicketBatch, refreshRejectedDependents } from '../tools/split-repair.mjs';
+import { repairTicketBatch, refreshRejectedDependents, detectSharedFileIssues } from '../tools/split-repair.mjs';
 import { promotePathPendingTickets } from '../tools/scope-commands.mjs';
 import { validateTicket } from '../tools/tickets.mjs';
 import { validateTicketPaths } from '../tools/ticket-paths.mjs';
@@ -42,6 +42,35 @@ const base = (over = {}) => ({
 
 const exists = new Set(['src/existing.mjs']);
 const pathExists = (p) => exists.has(p);
+
+test('repair does not chain two tickets that write the same file', () => {
+  const writerA = base({
+    id: 'T-0001',
+    files: ['src/pages/list.tsx'],
+    acceptance: ['ok'],
+  });
+  const writerB = base({
+    id: 'T-0002',
+    files: ['src/pages/list.tsx'],
+    acceptance: ['ok'],
+  });
+  const result = repairTicketBatch({
+    tickets: [writerA, writerB],
+    ledgerTickets: [],
+    scopeText: SCOPE,
+    pathExists,
+  });
+  assert.equal(result.parked.length, 0);
+  const a = result.tickets.find(t => t.id === 'T-0001');
+  const b = result.tickets.find(t => t.id === 'T-0002');
+  assert.deepEqual(a.dependsOn, []);
+  assert.deepEqual(b.dependsOn, []);
+  assert.ok(!result.notes.some(n => /path-dependency.*list\.tsx/i.test(n)));
+  const conflicts = detectSharedFileIssues(result.tickets);
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].path, 'src/pages/list.tsx');
+  assert.match(conflicts[0].reason, /T-0001.*T-0002|T-0002.*T-0001/);
+});
 
 test('missing contract owned by another ticket becomes a dependency', () => {
   const owner = base({
