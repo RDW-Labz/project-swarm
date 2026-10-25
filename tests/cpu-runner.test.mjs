@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildBurstScorecard, idleSlotPercentFromWaves } from '../tools/burst-scorecard.mjs';
+import { runCpuRunnerJob } from '../tools/cpu-runner.mjs';
 
 test('idleSlotPercentFromWaves matches wave idle share', () => {
   const pct = idleSlotPercentFromWaves([
@@ -73,4 +74,49 @@ test('buildBurstScorecard reports not improved when only duration improves', () 
     idleSlotPct: 40,
   };
   assert.equal(buildBurstScorecard(before, after).improved, false);
+});
+
+const sleepMs = (ms) =>
+  `node -e "import('node:timers/promises').then(({setTimeout})=>setTimeout(${ms}))"`;
+
+test('runCpuRunnerJob records pass and duration for passing ticket tests and e2e', async () => {
+  const result = await runCpuRunnerJob({
+    ticketTestCommand: sleepMs(40),
+    e2eSuiteCommand: sleepMs(40),
+  });
+  assert.equal(result.ticketTests.status, 'pass');
+  assert.equal(result.ticketTests.exitCode, 0);
+  assert.ok(result.ticketTests.durationMs >= 35);
+  assert.equal(result.e2eSuite.status, 'pass');
+  assert.equal(result.e2eSuite.exitCode, 0);
+  assert.ok(result.e2eSuite.durationMs >= 35);
+  assert.ok(result.completedAt);
+});
+
+test('runCpuRunnerJob still runs e2e when ticket tests fail', async () => {
+  const marker = `cpu-runner-e2e-${Date.now()}.marker`;
+  const result = await runCpuRunnerJob({
+    ticketTestCommand: 'exit 1',
+    e2eSuiteCommand: `touch ${marker} && exit 0`,
+  });
+  assert.equal(result.ticketTests.status, 'fail');
+  assert.notEqual(result.ticketTests.exitCode, 0);
+  assert.equal(result.e2eSuite.status, 'pass');
+  assert.equal(result.e2eSuite.exitCode, 0);
+  assert.ok(result.e2eSuite.durationMs >= 0);
+  const { unlinkSync, existsSync } = await import('node:fs');
+  if (existsSync(marker)) unlinkSync(marker);
+});
+
+test('runCpuRunnerJob uses elapsed time, not a fixed duration', async () => {
+  const short = await runCpuRunnerJob({
+    ticketTestCommand: sleepMs(25),
+    e2eSuiteCommand: 'exit 0',
+  });
+  const long = await runCpuRunnerJob({
+    ticketTestCommand: sleepMs(120),
+    e2eSuiteCommand: 'exit 0',
+  });
+  assert.ok(long.ticketTests.durationMs > short.ticketTests.durationMs + 50);
+  assert.notEqual(short.ticketTests.durationMs, long.ticketTests.durationMs);
 });
