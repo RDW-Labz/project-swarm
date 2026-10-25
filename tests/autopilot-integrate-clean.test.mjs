@@ -282,6 +282,56 @@ test('integrateCheckoutGitState detects rebase-merge via git-path', async t => {
   assert.equal(state.rebaseInProgress, true);
 });
 
+test('integrateCheckoutGitState treats AA and DD porcelain codes as unmerged', async t => {
+  const root = await tempRoot(t);
+  const runStatus = async () => 'AA both-added.txt\nDD both-deleted.txt\n M tracked.txt\n';
+  const exec = async (cmd, args) => {
+    if (cmd !== 'git') throw new Error('unexpected exec');
+    const sub = args[1];
+    if (sub === 'config') return { stdout: 'false\n' };
+    if (sub === 'rev-parse') return { stdout: '' };
+    throw new Error(`unexpected git ${sub}`);
+  };
+  const state = await integrateCheckoutGitState(root, {
+    exec,
+    runStatus,
+    outputPaths: [],
+  });
+  assert.deepEqual(state.unmergedPaths.sort(), ['both-added.txt', 'both-deleted.txt']);
+});
+
+test('integrateCheckoutGitState resolves non-existent output paths through symlink parents', async t => {
+  const root = await tempRoot(t);
+  await execFileAsync('git', ['init'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.name', 't'], { cwd: root });
+  const targetDir = path.join(root, 'target');
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.writeFile(path.join(targetDir, 'widget.mjs'), 'v1\n');
+  await execFileAsync('git', ['add', 'target/widget.mjs'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: root });
+  const linkPath = path.join(root, 'link');
+  try {
+    await fs.symlink('target', linkPath);
+  } catch (err) {
+    if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+      t.skip('symlinks not supported in this environment');
+      return;
+    }
+    throw err;
+  }
+  await execFileAsync('git', ['add', 'link'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'add symlink'], { cwd: root });
+  await fs.writeFile(path.join(targetDir, 'widget.mjs'), 'v2\n');
+  const exec = (cmd, args, opts) => execFileAsync(cmd, args, { ...opts, cwd: root });
+  const state = await integrateCheckoutGitState(root, {
+    exec: (cmd, args, opts) => exec(cmd, args, opts).then(({ stdout }) => ({ stdout })),
+    outputPaths: ['link/widget.mjs'],
+  });
+  assert.ok(state.integrateCollisions.includes('target/widget.mjs'));
+  assert.ok(!state.integrateCollisions.includes('link'));
+});
+
 test('autopilot never stashes or removes files during integrate gating', async t => {
   const root = await tempRoot(t);
   await fs.mkdir(path.join(root, 'notes'), { recursive: true });

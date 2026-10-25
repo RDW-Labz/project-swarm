@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { realpath } from 'node:fs/promises';
+import { access, realpath } from 'node:fs/promises';
 import path from 'node:path';
 // Repo-relative paths and prefixes that swarm regenerates; they never count as operator edits.
 
@@ -285,17 +285,33 @@ async function gitIgnoreCase(root, exec) {
   }
 }
 
+const UNMERGED_PORCELAIN_CODES = new Set(['AA', 'DD', 'AU', 'UA', 'DU', 'UD', 'UU']);
+
+function isUnmergedPorcelainCode(code) {
+  return UNMERGED_PORCELAIN_CODES.has(String(code ?? '').trim());
+}
+
 async function buildRealpathKey(root, relPath) {
   const normalized = normalizeRelPath(relPath);
   if (normalized === null) return null;
+  const absolute = path.resolve(root, normalized);
   try {
-    return await realpath(path.join(root, normalized));
+    return await realpath(absolute);
   } catch {
-    try {
-      return await realpath(path.resolve(root, normalized));
-    } catch {
-      return path.resolve(root, normalized);
+    const segments = normalized.split('/').filter(Boolean);
+    for (let drop = 1; drop <= segments.length; drop++) {
+      const parentRel = segments.slice(0, segments.length - drop).join('/');
+      const tail = segments.slice(segments.length - drop);
+      const parentAbs = parentRel ? path.join(root, parentRel) : root;
+      try {
+        await access(parentAbs);
+        const resolvedParent = await realpath(parentAbs);
+        return path.join(resolvedParent, ...tail);
+      } catch {
+        continue;
+      }
     }
+    return absolute;
   }
 }
 
@@ -313,7 +329,7 @@ export async function integrateCheckoutGitState(root, { exec, runStatus, outputP
     || (await gitPathExists(root, exec, 'rebase-apply'));
   const ignoreCase = await gitIgnoreCase(root, exec);
   const trackedDirty = await dirtyFiles(root, { exec, runStatus, untracked: false });
-  const unmergedPaths = trackedDirty.filter(entry => entry.code.includes('U')).map(entry => entry.path);
+  const unmergedPaths = trackedDirty.filter(entry => isUnmergedPorcelainCode(entry.code)).map(entry => entry.path);
   const allWithUntracked = await dirtyFiles(root, { exec, runStatus, untracked: true });
   const untrackedDirty = allWithUntracked.filter(entry => entry.code === '??' || entry.code.startsWith('?'));
   const normalizedOutputs = new Set(
