@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { repairTicketBatch } from '../tools/split-repair.mjs';
+import { repairTicketBatch, refreshRejectedDependents } from '../tools/split-repair.mjs';
 import { validateTicket } from '../tools/tickets.mjs';
 import { validateTicketPaths } from '../tools/ticket-paths.mjs';
 
@@ -167,4 +167,117 @@ test('a genuinely unrepairable ticket is parked once with a precise reason', () 
   assert.equal(result.tickets.length, 0);
   assert.equal(result.parked.length, 1);
   assert.match(result.parked[0].issues[0].reason, /size L/);
+});
+
+test('path-new-file recomputes sensitive for auth outputs (never clears an existing true)', () => {
+  const tagged = base({
+    id: 'T-0001',
+    contracts: ['src/lib/auth/login.mjs'],
+    acceptance: ['ok'],
+    sensitive: false,
+  });
+  const already = base({
+    id: 'T-0002',
+    files: ['src/plain.mjs'],
+    acceptance: ['ok'],
+    sensitive: true,
+  });
+  const taggedResult = repairTicketBatch({
+    tickets: [tagged],
+    ledgerTickets: [],
+    scopeText: SCOPE,
+    pathExists,
+  });
+  assert.equal(taggedResult.tickets[0].sensitive, true);
+  assert.ok(taggedResult.notes.some(n => n.includes('sensitive-refresh')));
+  const kept = repairTicketBatch({
+    tickets: [already],
+    ledgerTickets: [],
+    scopeText: SCOPE,
+    pathExists,
+  });
+  assert.equal(kept.tickets[0].sensitive, true);
+});
+
+test('refreshRejectedDependents restores a validated ticket into the accepted list', () => {
+  const child = base({
+    id: 'T-0002',
+    dependsOn: ['T-0001'],
+    files: ['src/child.mjs'],
+    acceptance: ['ok'],
+  });
+  const rejected = [{ id: 'T-0002', title: child.title, reason: 'depends on rejected T-0001' }];
+  const refreshed = refreshRejectedDependents({
+    tickets: [],
+    rejected,
+    repairedIds: new Set(['T-0001']),
+    candidateTickets: [child],
+    exists: pathExists,
+  });
+  assert.equal(refreshed.rejected.length, 0);
+  assert.equal(refreshed.tickets.length, 1);
+  assert.equal(refreshed.tickets[0].id, 'T-0002');
+  assert.ok(refreshed.notes.some(n => n.includes('ticket restored')));
+});
+
+test('missing repo paths stay parked with a pending path-gate reason', () => {
+  const ticket = base({
+    context: ['docs/not-in-repo-yet.md'],
+    files: ['src/use.mjs'],
+    acceptance: ['ok'],
+  });
+  const result = repairTicketBatch({
+    tickets: [ticket],
+    ledgerTickets: [],
+    scopeText: SCOPE,
+    pathExists,
+  });
+  assert.equal(result.tickets.length, 0);
+  assert.equal(result.parked.length, 1);
+  assert.equal(result.parked[0].parkedReason, 'path-not-in-repo-pending');
+  assert.ok(result.parked[0].issues.some(i => /pending path gate/i.test(i.reason)));
+});
+
+test('path dependency skips cancelled or done owner tickets', () => {
+  const cancelledOwner = base({
+    id: 'T-0001',
+    status: 'cancelled',
+    files: ['src/shared.mjs'],
+    acceptance: ['ok'],
+  });
+  const activeOwner = base({
+    id: 'T-0002',
+    files: ['src/shared.mjs'],
+    acceptance: ['ok'],
+  });
+  const reader = base({
+    id: 'T-0003',
+    context: ['src/shared.mjs'],
+    files: ['src/reader.mjs'],
+    acceptance: ['ok'],
+  });
+  const result = repairTicketBatch({
+    tickets: [reader],
+    ledgerTickets: [cancelledOwner, activeOwner],
+    scopeText: SCOPE,
+    pathExists,
+  });
+  const fixed = result.tickets.find(t => t.id === 'T-0003');
+  assert.deepEqual(fixed.dependsOn, ['T-0002']);
+});
+
+test('repairTicketBatch is deterministic for the same input', () => {
+  const tickets = [
+    base({ id: 'T-0001', files: ['src/a.mjs'], acceptance: ['ok'] }),
+    base({
+      id: 'T-0002',
+      context: ['src/a.mjs'],
+      files: ['src/b.mjs'],
+      acceptance: ['ok'],
+    }),
+  ];
+  const opts = { tickets, ledgerTickets: [], scopeText: SCOPE, pathExists };
+  const a = repairTicketBatch(opts);
+  const b = repairTicketBatch(opts);
+  assert.equal(JSON.stringify(a), JSON.stringify(b));
 });

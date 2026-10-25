@@ -1337,7 +1337,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
   }
   for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
   rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
-  return { tickets, errors, notes, copiedAcceptanceIds, rejected };
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected, candidateTickets: candidates.map((candidate) => candidate.ticket) };
 }
 
 async function readStageFiles(root, runId) {
@@ -1423,6 +1423,27 @@ function tagIssueStages(issues, stageByTicket) {
   return issues.map(issue => (issue.stage ? issue : { ...issue, stage: issue.ticket ? stageByTicket.get(issue.ticket) ?? null : null }));
 }
 
+function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
+  const stillParked = [];
+  const promoted = [];
+  for (const entry of pathPendingParked) {
+    const ticket = entry.ticket;
+    const paths = validateTicketPaths(ticket, { exists: pathExists, allTickets: [...tickets, ticket], repoFiles });
+    const missing = (paths.errors ?? []).filter(err => err.reason === 'missing file');
+    if (!missing.length) {
+      promoted.push(ticket);
+      continue;
+    }
+    const cleared = missing.every(err => {
+      const norm = normTicketPath(err.path);
+      return acceptNewPaths.has(norm) || repoFiles.includes(norm);
+    });
+    if (cleared) promoted.push(ticket);
+    else stillParked.push(entry);
+  }
+  return { tickets: [...tickets, ...promoted], pathPendingParked: stillParked };
+}
+
 function evaluateSplitIngest({
   root,
   lists,
@@ -1467,16 +1488,29 @@ function evaluateSplitIngest({
     repoFiles,
   });
   built.notes.push(...batchRepair.notes);
-  const pathOnlyParked = batchRepair.parked.filter((entry) => (entry.issues ?? []).every((issue) => /path not in repo/i.test(String(issue.reason ?? ''))));
-  const hardParked = batchRepair.parked.filter((entry) => !pathOnlyParked.includes(entry));
-  tickets = [...batchRepair.tickets, ...pathOnlyParked.map((entry) => entry.ticket)];
+  const pathPendingParked = batchRepair.parked.filter((entry) => entry.parkedReason === 'path-not-in-repo-pending');
+  const hardParked = batchRepair.parked.filter((entry) => entry.parkedReason !== 'path-not-in-repo-pending');
+  tickets = batchRepair.tickets;
   for (const entry of hardParked) {
     rejected.push({ id: entry.ticket.id, title: entry.ticket.title ?? '', reason: entry.issues[0]?.reason ?? 'could not repair ticket' });
   }
   const repairedIds = new Set(batchRepair.notes.map(line => /^T-[0-9]+/.exec(line)?.[0]).filter(Boolean));
-  const refreshed = refreshRejectedDependents({ tickets, rejected, repairedIds });
+  const refreshed = refreshRejectedDependents({
+    tickets,
+    rejected,
+    repairedIds,
+    candidateTickets: built.candidateTickets ?? [],
+    exists: pathExists,
+    pathOptions: { repoFiles },
+  });
+  tickets = refreshed.tickets;
   rejected = refreshed.rejected;
   built.notes.push(...refreshed.notes);
+  const pathPendingIds = new Set(pathPendingParked.map((entry) => entry.ticket.id));
+  tickets = [...tickets, ...pathPendingParked.map((entry) => entry.ticket)];
+  for (const entry of pathPendingParked) {
+    built.notes.push(`${entry.ticket.id}: path not in repo (pending path gate)`);
+  }
   const stageByTicket = ticketStageLookup(lists, startAt);
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
@@ -1513,7 +1547,20 @@ function evaluateSplitIngest({
   const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
   const hardWiringGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
 
+  const pendingAfterGuards = pathPendingParked.map((entry) => ({
+    ...entry,
+    ticket: tickets.find((ticket) => ticket.id === entry.ticket.id) ?? entry.ticket,
+  }));
+  const readyTickets = tickets.filter((ticket) => !pathPendingIds.has(ticket.id));
+  const pathPromotion = promotePathPendingTickets(pendingAfterGuards, readyTickets, { repoFiles, acceptNewPaths, pathExists });
+  tickets = pathPromotion.tickets;
   const pathCheck = ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths);
+  for (const entry of pathPromotion.pathPendingParked) {
+    const paths = validateTicketPaths(entry.ticket, { exists: pathExists, allTickets: tickets, repoFiles });
+    for (const err of paths.errors ?? []) {
+      pathCheck.refusals.push(formatTicketPathRefusal(entry.ticket.id, err));
+    }
+  }
   const laneRefusals = [];
   const laneNotes = [];
   const sizes = contextEnvFor(root, profile).sizes;
@@ -1619,6 +1666,7 @@ function evaluateSplitIngest({
   const validTickets = tickets.filter(ticket => !badIds.has(ticket.id));
   return {
     tickets: validTickets,
+    pathPendingParked: pathPromotion.pathPendingParked,
     allTickets: tickets,
     issues,
     existing: existing?.tickets ?? [],

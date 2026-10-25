@@ -13,6 +13,7 @@ import {
 } from './wiring.mjs';
 import { validateTicket } from './tickets.mjs';
 import { parseScope, requirementText } from './scope.mjs';
+import { isSensitiveTicket } from './sensitive-ticket.mjs';
 import {
   applyTicketPathWiring,
   validateTicketPaths,
@@ -25,6 +26,30 @@ import {
 
 const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
 const LIST_FIELDS = ['scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'tests', 'screens', 'dependsOn', 'deletes', 'dependencies'];
+const INACTIVE_OWNER_STATUSES = new Set(['done', 'rejected', 'cancelled']);
+const publicRoutePath = file => /(?:^|\/)app\/api\/.+\/route\.[cm]?[jt]sx?$|(?:^|\/)src\/routes\/public(?:\/|$)/i.test(String(file ?? ''));
+const writesPublicApiRoute = ticket => (ticket?.files ?? []).some(publicRoutePath);
+
+function reqLookupFromScope(scope) {
+  return new Map((scope?.requirements ?? []).map((requirement) => [requirement.id, requirement]));
+}
+
+/** Match scope-commands ticketsFromStageLists sensitive tagging (OR-only; never clear true). */
+function applySplitterSensitive(ticket, scope, reqLookup) {
+  if (ticket.sensitive === true) return;
+  ticket.sensitive = isSensitiveTicket(ticket, scope, reqLookup) || writesPublicApiRoute(ticket);
+}
+
+function pickPathOwner(ownerIds, allTickets) {
+  const byId = new Map((allTickets ?? []).map(t => [t.id, t]));
+  for (const id of ownerIds) {
+    const owner = byId.get(id);
+    const status = owner?.status ?? 'todo';
+    if (INACTIVE_OWNER_STATUSES.has(status)) continue;
+    return id;
+  }
+  return null;
+}
 
 export const ROOT_RULES = Object.freeze([
   'Never put a file in a ticket\'s context or reads unless it exists in the repo now or is produced by a ticket in its dependsOn chain (the producer must be an ancestor).',
@@ -118,8 +143,9 @@ function repairAcceptance(ticket, scope, addNote) {
   return true;
 }
 
-function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions = {}) {
+function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions = {}, scope, reqLookup) {
   let changed = false;
+  let sensitivePathsTouched = false;
   const owned = ticketOwnedPaths(ticket);
 
   for (const contractPath of ticket.contracts ?? []) {
@@ -127,7 +153,8 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
     if (!norm || exists(norm)) continue;
     const owners = ownersOfTicketPath(norm, allTickets).filter(id => id !== ticket.id);
     if (owners.length) {
-      const ownerId = owners[0];
+      const ownerId = pickPathOwner(owners, allTickets);
+      if (!ownerId) continue;
       if (!addingDepCreatesCycle(ticket.id, ownerId, allTickets)) {
         const deps = new Set(ticket.dependsOn ?? []);
         if (!deps.has(ownerId)) {
@@ -146,6 +173,7 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
       ticket.files = [...(ticket.files ?? []), norm];
       addNote(ticket.id, 'path-new-file', `${norm} declared in files (new contract output)`);
       changed = true;
+      sensitivePathsTouched = true;
     }
   }
 
@@ -154,8 +182,8 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
     if (!norm || exists(norm) || owned.has(norm)) continue;
     const owners = ownersOfTicketPath(norm, allTickets).filter(id => id !== ticket.id);
     if (!owners.length) continue;
-    const ownerId = owners[0];
-    if (addingDepCreatesCycle(ticket.id, ownerId, allTickets)) continue;
+    const ownerId = pickPathOwner(owners, allTickets);
+    if (!ownerId || addingDepCreatesCycle(ticket.id, ownerId, allTickets)) continue;
     const deps = new Set(ticket.dependsOn ?? []);
     if (!deps.has(ownerId)) {
       ticket.dependsOn = [...deps, ownerId];
@@ -169,8 +197,8 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
     if (!norm || exists(norm)) continue;
     const owners = ownersOfTicketPath(norm, allTickets).filter(id => id !== ticket.id);
     if (!owners.length) continue;
-    const ownerId = owners[0];
-    if (addingDepCreatesCycle(ticket.id, ownerId, allTickets)) continue;
+    const ownerId = pickPathOwner(owners, allTickets);
+    if (!ownerId || addingDepCreatesCycle(ticket.id, ownerId, allTickets)) continue;
     const deps = new Set(ticket.dependsOn ?? []);
     if (!deps.has(ownerId)) {
       ticket.dependsOn = [...deps, ownerId];
@@ -179,10 +207,26 @@ function repairPathsForTicket(ticket, allTickets, exists, addNote, pathOptions =
     }
   }
 
+  const filesBeforeWiring = JSON.stringify(ticket.files ?? []);
   const wiring = applyTicketPathWiring(ticket, allTickets, { ...pathOptions, exists, allTickets });
+  if (JSON.stringify(ticket.files ?? []) !== filesBeforeWiring) sensitivePathsTouched = true;
   for (const note of wiring.notes ?? []) {
     addNote(ticket.id, 'path-wiring', note.includes(':') ? note.slice(note.indexOf(':') + 1).trim() : note);
     changed = true;
+  }
+  const ownerById = new Map(allTickets.map(t => [t.id, t]));
+  const activeDeps = (ticket.dependsOn ?? []).filter((depId) => {
+    const status = ownerById.get(depId)?.status ?? 'todo';
+    return !INACTIVE_OWNER_STATUSES.has(status);
+  });
+  if (activeDeps.length !== (ticket.dependsOn ?? []).length) {
+    ticket.dependsOn = activeDeps;
+    addNote(ticket.id, 'path-dependency', 'dropped dependsOn inactive ledger owners (done, rejected or cancelled)');
+    changed = true;
+  }
+  if (sensitivePathsTouched) {
+    applySplitterSensitive(ticket, scope, reqLookup);
+    addNote(ticket.id, 'sensitive-refresh', `sensitive=${ticket.sensitive === true}`);
   }
   return changed;
 }
@@ -223,6 +267,7 @@ export function repairTicketBatch({ tickets, ledgerTickets = [], scopeText = '',
   const notes = [];
   const addNote = (id, rule, detail) => notes.push(`${id}: ${rule}: ${detail}`);
   const scope = scopeText ? parseScope(scopeText) : { requirements: [] };
+  const reqLookup = reqLookupFromScope(scope);
   const exists = typeof pathExists === 'function'
     ? (p) => pathExists(normTicketPath(p))
     : () => false;
@@ -244,7 +289,7 @@ export function repairTicketBatch({ tickets, ledgerTickets = [], scopeText = '',
       changed = normalizeListFields(ticket, addNote) || changed;
       changed = normalizeScreens(ticket, addNote) || changed;
       changed = repairAcceptance(ticket, scope, addNote) || changed;
-      changed = repairPathsForTicket(ticket, allTickets(), exists, addNote, pathOptions) || changed;
+      changed = repairPathsForTicket(ticket, allTickets(), exists, addNote, pathOptions, scope, reqLookup) || changed;
     }
     if (!changed) break;
   }
@@ -255,7 +300,19 @@ export function repairTicketBatch({ tickets, ledgerTickets = [], scopeText = '',
     if (errs.length) failures.set(ticket.id, { ticket, errs });
   }
 
-  const parked = collapseDependentParked(failures);
+  const parked = collapseDependentParked(failures).map((entry) => {
+    const pathOnly = (entry.issues ?? []).length > 0
+      && (entry.issues ?? []).every((issue) => /path not in repo/i.test(String(issue.reason ?? '')));
+    if (!pathOnly) return entry;
+    return {
+      ...entry,
+      parkedReason: 'path-not-in-repo-pending',
+      issues: [{
+        code: 'path-pending',
+        reason: 'path not in repo (pending path gate)',
+      }, ...(entry.issues ?? [])],
+    };
+  });
   const parkedIds = new Set(parked.map(p => p.ticket.id));
   const valid = pool.filter(t => !parkedIds.has(t.id));
 
@@ -263,12 +320,33 @@ export function repairTicketBatch({ tickets, ledgerTickets = [], scopeText = '',
 }
 
 /** Re-check tickets that were rejected only because a dependency was rejected. */
-export function refreshRejectedDependents({ tickets, rejected = [], repairedIds = new Set() }) {
-  if (!repairedIds.size || !rejected.length) return { tickets, rejected, notes: [] };
+export function refreshRejectedDependents({
+  tickets,
+  rejected = [],
+  repairedIds = new Set(),
+  candidateTickets = [],
+  exists = () => false,
+  pathOptions = {},
+} = {}) {
+  if (!repairedIds.size || !rejected.length) {
+    return { tickets: [...(tickets ?? [])], rejected: [...(rejected ?? [])], notes: [] };
+  }
   const notes = [];
+  const nextTickets = (tickets ?? []).map(cloneTicket);
+  const ticketById = new Map(nextTickets.map(t => [t.id, t]));
+  for (const t of candidateTickets ?? []) {
+    if (t?.id) ticketById.set(t.id, t);
+  }
   const rejectedById = new Map(rejected.map(row => [row.id, row]));
   const stillRejected = new Set(rejectedById.keys());
-  const ticketById = new Map(tickets.map(t => [t.id, t]));
+  const allTickets = () => {
+    const byId = new Map();
+    for (const t of nextTickets) byId.set(t.id, t);
+    for (const t of candidateTickets ?? []) {
+      if (t?.id) byId.set(t.id, t);
+    }
+    return [...byId.values()];
+  };
   let changed = true;
   while (changed) {
     changed = false;
@@ -277,15 +355,29 @@ export function refreshRejectedDependents({ tickets, rejected = [], repairedIds 
       const parent = String(row.reason).match(/T-[0-9]+/)?.[0];
       if (!parent || !repairedIds.has(parent)) continue;
       if (stillRejected.has(parent)) continue;
+      const ticket = ticketById.get(id);
+      if (!ticket) continue;
+      const shape = validateTicket(ticket);
+      const paths = validateTicketPaths(ticket, { ...pathOptions, exists, allTickets: allTickets() });
+      const pathErrs = [];
+      for (const err of paths.errors ?? []) {
+        if (err.reason === 'missing file') pathErrs.push(`${err.field} path not in repo: ${err.path}`);
+        else pathErrs.push(formatTicketPathRefusal(ticket.id, err).replace(/^[^:]+:\s*/, ''));
+      }
+      const errs = [...(shape.errors ?? []), ...pathErrs];
+      if (!shape.ok || errs.length) continue;
       stillRejected.delete(id);
       rejectedById.delete(id);
-      if (ticketById.has(id)) {
+      if (!nextTickets.some(t => t.id === id)) {
+        nextTickets.push(cloneTicket(ticket));
+        notes.push(`${id}: rejected-dependency-refresh: parent ${parent} repaired; ticket restored`);
+      } else {
         notes.push(`${id}: rejected-dependency-refresh: parent ${parent} repaired; ticket kept`);
       }
       changed = true;
     }
   }
-  return { tickets, rejected: [...rejectedById.values()], notes };
+  return { tickets: nextTickets, rejected: [...rejectedById.values()], notes };
 }
 
 export function issueFingerprint(issue) {
