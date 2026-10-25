@@ -14,13 +14,17 @@ import {
   remoteClusterModeEnabled,
   CLUSTER_LEDGER_NODE_HEADER,
   authorizeClusterNode,
+  clusterLedgerAuthHeaders,
 } from '../tools/cluster-ledger-api.mjs';
 import { claim, readLeases } from '../tools/ledger-lease.mjs';
 import { createLedger, writeLedger } from '../tools/tickets.mjs';
 
 const LOGIN = 'peer@tailnet.example';
 const NODE_A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const NODE_B = 'bbbbbbbb-bbbb-4ccc-8ddd-ffffffffffff';
 const NODE_UNKNOWN = '11111111-2222-4333-8444-555555555555';
+const SECRET_A = 'aa'.repeat(32);
+const SECRET_B = 'bb'.repeat(32);
 
 const tmp = async t => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cluster-ledger-')));
@@ -45,15 +49,33 @@ async function seedTicket(root, id = 'T-9100') {
   return id;
 }
 
-function registryFor(...ids) {
+function registryFor(entries) {
   const nodes = {};
-  for (const id of ids) nodes[id] = { host: 'test' };
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      nodes[entry] = { host: 'test', secret: SECRET_A };
+    } else {
+      nodes[entry.id] = { host: 'test', secret: entry.secret };
+    }
+  }
   return { version: 1, nodes };
 }
 
-function httpJson(port, pathname, { method = 'GET', headers = {}, body = null } = {}) {
+function httpJson(port, pathname, {
+  method = 'GET',
+  headers = {},
+  body = null,
+  nodeId = NODE_A,
+  secret = SECRET_A,
+  signAt = Date.now(),
+  skipAuth = false,
+} = {}) {
   return new Promise((resolve, reject) => {
     const payload = body == null ? null : JSON.stringify(body);
+    const bodyForSign = payload ?? '';
+    const authHeaders = skipAuth
+      ? {}
+      : clusterLedgerAuthHeaders(secret, method, pathname, bodyForSign, { now: signAt });
     const req = http.request({
       hostname: '127.0.0.1',
       port,
@@ -62,7 +84,8 @@ function httpJson(port, pathname, { method = 'GET', headers = {}, body = null } 
       headers: {
         Host: `127.0.0.1:${port}`,
         'Tailscale-User-Login': LOGIN,
-        [CLUSTER_LEDGER_NODE_HEADER]: NODE_A,
+        [CLUSTER_LEDGER_NODE_HEADER]: nodeId,
+        ...authHeaders,
         ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}),
         ...headers,
       },
@@ -82,8 +105,8 @@ function httpJson(port, pathname, { method = 'GET', headers = {}, body = null } 
   });
 }
 
-async function startTestServer(t, root, registry) {
-  const server = createClusterLedgerServer({ root, registry });
+async function startTestServer(t, root, registry, { readRegistry } = {}) {
+  const server = createClusterLedgerServer({ root, registry, readRegistry });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   t.after(() => new Promise(resolve => server.close(() => resolve())));
@@ -115,7 +138,7 @@ test('listener does not start when remote cluster mode is off', async t => {
 test('verified node can claim, renew, release via HTTP', async t => {
   const root = await tmp(t);
   const ticketId = await seedTicket(root);
-  const port = await startTestServer(t, root, registryFor(NODE_A));
+  const port = await startTestServer(t, root, registryFor([NODE_A]));
   const t0 = Date.now();
 
   const claimed = await httpJson(port, '/api/cluster/ledger/claim', {
@@ -147,7 +170,7 @@ test('verified node can claim, renew, release via HTTP', async t => {
 test('unverified or unknown node id is refused on every route', async t => {
   const root = await tmp(t);
   const ticketId = await seedTicket(root);
-  const port = await startTestServer(t, root, registryFor(NODE_A));
+  const port = await startTestServer(t, root, registryFor([NODE_A]));
 
   const routes = [
     { path: '/api/cluster/ledger/read', method: 'GET' },
@@ -173,22 +196,124 @@ test('unverified or unknown node id is refused on every route', async t => {
 
     const unknown = await httpJson(port, route.path, {
       method: route.method,
-      headers: { [CLUSTER_LEDGER_NODE_HEADER]: NODE_UNKNOWN },
+      nodeId: NODE_UNKNOWN,
+      secret: SECRET_A,
       body: route.body,
     });
-    assert.equal(unknown.status, 403, `${route.path} unknown node`);
+    assert.equal(unknown.status, 401, `${route.path} unknown node`);
+    assert.deepEqual(unknown.json, { error: 'unauthorized', message: 'request could not be authorized' });
   }
 
   const badId = await httpJson(port, '/api/cluster/ledger/read', {
     headers: { [CLUSTER_LEDGER_NODE_HEADER]: 'not-a-uuid' },
+    skipAuth: true,
   });
   assert.equal(badId.status, 401);
+});
+
+test('unknown node and bad HMAC are indistinguishable', async t => {
+  const root = await tmp(t);
+  const port = await startTestServer(t, root, registryFor([NODE_A]));
+
+  const unknown = await httpJson(port, '/api/cluster/ledger/read', {
+    nodeId: NODE_UNKNOWN,
+    secret: SECRET_A,
+  });
+  const wrongSig = await httpJson(port, '/api/cluster/ledger/read', {
+    nodeId: NODE_A,
+    secret: SECRET_B,
+  });
+  const noSig = await httpJson(port, '/api/cluster/ledger/read', {
+    skipAuth: true,
+    headers: { [CLUSTER_LEDGER_NODE_HEADER]: NODE_A },
+  });
+
+  assert.equal(unknown.status, 401);
+  assert.equal(wrongSig.status, 401);
+  assert.equal(noSig.status, 401);
+  assert.deepEqual(unknown.json, wrongSig.json);
+  assert.deepEqual(unknown.json, noSig.json);
+});
+
+test('stale timestamp is rejected', async t => {
+  const root = await tmp(t);
+  const port = await startTestServer(t, root, registryFor([NODE_A]));
+  const stale = await httpJson(port, '/api/cluster/ledger/read', {
+    signAt: Date.now() - 120_000,
+  });
+  assert.equal(stale.status, 401);
+  assert.deepEqual(stale.json, { error: 'unauthorized', message: 'request could not be authorized' });
+});
+
+test('node B cannot renew or release node A lease', async t => {
+  const root = await tmp(t);
+  const ticketId = await seedTicket(root);
+  const port = await startTestServer(t, root, registryFor([
+    { id: NODE_A, secret: SECRET_A },
+    { id: NODE_B, secret: SECRET_B },
+  ]));
+
+  const claimed = await httpJson(port, '/api/cluster/ledger/claim', {
+    method: 'POST',
+    body: { ticketId, leaseTtlMs: 60_000 },
+    nodeId: NODE_A,
+    secret: SECRET_A,
+  });
+  assert.equal(claimed.status, 200);
+
+  const renewAsB = await httpJson(port, '/api/cluster/ledger/renew', {
+    method: 'POST',
+    body: { ticketId, fencingToken: 1, leaseTtlMs: 90_000 },
+    nodeId: NODE_B,
+    secret: SECRET_B,
+  });
+  assert.equal(renewAsB.status, 403);
+  assert.equal(renewAsB.json.error, 'forbidden');
+
+  const releaseAsB = await httpJson(port, '/api/cluster/ledger/release', {
+    method: 'POST',
+    body: { ticketId, fencingToken: 1 },
+    nodeId: NODE_B,
+    secret: SECRET_B,
+  });
+  assert.equal(releaseAsB.status, 403);
+});
+
+test('corrupted registry yields error response not hang', async t => {
+  const root = await tmp(t);
+  const port = await startTestServer(t, root, null, {
+    readRegistry: async () => {
+      throw new Error('registry corrupt');
+    },
+  });
+  const res = await httpJson(port, '/api/cluster/ledger/read');
+  assert.equal(res.status, 503);
+  assert.equal(res.json.error, 'unavailable');
+});
+
+test('missing remote address is rejected', () => {
+  const registry = registryFor([NODE_A]);
+  const pathname = '/api/cluster/ledger/read';
+  const authHeaders = clusterLedgerAuthHeaders(SECRET_A, 'GET', pathname, '');
+  const req = {
+    headers: {
+      'Tailscale-User-Login': LOGIN,
+      [CLUSTER_LEDGER_NODE_HEADER]: NODE_A,
+      ...authHeaders,
+    },
+  };
+  for (const remote of [undefined, '', null]) {
+    const out = authorizeClusterNode(req, remote, registry, { method: 'GET', path: pathname });
+    assert.equal(out.ok, false);
+    assert.equal(out.status, 401);
+    assert.equal(out.body.error, 'not-verified');
+  }
 });
 
 test('HTTP claim matches direct ledger-lease.mjs state', async t => {
   const root = await tmp(t);
   const ticketId = await seedTicket(root);
-  const port = await startTestServer(t, root, registryFor(NODE_A));
+  const port = await startTestServer(t, root, registryFor([NODE_A]));
   const t0 = Date.now();
 
   const viaApi = await httpJson(port, '/api/cluster/ledger/claim', {
@@ -214,9 +339,17 @@ test('HTTP claim matches direct ledger-lease.mjs state', async t => {
 });
 
 test('authorizeClusterNode is fail-closed', () => {
-  const registry = registryFor(NODE_A);
-  const req = { headers: { 'Tailscale-User-Login': LOGIN, [CLUSTER_LEDGER_NODE_HEADER]: NODE_A } };
-  assert.equal(authorizeClusterNode(req, '127.0.0.1', registry).ok, true);
+  const registry = registryFor([NODE_A]);
+  const path = '/api/cluster/ledger/read';
+  const authHeaders = clusterLedgerAuthHeaders(SECRET_A, 'GET', path, '');
+  const req = {
+    headers: {
+      'Tailscale-User-Login': LOGIN,
+      [CLUSTER_LEDGER_NODE_HEADER]: NODE_A,
+      ...authHeaders,
+    },
+  };
+  assert.equal(authorizeClusterNode(req, '127.0.0.1', registry, { method: 'GET', path }).ok, true);
   assert.equal(authorizeClusterNode({ headers: {} }, '127.0.0.1', registry).ok, false);
 });
 
@@ -240,7 +373,7 @@ test('listener starts when remote cluster mode is on', async t => {
   const env = { HOME: home, SWARM_CONFIG: configFile };
   const regFile = path.join(home, '.project-swarm', 'nodes', 'registry.json');
   await fs.mkdir(path.dirname(regFile), { recursive: true });
-  await fs.writeFile(regFile, `${JSON.stringify(registryFor(NODE_A))}\n`);
+  await fs.writeFile(regFile, `${JSON.stringify(registryFor([NODE_A]))}\n`);
   env.SWARM_HOME = path.join(home, '.project-swarm');
 
   const started = await startClusterLedgerListener({ root, env, home });

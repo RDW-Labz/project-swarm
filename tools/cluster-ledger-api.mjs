@@ -5,6 +5,7 @@
 // Listener: starts only when the canonical machine config sets `remoteClusterMode: true`
 // (tools/local-config.mjs / SWARM_CONFIG), off by default. Port: env SWARM_CLUSTER_LEDGER_PORT
 // or config `clusterLedgerPort`, default 9448. Binds 127.0.0.1; expose with tailscale serve separately.
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -16,8 +17,56 @@ import { isTailnetAddress } from './remote.mjs';
 
 export const DEFAULT_CLUSTER_LEDGER_PORT = 9448;
 export const CLUSTER_LEDGER_NODE_HEADER = 'x-swarm-node-id';
+export const CLUSTER_LEDGER_TIMESTAMP_HEADER = 'x-swarm-timestamp';
+export const CLUSTER_LEDGER_SIGNATURE_HEADER = 'x-swarm-signature';
 
 const MAX_BODY_BYTES = 16 * 1024;
+/** Reject request signatures whose timestamp is more than this many ms from server time (replay limit). */
+const MAX_AUTH_TIMESTAMP_SKEW_MS = 60_000;
+
+const GENERIC_UNAUTHORIZED = { status: 401, body: { error: 'unauthorized', message: 'request could not be authorized' } };
+
+/**
+ * Canonical string for node HMAC auth: method, path, millisecond timestamp, and raw body bytes.
+ * Delimiters are newlines so method/path/body cannot collide across fields.
+ * Client: HMAC-SHA256(nodeSecret, canonical) as lowercase hex in x-swarm-signature with x-swarm-timestamp.
+ */
+export function clusterLedgerCanonicalString(method, path, timestampMs, body = '') {
+  const bodyStr = body ?? '';
+  return `${method}\n${path}\n${String(timestampMs)}\n${bodyStr}`;
+}
+
+export function clusterLedgerHmac(secret, method, path, timestampMs, body = '') {
+  return createHmac('sha256', secret).update(clusterLedgerCanonicalString(method, path, timestampMs, body)).digest('hex');
+}
+
+export function clusterLedgerAuthHeaders(secret, method, path, body, { now = Date.now() } = {}) {
+  const bodyStr = typeof body === 'string' ? body : (body == null ? '' : JSON.stringify(body));
+  const timestamp = String(now);
+  return {
+    [CLUSTER_LEDGER_TIMESTAMP_HEADER]: timestamp,
+    [CLUSTER_LEDGER_SIGNATURE_HEADER]: clusterLedgerHmac(secret, method, path, timestamp, bodyStr),
+  };
+}
+
+function verifyNodeHmac(secret, method, path, timestampHeader, signatureHeader, body) {
+  if (typeof secret !== 'string' || !secret) return false;
+  if (typeof timestampHeader !== 'string' || !timestampHeader.trim()) return false;
+  if (typeof signatureHeader !== 'string' || !signatureHeader.trim()) return false;
+  const ts = Number(timestampHeader);
+  if (!Number.isFinite(ts) || !Number.isInteger(ts)) return false;
+  if (Math.abs(Date.now() - ts) > MAX_AUTH_TIMESTAMP_SKEW_MS) return false;
+  const expected = clusterLedgerHmac(secret, method, path, timestampHeader, body ?? '');
+  if (expected.length !== signatureHeader.length) return false;
+  try {
+    const a = Buffer.from(expected, 'hex');
+    const b = Buffer.from(signatureHeader, 'hex');
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
 
 export function nodesRegistryFile(env = process.env, home = env.HOME || os.homedir()) {
   const install = env.SWARM_HOME || path.join(home, '.project-swarm');
@@ -84,13 +133,16 @@ export function tailnetNodeRequestVerified(req, remoteAddress, { hosts = [] } = 
     if (!hosts.map(h => String(h).toLowerCase()).includes(String(host).toLowerCase())) return false;
   }
 
-  const ip = String(remoteAddress ?? '').replace(/^::ffff:/, '');
+  const ip = remoteAddress == null || remoteAddress === ''
+    ? ''
+    : String(remoteAddress).replace(/^::ffff:/, '');
+  if (!ip) return false;
   const loopbackPeer = ip === '127.0.0.1' || ip === '::1';
-  if (!localHost && ip && !isTailnetAddress(ip) && !loopbackPeer) return false;
+  if (!localHost && !isTailnetAddress(ip) && !loopbackPeer) return false;
   return true;
 }
 
-export function authorizeClusterNode(req, remoteAddress, registry, { hosts = [] } = {}) {
+export function authorizeClusterNode(req, remoteAddress, registry, { hosts = [], method = 'GET', path = '/', body = '' } = {}) {
   if (!tailnetNodeRequestVerified(req, remoteAddress, { hosts })) {
     return { ok: false, status: 401, body: { error: 'not-verified', message: 'tailnet node identity was not verified' } };
   }
@@ -98,8 +150,17 @@ export function authorizeClusterNode(req, remoteAddress, registry, { hosts = [] 
   if (!nodeId) {
     return { ok: false, status: 401, body: { error: 'missing-node-id', message: 'x-swarm-node-id must be a valid node uuid' } };
   }
-  if (!registry?.nodes?.[nodeId]) {
-    return { ok: false, status: 403, body: { error: 'unknown-node', message: 'node id is not registered' } };
+  const nodeEntry = registry?.nodes?.[nodeId];
+  const secret = nodeEntry?.secret;
+  const timestampHeader = headerValue(req?.headers, CLUSTER_LEDGER_TIMESTAMP_HEADER);
+  const signatureHeader = headerValue(req?.headers, CLUSTER_LEDGER_SIGNATURE_HEADER);
+  if (
+    !nodeEntry
+    || typeof secret !== 'string'
+    || !secret
+    || !verifyNodeHmac(secret, method, path, timestampHeader, signatureHeader, body)
+  ) {
+    return { ok: false, ...GENERIC_UNAUTHORIZED };
   }
   return { ok: true, nodeId };
 }
@@ -141,12 +202,15 @@ export async function handleClusterLedgerOperation(root, route, body, { now = Da
   if (route === 'renew') {
     const ticketId = body?.ticketId;
     const fencingToken = body?.fencingToken;
+    const callerNodeId = body?._callerNodeId;
     if (typeof ticketId !== 'string' || !ticketId) {
       return { status: 400, body: { error: 'bad-request', message: 'ticketId is required' } };
     }
     if (!Number.isInteger(fencingToken)) {
       return { status: 400, body: { error: 'bad-request', message: 'fencingToken must be an integer' } };
     }
+    const holderDenied = await assertLeaseHolder(root, ticketId, callerNodeId);
+    if (holderDenied) return holderDenied;
     const opts = { now };
     if (body?.leaseTtlMs !== undefined) opts.leaseTtlMs = body.leaseTtlMs;
     try {
@@ -159,12 +223,15 @@ export async function handleClusterLedgerOperation(root, route, body, { now = Da
   if (route === 'release') {
     const ticketId = body?.ticketId;
     const fencingToken = body?.fencingToken;
+    const callerNodeId = body?._callerNodeId;
     if (typeof ticketId !== 'string' || !ticketId) {
       return { status: 400, body: { error: 'bad-request', message: 'ticketId is required' } };
     }
     if (!Number.isInteger(fencingToken)) {
       return { status: 400, body: { error: 'bad-request', message: 'fencingToken must be an integer' } };
     }
+    const holderDenied = await assertLeaseHolder(root, ticketId, callerNodeId);
+    if (holderDenied) return holderDenied;
     try {
       const result = await release(root, ticketId, fencingToken, { now });
       return { status: 200, body: result };
@@ -175,6 +242,15 @@ export async function handleClusterLedgerOperation(root, route, body, { now = Da
   return { status: 404, body: { error: 'not-found' } };
 }
 
+async function assertLeaseHolder(root, ticketId, callerNodeId) {
+  const store = await readLeases(root);
+  const lease = store.leases[ticketId];
+  if (!lease || lease.holderId !== callerNodeId) {
+    return { status: 403, body: { error: 'forbidden', message: 'only the lease holder may renew or release this lease' } };
+  }
+  return null;
+}
+
 async function readJsonBody(req, limit = MAX_BODY_BYTES) {
   const chunks = [];
   let size = 0;
@@ -183,9 +259,10 @@ async function readJsonBody(req, limit = MAX_BODY_BYTES) {
     if (size > limit) return { error: 'too-large' };
     chunks.push(chunk);
   }
-  if (!chunks.length) return { value: {} };
+  if (!chunks.length) return { value: {}, raw: '' };
+  const raw = Buffer.concat(chunks).toString('utf8');
   try {
-    return { value: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+    return { value: JSON.parse(raw), raw };
   } catch {
     return { error: 'invalid-json' };
   }
@@ -205,56 +282,72 @@ export function createClusterLedgerServer({
 } = {}) {
   if (!root) throw new Error('cluster-ledger-api: root is required');
   const server = http.createServer(async (req, res) => {
-    const remoteAddress = req.socket?.remoteAddress;
-    const u = new URL(req.url ?? '/', 'http://127.0.0.1');
-    const pathname = u.pathname.replace(/\/+$/, '') || '/';
-    const routeMap = {
-      '/api/cluster/ledger/claim': 'claim',
-      '/api/cluster/ledger/renew': 'renew',
-      '/api/cluster/ledger/release': 'release',
-      '/api/cluster/ledger/read': 'read',
-    };
-    const route = routeMap[pathname];
-    if (!route) {
-      sendJson(res, 404, { error: 'not-found' });
-      return;
-    }
-    const reg = registry ?? await readRegistry();
-    const auth = authorizeClusterNode(req, remoteAddress, reg, { hosts });
-    if (!auth.ok) {
-      sendJson(res, auth.status, auth.body);
-      return;
-    }
-    if (route === 'read') {
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        sendJson(res, 405, { error: 'method-not-allowed' });
+    try {
+      const remoteAddress = req.socket?.remoteAddress;
+      const u = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const pathname = u.pathname.replace(/\/+$/, '') || '/';
+      const routeMap = {
+        '/api/cluster/ledger/claim': 'claim',
+        '/api/cluster/ledger/renew': 'renew',
+        '/api/cluster/ledger/release': 'release',
+        '/api/cluster/ledger/read': 'read',
+      };
+      const route = routeMap[pathname];
+      if (!route) {
+        sendJson(res, 404, { error: 'not-found' });
         return;
       }
-      const out = await handleClusterLedgerOperation(root, 'read');
-      if (req.method === 'HEAD') {
-        res.writeHead(out.status);
-        res.end();
+
+      let bodyRaw = '';
+      let parsedBody = {};
+      if (route === 'read') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          sendJson(res, 405, { error: 'method-not-allowed' });
+          return;
+        }
+      } else {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'method-not-allowed' });
+          return;
+        }
+        const bodyRead = await readJsonBody(req);
+        if (bodyRead.error === 'too-large') {
+          sendJson(res, 413, { error: 'payload-too-large' });
+          return;
+        }
+        if (bodyRead.error === 'invalid-json') {
+          sendJson(res, 400, { error: 'invalid-json' });
+          return;
+        }
+        bodyRaw = bodyRead.raw ?? '';
+        parsedBody = bodyRead.value ?? {};
+      }
+
+      const reg = registry ?? await readRegistry();
+      const auth = authorizeClusterNode(req, remoteAddress, reg, { hosts, method: req.method ?? 'GET', path: pathname, body: bodyRaw });
+      if (!auth.ok) {
+        sendJson(res, auth.status, auth.body);
         return;
       }
+
+      if (route === 'read') {
+        const out = await handleClusterLedgerOperation(root, 'read');
+        if (req.method === 'HEAD') {
+          res.writeHead(out.status);
+          res.end();
+          return;
+        }
+        sendJson(res, out.status, out.body);
+        return;
+      }
+
+      const body = { ...parsedBody, _callerNodeId: auth.nodeId };
+      const out = await handleClusterLedgerOperation(root, route, body);
       sendJson(res, out.status, out.body);
-      return;
+    } catch (error) {
+      console.error('cluster-ledger-api: request failed', error);
+      sendJson(res, 503, { error: 'unavailable', message: 'cluster ledger temporarily unavailable' });
     }
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'method-not-allowed' });
-      return;
-    }
-    const bodyRead = await readJsonBody(req);
-    if (bodyRead.error === 'too-large') {
-      sendJson(res, 413, { error: 'payload-too-large' });
-      return;
-    }
-    if (bodyRead.error === 'invalid-json') {
-      sendJson(res, 400, { error: 'invalid-json' });
-      return;
-    }
-    const body = { ...bodyRead.value, _callerNodeId: auth.nodeId };
-    const out = await handleClusterLedgerOperation(root, route, body);
-    sendJson(res, out.status, out.body);
   });
   return server;
 }
