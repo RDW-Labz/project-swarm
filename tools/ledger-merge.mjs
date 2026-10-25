@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // One-time, evidence-preserving merge of two machine-local ticket ledgers (Mac mini + MacBook).
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { readLedger, ledgerPath } from './tickets.mjs';
-import { readReviewRecords } from './security-review.mjs';
+import { readReviewRecords, securityReviewReason } from './security-review.mjs';
 import { journalPath, readJournal, safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 import { acquireAutopilotLock } from './autopilot-lock.mjs';
 
@@ -14,10 +15,6 @@ function eventTime(event) {
   const raw = event?.ts ?? event?.at;
   const n = Date.parse(raw ?? '');
   return Number.isFinite(n) ? n : 0;
-}
-
-function hasSecurityReviewOnTicket(ticket) {
-  return ticket?.securityReview && typeof ticket.securityReview === 'object' && !Array.isArray(ticket.securityReview);
 }
 
 function ticketIndexById(tickets) {
@@ -84,7 +81,7 @@ function enrichTicketReviewConsistency(ticket, records, notes) {
   const record = records?.tickets?.[out.id];
   const failed = record?.verdict === 'fail';
   const missing = !record;
-  const needsRecord = hasSecurityReviewOnTicket(out) && out.securityReview.state === 'blocked';
+  const needsRecord = securityReviewReason(out) != null;
   if (failed || (missing && needsRecord)) {
     notes.push(
       `${out.id}: security review verdicts disagree (ticket status ${out.status} vs records.json` +
@@ -168,9 +165,13 @@ async function writeTempRegularFile(file, body) {
   }
 }
 
+export function ledgerMergeRenamesMarkerPath(root) {
+  return path.join(root, '.swarm', 'project', '.ledger-merge-renames-in-progress');
+}
+
 /**
  * Write ledger, review records, and journal via temp files, then rename all into place.
- * @param {{ throwBeforeRename?: boolean, throwAfterTempCount?: number }} hooks - test hooks
+ * @param {{ throwBeforeRename?: boolean, throwAfterTempCount?: number, throwOnRenameIndex?: number }} hooks - test hooks
  */
 export async function applyMergedOutputs(root, { ledger, reviewRecords, journalEvents }, hooks = {}) {
   const projectDir = await safeWritableDir(root, ['.swarm', 'project']);
@@ -197,9 +198,16 @@ export async function applyMergedOutputs(root, { ledger, reviewRecords, journalE
     }
   }
 
-  for (const { tmp, final } of pending) {
-    await fs.rename(tmp, final);
+  const marker = ledgerMergeRenamesMarkerPath(root);
+  // Marker plus back-to-back renameSync: a lingering marker means the trio did not finish as one group.
+  fsSync.writeFileSync(marker, `${new Date().toISOString()}\n`, { mode: 0o600 });
+  for (let i = 0; i < pending.length; i += 1) {
+    if (hooks.throwOnRenameIndex === i) {
+      throw Object.assign(new Error('apply merge aborted mid-rename (test)'), { code: 'merge-apply-incomplete' });
+    }
+    fsSync.renameSync(pending[i].tmp, pending[i].final);
   }
+  fsSync.unlinkSync(marker);
 }
 
 /**

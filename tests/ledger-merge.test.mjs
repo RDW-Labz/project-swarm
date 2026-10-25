@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { createLedger, writeLedger, readLedger, ledgerPath } from '../tools/tickets.mjs';
 import { readReviewRecords, writeReviewRecords } from '../tools/security-review.mjs';
 import { journalPath, readJournal } from '../tools/journal.mjs';
-import { mergeTicketLedgers } from '../tools/ledger-merge.mjs';
+import { mergeTicketLedgers, ledgerMergeRenamesMarkerPath } from '../tools/ledger-merge.mjs';
 
 const baseTicket = (id, status, extra = {}) => ({
   id,
@@ -239,6 +239,40 @@ test('done or review ticket with failing review record is flagged in notes', asy
   assert.equal(result.ok, true);
   assert.ok(result.notes.some(n => n.includes('T-0501') && n.includes('verdict fail')));
   assert.ok(result.notes.some(n => n.includes('T-0502') && n.includes('verdict fail')));
+});
+
+test('apply abort mid-rename leaves marker and mixed old/new outputs', async () => {
+  const mini = await setupRoot([baseTicket('T-0701', 'todo')]);
+  const book = await setupRoot([baseTicket('T-0702', 'todo')]);
+  const target = await setupRoot([baseTicket('T-0700', 'todo')], {
+    journal: [{ kind: 'note', ts: '2026-01-01T00:00:00.000Z', text: 'original' }],
+    records: { tickets: { 'T-0700': { verdict: 'pass', findings: [], run: 'r0', at: '2026-01-01T00:00:00.000Z' } } },
+  });
+  const ticketsBefore = await fs.readFile(ledgerPath(target), 'utf8');
+  const recordsBefore = await fs.readFile(path.join(target, '.swarm', 'security-reviews', 'records.json'), 'utf8');
+  const journalBefore = await fs.readFile(path.join(target, '.swarm', 'project', 'journal.ndjson'), 'utf8');
+
+  await assert.rejects(
+    () => mergeTicketLedgers({ mini, book, target, apply: true, applyHooks: { throwOnRenameIndex: 1 } }),
+    err => err.code === 'merge-apply-incomplete',
+  );
+
+  assert.notEqual(await fs.readFile(ledgerPath(target), 'utf8'), ticketsBefore);
+  assert.equal(await fs.readFile(path.join(target, '.swarm', 'security-reviews', 'records.json'), 'utf8'), recordsBefore);
+  assert.equal(await fs.readFile(path.join(target, '.swarm', 'project', 'journal.ndjson'), 'utf8'), journalBefore);
+  await fs.access(ledgerMergeRenamesMarkerPath(target));
+});
+
+test('done ticket that requires security review but has no record is flagged in notes', async () => {
+  const mini = await setupRoot([
+    baseTicket('T-0801', 'done', { pr: 3, files: ['src/api/users/route.ts'] }),
+  ]);
+  const book = await setupRoot([]);
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+
+  const result = await mergeTicketLedgers({ mini, book, target });
+  assert.equal(result.ok, true);
+  assert.ok(result.notes.some(n => n.includes('T-0801') && n.includes('record missing')));
 });
 
 test('internal duplicate ticket id on one side is a hard error', async () => {
