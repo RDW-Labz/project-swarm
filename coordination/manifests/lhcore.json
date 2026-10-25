@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lhcore",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/lanes.mjs",
+    "tools/local-lane.mjs",
+    "tools/managers/lane-health/probe.mjs"
+   ],
+   "outputs": [
+    "tools/lane-adapters.mjs",
+    "tools/lane-health.mjs",
+    "tests/lane-health-core.test.mjs"
+   ],
+   "prompt": "Build the core of automatic lane health (new files only; no model calls ever; no paid requests). Read tools/lanes.mjs (LANE_AGENTS, resolveLanes, lane pause store), tools/local-lane.mjs (endpoint probe and tracker), tools/router.mjs (routeJob health argument) and tools/managers/lane-health/probe.mjs first, and reuse their ideas without editing them.\n1) tools/lane-adapters.mjs: the adapter registry and contract. registerLaneAdapter({ name, kind, health }) where health({ lane, config, env, exec, fetch, now, lastResult }) returns { state: 'healthy'|'degraded'|'down'|'paused', reason: string, detail?: object } using only free checks (tunnel or port reachable, a models-list GET, a CLI --version or status call, quota or rate-limit records, daily cap from the spend ledger); listLaneAdapters(), getLaneAdapter(name); validateLaneAdapter(adapter) returns problems (missing name, kind or a health function, a health that returns a bad shape); defaultLaneHealth({ lane, config, env, exec, fetch, now, lastResult }) for lanes without a specific check: the endpoint (baseUrl) or the CLI (command with --version) is reachable (injectable fetch and exec, 3 second timeout, no shell, fixed argv), plus the last job result on that lane (a failed last job makes it degraded; two failed in a row down); a lane with no baseUrl and no command is paused with reason 'no health check configured'. discoverLanes({ config, adapters }) returns every lane in the config (every key of config.lanes, and each endpoint under lanes.local as local:<name>) plus every registered adapter name, with no hardcoded lane list, and nothing else: a lane removed from the config and not registered is simply absent.\n2) tools/lane-health.mjs: createLaneHealthMonitor({ home, now, fs, env, config, adapters, exec, fetch, emit }) with tick() (probe every discovered lane in parallel with a 5 second cap each, update state, never throws), snapshot(), recordJobResult(lane, ok, { jobId }), and readLaneHealth({ home }) / laneRoutable(snapshot, lane, job) returning { ok, reason, weight }. State per lane: state (healthy, degraded, down, paused), reason, checkedAt, since, consecutiveOk, consecutiveBad, flaps, backoffUntil, probation { active, checksOk, jobsOk, since }. Rules: a down lane is not routable; degraded stays routable with a lower weight; a lane returns to healthy only after 2 consecutive ok checks; flap backoff: 3 or more state changes within 30 minutes doubles the required ok streak and the wait before re-adding, capped at 30 minutes; PROBATION: a lane with no history in the state starts on probation and is routable only for small jobs (job.size === 'small' or job.risk === 'low'); it leaves probation automatically when checksOk >= 3 and jobsOk >= 2 (real job results from recordJobResult), after which it is fully routable; a lane that disappears from discovery is pruned from the state (nothing left pointing at it) and an event is emitted. Persist to the user home folder ~/.project-swarm/lane-health/state.json (PROJECT_SWARM_HOME override, one shared helper with the other modules, folder 0700, file 0600, atomic temp-and-rename, never follow symlinks) and append state-change events (lane, from, to, reason, at) to lane-health/events.ndjson (cap the file at 1 MB by rotating once). emit(event) is called for every change (up, down, degraded, probation-ended, pruned, needs-you when every lane of a tier has been down 30 minutes: tiers are cheap (cursor, anthropic haiku, local, openrouter) and expensive (claude sonnet/opus, codex); a lane that needs something only the owner can do, reason starting with 'login expired' or 'billing', emits needs-you immediately).\n3) tests/lane-health-core.test.mjs (injected fakes, temp dirs, fake clock, no network, no real CLI): discovery has no hardcoded list (a fake config lane and a fake registered adapter both appear; removing it prunes state and emits 'pruned'); the registry contract rejects an adapter without health; defaultLaneHealth cases; down, then 2 ok checks to return; flapping backoff; probation: a brand-new fake lane is monitored, restricted to small jobs, then fully routable after 3 checks and 2 jobs, with zero manual setup; all-tier-down for 30 minutes emits needs-you once; state file mode 0600 and atomic; a health function that tries a POST or a model call is not possible through the injected fetch (the fetch fake only allows GET and records calls: assert no POST)."
+  }
+ ]
+}
