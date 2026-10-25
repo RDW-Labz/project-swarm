@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.12
+
+Board stay-up survives a restart.
+- **Board:** swarm watch --all --keep-up read its saved identity with a method real file handles do not have, so it crashed on every restart after the first; it now reloads the same link and port.
+- **Merge:** swarm merge reports merged when GitHub already deleted the branch (HTTP 404 on the remote branch delete).
+- **Ledger:** backup staging folders left by a killed backup are removed after an hour.
+
 ## 1.167.11
 
 The swarm limits itself by real memory and never deletes a checkout that holds its state.

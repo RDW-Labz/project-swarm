@@ -330,7 +330,7 @@ describe('board identity port bookmark', () => {
         if (!entry) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
         entry.lastOpenFlags = flags;
         return {
-          async fstat() {
+          async stat() {
             return { mode: entry.mode ?? 0o100600, uid: entry.uid ?? UID, isFile: () => true };
           },
           async readFile() { return entry.content; },
