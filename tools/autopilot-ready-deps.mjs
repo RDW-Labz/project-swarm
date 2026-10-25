@@ -102,6 +102,30 @@ async function resolveRunForIntegrate(root, runId, deps, events) {
   return { run, runs: run ? [run] : [] };
 }
 
+/** True when integrateRun finished with checks passed (matches autopilot integrate completion). */
+export function integrateTriageSucceeded(out) {
+  if (!out || typeof out !== 'object') {
+    return { ok: false, error: 'integrate: empty result' };
+  }
+  if (out.status === 'failed' || out.integrationStatus === 'failed-check') {
+    return { ok: false, error: String(out.message ?? 'integrate failed') };
+  }
+  if (out.checksPassed === false) {
+    return { ok: false, error: String(out.message ?? 'integration checks failed') };
+  }
+  if (out.status === 'partial' || out.integrationStatus === 'partial' || out.integrationStatus === 'queued') {
+    return { ok: false, error: 'integration incomplete' };
+  }
+  if (out.status === 'checks-failed') {
+    return { ok: false, error: String(out.message ?? 'integration checks failed') };
+  }
+  const status = out.status;
+  if (status !== 'integrated' && status !== 'merged') {
+    return { ok: false, error: String(out.message ?? `integrate did not complete (status ${status ?? 'unknown'})`) };
+  }
+  return { ok: true, error: null };
+}
+
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
 let memoryProbeWarningLogged = false;
@@ -178,8 +202,11 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
       return { ok: false, error: `run ${runId} is already integrated` };
     }
     const { run, runs } = await resolveRunForIntegrate(root, runId, deps, events);
-    const outputPaths = run ? runIntegrateOutputPaths(run, events, { runs }) : [];
-    if (run) {
+    if (!run) {
+      return { ok: false, error: 'run not found' };
+    }
+    const outputPaths = runIntegrateOutputPaths(run, events, { runs });
+    {
       const manifest = runManifestFromEvents(run, events);
       const jobs = jobsFromRun(run, manifest);
       const hasIntegratableJobs = integrableFromJobs(jobs)
@@ -197,8 +224,7 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
     if (why) return { ok: false, error: why };
     try {
       const out = await integrateRunForRoot(root, runId);
-      const failed = out?.status === 'failed' || out?.integrationStatus === 'failed-check';
-      return { ok: !failed, error: failed ? String(out?.message ?? 'integrate failed') : null };
+      return integrateTriageSucceeded(out);
     } catch (error) {
       return { ok: false, error: String(error?.message ?? error) };
     }

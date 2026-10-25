@@ -343,7 +343,22 @@ export async function releaseTriageLock(root) {
 }
 
 async function collectTriageItems(roots, triageDeps) {
-  if (typeof triageDeps.collectInbox === 'function') return triageDeps.collectInbox(roots, triageDeps);
+  if (typeof triageDeps.collectInbox === 'function') {
+    const items = await triageDeps.collectInbox(roots, triageDeps);
+    if (typeof triageDeps.readJournal !== 'function') return items;
+    const byRoot = new Map();
+    for (const item of Array.isArray(items) ? items : []) {
+      const root = item.project ?? roots[0];
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root).push(item);
+    }
+    const merged = [];
+    for (const [root, list] of byRoot) {
+      const events = await triageDeps.readJournal(root, { limit: Infinity });
+      merged.push(...mergeOwnerDecisionNotes(events, list));
+    }
+    return merged;
+  }
   if (typeof triageDeps.listRuns === 'function' && typeof triageDeps.readState === 'function') {
     const inbox = inboxDeps({ now: triageDeps.now, channel: 'agent' });
     return collectInbox(roots, { ...inbox, ...triageDeps });
@@ -352,11 +367,12 @@ async function collectTriageItems(roots, triageDeps) {
   const items = [];
   for (const root of roots) {
     const events = await triageDeps.readJournal(root, { limit: Infinity });
+    const rootItems = [];
     for (const event of openItems(events)) {
       const id = String(event.id);
       const since = event.ts ?? new Date(nowMs).toISOString();
       if (event.kind === 'human') {
-        items.push({
+        rootItems.push({
           id,
           kind: 'human',
           project: root,
@@ -366,7 +382,7 @@ async function collectTriageItems(roots, triageDeps) {
           since,
         });
       } else if (event.kind === 'blocker') {
-        items.push({
+        rootItems.push({
           id,
           kind: 'blocker',
           project: root,
@@ -390,8 +406,9 @@ async function collectTriageItems(roots, triageDeps) {
       };
       if (Array.isArray(event.options)) item.choices = event.options.map(option => String(option));
       if (event.choice !== undefined) item.default = String(event.choice);
-      items.push(item);
+      rootItems.push(item);
     }
+    items.push(...mergeOwnerDecisionNotes(events, rootItems));
   }
   return items;
 }
@@ -501,6 +518,59 @@ async function ensureOwnerCard(_projectRoot, item, _deps) {
   return { updated: false, decision };
 }
 
+function integrateSuppressUntilForItem(item, nowMs) {
+  if (!integrateBlockerRunIdFromId(String(item?.id ?? ''))) return null;
+  return new Date(nowMs + SWARM_FIX_INTEGRATE_SUPPRESS_MS).toISOString();
+}
+
+function ownerDecisionItemKey(item) {
+  return `${item?.kind ?? ''}:${item?.id ?? ''}`;
+}
+
+function mergeOwnerDecisionNotes(events, items) {
+  const notes = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind !== 'note' || !event.ownerDecisionFor || !event.text) continue;
+    notes.set(String(event.ownerDecisionFor), sanitizeText(event.text));
+  }
+  return (Array.isArray(items) ? items : []).map((entry) => {
+    const decision = notes.get(ownerDecisionItemKey(entry));
+    if (!decision) return entry;
+    return { ...entry, title: decision, text: decision };
+  });
+}
+
+async function recordOwnerDecisionOnItem(projectRoot, item, deps, decision) {
+  const append = deps.appendEvent;
+  if (typeof append !== 'function' || !decision) return;
+  const text = sanitizeText(decision);
+  const current = sanitizeText(item.title ?? item.text ?? '');
+  if (current === text) return;
+  const itemKey = ownerDecisionItemKey(item);
+  if (typeof deps.readJournal === 'function') {
+    const events = await deps.readJournal(projectRoot, { limit: Infinity });
+    const already = (Array.isArray(events) ? events : []).some(event => event?.kind === 'note'
+      && event.ownerDecisionFor === itemKey
+      && sanitizeText(event.text ?? '') === text);
+    if (already) return;
+  }
+  const now = deps.now;
+  if (item.kind === 'human') {
+    await append(projectRoot, { kind: 'human', id: item.id, title: text }, { now });
+    return;
+  }
+  if (item.kind === 'decision') {
+    await append(projectRoot, { kind: 'decision', id: item.id, text, confirm: true }, { now });
+    return;
+  }
+  await append(projectRoot, {
+    kind: 'note',
+    id: `needs-you-owner-${itemKey}`,
+    text,
+    ownerDecisionFor: itemKey,
+  }, { now });
+}
+
 async function invokeHandler(projectRoot, item, deps, handlers, kind) {
   if (!Object.hasOwn(handlers, kind)) return { skipped: true };
   const fn = handlers[kind];
@@ -545,7 +615,8 @@ async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs, lo
   const swarmRoot = await resolveSwarmRoot(deps, projectRoot);
   if (!swarmRoot) {
     const message = sanitizeText(`needs-you triage exhausted for ${label} (${item.id}); no project-swarm root found for swarm-fix goal`);
-    if (typeof log === 'function') log(message);
+    const alreadyStuck = state.items[key]?.exhaustedNoGoal === true;
+    if (!alreadyStuck && typeof log === 'function') log(message);
     return { note: null, goalId: null, goalRoot: null, stuck: true };
   }
   let goalId = null;
@@ -624,6 +695,7 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
         const decision = owner.decision
           ?? buildIntegrateCheckoutOwnerDecisionText(item)
           ?? buildOwnerDecisionText(item);
+        await recordOwnerDecisionOnItem(projectRoot, item, triageDeps, decision);
         results.push({ id: item.id, project: projectRoot, action: 'owner', decision });
         continue;
       }
@@ -631,6 +703,7 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       if (existingSwarmGoal) {
         await refreshTriageLock(primaryRoot, { now: nowFn });
         const decision = buildSwarmFixOwnerDecision(existingSwarmGoal);
+        await recordOwnerDecisionOnItem(projectRoot, item, triageDeps, decision);
         results.push({ id: item.id, project: projectRoot, action: 'owner', decision, goalId: existingSwarmGoal });
         continue;
       }
@@ -664,14 +737,13 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       if (tries >= MAX_TRIAGE_ATTEMPTS) {
         const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs, log });
         if (fix.stuck) {
+          state.items[key] = { ...(state.items[key] ?? {}), exhausted: true, exhaustedNoGoal: true };
           results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
           continue;
         }
         await closeItem(projectRoot, item, triageDeps, {
           note: fix.note,
-          integrateSuppressUntil: integrateBlockerRunIdFromId(String(item.id ?? ''))
-            ? new Date(nowMs + SWARM_FIX_INTEGRATE_SUPPRESS_MS).toISOString()
-            : null,
+          integrateSuppressUntil: integrateSuppressUntilForItem(item, nowMs),
         });
         recordSuppress(state, item, nowMs);
         state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
@@ -695,7 +767,10 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
 
       if (ok) {
         const note = 'autopilot triage fixed and closed';
-        await closeItem(projectRoot, item, triageDeps, { note });
+        await closeItem(projectRoot, item, triageDeps, {
+          note,
+          integrateSuppressUntil: integrateSuppressUntilForItem(item, nowMs),
+        });
         recordSuppress(state, item, nowMs);
         delete state.items[key];
         results.push({ id: item.id, project: projectRoot, action: 'closed', note });
@@ -707,13 +782,12 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       if (after >= MAX_TRIAGE_ATTEMPTS) {
         const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs, log });
         if (fix.stuck) {
+          state.items[key] = { ...(state.items[key] ?? {}), exhausted: true, exhaustedNoGoal: true };
           results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
         } else {
           await closeItem(projectRoot, item, triageDeps, {
             note: fix.note,
-            integrateSuppressUntil: integrateBlockerRunIdFromId(String(item.id ?? ''))
-              ? new Date(nowMs + SWARM_FIX_INTEGRATE_SUPPRESS_MS).toISOString()
-              : null,
+            integrateSuppressUntil: integrateSuppressUntilForItem(item, nowMs),
           });
           recordSuppress(state, item, nowMs);
           state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };

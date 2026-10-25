@@ -23,7 +23,7 @@ import {
   SWARM_FIX_INTEGRATE_SUPPRESS_MS,
 } from '../tools/needs-you-triage.mjs';
 import { integrateBlockerSuppressed } from '../tools/journal.mjs';
-import { readyAutopilotDeps, buildNeedsYouTriageHandlers } from '../tools/autopilot-ready-deps.mjs';
+import { readyAutopilotDeps, buildNeedsYouTriageHandlers, integrateTriageSucceeded } from '../tools/autopilot-ready-deps.mjs';
 
 const NOW = Date.parse('2025-03-01T12:00:00Z');
 
@@ -129,6 +129,9 @@ test('owner decision text is required shape and blocks handlers', async t => {
   assert.ok(decision.includes('Why only you:'));
   assert.equal(out.results[0].action, 'owner');
   assert.equal(out.results[0].decision, decision);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].e.kind, 'decision');
+  assert.equal(events[0].e.text, decision);
 });
 
 test('fixable item is retried then closed on success', async t => {
@@ -265,6 +268,10 @@ test('missing swarm root leaves item stuck without double SWARM-FIX log', async 
   }
   assert.equal(logs.length, 1);
   assert.ok(!logs[0].includes('SWARM-FIX'));
+  await runNeedsYouTriagePass(root, deps, { log: line => logs.push(line) });
+  assert.equal(logs.length, 1);
+  const state = await readTriageState(root);
+  assert.equal(state.items[`${root}:blocker:${inboxItem.id}`]?.exhausted, true);
 });
 
 test('corrupt triage state aborts the pass without resetting counts', async t => {
@@ -324,13 +331,14 @@ test('reopen suppression never auto-closes an owner-class item', async t => {
     collectInbox: async () => [ownerItem],
   });
   assert.equal(out.results[0]?.action, 'owner');
-  assert.equal(appended.length, 0);
+  assert.ok(!appended.some(e => e.resolved === true || e.done === true));
+  assert.equal(appended.filter(e => e.kind === 'decision').length, 1);
 });
 
 test('production deps expose handlers and run a fake item through them', async t => {
   const root = await tmp(t);
   const handlers = buildNeedsYouTriageHandlers(root, {
-    integrate: async () => ({ files: 1 }),
+    integrate: async () => ({ status: 'integrated', checksPassed: true, files: 1 }),
   });
   assert.equal(typeof handlers.integrate, 'function');
   assert.equal(handlers['ci-failure'], undefined);
@@ -347,7 +355,8 @@ test('production deps expose handlers and run a fake item through them', async t
     root,
     item: { id: 'integrate-RUN--abc', title: 'integrate' },
     deps: {
-      readJournal: async () => [],
+      readJournal: async () => [{ kind: 'run', id: 'RUN' }],
+      listRuns: async () => [{ id: 'RUN', status: 'complete', jobs: [] }],
       checkout: async () => ({ branch: 'swarm/test', linkedWorktree: false, dirty: false }),
       integrateCheckoutGitState: async () => ({
         branch: 'swarm/test',
@@ -397,12 +406,16 @@ test('closed integrate blocker records resolution keys and suppresses re-raise',
   await runNeedsYouTriagePass(root, deps);
   const resolution = journal.find(e => e.resolved === true && e.integrateKey);
   assert.ok(resolution?.integrateCauseKey);
-  assert.ok(integrateBlockerSuppressed(journal, {
+  assert.ok(resolution?.integrateSuppressUntil);
+  const fields = {
     id: inboxItem.id,
     integrateKind: 'integrate',
     integrateRun: 'r1',
     integrateCause: inboxItem.integrateCause,
-  }));
+  };
+  assert.ok(integrateBlockerSuppressed(journal, fields, { now: NOW }));
+  const afterExpiry = NOW + SWARM_FIX_INTEGRATE_SUPPRESS_MS + 1;
+  assert.equal(integrateBlockerSuppressed(journal, fields, { now: afterExpiry }), false);
   journal.push({
     kind: 'blocker',
     id: 'integrate-r1',
@@ -411,12 +424,7 @@ test('closed integrate blocker records resolution keys and suppresses re-raise',
     integrateRun: 'r1',
     integrateCause: inboxItem.integrateCause,
   });
-  assert.ok(integrateBlockerSuppressed(journal, {
-    id: inboxItem.id,
-    integrateKind: 'integrate',
-    integrateRun: 'r1',
-    integrateCause: inboxItem.integrateCause,
-  }));
+  assert.ok(integrateBlockerSuppressed(journal, fields, { now: NOW }));
 });
 
 test('integrate-checkout blockers are owner items with decision text from cause', async t => {
@@ -523,6 +531,8 @@ test('reopened integrate blocker with existing swarm-fix goal stays owner withou
   assert.equal(goalCalls, 1);
   assert.equal(out.results[0].action, 'owner');
   assert.ok(out.results[0].decision?.includes('G-one'));
+  const ownerNote = journal.find(e => e.kind === 'note' && e.text?.includes('G-one'));
+  assert.ok(ownerNote);
 });
 
 test('integrate handler refuses when run has integratable jobs but no output paths', async t => {
@@ -647,4 +657,78 @@ test('pass triages only the primary project root', async t => {
   assert.equal(out.results.length, 1);
   assert.equal(closed.length, 1);
   assert.equal(closed[0].r, a);
+});
+
+test('integrateTriageSucceeded accepts only integrated or merged with checks passed', () => {
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', checksPassed: true }).ok, true);
+  assert.equal(integrateTriageSucceeded({ status: 'merged', checksPassed: true }).ok, true);
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', checksSkipped: true, checksPassed: true }).ok, true);
+  assert.equal(integrateTriageSucceeded({ files: 1 }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'partial' }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', integrationStatus: 'queued' }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', integrationStatus: 'partial' }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', checksPassed: false }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'failed' }).ok, false);
+  assert.equal(integrateTriageSucceeded({ status: 'integrated', integrationStatus: 'failed-check' }).ok, false);
+});
+
+test('integrate handler returns run not found before output-path refusal', async t => {
+  const root = await tmp(t);
+  const handlers = buildNeedsYouTriageHandlers(root, {
+    integrate: async () => ({ status: 'integrated', checksPassed: true }),
+  });
+  const out = await handlers.integrate({
+    root,
+    item: { id: 'integrate-MISSING--abc', title: 'integrate' },
+    deps: {
+      readJournal: async () => [],
+      listRuns: async () => [],
+      checkout: async () => ({ branch: 'swarm/test', linkedWorktree: false, dirty: false }),
+      integrateCheckoutGitState: async () => ({
+        branch: 'swarm/test',
+        linkedWorktree: false,
+        mergeInProgress: false,
+        rebaseInProgress: false,
+        cherryPickInProgress: false,
+        integrateTrackedDirty: [],
+        integrateCollisions: [],
+        unmergedPaths: [],
+      }),
+    },
+  });
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'run not found');
+});
+
+test('integrate handler rejects partial integrate result', async t => {
+  const root = await tmp(t);
+  const run = {
+    id: 'RUN',
+    status: 'complete',
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['out.mjs'] }],
+  };
+  const handlers = buildNeedsYouTriageHandlers(root, {
+    integrate: async () => ({ status: 'partial', integrationStatus: 'queued' }),
+  });
+  const out = await handlers.integrate({
+    root,
+    item: { id: 'integrate-RUN--abc', title: 'integrate' },
+    deps: {
+      readJournal: async () => [{ kind: 'run', id: 'RUN', manifest: { jobs: run.jobs } }],
+      listRuns: async () => [run],
+      checkout: async () => ({ branch: 'swarm/test', linkedWorktree: false, dirty: false }),
+      integrateCheckoutGitState: async () => ({
+        branch: 'swarm/test',
+        linkedWorktree: false,
+        mergeInProgress: false,
+        rebaseInProgress: false,
+        cherryPickInProgress: false,
+        integrateTrackedDirty: [],
+        integrateCollisions: [],
+        unmergedPaths: [],
+      }),
+    },
+  });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /incomplete/i);
 });

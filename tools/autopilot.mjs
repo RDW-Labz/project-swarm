@@ -686,7 +686,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     const integrateRun = draft.integrateRun ?? draft.run;
     const integrateCause = draft.integrateCause ?? draft.text ?? '';
     const id = draft.id ?? integrateBlockerId(integrateKind, integrateRun, integrateCause);
-    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) return false;
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now: nowFn })) return false;
     if (openBlockerIds(events).has(id)) return false;
     const payload = {
       kind: 'blocker',
