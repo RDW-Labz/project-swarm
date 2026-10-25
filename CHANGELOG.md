@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.14
+
+Needs-you fixes itself, and the leaked test servers are gone.
+- **Needs-you:** autopilot triages every inbox item first; only money, live deploys, login or billing problems and real choices reach the owner (each with a Decision needed text), everything else is retried up to 3 times and then becomes a swarm-fix goal; integrate-checkout items always go to the owner.
+- **Integrate:** autopilot integrates even when the checkout has untracked files; it blocks only on tracked edits, merge or rebase in progress, or a collision with the run's output paths, and splitter and review runs never raise integrate items.
+- **Split:** repairs fix missing files (create or dependency), missing acceptance, screen ids and rejected-dependency chains automatically instead of parking tickets.
+- **Leaks:** the cursor lane kills a job's whole process group when the job ends, and the server-restart tests stop their fake servers.
+
 ## 1.167.13
 
 swarm remote off stops the real board.
