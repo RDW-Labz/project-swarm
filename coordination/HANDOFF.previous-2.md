@@ -1,29 +1,37 @@
 # Handoff
 
-Hand-written until Phase 10b ships (this PR); then `swarm brief` regenerates it. Updated after every step.
+Hand-written until Phase 10b ships; then `swarm brief` regenerates it. Updated after every step.
 
-Last updated: 2026-10-15, Phase 10b built and waiting for the real-host test run on dev2 before the PR is opened.
+Last updated: 2026-10-15, after opening PR #106 (multi-edit) and applying the owner's routing decisions to #105.
 
 ## Goal
-Plan: docs/plans/swarm-scale-plan-v2.md. Order: 10 → 10b → 10c → 11 → 12 → 14 → 13 → 15 → 16 (Swarm Watch, after Phase 14) → 17.
-Rules: route cheapest first (anthropic Haiku → cursor → codex → claude after 2 failures; Hermes research only; OpenRouter bookkeeping only); one PR per phase with tests, CHANGELOG, version bump and the dogfood scoreboard in the PR description; never merge without Braden's OK; ask before raising a cap or adding a paid service; never touch dev2's model/disk/Strata without his go.
+Plan: docs/plans/swarm-scale-plan-v2.md. Order: 10 → 10b → 10c → 11 → 12 → 14 → 13 → 15 → 16 (docs/plans/swarm-watch-spec.md, prototype in docs/design/; after Phase 14) → 17 (now includes the lane benchmark).
+Rules: route cheapest-first; one PR per phase with tests, CHANGELOG, version bump and the dogfood scoreboard in the PR description; never merge without Braden's OK; ask before raising a cap or adding a paid service.
+Dogfood rules: workers run on the INSTALLED runner (~/.project-swarm/current, still v1.62.0), never the working copy; update the runner only after Braden merges a phase; spend-cap/secrets/sensitive-routing/merge-queue changes get a Claude review job before the PR; keep docs/state/dogfood.md; use Swarm Watch once it ships.
+
+## Open PRs (none merged; Braden merges in order #103 → #104 → #105 → #106 after review)
+- #103 docs only: plan v2 + 10b/10c addendum + Swarm Watch spec/prototype + lane benchmark in Phase 17 + routing rule. Branch docs/plans-v2.
+- #104 Phase 10, v1.63.0 (real swarm command...). Branch feat/phase10-swarm-command. 12 checks were green.
+- #105 Lane benchmark + Hermes over ssh + Hermes parser fix + routing from the owner's decisions (anthropic→cursor→codex→claude; Hermes research only; OpenRouter bookkeeping only; test route codex→anthropic→cursor), v1.64.0, stacked on #104. Claude security reviews run on the ssh code and on the routing change; findings fixed. Branch feat/lane-benchmark-hermes-ssh.
+- #106 Several ordered edits per file on API + Hermes/Qwen lanes (+ fix: Hermes dropped edits) + benchmark rerun, v1.65.0, stacked on #105. Branch feat/multi-edit. Rerun: Hermes 2→6/10, Sonnet 8→10, Haiku 9, OpenRouter 3.
 
 ## Done
-- Merged by Braden's OK: #103, #104, #105, #106 (v1.63.0 to v1.65.0). Shared runner (~/.project-swarm) is on 1.65.0; `swarm` command installed; alias still in ~/.zshrc (remove it; PATH line in ~/.zshenv).
-- Phase 10b built on branch feat/phase10b-failover (v1.66.0): journal, brief, handoff, checkpoint, autopilot, generated HANDOFF.md, init pointers + Gemini + local Claude hook, remote-host fix (swarm-remote-exec now runs a command; real-host test), updater fix, `auto` doctor bug fix, project-root default for the shared runner. Claude Opus security review run ($0.78); all high/medium findings fixed. docs/failover.md written. Full suite 1957 pass.
-- Lessons logged: 1 (remote hosts), 2 (updater).
+- Benchmark: 7 lanes x 10 tasks; results in docs/state/lane-benchmark.md. Hermes ran on dev2 itself (bundle copied, only results-hermes.json came back).
+- Machine config (~/.config/project-swarm/config.json): cliHosts.hermes (dev2, /home/dev2/.local/bin/hermes), lanes.hermes.model qwen3.8-flash-next-iq2_xs, lanes.anthropic haiku, lanes.openrouter gpt-oss-20b; dev2 `hosts` entry stays enabled: false (remote `hosts` don't work yet, see below).
+- Claude security review of cli-host code run (Opus, $0.26); 5 findings fixed.
 
 ## Running
-- A background loop re-running tests/remote-exec-real.test.mjs against dev2 (the VPN drops most calls). Remote side is at /home/dev2/swarm-bench/remote-exec/ (remote-exec.mjs + wrapper swarm-remote-exec). Results: scratchpad real-loop.out. The test passed once for each of its 3 cases on earlier script versions; the final hardened script still needs one clean full pass.
+Nothing.
 
 ## Open
-- BLOCKED, waiting on Braden: the dev2 model swap. Strata 0.1.41 cannot be shown to load orcarouter Q3_K_M (expert gate/up are Q3_K, which Strata's native expert kernels do not handle; expert down is Q5_0, needs the opt-in Orca build). Strata documents IQ3_XXS (85.2 GB, 2 shards) and Q4_K_S (112 GB, special build). Nothing was deleted or downloaded. Options sent to Braden: IQ3_XXS, Q4_K_S, or Q3_K_M anyway with no deletion until it loads. dev2 facts: 91 GiB RAM (Strata uses ~60), RTX 5090 32 GB full, disk 86 GB free, Strata runs as user unit strata.service on :8000 (shared by hermes-dev sessions and the Cluer stack).
-- Then: Hermes benchmark rerun at concurrency 1 on the new model, add to docs/state/lane-benchmark.md next to the IQ2_XS rows.
-- After this PR merges: `swarm update` (the updater now runs the new installer, so the first update that includes the fix still runs the old one: run `node ~/.project-swarm/tools/install.mjs --user` once if the swarm command is missing).
-- Phase 10c (inbox and unblocked work) is next after 10b.
-- Hermes is research-only in routing; dev2 `hosts` entry stays enabled: false until Braden turns it on (remote hosts now work: add `commands` and `remoteExec` to it).
+- BUG for the next phase PR (10b): remote `hosts` send no command to swarm-remote-exec, so remote jobs hang or return nothing; only stub-tested. Fix + a test against real dev2. Logged as lesson 1 (coordination/swarm-lessons.jsonl).
+- Multi-edit is done in #106 (waiting for review).
+- Hermes is out of the default order (research only) per Braden's decision. Next Hermes experiment: rerun at concurrency 1 on dev2 (3 of its 4 failures were CLI `exit 1` with no message). Bigger model options on dev2 were sent to Braden (nothing downloaded, ask first): IQ3_XXS/IQ3_S need ~80 GB of disk (86 GB free; would mean deleting the 64 GB IQ2_XS); UD-IQ4_XS is a 94 GB download.
+- VPN to dev2 has ~90% packet loss; Tailscale later. Don't patch for it further.
+- After #104 merges: `swarm update`, remove the alias from ~/.zshrc, PATH in ~/.zshenv (steps in the #104 description). After #105 merges: update the runner again and dev2's copy is no longer needed.
+- Phase 10b itself (journal, brief, handoff, checkpoint, autopilot) and 10c (inbox) are not started. Cut 10b from main once #104/#105 merge (or stack on #105).
 
 ## Next 3 commands
-1. `cat <scratchpad>/real-loop.out` (real-host test result; rerun `SWARM_TEST_SSH_HOST=dev2@10.10.10.220 SWARM_TEST_SSH_EXEC=/home/dev2/swarm-bench/remote-exec/swarm-remote-exec node --import ./tests/_isolate-config.mjs --test tests/remote-exec-real.test.mjs`)
-2. `git add -A <10b files> && git commit && git push -u origin feat/phase10b-failover && gh pr create` (body: scoreboard from docs/state/dogfood.md)
-3. Wait for CI + CodeQL, then report the PR ready; do not merge
+1. `gh pr checks 105 --watch` (CI + CodeQL must be green before calling it ready)
+2. `git checkout -b feat/phase10b-failover feat/lane-benchmark-hermes-ssh`, then write the 10b manifest (journal, brief, handoff, checkpoint, autopilot, remote-exec fix as separate jobs) and run it on the installed runner with `--root /Users/bean/project-swarm`
+3. After each merge: `swarm update` (shared runner) and re-run `swarm doctor all`

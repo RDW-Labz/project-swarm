@@ -70,12 +70,21 @@ async function harness(t, mock = {}) {
   await fs.writeFile(path.join(tsDir, 'state.json'), JSON.stringify({ backend: 'Running', dns: DNS, login: LOGIN, serve: {}, funnelPorts: [], ...mock }));
   const env = { ...process.env, SWARM_TAILSCALE_BIN: MOCK, MOCK_TS_DIR: tsDir, SWARM_REMOTE_FILE: path.join(dir, 'home', 'remote.json'), SWARM_BOARD_FILE: path.join(dir, 'board.json') };
   const boards = [];
+  const boardPid = () => (boards.length ? process.pid + boards.length : null);
+  const swarmRunner = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
   const base = realDeps(env);
   const deps = {
     ...base,
     installed: async () => true,
     sleep: async () => {},
     up: async () => (await base.tailscale(['up'])).ok,
+    alive: pid => pid === boardPid(),
+    commandOf: async pid => (pid === boardPid() ? `${process.execPath} ${swarmRunner} remote serve` : ''),
+    listenerPids: async port => {
+      const state = await readRemote(env);
+      const pid = boardPid();
+      return state?.port === port && pid ? [pid] : [];
+    },
     // The board runs in this process (loopback only); `remote on` starts and stops it through these two.
     spawnServer: async () => {
       const state = await readRemote(env);

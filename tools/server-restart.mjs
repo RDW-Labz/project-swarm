@@ -364,6 +364,48 @@ export function identityMismatchRemovesRecord(reason) {
   return reason === 'process start time is newer than the server record';
 }
 
+export function defaultLaunchdBoardPlistPath(home = os.homedir()) {
+  return path.join(home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
+}
+
+function restartHintCommand(tokens) {
+  return tokens.map(shellQuote).join(' ');
+}
+
+export function restartHintContextLine(pid, port) {
+  return `# pid ${pid}, port ${port}`;
+}
+
+export function identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists, getuid } = {}) {
+  if (kind === 'remote') {
+    return `${restartHintCommand(['swarm', 'remote', 'off'])} && ${restartHintCommand(['swarm', 'remote', 'on'])}`;
+  }
+  if (kind === 'board') {
+    const hasLaunchd = launchdBoardPlistExists
+      ? launchdBoardPlistExists()
+      : existsSync(defaultLaunchdBoardPlistPath());
+    if (hasLaunchd) {
+      const uid = typeof getuid === 'function' ? getuid() : process.getuid();
+      const target = `gui/${uid}/com.project-swarm.board`;
+      return restartHintCommand(['launchctl', 'kickstart', '-k', target]);
+    }
+    return restartHintCommand(['swarm', 'watch', '--all', '--keep-up']);
+  }
+  const manual = record.argv?.length
+    ? restartHintCommand(['swarm', ...record.argv])
+    : restartHintCommand(['swarm']);
+  return manual;
+}
+
+function emitIdentityUnverifiedRestart(emit, { label, record, kind, reasonSuffix, launchdBoardPlistExists, getuid }) {
+  const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists, getuid });
+  emit(`${label} server record (pid ${record.pid}): ${reasonSuffix}`);
+  emit('restart to pick up the update:');
+  emit(restartHintContextLine(record.pid, record.port));
+  emit(restartHint);
+  return restartHint;
+}
+
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync, installRoot } = {}) {
   const identity = await readProcessIdentity(record.pid, { execFileImpl });
   if (!identity) return { ok: false, reason: 'could not read process command line', removeRecord: false };
@@ -729,6 +771,8 @@ export async function restartRegisteredServers({
   stopTimeoutMs = 15000,
   pidAliveImpl = pidAlive,
   killImpl = (pid, signal) => process.kill(pid, signal),
+  launchdBoardPlistExists,
+  getuid,
 } = {}) {
   const emit = line => {
     const text = line.endsWith('\n') ? line : `${line}\n`;
@@ -872,12 +916,26 @@ export async function restartRegisteredServers({
             emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
             servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
           } else {
-            emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
-            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+            const restartHint = emitIdentityUnverifiedRestart(emit, {
+              label,
+              record,
+              kind,
+              reasonSuffix: `${identity.reason}; record kept (changed concurrently)`,
+              launchdBoardPlistExists,
+              getuid,
+            });
+            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
           }
         } else {
-          emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
-          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+          const restartHint = emitIdentityUnverifiedRestart(emit, {
+            label,
+            record,
+            kind,
+            reasonSuffix: `${identity.reason}; record kept`,
+            launchdBoardPlistExists,
+            getuid,
+          });
+          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
         }
         continue;
       }

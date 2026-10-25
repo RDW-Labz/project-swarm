@@ -1,0 +1,42 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fix13c",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/remote.mjs",
+    "tools/server-restart.mjs",
+    "tests/fix-1167-13.test.mjs"
+   ],
+   "outputs": [
+    "tools/remote.mjs",
+    "tools/server-restart.mjs",
+    "tests/fix-1167-13.test.mjs",
+    "tests/remote.test.mjs"
+   ],
+   "prompt": "Fix the Opus security review findings of the swarm remote off change (tools/remote.mjs takeDown and its helpers, tools/server-restart.mjs), each with tests added to tests/fix-1167-13.test.mjs (injected deps only). 1 HIGH: when the recorded pid is alive, lsof shows a different pid on the port and ps (commandOf) of the listener fails or is empty, do NOT kill the recorded pid: set skipStop and clean=false, say why, keep the saved settings. 2 MEDIUM: always run commandOf on the pid that will be stopped, including the recorded pid, and require isSwarmWatchBoardCommand; skip the kill and keep the settings if the check fails. 3 MEDIUM: validate every pid before any kill: Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid (state.pid and every lsof pid); an invalid recorded pid is treated as no pid (never passed to kill). 4 MEDIUM: delete the test shim that treats a dead pid within 16 above process.pid as alive (tools/remote.mjs near line 173); tests inject deps.alive instead. 5 MEDIUM: re-run commandOf(stopPid) directly before deps.kill and abort (keep the settings, say the process changed) if the command line differs from the one verified earlier. 6 LOW: if lsof returns more than one pid, refuse to stop anything, keep the settings and print the pids. 7 LOW: tighten isSwarmWatchBoardCommand to match the real argv shapes only: the swarm.mjs path as an argv element followed (after optional --root PATH) by watch, or by remote serve (the remote board is spawned as swarm.mjs remote serve), not loose substrings; tests for 'vim swarm.mjs watch' (no match), the watch board and the remote serve board (match). 8 LOW: when the listener has died (the already-gone path) check the board port once more before deleting the record and keep the record if it still answers. 9 LOW tools/server-restart.mjs: quote every element of the restartHint command with the existing shellQuote helper. Keep every existing test passing (tests/remote*.test.mjs, tests/update*.test.mjs, tests/server-restart*.test.mjs, tests/fix-1167-13.test.mjs).",
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/installed-swarm.test.mjs",
+    "tests/restart-any-server.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/server-record-version.test.mjs",
+    "tests/server-restart-review.test.mjs",
+    "tests/server-restart-round2.test.mjs",
+    "tests/server-restart-round3.test.mjs",
+    "tests/server-restart-round4.test.mjs",
+    "tests/server-restart.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/update-pending-round3.test.mjs",
+    "tests/watch-token-urls.test.mjs"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,41 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fix13",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/remote.mjs",
+    "tools/server-restart.mjs",
+    "tests/remote.test.mjs"
+   ],
+   "outputs": [
+    "tools/remote.mjs",
+    "tools/server-restart.mjs",
+    "tests/fix-1167-13.test.mjs"
+   ],
+   "prompt": "Fix three bugs found on the Mac mini during the 1.167.12 rollout, each with tests in tests/fix-1167-13.test.mjs (injected deps only: no real kill, lsof, network or ps). Read tools/remote.mjs (takeDown, boardUp, the deps object) and tools/server-restart.mjs (the identity-unverified branches near line 860-885) first. 1) swarm remote off keeps a stale board record whose pid no longer exists and prints 'could not stop the board (process N); stop it by hand' every time: in takeDown, when state.pid is recorded but that process is dead (add an injectable deps.alive(pid) using process.kill(pid, 0), ESRCH means dead, EPERM means alive), treat the board as stopped: no 'could not stop' line, say 'the recorded board process N was already gone', and clear the record when everything else is clean. 2) swarm remote off did not stop the real board because the record pointed to the wrong pid: when the saved port answers as a swarm board (the existing boardUp check) but the recorded pid is dead or is not the process listening on that port, find the actual listener with a fixed-argv lookup (lsof -nP -iTCP:PORT -sTCP:LISTEN -t through an injectable deps.listenerPids(port), absolute path /usr/sbin/lsof, no shell, 2 second timeout, numeric port only), and stop it only if it passes a swarm-board check: the command line (ps -o command= -p PID through an injectable deps.commandOf(pid), absolute path /bin/ps) contains swarm.mjs and the word watch, AND the board check answers as a swarm board on the saved port. Never kill any other process; if the listener is not a swarm board print 'port N is held by another program (process M); not touching it' and keep the saved settings. SIGTERM, wait, then re-check the port; no SIGKILL. 3) swarm update showed a running remote as identity-unverified but left it on the old version and said nothing actionable: for every server it keeps because identity could not be verified (the identity-unverified status in tools/server-restart.mjs, for kinds remote and board and any other), print one exact restart command line per server and also add it to the result entry as restartHint: for a remote 'swarm remote off && swarm remote on', for the board 'swarm watch --all --keep-up' (or the launchd command launchctl kickstart -k gui/$(id -u)/com.project-swarm.board when a launchd board plist exists, injectable existence check), plus the exact pid and port. Do not auto-restart. Tests: stale dead pid is treated as stopped and the record cleared; wrong pid but the port is held by a swarm board listener which gets stopped; the listener is not a swarm board and is left alone; lookup failure keeps the saved settings and says so; update prints the restart hints for identity-unverified remote and board and puts restartHint in the result. Keep every existing test passing (tests/remote*.test.mjs, tests/update*.test.mjs, tests/server-restart*.test.mjs).",
+   "ignoreTests": [
+    "tests/adapters.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/installed-swarm.test.mjs",
+    "tests/restart-any-server.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/server-record-version.test.mjs",
+    "tests/server-restart-review.test.mjs",
+    "tests/server-restart-round2.test.mjs",
+    "tests/server-restart-round3.test.mjs",
+    "tests/server-restart-round4.test.mjs",
+    "tests/server-restart.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/update-pending-round3.test.mjs",
+    "tests/watch-token-urls.test.mjs"
+   ]
+  }
+ ]
+}
