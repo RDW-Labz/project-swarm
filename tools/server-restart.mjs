@@ -368,20 +368,30 @@ export function defaultLaunchdBoardPlistPath(home = os.homedir()) {
   return path.join(home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
 }
 
+function restartHintTokens(tokens, suffix) {
+  return `${tokens.map(shellQuote).join(' ')}${suffix}`;
+}
+
 export function identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists } = {}) {
   const pid = record.pid;
   const port = record.port;
   const suffix = ` (pid ${pid}, port ${port})`;
-  if (kind === 'remote') return `swarm remote off && swarm remote on${suffix}`;
+  if (kind === 'remote') {
+    return `${restartHintTokens(['swarm', 'remote', 'off'], '')} && ${restartHintTokens(['swarm', 'remote', 'on'], suffix)}`;
+  }
   if (kind === 'board') {
     const hasLaunchd = launchdBoardPlistExists
       ? launchdBoardPlistExists()
       : existsSync(defaultLaunchdBoardPlistPath());
-    if (hasLaunchd) return `launchctl kickstart -k gui/$(id -u)/com.project-swarm.board${suffix}`;
-    return `swarm watch --all --keep-up${suffix}`;
+    if (hasLaunchd) {
+      return restartHintTokens(['launchctl', 'kickstart', '-k', 'gui/$(id -u)/com.project-swarm.board'], suffix);
+    }
+    return restartHintTokens(['swarm', 'watch', '--all', '--keep-up'], suffix);
   }
-  const manual = record.argv?.length ? `swarm ${record.argv.join(' ')}` : 'swarm';
-  return `${manual}${suffix}`;
+  const manual = record.argv?.length
+    ? restartHintTokens(['swarm', ...record.argv], suffix)
+    : restartHintTokens(['swarm'], suffix);
+  return manual;
 }
 
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync, installRoot } = {}) {

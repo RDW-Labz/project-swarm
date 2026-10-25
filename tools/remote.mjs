@@ -32,7 +32,8 @@ export const REMOTE_USAGE = [
 ].join('\n');
 
 export const remoteFile = (env = process.env, home = os.homedir()) => env.SWARM_REMOTE_FILE || path.join(home, '.project-swarm', 'remote.json');
-export { remoteServerFile } from './server-restart.mjs';
+import { remoteServerFile, tokenizePsArgs } from './server-restart.mjs';
+export { remoteServerFile };
 const logFile = (env, home) => path.join(path.dirname(remoteFile(env, home)), 'remote.log');
 
 export async function readRemote(env = process.env) {
@@ -134,7 +135,7 @@ export function completeRealDeps(env = process.env) {
     try {
       const res = await execp('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 2000 });
       if (!res.ok) return null;
-      return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
+      return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => validStopPid(n));
     } catch {
       return null;
     }
@@ -164,19 +165,37 @@ async function waitForBoard(deps, state, tries = 40) {
   return false;
 }
 
-function pidAlive(deps, pid, { boardAnswers = false } = {}) {
-  if (deps.alive) {
-    if (deps.alive(pid)) return true;
-  } else {
-    try { process.kill(pid, 0); return true; } catch (error) { if (error?.code === 'EPERM') return true; }
-  }
-  if (boardAnswers && pid > process.pid && pid - process.pid <= 16) return true;
-  return false;
+export function validStopPid(pid) {
+  return Number.isInteger(pid) && pid > 1 && pid !== process.pid && pid !== process.ppid;
 }
 
-function isSwarmWatchBoardCommand(command) {
-  const cmd = String(command ?? '');
-  return cmd.includes('swarm.mjs') && /\bwatch\b/.test(cmd);
+function pidAlive(deps, pid) {
+  if (!validStopPid(pid)) return false;
+  if (deps.alive) return deps.alive(pid);
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
+}
+
+function isNodeLikeBinary(token) {
+  const t = String(token ?? '');
+  if (!t) return false;
+  if (t === process.execPath) return true;
+  const base = t.split(/[/\\]/).pop();
+  return base === 'node' || base === 'nodejs';
+}
+
+export function isSwarmWatchBoardCommand(command) {
+  const tokens = tokenizePsArgs(String(command ?? ''));
+  const swarmIdx = tokens.findIndex(t => t === 'swarm.mjs' || t.endsWith('/swarm.mjs') || t.endsWith('\\swarm.mjs'));
+  if (swarmIdx < 1 || !isNodeLikeBinary(tokens[swarmIdx - 1])) return false;
+  let i = swarmIdx + 1;
+  if (i < tokens.length && tokens[i] === '--root') {
+    i += 2;
+    if (i > tokens.length) return false;
+  }
+  if (i >= tokens.length) return false;
+  if (tokens[i] === 'watch') return true;
+  if (tokens[i] === 'remote' && i + 1 < tokens.length && tokens[i + 1] === 'serve') return true;
+  return false;
 }
 
 async function listenerOnPort(deps, port) {
@@ -206,67 +225,91 @@ async function takeDown(deps, state, { force = false } = {}) {
       else { clean = false; lines.push(`could not remove the Tailscale entry for ${key} (${(res.stderr || 'it is still there').trim().split('\n')[0]}); run: tailscale serve --https=${state.httpsPort} off`); }
     }
   }
-  if (state?.pid) {
+  const recordedPid = validStopPid(state?.pid) ? state.pid : null;
+  if (recordedPid) {
     const answers = state.port ? await boardUp(deps, state) : false;
-    const recordedAlive = pidAlive(deps, state.pid, { boardAnswers: answers });
+    const recordedAlive = pidAlive(deps, recordedPid);
     if (!answers && !force) {
-      if (!recordedAlive) lines.push(`the recorded board process ${state.pid} was already gone`);
-      else lines.push('the board was not running');
+      if (!recordedAlive) {
+        const stillUp = state.port ? await boardUp(deps, state) : false;
+        if (stillUp) {
+          clean = false;
+          lines.push('the board is still answering on the saved port; kept the saved settings');
+        } else lines.push(`the recorded board process ${recordedPid} was already gone`);
+      } else lines.push('the board was not running');
     } else {
-      let stopPid = state.pid;
+      let stopPid = recordedPid;
       let skipStop = false;
+      let verifiedCommand = null;
+      const keepSettings = (message) => {
+        clean = false;
+        lines.push(message);
+        skipStop = true;
+      };
       if (state.port && answers && deps.listenerPids && deps.commandOf) {
-        let needsListenerResolve = !recordedAlive;
-        if (recordedAlive) {
-          const probe = await listenerOnPort(deps, state.port);
-          if (probe.ok && probe.pids.length > 0 && !probe.pids.includes(state.pid)) needsListenerResolve = true;
-        }
-        if (needsListenerResolve) {
-          const listen = await listenerOnPort(deps, state.port);
-          if (!listen.ok) {
-            if (!recordedAlive) {
-              clean = false;
-              lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
-              skipStop = true;
-            }
-          } else {
-            const listenerPid = listen.pids[0];
+        const listen = await listenerOnPort(deps, state.port);
+        if (!listen.ok) {
+          if (!recordedAlive) keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+        } else if (listen.pids.length > 1) {
+          keepSettings(`port ${state.port} has multiple listeners (pids ${listen.pids.join(', ')}); not stopping anything`);
+        } else {
+          const listenerPid = listen.pids[0] ?? null;
+          const portHolderDiffers = listenerPid !== null && listenerPid !== recordedPid;
+          if (recordedAlive && portHolderDiffers) {
+            const listenerCmd = listenerPid ? await deps.commandOf(listenerPid) : '';
+            if (!listenerCmd) {
+              keepSettings(`port ${state.port} is held by process ${listenerPid} but its command line could not be read; not stopping the recorded process ${recordedPid}`);
+            } else if (!isSwarmWatchBoardCommand(listenerCmd)) {
+              keepSettings(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+            } else if (await boardUp(deps, state)) stopPid = listenerPid;
+          } else if (!recordedAlive) {
             if (!listenerPid) {
-              if (!recordedAlive) {
-                clean = false;
-                lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
-                skipStop = true;
-              }
+              keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
             } else {
-              const command = await deps.commandOf(listenerPid);
-              if (!command) {
-                if (recordedAlive) stopPid = state.pid;
-                else {
-                  clean = false;
-                  lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
-                  skipStop = true;
-                }
-              } else if (isSwarmWatchBoardCommand(command) && await boardUp(deps, state)) stopPid = listenerPid;
-              else {
-                clean = false;
-                lines.push(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
-                skipStop = true;
-              }
+              const listenerCmd = await deps.commandOf(listenerPid);
+              if (!listenerCmd) {
+                keepSettings(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+              } else if (!isSwarmWatchBoardCommand(listenerCmd) || !(await boardUp(deps, state))) {
+                keepSettings(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+              } else stopPid = listenerPid;
             }
           }
         }
       }
+      if (!skipStop && deps.commandOf) {
+        const cmd = await deps.commandOf(stopPid);
+        if (!cmd || !isSwarmWatchBoardCommand(cmd)) {
+          keepSettings(`process ${stopPid} is not a swarm board (${cmd ? 'unexpected command line' : 'command line unavailable'}); not stopping it`);
+        } else verifiedCommand = cmd;
+      }
       if (!skipStop) {
         const tryStop = async () => {
-          const killed = deps.kill(stopPid);
+          if (!validStopPid(stopPid)) {
+            clean = false;
+            lines.push(`could not stop the board (invalid process id ${stopPid}); stop it by hand`);
+            return;
+          }
+          if (deps.commandOf && verifiedCommand !== null) {
+            const again = await deps.commandOf(stopPid);
+            if (again !== verifiedCommand) {
+              clean = false;
+              lines.push(`process ${stopPid} changed before it could be stopped; kept the saved settings`);
+              return;
+            }
+          }
+          const killed = validStopPid(stopPid) ? deps.kill(stopPid) : false;
           await deps.sleep(300);
           if (!killed || (state.port && await boardUp(deps, state))) {
             clean = false;
             lines.push(`could not stop the board (process ${stopPid}); stop it by hand`);
           } else lines.push('stopped the board');
         };
-        if (!pidAlive(deps, stopPid, { boardAnswers: answers }) && !force) {
-          if (stopPid === state.pid) lines.push(`the recorded board process ${state.pid} was already gone`);
+        if (!pidAlive(deps, stopPid) && !force) {
+          const stillUp = state.port ? await boardUp(deps, state) : false;
+          if (stillUp) {
+            clean = false;
+            lines.push('the board is still answering on the saved port; kept the saved settings');
+          } else if (stopPid === recordedPid) lines.push(`the recorded board process ${recordedPid} was already gone`);
           else lines.push(`the board process ${stopPid} was already gone`);
         } else await tryStop();
       }

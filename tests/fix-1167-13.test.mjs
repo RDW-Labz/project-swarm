@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runRemoteCommand, readRemote } from '../tools/remote.mjs';
+import { runRemoteCommand, readRemote, isSwarmWatchBoardCommand, validStopPid } from '../tools/remote.mjs';
 import {
   identityUnverifiedRestartHint,
   restartRegisteredServers,
@@ -17,6 +17,25 @@ import { boardFile } from '../tools/watch-cli.mjs';
 const DNS = 'mini.tail.ts.net';
 const LOGIN = 'me@example.com';
 const TOKEN = 'a'.repeat(48);
+const SWARM = path.join('/opt', 'swarm', 'tools', 'swarm.mjs');
+
+test('isSwarmWatchBoardCommand matches real board argv only', () => {
+  const watchCmd = `${process.execPath} ${SWARM} watch --all`;
+  const remoteCmd = `${process.execPath} ${SWARM} remote serve`;
+  const rootWatch = `${process.execPath} ${SWARM} --root /tmp/repo watch`;
+  assert.equal(isSwarmWatchBoardCommand(watchCmd), true);
+  assert.equal(isSwarmWatchBoardCommand(remoteCmd), true);
+  assert.equal(isSwarmWatchBoardCommand(rootWatch), true);
+  assert.equal(isSwarmWatchBoardCommand(`vim ${SWARM} watch`), false);
+  assert.equal(isSwarmWatchBoardCommand(`${process.execPath} ${SWARM} status`), false);
+});
+
+test('validStopPid rejects unsafe pids', () => {
+  assert.equal(validStopPid(process.pid), false);
+  assert.equal(validStopPid(process.ppid), false);
+  assert.equal(validStopPid(1), false);
+  assert.equal(validStopPid(424242), true);
+});
 
 async function remoteOffHarness(t, { state, deps: depPatch = {} } = {}) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'fix1167-13-')));
@@ -31,9 +50,14 @@ async function remoteOffHarness(t, { state, deps: depPatch = {} } = {}) {
     tailscale: async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) }),
     sleep: async () => {},
     kill: pid => { killed.push(pid); return true; },
-    alive: pid => pid === state?.listenerPid,
+    alive: depPatch.alive ?? (pid => pid === state?.listenerPid || pid === state?.pid),
     listenerPids: async port => depPatch.listenerPids?.(port) ?? (state?.listenerPid ? [state.listenerPid] : []),
-    commandOf: async pid => depPatch.commandOf?.(pid) ?? state?.listenerCommand ?? '',
+    commandOf: async pid => {
+      if (depPatch.commandOf) return depPatch.commandOf(pid);
+      if (pid === state?.pid && state?.recordedCommand) return state.recordedCommand;
+      if (pid === state?.listenerPid) return state?.listenerCommand ?? '';
+      return state?.listenerCommand ?? '';
+    },
     get: async () => {
       if (depPatch.boardUp === false) return { status: 0, body: '' };
       return { status: 200, body: JSON.stringify({ projects: [] }) };
@@ -85,7 +109,7 @@ test('remote off: wrong pid but swarm board listener is stopped', async t => {
     hosts: [`${DNS}:8443`],
     pid: 111,
     listenerPid: 222,
-    listenerCommand: `${process.execPath} /opt/swarm/tools/swarm.mjs watch --all`,
+    listenerCommand: `${process.execPath} ${SWARM} watch --all`,
   };
   const h = await remoteOffHarness(t, { state, deps: { alive: pid => pid === 222 } });
   let boardUp = true;
@@ -122,6 +146,149 @@ test('remote off: non-swarm listener is left alone', async t => {
   assert.equal(res.exitCode, 1, res.stdout);
   assert.match(res.stdout, /port 18082 is held by another program \(process 333\); not touching it/);
   assert.equal(h.killed.length, 0);
+  assert.ok(await readRemote(h.env));
+});
+
+test('remote off: recorded pid alive but listener command unknown keeps settings and does not kill recorded pid', async t => {
+  const state = {
+    enabled: true,
+    token: TOKEN,
+    port: 18084,
+    httpsPort: 8443,
+    dns: DNS,
+    login: LOGIN,
+    hosts: [`${DNS}:8443`],
+    pid: 501,
+    listenerPid: 502,
+    recordedCommand: `${process.execPath} ${SWARM} remote serve`,
+  };
+  const h = await remoteOffHarness(t, {
+    state,
+    deps: {
+      alive: pid => pid === 501 || pid === 502,
+      listenerPids: async () => [502],
+      commandOf: async pid => (pid === 501 ? state.recordedCommand : ''),
+    },
+  });
+  h.deps.tailscale = async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) });
+  const res = await h.run();
+  assert.equal(res.exitCode, 1, res.stdout);
+  assert.match(res.stdout, /command line could not be read/);
+  assert.match(res.stdout, /not stopping the recorded process 501/);
+  assert.deepEqual(h.killed, []);
+  assert.ok(await readRemote(h.env));
+});
+
+test('remote off: multiple listeners on port refuses stop', async t => {
+  const state = {
+    enabled: true,
+    token: TOKEN,
+    port: 18085,
+    httpsPort: 8443,
+    dns: DNS,
+    login: LOGIN,
+    hosts: [`${DNS}:8443`],
+    pid: 601,
+    recordedCommand: `${process.execPath} ${SWARM} remote serve`,
+  };
+  const h = await remoteOffHarness(t, {
+    state,
+    deps: {
+      alive: pid => pid === 601,
+      listenerPids: async () => [601, 602],
+      commandOf: async () => state.recordedCommand,
+    },
+  });
+  h.deps.tailscale = async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) });
+  const res = await h.run();
+  assert.equal(res.exitCode, 1, res.stdout);
+  assert.match(res.stdout, /multiple listeners \(pids 601, 602\)/);
+  assert.equal(h.killed.length, 0);
+  assert.ok(await readRemote(h.env));
+});
+
+test('remote off: command line change before kill keeps settings', async t => {
+  const state = {
+    enabled: true,
+    token: TOKEN,
+    port: 18086,
+    httpsPort: 8443,
+    dns: DNS,
+    login: LOGIN,
+    hosts: [`${DNS}:8443`],
+    pid: 701,
+    listenerPid: 701,
+    listenerCommand: `${process.execPath} ${SWARM} remote serve`,
+  };
+  let calls = 0;
+  const h = await remoteOffHarness(t, {
+    state,
+    deps: {
+      alive: pid => pid === 701,
+      listenerPids: async () => [701],
+      commandOf: async () => {
+        calls += 1;
+        return calls === 1
+          ? state.listenerCommand
+          : `${process.execPath} ${SWARM} remote serve --tampered`;
+      },
+    },
+  });
+  h.deps.tailscale = async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) });
+  const res = await h.run();
+  assert.equal(res.exitCode, 1, res.stdout);
+  assert.match(res.stdout, /process 701 changed before it could be stopped/);
+  assert.equal(h.killed.length, 0);
+  assert.ok(await readRemote(h.env));
+});
+
+test('remote off: invalid recorded pid is never killed', async t => {
+  const state = {
+    enabled: true,
+    token: TOKEN,
+    port: 18087,
+    httpsPort: 8443,
+    dns: DNS,
+    login: LOGIN,
+    hosts: [`${DNS}:8443`],
+    pid: 1,
+  };
+  const h = await remoteOffHarness(t, { state, deps: { alive: () => false } });
+  h.deps.tailscale = async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) });
+  const res = await h.run();
+  assert.equal(res.exitCode, 0, res.stdout);
+  assert.match(res.stdout, /the board was not running/);
+  assert.equal(h.killed.length, 0);
+  assert.equal(await readRemote(h.env), null);
+});
+
+test('remote off: dead recorded pid but board still up keeps settings', async t => {
+  const state = {
+    enabled: true,
+    token: TOKEN,
+    port: 18088,
+    httpsPort: 8443,
+    dns: DNS,
+    login: LOGIN,
+    hosts: [`${DNS}:8443`],
+    pid: 801,
+  };
+  let boardChecks = 0;
+  const h = await remoteOffHarness(t, {
+    state,
+    deps: {
+      alive: () => false,
+      get: async () => {
+        boardChecks += 1;
+        if (boardChecks === 1) return { status: 0, body: '' };
+        return { status: 200, body: JSON.stringify({ projects: [] }) };
+      },
+    },
+  });
+  h.deps.tailscale = async () => ({ ok: true, stdout: JSON.stringify({ Web: {}, AllowFunnel: {}, TCP: {} }) });
+  const res = await h.run();
+  assert.equal(res.exitCode, 1, res.stdout);
+  assert.match(res.stdout, /still answering on the saved port/);
   assert.ok(await readRemote(h.env));
 });
 
