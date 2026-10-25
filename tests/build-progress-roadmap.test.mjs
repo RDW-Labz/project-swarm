@@ -17,6 +17,33 @@ const NOW = Date.UTC(2026, 9, 20, 15, 0, 0);
 const DAY = 86400000;
 const iso = at => new Date(at).toISOString();
 const roadmapFile = fileURLToPath(new URL('../docs/scope/roadmap.md', import.meta.url));
+const pctFloor = (done, total) => (total > 0 ? Math.max(0, Math.min(100, Math.floor(done * 100 / total))) : null);
+
+function countRoadmapRequirements(markdown) {
+  let count = 0;
+  for (const line of markdown.split('\n')) {
+    if (line.startsWith('### R-')) count += 1;
+  }
+  return count;
+}
+
+function countRoadmapStages(markdown) {
+  const start = markdown.indexOf('## Stages');
+  if (start < 0) return 0;
+  let count = 0;
+  for (const line of markdown.slice(start).split('\n')) {
+    if (line.startsWith('## ') && !line.startsWith('## Stages')) break;
+    if (/^- S\d+:/.test(line)) count += 1;
+  }
+  return count;
+}
+
+function etaFrom14DayWindow({ countedTickets, ticketDone, completionsIn14Days }) {
+  const perDay = Math.round((completionsIn14Days / 14) * 100) / 100;
+  const remaining = Math.max(0, countedTickets - ticketDone);
+  const days = remaining === 0 ? 0 : perDay > 0 ? Math.min(3650, Math.ceil(remaining / perDay)) : 3650;
+  return { remaining, perDay, days };
+}
 
 async function git(root, args) {
   return execFileP('git', ['-C', root, ...args], { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
@@ -43,9 +70,12 @@ async function roadmapFixture(t, { doneCount = 12, doneAgeDays = 1 } = {}) {
   const oldText = fullText.slice(0, fullText.indexOf('\n### R-040'));
   const fullScope = parseScope(fullText);
   const oldScope = parseScope(oldText);
-  // S9 Cluster adds R-052–R-065; S10 Command Center adds R-066–R-080 (65 + 15 = 80 total).
-  assert.equal(fullScope.requirements.length, 80);
-  assert.equal(oldScope.requirements.length, 39);
+  const fullRequirementTotal = countRoadmapRequirements(fullText);
+  const oldRequirementTotal = countRoadmapRequirements(oldText);
+  const stageTotal = countRoadmapStages(fullText);
+  assert.equal(fullScope.requirements.length, fullRequirementTotal);
+  assert.equal(oldScope.requirements.length, oldRequirementTotal);
+  assert.ok(stageTotal >= 1, 'roadmap lists at least one stage');
   await fs.writeFile(path.join(main, 'docs/scope/roadmap.md'), oldText);
   await git(main, ['init', '-q']);
   await git(main, ['config', 'user.name', 'Roadmap Fixture']);
@@ -73,7 +103,10 @@ async function roadmapFixture(t, { doneCount = 12, doneAgeDays = 1 } = {}) {
   const family = async () => [mainRoot, linkedRoot];
   const project = { id: 'roadmap-fixture', name: 'Roadmap fixture', root: mainRoot };
   const progressOpts = (extra = {}) => ({ root: mainRoot, projectId: project.id, now: NOW, historyFile, family, ...extra });
-  return { main: mainRoot, linked: linkedRoot, historyFile, oldLedger, worktreeLedger, project, family, progressOpts };
+  return {
+    main: mainRoot, linked: linkedRoot, historyFile, oldLedger, worktreeLedger, project, family, progressOpts,
+    fullRequirementTotal, oldRequirementTotal, stageTotal,
+  };
 }
 
 async function writeRun(root, runId, state) {
@@ -84,23 +117,26 @@ async function writeRun(root, runId, state) {
 
 test('build progress follows the newest approved roadmap ledger across linked worktrees and excludes human tickets', async t => {
   const fixture = await roadmapFixture(t);
+  const { fullRequirementTotal: total } = fixture;
+  const done = 12;
+  const ticketsPct = pctFloor(done, total);
   const progress = await buildProgress(fixture.progressOpts());
   assert.equal(progress.source.root, fixture.linked);
   assert.equal(progress.source.differs, true);
   assert.equal(progress.source.candidates, 2);
-  assert.equal(progress.percent.requirements.total, 80);
-  assert.equal(progress.percent.requirements.covered, 12);
-  assert.deepEqual(progress.percent.tickets, { done: 12, total: 80, pct: 15 });
+  assert.equal(progress.percent.requirements.total, total);
+  assert.equal(progress.percent.requirements.covered, done);
+  assert.deepEqual(progress.percent.tickets, { done, total, pct: ticketsPct });
   assert.match(progress.eta.basis, /14 days/);
-  assert.equal(progress.eta.remaining, 68);
+  assert.equal(progress.eta.remaining, total - done);
   assert.equal(progress.left.human.length, 2);
   assert.ok(progress.notes.includes(`ledger read from ${path.basename(fixture.linked)} (newest approved of 2 checkouts)`));
 
   const summary = progressSummary(progress);
-  assert.deepEqual([progress.percent.tickets.total, progress.percent.tickets.total - progress.percent.tickets.done], [80, 68]);
-  assert.deepEqual(summary, { overall: 15, ticketsPct: 15, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0, headline: 'build 12/80 · human 0/2', untracked: { runs: 0, jobs: 0 } });
-  assert.equal(progress.percent.tickets.total, 80);
-  assert.equal(progress.percent.tickets.done + (progress.percent.tickets.total - progress.percent.tickets.done) + progress.left.human.length, 82);
+  assert.deepEqual([progress.percent.tickets.total, progress.percent.tickets.total - progress.percent.tickets.done], [total, total - done]);
+  assert.deepEqual(summary, { overall: ticketsPct, ticketsPct, current: 'Building', eta: progress.eta.days, finished: false, offLedger: 0, headline: `build ${done}/${total} · human 0/2`, untracked: { runs: 0, jobs: 0 } });
+  assert.equal(progress.percent.tickets.total, total);
+  assert.equal(progress.percent.tickets.done + (progress.percent.tickets.total - progress.percent.tickets.done) + progress.left.human.length, total + 2);
 });
 
 test('an approved main ledger wins over a newer but unapproved linked ledger', async t => {
@@ -109,15 +145,15 @@ test('an approved main ledger wins over a newer but unapproved linked ledger', a
   const progress = await buildProgress(fixture.progressOpts());
   assert.equal(progress.source.root, fixture.project.root);
   assert.equal(progress.source.differs, false);
-  assert.equal(progress.percent.requirements.total, 39);
-  assert.equal(progress.percent.tickets.total, 39);
+  assert.equal(progress.percent.requirements.total, fixture.oldRequirementTotal);
+  assert.equal(progress.percent.tickets.total, fixture.oldRequirementTotal);
 });
 
 test('ETA widens from fourteen to thirty days, then to all recorded completions', async t => {
   const thirty = await roadmapFixture(t, { doneCount: 2, doneAgeDays: 20 });
   const thirtyProgress = await buildProgress(thirty.progressOpts());
   assert.match(thirtyProgress.eta.basis, /^2 done in the last 30 days$/);
-  assert.equal(thirtyProgress.eta.remaining, 78);
+  assert.equal(thirtyProgress.eta.remaining, thirty.fullRequirementTotal - 2);
 
   const since = await roadmapFixture(t, { doneCount: 2, doneAgeDays: 60 });
   const sinceProgress = await buildProgress(since.progressOpts());
@@ -140,8 +176,9 @@ test('roadmap progress excludes cancelled, proposed and human tickets, normalize
   tickets.push(humanTicket('T-9001'), { ...byId('T-0008'), id: 'T-9010', status: 'proposed', title: 'Proposed work' });
   await writeLedger(fixture.linked, approveLedger({ ...fixture.worktreeLedger, tickets }, { now: NOW }));
   const progress = await buildProgress(fixture.progressOpts());
+  const reqTotal = fixture.fullRequirementTotal;
   assert.deepEqual(progress.percent.tickets, { done: 4, total: 4, pct: 100 });
-  assert.deepEqual(progress.percent.requirements, { covered: 2, total: 80, pct: 2 });
+  assert.deepEqual(progress.percent.requirements, { covered: 2, total: reqTotal, pct: pctFloor(2, reqTotal) });
   assert.equal(progress.percent.overall, 100);
   assert.deepEqual(progress.stages.filter(stage => stage.total > 0).map(stage => [stage.stageId, stage.title, stage.total]), [
     ['S0', 'Stage 0', 1], ['S1', 'Unblock autonomy', 1], ['S2', 'Ticket Manager v2', 1], ['none', 'No stage', 1],
@@ -180,7 +217,15 @@ test('ETA falls back to run finish times, caps a zero rounded rate, and reports 
     ],
   });
   const fallback = await buildProgress(fixture.progressOpts());
-  assert.deepEqual(fallback.eta, { remaining: 78, perDay: 0.14, days: 558, basis: '2 done in the last 14 days (from run finish times)' });
+  const etaExpected = etaFrom14DayWindow({
+    countedTickets: fixture.fullRequirementTotal,
+    ticketDone: 2,
+    completionsIn14Days: 2,
+  });
+  assert.deepEqual(fallback.eta, {
+    ...etaExpected,
+    basis: '2 done in the last 14 days (from run finish times)',
+  });
 
   const old = 4000 * DAY;
   await writeRun(fixture.linked, 'ledger-done', {
