@@ -1,0 +1,51 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv8A",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/autopilot.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "prompt": "Fix three low review findings in tools/autopilot.mjs (defaultReadRunFolderSources and readJsonFileNoSymlink near lines 531-590), tests added to tests/autopilot-integrate-clean.test.mjs. 1 validate every run id (run.id and each job.childRun read from state.json) against /^[A-Za-z0-9][A-Za-z0-9._-]*$/ and reject any containing '..' before joining it into <root>/.swarm/runs/<id>; an invalid id is skipped. 2 cap the file size: fstat the opened handle and refuse anything over 2 MB (return no paths). 3 close the lstat-then-read gap: open with O_RDONLY | O_NOFOLLOW and read from that handle (fstat the same handle for regular-file and size), and lstat both parent folders (.swarm and .swarm/runs) refusing symlinks. Tests: a child id '../../x' is skipped and never read, an oversized state.json yields no paths, a symlinked state.json, a symlinked .swarm/runs folder and a symlink swapped in are all refused (use a real temp dir with real symlinks). Keep every existing test passing (tests/autopilot-*.test.mjs, tests/needs-you-triage.test.mjs, tests/generated-state*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

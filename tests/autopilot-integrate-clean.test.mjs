@@ -453,6 +453,89 @@ test('production-shaped run summary integrates when run folder declares outputs'
   assert.equal(deps.calls.some(c => c[0] === 'integrate'), true);
 });
 
+async function skipIfNoSymlinks(t, err) {
+  if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+    t.skip('symlinks not supported in this environment');
+    return true;
+  }
+  throw err;
+}
+
+test('runIntegrateOutputPaths skips path-traversal childRun ids from saved state', async t => {
+  const root = await tempRoot(t);
+  await fs.mkdir(path.join(root, '.swarm', 'x'), { recursive: true });
+  await writeRunFolder(root, 'r-parent', {
+    state: {
+      id: 'r-parent',
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['src/parent-only.mjs'], childRun: '../../x' },
+      ],
+    },
+  });
+  await writeRunFolder(root, 'x', {
+    state: {
+      id: 'x',
+      jobs: [{ id: 'j-leak', status: 'complete', outputs: ['src/pwned.mjs'] }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-parent', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['src/parent-only.mjs']);
+});
+
+test('runIntegrateOutputPaths refuses oversized saved state.json', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-huge', {});
+  const huge = JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/huge-leak.mjs'] }],
+    pad: 'x'.repeat(2 * 1024 * 1024),
+  });
+  await fs.writeFile(path.join(runDir, 'state.json'), huge, 'utf8');
+  const paths = runIntegrateOutputPaths({ id: 'r-huge', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
+test('runIntegrateOutputPaths refuses symlinked .swarm/runs directory', async t => {
+  const root = await tempRoot(t);
+  const outsideRuns = path.join(root, 'outside-runs');
+  const runDir = path.join(outsideRuns, 'r-outside');
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), `${JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/outside-leak.mjs'] }],
+  })}\n`, 'utf8');
+  const swarmDir = path.join(root, '.swarm');
+  await fs.mkdir(swarmDir, { recursive: true });
+  const runsDir = path.join(swarmDir, 'runs');
+  try {
+    await fs.symlink(outsideRuns, runsDir);
+  } catch (err) {
+    if (await skipIfNoSymlinks(t, err)) return;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-outside', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
+test('runIntegrateOutputPaths refuses state.json replaced by symlink after create', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-swap', {
+    state: {
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/before-swap.mjs'] }],
+    },
+  });
+  const outside = path.join(root, 'outside-state.json');
+  await fs.writeFile(outside, JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/after-swap.mjs'] }],
+  }), 'utf8');
+  const statePath = path.join(runDir, 'state.json');
+  await fs.rm(statePath);
+  try {
+    await fs.symlink(outside, statePath);
+  } catch (err) {
+    if (await skipIfNoSymlinks(t, err)) return;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-swap', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
 test('autopilot never stashes or removes files during integrate gating', async t => {
   const root = await tempRoot(t);
   await fs.mkdir(path.join(root, 'notes'), { recursive: true });

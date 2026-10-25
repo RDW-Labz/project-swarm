@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
-import { lstatSync, readFileSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { O_NOFOLLOW, O_RDONLY } from 'node:constants';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
@@ -528,27 +529,53 @@ export function filterValidIntegrateOutputPaths(paths, projectRoot) {
   return out;
 }
 
-function readJsonFileNoSymlink(filePath) {
+const INTEGRATE_RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_RUN_FOLDER_JSON_BYTES = 2 * 1024 * 1024;
+
+function isValidIntegrateRunId(runId) {
+  return typeof runId === 'string'
+    && runId
+    && !runId.includes('..')
+    && INTEGRATE_RUN_ID_RE.test(runId);
+}
+
+function lstatPathNotSymlink(filePath) {
   try {
     const st = lstatSync(filePath);
-    if (st.isSymbolicLink()) return null;
-    const text = readFileSync(filePath, 'utf8');
-    return JSON.parse(text);
+    return !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function readJsonFileNoSymlink(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, O_RDONLY | O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_RUN_FOLDER_JSON_BYTES) return null;
+    const buf = Buffer.alloc(st.size);
+    if (st.size > 0) readSync(fd, buf, 0, st.size, 0);
+    return JSON.parse(buf.toString('utf8'));
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
   }
 }
 
 /** Default reader for saved run folder `state.json` / `manifest.json` (never throws). */
 export function defaultReadRunFolderSources(root, runId) {
-  if (!root || typeof runId !== 'string' || !runId) return { state: null, manifest: null };
-  const runDir = path.join(root, '.swarm', 'runs', runId);
-  try {
-    const st = lstatSync(runDir);
-    if (st.isSymbolicLink()) return { state: null, manifest: null };
-  } catch {
+  if (!root || !isValidIntegrateRunId(runId)) return { state: null, manifest: null };
+  const swarmDir = path.join(root, '.swarm');
+  const runsDir = path.join(swarmDir, 'runs');
+  if (!lstatPathNotSymlink(swarmDir) || !lstatPathNotSymlink(runsDir)) {
     return { state: null, manifest: null };
   }
+  const runDir = path.join(runsDir, runId);
+  if (!lstatPathNotSymlink(runDir)) return { state: null, manifest: null };
   return {
     state: readJsonFileNoSymlink(path.join(runDir, 'state.json')),
     manifest: readJsonFileNoSymlink(path.join(runDir, 'manifest.json')),
@@ -563,13 +590,13 @@ function collectFolderJobOutputs(jobs, { completeOnly } = {}) {
     if (completeOnly && !jobIsComplete(job)) continue;
     if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
     const childId = job.childRun ?? job.child_run;
-    if (typeof childId === 'string' && childId) childRunIds.push(childId);
+    if (isValidIntegrateRunId(childId)) childRunIds.push(childId);
   }
   return { paths, childRunIds };
 }
 
 function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new Set()) {
-  if (!root || typeof runId !== 'string' || !runId || visited.has(runId)) return [];
+  if (!root || !isValidIntegrateRunId(runId) || visited.has(runId)) return [];
   visited.add(runId);
   const reader = typeof readRunFolder === 'function' ? readRunFolder : defaultReadRunFolderSources;
   let sources;
@@ -578,8 +605,11 @@ function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new
   } catch {
     sources = { state: null, manifest: null };
   }
-  const state = sources?.state;
+  let state = sources?.state;
   const manifest = sources?.manifest;
+  if (state && typeof state.id === 'string' && state.id && !isValidIntegrateRunId(state.id)) {
+    state = null;
+  }
   const fromState = collectFolderJobOutputs(state?.jobs, { completeOnly: true });
   let paths = [...fromState.paths];
   const childIds = new Set(fromState.childRunIds);
@@ -590,7 +620,7 @@ function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new
   } else {
     for (const job of jobListFromSaved(state?.jobs)) {
       const childId = job?.childRun ?? job?.child_run;
-      if (typeof childId === 'string' && childId) childIds.add(childId);
+      if (isValidIntegrateRunId(childId)) childIds.add(childId);
     }
   }
   for (const childId of childIds) {
@@ -621,7 +651,7 @@ export function runIntegrateOutputPaths(run, events, { runs, root, readRunFolder
 
   collectFromJobs(jobsFromRun(run, manifest));
   let validated = filterValidIntegrateOutputPaths(paths, root);
-  if (!validated.length && root && run?.id) {
+  if (!validated.length && root && isValidIntegrateRunId(run?.id)) {
     validated = runFolderIntegrateOutputPaths(run.id, root, readRunFolder);
   }
   return [...new Set(validated)].sort();
