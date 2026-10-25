@@ -27,6 +27,8 @@ import {
   buildRepairJobs,
   runRepairLoop,
   parkedBlockers,
+  repairTicketBatch,
+  refreshRejectedDependents,
 } from './split-repair.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
@@ -1426,6 +1428,7 @@ function evaluateSplitIngest({
   lists,
   readErrors,
   scope,
+  scopeText = '',
   existing,
   profile,
   repoFiles,
@@ -1454,7 +1457,26 @@ function evaluateSplitIngest({
     const patch = ticketPatches.get(ticket.id);
     return patch ? { ...ticket, ...patch } : ticket;
   });
-  const rejected = [...built.rejected];
+  let rejected = [...built.rejected];
+  const pathExists = (p) => repoFiles.includes(normTicketPath(p));
+  const batchRepair = repairTicketBatch({
+    tickets,
+    ledgerTickets: existing?.tickets ?? [],
+    scopeText,
+    pathExists,
+    repoFiles,
+  });
+  built.notes.push(...batchRepair.notes);
+  const pathOnlyParked = batchRepair.parked.filter((entry) => (entry.issues ?? []).every((issue) => /path not in repo/i.test(String(issue.reason ?? ''))));
+  const hardParked = batchRepair.parked.filter((entry) => !pathOnlyParked.includes(entry));
+  tickets = [...batchRepair.tickets, ...pathOnlyParked.map((entry) => entry.ticket)];
+  for (const entry of hardParked) {
+    rejected.push({ id: entry.ticket.id, title: entry.ticket.title ?? '', reason: entry.issues[0]?.reason ?? 'could not repair ticket' });
+  }
+  const repairedIds = new Set(batchRepair.notes.map(line => /^T-[0-9]+/.exec(line)?.[0]).filter(Boolean));
+  const refreshed = refreshRejectedDependents({ tickets, rejected, repairedIds });
+  rejected = refreshed.rejected;
+  built.notes.push(...refreshed.notes);
   const stageByTicket = ticketStageLookup(lists, startAt);
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
@@ -1614,7 +1636,7 @@ function evaluateSplitIngest({
   };
 }
 
-async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false }) {
+async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false, scopeText = '' }) {
   const history = [];
   let rounds = 0;
   let prevIssueKeys = null;
@@ -1623,6 +1645,20 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     const v = validate();
     const all = [...(v.issues ?? []), ...(v.stageIssues ?? [])];
     return { all, keys: [...all].map(i => [i.code, i.stage ?? '', i.ticket ?? '', i.path ?? '', i.req ?? '', i.reason ?? ''].join('|')).sort().join('\0'), v };
+  };
+
+  const applyTicketBatchRepair = (v) => {
+    const pool = v.allTickets ?? v.tickets ?? [];
+    if (!pool.length) return [];
+    const repaired = repairTicketBatch({
+      tickets: pool,
+      ledgerTickets: v.existing ?? [],
+      scopeText,
+      pathExists: (p) => (v.repoFiles ?? []).includes(normTicketPath(p)),
+      repoFiles: v.repoFiles ?? [],
+    });
+    if (repaired.notes.length && typeof v.setTickets === 'function') v.setTickets(repaired.tickets);
+    return repaired.notes;
   };
 
   const applyAutoFixPass = (v, allIssues) => {
@@ -1643,25 +1679,30 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
 
   const errorsInFirst = issues.length;
   applyAutoFixPass(v, issues);
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
   ({ all: issues, keys, v } = snapshot());
 
   if (!issues.length) {
     log?.({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
     history.push({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
-    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history };
+    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   const shouldRepair = issueList => issueList.some(issue => issue.fixable)
     || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration' || issue.code === 'invalid-integration-test'));
 
   if (!shouldRepair(issues)) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   if (maxRepairs === 0) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   prevIssueKeys = keys;
@@ -1690,21 +1731,26 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     }
 
     applyAutoFixPass(v, issues);
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
     ({ all: issues, keys, v } = snapshot());
 
     if (!issues.length) {
-      return { tickets: v.tickets ?? [], parked: [], rounds, history };
+      return { tickets: v.tickets ?? [], parked: [], rounds, history, repairNotes: v.repairNotes ?? [] };
     }
 
     if (keys === prevIssueKeys) {
+      v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+      ({ all: issues, keys, v } = snapshot());
       const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
     }
     prevIssueKeys = keys;
   }
 
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+  ({ all: issues, keys, v } = snapshot());
   const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
 }
 
 async function defaultRunSplit(root, manifest) {
@@ -1939,6 +1985,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
       lists: workingLists,
       readErrors,
       scope,
+      scopeText: text,
       existing,
       profile,
       repoFiles,
@@ -1969,6 +2016,10 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
             stage: ticket.stage,
             context: ticket.context,
             files: ticket.files,
+            contracts: ticket.contracts,
+            acceptance: ticket.acceptance,
+            screens: ticket.screens,
+            tests: ticket.tests,
           });
         }
       },
@@ -2034,6 +2085,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     validate,
     rerun,
     allowIntegrationRepair: typeof deps.runSplit === 'function',
+    scopeText: text,
     log: entry => { repairHistory.push(entry); },
   });
   ticketPatches.clear();
@@ -2075,7 +2127,11 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     }
   }
 
-  const repairLines = [`repair rounds: ${loopResult.rounds}`, ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`)];
+  const repairLines = [
+    `repair rounds: ${loopResult.rounds}`,
+    ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`),
+    ...(loopResult.repairNotes ?? []),
+  ];
   const parkedLines = loopResult.parked.length
     ? [`parked: ${loopResult.parked.length} ticket(s)`, ...loopResult.parked.map(({ ticket, issues: parkedIssues }) => `${ticket.id} (${ticket.title ?? 'untitled'}): ${(parkedIssues ?? []).map(i => i.reason ?? i.code).join('; ')}`)]
     : [];
