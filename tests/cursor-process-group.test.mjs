@@ -43,15 +43,28 @@ function cursorJob(overrides = {}) {
 
 const launch = { profile: '/repo/sandbox.sb', bin: '/opt/cursor/cursor-agent', worktree: '/repo/wt', env: {} };
 
-function spawnCursorChild(child, { complete = false, hang = false } = {}) {
+function spawnCursorChild(child, { complete = false, hang = false, exitRacesTimeout = false, timeoutMs = 40 } = {}) {
   return () => {
-    if (complete) {
+    if (exitRacesTimeout) {
+      setTimeout(() => child.stdout.write(`${cursorLine}\n`), 5);
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+        setImmediate(() => child.emit('close', 0));
+      }, timeoutMs + 5);
+    } else if (complete) {
       setTimeout(() => {
         child.stdout.write(`${cursorLine}\n`);
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
         child.emit('close', 0);
       }, 5);
     } else if (!hang) {
-      setTimeout(() => child.emit('close', 0), 5);
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+        child.emit('close', 0);
+      }, 5);
     }
     return child;
   };
@@ -132,6 +145,18 @@ test('killCursorProcessGroup skips SIGKILL when polling sees the group exit earl
   });
   assert.deepEqual(calls.filter(c => c.signal === 'SIGKILL'), []);
   assert.ok(calls.some(c => c.signal === 0));
+});
+
+test('killCursorProcessGroup treats EPERM as not our group and skips SIGKILL', async () => {
+  const calls = [];
+  const killImpl = (target, signal) => {
+    calls.push({ target, signal });
+    if (signal === 0) throw Object.assign(new Error('denied'), { code: 'EPERM' });
+  };
+  const result = await killCursorProcessGroup(5020, { killImpl, sleep: noopSleep, graceMs: 0, now: () => 0 });
+  assert.deepEqual(result, { refused: false, error: null });
+  assert.deepEqual(calls.filter(c => c.signal === 'SIGKILL'), []);
+  assert.ok(calls.some(c => c.signal === 'SIGTERM'));
 });
 
 test('killCursorProcessGroup re-probes with signal 0 immediately before SIGKILL', async () => {
@@ -217,13 +242,32 @@ test('execute cursor stop runs one kill sequence when exit races timeout', async
     sequences += 1;
     return killGroupViaKillImpl(pid, opts);
   };
-  const pending = execute(cursorJob({ timeoutMs: 40 }), '/tmp', 'go', {
-    spawnImpl: spawnCursorChild(child, { complete: true }),
+  const timeoutMs = 40;
+  const pending = execute(cursorJob({ timeoutMs }), '/tmp', 'go', {
+    spawnImpl: spawnCursorChild(child, { exitRacesTimeout: true, timeoutMs }),
     cursor: launch,
     killImpl,
     killGroupImpl,
   });
   const result = await pending;
-  assert.equal(result.status, 'complete');
+  assert.equal(result.status, 'timeout');
   assert.equal(sequences, 1);
+});
+
+test('execute cursor stop resolves when stdio close times out after group kill', async () => {
+  const child = fakeCursorChild(6500);
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const killImpl = (target, signal) => {
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+  };
+  const result = await execute(cursorJob({ timeoutMs: 30 }), '/tmp', 'go', {
+    spawnImpl: spawnCursorChild(child, { hang: true }),
+    cursor: launch,
+    killImpl,
+    killGroupImpl: pid => killCursorProcessGroup(pid, { killImpl, sleep: noopSleep }),
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.terminationReason, 'timeout');
+  assert.match(result.cleanupError, /stdio close timed out/);
 });

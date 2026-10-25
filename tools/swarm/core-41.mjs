@@ -129,27 +129,47 @@ export async function expandOpenScopes(root, manifest) {
 // process group and will not receive this group-directed SIGTERM/SIGKILL (known limit).
 /** Kill a detached cursor lane leader's process group; injectable for tests. */
 export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind(process), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), pollIntervalMs = 75, graceMs = 5000, now = () => Date.now() } = {}) {
-  if (!Number.isInteger(pid) || pid <= 1) return { refused: true, error: null };
-  if (pid === process.pid || pid === process.ppid) return { refused: true, error: null };
-  const target = -pid;
-  const probe = () => { try { killImpl(target, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
-  try { killImpl(target, 'SIGTERM'); }
-  catch (error) {
-    if (error.code === 'ESRCH') return { refused: false, error: null };
+  try {
+    if (!Number.isInteger(pid) || pid <= 1) return { refused: true, error: null };
+    if (pid === process.pid || pid === process.ppid) return { refused: true, error: null };
+    const target = -pid;
+    const probe = () => {
+      try {
+        killImpl(target, 0);
+        return { alive: true, gone: false, error: null, notOurs: false };
+      } catch (error) {
+        if (error.code === 'ESRCH') return { alive: false, gone: true, error: null, notOurs: false };
+        if (error.code === 'EPERM') return { alive: true, gone: false, error: null, notOurs: true };
+        const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+        return { alive: false, gone: false, error: `Cursor process group cleanup failed (${code}) while probing`, notOurs: false };
+      }
+    };
+    try { killImpl(target, 'SIGTERM'); }
+    catch (error) {
+      if (error.code === 'ESRCH') return { refused: false, error: null };
+      if (error.code === 'EPERM') return { refused: false, error: null };
+      const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+      return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGTERM` };
+    }
+    const deadline = now() + graceMs;
+    while (now() < deadline) {
+      const state = probe();
+      if (state.error) return { refused: false, error: state.error };
+      if (state.gone || state.notOurs) return { refused: false, error: null };
+      await sleep(pollIntervalMs);
+    }
+    const finalProbe = probe();
+    if (finalProbe.error) return { refused: false, error: finalProbe.error };
+    if (finalProbe.gone || finalProbe.notOurs) return { refused: false, error: null };
+    try { killImpl(target, 'SIGKILL'); return { refused: false, error: null }; }
+    catch (error) {
+      if (error.code === 'ESRCH' || error.code === 'EPERM') return { refused: false, error: null };
+      const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+      return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGKILL` };
+    }
+  } catch (error) {
     const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
-    return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGTERM` };
-  }
-  const deadline = now() + graceMs;
-  while (now() < deadline) {
-    if (!probe()) return { refused: false, error: null };
-    await sleep(pollIntervalMs);
-  }
-  if (!probe()) return { refused: false, error: null };
-  try { killImpl(target, 'SIGKILL'); return { refused: false, error: null }; }
-  catch (error) {
-    if (error.code === 'ESRCH') return { refused: false, error: null };
-    const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
-    return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGKILL` };
+    return { refused: false, error: `Cursor process group cleanup failed (${code})` };
   }
 }
 
@@ -157,14 +177,19 @@ function waitForChildClose(child, timeoutMs = 500) {
   if (!child?.pid) return Promise.resolve({ error: null });
   if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ error: null });
   return new Promise(resolve => {
-    const timer = setTimeout(() => resolve({ error: null }), timeoutMs);
+    const timer = setTimeout(() => resolve({ error: 'child stdio close timed out' }), timeoutMs);
     child.once('close', () => { clearTimeout(timer); resolve({ error: null }); });
   });
 }
 
 async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = killCursorProcessGroup }) {
   if (!Number.isInteger(groupPid)) return await stopChild(child, { killImpl });
-  const group = await killGroupImpl(groupPid, { killImpl });
+  let group;
+  try { group = await killGroupImpl(groupPid, { killImpl }); }
+  catch (error) {
+    const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+    return { error: `Cursor process group cleanup failed (${code})` };
+  }
   if (group.refused) return { error: null };
   if (group.error) return { error: group.error };
   return await waitForChildClose(child);
@@ -187,20 +212,22 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
     const stopChildForJob = () => job.agent === 'cursor'
       ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl })
       : stopChild(child, { killImpl });
-    const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
+    const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null)); };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout); clearInterval(poll); signal?.removeEventListener('abort', onAbort);
-      const cleanup=await(termination??stopChildForJob());
+      let cleanup;
+      try { cleanup = await (termination ?? stopChildForJob()); }
+      catch { cleanup = { error: 'Cursor child cleanup failed' }; }
       try { await sink?.close(); } catch (problem) { logFailure ??= problem; }
       const cleanupError=cleanup.error;
       if (logFailure) {
         resolve({ ...setupFailedResult(logFailure.message), setupFailed: false, refusedBeforeStart: false, code: 'adapter-log-failed', stream: logFailure.stream, stdout, stderr, exitCode: code, cleanupError, terminationReason: reason ?? null });
         return;
       }
-      if(cleanupError){child?.unref();child?.stdin?.destroy();child?.stdout?.destroy();child?.stderr?.destroy();}
+      if(cleanupError){child?.unref?.();child?.stdin?.destroy?.();child?.stdout?.destroy?.();child?.stderr?.destroy?.();}
       if (job.agent === 'cursor') {
         // stdout is cursor's `--output-format json` result; the envelope is read from its final
         // text exactly as codex's, then from the outputs-only worktree diff.
@@ -283,7 +310,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
         termination??=stopChildForJob();
-        termination.then(cleanup=>{if(cleanup.error)finish(null);});
+        termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null));
       });
       child.on('close', code => finish(code));
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {

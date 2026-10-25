@@ -29,6 +29,9 @@ const REPO = path.join(HERE, '..');
 /** @type {{ pid: number, child?: import('node:child_process').ChildProcess }[]} */
 const trackedFakeServers = [];
 
+/** @type {Set<string>} */
+const tempHomesUsed = new Set();
+
 function trackFakeServer(child) {
   if (!child?.pid) return child;
   if (!trackedFakeServers.some(e => e.child === child)) {
@@ -62,15 +65,30 @@ async function stopTrackedFakeServers() {
 }
 
 afterEach(async () => {
+  for (const home of tempHomesUsed) {
+    try { await fs.writeFile(path.join(home, 'stop'), '', { mode: 0o600 }); } catch { /* best effort */ }
+  }
+  tempHomesUsed.clear();
   await stopTrackedFakeServers();
 });
 
 const FAKE_SERVER = `import http from 'node:http';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 const port = Number(process.env.TEST_PORT);
 const version = process.env.TEST_VERSION || '1.0.0';
 const recordFile = process.env.TEST_RECORD_FILE;
 const ignoreTerm = process.env.TEST_IGNORE_SIGTERM === '1';
+const home = process.env.HOME || process.cwd();
+const stopFile = path.join(home, 'stop');
+const parentPollMs = Number(process.env.TEST_PARENT_POLL_MS) || 1000;
+let shuttingDown = false;
+const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 500).unref();
+};
 if (ignoreTerm) process.on('SIGTERM', () => {});
 const body = JSON.stringify({ pid: process.pid, url: 'http://127.0.0.1:' + port + '/?t=x', startedAt: new Date().toISOString(), version, argv: ['watch', '--all'], cwd: process.cwd(), port, env: {}, mode: 'background' });
 if (recordFile) await fs.writeFile(recordFile, body + '\\n', { mode: 0o600 });
@@ -83,6 +101,11 @@ const server = http.createServer((req, res) => {
   res.writeHead(404); res.end();
 });
 server.listen(port, '127.0.0.1');
+setTimeout(shutdown, 120_000).unref();
+setInterval(async () => {
+  try { if (await fs.stat(stopFile)) shutdown(); } catch { /* missing */ }
+}, 500).unref();
+setInterval(() => { if (process.ppid === 1) shutdown(); }, parentPollMs).unref();
 `;
 
 async function freePort() {
@@ -100,6 +123,7 @@ async function mkHome() {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'server-restart-home-'));
   const swarmDir = path.join(home, '.project-swarm');
   await fs.mkdir(swarmDir, { recursive: true, mode: 0o700 });
+  tempHomesUsed.add(home);
   return home;
 }
 
@@ -315,6 +339,53 @@ child.unref();
   assert.equal(servers[0]?.kind, 'remote');
   assert.equal(servers[0]?.status, 'restarted');
   assert.match(lines.join(''), /remote server restarted/);
+});
+
+test('fake server exits when its parent is gone', async () => {
+  const home = await mkHome();
+  const port = await freePort();
+  const script = path.join(home, 'fake-server.mjs');
+  await fs.writeFile(script, FAKE_SERVER);
+  const recordFile = boardFile({ HOME: home }, home);
+  const wrapper = spawn(process.execPath, ['-e', `
+import { spawn } from 'node:child_process';
+const child = spawn(process.execPath, [${JSON.stringify(script)}], {
+  detached: true,
+  stdio: 'ignore',
+  env: {
+    ...process.env,
+    HOME: ${JSON.stringify(home)},
+    TEST_PORT: '${port}',
+    TEST_RECORD_FILE: ${JSON.stringify(recordFile)},
+    TEST_PARENT_POLL_MS: '50',
+  },
+});
+child.unref();
+setTimeout(() => process.exit(0), 100);
+`], { stdio: 'ignore', env: { ...process.env, HOME: home } });
+  await new Promise(resolve => wrapper.once('exit', resolve));
+  const deadline = Date.now() + 8000;
+  let fakePid = null;
+  while (Date.now() < deadline) {
+    try {
+      const text = await fs.readFile(recordFile, 'utf8');
+      fakePid = JSON.parse(text.trim()).pid;
+      if (fakePid) break;
+    } catch { /* wait */ }
+    await new Promise(r => setTimeout(r, 50));
+  }
+  assert.ok(fakePid);
+  const waitDeadline = Date.now() + 5000;
+  while (Date.now() < waitDeadline) {
+    try {
+      process.kill(fakePid, 0);
+      await new Promise(r => setTimeout(r, 100));
+    } catch (error) {
+      if (error.code === 'ESRCH') return;
+      throw error;
+    }
+  }
+  assert.fail('fake server still running after parent exited');
 });
 
 test('stopTrackedFakeServers kills only tracked child handles', async () => {
