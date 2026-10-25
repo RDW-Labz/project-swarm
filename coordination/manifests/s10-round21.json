@@ -1,0 +1,55 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "cc21hive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/hive.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "Fix docs/design/command-center-mockup/hive.html. DIAGNOSIS (verified by looking at the round 20 screenshot): the card bodies render empty because the rows and the p() meter are clipped. Each card is only about 80px tall (header 28px, body about 50px) while the stage has 120px of empty space below the cards. Fix: make the five cards of each column share the FULL stage height (each about 19 percent of the stage, gap 1.5 percent) so every card is about 130px tall at 1440x900, give the card body padding 8px 10px, three rows of 12.5px mono (label left, value right, title attribute with the source field) and the p() meter bar with its label at the bottom; never overflow hidden on the body. Then: 1) Orbit: stagger the columns inward toward the ring (the top and bottom cards of each column sit at about 2 percent from the edge, the middle card at about 7 percent, so the columns bow around the ring) and keep the streams ending at each card inner edge. 2) Bottom panels: a fixed three-column grid, a taller strip (20vh), no clipping; the toolgate tooltip moves to the top right corner of the stage; the sample footer text sits under the chart, not over it. 3) Phone at 390px: single column, no horizontal overflow, ring capped at 60vw square, cards full width with the full body, nav collapses to one row. Rounds 19 and 20 grader scores: Hive 2.6 then 2.7, Cockpit 3.1 then 2.9 (target 4.5 on every item). Keep what works. Verify your own result by rendering: open the page in your headless browser at 1440x900 and 390x844 if you can, and check that no element has scrollHeight greater than clientHeight where content would be clipped.",
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/board.test.mjs",
+    "tests/field-lessons-batch-ai-runtime.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scheduling.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-integrity.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/split-repair.test.mjs"
+   ]
+  },
+  {
+   "id": "cc21cock",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "docs/design/command-center-mockup/shared.css",
+    "docs/design/review-rubric.md",
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/cockpit.html"
+   ],
+   "prompt": "Fix docs/design/command-center-mockup/cockpit.html. 1) Header per the target: title at 56px or larger bold white (two lines at desktop), an orange subtitle line, a small mono breadcrumb row, and the multi-colour segment rule under it; fully visible at the top of a 1440x900 screenshot. 2) Stack tiles twice as large with 28px or larger numerals and tinted outlines; stream boxes taller with a thick coloured top bar and a progress track. 3) Phone at 390px (currently broken: nav overlaps the header, entity sits on the title text, loop and header cards clipped): single column, nav collapses to one row of four 44px tabs below the header, entity small and in its own block, every row and card full width and unclipped, no horizontal overflow. Rounds 19 and 20 grader scores: Hive 2.6 then 2.7, Cockpit 3.1 then 2.9 (target 4.5 on every item). Keep what works. Verify your own result by rendering: open the page in your headless browser at 1440x900 and 390x844 if you can, and check that no element has scrollHeight greater than clientHeight where content would be clipped.",
+   "ignoreTests": []
+  }
+ ]
+}

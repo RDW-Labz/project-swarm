@@ -1,0 +1,2052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Command Center — Cockpit (mockup)</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    :root {
+      --bg: #07060a;
+      --bg-glow: #120e14;
+      --card: #0f0d12;
+      --card-2: #141118;
+      --line: #2a2430;
+      --line-soft: #1c1820;
+      --fg: #f2ece4;
+      --muted: #9a9288;
+      --faint: #5c564e;
+      --accent: #5ee08a;
+      --accent-ink: #0a1a10;
+      --warn: #e8b84a;
+      --bad: #e86a6a;
+      --info: #6ab8ff;
+      --lav: #c49bff;
+      --haiku: #7dd3fc;
+      --sonnet: #a78bfa;
+      --opus: #e8956a;
+      --codex: #86efac;
+      --cursor: #f472b6;
+      --gpu: #fbbf24;
+      --claude: #fb923c;
+      --other: #94a3b8;
+      --r-sm: 8px;
+      --r: 12px;
+      --r-lg: 16px;
+      --pill: 999px;
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      --dur-fast: 120ms;
+      --dur: 220ms;
+      --dur-slow: 480ms;
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      --ring: 0 0 0 2px rgba(200, 160, 255, 0.55);
+      --cockpit-warm: #1a120e;
+      --cockpit-orange: #c9784a;
+      --cockpit-orange-dim: #8a5238;
+      --cockpit-teal: #5ec4b8;
+      --cockpit-pink: #e87898;
+      --tap: 44px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      height: 100vh;
+      max-height: 100vh;
+      font-family: var(--font, system-ui, sans-serif);
+      background:
+        radial-gradient(ellipse 120% 80% at 50% -20%, rgba(201, 120, 74, 0.12), transparent 55%),
+        radial-gradient(ellipse 80% 50% at 100% 50%, rgba(94, 196, 184, 0.06), transparent 50%),
+        var(--bg, #07060a);
+      color: var(--fg, #f2ece4);
+      line-height: 1.45;
+      overflow: hidden;
+      overflow-x: hidden;
+    }
+
+    .skip { position: absolute; left: -9999px; }
+    .skip:focus { left: 8px; top: 8px; z-index: 99; padding: 8px 12px; background: var(--card); border-radius: var(--r-sm); }
+
+    .shell {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 12px;
+      width: 100%;
+      min-width: 0;
+      height: 100vh;
+      max-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 0;
+    }
+
+    .panel-cockpit {
+      min-height: 0;
+      min-width: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) minmax(22vh, 24vh) auto;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .panel-cockpit .view-tabs,
+    .panel-cockpit .phone-panel { grid-row: 1; }
+
+    @media (min-width: 721px) {
+      .panel-cockpit .view-tabs,
+      .panel-cockpit .phone-panel { display: none; }
+      .panel-cockpit .band-main { grid-row: 1; }
+      .panel-cockpit .band-bottom { grid-row: 2; }
+      .panel-cockpit .cockpit-footnote { grid-row: 3; }
+    }
+
+    .band-header {
+      flex: none;
+      min-height: 0;
+      overflow: visible;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      padding: 6px 0 8px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    @media (min-width: 721px) {
+      .band-header {
+        position: relative;
+        padding: 8px 0 10px;
+      }
+      .band-header > .illus-banner {
+        position: absolute;
+        top: 4px;
+        right: 0;
+        left: auto;
+        max-width: min(48%, 480px);
+        margin: 0;
+        padding: 4px 8px;
+        font-size: 0.5rem;
+        line-height: 1.2;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .band-header .app-nav { display: none; }
+      .band-header .cockpit-nav {
+        padding: 0 0 6px;
+        margin: 0;
+        border-bottom: 0;
+        font-size: 0.62rem;
+        color: var(--muted);
+        text-transform: none;
+      }
+      .band-header .cockpit-nav .num-label { color: var(--faint); }
+      .band-header .cockpit-hero .tagline {
+        display: block;
+        margin: 4px 0 0;
+        font-size: clamp(0.75rem, 1.4vw, 0.95rem);
+      }
+      .band-header .cockpit-hero h1 {
+        font-size: clamp(3.5rem, 4.8vw, 4.25rem);
+        font-weight: 800;
+        color: #fff;
+        min-height: 0;
+        line-height: 0.92;
+      }
+      .band-header .cockpit-hero .headline-num { color: #fff; }
+      .band-header .header-hero-pack {
+        gap: 6px 16px;
+        align-items: end;
+      }
+      .category-bar--hero-mobile { display: none; }
+      .category-bar--header {
+        margin: 8px 0 0;
+        padding: 8px 0 0;
+        border-top: 1px solid var(--line-soft);
+      }
+      .category-bar--header .category-links {
+        margin-bottom: 6px;
+        font-size: 0.58rem;
+      }
+      .category-bar--header .category-meter { height: 6px; }
+      .band-header .scan-live--header {
+        font-size: 0.68rem;
+      }
+      .band-main .category-bar--stage { display: none; }
+    }
+
+    .band-main {
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .band-bottom {
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr) minmax(0, 0.95fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 4px 8px;
+      padding-top: 4px;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .bottom-loops {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .bottom-loops .loop-block {
+      margin: 0;
+      padding: 5px 8px;
+      overflow: visible;
+      min-height: 0;
+    }
+
+    .bottom-loops .loop-steps {
+      font-size: 0.58rem;
+      line-height: 1.35;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
+    }
+
+    .bottom-loops .loop-head {
+      margin-bottom: 4px;
+      font-size: 0.58rem;
+    }
+
+    .band-bottom .stream-section {
+      margin: 0;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .band-bottom .stream-head {
+      margin-bottom: 4px;
+      font-size: 0.58rem;
+    }
+
+    .band-bottom .stream-grid {
+      gap: 4px;
+      flex: 1;
+      min-height: 0;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: minmax(0, 1fr);
+    }
+
+    .band-bottom .stream-card {
+      min-height: 52px;
+      padding: 8px 8px 6px;
+      font-size: 0.58rem;
+      gap: 4px;
+      border-top-width: 6px;
+      border-top-style: solid;
+    }
+    .band-bottom .stream-card--accent-teal { border-top-color: #5ec4b8; }
+    .band-bottom .stream-card--accent-blue { border-top-color: #6ab8ff; }
+    .band-bottom .stream-card--accent-gold { border-top-color: #e8b84a; }
+    .band-bottom .stream-card--accent-white { border-top-color: #f2ece4; }
+    .band-bottom .stream-card--accent-pink { border-top-color: #e87898; }
+    .band-bottom .stream-card--accent-green { border-top-color: #5ee08a; }
+
+    .band-bottom .stream-title {
+      font-size: 0.62rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .band-bottom .stack-block {
+      margin: 0;
+      padding: 6px 8px;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .band-bottom .stack-head { margin-bottom: 2px; flex: none; }
+
+    .band-bottom .stack-title {
+      font-size: clamp(0.85rem, 1.6vh, 1.05rem);
+      margin: 0;
+      line-height: 1;
+      text-transform: uppercase;
+      letter-spacing: -0.02em;
+    }
+    .band-bottom .stack-sub { display: none; }
+
+    .band-bottom .stack-metrics {
+      margin-top: 4px;
+      gap: 4px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .band-bottom .metric-tile {
+      padding: 8px 6px 10px;
+      min-width: 0;
+      border: 2px solid var(--line);
+      border-top-width: 4px;
+      border-top-style: solid;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: var(--r-sm);
+      text-align: center;
+      overflow: visible;
+    }
+
+    .band-bottom .metric-tile--opus { border-color: rgba(201, 120, 74, 0.55); border-top-color: var(--cockpit-orange); }
+    .band-bottom .metric-tile--skills { border-color: rgba(168, 144, 104, 0.5); border-top-color: #c4a574; }
+    .band-bottom .metric-tile--engines { border-color: rgba(106, 184, 255, 0.45); border-top-color: #6ab8ff; }
+    .band-bottom .metric-tile--taste { border-color: rgba(94, 224, 138, 0.45); border-top-color: #5ee08a; }
+    .band-bottom .metric-tile--broll { border-color: rgba(232, 106, 106, 0.45); border-top-color: #e86a6a; }
+    .band-bottom .metric-tile--web { border-color: rgba(242, 236, 228, 0.35); border-top-color: #f2ece4; }
+
+    .band-bottom .metric-tile .m-label {
+      font-size: 0.48rem;
+      margin-bottom: 2px;
+    }
+    .band-bottom .metric-tile .m-val {
+      font-size: clamp(1.75rem, 2.8vh, 2rem);
+      line-height: 1;
+      font-weight: 800;
+    }
+    .band-bottom .stack-block {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 0;
+      overflow: hidden;
+      align-content: start;
+    }
+    .band-bottom .stack-metrics {
+      margin-bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      flex: 1;
+      min-height: 0;
+      overflow: visible;
+    }
+    .band-bottom .stack-foot {
+      margin-top: 6px;
+      padding-top: 6px;
+      flex: none;
+      font-size: 0.48rem;
+      line-height: 1.3;
+      border-top: 1px solid var(--line-soft);
+      position: relative;
+      z-index: 2;
+    }
+    .band-bottom .stream-bar {
+      height: 5px;
+      margin-top: auto;
+      flex: none;
+    }
+    .band-bottom .stack-sub { margin-top: 2px; font-size: 0.52rem; }
+
+    .cockpit-footnote {
+      margin: 0;
+      padding: 3px 0 6px;
+      border-top: none;
+      font-size: 0.5rem;
+      line-height: 1.3;
+    }
+
+    .app-nav {
+      padding: 4px 0;
+      margin-bottom: 0;
+      border-bottom: none;
+      flex-wrap: nowrap;
+      gap: 6px 10px;
+    }
+
+    .app-nav .brand { font-size: 0.82rem; flex: none; }
+    .app-nav .nav-stats { font-size: 0.58rem; gap: 4px 8px; flex: 1 1 auto; }
+    .app-nav .nav-crumb { font-size: 0.58rem; flex: 0 1 140px; }
+    .app-nav .nav-actions .btn-pill {
+      min-height: 36px;
+      padding: 0 10px;
+      font-size: 0.62rem;
+    }
+
+    .illus-banner {
+      margin: 0 0 4px;
+      padding: 4px 8px;
+      font-size: 0.52rem;
+      line-height: 1.25;
+    }
+
+    .header-hero-pack {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 4px 12px;
+      align-items: end;
+      min-width: 0;
+    }
+
+    .cockpit-nav {
+      padding: 2px 0;
+      margin-bottom: 2px;
+      font-size: 0.62rem;
+      border-bottom: none;
+    }
+
+    .cockpit-hero h1 { font-size: clamp(1.35rem, 5vh, 2.1rem); }
+    .cockpit-hero .tagline { margin-top: 2px; font-size: clamp(0.62rem, 1.4vh, 0.82rem); }
+    .category-bar { margin-top: 4px; padding-top: 4px; }
+    .category-links { margin-bottom: 4px; font-size: 0.56rem; }
+    .category-meter { height: 4px; }
+    .scan-live { margin-top: 4px; font-size: 0.62rem; }
+    .scan-live-label { margin-right: 10px; }
+    .scan-live--header {
+      margin: 0;
+      flex: none;
+      text-align: right;
+      align-self: end;
+      white-space: nowrap;
+    }
+
+    .sample-badge {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 0 5px;
+      border-radius: var(--pill);
+      border: 1px solid var(--line);
+      background: #1a181c;
+      color: var(--faint);
+      font-size: 0.5rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      vertical-align: middle;
+    }
+
+    .illus-banner {
+      margin: 0 0 10px;
+      padding: 8px 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line-soft);
+      background: rgba(12, 10, 14, 0.85);
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    /* —— App chrome —— */
+    .app-nav {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 16px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line-soft);
+      margin-bottom: 8px;
+      background: linear-gradient(180deg, rgba(15, 13, 18, 0.95), transparent);
+    }
+    .brand {
+      font-style: italic;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: var(--cockpit-pink);
+      font-size: 1.05rem;
+    }
+    .nav-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      min-width: 0;
+      flex: 1 1 200px;
+    }
+    .nav-stats .pair {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px 6px;
+      align-items: baseline;
+      max-width: 100%;
+    }
+    .nav-stats .val { color: var(--fg); font-variant-numeric: tabular-nums; }
+    .nav-stats .slash { color: var(--faint); margin: 0 2px; }
+    .nav-crumb {
+      flex: 1 1 200px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .nav-crumb strong { color: var(--fg); font-weight: 600; }
+    .nav-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+    .btn-pill {
+      min-height: var(--tap);
+      padding: 0 14px;
+      border-radius: var(--pill);
+      border: 1px solid var(--line);
+      background: var(--card-2);
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      cursor: default;
+    }
+    .btn-pill:focus-visible { outline: none; box-shadow: var(--ring); }
+    .btn-pill--accent { border-color: var(--cockpit-orange-dim); color: var(--cockpit-orange); }
+
+    /* —— Cockpit view tabs (phone) —— */
+    .view-tabs {
+      display: none;
+      gap: 0;
+      margin: 0 0 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      overflow: hidden;
+      min-width: 0;
+    }
+    .view-tabs [role="tab"] {
+      flex: 1;
+      min-height: var(--tap);
+      min-width: 0;
+      border: 0;
+      background: var(--card);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      cursor: pointer;
+      padding: 4px 2px;
+    }
+    .view-tabs [role="tab"][aria-selected="true"] {
+      background: var(--card-2);
+      color: var(--fg);
+      box-shadow: inset 0 -2px 0 var(--cockpit-orange);
+    }
+    .view-tabs [role="tab"]:focus-visible { outline: none; box-shadow: var(--ring); }
+
+    @media (max-width: 720px) {
+      .category-bar--header { display: none; }
+      .category-bar--stage { display: none; }
+      .category-bar--hero-mobile {
+        display: block;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line-soft);
+      }
+      .category-bar--hero-mobile .category-meter { height: 6px; }
+      body {
+        height: auto;
+        max-height: none;
+        min-height: 100vh;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .shell {
+        height: auto;
+        max-height: none;
+        grid-template-rows: auto minmax(0, 1fr);
+        padding: 0 10px 12px;
+      }
+      .band-header {
+        overflow: visible;
+        padding-bottom: 4px;
+      }
+      .band-header .app-nav {
+        display: none;
+      }
+      .band-header > .illus-banner {
+        display: none;
+      }
+      .band-header .header-hero-pack {
+        grid-template-columns: 1fr;
+      }
+      .band-header .scan-live--header {
+        text-align: left;
+        align-self: start;
+        margin-top: 6px;
+      }
+      .band-header .cockpit-hero h1 {
+        font-size: clamp(1.75rem, 8vw, 2.25rem);
+        color: #fff;
+        min-height: 0;
+      }
+      .band-header .cockpit-nav {
+        font-size: 0.58rem;
+        padding-bottom: 4px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--muted);
+        text-transform: none;
+      }
+      .band-main { overflow: visible; }
+      .band-bottom { display: none; }
+      .view-tabs {
+        display: flex;
+        position: sticky;
+        top: 0;
+        z-index: 12;
+        margin: 0 0 10px;
+        background: var(--bg);
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+      }
+      .phone-panel { display: none; min-width: 0; }
+      .phone-panel[data-active="true"] { display: block; }
+      .panel-cockpit {
+        display: block;
+        overflow: visible;
+      }
+      .panel-cockpit[data-tab-mode="true"] .band-main,
+      .panel-cockpit[data-tab-mode="true"] .band-bottom,
+      .panel-cockpit[data-tab-mode="true"] .desktop-only-stage { display: none; }
+      .stage-wrap--phone { margin-top: 8px; }
+      .ticket-col--phone { gap: 6px; }
+      .ticket-col--phone .ticket-row { margin-left: 0 !important; margin-right: 0 !important; }
+      .stage-center--phone {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+        padding: 0;
+      }
+      .stage-center--phone .entity-label {
+        order: 1;
+        align-self: center;
+        margin: 0;
+        padding: 4px 12px;
+        max-width: 100%;
+      }
+      .stage-center--phone .entity-label h2 { font-size: 0.62rem; }
+      .stage-center--phone .entity-label p { font-size: 0.48rem; }
+      .mascot-stage--phone {
+        order: 2;
+        width: 100%;
+        max-width: 100%;
+        height: 120px;
+        margin: 0 auto;
+        overflow: hidden;
+        flex: none;
+      }
+      .mascot-stage--phone .mascot-pixel {
+        width: 88px;
+        height: 72px;
+        transform: translateX(-50%) scale(1.35);
+        transform-origin: center bottom;
+        filter: none;
+      }
+      .now-panel--phone {
+        order: 3;
+        margin: 0;
+        max-width: 100%;
+        width: 100%;
+      }
+      .now-panel--phone {
+        max-width: 100%;
+        width: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .stage-center--phone {
+        width: 100%;
+        min-width: 0;
+        gap: 6px;
+      }
+      .phone-now-rows {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        width: 100%;
+        min-width: 0;
+      }
+      .phone-now-loops {
+        display: grid;
+        gap: 4px;
+        width: 100%;
+        min-width: 0;
+      }
+      .phone-now-loops {
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+      }
+      .phone-now-loops .loop-block {
+        margin: 0;
+        padding: 8px 10px;
+        width: 100%;
+        max-width: 100%;
+        overflow: visible;
+      }
+      .phone-now-loops .loop-steps {
+        font-size: 0.58rem;
+        line-height: 1.4;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+      }
+      .phone-panel[data-active="true"]#phone-now {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .stream-section--phone { margin: 10px 0; }
+      .stack-block--phone { margin-top: 10px; }
+      .app-nav { flex-wrap: wrap; }
+      .app-nav .nav-crumb { flex: 1 1 100%; }
+      .header-hero-pack { grid-template-columns: 1fr; }
+      .cockpit-nav { white-space: normal; }
+      .cockpit-hero h1 { font-size: 1.35rem; }
+    }
+
+    /* —— Cockpit header —— */
+    .cockpit-nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 6px 12px;
+      padding: 0 0 8px;
+      font-family: var(--mono);
+      font-size: clamp(0.62rem, 1.2vw, 0.72rem);
+      text-transform: none;
+      color: var(--muted);
+      border-bottom: 0;
+      margin-bottom: 6px;
+      font-variant-numeric: tabular-nums;
+    }
+    .cockpit-nav .sep { color: var(--faint); margin: 0 6px; }
+    .cockpit-nav .nav-block { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; min-width: 0; }
+    .cockpit-hero h1 {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0;
+      font-family: "Arial Narrow", "Helvetica Neue", system-ui, sans-serif;
+      font-size: 2.85vh;
+      font-weight: 900;
+      font-stretch: condensed;
+      letter-spacing: -0.03em;
+      line-height: 0.88;
+      text-transform: uppercase;
+      min-height: 5.1vh;
+      justify-content: center;
+    }
+    .cockpit-hero .headline-line {
+      display: block;
+      max-width: 100%;
+    }
+    .cockpit-hero .headline-num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
+    }
+    .cockpit-hero .tagline {
+      margin: 6px 0 0;
+      font-size: clamp(0.78rem, 2.2vw, 1.15rem);
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      letter-spacing: 0.06em;
+      line-height: 1.2;
+      max-width: 42rem;
+    }
+    .category-bar {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line-soft);
+    }
+    .category-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .category-links a, .category-links span {
+      color: inherit;
+      text-decoration: none;
+    }
+    .category-links .sep { color: var(--faint); }
+    .category-meter {
+      display: flex;
+      height: 6px;
+      border-radius: var(--pill);
+      overflow: hidden;
+      background: var(--line-soft);
+    }
+    .category-meter span { flex: var(--w, 1); min-width: 4px; }
+    .meter-opus { background: var(--cockpit-orange); }
+    .meter-skills { background: #a89068; }
+    .meter-engines { background: var(--info); }
+    .meter-taste { background: var(--accent); }
+    .meter-broll { background: var(--bad); }
+    .meter-web { background: var(--fg); }
+    .scan-live {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: baseline;
+      gap: 10px 14px;
+      font-family: var(--mono);
+      font-size: clamp(0.68rem, 1.5vw, 0.82rem);
+      text-transform: uppercase;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .scan-live-label {
+      color: var(--cockpit-teal);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+    }
+    .scan-live-count {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      color: var(--fg);
+      font-weight: 700;
+    }
+    .scan-of { color: var(--faint); font-weight: 600; }
+
+    /* —— Stage —— */
+    .stage-wrap {
+      position: relative;
+      margin: 0;
+      padding: 4px 4px 6px;
+      border-radius: var(--r);
+      background:
+        linear-gradient(180deg, var(--cockpit-warm), var(--card)),
+        repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px),
+        repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(255, 255, 255, 0.03) 24px);
+      border: 1px solid var(--line);
+      min-width: 0;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .stage-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(200px, 280px) minmax(0, 1fr);
+      gap: 2px 8px;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+    @media (min-width: 721px) and (max-width: 1100px) {
+      .stage-grid { grid-template-columns: minmax(0, 1fr) minmax(180px, 220px) minmax(0, 1fr); }
+    }
+
+    .ticket-col {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      min-height: 0;
+      justify-content: space-evenly;
+      overflow: hidden;
+    }
+    .ticket-col--left {
+      padding-right: 6px;
+    }
+    .ticket-col--right .ticket-row { margin-left: auto; }
+    .ticket-col--right .ticket-name {
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .ticket-col--right .ticket-sub {
+      color: #7ecfc4;
+      opacity: 1;
+    }
+    .ticket-col--right .ticket-badge {
+      opacity: 0.92;
+      color: var(--cockpit-orange);
+    }
+
+    .ticket-search {
+      margin-bottom: 4px;
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      flex: none;
+    }
+    .ticket-search label {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .ticket-search input {
+      min-height: var(--tap);
+      padding: 0 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      width: 100%;
+    }
+    .ticket-search input:focus-visible { outline: none; box-shadow: var(--ring); }
+
+    .ticket-row {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr) auto 20px;
+      gap: 5px;
+      align-items: center;
+      min-height: 0;
+      padding: 3px 6px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: rgba(12, 10, 14, 0.82);
+      font-family: var(--mono);
+      font-size: clamp(0.56rem, 1.1vh, 0.64rem);
+      width: 100%;
+      max-width: 100%;
+      text-align: left;
+      transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast);
+    }
+    .ticket-row[data-hidden="true"] { display: none; }
+    .ticket-row--done { opacity: 0.72; }
+    .ticket-row--active {
+      opacity: 1;
+      border-color: var(--fg);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+    }
+    .ticket-row--pending { opacity: 0.45; border-style: dashed; }
+    .ticket-idx {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 24px;
+      flex: none;
+      border-radius: 4px;
+      border: 3px solid var(--cockpit-orange);
+      background: rgba(201, 120, 74, 0.28);
+      color: var(--fg);
+      font-weight: 700;
+      font-size: 0.58rem;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .ticket-idx--opus { border-color: var(--cockpit-orange); background: rgba(201, 120, 74, 0.32); color: #f0c4a8; }
+    .ticket-idx--skills { border-color: #a89068; background: rgba(168, 144, 104, 0.28); color: #e8dcc8; }
+    .ticket-idx--engines { border-color: var(--info); background: rgba(106, 184, 255, 0.22); color: #cfe8ff; }
+    .ticket-idx--taste { border-color: var(--accent); background: rgba(94, 224, 138, 0.2); color: #c8f5d8; }
+    .ticket-idx--broll { border-color: var(--cockpit-pink); background: rgba(232, 120, 152, 0.22); color: #ffd0dc; }
+    .ticket-idx--web { border-color: #c8c0b8; background: rgba(200, 192, 184, 0.18); color: #f2ece4; }
+    .ticket-idx--pending { border-color: var(--faint); background: rgba(92, 86, 78, 0.2); color: var(--muted); }
+    .ticket-main { min-width: 0; overflow: hidden; }
+    .ticket-name {
+      display: block;
+      font-weight: 600;
+      color: var(--fg);
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .ticket-sub { color: var(--cockpit-teal); font-size: 0.65rem; opacity: 0.85; }
+    .ticket-badge {
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      opacity: 0.75;
+      letter-spacing: 0.04em;
+    }
+    .ticket-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      flex: none;
+      color: var(--cockpit-orange);
+    }
+    .ticket-check {
+      width: 14px;
+      height: 14px;
+      display: block;
+    }
+    .ticket-mark--live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px rgba(94, 224, 138, 0.65);
+    }
+
+    .stage-center {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      padding: 0 4px;
+      min-width: 0;
+      min-height: 0;
+      justify-content: flex-start;
+      overflow: hidden;
+      z-index: 1;
+    }
+    .entity-label {
+      border: 1px solid var(--cockpit-orange-dim);
+      border-radius: var(--r-sm);
+      padding: 4px 10px;
+      margin-bottom: 10px;
+      background: rgba(0, 0, 0, 0.35);
+      flex: none;
+      position: relative;
+      z-index: 3;
+    }
+    .entity-label h2 {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+    }
+    .entity-label p {
+      margin: 2px 0 0;
+      font-family: var(--mono);
+      font-size: 0.5rem;
+      text-transform: uppercase;
+      color: var(--cockpit-orange);
+      letter-spacing: 0.06em;
+    }
+    .mascot-stage {
+      position: relative;
+      width: min(100%, 280px);
+      height: min(26vh, 200px);
+      margin: 4px 0 0;
+      flex: 1 1 auto;
+      min-height: 108px;
+      max-height: 200px;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 2;
+    }
+    .mascot-shadow {
+      position: absolute;
+      left: 12%;
+      right: 12%;
+      bottom: 2px;
+      height: 14px;
+      background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), transparent 70%);
+      border-radius: 50%;
+    }
+    .mascot-orbit {
+      position: absolute;
+      left: 4%;
+      right: 4%;
+      bottom: 22%;
+      height: 42%;
+      max-height: 88px;
+      border: 2px solid rgba(255, 255, 255, 0.32);
+      border-radius: 50%;
+      transform: perspective(140px) rotateX(62deg);
+      box-shadow: 0 0 14px rgba(201, 120, 74, 0.2);
+      z-index: 1;
+    }
+    .mascot-orbit-dot {
+      position: absolute;
+      top: 50%;
+      left: 8%;
+      width: 6px;
+      height: 6px;
+      margin: -3px 0 0 -3px;
+      border-radius: 50%;
+      background: #f5f5f5;
+      box-shadow: 0 0 6px rgba(255, 255, 255, 0.7);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .mascot-orbit-dot { animation: orbit-dot 5s linear infinite; }
+    }
+    @keyframes orbit-dot {
+      0% { left: 8%; top: 50%; }
+      25% { left: 50%; top: 8%; }
+      50% { left: 92%; top: 50%; }
+      75% { left: 50%; top: 92%; }
+      100% { left: 8%; top: 50%; }
+    }
+    .mascot-pixel {
+      position: absolute;
+      left: 50%;
+      bottom: 12%;
+      transform: translateX(-50%) scale(2.65);
+      transform-origin: center bottom;
+      width: 88px;
+      height: 72px;
+      z-index: 2;
+      filter: none;
+      shape-rendering: crispEdges;
+      outline: 1px solid rgba(26, 18, 14, 0.85);
+      outline-offset: 1px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .mascot-orbit-dot, .glitch-text { animation: none !important; }
+    }
+
+    /* —— Now panel —— */
+    .now-panel {
+      margin: 2px auto 0;
+      max-width: min(300px, 100%);
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: rgba(8, 8, 12, 0.92);
+      text-align: left;
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      flex: none;
+      position: relative;
+      z-index: 3;
+    }
+    .now-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      font-size: 0.62rem;
+      color: var(--info);
+    }
+    .now-progress .val { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .now-repo { color: var(--muted); }
+    .now-title {
+      margin: 2px 0;
+      font-size: 1.05rem;
+      font-weight: 800;
+      font-family: var(--font);
+      letter-spacing: -0.02em;
+    }
+    .glitch-text {
+      position: relative;
+      display: inline-block;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .glitch-text--on { animation: glitch-idle 4s steps(2) infinite; }
+    }
+    @keyframes glitch-idle {
+      0%, 92%, 100% { text-shadow: none; }
+      93% { text-shadow: 1px 0 var(--bad), -1px 0 var(--info); }
+      95% { text-shadow: -1px 0 var(--bad), 1px 0 var(--info); }
+    }
+    .now-desc { color: var(--muted); margin: 0 0 8px; font-size: 0.68rem; }
+    .now-handoff { color: var(--lav); font-size: 0.65rem; }
+    .now-handoff strong { color: var(--fg); font-weight: 600; }
+
+    /* —— Loops —— */
+    .loop-block {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: var(--r);
+      border: 1px solid var(--cockpit-orange-dim);
+      background: var(--card);
+    }
+    .loop-block--swarm { border-color: var(--line); margin-bottom: 8px; }
+    .loop-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+    }
+    .loop-head .title { color: var(--cockpit-orange); letter-spacing: 0.08em; }
+    .loop-block--swarm .loop-head .title { color: var(--cockpit-pink); }
+    .loop-head .tag { color: var(--muted); }
+    .loop-steps {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--muted);
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
+    }
+    .loop-steps .step { color: var(--fg); }
+    .loop-steps .step--live { color: var(--accent); }
+    .loop-steps .sep { color: var(--faint); margin: 0 4px; }
+
+    /* —— Streams —— */
+    .stream-section { margin: 10px 0; }
+    .stream-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+    }
+    .stream-head--worker { color: var(--cockpit-pink); }
+    .stream-head--render { color: var(--cockpit-orange); }
+    .stream-count { color: var(--muted); }
+    .stream-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 520px) {
+      .stream-grid { grid-template-columns: 1fr; }
+    }
+    .stream-card {
+      padding: 12px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: var(--card-2);
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      min-height: 88px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stream-card--accent-teal { border-top: 6px solid var(--cockpit-teal); }
+    .stream-card--accent-blue { border-top: 6px solid var(--info); }
+    .stream-card--accent-gold { border-top: 6px solid var(--warn); }
+    .stream-card--accent-white { border-top: 6px solid var(--fg); }
+    .stream-card--accent-pink { border-top: 6px solid var(--cockpit-pink); }
+    .stream-card--accent-green { border-top: 6px solid var(--accent); }
+    .stream-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+    .stream-id { color: var(--faint); font-variant-numeric: tabular-nums; }
+    .stream-title { font-weight: 700; color: var(--fg); flex: 1; }
+    .stream-status { text-transform: uppercase; font-size: 0.58rem; color: var(--cockpit-pink); }
+    .stream-meta { color: var(--muted); }
+    .stream-bar {
+      height: 5px;
+      border-radius: var(--pill);
+      background: var(--line-soft);
+      margin-top: auto;
+    }
+    .stream-bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      width: var(--pct, 70%);
+      background: var(--bar, var(--cockpit-teal));
+    }
+
+    /* —— Stack —— */
+    .stack-block {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--cockpit-orange-dim);
+      background: linear-gradient(135deg, var(--cockpit-warm), var(--card));
+    }
+    .stack-head { margin-bottom: 14px; }
+    .stack-label {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+    }
+    .stack-title {
+      margin: 4px 0 0;
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 800;
+    }
+    .stack-sub {
+      margin: 6px 0 0;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .stack-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .metric-tile {
+      flex: 1 1 72px;
+      min-width: 64px;
+      padding: 10px 8px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.25);
+      text-align: center;
+    }
+    .metric-tile--active { border-color: var(--fg); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12); }
+    .metric-tile .m-label {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.52rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .metric-tile .m-val {
+      font-family: var(--mono);
+      font-size: 1.25rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--fg);
+    }
+    .metric-tile--opus { border-color: rgba(201, 120, 74, 0.5); }
+    .metric-tile--opus .m-label { color: var(--cockpit-orange); }
+    .metric-tile--skills .m-label { color: #a89068; }
+    .metric-tile--engines .m-label { color: var(--info); }
+    .metric-tile--taste .m-label { color: var(--accent); }
+    .metric-tile--broll .m-label { color: var(--bad); }
+    .metric-tile--web .m-label { color: var(--fg); }
+    .stack-foot {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      color: var(--faint);
+    }
+    .stack-foot .handle { color: var(--cockpit-pink); }
+
+    .num-label {
+      font-family: var(--mono);
+      font-size: 0.55rem;
+      text-transform: uppercase;
+      color: var(--faint);
+      letter-spacing: 0.04em;
+    }
+    .num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+
+    @media (max-width: 720px) {
+      .ticket-search { display: flex; }
+      .ticket-row {
+        min-height: var(--tap);
+        font-size: 0.68rem;
+      }
+      .nav-actions { width: 100%; margin-left: 0; }
+      .nav-actions .btn-pill { flex: 1; min-height: var(--tap); }
+    }
+
+    @media (max-width: 390px) {
+      body { overflow-x: hidden; }
+      .shell > * { min-width: 0; max-width: 100%; }
+      .shell { padding: 0 8px 10px; width: 100%; }
+      .panel-cockpit,
+      .phone-panel,
+      .phone-panel[data-active="true"] {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+        overflow-y: visible;
+      }
+      .scan-live { justify-content: flex-start; }
+      .now-title { font-size: 1.1rem; }
+      .view-tabs [role="tab"] {
+        min-height: 44px;
+        min-width: 0;
+        padding: 8px 2px;
+        font-size: 0.58rem;
+      }
+      .mascot-stage--phone {
+        height: 108px;
+      }
+      .mascot-stage--phone .mascot-pixel {
+        transform: translateX(-50%) scale(1.28);
+      }
+      .stream-section--phone .stream-card {
+        min-height: 96px;
+        border-top-width: 6px;
+      }
+      .stack-block--phone .stack-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .stack-block--phone .metric-tile {
+        padding: 10px 8px;
+        border: 2px solid var(--line);
+        border-top-width: 4px;
+      }
+      .stack-block--phone .metric-tile .m-val {
+        font-size: 1.75rem;
+      }
+      .phone-now-loops .loop-head { font-size: 0.52rem; margin-bottom: 2px; }
+      .phone-now-rows .ticket-row {
+        font-size: 0.62rem;
+        min-height: 40px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to cockpit</a>
+  <div class="shell">
+    <header class="band-header">
+    <div class="app-nav" aria-label="Swarm Watch chrome">
+      <div class="brand" aria-hidden="true">Swarm Watch</div>
+      <div class="nav-stats" role="status" aria-live="polite">
+        <span class="pair">
+          <span class="num-label">projects active</span>
+          <span class="val num" title="source field: board.projectsActive">4</span>
+          <span class="slash">/</span>
+          <span class="num-label">cap</span>
+          <span class="val num" title="source field: board.projectsCap">7</span>
+        </span>
+        <span class="pair">
+          <span class="num-label">agents running</span>
+          <span class="val num" title="source field: board.agentsRunning">0<span class="sample-badge">sample</span></span>
+        </span>
+        <span class="pair">
+          <span class="num-label">done 24h</span>
+          <span class="val num" title="source field: board.done24h">0<span class="sample-badge">sample</span></span>
+        </span>
+        <span class="pair">
+          <span class="num-label">need you</span>
+          <span class="val num" title="source field: inbox.needYouCount">0<span class="sample-badge">sample</span></span>
+        </span>
+      </div>
+      <div class="nav-crumb">
+        <span class="num-label">breadcrumb</span>
+        The Hive <strong>project-swarm</strong>
+      </div>
+      <div class="nav-actions">
+        <button type="button" class="btn-pill btn-pill--accent" aria-current="page">Command Center</button>
+        <button type="button" class="btn-pill">Search</button>
+      </div>
+    </div>
+
+      <p class="illus-banner" role="note">Illustrative values — counts mirror the motion scan post unless tagged sample; compaction and context peaks labelled below.</p>
+
+      <div class="header-hero-pack">
+      <div class="header-hero-main">
+      <nav class="cockpit-nav" aria-label="Cockpit breadcrumb">
+        <span class="nav-block">
+          <span class="num-label">owner</span> N01ennn
+          <span class="sep">/</span>
+          <span class="num-label">lane</span> Opus 5.5 motion
+          <span class="sep">/</span>
+          <span class="num-label">scan</span> GitHub scan
+        </span>
+        <span class="nav-block">
+          <span class="num-label">repos</span>
+          <span class="num" title="source field: motionScan.repoTotal">20</span>
+          <span class="sep">/</span>
+          <span class="num-label">director</span> Opus 5.5
+          <span class="sep">/</span>
+          <span class="num-label">period</span>
+          <span class="num" title="source field: motionScan.periodLabel">2026.10</span>
+        </span>
+      </nav>
+
+      <header class="cockpit-hero">
+        <h1>
+          <span class="headline-line">
+            <span class="headline-num num" title="source field: motionScan.repoTotal">20</span>
+            GitHub
+          </span>
+          <span class="headline-line">repos</span>
+        </h1>
+        <p class="tagline">To turn your Opus 5.5 into a f*cking motion empire</p>
+        <div class="category-bar category-bar--hero-mobile" aria-hidden="false">
+          <div class="category-links" aria-label="Category filters">
+            <span>Opus 5.5</span><span class="sep">/</span>
+            <span>Skills</span><span class="sep">/</span>
+            <span>Engines</span><span class="sep">/</span>
+            <span>Taste</span><span class="sep">/</span>
+            <span>B-roll</span><span class="sep">/</span>
+            <span>Web</span>
+          </div>
+          <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+            <span class="meter-opus" style="--w:3"></span>
+            <span class="meter-skills" style="--w:7"></span>
+            <span class="meter-engines" style="--w:4"></span>
+            <span class="meter-taste" style="--w:2"></span>
+            <span class="meter-broll" style="--w:1"></span>
+            <span class="meter-web" style="--w:3"></span>
+          </div>
+        </div>
+      </header>
+      </div>
+      <div class="scan-live scan-live--header" aria-label="Live scan status">
+        <span class="scan-live-label">Live scan</span>
+        <span class="scan-live-count">
+          <span class="num" title="source field: motionScan.completedCount">19</span>
+          <span class="scan-of">of</span>
+          <span class="num" title="source field: motionScan.repoTotal">20</span>
+        </span>
+      </div>
+      </div>
+
+      <div class="category-bar category-bar--header" aria-hidden="false">
+        <div class="category-links" aria-label="Category filters">
+          <span>Opus 5.5</span><span class="sep">/</span>
+          <span>Skills</span><span class="sep">/</span>
+          <span>Engines</span><span class="sep">/</span>
+          <span>Taste</span><span class="sep">/</span>
+          <span>B-roll</span><span class="sep">/</span>
+          <span>Web</span>
+        </div>
+        <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+          <span class="meter-opus" style="--w:3"></span>
+          <span class="meter-skills" style="--w:7"></span>
+          <span class="meter-engines" style="--w:4"></span>
+          <span class="meter-taste" style="--w:2"></span>
+          <span class="meter-broll" style="--w:1"></span>
+          <span class="meter-web" style="--w:3"></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="panel-cockpit" id="main" data-tab-mode="false">
+      <div class="view-tabs" role="tablist" aria-label="Cockpit panels">
+        <button type="button" role="tab" id="tab-now" aria-controls="phone-now" aria-selected="true">Now</button>
+        <button type="button" role="tab" id="tab-tickets" aria-controls="phone-tickets" aria-selected="false">Tickets</button>
+        <button type="button" role="tab" id="tab-stream" aria-controls="phone-stream" aria-selected="false">Stream</button>
+        <button type="button" role="tab" id="tab-stack" aria-controls="phone-stack" aria-selected="false">Stack</button>
+      </div>
+
+      <div class="phone-panel" id="phone-now" role="tabpanel" aria-labelledby="tab-now" data-active="true"></div>
+      <div class="phone-panel" id="phone-tickets" role="tabpanel" aria-labelledby="tab-tickets" data-active="false"></div>
+      <div class="phone-panel" id="phone-stream" role="tabpanel" aria-labelledby="tab-stream" data-active="false"></div>
+      <div class="phone-panel" id="phone-stack" role="tabpanel" aria-labelledby="tab-stack" data-active="false"></div>
+
+      <div class="band-main desktop-only-stage">
+      <div class="category-bar category-bar--stage">
+        <div class="category-links" aria-label="Category filters">
+          <span>Opus 5.5</span><span class="sep">/</span>
+          <span>Skills</span><span class="sep">/</span>
+          <span>Engines</span><span class="sep">/</span>
+          <span>Taste</span><span class="sep">/</span>
+          <span>B-roll</span><span class="sep">/</span>
+          <span>Web</span>
+        </div>
+        <div class="category-meter" aria-hidden="true" title="source field: motionScan.categoryWeights (sample proportions)">
+          <span class="meter-opus" style="--w:3"></span>
+          <span class="meter-skills" style="--w:7"></span>
+          <span class="meter-engines" style="--w:4"></span>
+          <span class="meter-taste" style="--w:2"></span>
+          <span class="meter-broll" style="--w:1"></span>
+          <span class="meter-web" style="--w:3"></span>
+        </div>
+      </div>
+      <section class="stage-wrap" aria-label="Ticket flow stage">
+        <div class="ticket-search">
+          <label for="ticket-filter">Search tickets</label>
+          <input id="ticket-filter" type="search" placeholder="Filter repos by name" autocomplete="off" aria-describedby="ticket-filter-hint">
+          <span id="ticket-filter-hint" class="num-label">filters static sample rows only</span>
+        </div>
+        <div class="stage-grid">
+          <div class="ticket-col ticket-col--left" id="tickets-left" aria-label="Tickets one through ten"></div>
+
+          <div class="stage-center">
+            <div class="entity-label">
+              <h2>Opus 5.5</h2>
+              <p>Motion director · Skills + engines</p>
+            </div>
+            <div class="mascot-stage" aria-hidden="true">
+              <div class="mascot-orbit"><span class="mascot-orbit-dot"></span></div>
+              <svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot" shape-rendering="crispEdges">
+                <rect x="6" y="0" width="10" height="2" fill="#c9784a"/>
+                <rect x="4" y="2" width="14" height="2" fill="#c9784a"/>
+                <rect x="3" y="4" width="3" height="2" fill="#f5e6dc"/>
+                <rect x="16" y="4" width="3" height="2" fill="#f5e6dc"/>
+                <rect x="5" y="4" width="12" height="4" fill="#c9784a"/>
+                <rect x="7" y="6" width="2" height="2" fill="#1a120e"/>
+                <rect x="13" y="6" width="2" height="2" fill="#1a120e"/>
+                <rect x="4" y="8" width="14" height="3" fill="#c9784a"/>
+                <rect x="2" y="9" width="2" height="4" fill="#c9784a"/>
+                <rect x="18" y="9" width="2" height="4" fill="#c9784a"/>
+                <rect x="6" y="11" width="3" height="2" fill="#8a5238"/>
+                <rect x="13" y="11" width="3" height="2" fill="#8a5238"/>
+                <rect x="5" y="13" width="12" height="2" fill="#c9784a"/>
+                <rect x="7" y="15" width="3" height="2" fill="#8a5238"/>
+                <rect x="12" y="15" width="3" height="2" fill="#8a5238"/>
+              </svg>
+              <div class="mascot-shadow"></div>
+            </div>
+            <aside class="now-panel" aria-label="Now loading panel">
+              <div class="now-head">
+                <span>Now loading</span>
+                <span class="now-progress">
+                  <span class="val num" title="source field: motionScan.activeIndex">19</span>
+                  <span class="scan-of">/</span>
+                  <span class="val num" title="source field: motionScan.repoTotal">20</span>
+                </span>
+              </div>
+              <div class="now-repo">motiondivision /</div>
+              <div class="now-title glitch-text glitch-text--on">motion</div>
+              <p class="now-desc">Motion itself, formerly Framer Motion</p>
+              <p class="now-handoff">
+                Opus 5.5 gets &gt; <strong>the Motion library</strong>
+              </p>
+            </aside>
+          </div>
+
+          <div class="ticket-col ticket-col--right" id="tickets-right" aria-label="Tickets eleven through twenty"></div>
+        </div>
+      </section>
+      </div>
+
+      <div class="band-bottom">
+      <div class="bottom-loops">
+      <section class="loop-block loop-block--swarm" aria-label="Swarm loop (context)">
+        <div class="loop-head">
+          <span class="title">The swarm loop</span>
+          <span class="tag">Ledger in, merged PR out</span>
+        </div>
+        <p class="loop-steps">
+          <span class="step">you approve the scope</span><span class="sep">&gt;</span>
+          <span class="step">the split makes tickets</span><span class="sep">&gt;</span>
+          <span class="step">workers build in waves</span><span class="sep">&gt;</span>
+          <span class="step">checks gate every merge</span><span class="sep">&gt;</span>
+          <span class="step">the PR merges</span><span class="sep">&gt;</span>
+          <span class="step step--live">the ledger marks it done</span>
+        </p>
+      </section>
+
+      <section class="loop-block" aria-label="The motion loop">
+        <div class="loop-head">
+          <span class="title">The motion loop</span>
+          <span class="tag">Code in, MP4 out</span>
+        </div>
+        <p class="loop-steps">
+          <span class="step">you write the brief</span><span class="sep">&gt;</span>
+          <span class="step">Opus 5.5 storyboards</span><span class="sep">&gt;</span>
+          <span class="step">a skill sets timing + camera</span><span class="sep">&gt;</span>
+          <span class="step">an engine renders the MP4</span><span class="sep">&gt;</span>
+          <span class="step">Opus checks its own frames</span>
+        </p>
+      </section>
+      </div>
+
+      <section class="stream-section" aria-label="Worker stream">
+        <div class="stream-head stream-head--worker">
+          <span>// Worker stream / latest finished tickets</span>
+          <span class="stream-count">
+            <span class="num-label">showing</span>
+            <span class="num" title="source field: workerStream.visibleCount">4</span>
+            latest
+          </span>
+        </div>
+        <div class="stream-grid">
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id">
+                <span class="num" title="source field: workerStream.items[0].ticketId">T-041<span class="sample-badge">sample</span></span>
+              </span>
+              <span class="stream-title">build-owns-tests rules</span>
+              <span class="stream-status">Newest</span>
+            </div>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
+            <div class="stream-bar"><span style="--pct:88%;--bar:var(--cockpit-pink)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-teal">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[1].ticketId">T-038<span class="sample-badge">sample</span></span></span>
+              <span class="stream-title">manifest checks in CI</span>
+              <span class="stream-status" style="color:var(--cockpit-teal)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
+            <div class="stream-bar"><span style="--pct:100%;--bar:var(--cockpit-teal)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-blue">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[2].ticketId">T-035<span class="sample-badge">sample</span></span></span>
+              <span class="stream-title">wave prep routing</span>
+              <span class="stream-status" style="color:var(--info)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
+            <div class="stream-bar"><span style="--pct:76%;--bar:var(--info)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-gold">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: workerStream.items[3].ticketId">T-031<span class="sample-badge">sample</span></span></span>
+              <span class="stream-title">scope command meta</span>
+              <span class="stream-status" style="color:var(--warn)">Done</span>
+            </div>
+            <span class="stream-meta">Finished &gt; 12m ago<span class="sample-badge">sample</span></span>
+            <div class="stream-bar"><span style="--pct:64%;--bar:var(--warn)"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="stream-section" aria-label="Render stream">
+        <div class="stream-head stream-head--render">
+          <span>// Render stream / what each repo hands to Opus 5.5</span>
+          <span class="stream-count">
+            <span class="num-label">showing</span>
+            <span class="num" title="source field: renderStream.visibleCount">4</span>
+            latest
+          </span>
+        </div>
+        <div class="stream-grid">
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[0].nodeIndex">19</span></span>
+              <span class="stream-title">motion</span>
+              <span class="stream-status" style="color:var(--warn)">Web</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; the Motion library</span>
+            <div class="stream-bar"><span style="--pct:92%;--bar:var(--fg)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-white">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[1].nodeIndex">04</span></span>
+              <span class="stream-title">motion-dev-animations-skill</span>
+              <span class="stream-status" style="color:var(--warn)">Web</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; web animation</span>
+            <div class="stream-bar"><span style="--pct:80%;--bar:var(--fg)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-pink">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[2].nodeIndex">03</span></span>
+              <span class="stream-title">motion-graphics</span>
+              <span class="stream-status" style="color:var(--bad)">B-roll</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; B-roll from transcript</span>
+            <div class="stream-bar"><span style="--pct:55%;--bar:var(--cockpit-pink)"></span></div>
+          </article>
+          <article class="stream-card stream-card--accent-green">
+            <div class="stream-top">
+              <span class="stream-id"><span class="num" title="source field: renderStream.items[3].nodeIndex">05</span></span>
+              <span class="stream-title">awesome-motion-design-agent-skills</span>
+              <span class="stream-status" style="color:var(--accent)">Taste</span>
+            </div>
+            <span class="stream-meta">Opus gets &gt; a map of the field</span>
+            <div class="stream-bar"><span style="--pct:48%;--bar:var(--accent)"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="stack-block" id="stack-block" aria-label="Motion stack">
+        <div class="stack-head">
+          <div class="stack-label">Motion stack</div>
+          <h2 class="stack-title">
+            <span class="num" title="source field: motionStack.repoTotal">20</span>
+            repos
+          </h2>
+          <p class="stack-sub">Opus 5.5 / skills / engines / taste / b-roll / web</p>
+        </div>
+        <div class="stack-metrics">
+          <div class="metric-tile metric-tile--opus">
+            <span class="m-label">Opus 5.5</span>
+            <span class="m-val num" title="source field: motionStack.counts.opus">3</span>
+          </div>
+          <div class="metric-tile metric-tile--skills">
+            <span class="m-label">Skills</span>
+            <span class="m-val num" title="source field: motionStack.counts.skills">7</span>
+          </div>
+          <div class="metric-tile metric-tile--engines">
+            <span class="m-label">Engines</span>
+            <span class="m-val num" title="source field: motionStack.counts.engines">4</span>
+          </div>
+          <div class="metric-tile metric-tile--taste">
+            <span class="m-label">Taste</span>
+            <span class="m-val num" title="source field: motionStack.counts.taste">2</span>
+          </div>
+          <div class="metric-tile metric-tile--broll">
+            <span class="m-label">B-roll</span>
+            <span class="m-val num" title="source field: motionStack.counts.broll">1</span>
+          </div>
+          <div class="metric-tile metric-tile--web metric-tile--active">
+            <span class="m-label">Web</span>
+            <span class="m-val num" title="source field: motionStack.counts.web">3</span>
+          </div>
+        </div>
+        <div class="stack-foot">
+          <span>All links in the post — check each repo before you install.</span>
+          <span class="handle">@N01ennn</span>
+        </div>
+      </footer>
+      </div>
+
+      <footer class="cockpit-footnote" aria-label="Data notes">
+        <span>Simulation — illustrative values — sample fields tagged only when not in the scan post.</span>
+        <span>
+          <span class="num-label">compaction kept</span>
+          <span class="num" title="source field: project.compaction.keptLines">14 lines</span>
+          <span class="sep">/</span>
+          <span class="num-label">context peak</span>
+          <span class="num" title="source field: project.context.peakLines">42 peak</span>
+        </span>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      var tickets = [
+        { n: 1, repo: 'claude-motion', sub: 'whaleyxbt', badge: 'Skills', state: 'done' },
+        { n: 2, repo: 'motion-graphics-skills', sub: 'howseen-ai', badge: 'Opus 5.5', state: 'done' },
+        { n: 3, repo: 'motion-graphics', sub: 'charlie947', badge: 'B-roll', state: 'done' },
+        { n: 4, repo: 'motion-dev-animations-skill', sub: 'motiondivision', badge: 'Web', state: 'done' },
+        { n: 5, repo: 'awesome-motion-design-agent-skills', sub: 'sample-owner', badge: 'Taste', state: 'done' },
+        { n: 6, repo: 'remotion-templates', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 7, repo: 'motion-canvas-skills', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 8, repo: 'rive-motion-kit', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 9, repo: 'lottie-pipeline', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 10, repo: 'gsap-recipes', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 11, repo: 'after-effects-scripts', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 12, repo: 'blender-motion', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 13, repo: 'ffmpeg-motion', sub: 'sample-owner', badge: 'Engines', state: 'done' },
+        { n: 14, repo: 'storyboard-skill', sub: 'sample-owner', badge: 'Opus 5.5', state: 'done' },
+        { n: 15, repo: 'camera-rig-skill', sub: 'sample-owner', badge: 'Skills', state: 'done' },
+        { n: 16, repo: 'motion-taste-pack', sub: 'sample-owner', badge: 'Taste', state: 'done' },
+        { n: 17, repo: 'web-gl-transitions', sub: 'sample-owner', badge: 'Web', state: 'done' },
+        { n: 18, repo: 'broll-cut-skill', sub: 'sample-owner', badge: 'B-roll', state: 'done' },
+        { n: 19, repo: 'motion', sub: 'motiondivision', badge: 'Web', state: 'active' },
+        { n: 20, repo: 'pending-slot', sub: 'unassigned', badge: 'Pending', state: 'pending' }
+      ];
+
+      var CHECK_SVG = '<svg class="ticket-check" viewBox="0 0 12 12" focusable="false" aria-hidden="true">' +
+        '<path d="M2.5 6.2 5 8.7 9.5 3.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>';
+
+      function stairInset(n) {
+        return Math.min(24, Math.round(Math.max(0, 5.5 - Math.abs(n - 5.5)) * 4.5));
+      }
+
+      function catClass(badge) {
+        if (badge === 'Opus 5.5') return 'ticket-idx--opus';
+        if (badge === 'Skills') return 'ticket-idx--skills';
+        if (badge === 'Engines') return 'ticket-idx--engines';
+        if (badge === 'Taste') return 'ticket-idx--taste';
+        if (badge === 'B-roll') return 'ticket-idx--broll';
+        if (badge === 'Web') return 'ticket-idx--web';
+        return 'ticket-idx--pending';
+      }
+
+      function rowHtml(t) {
+        var cls = 'ticket-row ticket-row--' + t.state;
+        var idx = (t.n < 10 ? '0' : '') + t.n;
+        var mark = '';
+        if (t.state === 'done') {
+          mark = '<span class="ticket-mark">' + CHECK_SVG + '</span>';
+        } else if (t.state === 'active') {
+          mark = '<span class="ticket-mark"><span class="ticket-mark--live"></span></span>';
+        } else {
+          mark = '<span class="ticket-mark" aria-hidden="true">o</span>';
+        }
+        return (
+          '<button type="button" class="' + cls + '" data-repo="' + t.repo.toLowerCase() + '" data-idx="' + t.n + '" ' +
+          'title="source field: motionScan.nodes[' + (t.n - 1) + '].repoName">' +
+          '<span class="ticket-idx num ' + catClass(t.badge) + '" title="source field: motionScan.nodes[' + (t.n - 1) + '].index">' + idx + '</span>' +
+          '<span class="ticket-main">' +
+          '<span class="ticket-name">' + t.repo + '</span>' +
+          '<span class="ticket-sub">' + t.sub + '</span></span>' +
+          '<span class="ticket-badge">' + t.badge + '</span>' +
+          mark +
+          '</button>'
+        );
+      }
+
+      var left = document.getElementById('tickets-left');
+      var right = document.getElementById('tickets-right');
+      var phoneTickets = document.getElementById('phone-tickets');
+      var phoneLeft = document.createElement('div');
+      var phoneRight = document.createElement('div');
+      phoneLeft.className = 'ticket-col ticket-col--left ticket-col--phone';
+      phoneRight.className = 'ticket-col ticket-col--right ticket-col--phone';
+      phoneLeft.id = 'tickets-left-phone';
+      phoneRight.id = 'tickets-right-phone';
+
+      tickets.forEach(function (t) {
+        var el = document.createElement('div');
+        el.innerHTML = rowHtml(t);
+        var btn = el.firstChild;
+        var inset = stairInset(t.n <= 10 ? t.n : t.n - 10);
+        var clone = btn.cloneNode(true);
+        if (t.n <= 10) {
+          btn.style.marginLeft = inset + 'px';
+          left.appendChild(btn);
+          clone.style.marginLeft = Math.round(inset * 0.45) + 'px';
+          phoneLeft.appendChild(clone);
+        } else {
+          btn.style.marginRight = inset + 'px';
+          btn.style.marginLeft = 'auto';
+          right.appendChild(btn);
+          clone.style.marginRight = Math.round(inset * 0.45) + 'px';
+          clone.style.marginLeft = 'auto';
+          phoneRight.appendChild(clone);
+        }
+      });
+
+      if (phoneTickets) {
+        var searchBlock = document.querySelector('.ticket-search');
+        if (searchBlock) {
+          var searchClone = searchBlock.cloneNode(true);
+          searchClone.style.display = 'flex';
+          var filterInput = searchClone.querySelector('input');
+          if (filterInput) {
+            filterInput.id = 'ticket-filter-phone';
+            filterInput.addEventListener('input', function () {
+              var q = filterInput.value.trim().toLowerCase();
+              document.querySelectorAll('.ticket-row').forEach(function (row) {
+                var show = !q || row.getAttribute('data-repo').indexOf(q) !== -1;
+                row.setAttribute('data-hidden', show ? 'false' : 'true');
+              });
+            });
+          }
+          phoneTickets.appendChild(searchClone);
+        }
+        var phoneStage = document.createElement('div');
+        phoneStage.className = 'stage-wrap stage-wrap--phone';
+        phoneStage.setAttribute('aria-label', 'Ticket list');
+        var phoneGrid = document.createElement('div');
+        phoneGrid.className = 'stage-grid';
+        phoneGrid.style.gridTemplateColumns = '1fr';
+        phoneGrid.appendChild(phoneLeft);
+        phoneGrid.appendChild(phoneRight);
+        phoneStage.appendChild(phoneGrid);
+        phoneTickets.appendChild(phoneStage);
+      }
+
+      var input = document.getElementById('ticket-filter');
+      input.addEventListener('input', function () {
+        var q = input.value.trim().toLowerCase();
+        document.querySelectorAll('.ticket-row').forEach(function (btn) {
+          var show = !q || btn.getAttribute('data-repo').indexOf(q) !== -1;
+          btn.setAttribute('data-hidden', show ? 'false' : 'true');
+        });
+      });
+
+      var panelCockpit = document.getElementById('main');
+      var phoneNow = document.getElementById('phone-now');
+      var phoneStream = document.getElementById('phone-stream');
+      var phoneStack = document.getElementById('phone-stack');
+      var stageCenter = document.querySelector('.stage-center');
+
+      if (phoneNow && stageCenter) {
+        var nowClone = stageCenter.cloneNode(true);
+        nowClone.classList.add('stage-center--phone');
+        var mascot = nowClone.querySelector('.mascot-stage');
+        if (mascot) mascot.classList.add('mascot-stage--phone');
+        var nowPanel = nowClone.querySelector('.now-panel');
+        if (nowPanel) nowPanel.classList.add('now-panel--phone');
+        phoneNow.appendChild(nowClone);
+
+        var loopsSrc = document.querySelector('.bottom-loops');
+        if (loopsSrc) {
+          var loopsPhone = loopsSrc.cloneNode(true);
+          loopsPhone.classList.add('phone-now-loops');
+          phoneNow.appendChild(loopsPhone);
+        }
+
+        var phoneNowRows = document.createElement('div');
+        phoneNowRows.className = 'phone-now-rows';
+        phoneNowRows.setAttribute('aria-label', 'Highlighted tickets');
+        tickets.filter(function (t) {
+          return t.state === 'active' || t.state === 'pending' || t.n >= 17;
+        }).forEach(function (t) {
+          var wrap = document.createElement('div');
+          wrap.innerHTML = rowHtml(t);
+          phoneNowRows.appendChild(wrap.firstChild);
+        });
+        phoneNow.appendChild(phoneNowRows);
+      }
+
+      if (phoneStream) {
+        var streamWrap = document.createElement('div');
+        streamWrap.className = 'stream-section--phone';
+        var bottomLoops = document.querySelector('.bottom-loops');
+        if (bottomLoops) streamWrap.appendChild(bottomLoops.cloneNode(true));
+        document.querySelectorAll('.band-bottom .stream-section').forEach(function (sec) {
+          var c = sec.cloneNode(true);
+          c.classList.add('stream-section--phone');
+          streamWrap.appendChild(c);
+        });
+        phoneStream.appendChild(streamWrap);
+      }
+
+      if (phoneStack) {
+        var stack = document.getElementById('stack-block');
+        if (stack) {
+          var stackClone = stack.cloneNode(true);
+          stackClone.classList.add('stack-block--phone');
+          phoneStack.appendChild(stackClone);
+        }
+      }
+
+      var tabIds = ['now', 'tickets', 'stream', 'stack'];
+      var tabs = tabIds.map(function (id) { return document.getElementById('tab-' + id); });
+      var panels = tabIds.map(function (id) { return document.getElementById('phone-' + id); });
+
+      function phoneLayoutOn() {
+        return window.matchMedia('(max-width: 720px)').matches;
+      }
+
+      function syncTabMode() {
+        var on = phoneLayoutOn();
+        if (panelCockpit) panelCockpit.dataset.tabMode = on ? 'true' : 'false';
+        if (!on) {
+          panels.forEach(function (p) { if (p) { p.dataset.active = 'false'; } });
+          return;
+        }
+        var active = tabs.findIndex(function (t) { return t && t.getAttribute('aria-selected') === 'true'; });
+        if (active < 0) active = 0;
+        selectPhoneTab(tabIds[active]);
+      }
+
+      function selectPhoneTab(which) {
+        tabIds.forEach(function (id, i) {
+          var selected = id === which;
+          if (tabs[i]) tabs[i].setAttribute('aria-selected', selected ? 'true' : 'false');
+          if (panels[i]) panels[i].dataset.active = selected ? 'true' : 'false';
+        });
+      }
+
+      tabs.forEach(function (tab, i) {
+        if (!tab) return;
+        tab.addEventListener('click', function () { selectPhoneTab(tabIds[i]); });
+        tab.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowRight' && tabs[i + 1]) { e.preventDefault(); tabs[i + 1].focus(); selectPhoneTab(tabIds[i + 1]); }
+          if (e.key === 'ArrowLeft' && tabs[i - 1]) { e.preventDefault(); tabs[i - 1].focus(); selectPhoneTab(tabIds[i - 1]); }
+        });
+      });
+
+      syncTabMode();
+      window.addEventListener('resize', syncTabMode);
+    })();
+  </script>
+</body>
+</html>

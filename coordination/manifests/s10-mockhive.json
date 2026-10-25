@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "jobs": [
+  {
+   "id": "ccmockhive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "context": [
+    "docs/design/review-rubric.md",
+    "docs/design/swarm-watch-design-system.md"
+   ],
+   "outputs": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "prompt": "Build a static, self-contained mockup of the Command Center HIVE view as one HTML file, docs/design/command-center-mockup/hive.html, plus docs/design/command-center-mockup/shared.css (design tokens shared with the cockpit mockup). Open and study the reference image docs/design/reference/hive-target.png (read the file from the repo; it is the visual target) and docs/design/review/CC-mockup/region-rounds/README.md plus the m2 and m5 side-by-side crops there to see what earlier rounds scored low (Hive streams 3.0, core 3.5, card 3.6, panels 3.4). Match the target: top stat strip, the central brain entity with project nodes around it, glowing particle streams from nodes into the brain (draw them with canvas, curved paths, additive glow, 30 fps, off when prefers-reduced-motion), the project card, and the bottom panels (event log, lanes, savings, throughput chart). Only the layout and style are mocked: every number carries a visible label and a title attribute naming its source field, and no number is invented (use clearly labelled sample values such as 'sample' badges). Phone layout at 390 px: vertical Hive, 44 px tap targets, no horizontal scroll. Reduced motion: still frames. No external requests, no libraries, no fonts from the network, ASCII text only. The goal is to reach 4.5 of 5 on every rubric item in docs/design/review-rubric.md (a separate grader scores it).",
+   "timeoutMs": 2400000
+  }
+ ]
+}
