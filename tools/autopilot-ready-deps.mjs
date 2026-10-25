@@ -21,6 +21,45 @@ import { integrationBlocker } from './autopilot.mjs';
 import { integrateCheckoutGitState } from './generated-state.mjs';
 import { buildHandlersMap } from './needs-you-triage.mjs';
 
+async function defaultGitExec(root, cmd, args, opts) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', ...opts });
+  return { stdout };
+}
+
+async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
+  if (typeof deps.integrateCheckoutGitState === 'function') {
+    try {
+      const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
+      if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
+    } catch { /* fall through */ }
+  }
+  try {
+    const exec = typeof deps.gitExecForIntegrate === 'function'
+      ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+      : (cmd, args, opts) => defaultGitExec(root, cmd, args, opts);
+    const gitState = await integrateCheckoutGitState(root, {
+      exec,
+      runStatus: typeof deps.runIntegrateGitStatus === 'function'
+        ? opts => deps.runIntegrateGitStatus(root, opts)
+        : undefined,
+      outputPaths,
+    });
+    if (gitState) return { ...checkout, ...gitState, dirty: false };
+  } catch { /* use raw checkout */ }
+  return checkout;
+}
+
+function runAlreadyIntegrated(events, runId) {
+  const list = Array.isArray(events) ? events : [];
+  return list.some(event => event
+    && event.kind === 'integration'
+    && event.run === runId
+    && (event.status === 'complete' || event.status === 'integrated'));
+}
+
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
 let memoryProbeWarningLogged = false;
@@ -72,7 +111,6 @@ function splitParkIngestRunId(item) {
 export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
   const handlers = Object.create(null);
   const env = inject.env ?? process.env;
-  const startScope = inject.startScope;
 
   handlers['split-park'] = async ({ root, item, deps }) => {
     const runId = splitParkIngestRunId(item);
@@ -89,35 +127,21 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
     return integrateRun(root, runId, {});
   };
 
-  handlers.integrate = async ({ root, item }) => {
-    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
-    if (!runId) return { ok: false, error: 'integrate: missing run id' };
-    try {
-      const out = await integrateRunForRoot(root, runId);
-      const failed = out?.status === 'failed' || out?.integrationStatus === 'failed-check';
-      return { ok: !failed, error: failed ? String(out?.message ?? 'integrate failed') : null };
-    } catch (error) {
-      return { ok: false, error: String(error?.message ?? error) };
+  const guardedIntegrateRun = async ({ root, item, deps, runId }) => {
+    if (typeof deps.readJournal !== 'function') {
+      return { ok: false, error: 'integrate: journal unavailable' };
     }
-  };
-
-  handlers['integrate-checkout'] = async ({ root, item, deps }) => {
-    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
-    if (!runId) return { ok: false, error: 'integrate-checkout: missing run id' };
+    const events = await deps.readJournal(root, { limit: Infinity });
+    if (runAlreadyIntegrated(events, runId)) {
+      return { ok: false, error: `run ${runId} is already integrated` };
+    }
     let checkout = null;
     try {
       if (typeof deps.checkout === 'function') checkout = await deps.checkout(root);
     } catch { checkout = null; }
-    try {
-      const gitState = await integrateCheckoutGitState(root, {
-        exec: typeof deps.gitExecForIntegrate === 'function'
-          ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
-          : undefined,
-        outputPaths: Array.isArray(item.outputPaths) ? item.outputPaths : [],
-      });
-      if (gitState) checkout = { ...checkout, ...gitState, dirty: false };
-    } catch { /* use checkout as-is */ }
-    const why = integrationBlocker(checkout, { outputPaths: Array.isArray(item.outputPaths) ? item.outputPaths : [] });
+    const outputPaths = Array.isArray(item?.outputPaths) ? item.outputPaths : [];
+    const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
+    const why = integrationBlocker(checkoutView, { outputPaths });
     if (why) return { ok: false, error: why };
     try {
       const out = await integrateRunForRoot(root, runId);
@@ -128,12 +152,16 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
     }
   };
 
-  handlers['ci-failure'] = async ({ root, deps }) => {
-    const scope = typeof deps.startScope === 'function' ? deps.startScope : startScope;
-    if (typeof scope !== 'function') return { ok: false, error: 'ci-failure: startScope unavailable' };
-    const out = await scope({ root, maxJobs: 1, skipSkeleton: true });
-    const ok = out?.ok !== false && out?.result !== 'held-memory';
-    return { ok, error: ok ? null : String(out?.result ?? 'start scope failed') };
+  handlers.integrate = async ({ root, item, deps }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate: missing run id' };
+    return guardedIntegrateRun({ root, item, deps, runId });
+  };
+
+  handlers['integrate-checkout'] = async ({ root, item, deps }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate-checkout: missing run id' };
+    return guardedIntegrateRun({ root, item, deps, runId });
   };
 
   return buildHandlersMap(handlers);

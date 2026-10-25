@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
+import { open as fsOpen } from 'node:fs/promises';
 import path from 'node:path';
 import {
   integrateBlockerKindFromId,
+  integrateBlockerResolutionEvent,
   integrateBlockerRunIdFromId,
   openItems,
   sanitizeText,
@@ -14,13 +16,12 @@ export const MAX_TRIAGE_ATTEMPTS = 3;
 export const REOPEN_SUPPRESS_MS = 60 * 60 * 1000;
 const STATE_REL = path.join('.swarm', 'needs-you-triage', 'state.json');
 const LOCK_REL = path.join('.swarm', 'needs-you-triage', 'state.lock');
-const LOCK_STALE_MS = 5 * 60 * 1000;
+const LOCK_STALE_MS = 30 * 60 * 1000;
 
 export const TRIAGE_HANDLER_KINDS = Object.freeze([
   'split-park',
   'integrate',
   'integrate-checkout',
-  'ci-failure',
 ]);
 
 export const RISKY_WORD_FRAGMENTS = Object.freeze([
@@ -108,25 +109,54 @@ export function buildOwnerDecisionText(item) {
   return null;
 }
 
+const CHECKOUT_OWNER_INTEGRATE_CAUSE = /\b(the checkout is on (?:main|master)|uncommitted tracked changes|a merge is in progress|a rebase is in progress|a cherry-pick is in progress)\b/i;
+
+export function integrateCheckoutCauseNeedsOwner(cause) {
+  const text = String(cause ?? '');
+  if (!text) return false;
+  return CHECKOUT_OWNER_INTEGRATE_CAUSE.test(text);
+}
+
+export function buildIntegrateCheckoutOwnerDecisionText(item) {
+  if (!item || typeof item !== 'object') return null;
+  const cause = sanitizeText(item.integrateCause ?? item.text ?? item.title ?? '');
+  if (!integrateCheckoutCauseNeedsOwner(cause)) return null;
+  if (/\bthe checkout is on (?:main|master)\b/i.test(cause)) {
+    return `${DECISION_PREFIX} Checkout is on main or master before integrate Options: move work to a swarm/* branch or linked worktree, then integrate. Why only you: integrating on main or master is never automatic.`;
+  }
+  if (/\buncommitted tracked changes\b/i.test(cause)) {
+    return `${DECISION_PREFIX} Uncommitted tracked changes block integrate Options: commit the changes, stash or move them to another branch, or discard what you do not need. Why only you: autopilot will not commit or discard your local edits.`;
+  }
+  if (/\ba merge is in progress\b/i.test(cause)) {
+    return `${DECISION_PREFIX} A merge is in progress in the checkout Options: finish or abort the merge, then integrate. Why only you: resolving an in-progress merge needs the owner.`;
+  }
+  if (/\ba rebase is in progress\b/i.test(cause)) {
+    return `${DECISION_PREFIX} A rebase is in progress in the checkout Options: finish or abort the rebase, then integrate. Why only you: resolving an in-progress rebase needs the owner.`;
+  }
+  if (/\ba cherry-pick is in progress\b/i.test(cause)) {
+    return `${DECISION_PREFIX} A cherry-pick is in progress in the checkout Options: finish or abort the cherry-pick, then integrate. Why only you: resolving an in-progress cherry-pick needs the owner.`;
+  }
+  return `${DECISION_PREFIX} Checkout must be cleaned up before integrate Options: fix the git state described in the blocker, then integrate. Why only you: this checkout state needs the owner.`;
+}
+
 export function classifyInboxItem(item) {
   if (!item || typeof item !== 'object') return 'owner';
-  if (item.kind === 'decision') {
-    return buildOwnerDecisionText(item) ? 'owner' : 'owner';
-  }
+  if (item.kind !== 'blocker') return 'owner';
   const blob = itemTextBlob(item);
   if (!blob) return 'owner';
   if (hasRiskyWords(blob)) return 'owner';
   const subtype = inboxItemSubtype(item);
   if (!FIXABLE_SUBTYPES.has(subtype)) return 'owner';
-  if (subtype === 'ci-failure' && !ciFailureKnownTestCause(item)) return 'owner';
-  if (item.kind === 'blocker' || item.kind === 'human') {
-    const id = String(item.id ?? '');
-    if (id.startsWith('cap-') || OWNER_MONEY.test(blob)) {
-      return buildOwnerDecisionText(item) ? 'owner' : 'owner';
-    }
-    if (OWNER_DEPLOY.test(blob)) return 'owner';
-    if (OWNER_LOGIN.test(blob)) return 'owner';
+  if (subtype === 'integrate-checkout') {
+    const cause = item.integrateCause ?? blob;
+    if (integrateCheckoutCauseNeedsOwner(cause)) return 'owner';
   }
+  const id = String(item.id ?? '');
+  if (id.startsWith('cap-') || OWNER_MONEY.test(blob)) {
+    return buildOwnerDecisionText(item) ? 'owner' : 'owner';
+  }
+  if (OWNER_DEPLOY.test(blob)) return 'owner';
+  if (OWNER_LOGIN.test(blob)) return 'owner';
   return 'fixable';
 }
 
@@ -193,8 +223,13 @@ export async function writeTriageState(root, state) {
   await fs.rename(tmp, file);
 }
 
-async function isPidAlive(pid) {
+export async function isPidAlive(pid, { isPidAlive: check } = {}) {
+  const probe = typeof check === 'function' ? check : defaultIsPidAlive;
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  return probe(pid);
+}
+
+function defaultIsPidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -203,32 +238,86 @@ async function isPidAlive(pid) {
   }
 }
 
-export async function acquireTriageLock(root, { now = Date.now } = {}) {
+async function lockIsStale(existing, nowMs, isAlive) {
+  const owner = Number(existing?.pid);
+  const at = Number(existing?.at);
+  const alive = await isAlive(owner);
+  if (!alive) return true;
+  if (!Number.isFinite(at)) return false;
+  return nowMs - at > LOCK_STALE_MS && !alive;
+}
+
+async function readLockPayload(file) {
+  try {
+    return JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    try { await fs.unlink(file); } catch { /* replace unreadable lock */ }
+    return null;
+  }
+}
+
+async function writeLockExclusive(file, payload) {
+  const handle = await fsOpen(file, 'wx', 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(payload)}\n`, { encoding: 'utf8' });
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function refreshTriageLock(root, { now = Date.now } = {}) {
+  const file = triageLockPath(root);
+  const nowMs = typeof now === 'function' ? now() : Number(now);
+  try {
+    const existing = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (Number(existing?.pid) !== process.pid) return;
+    await fs.writeFile(file, `${JSON.stringify({ pid: process.pid, at: nowMs })}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch { /* no lock */ }
+}
+
+export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidCheck } = {}) {
   const file = triageLockPath(root);
   const dir = path.dirname(file);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const nowMs = typeof now === 'function' ? now() : Number(now);
-  try {
-    const existing = JSON.parse(await fs.readFile(file, 'utf8'));
+  const alive = pid => isPidAlive(pid, { isPidAlive: pidCheck });
+
+  const existing = await readLockPayload(file);
+  if (existing) {
     const owner = Number(existing?.pid);
-    const at = Number(existing?.at);
-    const alive = await isPidAlive(owner);
-    const stale = !Number.isFinite(at) || nowMs - at > LOCK_STALE_MS || !alive;
+    const stale = await lockIsStale(existing, nowMs, alive);
     if (!stale && owner !== process.pid) return { ok: false, reason: 'locked' };
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      try { await fs.unlink(file); } catch { /* replace unreadable lock */ }
+    if (stale) {
+      try { await fs.unlink(file); } catch { /* raced */ }
+    } else if (owner === process.pid) {
+      await refreshTriageLock(root, { now: nowMs });
+      return { ok: true };
     }
   }
+
   const payload = { pid: process.pid, at: nowMs };
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600 });
   try {
-    await fs.rename(tmp, file);
+    await writeLockExclusive(file, payload);
     return { ok: true };
-  } catch {
-    try { await fs.unlink(tmp); } catch { /* ignore */ }
-    return { ok: false, reason: 'locked' };
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    const other = await readLockPayload(file);
+    if (other && Number(other.pid) === process.pid) {
+      await refreshTriageLock(root, { now: nowMs });
+      return { ok: true };
+    }
+    const owner = Number(other?.pid);
+    if (other && !(await lockIsStale(other, nowMs, alive)) && owner !== process.pid) {
+      return { ok: false, reason: 'locked' };
+    }
+    try { await fs.unlink(file); } catch { /* ignore */ }
+    try {
+      await writeLockExclusive(file, payload);
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'locked' };
+    }
   }
 }
 
@@ -368,34 +457,45 @@ async function closeItem(projectRoot, item, deps, { note } = {}) {
   if (item.kind === 'blocker') {
     const integrateKind = integrateBlockerKindFromId(String(item.id ?? ''));
     const integrateRun = integrateBlockerRunIdFromId(String(item.id ?? ''));
-    const payload = {
-      kind: 'blocker',
+    const integrateCause = sanitizeText(item.integrateCause ?? text);
+    const prior = {
       id: item.id,
-      resolved: true,
       text,
-      triageClosed: true,
-      ...(note ? { triageNote: sanitizeText(note) } : {}),
+      integrateCause: item.integrateCause,
+      integrateKind,
+      integrateRun,
     };
-    if (integrateKind && integrateRun) {
-      payload.integrateKind = integrateKind;
-      payload.integrateRun = integrateRun;
-      payload.integrateCause = sanitizeText(item.integrateCause ?? text);
-    }
+    const payload = integrateKind && integrateRun
+      ? {
+        ...integrateBlockerResolutionEvent(prior, {
+          integrateKind,
+          integrateRun,
+          integrateCause,
+          resolvedBy: 'needs-you-triage',
+        }),
+        triageClosed: true,
+        ...(note ? { triageNote: sanitizeText(note) } : {}),
+      }
+      : {
+        kind: 'blocker',
+        id: item.id,
+        resolved: true,
+        text,
+        triageClosed: true,
+        ...(note ? { triageNote: sanitizeText(note) } : {}),
+      };
     await append(projectRoot, payload, { now });
     return;
   }
   if (item.kind === 'human') {
-    if (typeof deps.markDone === 'function') {
-      await deps.markDone(projectRoot, item.id, deps);
-      return;
-    }
     await append(projectRoot, { kind: 'human', id: item.id, done: true, ...(note ? { triageNote: sanitizeText(note) } : {}) }, { now });
     return;
   }
 }
 
 async function ensureOwnerCard(_projectRoot, item, _deps) {
-  const decision = buildOwnerDecisionText(item);
+  const checkoutDecision = buildIntegrateCheckoutOwnerDecisionText(item);
+  const decision = checkoutDecision ?? buildOwnerDecisionText(item);
   if (!decision) return { updated: false };
   const title = sanitizeText(item.title ?? item.text ?? '');
   if (title.startsWith(DECISION_PREFIX)) return { updated: false, decision: title };
@@ -416,21 +516,22 @@ function lastErrorLine(attempts) {
   return sanitizeText(line).slice(0, 300);
 }
 
-function itemSummaryForGoal(item) {
-  const raw = sanitizeText(item.title ?? item.text ?? String(item.id ?? ''));
-  return raw.slice(0, 200);
+function stripPathsForGoal(text) {
+  let out = sanitizeText(String(text ?? ''));
+  out = out.replace(/(?:[A-Za-z]:)?\/(?:[^\s:]{1,200})/g, '<path>');
+  out = out.replace(/\b[\w./-]+\.(?:mjs|cjs|js|ts|tsx|jsx|json|md|txt|yml|yaml)\b/gi, '<path>');
+  out = out.replace(/\b[\w.-]*\/[\w./-]+\b/g, '<path>');
+  return out.slice(0, 200);
 }
 
 async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs, log }) {
   const entry = state.items[key] ?? { attempts: [] };
   const attempts = entry.attempts ?? [];
   const tries = attempts.length;
-  const lastError = lastErrorLine(attempts);
+  const lastError = stripPathsForGoal(lastErrorLine(attempts));
   const label = shortProjectLabel(projectRoot);
-  const summary = itemSummaryForGoal(item);
-  const title = sanitizeText(`needs-you triage failed after ${tries} tries on ${label}`);
-  const detail = sanitizeText(`item=${sanitizeText(String(item.id ?? ''))} last=${lastError} attempts=${tries} summary=${summary}`);
-  const goalText = sanitizeText(`SWARM-FIX: ${title} — ${detail}`);
+  const subtype = inboxItemSubtype(item);
+  const goalText = sanitizeText(`SWARM-FIX: needs-you triage failed subtype=${subtype} project=${label} attempts=${tries} last=${lastError}`);
   const swarmRoot = await resolveSwarmRoot(deps, projectRoot);
   if (!swarmRoot) {
     const message = sanitizeText(`needs-you triage exhausted for ${label} (${item.id}); no project-swarm root found for swarm-fix goal`);
@@ -457,7 +558,7 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
   const nowSource = now ?? deps?.now ?? Date.now;
   const nowFn = typeof nowSource === 'function' ? nowSource : () => Number(nowSource);
   const nowMs = nowFn();
-  const lock = await acquireTriageLock(primaryRoot, { now: nowFn });
+  const lock = await acquireTriageLock(primaryRoot, { now: nowFn, isPidAlive: deps?.isPidAlive });
   if (lock?.ok !== true) {
     return { passCount: 0, results: [], skipped: lock?.reason ?? 'locked' };
   }
@@ -480,6 +581,10 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       swarmRoot: deps.swarmRoot,
       integrate: deps.integrate,
       startScope: deps.startScope,
+      checkout: deps.checkout,
+      gitExecForIntegrate: deps.gitExecForIntegrate,
+      integrateCheckoutGitState: deps.integrateCheckoutGitState,
+      runIntegrateGitStatus: deps.runIntegrateGitStatus,
       ...(deps.needsYouTriage ?? {}),
     };
     const handlers = buildHandlersMap(triageDeps.handlers ?? {});
@@ -498,8 +603,12 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       const subtype = inboxItemSubtype(item);
 
       if (bucket === 'owner') {
+        await refreshTriageLock(primaryRoot, { now: nowFn });
         const owner = await ensureOwnerCard(projectRoot, item, triageDeps);
-        results.push({ id: item.id, project: projectRoot, action: 'owner', decision: owner.decision ?? buildOwnerDecisionText(item) });
+        const decision = owner.decision
+          ?? buildIntegrateCheckoutOwnerDecisionText(item)
+          ?? buildOwnerDecisionText(item);
+        results.push({ id: item.id, project: projectRoot, action: 'owner', decision });
         continue;
       }
 
@@ -545,6 +654,7 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       let ok = false;
       let error = null;
       try {
+        await refreshTriageLock(primaryRoot, { now: nowFn });
         const handled = await invokeHandler(projectRoot, item, triageDeps, handlers, subtype);
         if (handled.skipped) continue;
         const out = handled.out;

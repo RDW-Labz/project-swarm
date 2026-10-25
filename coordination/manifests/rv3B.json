@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv3B",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/split-repair.mjs",
+    "tests/split-repair-auto.test.mjs"
+   ],
+   "outputs": [
+    "tools/split-repair.mjs",
+    "tools/scope-commands.mjs",
+    "tests/split-repair-auto.test.mjs"
+   ],
+   "prompt": "Fix review findings in the split repair hook, tests added to tests/split-repair-auto.test.mjs. 8 LOW tools/scope-commands.mjs near lines 1481 and 1539: a ticket restored by refreshRejectedDependents must be removed from built.rejected too (filter built.rejected by the refreshed rejected list) so the same id never counts as both kept and rejected in rejectedAll (near line 2222) and the split log; and the restore must not require the parent to be absent from rejected in a way that almost never fires: restore a child as soon as every parent it depends on is itself accepted (repaired in the same or an earlier round), re-validating it. 10 LOW tools/split-repair.mjs: a ticket parked only for 'path not in repo' must carry an explicit flag on the ticket object (pathPending: true) in addition to the note, so later steps can see it. Tests for each. Keep every existing test passing (tests/split-*.test.mjs, tests/scope-*.test.mjs, tests/ticket-paths*.test.mjs)."
+  }
+ ]
+}
