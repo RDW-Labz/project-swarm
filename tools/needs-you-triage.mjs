@@ -13,6 +13,24 @@ import { inboxDeps } from './inbox-commands.mjs';
 export const MAX_TRIAGE_ATTEMPTS = 3;
 export const REOPEN_SUPPRESS_MS = 60 * 60 * 1000;
 const STATE_REL = path.join('.swarm', 'needs-you-triage', 'state.json');
+const LOCK_REL = path.join('.swarm', 'needs-you-triage', 'state.lock');
+const LOCK_STALE_MS = 5 * 60 * 1000;
+
+export const TRIAGE_HANDLER_KINDS = Object.freeze([
+  'split-park',
+  'integrate',
+  'integrate-checkout',
+  'ci-failure',
+]);
+
+export const RISKY_WORD_FRAGMENTS = Object.freeze([
+  'spend', 'cap', 'budget', 'billing', 'bill', 'payment', 'invoice', 'price', 'cost', 'money',
+  'dollar', 'key', 'token', 'secret', 'credential', 'password', 'login', 'auth', 'permission',
+  'deploy', 'production', 'prod', 'live site', 'merge to main', 'release', 'subscription',
+  'quota', 'security', 'scan', 'leak',
+]);
+
+const FIXABLE_SUBTYPES = new Set(TRIAGE_HANDLER_KINDS);
 
 const OWNER_MONEY = /\b(spend cap|maxusd|paid service|purchase|raise maxusd)\b/i;
 const OWNER_DEPLOY = /\b(live deploy|production merge|deploy to production|merge to (?:main|master))\b/i;
@@ -21,6 +39,37 @@ const DECISION_PREFIX = 'Decision needed:';
 
 export function triageStatePath(root) {
   return path.join(root, STATE_REL);
+}
+
+export function triageLockPath(root) {
+  return path.join(root, LOCK_REL);
+}
+
+export function itemTextBlob(item) {
+  if (!item || typeof item !== 'object') return '';
+  return `${item.title ?? ''} ${item.text ?? ''} ${(item.steps ?? []).join(' ')}`.trim();
+}
+
+export function hasRiskyWords(blob) {
+  const text = String(blob ?? '').toLowerCase();
+  if (!text) return false;
+  return RISKY_WORD_FRAGMENTS.some(fragment => text.includes(fragment.toLowerCase()));
+}
+
+export function ciFailureKnownTestCause(item) {
+  if (!item || typeof item !== 'object') return false;
+  const id = String(item.id ?? '');
+  if (!id.startsWith('ci-failure')) return false;
+  const blob = itemTextBlob(item);
+  if (/\b(security scan|secrets? scan|credential scan)\b/i.test(blob)) return false;
+  if (item.knownTestFailure === true) return true;
+  if (item.testFile || item.failedTest) return true;
+  if (item.hook != null || item.batch != null) return true;
+  const cause = String(item.ciCause ?? item.cause ?? item.integrateCause ?? '');
+  if (/test[- ]?fail/i.test(cause) || cause === 'test-failure') return true;
+  if (/^ci-failure-batch-/i.test(id)) return true;
+  if (item.ticket) return true;
+  return false;
 }
 
 export function inboxItemSubtype(item) {
@@ -60,22 +109,36 @@ export function buildOwnerDecisionText(item) {
 }
 
 export function classifyInboxItem(item) {
-  if (!item || typeof item !== 'object') return 'fixable';
+  if (!item || typeof item !== 'object') return 'owner';
   if (item.kind === 'decision') {
-    return buildOwnerDecisionText(item) ? 'owner' : 'fixable';
+    return buildOwnerDecisionText(item) ? 'owner' : 'owner';
   }
+  const blob = itemTextBlob(item);
+  if (!blob) return 'owner';
+  if (hasRiskyWords(blob)) return 'owner';
   const subtype = inboxItemSubtype(item);
-  if (['split-park', 'integrate', 'integrate-checkout', 'ci-failure'].includes(subtype)) return 'fixable';
-  const blob = `${item.title ?? ''} ${item.text ?? ''} ${(item.steps ?? []).join(' ')}`;
+  if (!FIXABLE_SUBTYPES.has(subtype)) return 'owner';
+  if (subtype === 'ci-failure' && !ciFailureKnownTestCause(item)) return 'owner';
   if (item.kind === 'blocker' || item.kind === 'human') {
     const id = String(item.id ?? '');
     if (id.startsWith('cap-') || OWNER_MONEY.test(blob)) {
-      return buildOwnerDecisionText(item) ? 'owner' : 'fixable';
+      return buildOwnerDecisionText(item) ? 'owner' : 'owner';
     }
-    if (OWNER_DEPLOY.test(blob)) return buildOwnerDecisionText(item) ? 'owner' : 'fixable';
-    if (OWNER_LOGIN.test(blob)) return buildOwnerDecisionText(item) ? 'owner' : 'fixable';
+    if (OWNER_DEPLOY.test(blob)) return 'owner';
+    if (OWNER_LOGIN.test(blob)) return 'owner';
   }
   return 'fixable';
+}
+
+export function buildHandlersMap(rawHandlers) {
+  const handlers = Object.create(null);
+  const source = rawHandlers && typeof rawHandlers === 'object' ? rawHandlers : {};
+  for (const kind of TRIAGE_HANDLER_KINDS) {
+    if (Object.hasOwn(source, kind) && typeof source[kind] === 'function') {
+      handlers[kind] = source[kind];
+    }
+  }
+  return handlers;
 }
 
 function itemStateKey(item) {
@@ -92,11 +155,19 @@ function defaultState() {
   return { passCount: 0, items: {}, suppressReopen: {} };
 }
 
+function shortProjectLabel(projectRoot) {
+  if (typeof projectRoot !== 'string' || !projectRoot) return 'project';
+  const base = path.basename(projectRoot);
+  if (base && base !== '.' && base !== '/') return base;
+  const hash = Buffer.from(projectRoot).toString('hex').slice(0, 8);
+  return hash || 'project';
+}
+
 export async function readTriageState(root) {
   const file = triageStatePath(root);
   try {
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return defaultState();
+    if (!parsed || typeof parsed !== 'object') throw new Error('triage-state-corrupt');
     return {
       passCount: Number(parsed.passCount) || 0,
       items: parsed.items && typeof parsed.items === 'object' ? parsed.items : {},
@@ -104,7 +175,7 @@ export async function readTriageState(root) {
     };
   } catch (error) {
     if (error?.code === 'ENOENT') return defaultState();
-    return defaultState();
+    throw error;
   }
 }
 
@@ -120,6 +191,53 @@ export async function writeTriageState(root, state) {
   };
   await fs.writeFile(tmp, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600 });
   await fs.rename(tmp, file);
+}
+
+async function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+export async function acquireTriageLock(root, { now = Date.now } = {}) {
+  const file = triageLockPath(root);
+  const dir = path.dirname(file);
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const nowMs = typeof now === 'function' ? now() : Number(now);
+  try {
+    const existing = JSON.parse(await fs.readFile(file, 'utf8'));
+    const owner = Number(existing?.pid);
+    const at = Number(existing?.at);
+    const alive = await isPidAlive(owner);
+    const stale = !Number.isFinite(at) || nowMs - at > LOCK_STALE_MS || !alive;
+    if (!stale && owner !== process.pid) return { ok: false, reason: 'locked' };
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      try { await fs.unlink(file); } catch { /* replace unreadable lock */ }
+    }
+  }
+  const payload = { pid: process.pid, at: nowMs };
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.rename(tmp, file);
+    return { ok: true };
+  } catch {
+    try { await fs.unlink(tmp); } catch { /* ignore */ }
+    return { ok: false, reason: 'locked' };
+  }
+}
+
+export async function releaseTriageLock(root) {
+  const file = triageLockPath(root);
+  try {
+    const existing = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (Number(existing?.pid) === process.pid) await fs.unlink(file);
+  } catch { /* no lock */ }
 }
 
 async function collectTriageItems(roots, triageDeps) {
@@ -267,7 +385,7 @@ async function closeItem(projectRoot, item, deps, { note } = {}) {
     return;
   }
   if (item.kind === 'human') {
-    if (typeof deps.markDone === 'function' && String(item.id ?? '').includes(':')) {
+    if (typeof deps.markDone === 'function') {
       await deps.markDone(projectRoot, item.id, deps);
       return;
     }
@@ -284,136 +402,188 @@ async function ensureOwnerCard(_projectRoot, item, _deps) {
   return { updated: false, decision };
 }
 
-async function defaultHandler(projectRoot, item, deps, handlers) {
-  const kind = inboxItemSubtype(item);
-  const fn = handlers[kind] ?? handlers.generic;
-  if (typeof fn !== 'function') throw new Error(`triage-no-handler: ${kind}`);
-  return fn({ root: projectRoot, item, deps, kind });
+async function invokeHandler(projectRoot, item, deps, handlers, kind) {
+  if (!Object.hasOwn(handlers, kind)) return { skipped: true };
+  const fn = handlers[kind];
+  if (typeof fn !== 'function') return { skipped: true };
+  return { out: await fn({ root: projectRoot, item, deps, kind }) };
 }
 
-async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs }) {
+function lastErrorLine(attempts) {
+  if (!Array.isArray(attempts) || !attempts.length) return 'unknown';
+  const raw = String(attempts[attempts.length - 1]?.error ?? 'unknown');
+  const line = raw.split(/\r?\n/).filter(Boolean).pop() ?? raw;
+  return sanitizeText(line).slice(0, 300);
+}
+
+function itemSummaryForGoal(item) {
+  const raw = sanitizeText(item.title ?? item.text ?? String(item.id ?? ''));
+  return raw.slice(0, 200);
+}
+
+async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs, log }) {
   const entry = state.items[key] ?? { attempts: [] };
   const attempts = entry.attempts ?? [];
-  const lastError = attempts.length ? attempts[attempts.length - 1].error : 'unknown';
-  const title = `needs-you triage failed after ${MAX_TRIAGE_ATTEMPTS} tries`;
-  const detail = `item=${item.id} project=${projectRoot} last=${lastError} attempts=${JSON.stringify(attempts)}`;
-  const goalText = `SWARM-FIX: ${title} — ${detail}`;
+  const tries = attempts.length;
+  const lastError = lastErrorLine(attempts);
+  const label = shortProjectLabel(projectRoot);
+  const summary = itemSummaryForGoal(item);
+  const title = sanitizeText(`needs-you triage failed after ${tries} tries on ${label}`);
+  const detail = sanitizeText(`item=${sanitizeText(String(item.id ?? ''))} last=${lastError} attempts=${tries} summary=${summary}`);
+  const goalText = sanitizeText(`SWARM-FIX: ${title} — ${detail}`);
   const swarmRoot = await resolveSwarmRoot(deps, projectRoot);
-  const goalRoot = swarmRoot ?? projectRoot;
-  const prefixed = swarmRoot ? goalText : `SWARM-FIX: ${goalText}`;
+  if (!swarmRoot) {
+    const message = sanitizeText(`needs-you triage exhausted for ${label} (${item.id}); no project-swarm root found for swarm-fix goal`);
+    if (typeof log === 'function') log(message);
+    return { note: null, goalId: null, goalRoot: null, stuck: true };
+  }
   let goalId = null;
   if (typeof deps.addGoal === 'function') {
-    const out = await deps.addGoal(goalRoot, { goal: prefixed, paths: ['tools/needs-you-triage.mjs', 'tools/autopilot.mjs'] }, { now: deps.now });
+    const out = await deps.addGoal(swarmRoot, { goal: goalText, paths: ['tools/needs-you-triage.mjs', 'tools/autopilot.mjs'] }, { now: deps.now });
     goalId = out?.id ?? null;
   }
-  const note = goalId ? `autopilot triage opened swarm-fix goal ${goalId} in ${goalRoot}` : `autopilot triage opened swarm-fix backlog goal in ${goalRoot}`;
-  return { note, goalId, goalRoot };
+  if (!goalId) {
+    return { note: null, goalId: null, goalRoot: swarmRoot, stuck: true };
+  }
+  const note = sanitizeText(`autopilot triage opened swarm-fix goal ${goalId} in ${path.basename(swarmRoot)}`);
+  return { note, goalId, goalRoot: swarmRoot, stuck: false };
 }
 
 /**
  * One needs-you triage pass for the primary project and any registry projects.
  * Injectable handlers and inbox deps; never raises caps, merges live, or touches credentials.
  */
-export async function runNeedsYouTriagePass(primaryRoot, deps, { now = Date.now } = {}) {
-  const nowFn = typeof now === 'function' ? now : () => Number(now);
+export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}) {
+  const nowSource = now ?? deps?.now ?? Date.now;
+  const nowFn = typeof nowSource === 'function' ? nowSource : () => Number(nowSource);
   const nowMs = nowFn();
-  const triageDeps = {
-    now,
-    installRoot: deps.installRoot ?? null,
-    appendEvent: deps.appendEvent,
-    readJournal: deps.readJournal,
-    addGoal: deps.addGoal,
-    markDone: deps.markDone,
-    collectInbox: deps.collectInbox,
-    listTriageRoots: deps.listTriageRoots,
-    swarmRoot: deps.swarmRoot,
-    ...(deps.needsYouTriage ?? {}),
-  };
-  const handlers = { ...(triageDeps.handlers ?? {}) };
-  const roots = await listProjectRoots(primaryRoot, triageDeps);
-  const state = await readTriageState(primaryRoot);
-  state.passCount = (state.passCount ?? 0) + 1;
-  const passCount = state.passCount;
+  const lock = await acquireTriageLock(primaryRoot, { now: nowFn });
+  if (lock?.ok !== true) {
+    return { passCount: 0, results: [], skipped: lock?.reason ?? 'locked' };
+  }
+  try {
+    let state;
+    try {
+      state = await readTriageState(primaryRoot);
+    } catch {
+      return { passCount: 0, results: [], error: 'state-unreadable' };
+    }
+    const triageDeps = {
+      now: nowSource,
+      installRoot: deps.installRoot ?? null,
+      appendEvent: deps.appendEvent,
+      readJournal: deps.readJournal,
+      addGoal: deps.addGoal,
+      markDone: deps.markDone,
+      collectInbox: deps.collectInbox,
+      listTriageRoots: deps.listTriageRoots,
+      swarmRoot: deps.swarmRoot,
+      integrate: deps.integrate,
+      startScope: deps.startScope,
+      ...(deps.needsYouTriage ?? {}),
+    };
+    const handlers = buildHandlersMap(triageDeps.handlers ?? {});
+    const roots = await listProjectRoots(primaryRoot, triageDeps);
+    state.passCount = (state.passCount ?? 0) + 1;
+    const passCount = state.passCount;
 
-  const items = await collectTriageItems(roots, triageDeps);
-  const results = [];
+    const items = await collectTriageItems(roots, triageDeps);
+    const results = [];
 
-  for (const item of Array.isArray(items) ? items : []) {
-    if (!item?.id) continue;
-    const projectRoot = item.project ?? primaryRoot;
-    const key = itemStateKey(item);
+    for (const item of Array.isArray(items) ? items : []) {
+      if (!item?.id) continue;
+      const projectRoot = item.project ?? primaryRoot;
+      const key = itemStateKey(item);
+      const bucket = classifyInboxItem(item);
+      const subtype = inboxItemSubtype(item);
 
-    if (state.items[key]?.exhausted) {
+      if (bucket === 'owner') {
+        const owner = await ensureOwnerCard(projectRoot, item, triageDeps);
+        results.push({ id: item.id, project: projectRoot, action: 'owner', decision: owner.decision ?? buildOwnerDecisionText(item) });
+        continue;
+      }
+
+      if (!Object.hasOwn(handlers, subtype)) {
+        continue;
+      }
+
+      if (state.items[key]?.exhausted) {
+        if (isReopenSuppressed(state, item, nowMs)) {
+          const note = 'suppressed reopen within one hour for the same cause';
+          await closeItem(projectRoot, item, triageDeps, { note });
+          results.push({ id: item.id, project: projectRoot, action: 'suppressed-reopen', note });
+        }
+        continue;
+      }
+
       if (isReopenSuppressed(state, item, nowMs)) {
         const note = 'suppressed reopen within one hour for the same cause';
         await closeItem(projectRoot, item, triageDeps, { note });
         results.push({ id: item.id, project: projectRoot, action: 'suppressed-reopen', note });
+        continue;
       }
-      continue;
+
+      if (!canRetryThisPass(state, key, passCount)) {
+        results.push({ id: item.id, project: projectRoot, action: 'wait-pass' });
+        continue;
+      }
+
+      const tries = attemptCount(state, key);
+      if (tries >= MAX_TRIAGE_ATTEMPTS) {
+        const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs, log });
+        if (fix.stuck) {
+          results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
+          continue;
+        }
+        await closeItem(projectRoot, item, triageDeps, { note: fix.note });
+        recordSuppress(state, item, nowMs);
+        state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
+        results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });
+        continue;
+      }
+
+      let ok = false;
+      let error = null;
+      try {
+        const handled = await invokeHandler(projectRoot, item, triageDeps, handlers, subtype);
+        if (handled.skipped) continue;
+        const out = handled.out;
+        ok = out?.ok !== false;
+        if (!ok) error = out?.error ?? 'handler returned not ok';
+      } catch (err) {
+        ok = false;
+        error = String(err?.message ?? err);
+      }
+
+      if (ok) {
+        const note = 'autopilot triage fixed and closed';
+        await closeItem(projectRoot, item, triageDeps, { note });
+        recordSuppress(state, item, nowMs);
+        delete state.items[key];
+        results.push({ id: item.id, project: projectRoot, action: 'closed', note });
+        continue;
+      }
+
+      recordAttempt(state, key, passCount, error);
+      const after = attemptCount(state, key);
+      if (after >= MAX_TRIAGE_ATTEMPTS) {
+        const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs, log });
+        if (fix.stuck) {
+          results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
+        } else {
+          await closeItem(projectRoot, item, triageDeps, { note: fix.note });
+          recordSuppress(state, item, nowMs);
+          state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
+          results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });
+        }
+      } else {
+        results.push({ id: item.id, project: projectRoot, action: 'retry', attempt: after, error });
+      }
     }
 
-    if (isReopenSuppressed(state, item, nowMs)) {
-      const note = 'suppressed reopen within one hour for the same cause';
-      await closeItem(projectRoot, item, triageDeps, { note });
-      results.push({ id: item.id, project: projectRoot, action: 'suppressed-reopen', note });
-      continue;
-    }
-
-    const bucket = classifyInboxItem(item);
-    if (bucket === 'owner') {
-      const owner = await ensureOwnerCard(projectRoot, item, triageDeps);
-      results.push({ id: item.id, project: projectRoot, action: 'owner', decision: owner.decision ?? buildOwnerDecisionText(item) });
-      continue;
-    }
-
-    if (!canRetryThisPass(state, key, passCount)) {
-      results.push({ id: item.id, project: projectRoot, action: 'wait-pass' });
-      continue;
-    }
-
-    const tries = attemptCount(state, key);
-    if (tries >= MAX_TRIAGE_ATTEMPTS) {
-      const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs });
-      await closeItem(projectRoot, item, triageDeps, { note: fix.note });
-      recordSuppress(state, item, nowMs);
-      state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
-      results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });
-      continue;
-    }
-
-    let ok = false;
-    let error = null;
-    try {
-      const out = await defaultHandler(projectRoot, item, triageDeps, handlers);
-      ok = out?.ok !== false;
-      if (!ok) error = out?.error ?? 'handler returned not ok';
-    } catch (err) {
-      ok = false;
-      error = String(err?.message ?? err);
-    }
-
-    if (ok) {
-      const note = 'autopilot triage fixed and closed';
-      await closeItem(projectRoot, item, triageDeps, { note });
-      recordSuppress(state, item, nowMs);
-      delete state.items[key];
-      results.push({ id: item.id, project: projectRoot, action: 'closed', note });
-      continue;
-    }
-
-    recordAttempt(state, key, passCount, error);
-    const after = attemptCount(state, key);
-    if (after >= MAX_TRIAGE_ATTEMPTS) {
-      const fix = await openSwarmFixGoal({ projectRoot, item, state, key, deps: triageDeps, nowMs });
-      await closeItem(projectRoot, item, triageDeps, { note: fix.note });
-      recordSuppress(state, item, nowMs);
-      state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
-      results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });
-    } else {
-      results.push({ id: item.id, project: projectRoot, action: 'retry', attempt: after, error });
-    }
+    await writeTriageState(primaryRoot, state);
+    return { passCount, results };
+  } finally {
+    await releaseTriageLock(primaryRoot);
   }
-
-  await writeTriageState(primaryRoot, state);
-  return { passCount, results };
 }

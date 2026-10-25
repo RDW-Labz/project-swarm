@@ -11,6 +11,15 @@ import {
   memoryPressureHoldLine,
   memoryPressureLevel,
 } from './machine-limit.mjs';
+import { addGoal } from './backlog.mjs';
+import { markDone } from './inbox.mjs';
+import { inboxDeps } from './inbox-commands.mjs';
+import {
+  integrateBlockerRunIdFromId,
+} from './journal.mjs';
+import { integrationBlocker } from './autopilot.mjs';
+import { integrateCheckoutGitState } from './generated-state.mjs';
+import { buildHandlersMap } from './needs-you-triage.mjs';
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
@@ -50,6 +59,86 @@ function ticketFiles(ticket) {
   return [];
 }
 
+function splitParkIngestRunId(item) {
+  if (!item || typeof item !== 'object') return null;
+  if (item.ingestRun) return String(item.ingestRun);
+  if (item.runId) return String(item.runId);
+  const blob = `${item.text ?? ''} ${item.title ?? ''}`;
+  const match = blob.match(/--ingest\s+([A-Za-z0-9][A-Za-z0-9._-]+)/);
+  return match ? match[1] : null;
+}
+
+/** Production needs-you triage handlers (safe scope commands only; never executes item text). */
+export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
+  const handlers = Object.create(null);
+  const env = inject.env ?? process.env;
+  const startScope = inject.startScope;
+
+  handlers['split-park'] = async ({ root, item, deps }) => {
+    const runId = splitParkIngestRunId(item);
+    if (!runId) return { ok: false, error: 'split-park: missing ingest run id' };
+    const { runScopeCommand } = await import('./scope-commands.mjs');
+    const res = await runScopeCommand(root, 'split', ['--ingest', runId, '--merge', '--max-repairs', '3'], deps.scopeDeps ?? {});
+    const ok = res?.exitCode === 0;
+    return { ok, error: ok ? null : String(res?.stdout ?? 'split ingest failed').slice(0, 500) };
+  };
+
+  const integrateRunForRoot = async (root, runId) => {
+    if (typeof inject.integrate === 'function') return inject.integrate(root, runId);
+    const { integrateRun } = await import('./swarm.mjs');
+    return integrateRun(root, runId, {});
+  };
+
+  handlers.integrate = async ({ root, item }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate: missing run id' };
+    try {
+      const out = await integrateRunForRoot(root, runId);
+      const failed = out?.status === 'failed' || out?.integrationStatus === 'failed-check';
+      return { ok: !failed, error: failed ? String(out?.message ?? 'integrate failed') : null };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  };
+
+  handlers['integrate-checkout'] = async ({ root, item, deps }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate-checkout: missing run id' };
+    let checkout = null;
+    try {
+      if (typeof deps.checkout === 'function') checkout = await deps.checkout(root);
+    } catch { checkout = null; }
+    try {
+      const gitState = await integrateCheckoutGitState(root, {
+        exec: typeof deps.gitExecForIntegrate === 'function'
+          ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+          : undefined,
+        outputPaths: Array.isArray(item.outputPaths) ? item.outputPaths : [],
+      });
+      if (gitState) checkout = { ...checkout, ...gitState, dirty: false };
+    } catch { /* use checkout as-is */ }
+    const why = integrationBlocker(checkout, { outputPaths: Array.isArray(item.outputPaths) ? item.outputPaths : [] });
+    if (why) return { ok: false, error: why };
+    try {
+      const out = await integrateRunForRoot(root, runId);
+      const failed = out?.status === 'failed' || out?.integrationStatus === 'failed-check';
+      return { ok: !failed, error: failed ? String(out?.message ?? 'integrate failed') : null };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  };
+
+  handlers['ci-failure'] = async ({ root, deps }) => {
+    const scope = typeof deps.startScope === 'function' ? deps.startScope : startScope;
+    if (typeof scope !== 'function') return { ok: false, error: 'ci-failure: startScope unavailable' };
+    const out = await scope({ root, maxJobs: 1, skipSkeleton: true });
+    const ok = out?.ok !== false && out?.result !== 'held-memory';
+    return { ok, error: ok ? null : String(out?.result ?? 'start scope failed') };
+  };
+
+  return buildHandlersMap(handlers);
+}
+
 /** Dependency bundle for autopilot start-ready (live runs, busy markers, cap, go --scope). */
 export function readyAutopilotDeps(projectRoot, {
   env = process.env,
@@ -63,6 +152,7 @@ export function readyAutopilotDeps(projectRoot, {
   readPending,
   readMachine: readMachineImpl = readMachine,
   log = line => process.stderr.write(`${line}\n`),
+  installRoot = null,
 } = {}) {
   const rootForMarkers = projectRoot;
 
@@ -70,7 +160,7 @@ export function readyAutopilotDeps(projectRoot, {
     return readTickets(root);
   }
 
-  return {
+  const bundle = {
     readTickets: allTickets,
 
     async readyTickets(root) {
@@ -130,7 +220,7 @@ export function readyAutopilotDeps(projectRoot, {
     },
 
     async startScope({ root, maxJobs, skipSkeleton = false }) {
-      const cwd = path.resolve(root);
+      const cwd = path.resolve(typeof root === 'string' && root ? root : projectRoot);
       let jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
       if (memoryAware) {
         let config = {};
@@ -175,5 +265,28 @@ export function readyAutopilotDeps(projectRoot, {
         return { ok: false, result: String(error?.message ?? error) };
       }
     },
+
+    async markDone(root, id, extra = {}) {
+      const now = typeof extra.now === 'function' ? extra.now : () => Date.now();
+      return markDone(root, id, inboxDeps({ now, channel: 'agent' }));
+    },
+
+    async addGoal(root, spec, opts = {}) {
+      const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+      return addGoal(root, spec, { ...opts, now });
+    },
+
+    installRoot,
   };
+
+  bundle.needsYouTriage = {
+    handlers: buildNeedsYouTriageHandlers(projectRoot, {
+      env,
+      spawnImpl,
+      installRoot,
+      startScope: opts => bundle.startScope(opts),
+    }),
+  };
+
+  return bundle;
 }

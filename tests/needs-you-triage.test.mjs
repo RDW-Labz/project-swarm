@@ -13,8 +13,13 @@ import {
   readTriageState,
   writeTriageState,
   triageStatePath,
+  triageLockPath,
+  buildHandlersMap,
+  RISKY_WORD_FRAGMENTS,
   MAX_TRIAGE_ATTEMPTS,
+  REOPEN_SUPPRESS_MS,
 } from '../tools/needs-you-triage.mjs';
+import { readyAutopilotDeps, buildNeedsYouTriageHandlers } from '../tools/autopilot-ready-deps.mjs';
 
 const NOW = Date.parse('2025-03-01T12:00:00Z');
 
@@ -47,9 +52,33 @@ test('classification table: owner vs fixable', () => {
   assert.equal(classifyInboxItem(item({ id: 'split-park-S1-T-1', title: 'split parked' })), 'fixable');
   assert.equal(classifyInboxItem(item({ id: 'integrate-RUN--abc', title: 'integrate failed' })), 'fixable');
   assert.equal(classifyInboxItem(item({ id: 'integrate-checkout-RUN', title: 'dirty tree' })), 'fixable');
-  assert.equal(classifyInboxItem(item({ id: 'ci-failure-batch-2', title: 'CI failed' })), 'fixable');
+  assert.equal(classifyInboxItem(item({ id: 'ci-failure-batch-2', title: 'CI failed', batch: 2 })), 'fixable');
+  assert.equal(classifyInboxItem(item({ id: 'ci-failure-sec', title: 'security scan failed' })), 'owner');
+  assert.equal(classifyInboxItem(item({ id: 'ci-failure-x', title: 'unknown CI' })), 'owner');
+  assert.equal(classifyInboxItem(item({ id: 'mystery-blocker', title: 'something odd' })), 'owner');
+  assert.equal(classifyInboxItem(item({ title: '' })), 'owner');
+  assert.equal(classifyInboxItem(item({ id: 'split-park-S1-T-1', title: 'deploy retry parked' })), 'owner');
   assert.equal(inboxItemSubtype(item({ id: 'split-park-x' })), 'split-park');
   assert.equal(inboxItemSubtype(item({ id: 'integrate-checkout-R1' })), 'integrate-checkout');
+  assert.equal(classifyInboxItem(item({ triageKind: 'constructor', title: 'harmless' })), 'owner');
+});
+
+test('each risky word fragment classifies as owner on allowlisted kinds', () => {
+  for (const word of RISKY_WORD_FRAGMENTS) {
+    const title = `split parked ${word} noise`;
+    assert.equal(classifyInboxItem(item({ id: 'split-park-S1-T-9', title })), 'owner', word);
+  }
+});
+
+test('buildHandlersMap ignores prototype property names', () => {
+  const raw = Object.create(null);
+  raw['split-park'] = async () => ({ ok: true });
+  raw.constructor = async () => ({ ok: true });
+  raw.toString = async () => ({ ok: true });
+  const handlers = buildHandlersMap(raw);
+  assert.equal(typeof handlers['split-park'], 'function');
+  assert.equal(Object.hasOwn(handlers, 'constructor'), false);
+  assert.equal(Object.hasOwn(handlers, 'toString'), false);
 });
 
 test('owner decision text is required shape and blocks handlers', async t => {
@@ -125,14 +154,15 @@ test('fixable item is retried then closed on success', async t => {
 test('third failure opens exactly one swarm-fix goal and closes the item', async t => {
   const root = await tmp(t);
   const swarmRoot = await tmp(t);
-  const journal = [{ kind: 'blocker', id: 'ci-failure-1', text: 'ci broke' }];
+  const journal = [{ kind: 'blocker', id: 'ci-failure-batch-1', text: 'ci broke' }];
   const appended = [];
   const goals = [];
   const inboxItem = {
     kind: 'blocker',
-    id: 'ci-failure-1',
+    id: 'ci-failure-batch-1',
     project: root,
     title: 'ci broke',
+    batch: 1,
     unblocks: 0,
     since: '2025-01-01T00:00:00.000Z',
   };
@@ -156,7 +186,163 @@ test('third failure opens exactly one swarm-fix goal and closes the item', async
   }
   assert.equal(goals.length, 1);
   assert.ok(goals[0].spec.goal.includes('SWARM-FIX:'));
+  assert.ok(!goals[0].spec.goal.includes(root));
   assert.ok(appended.some(e => e.e?.resolved === true));
+});
+
+test('swarm-fix does not close or claim a goal without an id', async t => {
+  const root = await tmp(t);
+  const inboxItem = {
+    kind: 'blocker',
+    id: 'ci-failure-batch-9',
+    project: root,
+    title: 'ci broke',
+    batch: 9,
+    unblocks: 0,
+    since: '2025-01-01T00:00:00.000Z',
+  };
+  const journal = [{ kind: 'blocker', id: inboxItem.id, text: 'ci broke' }];
+  const appended = [];
+  const deps = {
+    now: () => NOW,
+    swarmRoot: root,
+    readJournal: async () => journal,
+    appendEvent: async (r, e) => { appended.push(e); journal.push(e); },
+    collectInbox: async () => [inboxItem],
+    addGoal: async () => ({}),
+    needsYouTriage: {
+      handlers: {
+        'ci-failure': async () => ({ ok: false, error: 'still red' }),
+      },
+    },
+  };
+  for (let i = 0; i < MAX_TRIAGE_ATTEMPTS; i += 1) {
+    await runNeedsYouTriagePass(root, deps);
+  }
+  assert.equal(appended.filter(e => e.resolved === true).length, 0);
+});
+
+test('missing swarm root leaves item stuck without double SWARM-FIX log', async t => {
+  const root = await tmp(t);
+  const logs = [];
+  const inboxItem = {
+    kind: 'blocker',
+    id: 'ci-failure-batch-3',
+    project: root,
+    title: 'ci broke',
+    batch: 3,
+    unblocks: 0,
+    since: '2025-01-01T00:00:00.000Z',
+  };
+  const deps = {
+    now: () => NOW,
+    readJournal: async () => [{ kind: 'blocker', id: inboxItem.id, text: 'ci broke' }],
+    appendEvent: async () => {},
+    collectInbox: async () => [inboxItem],
+    addGoal: async () => { throw new Error('should not write goal into app repo'); },
+    needsYouTriage: {
+      handlers: {
+        'ci-failure': async () => ({ ok: false, error: 'nope' }),
+      },
+    },
+  };
+  for (let i = 0; i < MAX_TRIAGE_ATTEMPTS; i += 1) {
+    await runNeedsYouTriagePass(root, deps, { log: line => logs.push(line) });
+  }
+  assert.equal(logs.length, 1);
+  assert.ok(!logs[0].includes('SWARM-FIX'));
+});
+
+test('corrupt triage state aborts the pass without resetting counts', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.dirname(triageStatePath(root)), { recursive: true });
+  await fs.writeFile(triageStatePath(root), '{not-json', 'utf8');
+  const calls = [];
+  const out = await runNeedsYouTriagePass(root, {
+    now: () => NOW,
+    readJournal: async () => [],
+    appendEvent: async () => {},
+    collectInbox: async () => {
+      calls.push('inbox');
+      return [{ kind: 'blocker', id: 'split-park-S1-T-1', project: root, title: 'x', unblocks: 0, since: '2025-01-01T00:00:00.000Z' }];
+    },
+    needsYouTriage: { handlers: { 'split-park': async () => ({ ok: true }) } },
+  });
+  assert.equal(out.error, 'state-unreadable');
+  assert.equal(calls.length, 0);
+});
+
+test('triage lock excludes a concurrent pass', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.dirname(triageLockPath(root)), { recursive: true });
+  await fs.writeFile(triageLockPath(root), `${JSON.stringify({ pid: 1, at: NOW })}\n`, { mode: 0o600 });
+  const out = await runNeedsYouTriagePass(root, {
+    now: () => NOW,
+    readJournal: async () => [],
+    appendEvent: async () => {},
+    collectInbox: async () => [{ kind: 'blocker', id: 'split-park-S1-T-1', project: root, title: 'x', unblocks: 0, since: '2025-01-01T00:00:00.000Z' }],
+    needsYouTriage: { handlers: { 'split-park': async () => ({ ok: true }) } },
+  });
+  assert.equal(out.skipped, 'locked');
+});
+
+test('reopen suppression never auto-closes an owner-class item', async t => {
+  const root = await tmp(t);
+  const ownerItem = {
+    kind: 'decision',
+    id: 'd-reopen',
+    project: root,
+    text: 'Pick?',
+    choices: ['a', 'b'],
+    title: 'Pick?',
+    unblocks: 0,
+    since: '2025-01-01T00:00:00.000Z',
+  };
+  const state = await readTriageState(root);
+  state.suppressReopen[`${root}:decision:d-reopen`] = NOW + REOPEN_SUPPRESS_MS;
+  await writeTriageState(root, state);
+  const appended = [];
+  const out = await runNeedsYouTriagePass(root, {
+    now: () => NOW,
+    readJournal: async () => [],
+    appendEvent: async (r, e) => { appended.push(e); },
+    collectInbox: async () => [ownerItem],
+  });
+  assert.equal(out.results[0]?.action, 'owner');
+  assert.equal(appended.length, 0);
+});
+
+test('production deps expose handlers and run a fake item through them', async t => {
+  const root = await tmp(t);
+  let scopeCalled = false;
+  const handlers = buildNeedsYouTriageHandlers(root, {
+    startScope: async () => {
+      scopeCalled = true;
+      return { ok: true, result: 'started' };
+    },
+  });
+  assert.equal(typeof handlers['ci-failure'], 'function');
+  const ready = readyAutopilotDeps(root, {
+    spawnImpl: () => ({ once() {}, unref() {} }),
+    liveBusyMarkers: async () => [],
+    listLiveRuns: async () => [],
+    checkProjectCap: async () => null,
+    readTickets: async () => [],
+    readPending: async () => [],
+  });
+  assert.equal(typeof ready.needsYouTriage?.handlers?.['split-park'], 'function');
+  const out = await handlers['ci-failure']({
+    root,
+    item: { id: 'ci-failure-batch-1', batch: 1, title: 'fail' },
+    deps: {
+      startScope: async () => {
+        scopeCalled = true;
+        return { ok: true, result: 'started' };
+      },
+    },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(scopeCalled, true);
 });
 
 test('attempt counters survive restart via state file', async t => {
