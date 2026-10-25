@@ -272,23 +272,24 @@ test('concurrent createJobGrant for the same jobId does not silently race', asyn
   assert.equal(fail.code, 'EEXIST');
 });
 
-async function simulateServiceRun(command, context) {
+async function simulateServiceRun(argv, context) {
   let invoked = false;
-  const guard = guardJobCommandExecution({ ...context, command });
+  const guard = guardJobCommandExecution({ ...context, argv });
   if (!guard.proceed) {
     return {
       invoked,
       code: guard.exitCode,
       message: guard.message,
+      reason: guard.reason,
     };
   }
   invoked = true;
-  const child = spawn(command, { shell: true, stdio: 'ignore' });
+  const child = spawn(argv[0], argv.slice(1), { stdio: 'ignore' });
   const code = await new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('close', resolve);
   });
-  return { invoked, code, message: '' };
+  return { invoked, code, message: '', reason: '' };
 }
 
 function syntheticIsolatedGrant(jobId) {
@@ -302,28 +303,26 @@ function syntheticIsolatedGrant(jobId) {
 test('isolated job git push is denied at the service with exit 1 before invocation', async () => {
   const project = { sandbox: { isolated: true } };
   const grant = syntheticIsolatedGrant('job-push-deny');
-  const result = await simulateServiceRun('git push origin main', { project, grant });
+  const result = await simulateServiceRun(['git', 'push', 'origin', 'main'], { project, grant });
   assert.equal(result.invoked, false, 'git push must not be spawned for isolated jobs');
   assert.equal(result.code, DENY_EXIT_CODE);
   assert.match(result.message, /git push/i);
   assert.equal(result.message, GIT_PUSH_DENIED_MESSAGE);
 });
 
-test('isolated job denies obfuscated git push forms before invocation', async () => {
+test('isolated job denies obfuscated git push argv forms before invocation', async () => {
   const project = { sandbox: { isolated: true } };
   const grant = syntheticIsolatedGrant('job-push-obfusc');
   const attempts = [
-    'git  push origin',
-    'git\tpush',
-    'git -c http.version=HTTP/1.1 push',
-    'env git push',
-    'sh -c "git push origin"',
+    ['git', '-c', 'http.version=HTTP/1.1', 'push', 'origin'],
+    ['env', 'git', 'push'],
+    ['sh', '-c', 'git push origin'],
   ];
-  for (const command of attempts) {
-    const guard = guardJobCommandExecution({ project, grant, command });
-    assert.equal(guard.proceed, false, command);
-    assert.equal(guard.exitCode, 1, command);
-    assert.match(guard.message, /git push|git alias/i, command);
+  for (const argv of attempts) {
+    const guard = guardJobCommandExecution({ project, grant, argv });
+    assert.equal(guard.proceed, false, argv.join(' '));
+    assert.equal(guard.exitCode, 1, argv.join(' '));
+    assert.match(guard.message, /git push|git alias/i, argv.join(' '));
   }
 });
 
@@ -353,8 +352,9 @@ test('legacy (non-isolated) project jobs may still run git push as before', asyn
   assert.equal(pushGuard.proceed, true);
 });
 
-test('isolated job detected via grant env handles is denied git push', async () => {
+test('isolated job detected via grant env handles is denied git push with explicit argv', async t => {
   const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-guard-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
   const grant = await createJobGrant({
     grantsRoot,
     jobId: 'job-env-guard',
@@ -366,11 +366,68 @@ test('isolated job detected via grant env handles is denied git push', async () 
   const guard = guardJobCommandExecution({
     project,
     env,
-    command: 'git push',
+    argv: ['git', 'push'],
   });
   assert.equal(guard.proceed, false);
   assert.equal(guard.exitCode, 1);
-  await fs.rm(grantsRoot, { recursive: true, force: true });
+});
+
+test('project flag false but grant isolated is denied (fail closed)', () => {
+  const project = { sandbox: { isolated: false } };
+  const grant = syntheticIsolatedGrant('job-mismatch');
+  const guard = guardJobCommandExecution({
+    project,
+    grant,
+    argv: ['git', 'status'],
+  });
+  assert.equal(guard.proceed, false);
+  assert.equal(guard.reason, 'isolated-signal-mismatch');
+});
+
+test('isolated project with no grant or env is denied', () => {
+  const project = { sandbox: { isolated: true } };
+  const guard = guardJobCommandExecution({
+    project,
+    argv: ['git', 'status'],
+  });
+  assert.equal(guard.proceed, false);
+  assert.equal(guard.reason, 'isolated-project-missing-grant');
+});
+
+test('isolated project with explicit legacy grant may proceed', () => {
+  const project = { sandbox: { isolated: true } };
+  const grant = { mode: 'legacy', jobId: 'job-legacy-on-isolated-project' };
+  const guard = guardJobCommandExecution({
+    project,
+    grant,
+    command: 'git push origin main',
+  });
+  assert.equal(guard.proceed, true);
+});
+
+test('isolated job raw shell command string is denied as unparseable', () => {
+  const project = { sandbox: { isolated: true } };
+  const grant = syntheticIsolatedGrant('job-shell-deny');
+  const guard = guardJobCommandExecution({
+    project,
+    grant,
+    command: 'echo hello',
+  });
+  assert.equal(guard.proceed, false);
+  assert.equal(guard.reason, 'isolated-job-unparseable-command');
+});
+
+test('isolated job explicit argv git push remains denied (regression)', () => {
+  const project = { sandbox: { isolated: true } };
+  const grant = syntheticIsolatedGrant('job-argv-push');
+  const guard = guardJobCommandExecution({
+    project,
+    grant,
+    argv: ['git', 'push', 'origin', 'main'],
+  });
+  assert.equal(guard.proceed, false);
+  assert.equal(guard.reason, 'isolated-job-denied-git-push');
+  assert.equal(guard.message, GIT_PUSH_DENIED_MESSAGE);
 });
 
 test('createJobGrant rejects a too-short grantKey', async t => {

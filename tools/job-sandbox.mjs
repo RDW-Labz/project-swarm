@@ -54,19 +54,51 @@ export function isJobRunningIsolated({ grant, env } = {}) {
 export function messageForDenialReason(reason) {
   if (reason === 'isolated-job-denied-git-push') return GIT_PUSH_DENIED_MESSAGE;
   if (reason === 'isolated-job-denied-git-alias') return GIT_ALIAS_DENIED_MESSAGE;
+  if (reason === 'isolated-project-missing-grant') {
+    return 'sandbox: isolated project requires a job grant or isolated env handles';
+  }
+  if (reason === 'isolated-job-unparseable-command') {
+    return 'sandbox: isolated jobs require an explicit argv array for command screening';
+  }
+  if (reason === 'isolated-signal-mismatch') {
+    return 'sandbox: job isolation signals disagree with project configuration';
+  }
   return 'sandbox: command denied for isolated job';
 }
 
 /**
- * Normalize argv for policy evaluation (spawn argv or a single shell command string).
+ * @param {string} reason
+ * @returns {{ proceed: false, exitCode: number, message: string, reason: string }}
+ */
+function denyJobCommand(reason) {
+  return {
+    proceed: false,
+    exitCode: DENY_EXIT_CODE,
+    message: messageForDenialReason(reason),
+    reason,
+  };
+}
+
+/**
+ * Whether the caller supplied a real argv array (not a shell command string).
  *
  * @param {readonly string[] | undefined} argv
  * @param {string | undefined} command
+ * @returns {boolean}
+ */
+export function hasExplicitArgvForCommandCheck(argv) {
+  return Array.isArray(argv) && argv.length > 0;
+}
+
+/**
+ * Normalize argv for policy evaluation. Only explicit argv arrays are valid for isolated
+ * screening; raw shell command strings must be rejected by the guard before calling this.
+ *
+ * @param {readonly string[] | undefined} argv
  * @returns {readonly string[]}
  */
-export function argvForCommandCheck(argv, command) {
+export function argvForCommandCheck(argv) {
   if (Array.isArray(argv) && argv.length > 0) return argv;
-  if (typeof command === 'string' && command.length > 0) return [command];
   return [];
 }
 
@@ -90,14 +122,33 @@ export function guardJobCommandExecution({
   argv,
   command,
 } = {}) {
-  if (!isProjectIsolationEnabled(project)) {
-    return { proceed: true };
+  const projectIsolated = isProjectIsolationEnabled(project);
+  const jobIsolated = isJobRunningIsolated({ grant, env });
+  const grantLegacy = grant?.mode === 'legacy';
+
+  if (!projectIsolated && jobIsolated) {
+    return denyJobCommand('isolated-signal-mismatch');
   }
-  if (!isJobRunningIsolated({ grant, env })) {
+
+  if (projectIsolated && !jobIsolated) {
+    if (grantLegacy) {
+      return { proceed: true };
+    }
+    return denyJobCommand('isolated-project-missing-grant');
+  }
+
+  if (!projectIsolated && !jobIsolated) {
     return { proceed: true };
   }
 
-  const argvToCheck = argvForCommandCheck(argv, command);
+  const hasArgv = hasExplicitArgvForCommandCheck(argv);
+  const hasShellCommand =
+    typeof command === 'string' && command.length > 0 && !hasArgv;
+  if (hasShellCommand) {
+    return denyJobCommand('isolated-job-unparseable-command');
+  }
+
+  const argvToCheck = argvForCommandCheck(argv);
   const decision = evaluateJobCommand({
     mode: 'isolated',
     grants: { gitPush: grant?.permissions?.gitPush },
