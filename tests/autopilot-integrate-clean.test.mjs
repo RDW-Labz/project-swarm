@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   autopilotStep,
+  filterValidIntegrateOutputPaths,
   integrationBlocker,
   integrateCheckoutDirtyFromPorcelain,
   runIntegrateOutputPaths,
@@ -27,6 +28,18 @@ const iso = ms => new Date(ms).toISOString();
 async function tempRoot(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autopilot-integrate-clean-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+async function writeRunFolder(root, runId, { state = null, manifest = null } = {}) {
+  const dir = path.join(root, '.swarm', 'runs', runId);
+  await fs.mkdir(dir, { recursive: true });
+  if (state != null) {
+    await fs.writeFile(path.join(dir, 'state.json'), `${JSON.stringify(state)}\n`, 'utf8');
+  }
+  if (manifest != null) {
+    await fs.writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest)}\n`, 'utf8');
+  }
   return dir;
 }
 
@@ -330,6 +343,114 @@ test('integrateCheckoutGitState resolves non-existent output paths through symli
   });
   assert.ok(state.integrateCollisions.includes('target/widget.mjs'));
   assert.ok(!state.integrateCollisions.includes('link'));
+});
+
+test('runIntegrateOutputPaths reads complete job outputs from saved state.json', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-disk', {
+    state: {
+      id: 'r-disk',
+      status: 'complete',
+      jobs: [
+        { id: 'j1', status: 'running', outputs: ['src/running-only.mjs'] },
+        { id: 'j2', status: 'complete', outputs: ['src/from-state.mjs'] },
+      ],
+    },
+  });
+  const paths = runIntegrateOutputPaths(
+    { id: 'r-disk', status: 'complete', integrable: true, counts: { complete: 1 } },
+    [{ kind: 'run', id: 'r-disk', status: 'complete', counts: { complete: 1 } }],
+    { root },
+  );
+  assert.deepEqual(paths, ['src/from-state.mjs']);
+});
+
+test('runIntegrateOutputPaths falls back to manifest.json when state has no complete outputs', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-manifest', {
+    state: {
+      id: 'r-manifest',
+      jobs: [{ id: 'j1', status: 'complete', outputs: [] }],
+    },
+    manifest: {
+      jobs: [{ id: 'j1', outputs: ['lib/from-manifest.mjs'] }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-manifest', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['lib/from-manifest.mjs']);
+});
+
+test('runIntegrateOutputPaths ignores symlinked or unreadable saved state.json', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-bad', {});
+  const outside = path.join(root, 'outside-state.json');
+  await fs.writeFile(outside, JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/leak.mjs'] }],
+  }), 'utf8');
+  try {
+    await fs.symlink(outside, path.join(runDir, 'state.json'));
+  } catch (err) {
+    if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+      t.skip('symlinks not supported in this environment');
+      return;
+    }
+    throw err;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-bad', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+
+  const unreadable = await writeRunFolder(root, 'r-unread', {});
+  await fs.writeFile(path.join(unreadable, 'state.json'), '{not json', 'utf8');
+  assert.deepEqual(
+    runIntegrateOutputPaths({ id: 'r-unread', integrable: true }, [], { root }),
+    [],
+  );
+});
+
+test('runIntegrateOutputPaths drops absolute paths and parent segments', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-unsafe', {
+    state: {
+      jobs: [{
+        id: 'j1',
+        status: 'complete',
+        outputs: ['/etc/passwd', '../escape.mjs', 'ok/relative.mjs'],
+      }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-unsafe', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['ok/relative.mjs']);
+  assert.deepEqual(
+    filterValidIntegrateOutputPaths(['../x', '/abs', 'fine.mjs'], root),
+    ['fine.mjs'],
+  );
+});
+
+test('production-shaped run summary integrates when run folder declares outputs', async t => {
+  const root = await tempRoot(t);
+  const runId = 'r-prod';
+  await writeRunFolder(root, runId, {
+    state: {
+      id: runId,
+      status: 'complete',
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/prod-out.mjs'] }],
+    },
+  });
+  const productionRun = {
+    id: runId,
+    status: 'complete',
+    integrated: false,
+    integrable: true,
+    counts: { complete: 1, total: 1 },
+  };
+  const deps = fakeDeps({
+    journal: [{ kind: 'run', id: runId, status: 'complete', counts: productionRun.counts }],
+    runs: [productionRun],
+    integrateCheckoutGitState: async () => gitStateView(),
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.equal(step.blocked.length, 0);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), true);
 });
 
 test('autopilot never stashes or removes files during integrate gating', async t => {

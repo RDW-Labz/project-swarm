@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
@@ -283,7 +284,7 @@ function runManifest(run, events) {
   return hit?.manifest ?? null;
 }
 
-export function runSkipsIntegrateAttention(run, events, { runs } = {}) {
+export function runSkipsIntegrateAttention(run, events, { runs, root, readRunFolder } = {}) {
   if (!run || typeof run !== 'object') return true;
   if (runCountsAsIntegrated(run)) return true;
   if (['cancelled', 'abandoned'].includes(run.status)) return true;
@@ -291,10 +292,7 @@ export function runSkipsIntegrateAttention(run, events, { runs } = {}) {
   if (isAskRun(run, manifest) && runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
   if (run.integrable === false) return true;
   if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) {
-    if (run.integrable === true && runHasCompleteJob(run)
-      && runIntegrateOutputPaths(run, events, { runs }).length === 0) {
-      return false;
-    }
+    if (run.integrable === true && runHasCompleteJob(run)) return false;
     return true;
   }
   return isNonIntegratingRun(run, manifest);
@@ -501,8 +499,108 @@ function jobsFromRun(run, manifest) {
   return [...fromManifest, ...fromRun.filter(j => j?.id && !seen.has(j.id))];
 }
 
-/** Declared integrate output paths from manifest, run jobs, and lead-job child runs. */
-export function runIntegrateOutputPaths(run, events, { runs } = {}) {
+function jobListFromSaved(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value);
+  return [];
+}
+
+function jobIsComplete(job) {
+  return job && (job.status === 'complete' || job.state === 'complete');
+}
+
+/** Drop absolute paths, `..`, and anything that resolves outside `projectRoot`. */
+export function filterValidIntegrateOutputPaths(paths, projectRoot) {
+  if (!projectRoot || typeof projectRoot !== 'string') {
+    return (Array.isArray(paths) ? paths : []).map(String).filter(p => typeof p === 'string' && p && !path.isAbsolute(p) && !p.split(/[/\\]/).includes('..'));
+  }
+  const rootResolved = path.resolve(projectRoot);
+  const out = [];
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const rel = String(raw);
+    if (!rel || path.isAbsolute(rel)) continue;
+    const normalized = path.normalize(rel);
+    if (normalized.startsWith('..') || normalized.split(/[/\\]/).includes('..')) continue;
+    const resolved = path.resolve(rootResolved, normalized);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) continue;
+    out.push(normalized.split(path.sep).join('/'));
+  }
+  return out;
+}
+
+function readJsonFileNoSymlink(filePath) {
+  try {
+    const st = lstatSync(filePath);
+    if (st.isSymbolicLink()) return null;
+    const text = readFileSync(filePath, 'utf8');
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Default reader for saved run folder `state.json` / `manifest.json` (never throws). */
+export function defaultReadRunFolderSources(root, runId) {
+  if (!root || typeof runId !== 'string' || !runId) return { state: null, manifest: null };
+  const runDir = path.join(root, '.swarm', 'runs', runId);
+  try {
+    const st = lstatSync(runDir);
+    if (st.isSymbolicLink()) return { state: null, manifest: null };
+  } catch {
+    return { state: null, manifest: null };
+  }
+  return {
+    state: readJsonFileNoSymlink(path.join(runDir, 'state.json')),
+    manifest: readJsonFileNoSymlink(path.join(runDir, 'manifest.json')),
+  };
+}
+
+function collectFolderJobOutputs(jobs, { completeOnly } = {}) {
+  const paths = [];
+  const childRunIds = [];
+  for (const job of jobListFromSaved(jobs)) {
+    if (!job || typeof job !== 'object') continue;
+    if (completeOnly && !jobIsComplete(job)) continue;
+    if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
+    const childId = job.childRun ?? job.child_run;
+    if (typeof childId === 'string' && childId) childRunIds.push(childId);
+  }
+  return { paths, childRunIds };
+}
+
+function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new Set()) {
+  if (!root || typeof runId !== 'string' || !runId || visited.has(runId)) return [];
+  visited.add(runId);
+  const reader = typeof readRunFolder === 'function' ? readRunFolder : defaultReadRunFolderSources;
+  let sources;
+  try {
+    sources = reader(root, runId);
+  } catch {
+    sources = { state: null, manifest: null };
+  }
+  const state = sources?.state;
+  const manifest = sources?.manifest;
+  const fromState = collectFolderJobOutputs(state?.jobs, { completeOnly: true });
+  let paths = [...fromState.paths];
+  const childIds = new Set(fromState.childRunIds);
+  if (!paths.length) {
+    const fromManifest = collectFolderJobOutputs(manifest?.jobs, { completeOnly: false });
+    paths = [...fromManifest.paths];
+    for (const id of fromManifest.childRunIds) childIds.add(id);
+  } else {
+    for (const job of jobListFromSaved(state?.jobs)) {
+      const childId = job?.childRun ?? job?.child_run;
+      if (typeof childId === 'string' && childId) childIds.add(childId);
+    }
+  }
+  for (const childId of childIds) {
+    paths.push(...runFolderIntegrateOutputPaths(childId, root, readRunFolder, visited));
+  }
+  return filterValidIntegrateOutputPaths(paths, root);
+}
+
+/** Declared integrate output paths from manifest, run jobs, lead-job child runs, and saved run files. */
+export function runIntegrateOutputPaths(run, events, { runs, root, readRunFolder } = {}) {
   const manifest = runManifest(run, events);
   const paths = [];
   const visitedChildRuns = new Set();
@@ -522,7 +620,11 @@ export function runIntegrateOutputPaths(run, events, { runs } = {}) {
   }
 
   collectFromJobs(jobsFromRun(run, manifest));
-  return [...new Set(paths)].sort();
+  let validated = filterValidIntegrateOutputPaths(paths, root);
+  if (!validated.length && root && run?.id) {
+    validated = runFolderIntegrateOutputPaths(run.id, root, readRunFolder);
+  }
+  return [...new Set(validated)].sort();
 }
 
 function runHasCompleteJob(run) {
@@ -759,11 +861,13 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
+  const integrateCtx = { runs, root, readRunFolder: deps.readRunFolder };
+
   if (!journalBroken) {
     const open = openIds(events);
     for (const run of runs) {
       const nonIntegrating = run.integrable === false
-        || runSkipsIntegrateAttention(run, events, { runs })
+        || runSkipsIntegrateAttention(run, events, integrateCtx)
         || (run.status === 'failed' && !runHasCompleteJob(run))
         || ['cancelled', 'abandoned'].includes(run.status);
       if (!nonIntegrating) continue;
@@ -784,7 +888,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   for (const run of runs) {
     if (journalBroken) break;
-    if (runSkipsIntegrateAttention(run, events, { runs })) continue;
+    if (runSkipsIntegrateAttention(run, events, integrateCtx)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
     const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events), runs });
@@ -805,8 +909,8 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       continue;
     }
     if (decision.action === 'integrate') {
-      if (runSkipsIntegrateAttention(run, events, { runs }) || run.integrable === false) continue;
-      const outputPaths = runIntegrateOutputPaths(run, events, { runs });
+      if (runSkipsIntegrateAttention(run, events, integrateCtx) || run.integrable === false) continue;
+      const outputPaths = runIntegrateOutputPaths(run, events, integrateCtx);
       const manifest = runManifest(run, events);
       const jobs = jobsFromRun(run, manifest);
       const hasIntegratableJobs = integrableFromJobs(jobs)
