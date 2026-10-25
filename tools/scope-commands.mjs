@@ -1505,6 +1505,8 @@ function evaluateSplitIngest({
   });
   tickets = refreshed.tickets;
   rejected = refreshed.rejected;
+  const stillRejectedIds = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => stillRejectedIds.has(row.id));
   built.notes.push(...refreshed.notes);
   const pathPendingIds = new Set(pathPendingParked.map((entry) => entry.ticket.id));
   tickets = [...tickets, ...pathPendingParked.map((entry) => entry.ticket)];
@@ -1535,6 +1537,8 @@ function evaluateSplitIngest({
   addWiringDeps(tickets, existing?.tickets ?? []);
   const orderNotes = orderTestsAfterBuild(tickets, existing?.tickets ?? []);
   tickets = finalizeSplitTestStages(tickets, existing?.tickets ?? [], { notes: built.notes, rejected });
+  const rejectedIdsAfterFinalize = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => rejectedIdsAfterFinalize.has(row.id));
   for (const entry of rejected) {
     if (!built.rejected.some(row => row.id === entry.id)) built.rejected.push(entry);
   }

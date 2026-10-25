@@ -235,7 +235,68 @@ test('missing repo paths stay parked with a pending path-gate reason', () => {
   assert.equal(result.tickets.length, 0);
   assert.equal(result.parked.length, 1);
   assert.equal(result.parked[0].parkedReason, 'path-not-in-repo-pending');
+  assert.equal(result.parked[0].ticket.pathPending, true);
   assert.ok(result.parked[0].issues.some(i => /pending path gate/i.test(i.reason)));
+});
+
+test('refreshRejectedDependents restores child when repaired parent is still listed in rejected', () => {
+  const parent = base({
+    id: 'T-0001',
+    files: ['src/parent.mjs'],
+    acceptance: ['ok'],
+  });
+  const child = base({
+    id: 'T-0002',
+    dependsOn: ['T-0001'],
+    files: ['src/child.mjs'],
+    acceptance: ['ok'],
+  });
+  const rejected = [
+    { id: 'T-0001', title: parent.title, reason: 'bad shape' },
+    { id: 'T-0002', title: child.title, reason: 'depends on rejected T-0001' },
+  ];
+  const refreshed = refreshRejectedDependents({
+    tickets: [parent],
+    rejected,
+    repairedIds: new Set(['T-0001']),
+    candidateTickets: [child],
+    exists: pathExists,
+  });
+  assert.equal(refreshed.rejected.map(r => r.id).sort().join(','), 'T-0001');
+  assert.equal(refreshed.tickets.length, 2);
+  assert.ok(refreshed.tickets.some(t => t.id === 'T-0002'));
+});
+
+test('refreshRejectedDependents waits until every dependsOn parent is accepted', () => {
+  const p1 = base({ id: 'T-0001', files: ['src/a.mjs'], acceptance: ['ok'] });
+  const p2 = base({ id: 'T-0002', files: ['src/b.mjs'], acceptance: ['ok'] });
+  const child = base({
+    id: 'T-0003',
+    dependsOn: ['T-0001', 'T-0002'],
+    files: ['src/c.mjs'],
+    acceptance: ['ok'],
+  });
+  const rejected = [
+    { id: 'T-0003', title: child.title, reason: 'depends on rejected T-0001' },
+  ];
+  const onlyOneParent = refreshRejectedDependents({
+    tickets: [p1],
+    rejected,
+    repairedIds: new Set(['T-0001']),
+    candidateTickets: [p2, child],
+    exists: pathExists,
+  });
+  assert.equal(onlyOneParent.rejected.length, 1);
+  assert.equal(onlyOneParent.tickets.length, 1);
+  const bothParents = refreshRejectedDependents({
+    tickets: [p1, p2],
+    rejected: onlyOneParent.rejected,
+    repairedIds: new Set(['T-0001', 'T-0002']),
+    candidateTickets: [child],
+    exists: pathExists,
+  });
+  assert.equal(bothParents.rejected.length, 0);
+  assert.ok(bothParents.tickets.some(t => t.id === 'T-0003'));
 });
 
 test('path dependency skips cancelled or done owner tickets', () => {

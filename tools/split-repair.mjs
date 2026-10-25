@@ -306,6 +306,7 @@ export function repairTicketBatch({ tickets, ledgerTickets = [], scopeText = '',
     if (!pathOnly) return entry;
     return {
       ...entry,
+      ticket: { ...entry.ticket, pathPending: true },
       parkedReason: 'path-not-in-repo-pending',
       issues: [{
         code: 'path-pending',
@@ -347,16 +348,21 @@ export function refreshRejectedDependents({
     }
     return [...byId.values()];
   };
+  const dependencyAccepted = (depId) => {
+    if (nextTickets.some(t => t.id === depId)) return true;
+    if (repairedIds.has(depId) && !stillRejected.has(depId)) return true;
+    return false;
+  };
+
   let changed = true;
   while (changed) {
     changed = false;
     for (const [id, row] of [...rejectedById]) {
       if (!/depends on rejected/i.test(String(row.reason ?? ''))) continue;
-      const parent = String(row.reason).match(/T-[0-9]+/)?.[0];
-      if (!parent || !repairedIds.has(parent)) continue;
-      if (stillRejected.has(parent)) continue;
       const ticket = ticketById.get(id);
       if (!ticket) continue;
+      const deps = ticket.dependsOn ?? [];
+      if (!deps.length || !deps.every(dependencyAccepted)) continue;
       const shape = validateTicket(ticket);
       const paths = validateTicketPaths(ticket, { ...pathOptions, exists, allTickets: allTickets() });
       const pathErrs = [];
@@ -370,9 +376,9 @@ export function refreshRejectedDependents({
       rejectedById.delete(id);
       if (!nextTickets.some(t => t.id === id)) {
         nextTickets.push(cloneTicket(ticket));
-        notes.push(`${id}: rejected-dependency-refresh: parent ${parent} repaired; ticket restored`);
+        notes.push(`${id}: rejected-dependency-refresh: dependencies accepted; ticket restored`);
       } else {
-        notes.push(`${id}: rejected-dependency-refresh: parent ${parent} repaired; ticket kept`);
+        notes.push(`${id}: rejected-dependency-refresh: dependencies accepted; ticket kept`);
       }
       changed = true;
     }
