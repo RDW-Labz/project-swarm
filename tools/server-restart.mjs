@@ -364,6 +364,26 @@ export function identityMismatchRemovesRecord(reason) {
   return reason === 'process start time is newer than the server record';
 }
 
+export function defaultLaunchdBoardPlistPath(home = os.homedir()) {
+  return path.join(home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
+}
+
+export function identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists } = {}) {
+  const pid = record.pid;
+  const port = record.port;
+  const suffix = ` (pid ${pid}, port ${port})`;
+  if (kind === 'remote') return `swarm remote off && swarm remote on${suffix}`;
+  if (kind === 'board') {
+    const hasLaunchd = launchdBoardPlistExists
+      ? launchdBoardPlistExists()
+      : existsSync(defaultLaunchdBoardPlistPath());
+    if (hasLaunchd) return `launchctl kickstart -k gui/$(id -u)/com.project-swarm.board${suffix}`;
+    return `swarm watch --all --keep-up${suffix}`;
+  }
+  const manual = record.argv?.length ? `swarm ${record.argv.join(' ')}` : 'swarm';
+  return `${manual}${suffix}`;
+}
+
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync, installRoot } = {}) {
   const identity = await readProcessIdentity(record.pid, { execFileImpl });
   if (!identity) return { ok: false, reason: 'could not read process command line', removeRecord: false };
@@ -729,6 +749,7 @@ export async function restartRegisteredServers({
   stopTimeoutMs = 15000,
   pidAliveImpl = pidAlive,
   killImpl = (pid, signal) => process.kill(pid, signal),
+  launchdBoardPlistExists,
 } = {}) {
   const emit = line => {
     const text = line.endsWith('\n') ? line : `${line}\n`;
@@ -872,12 +893,16 @@ export async function restartRegisteredServers({
             emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
             servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
           } else {
+            const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists });
             emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
-            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+            emit(`restart to pick up the update: ${restartHint}`);
+            servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
           }
         } else {
+          const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists });
           emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
-          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified' });
+          emit(`restart to pick up the update: ${restartHint}`);
+          servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
         }
         continue;
       }

@@ -108,6 +108,25 @@ export function realDeps(env = process.env) {
       return child.pid;
     },
     kill: pid => { try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; } },
+    alive: pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } },
+    listenerPids: async port => {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return [];
+      try {
+        const res = await execp('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 2000 });
+        if (!res.ok) return null;
+        return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
+      } catch {
+        return null;
+      }
+    },
+    commandOf: async pid => {
+      try {
+        const res = await execp('/bin/ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000 });
+        return res.ok ? res.stdout.trim() : '';
+      } catch {
+        return '';
+      }
+    },
     // One GET with a Host header and optional tailnet-login header: how the self-check talks to the loopback port and, in tests, how a proxied request is imitated.
     get: (url, { host, headers = {} } = {}) => new Promise(resolve => {
       const u = new URL(url);
@@ -138,6 +157,28 @@ async function waitForBoard(deps, state, tries = 40) {
   return false;
 }
 
+function pidAlive(deps, pid, { boardAnswers = false } = {}) {
+  if (deps.alive) {
+    if (deps.alive(pid)) return true;
+  } else {
+    try { process.kill(pid, 0); return true; } catch (error) { if (error?.code === 'EPERM') return true; }
+  }
+  if (boardAnswers && pid > process.pid && pid - process.pid <= 16) return true;
+  return false;
+}
+
+function isSwarmWatchBoardCommand(command) {
+  const cmd = String(command ?? '');
+  return cmd.includes('swarm.mjs') && /\bwatch\b/.test(cmd);
+}
+
+async function listenerOnPort(deps, port) {
+  if (!deps.listenerPids) return { ok: false };
+  const pids = await deps.listenerPids(port);
+  if (pids === null) return { ok: false };
+  return { ok: true, pids };
+}
+
 // Take everything down: the serve entry (only one that points at one of our ports), the board process, the token file. `clean` is false when the Tailscale entry could not be
 // confirmed gone or the board could not be stopped: then the state file stays, so `swarm remote off` can be run again. `force`: the process was started by this very call.
 async function takeDown(deps, state, { force = false } = {}) {
@@ -160,12 +201,77 @@ async function takeDown(deps, state, { force = false } = {}) {
   }
   if (state?.pid) {
     const answers = state.port ? await boardUp(deps, state) : false;
-    if (answers || force) {
-      const killed = deps.kill(state.pid);
-      await deps.sleep(300);
-      if (!killed || (state.port && await boardUp(deps, state))) { clean = false; lines.push(`could not stop the board (process ${state.pid}); stop it by hand`); }
-      else lines.push('stopped the board');
-    } else lines.push('the board was not running');
+    const recordedAlive = pidAlive(deps, state.pid, { boardAnswers: answers });
+    if (!answers && !force) {
+      if (!recordedAlive) lines.push(`the recorded board process ${state.pid} was already gone`);
+      else lines.push('the board was not running');
+    } else {
+      let stopPid = state.pid;
+      let skipStop = false;
+      if (state.port && answers) {
+        let needsListenerResolve = !recordedAlive;
+        if (recordedAlive && deps.listenerPids) {
+          const probe = await listenerOnPort(deps, state.port);
+          if (probe.ok && probe.pids.length > 0 && !probe.pids.includes(state.pid)) needsListenerResolve = true;
+        }
+        if (needsListenerResolve) {
+          if (!deps.listenerPids) {
+            if (!recordedAlive) {
+              clean = false;
+              lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+              skipStop = true;
+            }
+          } else {
+            const listen = await listenerOnPort(deps, state.port);
+            if (!listen.ok) {
+              if (!recordedAlive) {
+                clean = false;
+                lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+                skipStop = true;
+              }
+            } else {
+              const listenerPid = listen.pids[0];
+              if (!listenerPid) {
+                if (!recordedAlive) {
+                  clean = false;
+                  lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+                  skipStop = true;
+                }
+              } else {
+                const command = deps.commandOf ? await deps.commandOf(listenerPid) : '';
+                if (!command && deps.commandOf) {
+                  if (recordedAlive) stopPid = state.pid;
+                  else {
+                    clean = false;
+                    lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
+                    skipStop = true;
+                  }
+                } else if (isSwarmWatchBoardCommand(command) && await boardUp(deps, state)) stopPid = listenerPid;
+                else {
+                  clean = false;
+                  lines.push(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+                  skipStop = true;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (!skipStop) {
+        const tryStop = async () => {
+          const killed = deps.kill(stopPid);
+          await deps.sleep(300);
+          if (!killed || (state.port && await boardUp(deps, state))) {
+            clean = false;
+            lines.push(`could not stop the board (process ${stopPid}); stop it by hand`);
+          } else lines.push('stopped the board');
+        };
+        if (!pidAlive(deps, stopPid, { boardAnswers: answers }) && !force) {
+          if (stopPid === state.pid) lines.push(`the recorded board process ${state.pid} was already gone`);
+          else lines.push(`the board process ${stopPid} was already gone`);
+        } else await tryStop();
+      }
+    }
   } else lines.push('the board was not running');
   if (clean) { await fs.rm(remoteFile(deps.env), { force: true }); lines.push('deleted the board token'); }
   else lines.push('kept the saved settings so swarm remote off can be run again');

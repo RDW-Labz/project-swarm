@@ -5,13 +5,14 @@
 ```text
 Project Swarm brief
 Goal: none
-Done: none
+Done:
+  - run 1792893834102-e14e2b42 integrated, 3 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1792415686129-b359f989 --queue
-  2. swarm "describe the goal in one sentence"
-  3. swarm status
+  1. swarm "describe the goal in one sentence"
+  2. swarm status
+  3. swarm board
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -19,3 +20,38 @@ Rules:
   - Workers run on the installed runner; update the runner only after the owner merges.
   - Record decisions with swarm note "<text>".
 ```
+
+Pending approvals:
+- blocker integrate-checkout-1792882520670-f6dc2d42 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792548393651-28032016 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792723047410-f44268a7 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792878987025-68f54d67 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879073782-cdecd07a 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879434084-d0c11147 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879559459-ee9686f7 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879612542-49b57711 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879713034-f8d39301 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879826503-17034e6a 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879950815-c483d501 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0417 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0383 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0401 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0395 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0397 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0388 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0391 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S9-T-0393 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker split-park-S1-T-0226 47h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792618361836-41e05e85 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-575f4d93 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-0aa96f6b 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618723546-ed0c23b2 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618943558-b1eacc9e 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792635375937-7fdc332b 2d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker security-1792687365474-0f0a07d2-locallane 2d branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-m8G2uR/base
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-paz2xd/base
+- unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
+- unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
+
+Generated at: 2026-10-25T02:17:06.388Z
