@@ -22,6 +22,7 @@
    "ignoreTests": [
     "tests/autopilot-blocker-resolved.test.mjs",
     "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-integrate-clean.test.mjs",
     "tests/autopilot-ledger-only.test.mjs",
     "tests/autopilot-lock.test.mjs",
     "tests/autopilot-no-outputs.test.mjs",

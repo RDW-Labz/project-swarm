@@ -20,6 +20,7 @@ import {
   integrateBlockerSuppressed,
   openBlockerIds,
 } from './journal.mjs';
+import { runNeedsYouTriagePass } from './needs-you-triage.mjs';
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -994,6 +995,10 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   if (deps.policyPass) {
     try { await executePolicyPass(root, deps, { now: nowMs }); } catch { /* policy pass never stops autopilot */ }
+  }
+
+  if (!journalBroken) {
+    try { await runNeedsYouTriagePass(root, deps, { now: nowFn }); } catch { /* needs-you triage never stops autopilot */ }
   }
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
