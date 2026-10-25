@@ -6,6 +6,7 @@
 Project Swarm brief
 Goal: none
 Done:
+  - run 1792895312551-7ece5ee0 integrated, 2 files
   - run 1792894912694-f35e66f2 integrated, 4 files
   - run 1792894670643-a2153f41 integrated, 1 files
   - run 1792893834102-e14e2b42 integrated, 3 files
@@ -24,17 +25,17 @@ Rules:
 ```
 
 Pending approvals:
-- blocker integrate-checkout-1792879713034-f8d39301 0m branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879826503-17034e6a 2m branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879950815-c483d501 4m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792878987025-68f54d67 3m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879073782-cdecd07a 3m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879434084-d0c11147 3m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879559459-ee9686f7 5m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879612542-49b57711 7m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879713034-f8d39301 9m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879826503-17034e6a 11m branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792879950815-c483d501 13m branch swarm/ledger-root /Users/bean/project-swarm
 - blocker integrate-checkout-1792882520670-f6dc2d42 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792548393651-28032016 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792723047410-f44268a7 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792878987025-68f54d67 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879073782-cdecd07a 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879434084-d0c11147 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879559459-ee9686f7 3h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1792879612542-49b57711 3h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792548393651-28032016 4h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1792723047410-f44268a7 4h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker split-park-S9-T-0417 4h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker split-park-S9-T-0383 4h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker split-park-S9-T-0401 4h branch swarm/ledger-root /Users/bean/project-swarm
@@ -56,4 +57,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-25T02:26:21.343Z
+Generated at: 2026-10-25T02:35:19.925Z

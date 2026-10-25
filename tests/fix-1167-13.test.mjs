@@ -8,6 +8,7 @@ import path from 'node:path';
 import { runRemoteCommand, readRemote, isSwarmWatchBoardCommand, validStopPid } from '../tools/remote.mjs';
 import {
   identityUnverifiedRestartHint,
+  restartHintContextLine,
   restartRegisteredServers,
   writeRegistryRecord,
   remoteServerFile,
@@ -376,8 +377,22 @@ test('identity-unverified restart hints for remote and board', async t => {
   const remoteHint = identityUnverifiedRestartHint('remote', { pid: remotePid, port: 9200 }, {});
   assert.equal(board.restartHint, boardHint);
   assert.equal(remote.restartHint, remoteHint);
-  assert.ok(lines.some(l => l.includes(remoteHint)));
-  assert.ok(lines.some(l => l.includes(boardHint)));
+  assert.doesNotMatch(boardHint, /\(pid/);
+  assert.doesNotMatch(remoteHint, /\(pid/);
+  assert.ok(lines.some(l => l.trim() === restartHintContextLine(remotePid, 9200)));
+  assert.ok(lines.some(l => l.trim() === restartHintContextLine(boardPid, 9100)));
+  assert.ok(lines.some(l => l.trim() === remoteHint));
+  assert.ok(lines.some(l => l.trim() === boardHint));
   assert.match(lines.join(''), /restart to pick up the update:/);
   await fs.rm(home, { recursive: true, force: true });
+});
+
+test('identity-unverified launchd board hint uses numeric gui uid and paste-safe command', () => {
+  const hint = identityUnverifiedRestartHint('board', { pid: 42, port: 8080, argv: [] }, {
+    launchdBoardPlistExists: () => true,
+    getuid: () => 501,
+  });
+  assert.equal(hint, "'launchctl' 'kickstart' '-k' 'gui/501/com.project-swarm.board'");
+  assert.doesNotMatch(hint, /\$\(id -u\)/);
+  assert.doesNotMatch(hint, /\(pid/);
 });

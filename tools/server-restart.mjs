@@ -368,30 +368,42 @@ export function defaultLaunchdBoardPlistPath(home = os.homedir()) {
   return path.join(home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
 }
 
-function restartHintTokens(tokens, suffix) {
-  return `${tokens.map(shellQuote).join(' ')}${suffix}`;
+function restartHintCommand(tokens) {
+  return tokens.map(shellQuote).join(' ');
 }
 
-export function identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists } = {}) {
-  const pid = record.pid;
-  const port = record.port;
-  const suffix = ` (pid ${pid}, port ${port})`;
+export function restartHintContextLine(pid, port) {
+  return `# pid ${pid}, port ${port}`;
+}
+
+export function identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists, getuid } = {}) {
   if (kind === 'remote') {
-    return `${restartHintTokens(['swarm', 'remote', 'off'], '')} && ${restartHintTokens(['swarm', 'remote', 'on'], suffix)}`;
+    return `${restartHintCommand(['swarm', 'remote', 'off'])} && ${restartHintCommand(['swarm', 'remote', 'on'])}`;
   }
   if (kind === 'board') {
     const hasLaunchd = launchdBoardPlistExists
       ? launchdBoardPlistExists()
       : existsSync(defaultLaunchdBoardPlistPath());
     if (hasLaunchd) {
-      return restartHintTokens(['launchctl', 'kickstart', '-k', 'gui/$(id -u)/com.project-swarm.board'], suffix);
+      const uid = typeof getuid === 'function' ? getuid() : process.getuid();
+      const target = `gui/${uid}/com.project-swarm.board`;
+      return restartHintCommand(['launchctl', 'kickstart', '-k', target]);
     }
-    return restartHintTokens(['swarm', 'watch', '--all', '--keep-up'], suffix);
+    return restartHintCommand(['swarm', 'watch', '--all', '--keep-up']);
   }
   const manual = record.argv?.length
-    ? restartHintTokens(['swarm', ...record.argv], suffix)
-    : restartHintTokens(['swarm'], suffix);
+    ? restartHintCommand(['swarm', ...record.argv])
+    : restartHintCommand(['swarm']);
   return manual;
+}
+
+function emitIdentityUnverifiedRestart(emit, { label, record, kind, reasonSuffix, launchdBoardPlistExists, getuid }) {
+  const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists, getuid });
+  emit(`${label} server record (pid ${record.pid}): ${reasonSuffix}`);
+  emit('restart to pick up the update:');
+  emit(restartHintContextLine(record.pid, record.port));
+  emit(restartHint);
+  return restartHint;
 }
 
 export async function verifyRegistryPid(record, runnerPath, { execFileImpl = execFileAsync, installRoot } = {}) {
@@ -760,6 +772,7 @@ export async function restartRegisteredServers({
   pidAliveImpl = pidAlive,
   killImpl = (pid, signal) => process.kill(pid, signal),
   launchdBoardPlistExists,
+  getuid,
 } = {}) {
   const emit = line => {
     const text = line.endsWith('\n') ? line : `${line}\n`;
@@ -903,15 +916,25 @@ export async function restartRegisteredServers({
             emit(`${label} stale server record (pid ${record.pid}): ${identity.reason}; record removed`);
             servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'stale-record' });
           } else {
-            const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists });
-            emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept (changed concurrently)`);
-            emit(`restart to pick up the update: ${restartHint}`);
+            const restartHint = emitIdentityUnverifiedRestart(emit, {
+              label,
+              record,
+              kind,
+              reasonSuffix: `${identity.reason}; record kept (changed concurrently)`,
+              launchdBoardPlistExists,
+              getuid,
+            });
             servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
           }
         } else {
-          const restartHint = identityUnverifiedRestartHint(kind, record, { launchdBoardPlistExists });
-          emit(`${label} server record (pid ${record.pid}): ${identity.reason}; record kept`);
-          emit(`restart to pick up the update: ${restartHint}`);
+          const restartHint = emitIdentityUnverifiedRestart(emit, {
+            label,
+            record,
+            kind,
+            reasonSuffix: `${identity.reason}; record kept`,
+            launchdBoardPlistExists,
+            getuid,
+          });
           servers.push({ kind, pid: record.pid, from, to: targetVersion, port, status: 'identity-unverified', restartHint });
         }
         continue;
