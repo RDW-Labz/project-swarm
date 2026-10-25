@@ -102,7 +102,7 @@ describe('burst gpu gates', () => {
     const row = gate(result, 'gpu-first-try-pass-rate');
     assert.equal(row.measured, 0.9);
     assert.equal(row.pass, true);
-    assert.equal(row.value, '90 percent');
+    assert.equal(row.value, '90.0 percent');
   });
 
   test('gpu-first-try-pass-rate FAIL below 90% from benchmark replay', () => {
@@ -114,7 +114,84 @@ describe('burst gpu gates', () => {
     const row = gate(result, 'gpu-first-try-pass-rate');
     assert.equal(row.measured, 0.7);
     assert.equal(row.pass, false);
-    assert.equal(row.value, '70 percent');
+    assert.equal(row.value, '70.0 percent');
+  });
+
+  test('flat-rate-rate-limited ignores stale precomputed true when lane data shows not limited', () => {
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: 3,
+      flatRateRateLimited: true,
+      flatRateLanes: [
+        { name: 'cursor', rateLimited: true },
+        { name: 'codex', rateLimited: false },
+      ],
+      gpuFirstTryPassRate: 1,
+    });
+    const row = gate(result, 'flat-rate-rate-limited');
+    assert.equal(row.pass, false);
+    assert.equal(row.value, 'not all flat-rate lanes limited');
+  });
+
+  test('numeric gate inputs reject coercion from boolean, string, array, and null', () => {
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: true,
+      flatRateRateLimited: true,
+      gpuFirstTryPassRate: '1',
+    });
+    const days = gate(result, 'ready-over-free-slots');
+    assert.equal(days.pass, false);
+    assert.equal(days.measured, null);
+    assert.match(days.value, /missing/);
+
+    const gpu = gate(result, 'gpu-first-try-pass-rate');
+    assert.equal(gpu.pass, false);
+    assert.equal(gpu.measured, null);
+    assert.equal(gpu.value, 'missing');
+
+    const withNull = computeBurstGpuGates({
+      readyOverFreeDays: null,
+      flatRateRateLimited: true,
+      gpuFirstTryPassRate: [1],
+    });
+    assert.equal(gate(withNull, 'ready-over-free-slots').pass, false);
+    assert.equal(gate(withNull, 'gpu-first-try-pass-rate').pass, false);
+  });
+
+  test('gpu-first-try-pass-rate display matches FAIL verdict just below threshold', () => {
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: 3,
+      flatRateRateLimited: true,
+      gpuFirstTryPassRate: 0.895,
+    });
+    const row = gate(result, 'gpu-first-try-pass-rate');
+    assert.equal(row.pass, false);
+    assert.equal(row.value, '89.5 percent');
+  });
+
+  test('malformed benchmark replay rows do not throw and count as failing data', () => {
+    const malformed = [
+      { status: 'pass', retries: 0 },
+      null,
+      { status: 'pass', retries: 0 },
+    ];
+    assert.equal(gpuFirstTryPassRateFromReplay(malformed), 2 / 3);
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: 3,
+      flatRateRateLimited: true,
+      benchmarkReplayResults: malformed,
+    });
+    const row = gate(result, 'gpu-first-try-pass-rate');
+    assert.equal(row.pass, false);
+    assert.equal(row.measured, 2 / 3);
+    assert.equal(row.value, `${((2 / 3) * 100).toFixed(1)} percent`);
+
+    const nonObject = computeBurstGpuGates({
+      readyOverFreeDays: 3,
+      flatRateRateLimited: true,
+      benchmarkReplayResults: [null, 'bad'],
+    });
+    assert.equal(gate(nonObject, 'gpu-first-try-pass-rate').pass, false);
+    assert.equal(gate(nonObject, 'gpu-first-try-pass-rate').measured, 0);
   });
 
   test('three-line output order matches ready/free, rate limit, GPU pass rate', () => {
@@ -126,7 +203,7 @@ describe('burst gpu gates', () => {
     assert.deepEqual(result.lines, [
       'gate ready-over-free-slots: 4 consecutive days PASS',
       'gate flat-rate-rate-limited: not all flat-rate lanes limited FAIL',
-      'gate gpu-first-try-pass-rate: 73 percent FAIL',
+      'gate gpu-first-try-pass-rate: 73.0 percent FAIL',
     ]);
     assert.equal(result.pass, false);
     assert.equal(

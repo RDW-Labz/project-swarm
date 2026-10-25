@@ -30,7 +30,7 @@ export function readyOverFreeSlotsRatio(readyTickets, freeSlots) {
 export function gpuFirstTryPassRateFromReplay(results) {
   const rows = results ?? [];
   if (!rows.length) return null;
-  const firstTry = rows.filter((r) => r.status === 'pass' && (r.retries ?? 0) === 0).length;
+  const firstTry = rows.filter((r) => r?.status === 'pass' && (r?.retries ?? 0) === 0).length;
   return firstTry / rows.length;
 }
 
@@ -40,15 +40,23 @@ export function flatRateAllLimited(flatRateLanes) {
   return lanes.every((lane) => lane?.rateLimited === true);
 }
 
+function isValidReadyOverFreeDays(x) {
+  return typeof x === 'number' && Number.isFinite(x) && x >= 0;
+}
+
+function isValidGpuFirstTryPassRate(x) {
+  return typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1;
+}
+
 function gateRows({ readyOverFreeDays, flatRateRateLimited, gpuFirstTryPassRate }) {
-  const days = Number(readyOverFreeDays);
-  const gpuRate = Number(gpuFirstTryPassRate);
+  const daysValid = isValidReadyOverFreeDays(readyOverFreeDays);
+  const gpuValid = isValidGpuFirstTryPassRate(gpuFirstTryPassRate);
   return [
     {
       name: 'ready-over-free-slots',
-      value: `${Number.isFinite(days) ? days : 'missing'} consecutive days`,
-      measured: Number.isFinite(days) ? days : null,
-      pass: Number.isFinite(days) && days >= GATE_THRESHOLDS.minReadyOverFreeDays,
+      value: daysValid ? `${readyOverFreeDays} consecutive days` : 'missing consecutive days',
+      measured: daysValid ? readyOverFreeDays : null,
+      pass: daysValid && readyOverFreeDays >= GATE_THRESHOLDS.minReadyOverFreeDays,
     },
     {
       name: 'flat-rate-rate-limited',
@@ -60,9 +68,9 @@ function gateRows({ readyOverFreeDays, flatRateRateLimited, gpuFirstTryPassRate 
     },
     {
       name: 'gpu-first-try-pass-rate',
-      value: Number.isFinite(gpuRate) ? `${(gpuRate * 100).toFixed(0)} percent` : 'missing',
-      measured: Number.isFinite(gpuRate) ? gpuRate : null,
-      pass: Number.isFinite(gpuRate) && gpuRate >= GATE_THRESHOLDS.minGpuFirstTryPassRate,
+      value: gpuValid ? `${(gpuFirstTryPassRate * 100).toFixed(1)} percent` : 'missing',
+      measured: gpuValid ? gpuFirstTryPassRate : null,
+      pass: gpuValid && gpuFirstTryPassRate >= GATE_THRESHOLDS.minGpuFirstTryPassRate,
     },
   ];
 }
@@ -97,8 +105,9 @@ export function computeBurstGpuGates(inputs = {}) {
     readyOverFreeDays = Number.NaN;
   }
 
-  const flatRateRateLimited = inputs.flatRateRateLimited === true
-    || (inputs.flatRateLanes != null && flatRateAllLimited(inputs.flatRateLanes));
+  const flatRateRateLimited = inputs.flatRateLanes != null
+    ? flatRateAllLimited(inputs.flatRateLanes)
+    : inputs.flatRateRateLimited === true;
 
   let gpuFirstTryPassRate = inputs.gpuFirstTryPassRate;
   if (gpuFirstTryPassRate === undefined && inputs.benchmarkReplayResults != null) {
