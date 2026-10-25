@@ -6,6 +6,7 @@
 Project Swarm brief
 Goal: none
 Done:
+  - run 1792894670643-a2153f41 integrated, 1 files
   - run 1792893834102-e14e2b42 integrated, 3 files
 Running: none
 Needs the owner: none
@@ -54,4 +55,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-25T02:17:06.388Z
+Generated at: 2026-10-25T02:19:13.909Z

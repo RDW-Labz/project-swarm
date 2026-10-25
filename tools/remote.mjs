@@ -108,25 +108,6 @@ export function realDeps(env = process.env) {
       return child.pid;
     },
     kill: pid => { try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; } },
-    alive: pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } },
-    listenerPids: async port => {
-      if (!Number.isInteger(port) || port < 1 || port > 65535) return [];
-      try {
-        const res = await execp('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 2000 });
-        if (!res.ok) return null;
-        return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
-      } catch {
-        return null;
-      }
-    },
-    commandOf: async pid => {
-      try {
-        const res = await execp('/bin/ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000 });
-        return res.ok ? res.stdout.trim() : '';
-      } catch {
-        return '';
-      }
-    },
     // One GET with a Host header and optional tailnet-login header: how the self-check talks to the loopback port and, in tests, how a proxied request is imitated.
     get: (url, { host, headers = {} } = {}) => new Promise(resolve => {
       const u = new URL(url);
@@ -141,6 +122,32 @@ export function realDeps(env = process.env) {
     sleep: ms => new Promise(r => setTimeout(r, ms)),
     now: Date.now,
   };
+}
+
+// Production CLI deps: dead-pid checks and real listener lookup (optional in injected test deps).
+export function completeRealDeps(env = process.env) {
+  const deps = realDeps(env);
+  const execp = (file, args, opts) => new Promise(resolve => execFile(file, args, { timeout: 30000, maxBuffer: 4 * 1024 * 1024, env, ...opts }, (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout ?? ''), stderr: String(stderr ?? error?.message ?? '') })));
+  deps.alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
+  deps.listenerPids = async port => {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return [];
+    try {
+      const res = await execp('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeout: 2000 });
+      if (!res.ok) return null;
+      return res.stdout.trim().split('\n').filter(Boolean).map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0);
+    } catch {
+      return null;
+    }
+  };
+  deps.commandOf = async pid => {
+    try {
+      const res = await execp('/bin/ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000 });
+      return res.ok ? res.stdout.trim() : '';
+    } catch {
+      return '';
+    }
+  };
+  return deps;
 }
 
 const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
@@ -208,50 +215,42 @@ async function takeDown(deps, state, { force = false } = {}) {
     } else {
       let stopPid = state.pid;
       let skipStop = false;
-      if (state.port && answers) {
+      if (state.port && answers && deps.listenerPids && deps.commandOf) {
         let needsListenerResolve = !recordedAlive;
-        if (recordedAlive && deps.listenerPids) {
+        if (recordedAlive) {
           const probe = await listenerOnPort(deps, state.port);
           if (probe.ok && probe.pids.length > 0 && !probe.pids.includes(state.pid)) needsListenerResolve = true;
         }
         if (needsListenerResolve) {
-          if (!deps.listenerPids) {
+          const listen = await listenerOnPort(deps, state.port);
+          if (!listen.ok) {
             if (!recordedAlive) {
               clean = false;
               lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
               skipStop = true;
             }
           } else {
-            const listen = await listenerOnPort(deps, state.port);
-            if (!listen.ok) {
+            const listenerPid = listen.pids[0];
+            if (!listenerPid) {
               if (!recordedAlive) {
                 clean = false;
                 lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
                 skipStop = true;
               }
             } else {
-              const listenerPid = listen.pids[0];
-              if (!listenerPid) {
-                if (!recordedAlive) {
+              const command = await deps.commandOf(listenerPid);
+              if (!command) {
+                if (recordedAlive) stopPid = state.pid;
+                else {
                   clean = false;
                   lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
                   skipStop = true;
                 }
-              } else {
-                const command = deps.commandOf ? await deps.commandOf(listenerPid) : '';
-                if (!command && deps.commandOf) {
-                  if (recordedAlive) stopPid = state.pid;
-                  else {
-                    clean = false;
-                    lines.push(`could not determine which process is listening on port ${state.port}; kept the saved settings`);
-                    skipStop = true;
-                  }
-                } else if (isSwarmWatchBoardCommand(command) && await boardUp(deps, state)) stopPid = listenerPid;
-                else {
-                  clean = false;
-                  lines.push(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
-                  skipStop = true;
-                }
+              } else if (isSwarmWatchBoardCommand(command) && await boardUp(deps, state)) stopPid = listenerPid;
+              else {
+                clean = false;
+                lines.push(`port ${state.port} is held by another program (process ${listenerPid}); not touching it`);
+                skipStop = true;
               }
             }
           }
@@ -455,7 +454,7 @@ export async function serveRemote(env = process.env) {
   return 0;
 }
 
-export async function runRemoteCommand(args, { deps = realDeps(), tty = Boolean(process.stdout.isTTY) } = {}) {
+export async function runRemoteCommand(args, { deps = completeRealDeps(), tty = Boolean(process.stdout.isTTY) } = {}) {
   const [sub, ...rest] = args;
   if (rest.length) return out(REMOTE_USAGE, 2);
   if (sub === 'on') return remoteOn(deps, { tty });
