@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv4B",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tests/split-repair-auto.test.mjs"
+   ],
+   "outputs": [
+    "tools/scope-commands.mjs",
+    "tests/split-repair-auto.test.mjs"
+   ],
+   "prompt": "6 LOW tools/scope-commands.mjs near lines 1426-1444: tickets promoted into the ledger after a pathPending park must have the pathPending flag deleted (the flag is only valid while parked); add a test to tests/split-repair-auto.test.mjs. Keep every existing test passing (tests/split-*.test.mjs, tests/scope-*.test.mjs, tests/ticket-paths*.test.mjs)."
+  }
+ ]
+}

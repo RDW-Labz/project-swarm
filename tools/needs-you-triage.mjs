@@ -14,6 +14,7 @@ import { inboxDeps } from './inbox-commands.mjs';
 
 export const MAX_TRIAGE_ATTEMPTS = 3;
 export const REOPEN_SUPPRESS_MS = 60 * 60 * 1000;
+export const SWARM_FIX_INTEGRATE_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 const STATE_REL = path.join('.swarm', 'needs-you-triage', 'state.json');
 const LOCK_REL = path.join('.swarm', 'needs-you-triage', 'state.lock');
 const LOCK_STALE_MS = 30 * 60 * 1000;
@@ -109,18 +110,11 @@ export function buildOwnerDecisionText(item) {
   return null;
 }
 
-const CHECKOUT_OWNER_INTEGRATE_CAUSE = /\b(the checkout is on (?:main|master)|uncommitted tracked changes|a merge is in progress|a rebase is in progress|a cherry-pick is in progress)\b/i;
-
-export function integrateCheckoutCauseNeedsOwner(cause) {
-  const text = String(cause ?? '');
-  if (!text) return false;
-  return CHECKOUT_OWNER_INTEGRATE_CAUSE.test(text);
-}
-
 export function buildIntegrateCheckoutOwnerDecisionText(item) {
   if (!item || typeof item !== 'object') return null;
+  if (inboxItemSubtype(item) !== 'integrate-checkout') return null;
   const cause = sanitizeText(item.integrateCause ?? item.text ?? item.title ?? '');
-  if (!integrateCheckoutCauseNeedsOwner(cause)) return null;
+  if (!cause) return null;
   if (/\bthe checkout is on (?:main|master)\b/i.test(cause)) {
     return `${DECISION_PREFIX} Checkout is on main or master before integrate Options: move work to a swarm/* branch or linked worktree, then integrate. Why only you: integrating on main or master is never automatic.`;
   }
@@ -136,7 +130,25 @@ export function buildIntegrateCheckoutOwnerDecisionText(item) {
   if (/\ba cherry-pick is in progress\b/i.test(cause)) {
     return `${DECISION_PREFIX} A cherry-pick is in progress in the checkout Options: finish or abort the cherry-pick, then integrate. Why only you: resolving an in-progress cherry-pick needs the owner.`;
   }
-  return `${DECISION_PREFIX} Checkout must be cleaned up before integrate Options: fix the git state described in the blocker, then integrate. Why only you: this checkout state needs the owner.`;
+  if (/\ba revert is in progress\b/i.test(cause)) {
+    return `${DECISION_PREFIX} A revert is in progress in the checkout Options: finish or abort the revert, then integrate. Why only you: resolving an in-progress revert needs the owner.`;
+  }
+  if (/\bunmerged paths\b/i.test(cause)) {
+    return `${DECISION_PREFIX} ${cause} Options: resolve conflicts or abort the operation, then integrate. Why only you: unmerged paths need the owner.`;
+  }
+  if (/\blocal changes on integrate output path/i.test(cause)) {
+    return `${DECISION_PREFIX} ${cause} Options: commit, move, or discard local edits on those paths, then integrate. Why only you: autopilot will not change your working tree on integrate outputs.`;
+  }
+  if (/\bnot a swarm\/\* branch\b/i.test(cause) || /\bnot on a branch\b/i.test(cause)) {
+    return `${DECISION_PREFIX} ${cause} Options: check out a swarm/* branch or linked worktree, then integrate. Why only you: integrate only runs from the right branch or worktree.`;
+  }
+  if (/\bcould not be inspected\b/i.test(cause) || /\bcould not be checked\b/i.test(cause)) {
+    return `${DECISION_PREFIX} ${cause} Options: fix the checkout so git state can be read, then integrate. Why only you: autopilot cannot inspect this checkout.`;
+  }
+  if (/\bno declared output paths\b/i.test(cause) || /\bno output paths could be resolved\b/i.test(cause)) {
+    return `${DECISION_PREFIX} ${cause} Options: fix job outputs in the run manifest, then integrate. Why only you: integratable jobs need declared outputs before autopilot can integrate.`;
+  }
+  return `${DECISION_PREFIX} ${cause} Options: fix the git state described in the blocker, then integrate. Why only you: checkout blockers need the owner to commit, move work, or decide.`;
 }
 
 export function classifyInboxItem(item) {
@@ -147,10 +159,7 @@ export function classifyInboxItem(item) {
   if (hasRiskyWords(blob)) return 'owner';
   const subtype = inboxItemSubtype(item);
   if (!FIXABLE_SUBTYPES.has(subtype)) return 'owner';
-  if (subtype === 'integrate-checkout') {
-    const cause = item.integrateCause ?? blob;
-    if (integrateCheckoutCauseNeedsOwner(cause)) return 'owner';
-  }
+  if (subtype === 'integrate-checkout') return 'owner';
   const id = String(item.id ?? '');
   if (id.startsWith('cap-') || OWNER_MONEY.test(blob)) {
     return buildOwnerDecisionText(item) ? 'owner' : 'owner';
@@ -182,7 +191,7 @@ function causeKey(item) {
 }
 
 function defaultState() {
-  return { passCount: 0, items: {}, suppressReopen: {} };
+  return { passCount: 0, items: {}, suppressReopen: {}, swarmFixGoals: {} };
 }
 
 function shortProjectLabel(projectRoot) {
@@ -202,6 +211,7 @@ export async function readTriageState(root) {
       passCount: Number(parsed.passCount) || 0,
       items: parsed.items && typeof parsed.items === 'object' ? parsed.items : {},
       suppressReopen: parsed.suppressReopen && typeof parsed.suppressReopen === 'object' ? parsed.suppressReopen : {},
+      swarmFixGoals: parsed.swarmFixGoals && typeof parsed.swarmFixGoals === 'object' ? parsed.swarmFixGoals : {},
     };
   } catch (error) {
     if (error?.code === 'ENOENT') return defaultState();
@@ -218,6 +228,7 @@ export async function writeTriageState(root, state) {
     passCount: state.passCount ?? 0,
     items: state.items ?? {},
     suppressReopen: state.suppressReopen ?? {},
+    swarmFixGoals: state.swarmFixGoals ?? {},
   };
   await fs.writeFile(tmp, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600 });
   await fs.rename(tmp, file);
@@ -241,10 +252,8 @@ function defaultIsPidAlive(pid) {
 async function lockIsStale(existing, nowMs, isAlive) {
   const owner = Number(existing?.pid);
   const at = Number(existing?.at);
-  const alive = await isAlive(owner);
-  if (!alive) return true;
-  if (!Number.isFinite(at)) return false;
-  return nowMs - at > LOCK_STALE_MS && !alive;
+  if (Number.isFinite(at) && nowMs - at > LOCK_STALE_MS) return true;
+  return !(await isAlive(owner));
 }
 
 async function readLockPayload(file) {
@@ -299,6 +308,8 @@ export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidC
   const payload = { pid: process.pid, at: nowMs };
   try {
     await writeLockExclusive(file, payload);
+    const owned = await readLockPayload(file);
+    if (Number(owned?.pid) !== process.pid) return { ok: false, reason: 'locked' };
     return { ok: true };
   } catch (error) {
     if (error?.code !== 'EEXIST') throw error;
@@ -314,6 +325,8 @@ export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidC
     try { await fs.unlink(file); } catch { /* ignore */ }
     try {
       await writeLockExclusive(file, payload);
+      const owned = await readLockPayload(file);
+      if (Number(owned?.pid) !== process.pid) return { ok: false, reason: 'locked' };
       return { ok: true };
     } catch {
       return { ok: false, reason: 'locked' };
@@ -385,22 +398,7 @@ async function collectTriageItems(roots, triageDeps) {
 
 async function listProjectRoots(primaryRoot, deps) {
   if (typeof deps.listTriageRoots === 'function') return deps.listTriageRoots(primaryRoot);
-  const roots = [primaryRoot];
-  const installRoot = deps.installRoot;
-  if (!installRoot) return roots;
-  let registry = [];
-  try {
-    const value = JSON.parse(await fs.readFile(path.join(installRoot, '.swarm-projects.json'), 'utf8'));
-    registry = Array.isArray(value) ? value : [];
-  } catch { registry = []; }
-  for (const entry of registry) {
-    if (typeof entry !== 'string' || !path.isAbsolute(entry) || roots.includes(entry)) continue;
-    try {
-      await fs.access(path.join(entry, '.swarm'));
-      roots.push(entry);
-    } catch { /* not a swarm project */ }
-  }
-  return roots;
+  return [primaryRoot];
 }
 
 async function resolveSwarmRoot(deps, primaryRoot) {
@@ -449,7 +447,7 @@ function isReopenSuppressed(state, item, nowMs) {
   return Number.isFinite(until) && until > nowMs;
 }
 
-async function closeItem(projectRoot, item, deps, { note } = {}) {
+async function closeItem(projectRoot, item, deps, { note, integrateSuppressUntil = null } = {}) {
   const append = deps.appendEvent;
   const now = deps.now;
   if (typeof append !== 'function') throw new Error('triage-missing-append');
@@ -472,6 +470,7 @@ async function closeItem(projectRoot, item, deps, { note } = {}) {
           integrateRun,
           integrateCause,
           resolvedBy: 'needs-you-triage',
+          ...(integrateSuppressUntil != null ? { integrateSuppressUntil } : {}),
         }),
         triageClosed: true,
         ...(note ? { triageNote: sanitizeText(note) } : {}),
@@ -524,7 +523,18 @@ function stripPathsForGoal(text) {
   return out.slice(0, 200);
 }
 
+function buildSwarmFixOwnerDecision(goalId) {
+  return `${DECISION_PREFIX} Swarm-fix goal ${goalId} is still open for this blocker Options: complete or close the goal, then fix the underlying issue. Why only you: triage already filed one swarm-fix goal for this cause and will not retry automatically.`;
+}
+
 async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs, log }) {
+  const ck = causeKey(item);
+  const existingGoal = state.swarmFixGoals?.[ck];
+  if (existingGoal) {
+    const swarmRoot = await resolveSwarmRoot(deps, projectRoot);
+    const note = sanitizeText(`autopilot triage reusing swarm-fix goal ${existingGoal}`);
+    return { note, goalId: existingGoal, goalRoot: swarmRoot, stuck: false, reused: true };
+  }
   const entry = state.items[key] ?? { attempts: [] };
   const attempts = entry.attempts ?? [];
   const tries = attempts.length;
@@ -547,6 +557,8 @@ async function openSwarmFixGoal({ projectRoot, item, state, key, deps, nowMs, lo
     return { note: null, goalId: null, goalRoot: swarmRoot, stuck: true };
   }
   const note = sanitizeText(`autopilot triage opened swarm-fix goal ${goalId} in ${path.basename(swarmRoot)}`);
+  if (!state.swarmFixGoals || typeof state.swarmFixGoals !== 'object') state.swarmFixGoals = {};
+  state.swarmFixGoals[ck] = goalId;
   return { note, goalId, goalRoot: swarmRoot, stuck: false };
 }
 
@@ -594,11 +606,15 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
 
     const items = await collectTriageItems(roots, triageDeps);
     const results = [];
+    const primaryResolved = path.resolve(primaryRoot);
 
     for (const item of Array.isArray(items) ? items : []) {
       if (!item?.id) continue;
       const projectRoot = item.project ?? primaryRoot;
+      if (path.resolve(projectRoot) !== primaryResolved) continue;
       const key = itemStateKey(item);
+      const ck = causeKey(item);
+      const existingSwarmGoal = state.swarmFixGoals?.[ck];
       const bucket = classifyInboxItem(item);
       const subtype = inboxItemSubtype(item);
 
@@ -609,6 +625,13 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
           ?? buildIntegrateCheckoutOwnerDecisionText(item)
           ?? buildOwnerDecisionText(item);
         results.push({ id: item.id, project: projectRoot, action: 'owner', decision });
+        continue;
+      }
+
+      if (existingSwarmGoal) {
+        await refreshTriageLock(primaryRoot, { now: nowFn });
+        const decision = buildSwarmFixOwnerDecision(existingSwarmGoal);
+        results.push({ id: item.id, project: projectRoot, action: 'owner', decision, goalId: existingSwarmGoal });
         continue;
       }
 
@@ -644,7 +667,12 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
           results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
           continue;
         }
-        await closeItem(projectRoot, item, triageDeps, { note: fix.note });
+        await closeItem(projectRoot, item, triageDeps, {
+          note: fix.note,
+          integrateSuppressUntil: integrateBlockerRunIdFromId(String(item.id ?? ''))
+            ? new Date(nowMs + SWARM_FIX_INTEGRATE_SUPPRESS_MS).toISOString()
+            : null,
+        });
         recordSuppress(state, item, nowMs);
         state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
         results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });
@@ -681,7 +709,12 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
         if (fix.stuck) {
           results.push({ id: item.id, project: projectRoot, action: 'stuck', ...fix });
         } else {
-          await closeItem(projectRoot, item, triageDeps, { note: fix.note });
+          await closeItem(projectRoot, item, triageDeps, {
+            note: fix.note,
+            integrateSuppressUntil: integrateBlockerRunIdFromId(String(item.id ?? ''))
+              ? new Date(nowMs + SWARM_FIX_INTEGRATE_SUPPRESS_MS).toISOString()
+              : null,
+          });
           recordSuppress(state, item, nowMs);
           state.items[key] = { ...(state.items[key] ?? {}), exhausted: true };
           results.push({ id: item.id, project: projectRoot, action: 'swarm-fix', ...fix });

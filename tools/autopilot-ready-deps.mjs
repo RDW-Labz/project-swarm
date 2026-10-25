@@ -17,7 +17,11 @@ import { inboxDeps } from './inbox-commands.mjs';
 import {
   integrateBlockerRunIdFromId,
 } from './journal.mjs';
-import { integrationBlocker } from './autopilot.mjs';
+import {
+  integrationBlocker,
+  integrableFromJobs,
+  runIntegrateOutputPaths,
+} from './autopilot.mjs';
 import { integrateCheckoutGitState } from './generated-state.mjs';
 import { buildHandlersMap } from './needs-you-triage.mjs';
 
@@ -58,6 +62,44 @@ function runAlreadyIntegrated(events, runId) {
     && event.kind === 'integration'
     && event.run === runId
     && (event.status === 'complete' || event.status === 'integrated'));
+}
+
+function runManifestFromEvents(run, events) {
+  if (run?.manifest && typeof run.manifest === 'object') return run.manifest;
+  const history = Array.isArray(events) ? events.filter(e => e && e.kind === 'run' && e.id === run?.id) : [];
+  const hit = history.find(e => e.manifest && typeof e.manifest === 'object');
+  return hit?.manifest ?? null;
+}
+
+function jobsFromRun(run, manifest) {
+  const fromManifest = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const raw = run?.jobs;
+  const fromRun = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  if (!fromManifest.length) return fromRun;
+  if (!fromRun.length) return fromManifest;
+  const seen = new Set(fromManifest.map(j => j?.id).filter(Boolean));
+  return [...fromManifest, ...fromRun.filter(j => j?.id && !seen.has(j.id))];
+}
+
+function runHasCompleteJob(run) {
+  if (!run || typeof run !== 'object') return false;
+  const complete = Number(run.counts?.complete);
+  if (Number.isFinite(complete) && complete > 0) return true;
+  const raw = run.jobs;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  return list.some(job => job && (job.status === 'complete' || job.state === 'complete'));
+}
+
+async function resolveRunForIntegrate(root, runId, deps, events) {
+  if (typeof deps.listRuns === 'function') {
+    const runs = await deps.listRuns(root);
+    const list = Array.isArray(runs) ? runs : [];
+    const hit = list.find(r => r && r.id === runId);
+    if (hit) return { run: hit, runs: list };
+  }
+  const runEvents = (Array.isArray(events) ? events : []).filter(e => e?.kind === 'run' && e?.id === runId);
+  const run = runEvents.length ? runEvents[runEvents.length - 1] : null;
+  return { run, runs: run ? [run] : [] };
 }
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
@@ -135,11 +177,21 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
     if (runAlreadyIntegrated(events, runId)) {
       return { ok: false, error: `run ${runId} is already integrated` };
     }
+    const { run, runs } = await resolveRunForIntegrate(root, runId, deps, events);
+    const outputPaths = run ? runIntegrateOutputPaths(run, events, { runs }) : [];
+    if (run) {
+      const manifest = runManifestFromEvents(run, events);
+      const jobs = jobsFromRun(run, manifest);
+      const hasIntegratableJobs = integrableFromJobs(jobs)
+        || (run.integrable === true && runHasCompleteJob(run));
+      if (hasIntegratableJobs && outputPaths.length === 0) {
+        return { ok: false, error: 'integratable jobs have no declared output paths' };
+      }
+    }
     let checkout = null;
     try {
       if (typeof deps.checkout === 'function') checkout = await deps.checkout(root);
     } catch { checkout = null; }
-    const outputPaths = Array.isArray(item?.outputPaths) ? item.outputPaths : [];
     const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
     const why = integrationBlocker(checkoutView, { outputPaths });
     if (why) return { ok: false, error: why };
