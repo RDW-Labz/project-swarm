@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import { realpath } from 'node:fs/promises';
+import path from 'node:path';
 // Repo-relative paths and prefixes that swarm regenerates; they never count as operator edits.
 
 export const GENERATED_STATE = Object.freeze([
@@ -168,22 +170,61 @@ function normalizeOutputPath(relPath) {
   return normalizeRelPath(relPath);
 }
 
+function comparePath(p, { ignoreCase = false } = {}) {
+  const normalized = normalizeRelPath(p);
+  if (normalized === null) return null;
+  return ignoreCase ? normalized.toLowerCase() : normalized;
+}
+
+function pathSegments(relPath) {
+  const compared = comparePath(relPath);
+  if (compared === null) return [];
+  return compared.split('/').filter(Boolean);
+}
+
+/** True when two repo-relative paths are equal or one is a strict prefix of the other on path segments. */
+export function integratePathsCollide(outputPath, dirtyPath, { ignoreCase = false } = {}) {
+  const a = pathSegments(outputPath);
+  const b = pathSegments(dirtyPath);
+  if (!a.length || !b.length) return false;
+  const eq = (x, y) => (ignoreCase ? x.toLowerCase() === y.toLowerCase() : x === y);
+  if (a.length === b.length) return a.every((seg, i) => eq(seg, b[i]));
+  const shorter = a.length < b.length ? a : b;
+  const longer = a.length < b.length ? b : a;
+  return shorter.every((seg, i) => eq(seg, longer[i]));
+}
+
+function pathsCollide(outputPath, dirtyPath, { ignoreCase = false, realpathOf = null } = {}) {
+  const keyOf = typeof realpathOf === 'function' ? realpathOf : p => comparePath(p, { ignoreCase });
+  const outKey = keyOf(outputPath);
+  const dirtyKey = keyOf(dirtyPath);
+  if (outKey && dirtyKey && outKey === dirtyKey) return true;
+  return integratePathsCollide(outputPath, dirtyPath, { ignoreCase });
+}
+
 /** Paths the integrate step would write that are locally modified or untracked-and-present. */
-export function integrateOutputCollisions(outputPaths, trackedDirty, untrackedDirty) {
-  const targets = new Set(
-    (Array.isArray(outputPaths) ? outputPaths : [])
-      .map(normalizeOutputPath)
-      .filter(path => path !== null),
-  );
-  if (!targets.size) return [];
+export function integrateOutputCollisions(outputPaths, trackedDirty, untrackedDirty, {
+  ignoreCase = false,
+  realpathOf = null,
+} = {}) {
+  const targets = (Array.isArray(outputPaths) ? outputPaths : [])
+    .map(normalizeOutputPath)
+    .filter(p => p !== null);
+  if (!targets.length) return [];
   const hits = new Set();
-  for (const entry of Array.isArray(trackedDirty) ? trackedDirty : []) {
-    const normalized = normalizeRelPath(entry?.path);
-    if (normalized !== null && targets.has(normalized)) hits.add(normalized);
-  }
-  for (const entry of Array.isArray(untrackedDirty) ? untrackedDirty : []) {
+  const dirtyEntries = [
+    ...(Array.isArray(trackedDirty) ? trackedDirty : []),
+    ...(Array.isArray(untrackedDirty) ? untrackedDirty : []),
+  ];
+  for (const entry of dirtyEntries) {
     const normalized = normalizeRelPath(entry?.path ?? entry);
-    if (normalized !== null && targets.has(normalized)) hits.add(normalized);
+    if (normalized === null) continue;
+    for (const target of targets) {
+      if (pathsCollide(target, normalized, { ignoreCase, realpathOf })) {
+        hits.add(normalized);
+        break;
+      }
+    }
   }
   return [...hits].sort();
 }
@@ -216,6 +257,48 @@ async function gitVerifyRef(root, exec, ref) {
   }
 }
 
+async function gitPathExists(root, exec, gitPathName) {
+  if (typeof exec !== 'function') return false;
+  try {
+    const { stdout } = await exec('git', ['-C', root, 'rev-parse', '--git-path', gitPathName], { encoding: 'utf8' });
+    const rel = String(stdout ?? '').trim();
+    if (!rel) return false;
+    const { access } = await import('node:fs/promises');
+    const candidates = path.isAbsolute(rel) ? [rel] : [path.join(root, rel), path.join(root, '.git', rel)];
+    for (const candidate of candidates) {
+      try {
+        await access(candidate);
+        return true;
+      } catch { /* try next */ }
+    }
+  } catch { /* not in progress */ }
+  return false;
+}
+
+async function gitIgnoreCase(root, exec) {
+  if (typeof exec !== 'function') return false;
+  try {
+    const { stdout } = await exec('git', ['-C', root, 'config', '--get', 'core.ignorecase'], { encoding: 'utf8' });
+    return String(stdout ?? '').trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+async function buildRealpathKey(root, relPath) {
+  const normalized = normalizeRelPath(relPath);
+  if (normalized === null) return null;
+  try {
+    return await realpath(path.join(root, normalized));
+  } catch {
+    try {
+      return await realpath(path.resolve(root, normalized));
+    } catch {
+      return path.resolve(root, normalized);
+    }
+  }
+}
+
 /**
  * Git view for autopilot integrate: tracked dirty (no untracked), untracked on output paths only,
  * merge/rebase markers, and output-path collisions.
@@ -224,25 +307,60 @@ export async function integrateCheckoutGitState(root, { exec, runStatus, outputP
   if (typeof root !== 'string' || !root) return null;
   if (typeof exec !== 'function' && typeof runStatus !== 'function') return null;
   const mergeInProgress = await gitVerifyRef(root, exec, 'MERGE_HEAD');
-  const rebaseInProgress = await gitVerifyRef(root, exec, 'REBASE_HEAD');
+  const cherryPickInProgress = await gitVerifyRef(root, exec, 'CHERRY_PICK_HEAD');
+  const revertInProgress = await gitVerifyRef(root, exec, 'REVERT_HEAD');
+  const rebaseInProgress = (await gitPathExists(root, exec, 'rebase-merge'))
+    || (await gitPathExists(root, exec, 'rebase-apply'));
+  const ignoreCase = await gitIgnoreCase(root, exec);
   const trackedDirty = await dirtyFiles(root, { exec, runStatus, untracked: false });
+  const unmergedPaths = trackedDirty.filter(entry => entry.code.includes('U')).map(entry => entry.path);
   const allWithUntracked = await dirtyFiles(root, { exec, runStatus, untracked: true });
   const untrackedDirty = allWithUntracked.filter(entry => entry.code === '??' || entry.code.startsWith('?'));
   const normalizedOutputs = new Set(
     (Array.isArray(outputPaths) ? outputPaths : [])
       .map(normalizeOutputPath)
-      .filter(path => path !== null),
+      .filter(p => p !== null),
   );
   const presentUntracked = [];
   for (const entry of untrackedDirty) {
     const normalized = normalizeRelPath(entry.path);
-    if (normalized === null || !normalizedOutputs.has(normalized)) continue;
+    if (normalized === null) continue;
+    let onOutput = normalizedOutputs.has(normalized);
+    if (!onOutput) {
+      for (const out of normalizedOutputs) {
+        if (integratePathsCollide(out, normalized, { ignoreCase })) { onOutput = true; break; }
+      }
+    }
+    if (!onOutput) continue;
     if (await pathExistsInCheckout(root, exec, normalized)) presentUntracked.push({ code: entry.code, path: normalized });
   }
-  const integrateCollisions = integrateOutputCollisions(outputPaths, trackedDirty, presentUntracked);
+  const realpathCache = new Map();
+  const allPaths = new Set([
+    ...normalizedOutputs,
+    ...trackedDirty.map(e => e.path),
+    ...presentUntracked.map(e => e.path),
+  ]);
+  await Promise.all([...allPaths].map(async p => {
+    const key = await buildRealpathKey(root, p);
+    if (key) realpathCache.set(p, key);
+  }));
+  const realpathKeyFn = rel => {
+    const normalized = normalizeRelPath(rel);
+    if (normalized === null) return null;
+    const resolved = realpathCache.get(normalized);
+    if (resolved) return ignoreCase ? resolved.toLowerCase() : resolved;
+    return comparePath(normalized, { ignoreCase });
+  };
+  const integrateCollisions = integrateOutputCollisions(outputPaths, trackedDirty, presentUntracked, {
+    ignoreCase,
+    realpathOf: realpathKeyFn,
+  });
   return {
     mergeInProgress,
+    cherryPickInProgress,
+    revertInProgress,
     rebaseInProgress,
+    unmergedPaths,
     integrateTrackedDirty: trackedDirty,
     integrateCollisions,
     dirty: false,

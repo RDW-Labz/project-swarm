@@ -9,8 +9,17 @@ import {
   autopilotStep,
   integrationBlocker,
   integrateCheckoutDirtyFromPorcelain,
+  runIntegrateOutputPaths,
 } from '../tools/autopilot.mjs';
-import { integrateOutputCollisions } from '../tools/generated-state.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import {
+  integrateCheckoutGitState,
+  integrateOutputCollisions,
+  integratePathsCollide,
+} from '../tools/generated-state.mjs';
+
+const execFileAsync = promisify(execFile);
 
 const NOW = Date.parse('2030-01-01T12:00:00.000Z');
 const iso = ms => new Date(ms).toISOString();
@@ -84,7 +93,7 @@ test('untracked junk does not block integrate on a swarm branch', async t => {
   assert.equal(deps.calls.some(c => c[0] === 'integrate'), true);
 });
 
-test('tracked modification of an unrelated file does not block integrate', async t => {
+test('tracked modification outside output paths blocks and names files', async t => {
   const root = await tempRoot(t);
   const deps = fakeDeps({
     journal: [manifestEvent],
@@ -95,8 +104,11 @@ test('tracked modification of an unrelated file does not block integrate', async
     }),
   });
   const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
-  assert.deepEqual(step.blocked, []);
-  assert.equal(deps.calls.filter(c => c[0] === 'integrate').length, 1);
+  assert.deepEqual(step.blocked, ['integrate-checkout-r-out']);
+  const blocker = deps.calls.find(c => c[0] === 'appendEvent' && c[1].kind === 'blocker')?.[1];
+  assert.match(blocker.text, /notes\/scratch\.txt/);
+  assert.match(blocker.text, /commit or move/i);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
 });
 
 test('collision on a declared output path blocks and names the path', async t => {
@@ -155,6 +167,119 @@ test('integrateOutputCollisions only lists declared outputs', () => {
     [{ code: '??', path: 'src/widget.mjs' }],
   );
   assert.deepEqual(hits, ['src/widget.mjs']);
+});
+
+test('runIntegrateOutputPaths falls back to run.jobs when manifest is missing', () => {
+  const paths = runIntegrateOutputPaths(
+    {
+      id: 'r1',
+      jobs: [{ id: 'j1', outputs: ['lib/a.mjs'] }],
+    },
+    [],
+  );
+  assert.deepEqual(paths, ['lib/a.mjs']);
+});
+
+test('runIntegrateOutputPaths includes child-run job outputs', () => {
+  const paths = runIntegrateOutputPaths(
+    {
+      id: 'lead',
+      jobs: [{ id: 'lead-j', childRun: 'child1' }],
+    },
+    [],
+    {
+      runs: [
+        { id: 'child1', jobs: [{ id: 'c1', outputs: ['out/child.mjs'] }] },
+      ],
+    },
+  );
+  assert.deepEqual(paths, ['out/child.mjs']);
+});
+
+test('integratable run with no resolvable output paths blocks integrate', async t => {
+  const root = await tempRoot(t);
+  const deps = fakeDeps({
+    journal: [{ kind: 'run', id: 'r-empty', status: 'complete' }],
+    runs: [{
+      id: 'r-empty',
+      status: 'complete',
+      integrated: false,
+      integrable: true,
+      counts: { complete: 1 },
+      jobs: [{ id: 'j1', status: 'complete', outputs: [] }],
+    }],
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.deepEqual(step.blocked, ['integrate-checkout-r-empty']);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
+});
+
+test('failed run with complete jobs does not auto-close integrate blockers', async t => {
+  const root = await tempRoot(t);
+  const journal = [
+    { kind: 'blocker', id: 'integrate-checkout-r-fail', text: 'stale', ts: iso(NOW - 1000) },
+  ];
+  const deps = fakeDeps({
+    journal,
+    runs: [{
+      id: 'r-fail',
+      status: 'failed',
+      integrated: false,
+      integrable: true,
+      counts: { complete: 1, failed: 1 },
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/x.mjs'] }],
+    }],
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.deepEqual(step.blocked, []);
+  assert.ok(!journal.some(e => e.id === 'integrate-checkout-r-fail' && e.resolved === true));
+});
+
+test('integratePathsCollide matches directory prefixes', () => {
+  assert.equal(integratePathsCollide('src/pkg', 'src/pkg/deep/file.mjs'), true);
+  assert.equal(integratePathsCollide('src/pkg/deep', 'src/pkg'), true);
+});
+
+test('integrateOutputCollisions is case-insensitive when configured', () => {
+  const hits = integrateOutputCollisions(
+    ['src/Widget.mjs'],
+    [{ code: ' M', path: 'src/widget.mjs' }],
+    [],
+    { ignoreCase: true },
+  );
+  assert.deepEqual(hits, ['src/widget.mjs']);
+});
+
+test('integrationBlocker reports cherry-pick and unmerged paths', () => {
+  assert.match(integrationBlocker({
+    branch: 'swarm/work',
+    dirty: false,
+    cherryPickInProgress: true,
+  }), /cherry-pick/);
+  assert.match(integrationBlocker({
+    branch: 'swarm/work',
+    dirty: false,
+    unmergedPaths: ['both.txt'],
+  }), /both\.txt/);
+});
+
+test('integrateCheckoutGitState detects rebase-merge via git-path', async t => {
+  const root = await tempRoot(t);
+  await execFileAsync('git', ['init'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.name', 't'], { cwd: root });
+  await fs.writeFile(path.join(root, 'f.txt'), 'a\n');
+  await execFileAsync('git', ['add', 'f.txt'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: root });
+  const { stdout: gitDirOut } = await execFileAsync('git', ['rev-parse', '--git-path', 'rebase-merge'], { cwd: root });
+  const rebaseDir = path.join(root, gitDirOut.trim());
+  await fs.mkdir(rebaseDir, { recursive: true });
+  const exec = (cmd, args, opts) => execFileAsync(cmd, args, { ...opts, cwd: root });
+  const state = await integrateCheckoutGitState(root, {
+    exec: (cmd, args, opts) => exec(cmd, args, opts).then(({ stdout }) => ({ stdout })),
+    outputPaths: [],
+  });
+  assert.equal(state.rebaseInProgress, true);
 });
 
 test('autopilot never stashes or removes files during integrate gating', async t => {
