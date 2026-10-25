@@ -11,6 +11,7 @@ import {
   JobGrantAccessError,
   buildIsolatedProcessEnv,
   createJobGrant,
+  deleteJobGrant,
   grantPlaintextLeakCheck,
   loadJobGrantSecrets,
 } from '../tools/job-grants.mjs';
@@ -34,7 +35,7 @@ async function listenToken(host, port, token) {
 function runChild(script, env) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
-      env: { ...process.env, ...env },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -178,8 +179,103 @@ test('loadJobGrantSecrets surfaces missing grant files as not found', async () =
     () => loadJobGrantSecrets({
       SWARM_JOB_ID: 'job-z',
       SWARM_JOB_GRANT_FILE: path.join(os.tmpdir(), 'missing-grant.env'),
-      SWARM_JOB_GRANT_KEY: 'abc',
+      SWARM_JOB_GRANT_KEY: 'a'.repeat(64),
     }),
     error => error instanceof JobGrantAccessError && error.code === 'ENOENT',
+  );
+});
+
+test('deleteJobGrant removes the grant directory and file', async t => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
+  const grant = await createJobGrant({
+    grantsRoot,
+    jobId: 'job-del',
+    needs: NEEDS,
+    values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+  });
+  await fs.access(grant.envFile);
+  await deleteJobGrant(grantsRoot, 'job-del');
+  await assert.rejects(() => fs.access(grant.envFile), /ENOENT/);
+  await assert.rejects(() => fs.access(grant.grantDir), /ENOENT/);
+});
+
+test('createJobGrant reapplies tight permissions when overwrite replaces an existing grant', async t => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
+  const grant = await createJobGrant({
+    grantsRoot,
+    jobId: 'job-perms',
+    needs: NEEDS,
+    values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+  });
+  await fs.chmod(grant.grantDir, 0o777);
+  await fs.chmod(grant.envFile, 0o666);
+  await createJobGrant({
+    grantsRoot,
+    jobId: 'job-perms',
+    needs: NEEDS,
+    values: { DATABASE_URL: 'postgres://127.0.0.1:2/db' },
+    overwrite: true,
+  });
+  assert.equal((await fs.stat(grant.grantDir)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(grant.envFile)).mode & 0o777, 0o600);
+});
+
+test('createJobGrant rejects a pre-existing symlink at the grant file path', async t => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
+  const grantDir = path.join(grantsRoot, 'job-sym');
+  await fs.mkdir(grantDir, { recursive: true });
+  const outside = path.join(grantsRoot, 'outside-target');
+  await fs.writeFile(outside, 'pwned', 'utf8');
+  await fs.symlink(outside, path.join(grantDir, 'grant.env'));
+  await assert.rejects(
+    () => createJobGrant({
+      grantsRoot,
+      jobId: 'job-sym',
+      needs: NEEDS,
+      values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+    }),
+    error => error instanceof JobGrantAccessError && error.code === 'EEXIST',
+    'must not follow or truncate a pre-existing grant path',
+  );
+  assert.equal(await fs.readFile(outside, 'utf8'), 'pwned');
+});
+
+test('concurrent createJobGrant for the same jobId does not silently race', async t => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
+  const opts = {
+    grantsRoot,
+    jobId: 'job-race',
+    needs: NEEDS,
+    values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+  };
+  const results = await Promise.allSettled([
+    createJobGrant(opts),
+    createJobGrant(opts),
+  ]);
+  const fulfilled = results.filter(r => r.status === 'fulfilled');
+  const rejected = results.filter(r => r.status === 'rejected');
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  const fail = rejected[0].reason;
+  assert.ok(fail instanceof JobGrantAccessError);
+  assert.equal(fail.code, 'EEXIST');
+});
+
+test('createJobGrant rejects a too-short grantKey', async t => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-'));
+  t.after(() => fs.rm(grantsRoot, { recursive: true, force: true }));
+  await assert.rejects(
+    () => createJobGrant({
+      grantsRoot,
+      jobId: 'job-weak-key',
+      needs: NEEDS,
+      values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+      grantKey: 'short',
+    }),
+    /grantKey must be 64 hex characters/,
   );
 });

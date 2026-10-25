@@ -7,6 +7,7 @@ import path from 'node:path';
 
 const JOB_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ENV_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+const GRANT_KEY_RE = /^[0-9a-f]{64}$/i;
 const GRANT_FILE_NAME = 'grant.env';
 const GRANT_VERSION = 1;
 
@@ -34,19 +35,31 @@ export function assertEnvKey(key) {
   }
 }
 
+/**
+ * Caller-supplied grant keys must be 32 random bytes encoded as 64 hex digits (use a CSPRNG).
+ */
+export function assertGrantKey(grantKey) {
+  if (typeof grantKey !== 'string' || !GRANT_KEY_RE.test(grantKey)) {
+    throw new TypeError(
+      'grantKey must be 64 hex characters (32 random bytes from a CSPRNG)',
+    );
+  }
+}
+
 export function jobGrantDir(grantsRoot, jobId) {
   assertJobId(jobId);
   const root = path.resolve(grantsRoot);
   const dir = path.join(root, jobId);
   const resolved = path.resolve(dir);
-  if (resolved !== dir && !resolved.startsWith(root + path.sep)) {
+  if (!resolved.startsWith(root + path.sep)) {
     throw new TypeError('job id escapes grants root');
   }
-  return dir;
+  return resolved;
 }
 
 function deriveKey(grantKey) {
-  return crypto.createHash('sha256').update(String(grantKey), 'utf8').digest();
+  assertGrantKey(grantKey);
+  return Buffer.from(grantKey, 'hex');
 }
 
 function encryptGrantPayload({ jobId, secrets, grantKey }) {
@@ -97,6 +110,22 @@ function decryptGrantPayload({ content, grantKey, expectedJobId }) {
   return parsed.secrets;
 }
 
+async function applyGrantPermissions(grantDir, envFile) {
+  await fs.chmod(grantDir, 0o700);
+  await fs.chmod(envFile, 0o600);
+}
+
+/**
+ * Remove a job's grant directory and grant file. Call when a job finishes so secrets do not
+ * outlive the job on disk.
+ */
+export async function deleteJobGrant(grantsRoot, jobId) {
+  assertJobId(jobId);
+  const root = path.resolve(grantsRoot);
+  const grantDir = jobGrantDir(root, jobId);
+  await fs.rm(grantDir, { recursive: true, force: true });
+}
+
 /**
  * Build a scoped grant for one job. Does not mutate process.env or any shared global env.
  *
@@ -105,9 +134,17 @@ function decryptGrantPayload({ content, grantKey, expectedJobId }) {
  * @param {string} options.jobId
  * @param {string[]} options.needs - declared secret/env keys for this job
  * @param {Record<string, string>} options.values - source values (only `needs` keys are written)
- * @param {string} [options.grantKey] - per-job decryption key; generated when omitted
+ * @param {string} [options.grantKey] - 64-char hex key (32 CSPRNG bytes); generated when omitted
+ * @param {boolean} [options.overwrite=false] - replace an existing grant for the same job id
  */
-export async function createJobGrant({ grantsRoot, jobId, needs, values, grantKey }) {
+export async function createJobGrant({
+  grantsRoot,
+  jobId,
+  needs,
+  values,
+  grantKey,
+  overwrite = false,
+}) {
   assertJobId(jobId);
   if (!Array.isArray(needs) || needs.length === 0) {
     throw new TypeError('needs must be a non-empty array of env keys');
@@ -116,6 +153,9 @@ export async function createJobGrant({ grantsRoot, jobId, needs, values, grantKe
     throw new TypeError('values must be an object');
   }
   const key = grantKey ?? crypto.randomBytes(32).toString('hex');
+  if (grantKey !== undefined) {
+    assertGrantKey(grantKey);
+  }
   const secrets = {};
   for (const name of needs) {
     assertEnvKey(name);
@@ -128,11 +168,35 @@ export async function createJobGrant({ grantsRoot, jobId, needs, values, grantKe
 
   const root = path.resolve(grantsRoot);
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  await fs.chmod(root, 0o700);
+
   const grantDir = jobGrantDir(root, jobId);
-  await fs.mkdir(grantDir, { recursive: true, mode: 0o700 });
+  if (overwrite) {
+    await fs.rm(grantDir, { recursive: true, force: true });
+  }
+
+  try {
+    await fs.mkdir(grantDir, { mode: 0o700 });
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new JobGrantAccessError('job grant already exists', 'EEXIST');
+    }
+    throw error;
+  }
+
   const envFile = path.join(grantDir, GRANT_FILE_NAME);
   const body = encryptGrantPayload({ jobId, secrets, grantKey: key });
-  await fs.writeFile(envFile, body, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.writeFile(envFile, body, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    await fs.rm(grantDir, { recursive: true, force: true }).catch(() => {});
+    if (error?.code === 'EEXIST') {
+      throw new JobGrantAccessError('grant file already exists', 'EEXIST');
+    }
+    throw error;
+  }
+
+  await applyGrantPermissions(grantDir, envFile);
 
   const containerEnv = {
     [SWARM_JOB_ID]: jobId,
