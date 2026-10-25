@@ -17,6 +17,7 @@ import {
   runChiefWave,
 } from '../tools/chief-orchestrator.mjs';
 import { planCrossProjectWave } from '../tools/chief-slots.mjs';
+import { chiefOrchestratorStatus } from '../tools/chief-status.mjs';
 
 const exec = promisify(execFile);
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/chief-orchestrator.mjs');
@@ -113,4 +114,38 @@ test('runChiefOnce uses machineConcurrency from config when chief_orchestrator i
   assert.equal(counts.a + counts.b, 4);
   assert.equal(wave.started.reduce((sum, row) => sum + row.starts, 0), 4);
   assert.equal(chiefMachineDir({ env }), configDir);
+});
+
+test('chiefOrchestratorStatus reports slot counts and share for multiple active projects', () => {
+  const { machineCap, projects } = chiefOrchestratorStatus({
+    machineCap: 4,
+    projects: [
+      { project: 'alpha', path: '/repos/alpha', slotsInUse: 2, active: true },
+      { project: 'beta', path: '/repos/beta', slotsInUse: 1, active: true },
+      { project: 'gamma', slotsInUse: 1, active: false },
+    ],
+  });
+  assert.equal(machineCap, 4);
+  assert.deepEqual(
+    projects.map((row) => ({ project: row.project, path: row.path, slots: row.slots, share: row.share })),
+    [
+      { project: 'alpha', path: '/repos/alpha', slots: 2, share: 0.5 },
+      { project: 'beta', path: '/repos/beta', slots: 1, share: 0.25 },
+    ],
+  );
+});
+
+test('chiefOrchestratorStatus gives zero share for a project with no slots in use', () => {
+  const { projects } = chiefOrchestratorStatus({
+    machineCap: 4,
+    projects: [
+      { project: 'busy', path: '/busy', slotsInUse: 3 },
+      { project: 'idle', path: '/idle', slotsInUse: 0 },
+    ],
+  });
+  const idle = projects.find((row) => row.project === 'idle');
+  const busy = projects.find((row) => row.project === 'busy');
+  assert.equal(idle.slots, 0);
+  assert.equal(idle.share, 0);
+  assert.equal(busy.share, 0.75);
 });
