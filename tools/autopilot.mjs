@@ -6,7 +6,7 @@ import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
-import { filterGeneratedStatus } from './generated-state.mjs';
+import { filterGeneratedStatus, formatDirtyListing, integrateCheckoutGitState } from './generated-state.mjs';
 import { planWaveBatch } from './wave-batch.mjs';
 import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
 import { noteAutopilotStep } from './orchestrator-context.mjs';
@@ -476,7 +476,53 @@ function noteStartReadyLive(memory, nowMs, { live, busy, runs }) {
 }
 
 export function integrateCheckoutDirtyFromPorcelain(stdout) {
-  return filterGeneratedStatus(String(stdout ?? '').split('\n')).length > 0;
+  const lines = filterGeneratedStatus(String(stdout ?? '').split('\n'));
+  return lines.some(line => {
+    const code = line.length >= 2 ? line.slice(0, 2) : '';
+    if (code === '??' || code.startsWith('?')) return false;
+    return Boolean(line.trim());
+  });
+}
+
+function runIntegrateOutputPaths(run, events) {
+  const manifest = runManifest(run, events);
+  const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const paths = [];
+  for (const job of jobs) {
+    if (job && Array.isArray(job.outputs)) paths.push(...job.outputs.map(String));
+  }
+  return [...new Set(paths)].sort();
+}
+
+async function defaultGitExec(root, cmd, args, opts) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', ...opts });
+  return { stdout };
+}
+
+async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
+  if (typeof deps.integrateCheckoutGitState === 'function') {
+    try {
+      const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
+      if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
+    } catch { /* fall through */ }
+  }
+  try {
+    const exec = typeof deps.gitExecForIntegrate === 'function'
+      ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+      : (cmd, args, opts) => defaultGitExec(root, cmd, args, opts);
+    const gitState = await integrateCheckoutGitState(root, {
+      exec,
+      runStatus: typeof deps.runIntegrateGitStatus === 'function'
+        ? opts => deps.runIntegrateGitStatus(root, opts)
+        : undefined,
+      outputPaths,
+    });
+    if (gitState) return { ...checkout, ...gitState, dirty: false };
+  } catch { /* use raw checkout */ }
+  return checkout;
 }
 
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
@@ -484,13 +530,24 @@ export function integrateCheckoutDirtyFromPorcelain(stdout) {
 // paid work. `memory` also remembers what this process already did, whatever the journal says.
 // Integration only runs from a swarm/* branch or a linked worktree that is not main/master, and only when
 // there is no uncommitted work. Anything else (or a checkout that cannot be read) becomes a blocker.
-export function integrationBlocker(checkout) {
+export function integrationBlocker(checkout, { outputPaths = [] } = {}) {
   if (!checkout || typeof checkout !== 'object') return 'the checkout could not be inspected';
   const branch = typeof checkout.branch === 'string' ? checkout.branch : '';
-  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   if (!branch) return 'the checkout is not on a branch';
   if (branch === 'main' || branch === 'master') return `the checkout is on ${branch}`;
-  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) {
+    return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  }
+  if (checkout.mergeInProgress === true) return 'a merge is in progress in the checkout';
+  if (checkout.rebaseInProgress === true) return 'a rebase is in progress in the checkout';
+  const collisions = Array.isArray(checkout.integrateCollisions)
+    ? checkout.integrateCollisions
+    : [];
+  if (collisions.length) {
+    return `the checkout has local changes on integrate output path(s)${formatDirtyListing(collisions)}`;
+  }
+  if (Array.isArray(checkout.integrateTrackedDirty)) return null;
+  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   return null;
 }
 
@@ -656,13 +713,17 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   if (!journalBroken) {
     const open = openIds(events);
     for (const run of runs) {
-      if (run.integrable !== false) continue;
+      const nonIntegrating = run.integrable === false
+        || runSkipsIntegrateAttention(run, events)
+        || ['failed', 'cancelled', 'abandoned'].includes(run.status);
+      if (!nonIntegrating) continue;
       for (const id of open) {
         if (integrateBlockerRunId(id) !== run.id) continue;
+        const kind = integrateBlockerKindFromId(id);
+        if (kind !== 'integrate' && kind !== 'integrate-checkout') continue;
         const prior = latestBlockerEvent(events, id);
-        const kind = integrateBlockerKindFromId(id) ?? 'integrate';
         await write(integrateBlockerResolutionEvent(prior ?? { id, text: '' }, {
-          integrateKind: kind,
+          integrateKind: kind ?? 'integrate',
           integrateRun: run.id,
           integrateCause: prior?.integrateCause ?? prior?.text ?? '',
           resolvedBy: 'non-integrable',
@@ -695,9 +756,11 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
     if (decision.action === 'integrate') {
       if (runSkipsIntegrateAttention(run, events) || run.integrable === false) continue;
+      const outputPaths = runIntegrateOutputPaths(run, events);
       let checkout = null;
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
-      const why = integrationBlocker(checkout);
+      const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
+      const why = integrationBlocker(checkoutView, { outputPaths });
       if (why) {
         const integrateCause = why;
         const text = `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}`;

@@ -1,0 +1,53 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "nctriage",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/journal.mjs",
+    "tools/inbox-commands.mjs",
+    "tools/autopilot.mjs"
+   ],
+   "outputs": [
+    "tools/needs-you-triage.mjs",
+    "tools/autopilot.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "prompt": "Needs-you triage loop in autopilot, for every project and orchestrator. New module tools/needs-you-triage.mjs plus a hook in tools/autopilot.mjs (one call per autopilot pass; keep the hook small). Rules: 1) Every new inbox item (blockers from tools/journal.mjs and inbox-commands.mjs: split-park, integrate, integrate-checkout, ci-failure and any other kind) goes to the agent first. classifyInboxItem(item) returns 'owner' ONLY for: money (spend cap or paid service or purchase), a live deploy or production merge, a login or billing problem (expired login, key, subscription, payment), or a real choice only the owner can make (a decision card created through swarm decision); everything else is 'fixable'. 2) For fixable items run a handler through injectable deps and then close the item with swarm done semantics and a note: split-park items retry the split ingest or the split repair (swarm scope split --ingest RUN --merge, with the automatic repairs); integrate and integrate-checkout items retry integration when the checkout check passes; a ci-failure item with a known cause is retried once; an unknown kind gets the generic handler (record, retry the original command if the item names one). 3) Attempt tracking per item id in the project journal or a small state file under .swarm (atomic write): maximum 3 tries with a wait between tries (at least one autopilot pass); after the third failed try open a swarm ticket to fix the swarm itself: add a backlog goal for the project-swarm repository (find it through the user project registry by name project-swarm, or the configured swarm root; if it cannot be found, write the goal into the project's own backlog with a prefix 'SWARM-FIX:') with a title, the item id, the project, the last error text and the three attempts, then close the item here with a note pointing at that goal; never send it to the owner. 4) An item classified as owner must say exactly what the owner has to decide: build a short text 'Decision needed: <one line> Options: <a>, <b>. Why only you: <reason>' (money amount, deploy target, which login, the choice) and keep it as the Needs-you card; items without that text are not allowed to stay open as owner items (they are fixable by default). 5) Safety: the triage loop never raises a spend cap, never merges to a live site, never touches credentials, never runs a handler for an owner item, and never loops: a closed item is never reopened by the same cause within one hour. Tests in tests/needs-you-triage.test.mjs with fake items and fake handlers: classification table (money, deploy, login, billing, choice are owner; split-park, integrate, ci are fixable), a fixable item is retried then closed, the third failure opens exactly one swarm-fix goal and closes the item, an owner item carries the decision text and no handler runs, attempts survive a restart, no reopen loop, works with a fake second project root. Keep every existing test passing (tests/autopilot-*.test.mjs, tests/inbox*.test.mjs, tests/journal*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

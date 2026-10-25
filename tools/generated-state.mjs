@@ -163,3 +163,88 @@ export function formatDirtyListing(paths, max = 5) {
   const more = list.length > max ? ` (+${list.length - max} more)` : '';
   return `: ${shown.join(', ')}${more}`;
 }
+
+function normalizeOutputPath(relPath) {
+  return normalizeRelPath(relPath);
+}
+
+/** Paths the integrate step would write that are locally modified or untracked-and-present. */
+export function integrateOutputCollisions(outputPaths, trackedDirty, untrackedDirty) {
+  const targets = new Set(
+    (Array.isArray(outputPaths) ? outputPaths : [])
+      .map(normalizeOutputPath)
+      .filter(path => path !== null),
+  );
+  if (!targets.size) return [];
+  const hits = new Set();
+  for (const entry of Array.isArray(trackedDirty) ? trackedDirty : []) {
+    const normalized = normalizeRelPath(entry?.path);
+    if (normalized !== null && targets.has(normalized)) hits.add(normalized);
+  }
+  for (const entry of Array.isArray(untrackedDirty) ? untrackedDirty : []) {
+    const normalized = normalizeRelPath(entry?.path ?? entry);
+    if (normalized !== null && targets.has(normalized)) hits.add(normalized);
+  }
+  return [...hits].sort();
+}
+
+async function pathExistsInCheckout(root, exec, relPath) {
+  if (typeof root !== 'string' || !root || typeof relPath !== 'string' || !relPath) return false;
+  if (typeof exec === 'function') {
+    try {
+      await exec('git', ['-C', root, 'rev-parse', '--verify', `HEAD:${relPath}`], { encoding: 'utf8' });
+      return true;
+    } catch { /* not in HEAD */ }
+  }
+  try {
+    const { access } = await import('node:fs/promises');
+    const { default: path } = await import('node:path');
+    await access(path.join(root, relPath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function gitVerifyRef(root, exec, ref) {
+  if (typeof exec !== 'function') return false;
+  try {
+    await exec('git', ['-C', root, 'rev-parse', '-q', '--verify', ref], { encoding: 'utf8' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Git view for autopilot integrate: tracked dirty (no untracked), untracked on output paths only,
+ * merge/rebase markers, and output-path collisions.
+ */
+export async function integrateCheckoutGitState(root, { exec, runStatus, outputPaths = [] } = {}) {
+  if (typeof root !== 'string' || !root) return null;
+  if (typeof exec !== 'function' && typeof runStatus !== 'function') return null;
+  const mergeInProgress = await gitVerifyRef(root, exec, 'MERGE_HEAD');
+  const rebaseInProgress = await gitVerifyRef(root, exec, 'REBASE_HEAD');
+  const trackedDirty = await dirtyFiles(root, { exec, runStatus, untracked: false });
+  const allWithUntracked = await dirtyFiles(root, { exec, runStatus, untracked: true });
+  const untrackedDirty = allWithUntracked.filter(entry => entry.code === '??' || entry.code.startsWith('?'));
+  const normalizedOutputs = new Set(
+    (Array.isArray(outputPaths) ? outputPaths : [])
+      .map(normalizeOutputPath)
+      .filter(path => path !== null),
+  );
+  const presentUntracked = [];
+  for (const entry of untrackedDirty) {
+    const normalized = normalizeRelPath(entry.path);
+    if (normalized === null || !normalizedOutputs.has(normalized)) continue;
+    if (await pathExistsInCheckout(root, exec, normalized)) presentUntracked.push({ code: entry.code, path: normalized });
+  }
+  const integrateCollisions = integrateOutputCollisions(outputPaths, trackedDirty, presentUntracked);
+  return {
+    mergeInProgress,
+    rebaseInProgress,
+    integrateTrackedDirty: trackedDirty,
+    integrateCollisions,
+    dirty: false,
+  };
+}
