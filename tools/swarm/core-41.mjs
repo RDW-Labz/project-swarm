@@ -125,13 +125,12 @@ export async function expandOpenScopes(root, manifest) {
   return expanded;
 }
 
+// Descendants that call setsid() (or otherwise start a new session) are not in the leader's
+// process group and will not receive this group-directed SIGTERM/SIGKILL (known limit).
 /** Kill a detached cursor lane leader's process group; injectable for tests. */
-export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind(process), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), pgidFor = process.pid } = {}) {
+export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind(process), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), pollIntervalMs = 75, graceMs = 5000, now = () => Date.now() } = {}) {
   if (!Number.isInteger(pid) || pid <= 1) return { refused: true, error: null };
-  let ownPgid;
-  try { ownPgid = typeof process.getpgid === 'function' ? process.getpgid(pgidFor) : null; }
-  catch { ownPgid = null; }
-  if (pid === process.pid || (ownPgid != null && pid === ownPgid)) return { refused: true, error: null };
+  if (pid === process.pid || pid === process.ppid) return { refused: true, error: null };
   const target = -pid;
   const probe = () => { try { killImpl(target, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
   try { killImpl(target, 'SIGTERM'); }
@@ -140,7 +139,11 @@ export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind
     const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
     return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGTERM` };
   }
-  await sleep(5000);
+  const deadline = now() + graceMs;
+  while (now() < deadline) {
+    if (!probe()) return { refused: false, error: null };
+    await sleep(pollIntervalMs);
+  }
   if (!probe()) return { refused: false, error: null };
   try { killImpl(target, 'SIGKILL'); return { refused: false, error: null }; }
   catch (error) {
@@ -150,11 +153,21 @@ export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind
   }
 }
 
+function waitForChildClose(child, timeoutMs = 500) {
+  if (!child?.pid) return Promise.resolve({ error: null });
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ error: null });
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve({ error: null }), timeoutMs);
+    child.once('close', () => { clearTimeout(timer); resolve({ error: null }); });
+  });
+}
+
 async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = killCursorProcessGroup }) {
-  const group = Number.isInteger(groupPid) ? await killGroupImpl(groupPid, { killImpl }) : { refused: false, error: null };
-  const childResult = await stopChild(child, { killImpl });
-  if (group.refused) return childResult;
-  return { error: childResult.error ?? group.error ?? null };
+  if (!Number.isInteger(groupPid)) return await stopChild(child, { killImpl });
+  const group = await killGroupImpl(groupPid, { killImpl });
+  if (group.refused) return { error: null };
+  if (group.error) return { error: group.error };
+  return await waitForChildClose(child);
 }
 
 export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, killGroupImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
@@ -174,7 +187,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
     const stopChildForJob = () => job.agent === 'cursor'
       ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl })
       : stopChild(child, { killImpl });
-    const stop = why => { if (reason || settled) return; reason = why; termination=stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
+    const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;

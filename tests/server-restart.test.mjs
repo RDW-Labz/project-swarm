@@ -29,55 +29,35 @@ const REPO = path.join(HERE, '..');
 /** @type {{ pid: number, child?: import('node:child_process').ChildProcess }[]} */
 const trackedFakeServers = [];
 
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+function trackFakeServer(child) {
+  if (!child?.pid) return child;
+  if (!trackedFakeServers.some(e => e.child === child)) {
+    trackedFakeServers.push({ pid: child.pid, child });
   }
+  return child;
 }
 
-function trackFakeServer(childOrPid) {
-  const pid = typeof childOrPid === 'number' ? childOrPid : childOrPid?.pid;
-  if (!Number.isInteger(pid) || pid <= 0) return childOrPid;
-  const child = typeof childOrPid === 'number' ? undefined : childOrPid;
-  if (!trackedFakeServers.some(e => e.pid === pid)) {
-    trackedFakeServers.push({ pid, child });
+async function stopChildProcess(child, timeoutMs = 3000) {
+  if (!child?.pid) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  await new Promise(resolve => {
+    child.once('exit', () => resolve());
+    setTimeout(resolve, timeoutMs);
+  });
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    await new Promise(resolve => {
+      child.once('exit', () => resolve());
+      setTimeout(resolve, timeoutMs);
+    });
   }
-  return childOrPid;
-}
-
-async function waitForPidExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!pidAlive(pid)) return true;
-    await new Promise(r => setTimeout(r, 50));
-  }
-  return !pidAlive(pid);
 }
 
 async function stopTrackedFakeServers() {
   const pending = trackedFakeServers.splice(0, trackedFakeServers.length);
-  for (const { pid, child } of pending) {
-    if (!pidAlive(pid)) continue;
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch { /* already gone */ }
-    await waitForPidExit(pid, 2000);
-    if (pidAlive(pid)) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch { /* already gone */ }
-      await waitForPidExit(pid, 2000);
-    }
-    if (child) {
-      await new Promise(resolve => {
-        if (child.exitCode !== null || child.signalCode !== null) return resolve();
-        child.once('exit', () => resolve());
-        setTimeout(resolve, 3000);
-      });
-    }
+  for (const { child } of pending) {
+    if (child) await stopChildProcess(child);
   }
 }
 
@@ -148,13 +128,6 @@ async function startFake({ home, version, port, ignoreSigterm = false, recordKin
     await new Promise(r => setTimeout(r, 50));
   }
   return trackFakeServer(child);
-}
-
-async function trackPidFromRegistry(file) {
-  try {
-    const data = JSON.parse(await fs.readFile(file, 'utf8'));
-    if (Number.isInteger(data.pid) && data.pid > 0) trackFakeServer(data.pid);
-  } catch { /* no record */ }
 }
 
 async function installLayout(home, { runnerBody }) {
@@ -316,7 +289,6 @@ child.unref();
   assert.match(lines.join(''), /board restarted: 1\.0\.0 to 2\.0\.0/);
   const health = await fetch(`http://127.0.0.1:${port}/api/health`).then(r => r.json());
   assert.equal(health.version, '2.0.0');
-  trackFakeServer(health.pid);
 });
 
 test('remote server record works the same', async () => {
@@ -340,17 +312,15 @@ child.unref();
     home,
     write: t => lines.push(t),
   });
-  await trackPidFromRegistry(recordFile);
   assert.equal(servers[0]?.kind, 'remote');
   assert.equal(servers[0]?.status, 'restarted');
   assert.match(lines.join(''), /remote server restarted/);
 });
 
-test('stopTrackedFakeServers kills children when a test body throws', async (t) => {
+test('stopTrackedFakeServers kills only tracked child handles', async () => {
   const home = await mkHome();
   const port = await freePort();
   const child = await startFake({ home, version: '1.0.0', port });
-  const pid = child.pid;
   let caught = null;
   try {
     throw new Error('intentional test failure');
@@ -358,9 +328,8 @@ test('stopTrackedFakeServers kills children when a test body throws', async (t) 
     caught = error;
   }
   assert.equal(caught?.message, 'intentional test failure');
-  t.after(async () => {
-    assert.equal(pidAlive(pid), false);
-  });
+  await stopTrackedFakeServers();
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
 });
 
 test('failed replacement is retried once then manual command', async () => {
@@ -423,6 +392,5 @@ child.unref();
     env: { HOME: home, PATH: process.env.PATH },
     home,
   });
-  await trackPidFromRegistry(record);
   assert.equal(servers[0]?.status, 'restarted');
 });
