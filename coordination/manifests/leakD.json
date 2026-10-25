@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "leakD",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/server-restart.test.mjs"
+   ],
+   "prompt": "Fix four review findings in the cursor lane process-group kill (tools/swarm/core-41.mjs, do not edit tools/swarm/core-1.mjs) and its tests (tests/cursor-process-group.test.mjs, tests/server-restart.test.mjs). 1 MEDIUM probe() in the poll loop and the final re-probe re-throws errors other than ESRCH: a recycled pgid owned by another user gives EPERM, the promise rejects, termination.then has no catch, finish awaits it and execute never resolves (the job hangs). Catch inside probe and return a result object (alive true on EPERM, gone true on ESRCH, error text for anything else); treat EPERM as 'not our group': never send SIGKILL to it, finish normally; wrap the whole kill sequence so it can never reject into finish. 2 MEDIUM tests/server-restart.test.mjs: the runner starts detached fake servers (for example the 2.0.0 one) during a restart that the test no longer stops. Make the fake server (the fake-server.mjs the tests write into the temp home) stop ITSELF: exit after 120 seconds, exit when its parent process is gone (poll process.ppid every second, exit when it becomes 1), and exit when a sentinel file named stop in the temp home appears; the test after hooks create the sentinel in every temp home they used (best effort), in addition to killing the handles they hold. Add a test that a fake server started with a deleted parent exits (use a short interval option via an env var). 3 LOW the test 'exit races timeout' never emits exit: make the fake child emit exit then close after the timeout fires, and assert a single kill sequence and no hang. 4 LOW waitForChildClose: when the 500 ms wait ends without a close event (a descendant in its own session keeps the pipes open), return an error/timeout indicator so finish destroys the streams and resolves; add a test. Keep every existing test passing (tests/cursor*.test.mjs, tests/server-restart*.test.mjs, tests/lanes*.test.mjs).",
+   "ignoreTests": [
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}
