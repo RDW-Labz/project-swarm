@@ -1423,22 +1423,27 @@ function tagIssueStages(issues, stageByTicket) {
   return issues.map(issue => (issue.stage ? issue : { ...issue, stage: issue.ticket ? stageByTicket.get(issue.ticket) ?? null : null }));
 }
 
-function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
+export function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
   const stillParked = [];
   const promoted = [];
   for (const entry of pathPendingParked) {
     const ticket = entry.ticket;
     const paths = validateTicketPaths(ticket, { exists: pathExists, allTickets: [...tickets, ticket], repoFiles });
     const missing = (paths.errors ?? []).filter(err => err.reason === 'missing file');
+    const promote = (t) => {
+      if (!Object.hasOwn(t, 'pathPending')) return t;
+      const { pathPending: _drop, ...rest } = t;
+      return rest;
+    };
     if (!missing.length) {
-      promoted.push(ticket);
+      promoted.push(promote(ticket));
       continue;
     }
     const cleared = missing.every(err => {
       const norm = normTicketPath(err.path);
       return acceptNewPaths.has(norm) || repoFiles.includes(norm);
     });
-    if (cleared) promoted.push(ticket);
+    if (cleared) promoted.push(promote(ticket));
     else stillParked.push(entry);
   }
   return { tickets: [...tickets, ...promoted], pathPendingParked: stillParked };

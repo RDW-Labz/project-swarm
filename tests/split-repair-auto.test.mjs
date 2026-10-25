@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { repairTicketBatch, refreshRejectedDependents } from '../tools/split-repair.mjs';
+import { promotePathPendingTickets } from '../tools/scope-commands.mjs';
 import { validateTicket } from '../tools/tickets.mjs';
 import { validateTicketPaths } from '../tools/ticket-paths.mjs';
 
@@ -325,6 +326,30 @@ test('path dependency skips cancelled or done owner tickets', () => {
   });
   const fixed = result.tickets.find(t => t.id === 'T-0003');
   assert.deepEqual(fixed.dependsOn, ['T-0002']);
+});
+
+test('promoted path-pending tickets drop pathPending before ledger ingest', () => {
+  const ticket = base({
+    context: ['docs/now-in-repo.md'],
+    files: ['src/use.mjs'],
+    acceptance: ['ok'],
+    pathPending: true,
+  });
+  const pathPendingParked = [{
+    parkedReason: 'path-not-in-repo-pending',
+    ticket,
+    issues: [{ reason: 'pending path gate' }],
+  }];
+  const repoFiles = ['docs/now-in-repo.md', 'src/existing.mjs'];
+  const localExists = (p) => exists.has(p) || repoFiles.includes(p);
+  const result = promotePathPendingTickets(pathPendingParked, [], {
+    repoFiles,
+    acceptNewPaths: new Set(),
+    pathExists: localExists,
+  });
+  assert.equal(result.pathPendingParked.length, 0);
+  assert.equal(result.tickets.length, 1);
+  assert.equal('pathPending' in result.tickets[0], false);
 });
 
 test('repairTicketBatch is deterministic for the same input', () => {
