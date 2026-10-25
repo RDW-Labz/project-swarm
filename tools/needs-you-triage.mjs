@@ -555,14 +555,6 @@ async function recordOwnerDecisionOnItem(projectRoot, item, deps, decision) {
     if (already) return;
   }
   const now = deps.now;
-  if (item.kind === 'human') {
-    await append(projectRoot, { kind: 'human', id: item.id, title: text }, { now });
-    return;
-  }
-  if (item.kind === 'decision') {
-    await append(projectRoot, { kind: 'decision', id: item.id, text, confirm: true }, { now });
-    return;
-  }
   await append(projectRoot, {
     kind: 'note',
     id: `needs-you-owner-${itemKey}`,
@@ -668,6 +660,7 @@ export async function runNeedsYouTriagePass(primaryRoot, deps, { now, log } = {}
       gitExecForIntegrate: deps.gitExecForIntegrate,
       integrateCheckoutGitState: deps.integrateCheckoutGitState,
       runIntegrateGitStatus: deps.runIntegrateGitStatus,
+      listRuns: deps.listRuns ?? deps.loadRuns,
       ...(deps.needsYouTriage ?? {}),
     };
     const handlers = buildHandlersMap(triageDeps.handlers ?? {});

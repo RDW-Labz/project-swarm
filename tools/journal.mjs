@@ -305,7 +305,7 @@ export async function appendIntegrateBlockerIfNeeded(root, draft, { now = Date.n
   return withJournalLock(root, 'integrate-blocker', async () => {
     const events = await readJournal(root, { limit: Infinity });
     const id = typeof draft.id === 'string' ? draft.id : integrateBlockerId(integrateKind, integrateRun, integrateCause);
-    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) {
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now })) {
       return { appended: false, id };
     }
     const stored = await appendEvent(root, {

@@ -22,7 +22,7 @@ import {
   REOPEN_SUPPRESS_MS,
   SWARM_FIX_INTEGRATE_SUPPRESS_MS,
 } from '../tools/needs-you-triage.mjs';
-import { integrateBlockerSuppressed } from '../tools/journal.mjs';
+import { integrateBlockerSuppressed, openItems } from '../tools/journal.mjs';
 import { readyAutopilotDeps, buildNeedsYouTriageHandlers, integrateTriageSucceeded } from '../tools/autopilot-ready-deps.mjs';
 
 const NOW = Date.parse('2025-03-01T12:00:00Z');
@@ -130,7 +130,8 @@ test('owner decision text is required shape and blocks handlers', async t => {
   assert.equal(out.results[0].action, 'owner');
   assert.equal(out.results[0].decision, decision);
   assert.equal(events.length, 1);
-  assert.equal(events[0].e.kind, 'decision');
+  assert.equal(events[0].e.kind, 'note');
+  assert.equal(events[0].e.ownerDecisionFor, 'decision:d9');
   assert.equal(events[0].e.text, decision);
 });
 
@@ -332,7 +333,43 @@ test('reopen suppression never auto-closes an owner-class item', async t => {
   });
   assert.equal(out.results[0]?.action, 'owner');
   assert.ok(!appended.some(e => e.resolved === true || e.done === true));
-  assert.equal(appended.filter(e => e.kind === 'decision').length, 1);
+  assert.equal(appended.filter(e => e.kind === 'note' && e.ownerDecisionFor).length, 1);
+});
+
+test('owner decision note does not replace human or decision journal events', async t => {
+  const root = await tmp(t);
+  const journal = [
+    {
+      kind: 'human',
+      id: 'h1',
+      title: 'expired login for npm',
+      steps: ['open settings', 'refresh token'],
+      unblocks: 3,
+      ts: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      kind: 'decision',
+      id: 'd1',
+      text: 'Ship now?',
+      options: ['yes', 'no'],
+      choice: 'yes',
+      confirm: true,
+      ts: '2025-01-01T00:00:00.000Z',
+    },
+  ];
+  await runNeedsYouTriagePass(root, {
+    now: () => NOW,
+    readJournal: async () => journal,
+    appendEvent: async (r, e) => { journal.push(e); },
+  });
+  const human = openItems(journal).find(e => e.id === 'h1');
+  assert.deepEqual(human?.steps, ['open settings', 'refresh token']);
+  assert.equal(human?.unblocks, 3);
+  const decision = journal.filter(e => e.kind === 'decision' && e.id === 'd1').pop();
+  assert.deepEqual(decision?.options, ['yes', 'no']);
+  assert.equal(decision?.choice, 'yes');
+  assert.ok(journal.some(e => e.kind === 'note' && e.ownerDecisionFor === 'human:h1'));
+  assert.ok(journal.some(e => e.kind === 'note' && e.ownerDecisionFor === 'decision:d1'));
 });
 
 test('production deps expose handlers and run a fake item through them', async t => {
@@ -351,6 +388,17 @@ test('production deps expose handlers and run a fake item through them', async t
     readPending: async () => [],
   });
   assert.equal(typeof ready.needsYouTriage?.handlers?.['split-park'], 'function');
+  const loadRuns = async () => [{ id: 'RUN', status: 'complete', jobs: [{ id: 'j1', status: 'complete', outputs: ['out.mjs'] }] }];
+  const readyWithRuns = readyAutopilotDeps(root, {
+    spawnImpl: () => ({ once() {}, unref() {} }),
+    liveBusyMarkers: async () => [],
+    listLiveRuns: async () => [],
+    checkProjectCap: async () => null,
+    readTickets: async () => [],
+    readPending: async () => [],
+    loadRuns,
+  });
+  assert.equal(readyWithRuns.needsYouTriage?.listRuns, loadRuns);
   const out = await handlers.integrate({
     root,
     item: { id: 'integrate-RUN--abc', title: 'integrate' },

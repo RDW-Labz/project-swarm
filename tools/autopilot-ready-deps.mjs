@@ -91,8 +91,9 @@ function runHasCompleteJob(run) {
 }
 
 async function resolveRunForIntegrate(root, runId, deps, events) {
-  if (typeof deps.listRuns === 'function') {
-    const runs = await deps.listRuns(root);
+  const listRuns = typeof deps.listRuns === 'function' ? deps.listRuns : deps.loadRuns;
+  if (typeof listRuns === 'function') {
+    const runs = await listRuns(root);
     const list = Array.isArray(runs) ? runs : [];
     const hit = list.find(r => r && r.id === runId);
     if (hit) return { run: hit, runs: list };
@@ -259,7 +260,10 @@ export function readyAutopilotDeps(projectRoot, {
   readMachine: readMachineImpl = readMachine,
   log = line => process.stderr.write(`${line}\n`),
   installRoot = null,
+  loadRuns = null,
+  listRuns = null,
 } = {}) {
+  const runLoader = typeof listRuns === 'function' ? listRuns : loadRuns;
   const rootForMarkers = projectRoot;
 
   async function allTickets(root) {
@@ -383,6 +387,7 @@ export function readyAutopilotDeps(projectRoot, {
     },
 
     installRoot,
+    ...(typeof runLoader === 'function' ? { loadRuns: runLoader, listRuns: runLoader } : {}),
   };
 
   bundle.needsYouTriage = {
@@ -392,6 +397,7 @@ export function readyAutopilotDeps(projectRoot, {
       installRoot,
       startScope: opts => bundle.startScope(opts),
     }),
+    ...(typeof runLoader === 'function' ? { listRuns: runLoader } : {}),
   };
 
   return bundle;
