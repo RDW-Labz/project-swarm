@@ -1,0 +1,553 @@
+// SPDX-License-Identifier: Apache-2.0
+import './_isolate-config.mjs';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  autopilotStep,
+  filterValidIntegrateOutputPaths,
+  integrationBlocker,
+  integrateCheckoutDirtyFromPorcelain,
+  runIntegrateOutputPaths,
+} from '../tools/autopilot.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import {
+  integrateCheckoutGitState,
+  integrateOutputCollisions,
+  integratePathsCollide,
+} from '../tools/generated-state.mjs';
+
+const execFileAsync = promisify(execFile);
+
+const NOW = Date.parse('2030-01-01T12:00:00.000Z');
+const iso = ms => new Date(ms).toISOString();
+
+async function tempRoot(t) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autopilot-integrate-clean-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+async function writeRunFolder(root, runId, { state = null, manifest = null } = {}) {
+  const dir = path.join(root, '.swarm', 'runs', runId);
+  await fs.mkdir(dir, { recursive: true });
+  if (state != null) {
+    await fs.writeFile(path.join(dir, 'state.json'), `${JSON.stringify(state)}\n`, 'utf8');
+  }
+  if (manifest != null) {
+    await fs.writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest)}\n`, 'utf8');
+  }
+  return dir;
+}
+
+function fakeDeps(opts = {}) {
+  const { journal = [], runs = [], ...fns } = opts;
+  const calls = [];
+  return {
+    calls,
+    loadRuns: async () => runs,
+    readJournal: async () => journal,
+    appendEvent: async (_root, event) => {
+      calls.push(['appendEvent', event]);
+      journal.push({ ...event, ts: iso(NOW) });
+      return event;
+    },
+    readPlan: async () => null,
+    checkout: async () => ({ branch: 'swarm/work', dirty: false }),
+    integrate: async (...args) => { calls.push(['integrate', ...args]); return { files: 1 }; },
+    resume: async () => {},
+    retryFailed: async () => ({}),
+    startWave: async () => ({}),
+    ...fns,
+  };
+}
+
+const outputRun = {
+  id: 'r-out',
+  status: 'complete',
+  integrated: false,
+  integrable: true,
+};
+
+const manifestEvent = {
+  kind: 'run',
+  id: 'r-out',
+  status: 'complete',
+  manifest: {
+    jobs: [{ id: 'j1', outputs: ['src/widget.mjs'], status: 'complete' }],
+  },
+};
+
+function gitStateView(overrides = {}) {
+  return {
+    branch: 'swarm/work',
+    dirty: false,
+    integrateTrackedDirty: [],
+    integrateCollisions: [],
+    ...overrides,
+  };
+}
+
+test('untracked junk does not block integrate on a swarm branch', async t => {
+  const root = await tempRoot(t);
+  const deps = fakeDeps({
+    journal: [manifestEvent],
+    runs: [outputRun],
+    integrateCheckoutGitState: async () => gitStateView({
+      integrateTrackedDirty: [],
+      integrateCollisions: [],
+    }),
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.equal(step.blocked.length, 0);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), true);
+});
+
+test('tracked modification outside output paths blocks and names files', async t => {
+  const root = await tempRoot(t);
+  const deps = fakeDeps({
+    journal: [manifestEvent],
+    runs: [outputRun],
+    integrateCheckoutGitState: async () => gitStateView({
+      integrateTrackedDirty: [{ code: ' M', path: 'notes/scratch.txt' }],
+      integrateCollisions: [],
+    }),
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.deepEqual(step.blocked, ['integrate-checkout-r-out']);
+  const blocker = deps.calls.find(c => c[0] === 'appendEvent' && c[1].kind === 'blocker')?.[1];
+  assert.match(blocker.text, /notes\/scratch\.txt/);
+  assert.match(blocker.text, /commit or move/i);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
+});
+
+test('collision on a declared output path blocks and names the path', async t => {
+  const root = await tempRoot(t);
+  const deps = fakeDeps({
+    journal: [manifestEvent],
+    runs: [outputRun],
+    integrateCheckoutGitState: async () => gitStateView({
+      integrateTrackedDirty: [{ code: ' M', path: 'src/widget.mjs' }],
+      integrateCollisions: ['src/widget.mjs'],
+    }),
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.deepEqual(step.blocked, ['integrate-checkout-r-out']);
+  const blocker = deps.calls.find(c => c[0] === 'appendEvent' && c[1].kind === 'blocker')?.[1];
+  assert.match(blocker.text, /src\/widget\.mjs/);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
+});
+
+test('integrateCheckoutDirtyFromPorcelain ignores untracked lines', () => {
+  assert.equal(integrateCheckoutDirtyFromPorcelain('?? notes/local.txt\n'), false);
+  assert.equal(integrateCheckoutDirtyFromPorcelain(' M src/other.mjs\n'), true);
+});
+
+test('integrationBlocker names output-path collisions', () => {
+  const why = integrationBlocker({
+    branch: 'swarm/work',
+    dirty: false,
+    integrateTrackedDirty: [],
+    integrateCollisions: ['src/widget.mjs'],
+  });
+  assert.match(why, /src\/widget\.mjs/);
+});
+
+test('splitter and review runs produce no integrate item and close stale checkout blockers', async t => {
+  const root = await tempRoot(t);
+  const journal = [
+    { kind: 'blocker', id: 'integrate-checkout-split1', text: 'stale', ts: iso(NOW - 1000) },
+    { kind: 'blocker', id: 'integrate-split1', text: 'stale integrate', ts: iso(NOW - 1000) },
+  ];
+  const deps = fakeDeps({
+    journal,
+    runs: [{ id: 'split1', status: 'complete', integrated: false, integrable: false }],
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.deepEqual(step.blocked, []);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
+  assert.ok(journal.some(e => e.id === 'integrate-checkout-split1' && e.resolved === true));
+  assert.ok(journal.some(e => e.id === 'integrate-split1' && e.resolved === true));
+});
+
+test('integrateOutputCollisions only lists declared outputs', () => {
+  const hits = integrateOutputCollisions(
+    ['src/widget.mjs'],
+    [{ code: ' M', path: 'notes/x.txt' }, { code: ' M', path: 'src/widget.mjs' }],
+    [{ code: '??', path: 'src/widget.mjs' }],
+  );
+  assert.deepEqual(hits, ['src/widget.mjs']);
+});
+
+test('runIntegrateOutputPaths falls back to run.jobs when manifest is missing', () => {
+  const paths = runIntegrateOutputPaths(
+    {
+      id: 'r1',
+      jobs: [{ id: 'j1', outputs: ['lib/a.mjs'] }],
+    },
+    [],
+  );
+  assert.deepEqual(paths, ['lib/a.mjs']);
+});
+
+test('runIntegrateOutputPaths includes child-run job outputs', () => {
+  const paths = runIntegrateOutputPaths(
+    {
+      id: 'lead',
+      jobs: [{ id: 'lead-j', childRun: 'child1' }],
+    },
+    [],
+    {
+      runs: [
+        { id: 'child1', jobs: [{ id: 'c1', outputs: ['out/child.mjs'] }] },
+      ],
+    },
+  );
+  assert.deepEqual(paths, ['out/child.mjs']);
+});
+
+test('integratable run with no resolvable output paths blocks integrate', async t => {
+  const root = await tempRoot(t);
+  const deps = fakeDeps({
+    journal: [{ kind: 'run', id: 'r-empty', status: 'complete' }],
+    runs: [{
+      id: 'r-empty',
+      status: 'complete',
+      integrated: false,
+      integrable: true,
+      counts: { complete: 1 },
+      jobs: [{ id: 'j1', status: 'complete', outputs: [] }],
+    }],
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.deepEqual(step.blocked, ['integrate-checkout-r-empty']);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), false);
+});
+
+test('failed run with complete jobs does not auto-close integrate blockers', async t => {
+  const root = await tempRoot(t);
+  const journal = [
+    { kind: 'blocker', id: 'integrate-checkout-r-fail', text: 'stale', ts: iso(NOW - 1000) },
+  ];
+  const deps = fakeDeps({
+    journal,
+    runs: [{
+      id: 'r-fail',
+      status: 'failed',
+      integrated: false,
+      integrable: true,
+      counts: { complete: 1, failed: 1 },
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/x.mjs'] }],
+    }],
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.deepEqual(step.blocked, []);
+  assert.ok(!journal.some(e => e.id === 'integrate-checkout-r-fail' && e.resolved === true));
+});
+
+test('integratePathsCollide matches directory prefixes', () => {
+  assert.equal(integratePathsCollide('src/pkg', 'src/pkg/deep/file.mjs'), true);
+  assert.equal(integratePathsCollide('src/pkg/deep', 'src/pkg'), true);
+});
+
+test('integrateOutputCollisions is case-insensitive when configured', () => {
+  const hits = integrateOutputCollisions(
+    ['src/Widget.mjs'],
+    [{ code: ' M', path: 'src/widget.mjs' }],
+    [],
+    { ignoreCase: true },
+  );
+  assert.deepEqual(hits, ['src/widget.mjs']);
+});
+
+test('integrationBlocker reports cherry-pick and unmerged paths', () => {
+  assert.match(integrationBlocker({
+    branch: 'swarm/work',
+    dirty: false,
+    cherryPickInProgress: true,
+  }), /cherry-pick/);
+  assert.match(integrationBlocker({
+    branch: 'swarm/work',
+    dirty: false,
+    unmergedPaths: ['both.txt'],
+  }), /both\.txt/);
+});
+
+test('integrateCheckoutGitState detects rebase-merge via git-path', async t => {
+  const root = await tempRoot(t);
+  await execFileAsync('git', ['init'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.name', 't'], { cwd: root });
+  await fs.writeFile(path.join(root, 'f.txt'), 'a\n');
+  await execFileAsync('git', ['add', 'f.txt'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: root });
+  const { stdout: gitDirOut } = await execFileAsync('git', ['rev-parse', '--git-path', 'rebase-merge'], { cwd: root });
+  const rebaseDir = path.join(root, gitDirOut.trim());
+  await fs.mkdir(rebaseDir, { recursive: true });
+  const exec = (cmd, args, opts) => execFileAsync(cmd, args, { ...opts, cwd: root });
+  const state = await integrateCheckoutGitState(root, {
+    exec: (cmd, args, opts) => exec(cmd, args, opts).then(({ stdout }) => ({ stdout })),
+    outputPaths: [],
+  });
+  assert.equal(state.rebaseInProgress, true);
+});
+
+test('integrateCheckoutGitState treats AA and DD porcelain codes as unmerged', async t => {
+  const root = await tempRoot(t);
+  const runStatus = async () => 'AA both-added.txt\nDD both-deleted.txt\n M tracked.txt\n';
+  const exec = async (cmd, args) => {
+    if (cmd !== 'git') throw new Error('unexpected exec');
+    const sub = args[1];
+    if (sub === 'config') return { stdout: 'false\n' };
+    if (sub === 'rev-parse') return { stdout: '' };
+    throw new Error(`unexpected git ${sub}`);
+  };
+  const state = await integrateCheckoutGitState(root, {
+    exec,
+    runStatus,
+    outputPaths: [],
+  });
+  assert.deepEqual(state.unmergedPaths.sort(), ['both-added.txt', 'both-deleted.txt']);
+});
+
+test('integrateCheckoutGitState resolves non-existent output paths through symlink parents', async t => {
+  const root = await tempRoot(t);
+  await execFileAsync('git', ['init'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  await execFileAsync('git', ['config', 'user.name', 't'], { cwd: root });
+  const targetDir = path.join(root, 'target');
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.writeFile(path.join(targetDir, 'widget.mjs'), 'v1\n');
+  await execFileAsync('git', ['add', 'target/widget.mjs'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: root });
+  const linkPath = path.join(root, 'link');
+  try {
+    await fs.symlink('target', linkPath);
+  } catch (err) {
+    if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+      t.skip('symlinks not supported in this environment');
+      return;
+    }
+    throw err;
+  }
+  await execFileAsync('git', ['add', 'link'], { cwd: root });
+  await execFileAsync('git', ['commit', '-m', 'add symlink'], { cwd: root });
+  await fs.writeFile(path.join(targetDir, 'widget.mjs'), 'v2\n');
+  const exec = (cmd, args, opts) => execFileAsync(cmd, args, { ...opts, cwd: root });
+  const state = await integrateCheckoutGitState(root, {
+    exec: (cmd, args, opts) => exec(cmd, args, opts).then(({ stdout }) => ({ stdout })),
+    outputPaths: ['link/widget.mjs'],
+  });
+  assert.ok(state.integrateCollisions.includes('target/widget.mjs'));
+  assert.ok(!state.integrateCollisions.includes('link'));
+});
+
+test('runIntegrateOutputPaths reads complete job outputs from saved state.json', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-disk', {
+    state: {
+      id: 'r-disk',
+      status: 'complete',
+      jobs: [
+        { id: 'j1', status: 'running', outputs: ['src/running-only.mjs'] },
+        { id: 'j2', status: 'complete', outputs: ['src/from-state.mjs'] },
+      ],
+    },
+  });
+  const paths = runIntegrateOutputPaths(
+    { id: 'r-disk', status: 'complete', integrable: true, counts: { complete: 1 } },
+    [{ kind: 'run', id: 'r-disk', status: 'complete', counts: { complete: 1 } }],
+    { root },
+  );
+  assert.deepEqual(paths, ['src/from-state.mjs']);
+});
+
+test('runIntegrateOutputPaths falls back to manifest.json when state has no complete outputs', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-manifest', {
+    state: {
+      id: 'r-manifest',
+      jobs: [{ id: 'j1', status: 'complete', outputs: [] }],
+    },
+    manifest: {
+      jobs: [{ id: 'j1', outputs: ['lib/from-manifest.mjs'] }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-manifest', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['lib/from-manifest.mjs']);
+});
+
+test('runIntegrateOutputPaths ignores symlinked or unreadable saved state.json', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-bad', {});
+  const outside = path.join(root, 'outside-state.json');
+  await fs.writeFile(outside, JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/leak.mjs'] }],
+  }), 'utf8');
+  try {
+    await fs.symlink(outside, path.join(runDir, 'state.json'));
+  } catch (err) {
+    if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+      t.skip('symlinks not supported in this environment');
+      return;
+    }
+    throw err;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-bad', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+
+  const unreadable = await writeRunFolder(root, 'r-unread', {});
+  await fs.writeFile(path.join(unreadable, 'state.json'), '{not json', 'utf8');
+  assert.deepEqual(
+    runIntegrateOutputPaths({ id: 'r-unread', integrable: true }, [], { root }),
+    [],
+  );
+});
+
+test('runIntegrateOutputPaths drops absolute paths and parent segments', async t => {
+  const root = await tempRoot(t);
+  await writeRunFolder(root, 'r-unsafe', {
+    state: {
+      jobs: [{
+        id: 'j1',
+        status: 'complete',
+        outputs: ['/etc/passwd', '../escape.mjs', 'ok/relative.mjs'],
+      }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-unsafe', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['ok/relative.mjs']);
+  assert.deepEqual(
+    filterValidIntegrateOutputPaths(['../x', '/abs', 'fine.mjs'], root),
+    ['fine.mjs'],
+  );
+});
+
+test('production-shaped run summary integrates when run folder declares outputs', async t => {
+  const root = await tempRoot(t);
+  const runId = 'r-prod';
+  await writeRunFolder(root, runId, {
+    state: {
+      id: runId,
+      status: 'complete',
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/prod-out.mjs'] }],
+    },
+  });
+  const productionRun = {
+    id: runId,
+    status: 'complete',
+    integrated: false,
+    integrable: true,
+    counts: { complete: 1, total: 1 },
+  };
+  const deps = fakeDeps({
+    journal: [{ kind: 'run', id: runId, status: 'complete', counts: productionRun.counts }],
+    runs: [productionRun],
+    integrateCheckoutGitState: async () => gitStateView(),
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  assert.equal(step.blocked.length, 0);
+  assert.equal(deps.calls.some(c => c[0] === 'integrate'), true);
+});
+
+async function skipIfNoSymlinks(t, err) {
+  if (err?.code === 'EPERM' || err?.code === 'ENOTSUP') {
+    t.skip('symlinks not supported in this environment');
+    return true;
+  }
+  throw err;
+}
+
+test('runIntegrateOutputPaths skips path-traversal childRun ids from saved state', async t => {
+  const root = await tempRoot(t);
+  await fs.mkdir(path.join(root, '.swarm', 'x'), { recursive: true });
+  await writeRunFolder(root, 'r-parent', {
+    state: {
+      id: 'r-parent',
+      jobs: [
+        { id: 'j1', status: 'complete', outputs: ['src/parent-only.mjs'], childRun: '../../x' },
+      ],
+    },
+  });
+  await writeRunFolder(root, 'x', {
+    state: {
+      id: 'x',
+      jobs: [{ id: 'j-leak', status: 'complete', outputs: ['src/pwned.mjs'] }],
+    },
+  });
+  const paths = runIntegrateOutputPaths({ id: 'r-parent', integrable: true }, [], { root });
+  assert.deepEqual(paths, ['src/parent-only.mjs']);
+});
+
+test('runIntegrateOutputPaths refuses oversized saved state.json', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-huge', {});
+  const huge = JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/huge-leak.mjs'] }],
+    pad: 'x'.repeat(2 * 1024 * 1024),
+  });
+  await fs.writeFile(path.join(runDir, 'state.json'), huge, 'utf8');
+  const paths = runIntegrateOutputPaths({ id: 'r-huge', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
+test('runIntegrateOutputPaths refuses symlinked .swarm/runs directory', async t => {
+  const root = await tempRoot(t);
+  const outsideRuns = path.join(root, 'outside-runs');
+  const runDir = path.join(outsideRuns, 'r-outside');
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(path.join(runDir, 'state.json'), `${JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/outside-leak.mjs'] }],
+  })}\n`, 'utf8');
+  const swarmDir = path.join(root, '.swarm');
+  await fs.mkdir(swarmDir, { recursive: true });
+  const runsDir = path.join(swarmDir, 'runs');
+  try {
+    await fs.symlink(outsideRuns, runsDir);
+  } catch (err) {
+    if (await skipIfNoSymlinks(t, err)) return;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-outside', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
+test('runIntegrateOutputPaths refuses state.json replaced by symlink after create', async t => {
+  const root = await tempRoot(t);
+  const runDir = await writeRunFolder(root, 'r-swap', {
+    state: {
+      jobs: [{ id: 'j1', status: 'complete', outputs: ['src/before-swap.mjs'] }],
+    },
+  });
+  const outside = path.join(root, 'outside-state.json');
+  await fs.writeFile(outside, JSON.stringify({
+    jobs: [{ id: 'j1', status: 'complete', outputs: ['src/after-swap.mjs'] }],
+  }), 'utf8');
+  const statePath = path.join(runDir, 'state.json');
+  await fs.rm(statePath);
+  try {
+    await fs.symlink(outside, statePath);
+  } catch (err) {
+    if (await skipIfNoSymlinks(t, err)) return;
+  }
+  const paths = runIntegrateOutputPaths({ id: 'r-swap', integrable: true }, [], { root });
+  assert.deepEqual(paths, []);
+});
+
+test('autopilot never stashes or removes files during integrate gating', async t => {
+  const root = await tempRoot(t);
+  await fs.mkdir(path.join(root, 'notes'), { recursive: true });
+  await fs.writeFile(path.join(root, 'notes/keep-me.txt'), 'stay\n');
+  const deps = fakeDeps({
+    journal: [manifestEvent],
+    runs: [outputRun],
+    integrateCheckoutGitState: async () => gitStateView(),
+    stash: async () => { throw new Error('must not stash'); },
+    gitClean: async () => { throw new Error('must not clean'); },
+  });
+  await autopilotStep(root, deps, { now: () => NOW, memory: new Set() });
+  const text = await fs.readFile(path.join(root, 'notes/keep-me.txt'), 'utf8');
+  assert.equal(text, 'stay\n');
+});

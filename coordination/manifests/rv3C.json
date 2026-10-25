@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv3C",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/autopilot-ready-deps.mjs",
+    "tools/needs-you-triage.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-ready-deps.mjs",
+    "tools/needs-you-triage.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "prompt": "Fix review findings in the Needs-you triage wiring (tools/autopilot-ready-deps.mjs, tools/needs-you-triage.mjs), tests added to tests/needs-you-triage.test.mjs (fakes only). 1 HIGH the integrate handler must run the same safety as autopilot before integrating: build the checkout view with real git exec (branch, dirty list, linked worktree, merge or rebase state) and call integrationBlocker first; any blocker returns not-ok (never integrate on main or master, mid merge, mid cherry-pick or over tracked edits) and the handler must respect autopilot's once-only integrate guard (read the journal like autopilot does; do not integrate a run twice). 2 HIGH the ci-failure handler only spawns go --scope and claims success: remove ci-failure from the fixable allowlist (tools/needs-you-triage.mjs near the allowlist) so it stays with the owner, unless the handler can verify the re-run of that exact check passed (it cannot today), and delete the unverified handler. 3 MEDIUM triageDeps must carry the checkout inspection and gitExecForIntegrate so the integrate-checkout handler works; classify checkout causes that only the owner can resolve (checkout is on main or master, uncommitted tracked changes, a merge or rebase in progress) as owner items with a Decision needed text (what to commit or move), never as fixable, and never file a swarm-fix goal for them. 4 MEDIUM closeItem must write the journal resolution through integrateBlockerResolutionEvent / integrateBlockerFields (tools/journal.mjs) so the integrateKey and integrateCauseKey are recorded and integrateBlockerSuppressed stops autopilot from re-raising the same blocker; add a test that a closed item is not re-raised by the next autopilot pass. 5 MEDIUM the lock must be exclusive: create it with open(file, 'wx'), refresh its timestamp while held (handlers can run long), and treat it as stale only when the owning pid is dead (injectable pid check) or the file is older than 30 minutes AND the pid is dead. 6 MEDIUM the swarm-fix goal must not carry the item title: keep only the item subtype, the project basename and the attempt count plus the last error line, sanitised and truncated to 200 chars with any absolute path or file name patterns stripped (replace paths with <path>). 7 LOW only items with kind === 'blocker' can ever be fixable; any other kind (human items, decision cards) is owner; markDone is never called for a non-blocker item. Keep every existing test passing (tests/needs-you-triage.test.mjs, tests/autopilot-*.test.mjs, tests/inbox*.test.mjs, tests/journal*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

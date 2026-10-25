@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import crypto from 'node:crypto';
+import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
+import { O_NOFOLLOW, O_RDONLY } from 'node:constants';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stopGuard } from './stop-all.mjs';
 import { matchesFile, ELEVATED_GIT_OPS } from './handbuild.mjs';
 import { runPolicyPass, appendAutoDecision } from './policy-run.mjs';
 import { resolveDailyLimit } from './daily-limit.mjs';
-import { filterGeneratedStatus } from './generated-state.mjs';
+import { filterGeneratedStatus, formatDirtyListing, integrateCheckoutGitState } from './generated-state.mjs';
 import { planWaveBatch } from './wave-batch.mjs';
 import { isAskRun, isNonIntegratingRun, runHasNoOutputs, runIntegratedFromState } from './run-kind.mjs';
 import { noteAutopilotStep } from './orchestrator-context.mjs';
@@ -20,6 +22,7 @@ import {
   integrateBlockerSuppressed,
   openBlockerIds,
 } from './journal.mjs';
+import { runNeedsYouTriagePass } from './needs-you-triage.mjs';
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -282,14 +285,17 @@ function runManifest(run, events) {
   return hit?.manifest ?? null;
 }
 
-export function runSkipsIntegrateAttention(run, events) {
+export function runSkipsIntegrateAttention(run, events, { runs, root, readRunFolder } = {}) {
   if (!run || typeof run !== 'object') return true;
   if (runCountsAsIntegrated(run)) return true;
   if (['cancelled', 'abandoned'].includes(run.status)) return true;
   const manifest = runManifest(run, events);
   if (isAskRun(run, manifest) && runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
   if (run.integrable === false) return true;
-  if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) return true;
+  if (runHasNoOutputs({ id: run.id, jobs: run.jobs })) {
+    if (run.integrable === true && runHasCompleteJob(run)) return false;
+    return true;
+  }
   return isNonIntegratingRun(run, manifest);
 }
 
@@ -396,7 +402,7 @@ export function decide(run, ctx) {
   if (run.status === 'complete' && !runCountsAsIntegrated(run)) {
     if (runIsHandled(run, events)) return null;
     if (run.integrable === false) return null;
-    if (runSkipsIntegrateAttention(run, events)) return null;
+    if (runSkipsIntegrateAttention(run, events, { runs: c.runs })) return null;
     const failures = actionEvents(events, 'integrate', id).filter(failedResult);
     if (failures.length) {
       const last = failures[failures.length - 1];
@@ -476,7 +482,219 @@ function noteStartReadyLive(memory, nowMs, { live, busy, runs }) {
 }
 
 export function integrateCheckoutDirtyFromPorcelain(stdout) {
-  return filterGeneratedStatus(String(stdout ?? '').split('\n')).length > 0;
+  const lines = filterGeneratedStatus(String(stdout ?? '').split('\n'));
+  return lines.some(line => {
+    const code = line.length >= 2 ? line.slice(0, 2) : '';
+    if (code === '??' || code.startsWith('?')) return false;
+    return Boolean(line.trim());
+  });
+}
+
+function jobsFromRun(run, manifest) {
+  const fromManifest = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const raw = run?.jobs;
+  const fromRun = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  if (!fromManifest.length) return fromRun;
+  if (!fromRun.length) return fromManifest;
+  const seen = new Set(fromManifest.map(j => j?.id).filter(Boolean));
+  return [...fromManifest, ...fromRun.filter(j => j?.id && !seen.has(j.id))];
+}
+
+function jobListFromSaved(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value);
+  return [];
+}
+
+function jobIsComplete(job) {
+  return job && (job.status === 'complete' || job.state === 'complete');
+}
+
+/** Drop absolute paths, `..`, and anything that resolves outside `projectRoot`. */
+export function filterValidIntegrateOutputPaths(paths, projectRoot) {
+  if (!projectRoot || typeof projectRoot !== 'string') {
+    return (Array.isArray(paths) ? paths : []).map(String).filter(p => typeof p === 'string' && p && !path.isAbsolute(p) && !p.split(/[/\\]/).includes('..'));
+  }
+  const rootResolved = path.resolve(projectRoot);
+  const out = [];
+  for (const raw of Array.isArray(paths) ? paths : []) {
+    const rel = String(raw);
+    if (!rel || path.isAbsolute(rel)) continue;
+    const normalized = path.normalize(rel);
+    if (normalized.startsWith('..') || normalized.split(/[/\\]/).includes('..')) continue;
+    const resolved = path.resolve(rootResolved, normalized);
+    if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) continue;
+    out.push(normalized.split(path.sep).join('/'));
+  }
+  return out;
+}
+
+const INTEGRATE_RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_RUN_FOLDER_JSON_BYTES = 2 * 1024 * 1024;
+
+function isValidIntegrateRunId(runId) {
+  return typeof runId === 'string'
+    && runId
+    && !runId.includes('..')
+    && INTEGRATE_RUN_ID_RE.test(runId);
+}
+
+function lstatPathNotSymlink(filePath) {
+  try {
+    const st = lstatSync(filePath);
+    return !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function readJsonFileNoSymlink(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, O_RDONLY | O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > MAX_RUN_FOLDER_JSON_BYTES) return null;
+    const buf = Buffer.alloc(st.size);
+    if (st.size > 0) readSync(fd, buf, 0, st.size, 0);
+    return JSON.parse(buf.toString('utf8'));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+/** Default reader for saved run folder `state.json` / `manifest.json` (never throws). */
+export function defaultReadRunFolderSources(root, runId) {
+  if (!root || !isValidIntegrateRunId(runId)) return { state: null, manifest: null };
+  const swarmDir = path.join(root, '.swarm');
+  const runsDir = path.join(swarmDir, 'runs');
+  if (!lstatPathNotSymlink(swarmDir) || !lstatPathNotSymlink(runsDir)) {
+    return { state: null, manifest: null };
+  }
+  const runDir = path.join(runsDir, runId);
+  if (!lstatPathNotSymlink(runDir)) return { state: null, manifest: null };
+  return {
+    state: readJsonFileNoSymlink(path.join(runDir, 'state.json')),
+    manifest: readJsonFileNoSymlink(path.join(runDir, 'manifest.json')),
+  };
+}
+
+function collectFolderJobOutputs(jobs, { completeOnly } = {}) {
+  const paths = [];
+  const childRunIds = [];
+  for (const job of jobListFromSaved(jobs)) {
+    if (!job || typeof job !== 'object') continue;
+    if (completeOnly && !jobIsComplete(job)) continue;
+    if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
+    const childId = job.childRun ?? job.child_run;
+    if (isValidIntegrateRunId(childId)) childRunIds.push(childId);
+  }
+  return { paths, childRunIds };
+}
+
+function runFolderIntegrateOutputPaths(runId, root, readRunFolder, visited = new Set()) {
+  if (!root || !isValidIntegrateRunId(runId) || visited.has(runId)) return [];
+  visited.add(runId);
+  const reader = typeof readRunFolder === 'function' ? readRunFolder : defaultReadRunFolderSources;
+  let sources;
+  try {
+    sources = reader(root, runId);
+  } catch {
+    sources = { state: null, manifest: null };
+  }
+  let state = sources?.state;
+  const manifest = sources?.manifest;
+  if (state && typeof state.id === 'string' && state.id && !isValidIntegrateRunId(state.id)) {
+    state = null;
+  }
+  const fromState = collectFolderJobOutputs(state?.jobs, { completeOnly: true });
+  let paths = [...fromState.paths];
+  const childIds = new Set(fromState.childRunIds);
+  if (!paths.length) {
+    const fromManifest = collectFolderJobOutputs(manifest?.jobs, { completeOnly: false });
+    paths = [...fromManifest.paths];
+    for (const id of fromManifest.childRunIds) childIds.add(id);
+  } else {
+    for (const job of jobListFromSaved(state?.jobs)) {
+      const childId = job?.childRun ?? job?.child_run;
+      if (isValidIntegrateRunId(childId)) childIds.add(childId);
+    }
+  }
+  for (const childId of childIds) {
+    paths.push(...runFolderIntegrateOutputPaths(childId, root, readRunFolder, visited));
+  }
+  return filterValidIntegrateOutputPaths(paths, root);
+}
+
+/** Declared integrate output paths from manifest, run jobs, lead-job child runs, and saved run files. */
+export function runIntegrateOutputPaths(run, events, { runs, root, readRunFolder } = {}) {
+  const manifest = runManifest(run, events);
+  const paths = [];
+  const visitedChildRuns = new Set();
+
+  function collectFromJobs(jobs) {
+    for (const job of Array.isArray(jobs) ? jobs : []) {
+      if (!job || typeof job !== 'object') continue;
+      if (Array.isArray(job.outputs) && job.outputs.length) paths.push(...job.outputs.map(String));
+      const childId = job.childRun ?? job.child_run;
+      if (typeof childId !== 'string' || !childId || visitedChildRuns.has(childId)) continue;
+      visitedChildRuns.add(childId);
+      const child = (Array.isArray(runs) ? runs : []).find(r => r && r.id === childId);
+      if (!child) continue;
+      const childManifest = runManifest(child, events);
+      collectFromJobs(jobsFromRun(child, childManifest));
+    }
+  }
+
+  collectFromJobs(jobsFromRun(run, manifest));
+  let validated = filterValidIntegrateOutputPaths(paths, root);
+  if (!validated.length && root && isValidIntegrateRunId(run?.id)) {
+    validated = runFolderIntegrateOutputPaths(run.id, root, readRunFolder);
+  }
+  return [...new Set(validated)].sort();
+}
+
+function runHasCompleteJob(run) {
+  if (!run || typeof run !== 'object') return false;
+  const complete = Number(run.counts?.complete);
+  if (Number.isFinite(complete) && complete > 0) return true;
+  const raw = run.jobs;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  return list.some(job => job && (job.status === 'complete' || job.state === 'complete'));
+}
+
+async function defaultGitExec(root, cmd, args, opts) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', ...opts });
+  return { stdout };
+}
+
+async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
+  if (typeof deps.integrateCheckoutGitState === 'function') {
+    try {
+      const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
+      if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
+    } catch { /* fall through */ }
+  }
+  try {
+    const exec = typeof deps.gitExecForIntegrate === 'function'
+      ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+      : (cmd, args, opts) => defaultGitExec(root, cmd, args, opts);
+    const gitState = await integrateCheckoutGitState(root, {
+      exec,
+      runStatus: typeof deps.runIntegrateGitStatus === 'function'
+        ? opts => deps.runIntegrateGitStatus(root, opts)
+        : undefined,
+      outputPaths,
+    });
+    if (gitState) return { ...checkout, ...gitState, dirty: false };
+  } catch { /* use raw checkout */ }
+  return checkout;
 }
 
 // Every once-only rule (one retry, one start per wave, no repeated integration) is read from the journal.
@@ -484,13 +702,33 @@ export function integrateCheckoutDirtyFromPorcelain(stdout) {
 // paid work. `memory` also remembers what this process already did, whatever the journal says.
 // Integration only runs from a swarm/* branch or a linked worktree that is not main/master, and only when
 // there is no uncommitted work. Anything else (or a checkout that cannot be read) becomes a blocker.
-export function integrationBlocker(checkout) {
+export function integrationBlocker(checkout, { outputPaths = [] } = {}) {
   if (!checkout || typeof checkout !== 'object') return 'the checkout could not be inspected';
   const branch = typeof checkout.branch === 'string' ? checkout.branch : '';
-  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   if (!branch) return 'the checkout is not on a branch';
   if (branch === 'main' || branch === 'master') return `the checkout is on ${branch}`;
-  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  if (!branch.startsWith('swarm/') && checkout.linkedWorktree !== true) {
+    return `the checkout is on ${branch}, not a swarm/* branch or its own worktree`;
+  }
+  if (checkout.mergeInProgress === true) return 'a merge is in progress in the checkout';
+  if (checkout.cherryPickInProgress === true) return 'a cherry-pick is in progress in the checkout';
+  if (checkout.revertInProgress === true) return 'a revert is in progress in the checkout';
+  if (checkout.rebaseInProgress === true) return 'a rebase is in progress in the checkout';
+  const unmerged = Array.isArray(checkout.unmergedPaths) ? checkout.unmergedPaths : [];
+  if (unmerged.length) {
+    return `the checkout has unmerged paths${formatDirtyListing(unmerged)}`;
+  }
+  const collisions = Array.isArray(checkout.integrateCollisions)
+    ? checkout.integrateCollisions
+    : [];
+  if (collisions.length) {
+    return `the checkout has local changes on integrate output path(s)${formatDirtyListing(collisions)}`;
+  }
+  const trackedDirty = Array.isArray(checkout.integrateTrackedDirty) ? checkout.integrateTrackedDirty : [];
+  if (trackedDirty.length) {
+    return `the checkout has uncommitted tracked changes${formatDirtyListing(trackedDirty.map(e => e.path ?? e))}; commit or move them before integrating`;
+  }
+  if (checkout.dirty !== false) return 'the checkout has uncommitted changes (or could not be checked)';
   return null;
 }
 
@@ -580,7 +818,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     const integrateRun = draft.integrateRun ?? draft.run;
     const integrateCause = draft.integrateCause ?? draft.text ?? '';
     const id = draft.id ?? integrateBlockerId(integrateKind, integrateRun, integrateCause);
-    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) return false;
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now: nowFn })) return false;
     if (openBlockerIds(events).has(id)) return false;
     const payload = {
       kind: 'blocker',
@@ -653,16 +891,23 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
     }
   }
 
+  const integrateCtx = { runs, root, readRunFolder: deps.readRunFolder };
+
   if (!journalBroken) {
     const open = openIds(events);
     for (const run of runs) {
-      if (run.integrable !== false) continue;
+      const nonIntegrating = run.integrable === false
+        || runSkipsIntegrateAttention(run, events, integrateCtx)
+        || (run.status === 'failed' && !runHasCompleteJob(run))
+        || ['cancelled', 'abandoned'].includes(run.status);
+      if (!nonIntegrating) continue;
       for (const id of open) {
         if (integrateBlockerRunId(id) !== run.id) continue;
+        const kind = integrateBlockerKindFromId(id);
+        if (kind !== 'integrate' && kind !== 'integrate-checkout') continue;
         const prior = latestBlockerEvent(events, id);
-        const kind = integrateBlockerKindFromId(id) ?? 'integrate';
         await write(integrateBlockerResolutionEvent(prior ?? { id, text: '' }, {
-          integrateKind: kind,
+          integrateKind: kind ?? 'integrate',
           integrateRun: run.id,
           integrateCause: prior?.integrateCause ?? prior?.text ?? '',
           resolvedBy: 'non-integrable',
@@ -673,7 +918,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   for (const run of runs) {
     if (journalBroken) break;
-    if (runSkipsIntegrateAttention(run, events)) continue;
+    if (runSkipsIntegrateAttention(run, events, integrateCtx)) continue;
     const count = perRun.get(run.id) ?? 0;
     if (count >= MAX_ACTIONS_PER_RUN) continue;
     const decision = decide(run, { now: nowMs, events, plan, manifest: runManifest(run, events), runs });
@@ -694,10 +939,27 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
       continue;
     }
     if (decision.action === 'integrate') {
-      if (runSkipsIntegrateAttention(run, events) || run.integrable === false) continue;
+      if (runSkipsIntegrateAttention(run, events, integrateCtx) || run.integrable === false) continue;
+      const outputPaths = runIntegrateOutputPaths(run, events, integrateCtx);
+      const manifest = runManifest(run, events);
+      const jobs = jobsFromRun(run, manifest);
+      const hasIntegratableJobs = integrableFromJobs(jobs)
+        || (run.integrable === true && runHasCompleteJob(run));
+      if (hasIntegratableJobs && outputPaths.length === 0) {
+        const text = `Run ${run.id} is complete but not integrated: integratable jobs are present but no output paths could be resolved from the run manifest or job state. Inspect the run and fix job outputs, then run: swarm integrate ${run.id}`;
+        await raiseIntegrateBlocker({
+          id: `integrate-checkout-${run.id}`,
+          text,
+          integrateKind: 'integrate-checkout',
+          integrateRun: run.id,
+          integrateCause: 'integratable jobs have no declared output paths',
+        });
+        continue;
+      }
       let checkout = null;
       try { checkout = await deps.checkout(root); } catch { checkout = null; }
-      const why = integrationBlocker(checkout);
+      const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
+      const why = integrationBlocker(checkoutView, { outputPaths });
       if (why) {
         const integrateCause = why;
         const text = `Run ${run.id} is complete but not integrated: ${why}. Move to a swarm/* branch with a clean tree, then run: swarm integrate ${run.id}`;
@@ -931,6 +1193,10 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
 
   if (deps.policyPass) {
     try { await executePolicyPass(root, deps, { now: nowMs }); } catch { /* policy pass never stops autopilot */ }
+  }
+
+  if (!journalBroken) {
+    try { await runNeedsYouTriagePass(root, deps, { now: nowFn }); } catch { /* needs-you triage never stops autopilot */ }
   }
 
   if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }

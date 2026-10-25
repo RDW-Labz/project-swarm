@@ -27,6 +27,8 @@ import {
   buildRepairJobs,
   runRepairLoop,
   parkedBlockers,
+  repairTicketBatch,
+  refreshRejectedDependents,
 } from './split-repair.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
@@ -1335,7 +1337,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
   }
   for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
   rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
-  return { tickets, errors, notes, copiedAcceptanceIds, rejected };
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected, candidateTickets: candidates.map((candidate) => candidate.ticket) };
 }
 
 async function readStageFiles(root, runId) {
@@ -1421,11 +1423,38 @@ function tagIssueStages(issues, stageByTicket) {
   return issues.map(issue => (issue.stage ? issue : { ...issue, stage: issue.ticket ? stageByTicket.get(issue.ticket) ?? null : null }));
 }
 
+export function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
+  const stillParked = [];
+  const promoted = [];
+  for (const entry of pathPendingParked) {
+    const ticket = entry.ticket;
+    const paths = validateTicketPaths(ticket, { exists: pathExists, allTickets: [...tickets, ticket], repoFiles });
+    const missing = (paths.errors ?? []).filter(err => err.reason === 'missing file');
+    const promote = (t) => {
+      if (!Object.hasOwn(t, 'pathPending')) return t;
+      const { pathPending: _drop, ...rest } = t;
+      return rest;
+    };
+    if (!missing.length) {
+      promoted.push(promote(ticket));
+      continue;
+    }
+    const cleared = missing.every(err => {
+      const norm = normTicketPath(err.path);
+      return acceptNewPaths.has(norm) || repoFiles.includes(norm);
+    });
+    if (cleared) promoted.push(promote(ticket));
+    else stillParked.push(entry);
+  }
+  return { tickets: [...tickets, ...promoted], pathPendingParked: stillParked };
+}
+
 function evaluateSplitIngest({
   root,
   lists,
   readErrors,
   scope,
+  scopeText = '',
   existing,
   profile,
   repoFiles,
@@ -1454,7 +1483,41 @@ function evaluateSplitIngest({
     const patch = ticketPatches.get(ticket.id);
     return patch ? { ...ticket, ...patch } : ticket;
   });
-  const rejected = [...built.rejected];
+  let rejected = [...built.rejected];
+  const pathExists = (p) => repoFiles.includes(normTicketPath(p));
+  const batchRepair = repairTicketBatch({
+    tickets,
+    ledgerTickets: existing?.tickets ?? [],
+    scopeText,
+    pathExists,
+    repoFiles,
+  });
+  built.notes.push(...batchRepair.notes);
+  const pathPendingParked = batchRepair.parked.filter((entry) => entry.parkedReason === 'path-not-in-repo-pending');
+  const hardParked = batchRepair.parked.filter((entry) => entry.parkedReason !== 'path-not-in-repo-pending');
+  tickets = batchRepair.tickets;
+  for (const entry of hardParked) {
+    rejected.push({ id: entry.ticket.id, title: entry.ticket.title ?? '', reason: entry.issues[0]?.reason ?? 'could not repair ticket' });
+  }
+  const repairedIds = new Set(batchRepair.notes.map(line => /^T-[0-9]+/.exec(line)?.[0]).filter(Boolean));
+  const refreshed = refreshRejectedDependents({
+    tickets,
+    rejected,
+    repairedIds,
+    candidateTickets: built.candidateTickets ?? [],
+    exists: pathExists,
+    pathOptions: { repoFiles },
+  });
+  tickets = refreshed.tickets;
+  rejected = refreshed.rejected;
+  const stillRejectedIds = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => stillRejectedIds.has(row.id));
+  built.notes.push(...refreshed.notes);
+  const pathPendingIds = new Set(pathPendingParked.map((entry) => entry.ticket.id));
+  tickets = [...tickets, ...pathPendingParked.map((entry) => entry.ticket)];
+  for (const entry of pathPendingParked) {
+    built.notes.push(`${entry.ticket.id}: path not in repo (pending path gate)`);
+  }
   const stageByTicket = ticketStageLookup(lists, startAt);
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
@@ -1479,6 +1542,8 @@ function evaluateSplitIngest({
   addWiringDeps(tickets, existing?.tickets ?? []);
   const orderNotes = orderTestsAfterBuild(tickets, existing?.tickets ?? []);
   tickets = finalizeSplitTestStages(tickets, existing?.tickets ?? [], { notes: built.notes, rejected });
+  const rejectedIdsAfterFinalize = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => rejectedIdsAfterFinalize.has(row.id));
   for (const entry of rejected) {
     if (!built.rejected.some(row => row.id === entry.id)) built.rejected.push(entry);
   }
@@ -1491,7 +1556,20 @@ function evaluateSplitIngest({
   const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
   const hardWiringGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
 
+  const pendingAfterGuards = pathPendingParked.map((entry) => ({
+    ...entry,
+    ticket: tickets.find((ticket) => ticket.id === entry.ticket.id) ?? entry.ticket,
+  }));
+  const readyTickets = tickets.filter((ticket) => !pathPendingIds.has(ticket.id));
+  const pathPromotion = promotePathPendingTickets(pendingAfterGuards, readyTickets, { repoFiles, acceptNewPaths, pathExists });
+  tickets = pathPromotion.tickets;
   const pathCheck = ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths);
+  for (const entry of pathPromotion.pathPendingParked) {
+    const paths = validateTicketPaths(entry.ticket, { exists: pathExists, allTickets: tickets, repoFiles });
+    for (const err of paths.errors ?? []) {
+      pathCheck.refusals.push(formatTicketPathRefusal(entry.ticket.id, err));
+    }
+  }
   const laneRefusals = [];
   const laneNotes = [];
   const sizes = contextEnvFor(root, profile).sizes;
@@ -1597,6 +1675,7 @@ function evaluateSplitIngest({
   const validTickets = tickets.filter(ticket => !badIds.has(ticket.id));
   return {
     tickets: validTickets,
+    pathPendingParked: pathPromotion.pathPendingParked,
     allTickets: tickets,
     issues,
     existing: existing?.tickets ?? [],
@@ -1614,7 +1693,7 @@ function evaluateSplitIngest({
   };
 }
 
-async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false }) {
+async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false, scopeText = '' }) {
   const history = [];
   let rounds = 0;
   let prevIssueKeys = null;
@@ -1623,6 +1702,20 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     const v = validate();
     const all = [...(v.issues ?? []), ...(v.stageIssues ?? [])];
     return { all, keys: [...all].map(i => [i.code, i.stage ?? '', i.ticket ?? '', i.path ?? '', i.req ?? '', i.reason ?? ''].join('|')).sort().join('\0'), v };
+  };
+
+  const applyTicketBatchRepair = (v) => {
+    const pool = v.allTickets ?? v.tickets ?? [];
+    if (!pool.length) return [];
+    const repaired = repairTicketBatch({
+      tickets: pool,
+      ledgerTickets: v.existing ?? [],
+      scopeText,
+      pathExists: (p) => (v.repoFiles ?? []).includes(normTicketPath(p)),
+      repoFiles: v.repoFiles ?? [],
+    });
+    if (repaired.notes.length && typeof v.setTickets === 'function') v.setTickets(repaired.tickets);
+    return repaired.notes;
   };
 
   const applyAutoFixPass = (v, allIssues) => {
@@ -1643,25 +1736,30 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
 
   const errorsInFirst = issues.length;
   applyAutoFixPass(v, issues);
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
   ({ all: issues, keys, v } = snapshot());
 
   if (!issues.length) {
     log?.({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
     history.push({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
-    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history };
+    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   const shouldRepair = issueList => issueList.some(issue => issue.fixable)
     || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration' || issue.code === 'invalid-integration-test'));
 
   if (!shouldRepair(issues)) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   if (maxRepairs === 0) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   prevIssueKeys = keys;
@@ -1690,21 +1788,26 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     }
 
     applyAutoFixPass(v, issues);
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
     ({ all: issues, keys, v } = snapshot());
 
     if (!issues.length) {
-      return { tickets: v.tickets ?? [], parked: [], rounds, history };
+      return { tickets: v.tickets ?? [], parked: [], rounds, history, repairNotes: v.repairNotes ?? [] };
     }
 
     if (keys === prevIssueKeys) {
+      v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+      ({ all: issues, keys, v } = snapshot());
       const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
     }
     prevIssueKeys = keys;
   }
 
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+  ({ all: issues, keys, v } = snapshot());
   const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
 }
 
 async function defaultRunSplit(root, manifest) {
@@ -1939,6 +2042,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
       lists: workingLists,
       readErrors,
       scope,
+      scopeText: text,
       existing,
       profile,
       repoFiles,
@@ -1969,6 +2073,10 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
             stage: ticket.stage,
             context: ticket.context,
             files: ticket.files,
+            contracts: ticket.contracts,
+            acceptance: ticket.acceptance,
+            screens: ticket.screens,
+            tests: ticket.tests,
           });
         }
       },
@@ -2034,6 +2142,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     validate,
     rerun,
     allowIntegrationRepair: typeof deps.runSplit === 'function',
+    scopeText: text,
     log: entry => { repairHistory.push(entry); },
   });
   ticketPatches.clear();
@@ -2075,7 +2184,11 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     }
   }
 
-  const repairLines = [`repair rounds: ${loopResult.rounds}`, ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`)];
+  const repairLines = [
+    `repair rounds: ${loopResult.rounds}`,
+    ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`),
+    ...(loopResult.repairNotes ?? []),
+  ];
   const parkedLines = loopResult.parked.length
     ? [`parked: ${loopResult.parked.length} ticket(s)`, ...loopResult.parked.map(({ ticket, issues: parkedIssues }) => `${ticket.id} (${ticket.title ?? 'untitled'}): ${(parkedIssues ?? []).map(i => i.reason ?? i.code).join('; ')}`)]
     : [];

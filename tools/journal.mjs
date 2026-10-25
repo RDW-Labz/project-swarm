@@ -214,14 +214,29 @@ export function openBlockerIds(events) {
 /**
  * True when an integrate blocker must not be raised (resolved run/kind/cause or still open).
  */
-export function integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }) {
+function integrateSuppressUntilMs(event, nowMs) {
+  const raw = event?.integrateSuppressUntil;
+  if (raw == null || raw === '') return null;
+  const until = typeof raw === 'number' ? raw : Date.parse(String(raw));
+  return Number.isFinite(until) ? until : null;
+}
+
+function resolutionStillSuppresses(event, nowMs) {
+  const until = integrateSuppressUntilMs(event, nowMs);
+  if (until != null && until <= nowMs) return false;
+  return true;
+}
+
+export function integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now = Date.now } = {}) {
   const list = Array.isArray(events) ? events : [];
+  const nowMs = typeof now === 'function' ? now() : Number(now);
   const open = openBlockerIds(list);
   if (id && open.has(id)) return true;
   const causeKey = integrateBlockerCauseKey(integrateKind, integrateRun, integrateCause);
   const runKey = integrateBlockerKey(integrateKind, integrateRun);
   for (const event of list) {
     if (event?.kind !== 'blocker' || event.resolved !== true) continue;
+    if (!resolutionStillSuppresses(event, nowMs)) continue;
     if (event.integrateCauseKey === causeKey) return true;
     if (event.integrateKey === runKey && event.integrateCause === String(integrateCause ?? '')) return true;
     if (event.integrateKey === runKey && !event.integrateCause && id && event.id === id) return true;
@@ -229,7 +244,13 @@ export function integrateBlockerSuppressed(events, { id, integrateKind, integrat
   return false;
 }
 
-export function integrateBlockerResolutionEvent(prior, { integrateKind, integrateRun, integrateCause, resolvedBy = null } = {}) {
+export function integrateBlockerResolutionEvent(prior, {
+  integrateKind,
+  integrateRun,
+  integrateCause,
+  resolvedBy = null,
+  integrateSuppressUntil = null,
+} = {}) {
   const cause = String(integrateCause ?? prior?.integrateCause ?? '');
   const fields = integrateBlockerFields({ integrateKind, integrateRun, integrateCause: cause });
   return {
@@ -239,6 +260,7 @@ export function integrateBlockerResolutionEvent(prior, { integrateKind, integrat
     text: sanitizeText(prior?.text ?? ''),
     ...fields,
     ...(resolvedBy ? { resolvedBy } : {}),
+    ...(integrateSuppressUntil != null ? { integrateSuppressUntil } : {}),
   };
 }
 
@@ -283,7 +305,7 @@ export async function appendIntegrateBlockerIfNeeded(root, draft, { now = Date.n
   return withJournalLock(root, 'integrate-blocker', async () => {
     const events = await readJournal(root, { limit: Infinity });
     const id = typeof draft.id === 'string' ? draft.id : integrateBlockerId(integrateKind, integrateRun, integrateCause);
-    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause })) {
+    if (integrateBlockerSuppressed(events, { id, integrateKind, integrateRun, integrateCause }, { now })) {
       return { appended: false, id };
     }
     const stored = await appendEvent(root, {

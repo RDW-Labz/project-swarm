@@ -11,6 +11,121 @@ import {
   memoryPressureHoldLine,
   memoryPressureLevel,
 } from './machine-limit.mjs';
+import { addGoal } from './backlog.mjs';
+import { markDone } from './inbox.mjs';
+import { inboxDeps } from './inbox-commands.mjs';
+import {
+  integrateBlockerRunIdFromId,
+} from './journal.mjs';
+import {
+  integrationBlocker,
+  integrableFromJobs,
+  runIntegrateOutputPaths,
+} from './autopilot.mjs';
+import { integrateCheckoutGitState } from './generated-state.mjs';
+import { buildHandlersMap } from './needs-you-triage.mjs';
+
+async function defaultGitExec(root, cmd, args, opts) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const { stdout } = await execFileAsync(cmd, args, { encoding: 'utf8', ...opts });
+  return { stdout };
+}
+
+async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
+  if (typeof deps.integrateCheckoutGitState === 'function') {
+    try {
+      const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
+      if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
+    } catch { /* fall through */ }
+  }
+  try {
+    const exec = typeof deps.gitExecForIntegrate === 'function'
+      ? (cmd, args, opts) => deps.gitExecForIntegrate(root, cmd, args, opts)
+      : (cmd, args, opts) => defaultGitExec(root, cmd, args, opts);
+    const gitState = await integrateCheckoutGitState(root, {
+      exec,
+      runStatus: typeof deps.runIntegrateGitStatus === 'function'
+        ? opts => deps.runIntegrateGitStatus(root, opts)
+        : undefined,
+      outputPaths,
+    });
+    if (gitState) return { ...checkout, ...gitState, dirty: false };
+  } catch { /* use raw checkout */ }
+  return checkout;
+}
+
+function runAlreadyIntegrated(events, runId) {
+  const list = Array.isArray(events) ? events : [];
+  return list.some(event => event
+    && event.kind === 'integration'
+    && event.run === runId
+    && (event.status === 'complete' || event.status === 'integrated'));
+}
+
+function runManifestFromEvents(run, events) {
+  if (run?.manifest && typeof run.manifest === 'object') return run.manifest;
+  const history = Array.isArray(events) ? events.filter(e => e && e.kind === 'run' && e.id === run?.id) : [];
+  const hit = history.find(e => e.manifest && typeof e.manifest === 'object');
+  return hit?.manifest ?? null;
+}
+
+function jobsFromRun(run, manifest) {
+  const fromManifest = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const raw = run?.jobs;
+  const fromRun = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  if (!fromManifest.length) return fromRun;
+  if (!fromRun.length) return fromManifest;
+  const seen = new Set(fromManifest.map(j => j?.id).filter(Boolean));
+  return [...fromManifest, ...fromRun.filter(j => j?.id && !seen.has(j.id))];
+}
+
+function runHasCompleteJob(run) {
+  if (!run || typeof run !== 'object') return false;
+  const complete = Number(run.counts?.complete);
+  if (Number.isFinite(complete) && complete > 0) return true;
+  const raw = run.jobs;
+  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  return list.some(job => job && (job.status === 'complete' || job.state === 'complete'));
+}
+
+async function resolveRunForIntegrate(root, runId, deps, events) {
+  const listRuns = typeof deps.listRuns === 'function' ? deps.listRuns : deps.loadRuns;
+  if (typeof listRuns === 'function') {
+    const runs = await listRuns(root);
+    const list = Array.isArray(runs) ? runs : [];
+    const hit = list.find(r => r && r.id === runId);
+    if (hit) return { run: hit, runs: list };
+  }
+  const runEvents = (Array.isArray(events) ? events : []).filter(e => e?.kind === 'run' && e?.id === runId);
+  const run = runEvents.length ? runEvents[runEvents.length - 1] : null;
+  return { run, runs: run ? [run] : [] };
+}
+
+/** True when integrateRun finished with checks passed (matches autopilot integrate completion). */
+export function integrateTriageSucceeded(out) {
+  if (!out || typeof out !== 'object') {
+    return { ok: false, error: 'integrate: empty result' };
+  }
+  if (out.status === 'failed' || out.integrationStatus === 'failed-check') {
+    return { ok: false, error: String(out.message ?? 'integrate failed') };
+  }
+  if (out.checksPassed === false) {
+    return { ok: false, error: String(out.message ?? 'integration checks failed') };
+  }
+  if (out.status === 'partial' || out.integrationStatus === 'partial' || out.integrationStatus === 'queued') {
+    return { ok: false, error: 'integration incomplete' };
+  }
+  if (out.status === 'checks-failed') {
+    return { ok: false, error: String(out.message ?? 'integration checks failed') };
+  }
+  const status = out.status;
+  if (status !== 'integrated' && status !== 'merged') {
+    return { ok: false, error: String(out.message ?? `integrate did not complete (status ${status ?? 'unknown'})`) };
+  }
+  return { ok: true, error: null };
+}
 
 const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'swarm.mjs');
 const realpathCache = new Map();
@@ -50,6 +165,87 @@ function ticketFiles(ticket) {
   return [];
 }
 
+function splitParkIngestRunId(item) {
+  if (!item || typeof item !== 'object') return null;
+  if (item.ingestRun) return String(item.ingestRun);
+  if (item.runId) return String(item.runId);
+  const blob = `${item.text ?? ''} ${item.title ?? ''}`;
+  const match = blob.match(/--ingest\s+([A-Za-z0-9][A-Za-z0-9._-]+)/);
+  return match ? match[1] : null;
+}
+
+/** Production needs-you triage handlers (safe scope commands only; never executes item text). */
+export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
+  const handlers = Object.create(null);
+  const env = inject.env ?? process.env;
+
+  handlers['split-park'] = async ({ root, item, deps }) => {
+    const runId = splitParkIngestRunId(item);
+    if (!runId) return { ok: false, error: 'split-park: missing ingest run id' };
+    const { runScopeCommand } = await import('./scope-commands.mjs');
+    const res = await runScopeCommand(root, 'split', ['--ingest', runId, '--merge', '--max-repairs', '3'], deps.scopeDeps ?? {});
+    const ok = res?.exitCode === 0;
+    return { ok, error: ok ? null : String(res?.stdout ?? 'split ingest failed').slice(0, 500) };
+  };
+
+  const integrateRunForRoot = async (root, runId) => {
+    if (typeof inject.integrate === 'function') return inject.integrate(root, runId);
+    const { integrateRun } = await import('./swarm.mjs');
+    return integrateRun(root, runId, {});
+  };
+
+  const guardedIntegrateRun = async ({ root, item, deps, runId }) => {
+    if (typeof deps.readJournal !== 'function') {
+      return { ok: false, error: 'integrate: journal unavailable' };
+    }
+    const events = await deps.readJournal(root, { limit: Infinity });
+    if (runAlreadyIntegrated(events, runId)) {
+      return { ok: false, error: `run ${runId} is already integrated` };
+    }
+    const { run, runs } = await resolveRunForIntegrate(root, runId, deps, events);
+    if (!run) {
+      return { ok: false, error: 'run not found' };
+    }
+    const outputPaths = runIntegrateOutputPaths(run, events, { runs });
+    {
+      const manifest = runManifestFromEvents(run, events);
+      const jobs = jobsFromRun(run, manifest);
+      const hasIntegratableJobs = integrableFromJobs(jobs)
+        || (run.integrable === true && runHasCompleteJob(run));
+      if (hasIntegratableJobs && outputPaths.length === 0) {
+        return { ok: false, error: 'integratable jobs have no declared output paths' };
+      }
+    }
+    let checkout = null;
+    try {
+      if (typeof deps.checkout === 'function') checkout = await deps.checkout(root);
+    } catch { checkout = null; }
+    const checkoutView = await resolveIntegrateCheckoutView(root, checkout, outputPaths, deps);
+    const why = integrationBlocker(checkoutView, { outputPaths });
+    if (why) return { ok: false, error: why };
+    try {
+      const out = await integrateRunForRoot(root, runId);
+      return integrateTriageSucceeded(out);
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  };
+
+  handlers.integrate = async ({ root, item, deps }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate: missing run id' };
+    return guardedIntegrateRun({ root, item, deps, runId });
+  };
+
+  handlers['integrate-checkout'] = async ({ root, item, deps }) => {
+    const runId = integrateBlockerRunIdFromId(String(item?.id ?? ''));
+    if (!runId) return { ok: false, error: 'integrate-checkout: missing run id' };
+    return guardedIntegrateRun({ root, item, deps, runId });
+  };
+
+  return buildHandlersMap(handlers);
+}
+
 /** Dependency bundle for autopilot start-ready (live runs, busy markers, cap, go --scope). */
 export function readyAutopilotDeps(projectRoot, {
   env = process.env,
@@ -63,14 +259,18 @@ export function readyAutopilotDeps(projectRoot, {
   readPending,
   readMachine: readMachineImpl = readMachine,
   log = line => process.stderr.write(`${line}\n`),
+  installRoot = null,
+  loadRuns = null,
+  listRuns = null,
 } = {}) {
+  const runLoader = typeof listRuns === 'function' ? listRuns : loadRuns;
   const rootForMarkers = projectRoot;
 
   async function allTickets(root) {
     return readTickets(root);
   }
 
-  return {
+  const bundle = {
     readTickets: allTickets,
 
     async readyTickets(root) {
@@ -130,7 +330,7 @@ export function readyAutopilotDeps(projectRoot, {
     },
 
     async startScope({ root, maxJobs, skipSkeleton = false }) {
-      const cwd = path.resolve(root);
+      const cwd = path.resolve(typeof root === 'string' && root ? root : projectRoot);
       let jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
       if (memoryAware) {
         let config = {};
@@ -175,5 +375,30 @@ export function readyAutopilotDeps(projectRoot, {
         return { ok: false, result: String(error?.message ?? error) };
       }
     },
+
+    async markDone(root, id, extra = {}) {
+      const now = typeof extra.now === 'function' ? extra.now : () => Date.now();
+      return markDone(root, id, inboxDeps({ now, channel: 'agent' }));
+    },
+
+    async addGoal(root, spec, opts = {}) {
+      const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+      return addGoal(root, spec, { ...opts, now });
+    },
+
+    installRoot,
+    ...(typeof runLoader === 'function' ? { loadRuns: runLoader, listRuns: runLoader } : {}),
   };
+
+  bundle.needsYouTriage = {
+    handlers: buildNeedsYouTriageHandlers(projectRoot, {
+      env,
+      spawnImpl,
+      installRoot,
+      startScope: opts => bundle.startScope(opts),
+    }),
+    ...(typeof runLoader === 'function' ? { listRuns: runLoader } : {}),
+  };
+
+  return bundle;
 }
