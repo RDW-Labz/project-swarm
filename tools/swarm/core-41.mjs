@@ -173,16 +173,16 @@ export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind
   }
 }
 
-function waitForChildClose(child, timeoutMs = 500) {
+function waitForChildClose(child, { isStreamsClosed = () => false, timeoutMs = 500 } = {}) {
   if (!child?.pid) return Promise.resolve({ error: null });
-  if (child.exitCode != null || child.signalCode != null) return Promise.resolve({ error: null });
+  if (isStreamsClosed()) return Promise.resolve({ error: null });
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve({ error: 'child stdio close timed out' }), timeoutMs);
     child.once('close', () => { clearTimeout(timer); resolve({ error: null }); });
   });
 }
 
-async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = killCursorProcessGroup }) {
+async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = killCursorProcessGroup, isStreamsClosed = () => false } = {}) {
   if (!Number.isInteger(groupPid)) return await stopChild(child, { killImpl });
   let group;
   try { group = await killGroupImpl(groupPid, { killImpl }); }
@@ -192,7 +192,7 @@ async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = kill
   }
   if (group.refused) return { error: null };
   if (group.error) return { error: group.error };
-  return await waitForChildClose(child);
+  return await waitForChildClose(child, { isStreamsClosed });
 }
 
 export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, killGroupImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
@@ -208,9 +208,9 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
   catch (error) { return { ...setupFailedResult(error.message), setupFailed: false, code: error.code, stream: error.stream }; }
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
-    let timeout, poll, termination, logFailure, cursorGroupPid;
+    let timeout, poll, termination, logFailure, cursorGroupPid, streamsClosed = false;
     const stopChildForJob = () => job.agent === 'cursor'
-      ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl })
+      ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl, isStreamsClosed: () => streamsClosed })
       : stopChild(child, { killImpl });
     const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null)); };
     const onAbort = () => stop('cancelled');
@@ -312,7 +312,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         termination??=stopChildForJob();
         termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null));
       });
-      child.on('close', code => finish(code));
+      child.on('close', code => { streamsClosed = true; finish(code); });
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {
         try { sink?.write(key, data); } catch (error) { logFailure ??= error; stop('adapter-log-failed'); return; }
         const bytes = Buffer.byteLength(data);

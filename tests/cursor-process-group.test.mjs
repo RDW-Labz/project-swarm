@@ -271,3 +271,52 @@ test('execute cursor stop resolves when stdio close times out after group kill',
   assert.equal(result.terminationReason, 'timeout');
   assert.match(result.cleanupError, /stdio close timed out/);
 });
+
+function trackStreamDestroy(stream) {
+  let destroyed = false;
+  const orig = stream.destroy.bind(stream);
+  stream.destroy = (...args) => { destroyed = true; return orig(...args); };
+  return () => destroyed;
+}
+
+test('execute cursor finish destroys stdio when exit fires but close never arrives', async () => {
+  const child = fakeCursorChild(6600);
+  const stdoutDestroyed = trackStreamDestroy(child.stdout);
+  const stderrDestroyed = trackStreamDestroy(child.stderr);
+  const killImpl = (target, signal) => {
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+  };
+  const result = await execute(cursorJob({ timeoutMs: 30 }), '/tmp', 'go', {
+    spawnImpl: () => {
+      setTimeout(() => {
+        child.exitCode = 0;
+        child.emit('exit', 0, null);
+      }, 5);
+      return child;
+    },
+    cursor: launch,
+    killImpl,
+    killGroupImpl: pid => killCursorProcessGroup(pid, { killImpl, sleep: noopSleep }),
+  });
+  assert.equal(result.terminationReason, 'timeout');
+  assert.match(result.cleanupError, /stdio close timed out/);
+  assert.ok(stdoutDestroyed());
+  assert.ok(stderrDestroyed());
+});
+
+test('execute cursor finish does not destroy stdio when close follows group kill', async () => {
+  const child = fakeCursorChild(6700);
+  const stdoutDestroyed = trackStreamDestroy(child.stdout);
+  const stderrDestroyed = trackStreamDestroy(child.stderr);
+  const killImpl = killImplEndsChild(child);
+  const result = await execute(cursorJob({ timeoutMs: 30 }), '/tmp', 'go', {
+    spawnImpl: spawnCursorChild(child, { hang: true }),
+    cursor: launch,
+    killImpl,
+    killGroupImpl: (pid, opts) => killGroupViaKillImpl(pid, opts),
+  });
+  assert.equal(result.status, 'timeout');
+  assert.equal(result.cleanupError, null);
+  assert.equal(stdoutDestroyed(), false);
+  assert.equal(stderrDestroyed(), false);
+});

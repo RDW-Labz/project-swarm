@@ -81,7 +81,9 @@ const recordFile = process.env.TEST_RECORD_FILE;
 const ignoreTerm = process.env.TEST_IGNORE_SIGTERM === '1';
 const home = process.env.HOME || process.cwd();
 const stopFile = path.join(home, 'stop');
-const parentPollMs = Number(process.env.TEST_PARENT_POLL_MS) || 1000;
+const parentPollMs = process.env.TEST_PARENT_POLL_MS != null && process.env.TEST_PARENT_POLL_MS !== ''
+  ? Number(process.env.TEST_PARENT_POLL_MS)
+  : null;
 let shuttingDown = false;
 const shutdown = () => {
   if (shuttingDown) return;
@@ -105,7 +107,9 @@ setTimeout(shutdown, 120_000).unref();
 setInterval(async () => {
   try { if (await fs.stat(stopFile)) shutdown(); } catch { /* missing */ }
 }, 500).unref();
-setInterval(() => { if (process.ppid === 1) shutdown(); }, parentPollMs).unref();
+if (parentPollMs != null && parentPollMs > 0) {
+  setInterval(() => { if (process.ppid === 1) shutdown(); }, parentPollMs).unref();
+}
 `;
 
 async function freePort() {
