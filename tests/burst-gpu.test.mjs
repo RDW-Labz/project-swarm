@@ -6,6 +6,7 @@ import {
   consecutiveReadyOverFreeDays,
   flatRateAllLimited,
   gpuFirstTryPassRateFromReplay,
+  readyOverFreeSlotsRatio,
 } from '../tools/burst-gates.mjs';
 
 function gate(result, name) {
@@ -183,7 +184,7 @@ describe('burst gpu gates', () => {
     const row = gate(result, 'gpu-first-try-pass-rate');
     assert.equal(row.pass, false);
     assert.equal(row.measured, 2 / 3);
-    assert.equal(row.value, `${((2 / 3) * 100).toFixed(1)} percent`);
+    assert.equal(row.value, '66.6 percent');
 
     const nonObject = computeBurstGpuGates({
       readyOverFreeDays: 3,
@@ -210,6 +211,45 @@ describe('burst gpu gates', () => {
       result.text,
       `${result.lines.join('\n')}\n`,
     );
+  });
+
+  test('pressure sample fields are not coerced for consecutiveReadyOverFreeDays', () => {
+    const trailingMalformed = consecutiveReadyOverFreeDays([
+      { readyTickets: 9, freeSlots: 2 },
+      { readyTickets: 5, freeSlots: 4 },
+      { readyTickets: null, freeSlots: 1 },
+    ]);
+    assert.equal(trailingMalformed, 0);
+
+    const stringReady = consecutiveReadyOverFreeDays([
+      { readyTickets: '9', freeSlots: 1 },
+      { readyTickets: 8, freeSlots: 3 },
+    ]);
+    assert.equal(stringReady, 1);
+
+    const booleanFree = consecutiveReadyOverFreeDays([
+      { readyTickets: 10, freeSlots: true },
+    ]);
+    assert.equal(booleanFree, 0);
+  });
+
+  test('pressure sample fields are not coerced for readyOverFreeSlotsRatio', () => {
+    assert.equal(readyOverFreeSlotsRatio(null, 4), null);
+    assert.equal(readyOverFreeSlotsRatio(5, true), null);
+    assert.equal(readyOverFreeSlotsRatio('9', 2), null);
+    assert.equal(readyOverFreeSlotsRatio(9, 2), 4.5);
+  });
+
+  test('gpu-first-try-pass-rate 0.8999 displays below 90% and FAILs', () => {
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: 3,
+      flatRateRateLimited: true,
+      gpuFirstTryPassRate: 0.8999,
+    });
+    const row = gate(result, 'gpu-first-try-pass-rate');
+    assert.equal(row.pass, false);
+    assert.equal(row.value, '89.9 percent');
+    assert.notEqual(row.value, '90.0 percent');
   });
 
   test('consecutiveReadyOverFreeDays counts only trailing pressure days', () => {

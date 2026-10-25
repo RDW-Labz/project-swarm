@@ -5,14 +5,21 @@ export const GATE_THRESHOLDS = Object.freeze({
   minGpuFirstTryPassRate: 0.9,
 });
 
+function isValidPressureSampleField(x) {
+  return typeof x === 'number' && Number.isFinite(x) && x >= 0;
+}
+
 /** Trailing days (oldest→newest samples) where ready tickets exceed free slots. */
 export function consecutiveReadyOverFreeDays(samples) {
   const rows = samples ?? [];
   let count = 0;
   for (let i = rows.length - 1; i >= 0; i -= 1) {
-    const ready = Number(rows[i]?.readyTickets);
-    const free = Number(rows[i]?.freeSlots);
-    if (!Number.isFinite(ready) || !Number.isFinite(free) || ready <= free) break;
+    const ready = rows[i]?.readyTickets;
+    const free = rows[i]?.freeSlots;
+    // Invalid fields break the trailing streak (never coerced into pressure days).
+    if (!isValidPressureSampleField(ready) || !isValidPressureSampleField(free) || ready <= free) {
+      break;
+    }
     count += 1;
   }
   return count;
@@ -20,10 +27,14 @@ export function consecutiveReadyOverFreeDays(samples) {
 
 /** Queue pressure ratio (ready / free slots); null when free slots are zero. */
 export function readyOverFreeSlotsRatio(readyTickets, freeSlots) {
-  const ready = Number(readyTickets);
-  const free = Number(freeSlots);
-  if (!Number.isFinite(ready) || !Number.isFinite(free) || free <= 0) return null;
-  return ready / free;
+  if (
+    !isValidPressureSampleField(readyTickets)
+    || !isValidPressureSampleField(freeSlots)
+    || freeSlots <= 0
+  ) {
+    return null;
+  }
+  return readyTickets / freeSlots;
 }
 
 /** First-try pass rate from benchmark replay rows (same math as bench-replay aggregate). */
@@ -48,6 +59,11 @@ function isValidGpuFirstTryPassRate(x) {
   return typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1;
 }
 
+function formatGpuFirstTryPassRatePercent(rate) {
+  const truncatedTenths = Math.floor(rate * 1000) / 10;
+  return `${truncatedTenths.toFixed(1)} percent`;
+}
+
 function gateRows({ readyOverFreeDays, flatRateRateLimited, gpuFirstTryPassRate }) {
   const daysValid = isValidReadyOverFreeDays(readyOverFreeDays);
   const gpuValid = isValidGpuFirstTryPassRate(gpuFirstTryPassRate);
@@ -68,7 +84,7 @@ function gateRows({ readyOverFreeDays, flatRateRateLimited, gpuFirstTryPassRate 
     },
     {
       name: 'gpu-first-try-pass-rate',
-      value: gpuValid ? `${(gpuFirstTryPassRate * 100).toFixed(1)} percent` : 'missing',
+      value: gpuValid ? formatGpuFirstTryPassRatePercent(gpuFirstTryPassRate) : 'missing',
       measured: gpuValid ? gpuFirstTryPassRate : null,
       pass: gpuValid && gpuFirstTryPassRate >= GATE_THRESHOLDS.minGpuFirstTryPassRate,
     },
