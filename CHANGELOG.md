@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.13
+
+swarm remote off stops the real board.
+- **Remote:** swarm remote off treats a dead recorded board process as stopped and clears the record; when the saved port is held by a swarm board that the record does not name, it finds that listener and stops it after checking its command line and that the board answers (never another program, pids validated, re-checked right before the stop).
+- **Update:** servers kept because their identity could not be verified now print the exact command to restart them.
+
 ## 1.167.12
 
 Board stay-up survives a restart.
