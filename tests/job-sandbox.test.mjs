@@ -9,12 +9,19 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import {
   JobGrantAccessError,
+  SWARM_JOB_GRANT_FILE,
   buildIsolatedProcessEnv,
   createJobGrant,
   deleteJobGrant,
   grantPlaintextLeakCheck,
   loadJobGrantSecrets,
 } from '../tools/job-grants.mjs';
+import {
+  DENY_EXIT_CODE,
+  GIT_PUSH_DENIED_MESSAGE,
+  guardJobCommandExecution,
+} from '../tools/job-sandbox.mjs';
+import { issueGrant } from '../tools/job-sandbox-grants.mjs';
 
 const NEEDS = ['DATABASE_URL'];
 
@@ -263,6 +270,107 @@ test('concurrent createJobGrant for the same jobId does not silently race', asyn
   const fail = rejected[0].reason;
   assert.ok(fail instanceof JobGrantAccessError);
   assert.equal(fail.code, 'EEXIST');
+});
+
+async function simulateServiceRun(command, context) {
+  let invoked = false;
+  const guard = guardJobCommandExecution({ ...context, command });
+  if (!guard.proceed) {
+    return {
+      invoked,
+      code: guard.exitCode,
+      message: guard.message,
+    };
+  }
+  invoked = true;
+  const child = spawn(command, { shell: true, stdio: 'ignore' });
+  const code = await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+  return { invoked, code, message: '' };
+}
+
+function syntheticIsolatedGrant(jobId) {
+  return {
+    mode: 'isolated',
+    jobId,
+    permissions: { gitPush: false, databaseAccess: 'own-database-only' },
+  };
+}
+
+test('isolated job git push is denied at the service with exit 1 before invocation', async () => {
+  const project = { sandbox: { isolated: true } };
+  const grant = syntheticIsolatedGrant('job-push-deny');
+  const result = await simulateServiceRun('git push origin main', { project, grant });
+  assert.equal(result.invoked, false, 'git push must not be spawned for isolated jobs');
+  assert.equal(result.code, DENY_EXIT_CODE);
+  assert.match(result.message, /git push/i);
+  assert.equal(result.message, GIT_PUSH_DENIED_MESSAGE);
+});
+
+test('isolated job denies obfuscated git push forms before invocation', async () => {
+  const project = { sandbox: { isolated: true } };
+  const grant = syntheticIsolatedGrant('job-push-obfusc');
+  const attempts = [
+    'git  push origin',
+    'git\tpush',
+    'git -c http.version=HTTP/1.1 push',
+    'env git push',
+    'sh -c "git push origin"',
+  ];
+  for (const command of attempts) {
+    const guard = guardJobCommandExecution({ project, grant, command });
+    assert.equal(guard.proceed, false, command);
+    assert.equal(guard.exitCode, 1, command);
+    assert.match(guard.message, /git push|git alias/i, command);
+  }
+});
+
+test('legacy (non-isolated) project jobs may still run git push as before', async t => {
+  const project = { sandbox: { isolated: false } };
+  const grant = await issueGrant('job-legacy-push', { project });
+  assert.equal(grant.mode, 'legacy');
+  const guard = guardJobCommandExecution({
+    project,
+    grant,
+    command: 'git push origin main',
+  });
+  assert.equal(guard.proceed, true);
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-git-push-'));
+  t.after(() => fs.rm(repoDir, { recursive: true, force: true }));
+  await runChild(
+    `import { execSync } from 'node:child_process';
+     execSync('git init -q', { cwd: ${JSON.stringify(repoDir)} });
+     console.log('ok');`,
+    { PATH: process.env.PATH },
+  );
+  const pushGuard = guardJobCommandExecution({
+    project,
+    grant,
+    argv: ['git', 'push'],
+  });
+  assert.equal(pushGuard.proceed, true);
+});
+
+test('isolated job detected via grant env handles is denied git push', async () => {
+  const grantsRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-grants-guard-'));
+  const grant = await createJobGrant({
+    grantsRoot,
+    jobId: 'job-env-guard',
+    needs: NEEDS,
+    values: { DATABASE_URL: 'postgres://127.0.0.1:1/db' },
+  });
+  const env = buildIsolatedProcessEnv({ baseEnv: { PATH: process.env.PATH }, grant });
+  const project = { sandbox: { isolated: true } };
+  const guard = guardJobCommandExecution({
+    project,
+    env,
+    command: 'git push',
+  });
+  assert.equal(guard.proceed, false);
+  assert.equal(guard.exitCode, 1);
+  await fs.rm(grantsRoot, { recursive: true, force: true });
 });
 
 test('createJobGrant rejects a too-short grantKey', async t => {
