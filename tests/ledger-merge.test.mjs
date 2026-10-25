@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { createLedger, writeLedger, readLedger, ledgerPath } from '../tools/tickets.mjs';
 import { readReviewRecords, writeReviewRecords } from '../tools/security-review.mjs';
 import { journalPath, readJournal } from '../tools/journal.mjs';
@@ -132,4 +133,138 @@ test('journal entries from both sides are preserved and time-ordered', async () 
   assert.equal(result.ok, true);
   const journal = await readJournal(target, { limit: Infinity });
   assert.deepEqual(journal.map(e => e.text), ['early-mini', 'mid-book', 'later-mini']);
+});
+
+test('apply:true refuses when target autopilot lock is held by a live process', async () => {
+  const holder = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1<<30)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    holder.once('spawn', resolve);
+    holder.once('error', reject);
+  });
+  try {
+    const mini = await setupRoot([baseTicket('T-0201', 'todo')]);
+    const book = await setupRoot([baseTicket('T-0202', 'todo')]);
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+    const projectDir = path.join(target, '.swarm', 'project');
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, 'autopilot.lock'),
+      `${JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString() })}\n`,
+    );
+    await fs.writeFile(path.join(projectDir, 'marker.txt'), 'keep');
+
+    await assert.rejects(
+      () => mergeTicketLedgers({ mini, book, target, apply: true }),
+      err => err.code === 'autopilot-running',
+    );
+    assert.equal(await fs.readFile(path.join(projectDir, 'marker.txt'), 'utf8'), 'keep');
+    await assert.rejects(fs.access(ledgerPath(target)));
+  } finally {
+    holder.kill('SIGTERM');
+  }
+});
+
+test('apply abort mid-write leaves target ledger files unchanged', async () => {
+  const mini = await setupRoot([baseTicket('T-0301', 'todo')]);
+  const book = await setupRoot([baseTicket('T-0302', 'todo')]);
+  const target = await setupRoot([baseTicket('T-0300', 'todo')], {
+    journal: [{ kind: 'note', ts: '2026-01-01T00:00:00.000Z', text: 'original' }],
+    records: { tickets: { 'T-0300': { verdict: 'pass', findings: [], run: 'r0', at: '2026-01-01T00:00:00.000Z' } } },
+  });
+  const ticketsBefore = await fs.readFile(ledgerPath(target), 'utf8');
+  const recordsBefore = await fs.readFile(path.join(target, '.swarm', 'security-reviews', 'records.json'), 'utf8');
+  const journalBefore = await fs.readFile(path.join(target, '.swarm', 'project', 'journal.ndjson'), 'utf8');
+
+  await assert.rejects(
+    () => mergeTicketLedgers({ mini, book, target, apply: true, applyHooks: { throwAfterTempCount: 2 } }),
+    err => err.code === 'merge-apply-aborted',
+  );
+
+  assert.equal(await fs.readFile(ledgerPath(target), 'utf8'), ticketsBefore);
+  assert.equal(await fs.readFile(path.join(target, '.swarm', 'security-reviews', 'records.json'), 'utf8'), recordsBefore);
+  assert.equal(await fs.readFile(path.join(target, '.swarm', 'project', 'journal.ndjson'), 'utf8'), journalBefore);
+});
+
+test('conflicting review records keep the done side with mergeNote on the ticket', async () => {
+  const mini = await setupRoot(
+    [baseTicket('T-0401', 'done', { pr: 1 })],
+    {
+      records: {
+        tickets: {
+          'T-0401': { verdict: 'pass', findings: [], run: 'mini-run', at: '2026-01-01T10:00:00.000Z', filesHash: 'hash-a' },
+        },
+      },
+    },
+  );
+  const book = await setupRoot(
+    [],
+    {
+      records: {
+        tickets: {
+          'T-0401': { verdict: 'fail', findings: [{ severity: 'high', title: 'x' }], run: 'book-run', at: '2026-01-02T10:00:00.000Z', filesHash: 'hash-b' },
+        },
+      },
+    },
+  );
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+
+  const result = await mergeTicketLedgers({ mini, book, target });
+  assert.equal(result.ok, true);
+  const ticket = result.ledger.tickets.find(t => t.id === 'T-0401');
+  assert.equal(ticket.mergeNote, result.notes.find(n => n.startsWith('T-0401:')));
+  assert.match(ticket.mergeNote, /kept mini record/);
+  assert.equal(result.reviewRecords.tickets['T-0401'].verdict, 'pass');
+  assert.equal(result.reviewRecords.tickets['T-0401'].filesHash, 'hash-a');
+});
+
+test('done or review ticket with failing review record is flagged in notes', async () => {
+  const mini = await setupRoot(
+    [
+      baseTicket('T-0501', 'done', { pr: 2 }),
+      baseTicket('T-0502', 'review'),
+    ],
+    {
+      records: {
+        tickets: {
+          'T-0501': { verdict: 'fail', findings: [], run: 'r1', at: '2026-01-01T10:00:00.000Z' },
+          'T-0502': { verdict: 'fail', findings: [], run: 'r2', at: '2026-01-01T11:00:00.000Z' },
+        },
+      },
+    },
+  );
+  const book = await setupRoot([]);
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+
+  const result = await mergeTicketLedgers({ mini, book, target });
+  assert.equal(result.ok, true);
+  assert.ok(result.notes.some(n => n.includes('T-0501') && n.includes('verdict fail')));
+  assert.ok(result.notes.some(n => n.includes('T-0502') && n.includes('verdict fail')));
+});
+
+test('internal duplicate ticket id on one side is a hard error', async () => {
+  const dup = baseTicket('T-0601', 'todo');
+  const miniRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-'));
+  await fs.mkdir(path.join(miniRoot, '.swarm', 'project'), { recursive: true });
+  await fs.writeFile(
+    ledgerPath(miniRoot),
+    `${JSON.stringify({
+      version: 1,
+      scope: { name: 'test', version: 1, hash: 'h1' },
+      tickets: [dup, { ...dup, title: 'duplicate row' }],
+      changeOrders: [],
+      approved: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`,
+  );
+  await writeReviewRecords(miniRoot, { tickets: {} });
+
+  const book = await setupRoot([baseTicket('T-0602', 'todo')]);
+  const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+
+  const result = await mergeTicketLedgers({ mini: miniRoot, book, target, apply: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'ticket-id-collision');
+  assert.match(result.error.message, /mini: duplicate ticket id: T-0601/);
+  await assert.rejects(fs.access(ledgerPath(target)));
 });
