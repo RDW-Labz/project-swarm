@@ -19,6 +19,7 @@ Out of scope: building the 8 managers as separate long-running agents (S6 define
 - S8: Swarm v2 later stages
 - S9: Cluster (N devices, one ledger, autonomous node-to-node work)
 - S10: Swarm Watch Command Center (Hive overview, project cockpit, command palette, tools hub)
+- S11: Self-managing swarm (lane health, self-healing, machine watchdog, shared queue, smart routing, quota forecasting, daily phone summary)
 
 ## S1 Unblock autonomy
 ### R-001 The policy engine auto-decides routine requests.
@@ -487,3 +488,68 @@ Acceptance:
 - Idle CPU stays under 3 percent in a 60-second trace; ambient canvas targets 30 fps and pauses when the tab is hidden; reduced motion shows still frames; keyboard access covers primary actions; body text contrast is at least 4.5:1.
 - Each CC stage completes the self-review loop in `docs/design/review-rubric.md` with every rubric item scored 4 or better within 5 rounds; artifacts live under `docs/design/review/CCn/roundN/` with screenshots and `scores.json`.
 - Every new vendored asset includes `VENDOR.json` beside the files and an entry in `docs/third-party.md`; licence check test exits 0.
+
+## S11 Self-managing swarm
+### R-081 Every lane is health-monitored automatically from the config and the adapter registry, with no hardcoded lane list.
+Acceptance:
+- A monitor inside autopilot probes every lane found in the config (every lanes key and every local endpoint) and in the adapter registry on a timer of about 2 minutes, and records healthy, degraded, down or paused with a reason and a last-checked time.
+- A test config that adds a fake new lane shows it monitored, on probation, then routed, with zero manual setup; removing a lane from the config removes it from monitoring and routing and leaves nothing pointing at it.
+- Probes are free checks only (tunnel or port reachable, a models-list GET, a CLI version or status call, rate-limit records, spend-cap records); a test asserts no model call and no POST is made by any probe.
+
+### R-082 Every lane adapter ships a health check, and new lanes start on probation.
+Acceptance:
+- The adapter interface includes a health function; a contract test fails for any adapter without one, so it cannot ship.
+- A lane with no specific check uses the default: endpoint or CLI reachable plus the last job result.
+- A new lane takes small jobs only until it passes 3 checks and 2 real jobs, then joins full routing automatically.
+
+### R-083 Routing uses lane health and reroutes without stuck jobs.
+Acceptance:
+- A down lane gets no new jobs; its share goes to the next cheapest healthy lane in the existing cost order; a degraded lane stays routable with lower weight.
+- A job already running on a lane that goes down is retried on another lane; a test with a fake lane going down proves no job stays running.
+- A lane returns after 2 healthy checks in a row; flapping lanes back off for longer before they are re-added.
+
+### R-084 Lane status is visible and only truly stuck cases alert the owner.
+Acceptance:
+- Swarm Watch and Command Center show each lane with a colour dot and the reason; lane up and down events are written to the swarm event log and to the swarm message bus when it exists so every orchestrator sees the same status.
+- Needs-you is raised only when every lane in a tier has been down for 30 minutes, or a lane needs the owner (login expired, billing).
+
+### R-085 Lanes try safe self-healing before they are marked down.
+Acceptance:
+- Before marking a lane down the swarm tries only safe fixes: restart that lane's own tunnel or service, kill only that lane's own leaked processes (checked by command line and port), and wait out a rate-limit reset.
+- Only an expired login or a billing problem goes to Needs-you; every fix attempt is logged with the lane, the action and the result.
+- Tests with a fake tunnel that comes back after a restart, a fake leaked process, and a fake rate limit prove the fixes and prove that no unrelated process is touched.
+
+### R-086 A machine watchdog keeps every machine healthy and widens waves again when pressure drops.
+Acceptance:
+- The watchdog watches memory, swap, disk and orphaned swarm processes on each machine and cleans up automatically (only processes it can prove are leaked swarm test or lane processes; never other programs).
+- Waves shrink under memory pressure and widen again within 2 checks after pressure drops; a fake-machine test proves both directions and the orphan cleanup.
+- Disk use of the scratch and run folders stays under a configured cap through safe garbage collection that never touches a checkout holding swarm state.
+
+### R-087 The MacBook and the Mac mini pull from one shared queue.
+Acceptance:
+- Machines share one ledger and queue over the swarm message bus; any machine with free capacity takes the next ready ticket, with no hand-written wave manifests.
+- A claim is a lease with an expiry; two machines never run the same ticket; a crashed machine's lease expires and the ticket is retried. A two-fake-machine test proves no double run, including under a simulated crash and a network split.
+- Stage ownership by hand is no longer needed after this ships; held tickets return to the shared queue.
+
+### R-088 Smart routing picks the best-value healthy lane and keeps the safety rules.
+Acceptance:
+- The swarm tracks each lane's success rate, speed and cost per ticket type and routes each ticket to the best-value healthy lane, with the cost order as the tie-break.
+- No secrets go to any worker and no sensitive or production code goes to OpenRouter; tests with fake lanes prove these rules still hold under every routing score.
+- Routing decisions are logged with the scores that decided them.
+
+### R-089 Quota forecasting shifts work early and never raises a cap.
+Acceptance:
+- The swarm predicts when Claude subscription quotas, the Anthropic API daily cap and the OpenRouter daily cap will run out and shifts work to other lanes before they do.
+- A forecast never raises a cap and never spends more than the configured caps; a test proves a cap is never changed by forecasting or routing.
+- The forecast appears in the daily summary and on the board with its inputs labelled.
+
+### R-090 One short daily summary reaches the owner's phone.
+Acceptance:
+- Each morning one short message lists what shipped, lane health, spend per tier, and anything that truly needs the owner, and is sent to the phone through swarm phone or the inbox, not only the board.
+- A test with fake data proves the message content, its length limit and that it is sent once per day.
+
+### R-091 Self-management changes are reviewed and released safely.
+Acceptance:
+- Every change that kills processes, changes routing, or touches money or quotas gets an Opus static review before merge.
+- Each feature ships in a numbered release with tests that use fake lanes and fake machines, and the release is installed on both Macs and confirmed.
+
