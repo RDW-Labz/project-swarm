@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import './_isolate-config.mjs';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -25,6 +25,65 @@ import { readFile } from 'node:fs/promises';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
+
+/** @type {{ pid: number, child?: import('node:child_process').ChildProcess }[]} */
+const trackedFakeServers = [];
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function trackFakeServer(childOrPid) {
+  const pid = typeof childOrPid === 'number' ? childOrPid : childOrPid?.pid;
+  if (!Number.isInteger(pid) || pid <= 0) return childOrPid;
+  const child = typeof childOrPid === 'number' ? undefined : childOrPid;
+  if (!trackedFakeServers.some(e => e.pid === pid)) {
+    trackedFakeServers.push({ pid, child });
+  }
+  return childOrPid;
+}
+
+async function waitForPidExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return true;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return !pidAlive(pid);
+}
+
+async function stopTrackedFakeServers() {
+  const pending = trackedFakeServers.splice(0, trackedFakeServers.length);
+  for (const { pid, child } of pending) {
+    if (!pidAlive(pid)) continue;
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch { /* already gone */ }
+    await waitForPidExit(pid, 2000);
+    if (pidAlive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch { /* already gone */ }
+      await waitForPidExit(pid, 2000);
+    }
+    if (child) {
+      await new Promise(resolve => {
+        if (child.exitCode !== null || child.signalCode !== null) return resolve();
+        child.once('exit', () => resolve());
+        setTimeout(resolve, 3000);
+      });
+    }
+  }
+}
+
+afterEach(async () => {
+  await stopTrackedFakeServers();
+});
 
 const FAKE_SERVER = `import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -88,7 +147,14 @@ async function startFake({ home, version, port, ignoreSigterm = false, recordKin
     } catch { /* wait */ }
     await new Promise(r => setTimeout(r, 50));
   }
-  return child;
+  return trackFakeServer(child);
+}
+
+async function trackPidFromRegistry(file) {
+  try {
+    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (Number.isInteger(data.pid) && data.pid > 0) trackFakeServer(data.pid);
+  } catch { /* no record */ }
 }
 
 async function installLayout(home, { runnerBody }) {
@@ -175,7 +241,6 @@ test('--no-restart skips everything', async () => {
     write: t => lines.push(t),
   });
   assert.ok(child.kill(0));
-  child.kill('SIGTERM');
   assert.deepEqual(lines, []);
   assert.equal(noRestartFromArgv(['node', 'swarm.mjs', 'update', '--no-restart']), true);
 });
@@ -207,7 +272,6 @@ test('terminal-mode record is not killed', async () => {
   assert.ok(child.kill(0));
   assert.equal(servers[0]?.status, 'terminal');
   assert.match(lines.join(''), /running in a terminal/);
-  child.kill('SIGTERM');
 });
 
 test('SIGTERM timeout is reported and process is not killed', async () => {
@@ -226,7 +290,6 @@ test('SIGTERM timeout is reported and process is not killed', async () => {
   assert.ok(child.kill(0));
   assert.equal(servers[0]?.status, 'sigterm-timeout');
   assert.match(lines.join(''), /after SIGTERM/);
-  child.kill('SIGKILL');
 });
 
 test('background fake server restarts on new version', async () => {
@@ -240,7 +303,7 @@ const child = spawn(process.execPath, [${JSON.stringify(fakePath)}], { detached:
 child.unref();
 `;
   const install = await installLayout(home, { runnerBody: runner });
-  const old = await startFake({ home, version: '1.0.0', port });
+  await startFake({ home, version: '1.0.0', port });
   const lines = [];
   const { servers } = await restartRegisteredServers({
     installRoot: install,
@@ -249,11 +312,11 @@ child.unref();
     home,
     write: t => lines.push(t),
   });
-  old.kill('SIGKILL');
   assert.equal(servers[0]?.status, 'restarted');
   assert.match(lines.join(''), /board restarted: 1\.0\.0 to 2\.0\.0/);
   const health = await fetch(`http://127.0.0.1:${port}/api/health`).then(r => r.json());
   assert.equal(health.version, '2.0.0');
+  trackFakeServer(health.pid);
 });
 
 test('remote server record works the same', async () => {
@@ -268,7 +331,7 @@ const child = spawn(process.execPath, [script], { detached: true, stdio: 'ignore
 child.unref();
 `;
   const install = await installLayout(home, { runnerBody: runner });
-  const old = await startFake({ home, version: '1.0.0', port, recordKind: 'remote' });
+  await startFake({ home, version: '1.0.0', port, recordKind: 'remote' });
   const lines = [];
   const { servers } = await restartRegisteredServers({
     installRoot: install,
@@ -277,10 +340,27 @@ child.unref();
     home,
     write: t => lines.push(t),
   });
-  old.kill('SIGKILL');
+  await trackPidFromRegistry(recordFile);
   assert.equal(servers[0]?.kind, 'remote');
   assert.equal(servers[0]?.status, 'restarted');
   assert.match(lines.join(''), /remote server restarted/);
+});
+
+test('stopTrackedFakeServers kills children when a test body throws', async (t) => {
+  const home = await mkHome();
+  const port = await freePort();
+  const child = await startFake({ home, version: '1.0.0', port });
+  const pid = child.pid;
+  let caught = null;
+  try {
+    throw new Error('intentional test failure');
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(caught?.message, 'intentional test failure');
+  t.after(async () => {
+    assert.equal(pidAlive(pid), false);
+  });
 });
 
 test('failed replacement is retried once then manual command', async () => {
@@ -343,5 +423,6 @@ child.unref();
     env: { HOME: home, PATH: process.env.PATH },
     home,
   });
+  await trackPidFromRegistry(record);
   assert.equal(servers[0]?.status, 'restarted');
 });

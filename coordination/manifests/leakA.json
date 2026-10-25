@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "leakA",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tests/server-restart.test.mjs",
+    "tools/server-restart.mjs"
+   ],
+   "outputs": [
+    "tests/server-restart.test.mjs"
+   ],
+   "prompt": "Fix the leak of orphaned fake-server.mjs node processes (78 orphans, about 2 GB, parent pid 1, found under the swarm-cursor temp folders 2026-10-24). Part 1, tests/server-restart.test.mjs: every fake server a test starts (the fake-server.mjs written into a temp home at lines near 68, 235, 262 and 331) must be stopped in an after or finally hook even when the test fails or times out: track each spawned child in a list, kill it (SIGTERM, then SIGKILL after 2 seconds) and await its exit; add one test that proves the helper kills its children when a test body throws. Use only injected or temp-dir state; no real ports outside 127.0.0.1 ephemeral ones."
+  }
+ ]
+}

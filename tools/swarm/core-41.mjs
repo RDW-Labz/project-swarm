@@ -125,7 +125,39 @@ export async function expandOpenScopes(root, manifest) {
   return expanded;
 }
 
-export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
+/** Kill a detached cursor lane leader's process group; injectable for tests. */
+export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind(process), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), pgidFor = process.pid } = {}) {
+  if (!Number.isInteger(pid) || pid <= 1) return { refused: true, error: null };
+  let ownPgid;
+  try { ownPgid = typeof process.getpgid === 'function' ? process.getpgid(pgidFor) : null; }
+  catch { ownPgid = null; }
+  if (pid === process.pid || (ownPgid != null && pid === ownPgid)) return { refused: true, error: null };
+  const target = -pid;
+  const probe = () => { try { killImpl(target, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } };
+  try { killImpl(target, 'SIGTERM'); }
+  catch (error) {
+    if (error.code === 'ESRCH') return { refused: false, error: null };
+    const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+    return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGTERM` };
+  }
+  await sleep(5000);
+  if (!probe()) return { refused: false, error: null };
+  try { killImpl(target, 'SIGKILL'); return { refused: false, error: null }; }
+  catch (error) {
+    if (error.code === 'ESRCH') return { refused: false, error: null };
+    const code = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'UNKNOWN';
+    return { refused: false, error: `Cursor process group cleanup failed (${code}) while sending SIGKILL` };
+  }
+}
+
+async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = killCursorProcessGroup }) {
+  const group = Number.isInteger(groupPid) ? await killGroupImpl(groupPid, { killImpl }) : { refused: false, error: null };
+  const childResult = await stopChild(child, { killImpl });
+  if (group.refused) return childResult;
+  return { error: childResult.error ?? group.error ?? null };
+}
+
+export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, killGroupImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
   // Hermes/Qwen may run on another machine over ssh (machine config `cliHosts`). A bad config fails
   // this job only.
   let cliHost = null;
@@ -138,14 +170,17 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
   catch (error) { return { ...setupFailedResult(error.message), setupFailed: false, code: error.code, stream: error.stream }; }
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
-    let timeout, poll, termination, logFailure;
-    const stop = why => { if (reason || settled) return; reason = why; termination=stopChild(child,{killImpl}); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
+    let timeout, poll, termination, logFailure, cursorGroupPid;
+    const stopChildForJob = () => job.agent === 'cursor'
+      ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl })
+      : stopChild(child, { killImpl });
+    const stop = why => { if (reason || settled) return; reason = why; termination=stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}); };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout); clearInterval(poll); signal?.removeEventListener('abort', onAbort);
-      const cleanup=await(termination??stopChild(child,{killImpl}));
+      const cleanup=await(termination??stopChildForJob());
       try { await sink?.close(); } catch (problem) { logFailure ??= problem; }
       const cleanupError=cleanup.error;
       if (logFailure) {
@@ -229,11 +264,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // Over ssh the local environment never travels: ssh gets only what it needs to find its own key.
         : cliHost ? (() => { const ssh = sshInvocation(cliHost, extraCliArgs(job)); return spawnImpl(ssh.command, ssh.args, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: sshEnv(process.env) }); })()
         : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: job.agent==='claude'?process.env:extraCliEnvironment(job.agent) });
+      if (job.agent === 'cursor' && child?.pid) cursorGroupPid = child.pid;
       child.on('error', error => finish(null, error));
       child.once('exit',()=>{
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
-        termination??=stopChild(child,{killImpl});
+        termination??=stopChildForJob();
         termination.then(cleanup=>{if(cleanup.error)finish(null);});
       });
       child.on('close', code => finish(code));
