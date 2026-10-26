@@ -360,13 +360,20 @@ export function readyAutopilotDeps(projectRoot, {
       const waitGrace = typeof waitExitGrace === 'function' ? waitExitGrace : waitStartScopeExitGrace;
       let stderrFd;
       let logPath;
+      // Opening the log file is best-effort: a root that doesn't exist on disk (as in many
+      // unit-test fixtures) must not block spawning go --scope, only the early-failure tail read.
       try {
         const scratchDir = await safeWritableDir(cwd, ['.swarm', 'project']);
         logPath = path.join(scratchDir, 'go-scope-spawn.log');
         stderrFd = fs.openSync(logPath, 'a');
+      } catch {
+        stderrFd = undefined;
+        logPath = undefined;
+      }
+      try {
         const child = spawnImpl(process.execPath, args, {
           detached: true,
-          stdio: ['ignore', 'ignore', stderrFd],
+          stdio: ['ignore', 'ignore', stderrFd !== undefined ? stderrFd : 'ignore'],
           env: { ...env, SWARM_AUTOPILOT_PID: String(selfPid) },
           cwd,
         });
