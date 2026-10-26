@@ -21,9 +21,9 @@ export const DEFAULT_LANE_WARN_RATIO = 0.85;
 /**
  * @typedef {object} LaneQuotaForecast
  * @property {LaneName} name
- * @property {'ok' | 'warn' | 'at-cap' | 'no-cap'} phase
+ * @property {'ok' | 'warn' | 'at-cap' | 'no-cap' | 'unknown'} phase
  * @property {string | null} projectedRunOutAt ISO-8601 when burn is projected to exhaust cap, or null.
- * @property {number | null} headroomUsd Remaining USD before cap at projection time; null when no cap.
+ * @property {number | null} headroomUsd Remaining USD before cap at projection time; null when no cap or unknown.
  * @property {'shift-work' | null} recommendation Advisory: route away from this lane before the cap stall.
  */
 
@@ -46,22 +46,40 @@ function hoursUntilUtcDayEnd(nowMs) {
 }
 
 /**
+ * @param {unknown} spentUsd
+ */
+function isValidSpentUsd(spentUsd) {
+  return typeof spentUsd === 'number' && Number.isFinite(spentUsd);
+}
+
+/**
+ * @param {unknown} capUsd
+ */
+function isValidCapUsd(capUsd) {
+  return typeof capUsd === 'number' && Number.isFinite(capUsd) && capUsd >= 0;
+}
+
+/**
  * @param {LaneQuotaInput} lane
+ * @returns {number | null}
  */
 function resolveBurnRatePerHour(lane) {
   if (typeof lane.burnRatePerHour === 'number' && Number.isFinite(lane.burnRatePerHour) && lane.burnRatePerHour >= 0) {
     return lane.burnRatePerHour;
   }
   const samples = Array.isArray(lane.recentSamples) ? lane.recentSamples : [];
-  if (samples.length < 2) return 0;
-  const sorted = [...samples].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  if (samples.length < 2) return null;
+  const sorted = [...samples]
+    .filter(s => s && typeof s.at === 'string' && Number.isFinite(Date.parse(s.at)))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  if (sorted.length < 2) return null;
   const first = sorted[0];
   const last = sorted[sorted.length - 1];
   const t0 = Date.parse(first.at);
   const t1 = Date.parse(last.at);
   const deltaUsd = Number(last.spentUsd) - Number(first.spentUsd);
   const deltaHours = (t1 - t0) / 3_600_000;
-  if (!Number.isFinite(deltaHours) || deltaHours <= 0 || !Number.isFinite(deltaUsd) || deltaUsd < 0) return 0;
+  if (!Number.isFinite(deltaHours) || deltaHours <= 0 || !Number.isFinite(deltaUsd) || deltaUsd < 0) return null;
   return deltaUsd / deltaHours;
 }
 
@@ -72,8 +90,14 @@ export function laneQuotaPhase({ spentUsd, projectedUsd, capUsd, warnRatio = DEF
   if (capUsd === null || capUsd === undefined) {
     return { phase: 'no-cap', headroomUsd: null };
   }
+  if (!isValidCapUsd(capUsd)) {
+    return { phase: 'unknown', headroomUsd: null };
+  }
   const cap = capUsd;
-  const spent = Number.isFinite(spentUsd) ? spentUsd : 0;
+  if (!isValidSpentUsd(spentUsd)) {
+    return { phase: 'unknown', headroomUsd: null };
+  }
+  const spent = spentUsd;
   const projected = Number.isFinite(projectedUsd) ? projectedUsd : spent;
   if (spent >= cap || projected >= cap) {
     return { phase: 'at-cap', headroomUsd: 0 };
@@ -90,14 +114,14 @@ export function laneQuotaPhase({ spentUsd, projectedUsd, capUsd, warnRatio = DEF
  * @param {number} nowMs
  * @param {number} spentUsd
  * @param {number} capUsd
- * @param {number} burnRatePerHour
+ * @param {number | null} burnRatePerHour
  * @returns {string | null}
  */
 function projectedRunOutAtIso(nowMs, spentUsd, capUsd, burnRatePerHour) {
   if (!Number.isFinite(capUsd) || capUsd <= 0) return null;
   const headroom = capUsd - spentUsd;
   if (headroom <= 0) return new Date(nowMs).toISOString();
-  if (!Number.isFinite(burnRatePerHour) || burnRatePerHour <= 0) return null;
+  if (burnRatePerHour === null || !Number.isFinite(burnRatePerHour) || burnRatePerHour <= 0) return null;
   const hours = headroom / burnRatePerHour;
   return new Date(nowMs + hours * 3_600_000).toISOString();
 }
@@ -117,6 +141,17 @@ function normalizeLanes(lanes) {
   return [];
 }
 
+/** @returns {LaneQuotaForecast} */
+function unknownLaneForecast(name) {
+  return {
+    name,
+    phase: 'unknown',
+    projectedRunOutAt: null,
+    headroomUsd: null,
+    recommendation: null,
+  };
+}
+
 /**
  * Read-only forecast: when each lane hits its configured daily cap given current spend and burn.
  * Does not read files, call the network, or mutate caps/config.
@@ -126,16 +161,53 @@ function normalizeLanes(lanes) {
  */
 export function forecastLaneQuotas({ lanes, now } = {}) {
   const nowMs = now instanceof Date ? now.getTime() : typeof now === 'string' ? Date.parse(now) : Number(now ?? Date.now());
-  const horizonHours = hoursUntilUtcDayEnd(nowMs);
   const normalized = normalizeLanes(lanes);
+
+  if (!Number.isFinite(nowMs)) {
+    const forecasts = normalized.map(lane => unknownLaneForecast(lane.name));
+    return {
+      lanes: forecasts,
+      summary: {
+        atRiskSoonest: [],
+        healthiestLane: null,
+        suggestedReroute: null,
+      },
+    };
+  }
+
+  const horizonHours = hoursUntilUtcDayEnd(nowMs);
 
   /** @type {LaneQuotaForecast[]} */
   const forecasts = normalized.map(lane => {
-    const spentUsd = Number.isFinite(lane.spentUsd) ? lane.spentUsd : 0;
     const capUsd = lane.capUsd;
     const warnRatio = lane.warnRatio ?? DEFAULT_LANE_WARN_RATIO;
+
+    if (!isValidSpentUsd(lane.spentUsd)) {
+      return unknownLaneForecast(lane.name);
+    }
+    const spentUsd = lane.spentUsd;
+
+    if (capUsd !== null && capUsd !== undefined && !isValidCapUsd(capUsd)) {
+      return unknownLaneForecast(lane.name);
+    }
+
     const burnRatePerHour = resolveBurnRatePerHour(lane);
-    const projectedUsd = roundUsd(spentUsd + burnRatePerHour * horizonHours);
+
+    if (capUsd !== null && capUsd !== undefined && burnRatePerHour === null) {
+      if (spentUsd >= capUsd) {
+        return {
+          name: lane.name,
+          phase: 'at-cap',
+          projectedRunOutAt: projectedRunOutAtIso(nowMs, spentUsd, capUsd, burnRatePerHour),
+          headroomUsd: 0,
+          recommendation: 'shift-work',
+        };
+      }
+      return unknownLaneForecast(lane.name);
+    }
+
+    const rateForProjection = burnRatePerHour ?? 0;
+    const projectedUsd = roundUsd(spentUsd + rateForProjection * horizonHours);
     const { phase, headroomUsd } = laneQuotaPhase({ spentUsd, projectedUsd, capUsd, warnRatio });
     const projectedRunOutAt =
       capUsd === null || capUsd === undefined
