@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0176-fix2",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix one remaining review finding on tools/cluster-client.mjs (T-0176). isAbortError currently only matches `error.name === 'AbortError'` or `error.code === 'ABORT_ERR'`. When `AbortSignal.timeout(ms)` actually fires, Node's fetch (and the subsequent res.text() read) reject with the signal's abort reason, which is a DOMException named 'TimeoutError' (not 'AbortError'). So a real network stall currently falls through to the generic 'cluster-request-failed' error instead of the intended 'cluster-request-timeout'. Fix isAbortError to also treat `error.name === 'TimeoutError'` (DOMException code 23 / TIMEOUT_ERR) as a timeout, so both the fetch call and the res.text() read correctly throw 'cluster-request-timeout' when the injected AbortSignal.timeout actually fires. Add a test that exercises a real timeout end-to-end: start a real local HTTP server (net/http) that never responds (or delays past the timeout) on a free port, point clusterLedgerRemoteFetch's host/port at it with a short timeoutMs (e.g. 50ms), and assert the call rejects with code 'cluster-request-timeout' - not a mock that stubs isAbortError's input directly, since that's exactly the gap that let this bug ship. Keep the test fast (timeoutMs in the tens of milliseconds, not seconds) so it doesn't slow the suite. Run the test file when done.",
+      "context": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "outputs": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "timeoutMs": 1200000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

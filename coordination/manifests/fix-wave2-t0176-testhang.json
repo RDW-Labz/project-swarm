@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0176-testhang-fix",
+      "agent": "auto",
+      "prompt": "tests/cluster-client.test.mjs currently fails when run with `node --test tests/cluster-client.test.mjs`: the first 5 tests pass, but test 6 ('stalled remote fetch rejects with cluster-request-timeout') and all tests after it (7-10) get cancelled with the error 'Promise resolution is still pending but the event loop has already resolved' / failureType 'cancelledByParent' - meaning something leaks an open handle, timer, or unresolved promise around test 5 ('AbortSignal.timeout on real fetch rejects with cluster-request-timeout', which uses a real http.createServer via listenMock) or test 6 ('stalled remote fetch...', which uses a fake `hangForever` fetch stub with a manual AbortSignal listener), causing the Node test runner to tear down the process early and mass-cancel the rest of the file. Diagnose the actual leak (likely candidates: the real HTTP server in listenMock not being fully torn down before the next test starts despite server.closeAllConnections() + the t.after(() => server.close()) hook; or the hangForever stub's Promise never settling when nothing ever calls resolve() - only reject() on abort - potentially leaving a dangling 'abort' listener registered after the signal already fired, or a Promise with no settle path if assert.rejects' own machinery adds extra listeners) and fix it so the full file passes cleanly end to end with `node --test tests/cluster-client.test.mjs` showing all 10 (or however many exist after your fix) tests passing with zero cancelled/failed. Do not weaken what's being tested (the real-timeout-via-real-server test and the fake-hangForever test must both still genuinely exercise cluster-request-timeout) - fix the cleanup/leak, not the assertions. Run the test file repeatedly (at least 3 times) to confirm it's not flaky before finishing.",
+      "context": ["tests/cluster-client.test.mjs", "tools/cluster-client.mjs"],
+      "outputs": ["tests/cluster-client.test.mjs"],
+      "timeoutMs": 1200000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}
