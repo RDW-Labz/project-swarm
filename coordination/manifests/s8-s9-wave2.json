@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "jobs": [
+    {
+      "id": "T-0176",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "T-0176: follower-side client so `swarm queue claim/release` can point at the canonical machine's cluster-ledger API instead of a local ledger file, built on T-0175's real HMAC auth (tools/cluster-ledger-api.mjs, read as context). That server exposes POST /api/cluster/ledger/claim, /renew, /release (body: {ticketId, fencingToken?, leaseTtlMs?}) and GET /api/cluster/ledger/read (returns {version, leases, maxTokenByTicket}), each requiring headers x-swarm-node-id, x-swarm-timestamp, x-swarm-signature. Use the already-exported `clusterLedgerAuthHeaders(secret, method, path, body, { now })` to sign requests rather than reimplementing HMAC. `resolveClusterLedgerPort` gives the port; there is currently no config field naming the canonical machine's HOST/address for a follower to dial — add one, following the existing naming convention in tools/cluster-ledger-api.mjs (clusterLedgerPort, clusterLedgerHosts, remoteClusterMode), e.g. a `clusterCanonicalHost` field read via loadLocalConfig (tools/local-config.mjs, read as context); document the new field with a one-line comment where you read it. `readNodeRegistry`/`nodesRegistryFile` (tools/cluster-ledger-api.mjs) read `{version:1, nodes: {\"<node-uuid>\": {secret}}}`; the follower's own node id comes from `getNodeId` (tools/node-identity.mjs, read as context) and its own signing secret comes from that same registry file (the follower's own entry, provisioned out-of-band per the T-0175 handoff notes — do not invent a registration call). Write tools/cluster-client.mjs exporting functions for claim/release/read against the remote API (reusing clusterLedgerAuthHeaders for signing and native fetch for the HTTP call), plus a small helper to tell whether follower/remote mode is configured (presence of `clusterCanonicalHost`, mirroring how `remoteClusterModeEnabled` reads its own flag). CRITICAL acceptance behavior: on ANY network failure (connection refused, timeout, non-2xx, malformed response) the claim/release call must reject/throw — never silently fall back to reading a local ledger file or returning stale/default data; a caller that wants a local fallback must choose that itself. Wiring these functions into `swarm queue claim/release`'s actual CLI output (tools/queue-commands.mjs) is explicitly OUT of scope for this ticket — do not edit that file; just export clean, well-tested functions the coordinator will wire in next. Write tests/cluster-client.test.mjs covering: (1) a successful claim against a mocked HTTP server returns the parsed lease result; (2) a connection failure / non-2xx response rejects and performs no local-file read, no fallback value; (3) requests are correctly signed (recompute the HMAC server-side in the test using clusterLedgerAuthHeaders with the same secret and assert header match); (4) the remote-mode helper correctly reports on/off based on the new config field. Run the test file when done.",
+      "context": [
+        "tools/cluster-ledger-api.mjs",
+        "tools/node-identity.mjs",
+        "tools/local-config.mjs",
+        "tools/ledger-lease.mjs"
+      ],
+      "outputs": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs"],
+      "ignoreTestsReason": "these enumerate the tools/ directory generically; full suite runs before integrate anyway"
+    },
+    {
+      "id": "T-0405",
+      "agent": "auto",
+      "prompt": "T-0405: audit tests/chief-orchestrator.test.mjs (read it as context first) against this epic's full acceptance: a second chief start exits non-zero and leaves the first unchanged; cross-project slot sharing starts jobs on two projects in the same wave within one machine cap; swarm orchestrator status lists active projects and slot share, with zero share for a project with no slots in use. Most of this is already covered (test names present: 'with chief_orchestrator on, a second chief start exits non-zero...', 'with two projects each having ready tickets and machine cap 4...', 'chiefOrchestratorStatus reports slot counts and share...', 'chiefOrchestratorStatus gives zero share...'). Your job is to find genuine remaining gaps, not pad with redundant assertions. Look specifically for: the chief lock surviving/recovering correctly if the lock-holder process died uncleanly (stale lock with a dead pid, read tools/chief-orchestrator.mjs's acquireChiefLock for the exact liveness-check-then-reclaim behavior and confirm it's exercised, not just acquireChiefLock's own dedicated test which is narrower); a project entry in chiefOrchestratorStatus with a non-integer or negative slots value, rejected rather than silently coerced (tools/chief-status.mjs's projectSlots already throws a TypeError for this - confirm it's covered); machineCap of exactly the number of total slots in use across all projects (no off-by-one in share math at 100%). If after reading the existing suite and tools/chief-orchestrator.mjs, tools/chief-slots.mjs, tools/chief-status.mjs you find no genuine gap beyond what's listed, say so plainly in your final report rather than inventing busywork tests. Run the test file when done.",
+      "context": [
+        "tests/chief-orchestrator.test.mjs",
+        "tools/chief-orchestrator.mjs",
+        "tools/chief-slots.mjs",
+        "tools/chief-status.mjs"
+      ],
+      "outputs": ["tests/chief-orchestrator.test.mjs"],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "T-0406",
+      "agent": "auto",
+      "prompt": "T-0406: mount `swarm orchestrator status` as a real CLI route, following tools/queue-commands.mjs's exact pattern (read it as context: an async `run<Name>Command(root, args, opts)` returning `{stdout, exitCode}`, with a USAGE string and try/catch around the real work). Write a NEW file tools/orchestrator-commands.mjs exporting `runOrchestratorCommand(root, args, { env = process.env } = {})`: when args is `['status']`, gather the real active-projects/slot-share state and print it with tools/chief-status.mjs's `formatOrchestratorStatus` (read tools/chief-status.mjs as context for the exact `{machineCap, projects:[{project,path?,slots,active?}]}` shape it expects). Build that real state from: `listProjects({file: projectsFile(env)})` (tools/projects.mjs, read as context) for the registered project list, cross-referenced with `boardSummary()` (tools/board.mjs, read as context: returns `{runs:[{root, status, jobs:[{id,status,...}]}]}` for every live run on the machine) to count, per project root (realpath-match `run.root` against each project's root), how many of that project's live jobs currently have `status === 'running'` — that count is the project's `slots`; a project with zero running jobs is `active:false` (or simply omitted — chiefOrchestratorStatus already filters `active !== false`, read tools/chief-status.mjs to confirm). `machineCap` comes from `machineConcurrency(loadLocalConfig({env}))` (tools/lanes.mjs / tools/local-config.mjs). Any other args: print a short usage string and exit 1 (same style as queue-commands.mjs's USAGE). Do NOT edit tools/swarm.mjs — wiring `runOrchestratorCommand` into the top-level `orchestrator` subcommand dispatch is the coordinator's follow-up, same as how T-0404/T-0419 left CLI wiring for later; your job is a correct, well-tested module with the exact exported signature above so that follow-up is a trivial 4-line addition mirroring the existing `if(args[0]==='queue'){...}` block. Write tests/chief-orchestrator-route.test.mjs covering: `status` with two registered projects, one with running jobs on its root and one idle, prints both with correct slot counts/shares via `runOrchestratorCommand`; an unknown subcommand returns exit code 1 with a usage message; a project with no live runs at all is still listed as present with zero slots or correctly omitted (match whatever chiefOrchestratorStatus already does for zero-slot projects - don't contradict it). Run the test file when done.",
+      "context": [
+        "tools/queue-commands.mjs",
+        "tools/chief-status.mjs",
+        "tools/board.mjs",
+        "tools/board-commands.mjs",
+        "tools/projects.mjs",
+        "tools/lanes.mjs",
+        "tools/local-config.mjs"
+      ],
+      "outputs": ["tools/orchestrator-commands.mjs", "tests/chief-orchestrator-route.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs"],
+      "ignoreTestsReason": "these enumerate the tools/ directory generically; full suite runs before integrate anyway"
+    },
+    {
+      "id": "T-0409",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "T-0409: audit tests/job-sandbox.test.mjs (read it as context) against this epic's acceptance: two concurrent isolated jobs get different container grants and neither can open the other's DATABASE_URL; isolated jobs are denied git push (including obfuscated forms) before invocation; legacy (non-isolated) projects are unaffected. This is already heavily covered (test names present include 'two concurrent isolated jobs cannot read each other DATABASE_URL value', 'isolated job git push is denied at the service with exit 1 before invocation', 'isolated job denies obfuscated git push argv forms before invocation', 'legacy (non-isolated) project jobs may still run git push as before', plus several fail-closed edge cases). Read tools/job-grants.mjs and tools/job-sandbox.mjs as context and find any genuine remaining gap against the acceptance text above - for example: does a THIRD concurrent isolated job (not just two) still get correctly isolated grants (no accidental pairwise-only logic); does a project that toggles isolation on mid-run (existing grant from before the flag flipped) behave safely; is grant-directory permission (not just file permission) verified tight enough that a sibling job's process can't list the directory to discover filenames. If, after reading the existing suite and the two source files, you find no genuine gap, say so plainly in your final report and do not pad with redundant assertions. Run the test file when done.",
+      "context": [
+        "tests/job-sandbox.test.mjs",
+        "tools/job-grants.mjs",
+        "tools/job-sandbox.mjs"
+      ],
+      "outputs": ["tests/job-sandbox.test.mjs"],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "T-0410",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "T-0410: `swarm queue claim` should route a claimed job through the isolated sandbox (per-job container grant) for projects that have isolation enabled, and behave exactly as today (legacy) for projects that don't. Read tools/queue-commands.mjs (context + the file you'll edit), tools/job-sandbox.mjs (isProjectIsolationEnabled(project) tells you whether a project has isolation on), and tools/job-grants.mjs (createJobGrant({...}) produces the per-job scoped grant; buildIsolatedProcessEnv builds the env block a caller would set for the isolated process) as context. In runQueueCommand's `claim` branch (tools/queue-commands.mjs): after a successful lease `claim(...)`, when the project is isolation-enabled, also call `createJobGrant` for this job (use the claimed ticketId as the job id, matching whatever shape createJobGrant expects per tools/job-grants.mjs) and include the grant's env-handle info (whatever a caller needs: at minimum the env var names SWARM_JOB_ID/SWARM_JOB_GRANT_FILE it sets, not secret values) in the command's stdout/result so a caller can route the job through `buildIsolatedProcessEnv`; when the project is NOT isolation-enabled, behavior must be byte-for-byte unchanged from before this ticket (no grant creation, same stdout format as today). There is no project-config object currently passed into runQueueCommand - read how `root`/`opts` flow in today and add the minimal plumbing (e.g. reading the project's local config the same way other isolation-aware code does) rather than inventing a new unrelated config path; if no project config loader already exists in this file's reach, loading it the same way tools/job-sandbox.mjs's callers do elsewhere in the codebase is the right pattern - check job-sandbox.mjs's own usage/tests for how `project` objects are normally sourced. Write tests/job-sandbox-route.test.mjs covering: a project with isolation enabled, `queue claim TICKET` creates a per-job grant tied to that ticket id and reports it; a project without isolation enabled (legacy/default) claims a ticket with output identical to pre-ticket behavior and creates no grant; a network/lease failure during claim creates no orphaned grant (grant creation only follows a successful claim, never before or independent of it). Run the test file when done.",
+      "context": [
+        "tools/queue-commands.mjs",
+        "tools/job-sandbox.mjs",
+        "tools/job-grants.mjs",
+        "tests/job-sandbox.test.mjs",
+        "tests/queue-commands.test.mjs"
+      ],
+      "outputs": ["tools/queue-commands.mjs", "tests/job-sandbox-route.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/queue-commands.test.mjs", "tests/split-module.test.mjs"],
+      "ignoreTestsReason": "legacy claim/release behavior stays unchanged; new isolated-routing coverage goes in tests/job-sandbox-route.test.mjs instead (queue-commands.test.mjs kept in context to self-check no regression)."
+    },
+    {
+      "id": "T-0413",
+      "agent": "auto",
+      "prompt": "T-0413: audit tests/burst-runner.test.mjs (read it as context) against this epic's acceptance: a cloud runner missing heartbeat for 120s returns its lease to the local queue so a local worker can claim it; a `lane:burst` ticket on a burst-enabled project is routed to a registered cloud runner; a burst-disabled project shows zero cloud jobs even after other projects' burst activity. This is already covered (test names present: 'cloud runner missing heartbeat for 120s returns lease; local worker can claim', 'lane:burst on burst-enabled project routes to cloud runner and records completion', 'burst-disabled project shows zero cloud jobs despite other projects burst activity'). Read tools/burst-lease.mjs and tools/burst-route.mjs as context and look for genuine remaining gaps: a heartbeat that arrives at exactly 119s vs 121s (boundary behavior around HEARTBEAT_TIMEOUT_MS); a runner that re-registers with the same runnerId after being swept (no duplicate/zombie lease); the runners store file (runnersPath) surviving a concurrent read/write without corruption under two near-simultaneous heartbeat calls. If, after reading the existing suite and the two source files, you find no genuine gap, say so plainly in your final report and do not pad with redundant assertions. Run the test file when done.",
+      "context": [
+        "tests/burst-runner.test.mjs",
+        "tools/burst-lease.mjs",
+        "tools/burst-route.mjs"
+      ],
+      "outputs": ["tests/burst-runner.test.mjs"],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "T-0417",
+      "agent": "auto",
+      "prompt": "T-0417: audit tests/cpu-runner.test.mjs (read it as context) against this epic's acceptance: a registered cloud CPU runner runs a ticket's own test command and the full e2e suite and records pass/fail plus real elapsed duration; the runner stays off unless the before/after benchmark scorecard shows improvement. This is already covered (test names present: 'buildBurstScorecard improved case...', 'buildBurstScorecard reports not improved on regression/when unchanged/when only duration improves', 'runCpuRunnerJob records pass and duration...', 'runCpuRunnerJob still runs e2e when ticket tests fail', 'runCpuRunnerJob uses elapsed time, not a fixed duration'). Read tools/cpu-runner.mjs and tools/burst-scorecard.mjs as context and look for genuine remaining gaps: does anything actually gate the runner being enabled/disabled on the scorecard's `improved` boolean end-to-end (read tools/cpu-runner.mjs for whether it even consults the scorecard, or whether that gating lives only in burst-scorecard.mjs's own return value with no caller wiring it to an on/off switch yet - if the gate itself isn't wired anywhere, say so as a finding rather than writing a test for code that doesn't exist); a ticket test command that throws/crashes (not just fails) is still recorded and doesn't prevent the e2e suite from running. If, after reading the existing suite and the two source files, you find no genuine gap, say so plainly in your final report and do not pad with redundant assertions. Run the test file when done.",
+      "context": [
+        "tests/cpu-runner.test.mjs",
+        "tools/cpu-runner.mjs",
+        "tools/burst-scorecard.mjs"
+      ],
+      "outputs": ["tests/cpu-runner.test.mjs"],
+      "timeoutMs": 1200000
+    },
+    {
+      "id": "T-0420",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "T-0420: `swarm burst gpu start` must refuse and rent nothing while any gate fails, showing the measured numbers before any rental, and must refuse a sensitive ticket with 'not allowed on rented lane'. Use tools/burst-gates.mjs's `computeBurstGpuGates`/`formatBurstGpuGates` (read as context) as the single source of truth for gate evaluation - that is the current, tested gates module (T-0419). IMPORTANT: ignore tools/burst-gpu-start.mjs - it is an earlier, unused, untested duplicate of this same gate logic (no test imports it, nothing calls it) written before burst-gates.mjs landed; do not import from it or extend it, and do not delete it either (out of scope - just don't build on it; flag it as dead code in your final report so the coordinator can decide whether to clean it up later). Write a NEW file tools/burst-gpu.mjs exporting a function (e.g. `startBurstGpu(inputs, ticket, provision)`) that: (1) computes gates via computeBurstGpuGates(inputs); (2) if any gate fails, returns/reports exit code 1, message 'gates not met', the gate lines with measured values, and calls `provision` zero times; (3) if `ticket` is present and `ticket.sensitive !== false` (i.e. sensitive or unknown), refuses with exit code 1 and message containing 'not allowed on rented lane', again calling `provision` zero times, even if gates pass; (4) only when gates pass AND the ticket is not sensitive does it call `provision()` (the actual rental - read tools/gpu.mjs's `gpuUp` as context for the real provisioning function shape, but do not call real infra in tests, inject a stub). Extend tests/burst-gpu.test.mjs (it already exists with gate-computation tests from T-0419 - read it first, don't duplicate those) with coverage for: any single gate FAIL blocks rental entirely and reports 'gates not met' with the measured values shown; a sensitive ticket is refused with 'not allowed on rented lane' even when all gates pass; a non-sensitive ticket with all gates passing actually invokes the provisioner exactly once. Run the test file when done.",
+      "context": [
+        "tools/burst-gates.mjs",
+        "tools/gpu.mjs",
+        "tests/burst-gpu.test.mjs"
+      ],
+      "outputs": ["tools/burst-gpu.mjs", "tests/burst-gpu.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs"],
+      "ignoreTestsReason": "these enumerate the tools/ directory generically; full suite runs before integrate anyway"
+    }
+  ]
+}

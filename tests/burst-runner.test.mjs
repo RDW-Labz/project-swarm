@@ -13,6 +13,8 @@ import {
   recordHeartbeat,
   sweepStaleHeartbeats,
   claimForRunner,
+  readRunners,
+  validateRunnersStore,
 } from '../tools/burst-lease.mjs';
 import {
   routeBurstTicket,
@@ -76,6 +78,78 @@ test('cloud runner missing heartbeat for 120s returns lease; local worker can cl
   const localClaim = await claim(root, ticket.id, localId, { now: sweepAt + 1000, leaseTtlMs: 60_000 });
   assert.equal(localClaim.holderId, localId);
   assert.ok(localClaim.fencingToken > leased.fencingToken);
+});
+
+test('heartbeat sweep boundary: 119s after last beat is fresh, 120s is stale', async t => {
+  const root = await tmp(t);
+  const ticket = await seed(root, { id: 'T-0414' });
+  const t0 = Date.now();
+  const runnerId = 'cloud-boundary';
+
+  await registerRunner(root, runnerId, { now: t0 });
+  await claimForRunner(root, ticket.id, runnerId, { now: t0, leaseTtlMs: 60_000 });
+  const lastBeat = t0 + 10_000;
+  await recordHeartbeat(root, runnerId, { now: lastBeat });
+
+  const justBefore = await sweepStaleHeartbeats(root, {
+    now: lastBeat + HEARTBEAT_TIMEOUT_MS - 1,
+  });
+  assert.deepEqual(justBefore.returned, []);
+
+  const atThreshold = await sweepStaleHeartbeats(root, {
+    now: lastBeat + HEARTBEAT_TIMEOUT_MS,
+  });
+  assert.deepEqual(atThreshold.returned, [ticket.id]);
+});
+
+test('runner re-registers with same runnerId after heartbeat sweep; single store entry, new claim', async t => {
+  const root = await tmp(t);
+  const ticket = await seed(root, { id: 'T-0415' });
+  const t0 = Date.now();
+  const runnerId = 'cloud-respawn';
+
+  await registerRunner(root, runnerId, { now: t0 });
+  const firstLease = await claimForRunner(root, ticket.id, runnerId, {
+    now: t0,
+    leaseTtlMs: 60_000,
+  });
+  const lastBeat = t0 + 5_000;
+  await recordHeartbeat(root, runnerId, { now: lastBeat });
+  const sweepAt = lastBeat + HEARTBEAT_TIMEOUT_MS + 1;
+  await sweepStaleHeartbeats(root, { now: sweepAt });
+
+  const reregAt = sweepAt + 1_000;
+  await registerRunner(root, runnerId, { now: reregAt });
+  const store = await readRunners(root);
+  assert.equal(Object.keys(store.runners).length, 1);
+  assert.ok(store.runners[runnerId]);
+
+  const secondLease = await claimForRunner(root, ticket.id, runnerId, {
+    now: reregAt + 100,
+    leaseTtlMs: 60_000,
+  });
+  assert.equal(secondLease.holderId, runnerId);
+  assert.ok(secondLease.fencingToken > firstLease.fencingToken);
+});
+
+test('concurrent heartbeats leave burst-runners.json valid with one runner record', async t => {
+  const root = await tmp(t);
+  const t0 = Date.now();
+  const runnerId = 'cloud-concurrent';
+  await registerRunner(root, runnerId, { now: t0 });
+
+  const [a, b] = await Promise.all([
+    recordHeartbeat(root, runnerId, { now: t0 + 100 }),
+    recordHeartbeat(root, runnerId, { now: t0 + 200 }),
+  ]);
+  assert.ok(a.lastHeartbeatAt);
+  assert.ok(b.lastHeartbeatAt);
+
+  const store = await readRunners(root);
+  validateRunnersStore(store);
+  assert.equal(Object.keys(store.runners).length, 1);
+  const beats = [a.lastHeartbeatAt, b.lastHeartbeatAt];
+  assert.ok(beats.includes(store.runners[runnerId].lastHeartbeatAt));
 });
 
 test('lane:burst on burst-enabled project routes to cloud runner and records completion', async t => {

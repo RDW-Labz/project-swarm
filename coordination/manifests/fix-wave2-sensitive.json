@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "T-0176-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix review findings on tools/cluster-client.mjs (T-0176, follower-side cluster-ledger HTTP client) and tests/cluster-client.test.mjs (read both as context + output). Opus review findings to fix: (1) MEDIUM: clusterLedgerRemoteFetch's fetch call (and the response.text() read) has no timeout/AbortSignal - a stalled/blackholed canonical host hangs the promise forever instead of failing closed. Add an options field (e.g. `timeoutMs`, default a sane value like 15000) and pass `signal: AbortSignal.timeout(timeoutMs)` to fetch; map an AbortError to a thrown error with code 'cluster-request-timeout'. (2) MEDIUM: fetch follows redirects by default and forwards the custom x-swarm-node-id/x-swarm-timestamp/x-swarm-signature headers to the redirect target - a hostile or MITM 3xx response on plain http can steal a valid signed request. Pass `redirect: 'error'` to fetch so any redirect is treated as a hard failure. (3) LOW: clusterCanonicalHost is interpolated into the URL unvalidated (a config value like 'trusted@evil.example' or one containing ':'/'/'/'#' changes the effective destination). Validate the host against a strict hostname/IPv4/bracketed-IPv6 pattern before use, build the URL with `new URL()`, and assert `url.hostname` matches the configured host and `url.pathname` matches the intended pathname before sending the request - throw a clear error (e.g. code 'cluster-host-invalid') otherwise. (4) LOW: readNodeRegistry's raw JSON.parse error for a malformed registry file can propagate an error message containing a content excerpt (potentially secret-adjacent) up through resolveNodeSigningSecret. In resolveNodeSigningSecret (or when reading the registry in this file), catch parse/read errors and rethrow a fixed-message error (code 'cluster-registry-invalid') with no original message or cause attached. (5) LOW: any non-empty string is currently accepted as the signing secret, including weak placeholders like 'changeme'. Require the secret to look like a real random secret (e.g. at least 32 hex or base64url characters) and reject anything else with code 'cluster-node-unregistered'. Add/extend tests in tests/cluster-client.test.mjs for each: a stalled connection (mock a fetch that never resolves, or resolves after an injected delay) times out and throws 'cluster-request-timeout' rather than hanging the test; a mocked 3xx redirect response is rejected rather than followed; a malicious host value (e.g. containing '@' or '/') is rejected before any request is attempted; a malformed registry file's parse error does not leak its raw content in the thrown error message; a short/weak secret value is rejected. Run the test file when done - it must not hang (use fake timers or short injected timeouts, not real multi-second waits).",
+      "context": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs", "tools/cluster-ledger-api.mjs"],
+      "outputs": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "T-0410-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix review findings on tools/queue-commands.mjs's isolated-sandbox claim routing (T-0410) and tests/job-sandbox-route.test.mjs (read both as context + output; also read tests/queue-commands.test.mjs as context to avoid regressing it, do not edit it). Opus review findings to fix: (1) MEDIUM: in the `claim` branch, `claim()` commits the lease BEFORE isolatedGrantSpec/createJobGrant run. If grant creation throws afterward (missing env value, EEXIST, EACCES, disk full), the function returns exitCode 1 but the lease stays held with no grant and no automatic release - the ticket is stranded claimed-but-ungrantable. Fix: compute and validate isolatedGrantSpec (so a missing-env-value failure happens) BEFORE calling claim() when isolation is enabled, so a spec validation failure never touches the lease at all; additionally wrap the createJobGrant call itself in try/catch, and on failure there, release the just-acquired lease (reuse whatever release/rollback path this module or ledger-lease.mjs already exposes for releasing a specific held lease by ticket+holder) before rethrowing/returning the failure, so a grant-creation failure never leaves an orphaned claimed lease. Add a test asserting the lease is released (claimable again) when grant creation fails. (2) LOW: readQueueProject (the new project-config read) now runs unconditionally before claim() for every project, including non-isolated/legacy ones - its dynamic import/readProject call sits outside its own try/catch, so a failure there now aborts even a legacy claim that used to succeed unconditionally. Fix: make a project-read failure fall back to treating the project as non-isolated (legacy) rather than aborting the claim, OR move the project read so it cannot affect the legacy claim path at all. Add a test: a project-config read failure still allows a legacy (non-isolated) claim to succeed exactly as before. Run the test file(s) when done.",
+      "context": ["tools/queue-commands.mjs", "tests/job-sandbox-route.test.mjs", "tests/queue-commands.test.mjs", "tools/job-grants.mjs", "tools/job-sandbox.mjs", "tools/ledger-lease.mjs"],
+      "outputs": ["tools/queue-commands.mjs", "tests/job-sandbox-route.test.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/queue-commands.test.mjs", "tests/split-module.test.mjs"],
+      "ignoreTestsReason": "legacy claim/release behavior stays unchanged; queue-commands.test.mjs kept in context to self-check no regression (don't edit it)"
+    },
+    {
+      "id": "T-0420-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix a review finding on tools/burst-gpu.mjs's startBurstGpu (T-0420) and tests/burst-gpu.test.mjs (read both as context + output). Opus review finding (HIGH severity, confirmed real bug): the sensitivity guard is `if (ticket != null && ticket.sensitive !== false) { refuse }` - when `ticket` is null or undefined, the WHOLE condition short-circuits to false, so the refusal is skipped entirely and provisioning proceeds even though the JSDoc and the ticket's own acceptance criteria say a missing/unknown ticket must be treated as sensitive and refused (only an explicit `ticket.sensitive === false` should allow rental). Fix: change the guard so a null/undefined ticket is refused same as a sensitive one - e.g. `if (ticket == null || ticket.sensitive !== false) { refuse }`. Add tests (there are currently none for this, which is why the bug shipped): startBurstGpu with gates passing and ticket `null`, `undefined`, `{sensitive: null}`, and `{sensitive: 'false'}` (the string, not boolean) are all refused with 'not allowed on rented lane' and the provisioner is called zero times in each case. Run the test file when done.",
+      "context": ["tools/burst-gpu.mjs", "tests/burst-gpu.test.mjs", "tools/burst-gates.mjs"],
+      "outputs": ["tools/burst-gpu.mjs", "tests/burst-gpu.test.mjs"],
+      "timeoutMs": 1200000
+    }
+  ]
+}
