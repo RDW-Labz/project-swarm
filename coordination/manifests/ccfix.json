@@ -1,0 +1,16 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "tests/watch-assets.test.mjs has the test 'tab scripts register under one of the four tab names'. It treats every .js file in tools/watch-assets as a legacy tab script, except an explicit list of non-tab files. The new Command Center scripts (file names starting with cc- such as cc-glitch.js and cc-tour.js, and files starting with command-center-) are not legacy tabs and do not call register(). Update only that test so it also skips files whose names start with cc- or command-center-, with a short comment saying why. Keep every other assertion unchanged and make sure the test still fails for a real tab script that does not register. Do not edit anything else.",
+   "context": ["tests/watch-assets.test.mjs"],
+   "outputs": ["tests/watch-assets.test.mjs"],
+   "timeoutMs": 900000
+  }
+ ]
+}
