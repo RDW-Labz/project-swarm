@@ -156,6 +156,27 @@ test('followerRemoteClusterConfigured follows clusterCanonicalHost', async t => 
   assert.equal(followerRemoteClusterConfigured({ env: blank.env, home: blank.home }), false);
 });
 
+test('AbortSignal.timeout on real fetch rejects with cluster-request-timeout', async t => {
+  const { port, server } = await listenMock(t, () => {
+    // Never call res.end() — stall until the client aborts.
+  });
+
+  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: port });
+  const fullEnv = await seedNodeIdentity(home, env);
+
+  await assert.rejects(
+    () =>
+      clusterLedgerRemoteFetch(CLUSTER_LEDGER_READ_PATH, {
+        env: fullEnv,
+        home,
+        timeoutMs: 50,
+      }),
+    err => err.code === 'cluster-request-timeout',
+  );
+
+  server.closeAllConnections();
+});
+
 test('stalled remote fetch rejects with cluster-request-timeout', async t => {
   const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: 9448 });
   const fullEnv = await seedNodeIdentity(home, env);

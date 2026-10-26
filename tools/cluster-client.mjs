@@ -119,6 +119,7 @@ function requestFailedError(cause) {
 function isAbortError(error) {
   if (!error || typeof error !== 'object') return false;
   if (error.name === 'AbortError') return true;
+  if (error.name === 'TimeoutError') return true;
   if (error.code === 'ABORT_ERR') return true;
   return false;
 }
