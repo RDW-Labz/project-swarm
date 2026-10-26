@@ -24,7 +24,6 @@ import {
 } from './autopilot.mjs';
 import { integrateCheckoutGitState } from './generated-state.mjs';
 import { buildHandlersMap } from './needs-you-triage.mjs';
-import { assertRegularOrMissing, safeWritableDir } from './journal.mjs';
 
 async function defaultGitExec(root, cmd, args, opts) {
   const { execFile } = await import('node:child_process');
@@ -248,73 +247,11 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
 }
 
 /** Dependency bundle for autopilot start-ready (live runs, busy markers, cap, go --scope). */
-const SCOPE_CHILD_ERR_TRIM_ABOVE = 256 * 1024;
-const SCOPE_CHILD_ERR_KEEP_TAIL = 64 * 1024;
-const SCOPE_CHILD_ERR_SNIPPET = 300;
-
-async function trimScopeChildErrLog(filePath) {
-  try {
-    const st = await fsPromises.stat(filePath);
-    if (!st.isFile() || st.size <= SCOPE_CHILD_ERR_TRIM_ABOVE) return;
-    const tailStart = Math.max(0, st.size - SCOPE_CHILD_ERR_KEEP_TAIL);
-    const tailLen = st.size - tailStart;
-    const handle = await fsPromises.open(filePath, 'r');
-    const buf = Buffer.alloc(tailLen);
-    await handle.read(buf, 0, tailLen, tailStart);
-    await handle.close();
-    await fsPromises.writeFile(filePath, buf, { mode: 0o600 });
-  } catch (error) {
-    if (error?.code === 'ENOENT') return;
-    throw error;
-  }
-}
-
-async function readScopeChildErrSnippet(filePath, startOffset) {
-  try {
-    const st = await fsPromises.stat(filePath);
-    if (!st.isFile() || st.size <= startOffset) return '';
-    const len = st.size - startOffset;
-    const handle = await fsPromises.open(filePath, 'r');
-    const buf = Buffer.alloc(len);
-    await handle.read(buf, 0, len, startOffset);
-    await handle.close();
-    const slice = buf.subarray(Math.max(0, buf.length - SCOPE_CHILD_ERR_SNIPPET));
-    return slice.toString('utf8');
-  } catch {
-    return '';
-  }
-}
-
-async function openScopeChildStderrLog(root, {
-  scopeChildStderrPath = null,
-  scopeChildStderrFd = null,
-} = {}) {
-  const dir = await safeWritableDir(root, ['.swarm', 'project']);
-  const filePath = scopeChildStderrPath ?? path.join(dir, 'scope-child.err');
-  await assertRegularOrMissing(filePath);
-  await trimScopeChildErrLog(filePath);
-  let startOffset = 0;
-  try {
-    const st = await fsPromises.stat(filePath);
-    if (st.isFile()) startOffset = st.size;
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  let fd = scopeChildStderrFd;
-  let openedHere = false;
-  if (fd === null || fd === undefined) {
-    fd = fs.openSync(filePath, 'a', 0o600);
-    openedHere = true;
-  }
-  return { filePath, fd, startOffset, openedHere };
-}
-
 export function readyAutopilotDeps(projectRoot, {
   env = process.env,
   memoryAware = true,
   spawnImpl,
   selfPid = process.pid,
-  spawnEarlyExitMs = 1500,
   liveBusyMarkers,
   listLiveRuns,
   checkProjectCap,
@@ -325,9 +262,6 @@ export function readyAutopilotDeps(projectRoot, {
   installRoot = null,
   loadRuns = null,
   listRuns = null,
-  scopeChildStderrPath = null,
-  scopeChildStderrFd = null,
-  openScopeChildStderr = openScopeChildStderrLog,
 } = {}) {
   const runLoader = typeof listRuns === 'function' ? listRuns : loadRuns;
   const rootForMarkers = projectRoot;
@@ -415,23 +349,13 @@ export function readyAutopilotDeps(projectRoot, {
       }
       const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
       if (skipSkeleton) args.push('--skip-skeleton');
-      const childEnv = { ...env, SWARM_AUTOPILOT_PID: String(selfPid) };
-      let stderrLog = null;
       try {
-        stderrLog = await openScopeChildStderr(cwd, {
-          scopeChildStderrPath,
-          scopeChildStderrFd,
-        });
-        const { filePath: stderrFilePath, fd: stderrFd, startOffset, openedHere } = stderrLog;
         const child = spawnImpl(process.execPath, args, {
           detached: true,
-          stdio: ['ignore', 'ignore', stderrFd],
-          env: childEnv,
+          stdio: 'ignore',
+          env: { ...env, SWARM_AUTOPILOT_PID: String(selfPid) },
           cwd,
         });
-        if (openedHere) {
-          try { fs.closeSync(stderrFd); } catch { /* ignore */ }
-        }
         return await new Promise((resolve) => {
           let settled = false;
           const finish = (out) => {
@@ -439,39 +363,15 @@ export function readyAutopilotDeps(projectRoot, {
             settled = true;
             resolve(out);
           };
-          const earlyExitTimer = setTimeout(() => {
+          child.once('error', (error) => finish({ ok: false, result: String(error?.message ?? error) }));
+          // Deliberately detached: the child may outlive autopilot and is guarded by its own busy marker.
+          queueMicrotask(() => {
             if (settled) return;
-            child.unref?.();
-            finish({ ok: true, result: `started go --scope (pid ${child?.pid})` });
-          }, spawnEarlyExitMs);
-          const settleEarlyExit = async (out) => {
-            clearTimeout(earlyExitTimer);
-            finish(out);
-          };
-          child.once('error', (error) => {
-            settleEarlyExit({ ok: false, result: String(error?.message ?? error) });
-          });
-          child.once('exit', (code, signal) => {
-            if (settled) return;
-            void (async () => {
-              const exitFailed = Boolean(signal)
-                || (typeof code === 'number' && code !== 0);
-              if (exitFailed) {
-                const parts = [`exit code ${code ?? 'null'}`];
-                if (signal) parts.push(`signal ${signal}`);
-                const errText = await readScopeChildErrSnippet(stderrFilePath, startOffset);
-                if (errText) parts.push(errText);
-                await settleEarlyExit({ ok: false, result: parts.join(': ') });
-                return;
-              }
-              await settleEarlyExit({ ok: true, result: `started go --scope (pid ${child?.pid})` });
-            })();
+            child.unref();
+            finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
           });
         });
       } catch (error) {
-        if (stderrLog?.openedHere && Number.isInteger(stderrLog.fd)) {
-          try { fs.closeSync(stderrLog.fd); } catch { /* ignore */ }
-        }
         return { ok: false, result: String(error?.message ?? error) };
       }
     },
