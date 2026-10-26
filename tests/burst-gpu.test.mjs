@@ -8,6 +8,7 @@ import {
   gpuFirstTryPassRateFromReplay,
   readyOverFreeSlotsRatio,
 } from '../tools/burst-gates.mjs';
+import { startBurstGpu } from '../tools/burst-gpu.mjs';
 
 function gate(result, name) {
   const row = result.rows.find((r) => r.name === name);
@@ -261,5 +262,115 @@ describe('burst gpu gates', () => {
       { readyTickets: 7, freeSlots: 3 },
     ]);
     assert.equal(days, 3);
+  });
+});
+
+function passingGateInputs(overrides = {}) {
+  return {
+    readyOverFreeDays: 3,
+    flatRateRateLimited: true,
+    gpuFirstTryPassRate: 0.9,
+    ...overrides,
+  };
+}
+
+describe('startBurstGpu', () => {
+  test('ready-over-free-slots FAIL blocks rental and reports gates not met with measured values', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs({ readyOverFreeDays: 2 }),
+      { sensitive: false },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.message, 'gates not met');
+    assert.match(result.lines.join('\n'), /2 consecutive days/);
+    assert.match(result.lines.join('\n'), /FAIL/);
+  });
+
+  test('flat-rate-rate-limited FAIL blocks rental and reports gates not met', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs({ flatRateRateLimited: false }),
+      { sensitive: false },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.message, 'gates not met');
+    assert.match(result.lines.join('\n'), /not all flat-rate lanes limited/);
+  });
+
+  test('gpu-first-try-pass-rate FAIL blocks rental and reports gates not met', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs({ gpuFirstTryPassRate: 0.5 }),
+      { sensitive: false },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.message, 'gates not met');
+    assert.match(result.lines.join('\n'), /50\.0 percent/);
+  });
+
+  test('sensitive ticket is refused on rented lane even when all gates pass', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs(),
+      { sensitive: true },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.message, /not allowed on rented lane/);
+  });
+
+  test('unknown-sensitive ticket is refused even when all gates pass', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs(),
+      { id: 'T-1' },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.message, /not allowed on rented lane/);
+  });
+
+  for (const ticket of [
+    null,
+    undefined,
+    { sensitive: null },
+    { sensitive: 'false' },
+  ]) {
+    test(`missing or non-explicit non-sensitive ticket is refused (${JSON.stringify(ticket)})`, async () => {
+      let calls = 0;
+      const result = await startBurstGpu(
+        passingGateInputs(),
+        ticket,
+        () => { calls += 1; },
+      );
+      assert.equal(calls, 0);
+      assert.equal(result.exitCode, 1);
+      assert.match(result.message, /not allowed on rented lane/);
+    });
+  }
+
+  test('non-sensitive ticket with passing gates invokes provision exactly once', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      passingGateInputs(),
+      { sensitive: false },
+      async () => {
+        calls += 1;
+        return { session: 'ok' };
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.provisionResult, { session: 'ok' });
   });
 });

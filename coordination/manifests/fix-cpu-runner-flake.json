@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "cpu-runner-timing-hardening",
+      "agent": "auto",
+      "prompt": "tests/cpu-runner.test.mjs has a test 'runCpuRunnerJob uses elapsed time, not a fixed duration' that runs a 25ms sleep vs a 120ms sleep and asserts `long.ticketTests.durationMs > short.ticketTests.durationMs + 50`. This flakes when the full ~6500-test suite runs in parallel on one machine (scheduling delay under heavy CPU contention can erase a 95ms margin) even though it passes reliably in isolation - this is a known load-induced flake (backlog goal g-4074b8b0), not a correctness bug in tools/cpu-runner.mjs. Harden the assertion so it stays meaningful under load without becoming flaky: widen the gap between the two sleep durations (e.g. a much shorter sleep like 10ms vs a much longer one like 500ms) and assert a relative/ratio relationship (e.g. long is at least 3x short, or long - short is at least some fraction of the configured gap) rather than a small fixed-ms absolute margin, so normal process-scheduling jitter under load can't flip the comparison. Keep the test's actual intent intact: it must still fail if runCpuRunnerJob reported a fixed/mocked duration instead of real elapsed time. Run the test file at least 3 times to confirm it's stable, and if possible, simulate load by running it concurrently with a CPU-busy background loop for one of the runs to sanity-check it still passes under contention.",
+      "context": ["tests/cpu-runner.test.mjs", "tools/cpu-runner.mjs"],
+      "outputs": ["tests/cpu-runner.test.mjs"],
+      "timeoutMs": 900000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration unaffected by a test-only timing fix"
+    }
+  ]
+}
