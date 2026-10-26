@@ -12,7 +12,13 @@ export function formatLanesStdout(snapshot) {
       const entry = lanes[name];
       const state = entry?.state ?? 'unknown';
       const reason = entry?.reason ?? '';
-      return `${name}\t${state}\t${reason}`;
+      let line = `${name}\t${state}\t${reason}`;
+      if (entry?.probation?.active === true) {
+        const checksOk = entry.probation.checksOk ?? 0;
+        const jobsOk = entry.probation.jobsOk ?? 0;
+        line += `\tprobation\t${checksOk}\t${jobsOk}`;
+      }
+      return line;
     });
   return rows.length ? `${rows.join('\n')}\n` : '(empty)\n';
 }

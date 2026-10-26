@@ -20,6 +20,49 @@ import { renderCockpit } from './cockpit-view.js';
 
 export const CC_INITIAL_STATE = Object.freeze({ view: 'hive' });
 
+const CC_BASE_PATH = '/command-center';
+
+/**
+ * Map a URL pathname to command-center navigation state (deep-link entry).
+ * @param {string} pathname
+ * @returns {CcNavState}
+ */
+export function ccStateFromPath(pathname) {
+  if (typeof pathname !== 'string') return { view: 'hive' };
+  const raw = pathname.trim();
+  if (!raw.startsWith(CC_BASE_PATH)) return { view: 'hive' };
+
+  const suffix = raw.slice(CC_BASE_PATH.length);
+  if (suffix === '' || suffix === '/') return { view: 'hive' };
+
+  const projectMatch = /^\/project\/([^/]+)\/?$/.exec(suffix);
+  if (projectMatch) {
+    const projectId = projectMatch[1];
+    if (typeof projectId === 'string' && projectId.length > 0) {
+      return { view: 'cockpit', projectId };
+    }
+  }
+
+  return { view: 'hive' };
+}
+
+/**
+ * Pathname for a navigation state (inverse of {@link ccStateFromPath} for valid states).
+ * @param {CcNavState | null | undefined} state
+ * @returns {string}
+ */
+export function ccPathFromState(state) {
+  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
+  if (
+    current.view === 'cockpit'
+    && typeof current.projectId === 'string'
+    && current.projectId.length > 0
+  ) {
+    return `${CC_BASE_PATH}/project/${current.projectId}`;
+  }
+  return CC_BASE_PATH;
+}
+
 /**
  * Pure reducer for command-center view transitions.
  * @param {CcNavState | null | undefined} state
