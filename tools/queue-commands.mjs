@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// `swarm queue claim|release`: single-machine lease claim and expired-lease sweep (cluster queue CLI).
+// `swarm queue list|claim|release`: queue listing, lease claim, and expired-lease sweep (cluster queue CLI).
 import path from 'node:path';
 import { claim, release, sweepExpiredLeases } from './ledger-lease.mjs';
 import { getNodeId } from './node-identity.mjs';
@@ -9,8 +9,17 @@ import {
   SWARM_JOB_ID,
 } from './job-grants.mjs';
 import { isProjectIsolationEnabled } from './job-sandbox.mjs';
+import { readLedger } from './tickets.mjs';
+import { burstEnabled, isCloudJob } from './burst-config.mjs';
+import {
+  BURST_LANE_TAG,
+  listQueueJobsForProject,
+  routeBurstTicket,
+  ticketHasBurstLane,
+} from './burst-route.mjs';
 
-const USAGE = 'Usage: swarm queue claim TICKET | swarm queue release --expired\n';
+const USAGE =
+  'Usage: swarm queue list | swarm queue claim TICKET [--runner RUNNER_ID] | swarm queue release --expired\n';
 
 export const JOB_GRANTS_DIR = '.swarm/job-grants';
 
@@ -53,6 +62,55 @@ export async function readQueueProject(root, { project, readProject } = {}) {
   }
 }
 
+/** Map a ledger ticket to a minimal queue row (tags align with ticketHasBurstLane / isCloudJob). */
+export function ticketToQueueJob(ticket) {
+  if (!ticket || typeof ticket.id !== 'string') return null;
+  const tags = Array.isArray(ticket.tags) ? [...ticket.tags] : [];
+  if (ticket.lane === 'burst' && !tags.includes(BURST_LANE_TAG)) {
+    tags.push(BURST_LANE_TAG);
+  }
+  return {
+    id: ticket.id,
+    status: ticket.status,
+    ...(tags.length ? { tags } : {}),
+    ...(ticket.lane === 'burst' ? { lane: 'burst' } : {}),
+  };
+}
+
+export function formatQueueListStdout(jobs) {
+  const rows = (Array.isArray(jobs) ? jobs : [])
+    .filter(Boolean)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map(job => {
+      const burst = isCloudJob(job) ? '\tlane:burst' : '';
+      return `${job.id}\t${job.status}${burst}`;
+    });
+  return rows.length ? `${rows.join('\n')}\n` : '(empty)\n';
+}
+
+function parseClaimArgs(args) {
+  if (args[0] !== 'claim') return { error: true };
+  let ticketId = null;
+  let runnerId = null;
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--runner') {
+      const next = args[i + 1];
+      if (typeof next !== 'string' || next.startsWith('-') || next.length === 0) return { error: true };
+      runnerId = next;
+      i++;
+    } else if (arg.startsWith('-')) {
+      return { error: true };
+    } else if (ticketId === null) {
+      ticketId = arg;
+    } else {
+      return { error: true };
+    }
+  }
+  if (!ticketId) return { error: true };
+  return { ticketId, runnerId };
+}
+
 export async function runQueueCommand(root, args, {
   env = process.env,
   home,
@@ -63,11 +121,33 @@ export async function runQueueCommand(root, args, {
 } = {}) {
   const at = () => (typeof now === 'function' ? now() : now);
   try {
+    if (args[0] === 'list') {
+      if (args.length !== 1) return { stdout: USAGE, exitCode: 1 };
+      const ledger = await readLedger(root);
+      const tickets = ledger?.tickets ?? [];
+      const projectConfig = await readQueueProject(root, { project, readProject });
+      const jobs = tickets.map(ticketToQueueJob).filter(Boolean);
+      const visible = listQueueJobsForProject(jobs, projectConfig);
+      return { stdout: formatQueueListStdout(visible), exitCode: 0 };
+    }
     if (args[0] === 'claim') {
-      if (args.length !== 2 || args[1].startsWith('-')) return { stdout: USAGE, exitCode: 1 };
-      const ticketId = args[1];
+      const parsed = parseClaimArgs(args);
+      if (parsed.error) return { stdout: USAGE, exitCode: 1 };
+      const { ticketId, runnerId } = parsed;
       const holderId = await getNodeId({ env, home: home ?? env.HOME });
       const projectConfig = await readQueueProject(root, { project, readProject });
+      if (burstEnabled(projectConfig)) {
+        const ledger = await readLedger(root);
+        const ticket = ledger?.tickets?.find(t => t.id === ticketId);
+        if (ticket && ticketHasBurstLane(ticket)) {
+          const routed = await routeBurstTicket(root, ticket, projectConfig, {
+            runnerId,
+            now: at(),
+          });
+          const holder = routed.lease.holderId;
+          return { stdout: `claimed ${routed.lease.ticketId} for ${holder}\n`, exitCode: 0 };
+        }
+      }
       let isolatedSpec;
       if (isProjectIsolationEnabled(projectConfig)) {
         isolatedSpec = isolatedGrantSpec(projectConfig, env);
