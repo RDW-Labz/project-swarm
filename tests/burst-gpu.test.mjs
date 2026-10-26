@@ -11,6 +11,7 @@ import {
 import { startBurstGpu } from '../tools/burst-gpu.mjs';
 import {
   createBurstScaler,
+  DEFAULT_START_SUSTAIN_MS,
   IDLE_STOP_MS,
   resolveBurstScalerAction,
 } from '../tools/burst-gpu-scale.mjs';
@@ -268,6 +269,33 @@ describe('burst gpu gates', () => {
     ]);
     assert.equal(days, 3);
   });
+
+  test('all three gates FAIL independently when each threshold is missed at once', () => {
+    const result = computeBurstGpuGates({
+      readyOverFreeDays: 2,
+      flatRateRateLimited: false,
+      gpuFirstTryPassRate: 0.5,
+    });
+    assert.equal(result.pass, false);
+
+    const days = gate(result, 'ready-over-free-slots');
+    assert.equal(days.measured, 2);
+    assert.equal(days.pass, false);
+
+    const flat = gate(result, 'flat-rate-rate-limited');
+    assert.equal(flat.measured, false);
+    assert.equal(flat.pass, false);
+
+    const gpu = gate(result, 'gpu-first-try-pass-rate');
+    assert.equal(gpu.measured, 0.5);
+    assert.equal(gpu.pass, false);
+
+    assert.deepEqual(result.lines, [
+      'gate ready-over-free-slots: 2 consecutive days FAIL',
+      'gate flat-rate-rate-limited: not all flat-rate lanes limited FAIL',
+      'gate gpu-first-try-pass-rate: 50.0 percent FAIL',
+    ]);
+  });
 });
 
 function passingGateInputs(overrides = {}) {
@@ -318,6 +346,27 @@ describe('startBurstGpu', () => {
     assert.equal(result.exitCode, 1);
     assert.equal(result.message, 'gates not met');
     assert.match(result.lines.join('\n'), /50\.0 percent/);
+  });
+
+  test('all three gate FAILs block rental once with gates not met and every measured line', async () => {
+    let calls = 0;
+    const result = await startBurstGpu(
+      {
+        readyOverFreeDays: 1,
+        flatRateRateLimited: false,
+        gpuFirstTryPassRate: 0.5,
+      },
+      { sensitive: false },
+      () => { calls += 1; },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.message, 'gates not met');
+    const text = result.lines.join('\n');
+    assert.match(text, /1 consecutive days FAIL/);
+    assert.match(text, /not all flat-rate lanes limited FAIL/);
+    assert.match(text, /50\.0 percent FAIL/);
+    assert.equal(result.gates.rows.every((r) => r.pass === false), true);
   });
 
   test('sensitive ticket is refused on rented lane even when all gates pass', async () => {
@@ -387,6 +436,97 @@ function longQueueSample(now, running = false) {
 function emptyQueueSample(now, running = true) {
   return { now, readyTickets: 0, freeSlots: 4, running };
 }
+
+describe('burst gpu scaler queue timing', () => {
+  const limitCtx = {
+    billedTodayUsd: 0,
+    hourlyUsd: 1,
+    settings: { machine: { usd: 100, mode: 'stop' } },
+  };
+
+  test('long queue sustains 10 minutes before start, then idle 10 minutes before stop', () => {
+    assert.equal(DEFAULT_START_SUSTAIN_MS, 600_000);
+    assert.equal(IDLE_STOP_MS, 600_000);
+
+    const scaler = createBurstScaler();
+    const t0 = 10_000_000;
+
+    assert.equal(
+      resolveBurstScalerAction(scaler, longQueueSample(t0), limitCtx).action,
+      'none',
+    );
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        longQueueSample(t0 + DEFAULT_START_SUSTAIN_MS - 1),
+        limitCtx,
+      ).action,
+      'none',
+    );
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        longQueueSample(t0 + DEFAULT_START_SUSTAIN_MS),
+        limitCtx,
+      ).action,
+      'start',
+    );
+
+    const afterStart = t0 + DEFAULT_START_SUSTAIN_MS;
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        emptyQueueSample(afterStart, true),
+        { ...limitCtx, billedTodayUsd: 0.1 },
+      ).action,
+      'none',
+    );
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        emptyQueueSample(afterStart + IDLE_STOP_MS - 1, true),
+        { ...limitCtx, billedTodayUsd: 0.1 },
+      ).action,
+      'none',
+    );
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        emptyQueueSample(afterStart + IDLE_STOP_MS, true),
+        { ...limitCtx, billedTodayUsd: 0.1 },
+      ).action,
+      'stop',
+    );
+  });
+
+  test('breaking a long queue resets the start sustain window', () => {
+    const scaler = createBurstScaler();
+    const t0 = 20_000_000;
+    const almost = DEFAULT_START_SUSTAIN_MS - 60_000;
+
+    resolveBurstScalerAction(scaler, longQueueSample(t0), limitCtx);
+    resolveBurstScalerAction(scaler, longQueueSample(t0 + almost), limitCtx);
+    resolveBurstScalerAction(scaler, emptyQueueSample(t0 + almost, false), limitCtx);
+    const restart = t0 + almost + 120_000;
+    resolveBurstScalerAction(scaler, longQueueSample(restart), limitCtx);
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        longQueueSample(restart + DEFAULT_START_SUSTAIN_MS - 1),
+        limitCtx,
+      ).action,
+      'none',
+    );
+    assert.equal(
+      resolveBurstScalerAction(
+        scaler,
+        longQueueSample(restart + DEFAULT_START_SUSTAIN_MS),
+        limitCtx,
+      ).action,
+      'start',
+    );
+  });
+});
 
 describe('burst gpu scaler daily limit', () => {
   const hourlyUsd = 1;
