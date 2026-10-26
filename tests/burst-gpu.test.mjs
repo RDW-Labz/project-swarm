@@ -9,6 +9,11 @@ import {
   readyOverFreeSlotsRatio,
 } from '../tools/burst-gates.mjs';
 import { startBurstGpu } from '../tools/burst-gpu.mjs';
+import {
+  createBurstScaler,
+  IDLE_STOP_MS,
+  resolveBurstScalerAction,
+} from '../tools/burst-gpu-scale.mjs';
 
 function gate(result, name) {
   const row = result.rows.find((r) => r.name === name);
@@ -372,5 +377,101 @@ describe('startBurstGpu', () => {
     assert.equal(result.exitCode, 0);
     assert.equal(result.ok, true);
     assert.deepEqual(result.provisionResult, { session: 'ok' });
+  });
+});
+
+function longQueueSample(now, running = false) {
+  return { now, readyTickets: 10, freeSlots: 2, running };
+}
+
+function emptyQueueSample(now, running = true) {
+  return { now, readyTickets: 0, freeSlots: 4, running };
+}
+
+describe('burst gpu scaler daily limit', () => {
+  const hourlyUsd = 1;
+  const stopSettings = { machine: { usd: 5, mode: 'stop' } };
+  const notifySettings = { machine: { usd: 5, mode: 'notify' } };
+  const ceilingSettings = { machine: { usd: 5, mode: 'notify', ceilingUsd: 6 } };
+
+  test('long-queue start is blocked in stop mode when daily limit would be exceeded', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const t0 = 1_000_000;
+    resolveBurstScalerAction(scaler, longQueueSample(t0), {
+      billedTodayUsd: 4.6,
+      hourlyUsd,
+      settings: stopSettings,
+    });
+    const result = resolveBurstScalerAction(scaler, longQueueSample(t0 + 1), {
+      billedTodayUsd: 4.6,
+      hourlyUsd,
+      settings: stopSettings,
+    });
+    assert.equal(result.action, 'none');
+    assert.equal(result.dailyLimit.allow, false);
+    assert.equal(result.dailyLimit.action, 'stop');
+    assert.match(result.dailyLimit.reason, /Daily spend limit/);
+  });
+
+  test('long-queue start proceeds in notify mode but surfaces limit notice', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const t0 = 2_000_000;
+    resolveBurstScalerAction(scaler, longQueueSample(t0), {
+      billedTodayUsd: 5,
+      hourlyUsd,
+      settings: notifySettings,
+    });
+    const result = resolveBurstScalerAction(scaler, longQueueSample(t0 + 1), {
+      billedTodayUsd: 5,
+      hourlyUsd,
+      settings: notifySettings,
+    });
+    assert.equal(result.action, 'start');
+    assert.equal(result.dailyLimit.allow, true);
+    assert.ok(result.dailyLimit.notify.length > 0);
+  });
+
+  test('hard ceiling stops a running worker before idle-queue timer', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const t0 = 3_000_000;
+    const running = { now: t0, readyTickets: 8, freeSlots: 2, running: true };
+    const result = resolveBurstScalerAction(scaler, running, {
+      billedTodayUsd: 5.5,
+      hourlyUsd,
+      settings: ceilingSettings,
+    });
+    assert.equal(result.action, 'stop');
+    assert.equal(result.dailyLimit.ceilingHit, true);
+    assert.match(result.dailyLimit.reason, /hard ceiling/);
+  });
+
+  test('start and idle stop under daily limit match createBurstScaler alone', () => {
+    const opts = { startSustainMs: 0, idleStopMs: 100 };
+    const plain = createBurstScaler(opts);
+    const limited = createBurstScaler(opts);
+    const t0 = 4_000_000;
+    const limitCtx = { billedTodayUsd: 0, hourlyUsd, settings: stopSettings };
+
+    const plainStart = plain.update(longQueueSample(t0));
+    const limitedStart = resolveBurstScalerAction(limited, longQueueSample(t0), limitCtx);
+    assert.equal(plainStart, 'start');
+    assert.equal(limitedStart.action, 'start');
+    assert.equal(limitedStart.dailyLimit.allow, true);
+
+    const t1 = t0 + 50;
+    assert.equal(plain.update(emptyQueueSample(t1, true)), 'none');
+    assert.equal(
+      resolveBurstScalerAction(limited, emptyQueueSample(t1, true), { ...limitCtx, billedTodayUsd: 0.5 }).action,
+      'none',
+    );
+    const t2 = t1 + 100;
+    const plainStop = plain.update(emptyQueueSample(t2, true));
+    const limitedStop = resolveBurstScalerAction(limited, emptyQueueSample(t2, true), {
+      ...limitCtx,
+      billedTodayUsd: 0.5,
+    });
+    assert.equal(plainStop, 'stop');
+    assert.equal(limitedStop.action, 'stop');
+    assert.equal(limitedStop.dailyLimit, null);
   });
 });

@@ -1,6 +1,8 @@
 // Burst GPU worker scaling decisions for ticket T-0280.
 // Pure logic only: the caller supplies samples and performs the actual start or stop.
 
+import { evaluateDailyLimit } from './daily-limit.mjs';
+
 export const IDLE_STOP_MS = 10 * 60 * 1000;
 export const DEFAULT_START_SUSTAIN_MS = 10 * 60 * 1000;
 
@@ -58,4 +60,43 @@ export function createBurstScaler(options = {}) {
       return 'none';
     },
   };
+}
+
+// Applies machine daily-limit checks to createBurstScaler decisions.
+// reserveUsd uses one hour of GPU cost (same convention as hourly rental exposure).
+export function resolveBurstScalerAction(scaler, sample, limitContext) {
+  const base = scaler.update(sample);
+  const {
+    billedTodayUsd = 0,
+    hourlyUsd,
+    settings = {},
+    notifiedLevels = [],
+  } = limitContext ?? {};
+  assertFiniteNumber('hourlyUsd', hourlyUsd);
+
+  const evaluate = (reserveUsd) => evaluateDailyLimit({
+    settings,
+    billedTodayUsd,
+    reserveUsd,
+    lane: 'rented',
+    now: sample.now,
+    notifiedLevels,
+  });
+
+  if (sample.running) {
+    const dailyLimit = evaluate(hourlyUsd);
+    if (dailyLimit.ceilingHit) {
+      return { action: 'stop', dailyLimit };
+    }
+  }
+
+  if (base === 'start') {
+    const dailyLimit = evaluate(hourlyUsd);
+    if (!dailyLimit.allow) {
+      return { action: 'none', dailyLimit };
+    }
+    return { action: 'start', dailyLimit };
+  }
+
+  return { action: base, dailyLimit: null };
 }
