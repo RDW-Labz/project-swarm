@@ -472,6 +472,66 @@ describe('burst gpu scaler daily limit', () => {
     });
     assert.equal(plainStop, 'stop');
     assert.equal(limitedStop.action, 'stop');
-    assert.equal(limitedStop.dailyLimit, null);
+    assert.equal(limitedStop.dailyLimit.allow, true);
+  });
+
+  test('negative hourlyUsd throws instead of allowing a start', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const t0 = 5_000_000;
+    resolveBurstScalerAction(scaler, longQueueSample(t0), {
+      billedTodayUsd: 4.6,
+      hourlyUsd,
+      settings: stopSettings,
+    });
+    assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(t0 + 1), {
+        billedTodayUsd: 4.6,
+        hourlyUsd: -1,
+        settings: stopSettings,
+      }),
+      /hourlyUsd must be a finite number/,
+    );
+  });
+
+  test('invalid billedTodayUsd throws instead of coercing to zero', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const ctx = { hourlyUsd, settings: stopSettings };
+    assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(6_000_000), {
+        ...ctx,
+        billedTodayUsd: '4.6',
+      }),
+      /billedTodayUsd must be a finite number/,
+    );
+    assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(6_000_001), {
+        ...ctx,
+        billedTodayUsd: -0.01,
+      }),
+      /billedTodayUsd must be a finite number/,
+    );
+    assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(6_000_002), {
+        ...ctx,
+        billedTodayUsd: Number.NaN,
+      }),
+      /billedTodayUsd must be a finite number/,
+    );
+  });
+
+  test('running worker in notify mode returns dailyLimit with notify below hard ceiling', () => {
+    const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
+    const t0 = 7_000_000;
+    const running = { now: t0, readyTickets: 8, freeSlots: 2, running: true };
+    const result = resolveBurstScalerAction(scaler, running, {
+      billedTodayUsd: 5,
+      hourlyUsd,
+      settings: notifySettings,
+      notifiedLevels: [],
+    });
+    assert.equal(result.action, 'none');
+    assert.ok(result.dailyLimit);
+    assert.equal(result.dailyLimit.allow, true);
+    assert.ok(result.dailyLimit.notify.length > 0);
   });
 });

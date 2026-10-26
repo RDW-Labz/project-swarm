@@ -12,6 +12,18 @@ function assertFiniteNumber(name, value) {
   }
 }
 
+function assertPositiveFiniteNumber(name, value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`${name} must be a finite number`);
+  }
+}
+
+function assertNonNegativeFiniteNumber(name, value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new TypeError(`${name} must be a finite number`);
+  }
+}
+
 // The queue is long when ready tickets exceed free slots across the Macs.
 export function isQueueLong(sample) {
   return sample.readyTickets > sample.freeSlots;
@@ -64,6 +76,11 @@ export function createBurstScaler(options = {}) {
 
 // Applies machine daily-limit checks to createBurstScaler decisions.
 // reserveUsd uses one hour of GPU cost (same convention as hourly rental exposure).
+//
+// Contract: billedTodayUsd must include any in-progress unbilled rental cost the caller
+// already knows about. A returned 'start' commits one hour of hourlyUsd exposure. Re-run
+// this function with fresh inputs before each actual start; do not reuse one result for
+// multiple starts.
 export function resolveBurstScalerAction(scaler, sample, limitContext) {
   const base = scaler.update(sample);
   const {
@@ -72,7 +89,8 @@ export function resolveBurstScalerAction(scaler, sample, limitContext) {
     settings = {},
     notifiedLevels = [],
   } = limitContext ?? {};
-  assertFiniteNumber('hourlyUsd', hourlyUsd);
+  assertNonNegativeFiniteNumber('billedTodayUsd', billedTodayUsd);
+  assertPositiveFiniteNumber('hourlyUsd', hourlyUsd);
 
   const evaluate = (reserveUsd) => evaluateDailyLimit({
     settings,
@@ -83,10 +101,11 @@ export function resolveBurstScalerAction(scaler, sample, limitContext) {
     notifiedLevels,
   });
 
+  let runningDailyLimit = null;
   if (sample.running) {
-    const dailyLimit = evaluate(hourlyUsd);
-    if (dailyLimit.ceilingHit) {
-      return { action: 'stop', dailyLimit };
+    runningDailyLimit = evaluate(hourlyUsd);
+    if (runningDailyLimit.ceilingHit) {
+      return { action: 'stop', dailyLimit: runningDailyLimit };
     }
   }
 
@@ -96,6 +115,10 @@ export function resolveBurstScalerAction(scaler, sample, limitContext) {
       return { action: 'none', dailyLimit };
     }
     return { action: 'start', dailyLimit };
+  }
+
+  if (sample.running) {
+    return { action: base, dailyLimit: runningDailyLimit };
   }
 
   return { action: base, dailyLimit: null };
