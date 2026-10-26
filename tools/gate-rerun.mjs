@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Re-run only failing gate-check tests with bounded, redacted output.
 import { spawn as defaultSpawn } from 'node:child_process';
+import path from 'node:path';
 
 const MAX_FAILED = 50;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -12,6 +13,8 @@ const SHELL_BINS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe
 const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT)$/i;
 const BEARER_RE = /Bearer\s+[A-Za-z0-9._~+/=-]+/g;
 const SK_RE = /sk-[A-Za-z0-9_-]{8,}/g;
+const PYTEST_ID_RE = /^[\w./-]+\.py(?:::\S.*)?$/;
+const SHORT_SUMMARY_HEADER_RE = /^={3,}\s*short test summary info\s*={3,}\s*$/i;
 
 function basename(cmd) {
   const part = String(cmd ?? '').split(/[/\\]/).pop() ?? '';
@@ -31,15 +34,41 @@ function resolveKind(kind, output) {
   return 'pytest';
 }
 
+function isValidPytestId(id) {
+  const s = String(id ?? '').trim();
+  if (!s || s.startsWith('-')) return false;
+  if (s.includes('..')) return false;
+  if (path.isAbsolute(s)) return false;
+  return PYTEST_ID_RE.test(s);
+}
+
+function shortTestSummaryLines(output) {
+  const lines = String(output ?? '').split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (SHORT_SUMMARY_HEADER_RE.test(lines[i])) {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  const section = [];
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^={3,}/.test(line)) break;
+    section.push(line);
+  }
+  return section;
+}
+
 function parsePytestFailures(output) {
   const out = [];
   const seen = new Set();
-  for (const line of String(output ?? '').split('\n')) {
-    const trimmed = line.trimStart();
-    if (!trimmed.startsWith('FAILED ') && !trimmed.startsWith('ERROR ')) continue;
-    const dash = trimmed.indexOf(' - ');
-    const id = (dash === -1 ? trimmed.replace(/^(FAILED|ERROR)\s+/, '') : trimmed.slice(0, dash).replace(/^(FAILED|ERROR)\s+/, '')).trim();
-    if (!id || seen.has(id)) continue;
+  for (const line of shortTestSummaryLines(output)) {
+    if (!line.startsWith('FAILED ') && !line.startsWith('ERROR ')) continue;
+    const dash = line.indexOf(' - ');
+    const id = (dash === -1 ? line.replace(/^(FAILED|ERROR)\s+/, '') : line.slice(0, dash).replace(/^(FAILED|ERROR)\s+/, '')).trim();
+    if (!isValidPytestId(id) || seen.has(id)) continue;
     seen.add(id);
     out.push({ id });
     if (out.length >= MAX_FAILED) break;
@@ -47,21 +76,36 @@ function parsePytestFailures(output) {
   return out;
 }
 
-function fileFromLocationLine(line) {
+function looksLikeTestFile(file) {
+  if (!file || file.startsWith('-')) return false;
+  return /\.test\.(mjs|cjs|js|ts)$/i.test(file);
+}
+
+function isSafeRelativeTestFile(file, cwd = process.cwd()) {
+  if (!looksLikeTestFile(file)) return false;
+  if (path.isAbsolute(file)) return false;
+  if (file.includes('..')) return false;
+  const resolved = path.resolve(cwd, file);
+  const root = path.resolve(cwd);
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  return resolved === root || resolved.startsWith(prefix);
+}
+
+function fileFromLocationLine(line, cwd = process.cwd()) {
   const location = /^\s*location:\s*(.+)$/i.exec(line)?.[1]?.trim();
   if (location) {
     const file = location.split(':')[0]?.trim();
-    if (file) return file;
+    if (file && isSafeRelativeTestFile(file, cwd)) return file;
   }
   const testAt = /^\s*test at\s+(.+)$/i.exec(line)?.[1]?.trim();
   if (testAt) {
     const file = testAt.split(':')[0]?.trim();
-    if (file) return file;
+    if (file && isSafeRelativeTestFile(file, cwd)) return file;
   }
   return undefined;
 }
 
-function parseNodeTestFailures(output) {
+function parseNodeTestFailures(output, cwd = process.cwd()) {
   const lines = String(output ?? '').replace(/\r\n/g, '\n').split('\n');
   const out = [];
   const seen = new Set();
@@ -73,7 +117,7 @@ function parseNodeTestFailures(output) {
     let file;
     for (let j = i + 1; j < Math.min(lines.length, i + 12); j++) {
       if (/^\s*not ok \d+ - /.test(lines[j])) break;
-      const fromLine = fileFromLocationLine(lines[j]);
+      const fromLine = fileFromLocationLine(lines[j], cwd);
       if (fromLine) {
         file = fromLine;
         break;
@@ -139,7 +183,7 @@ function isPytestTailArg(arg) {
 }
 
 function pytestIds(failed) {
-  return [...new Set(normalizeFailed(failed).map(entry => entry.id))];
+  return [...new Set(normalizeFailed(failed).map(entry => entry.id).filter(isValidPytestId))];
 }
 
 function buildPytestRerunArgv(argv, failed) {
@@ -150,23 +194,34 @@ function buildPytestRerunArgv(argv, failed) {
   if (!ids.length) return null;
   const prefix = argv.slice(0, pytestAt + 1);
   const tail = argv.slice(pytestAt + 1).filter(arg => !isPytestTailArg(arg));
-  return [...prefix, ...tail, '-rA', '-p', 'no:cacheprovider', ...ids];
+  return [...prefix, ...tail, '-rA', '-p', 'no:cacheprovider', '--', ...ids];
 }
 
 function isNodeTestFileArg(arg) {
   if (arg === '{affected}') return true;
-  if (arg.startsWith('-')) return false;
-  if (/\.test\.(mjs|cjs|js|ts)$/i.test(arg)) return true;
-  if (arg.startsWith('./tests/') || arg.startsWith('tests/')) return true;
-  if (arg.startsWith('./') && arg.includes('.')) return true;
+  return looksLikeTestFile(arg);
+}
+
+const NODE_ARG_CONSUMES_NEXT = new Set([
+  '--import',
+  '--require',
+  '-r',
+  '--loader',
+  '--test-reporter',
+  '--test-reporter-destination',
+]);
+
+function nodeArgConsumesNext(arg) {
+  if (NODE_ARG_CONSUMES_NEXT.has(arg)) return true;
+  if (arg === '--test-name-pattern') return true;
   return false;
 }
 
 function escapeRegExp(text) {
-  return String(text).replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function buildNodeTestRerunArgv(argv, failed) {
+function buildNodeTestRerunArgv(argv, failed, cwd = process.cwd()) {
   if (isUnsafeShellArgv(argv)) return null;
   const testIndex = argv.indexOf('--test');
   if (testIndex < 0) return null;
@@ -174,13 +229,14 @@ function buildNodeTestRerunArgv(argv, failed) {
   if (!entries.length) return null;
   const names = [...new Set(entries.map(entry => entry.name))];
   const files = [...new Set([
-    ...entries.map(entry => entry.file).filter(Boolean),
-    ...argv.filter(isNodeTestFileArg),
+    ...entries.map(entry => entry.file).filter(file => file && isSafeRelativeTestFile(file, cwd)),
+    ...argv.filter(arg => isNodeTestFileArg(arg) && arg !== '{affected}' && isSafeRelativeTestFile(arg, cwd)),
   ])];
   if (!files.length) return null;
   const kept = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === '{affected}') continue;
     if (isNodeTestFileArg(arg)) continue;
     if (arg.startsWith('--test-name-pattern=')) continue;
     if (arg === '--test-name-pattern') {
@@ -188,12 +244,16 @@ function buildNodeTestRerunArgv(argv, failed) {
       continue;
     }
     kept.push(arg);
+    if (nodeArgConsumesNext(arg) && i + 1 < argv.length) {
+      kept.push(argv[i + 1]);
+      i += 1;
+    }
   }
-  const patterns = names.map(name => `--test-name-pattern=${escapeRegExp(name)}`);
+  const patterns = names.map(name => `--test-name-pattern=^${escapeRegExp(name)}$`);
   return [...kept, ...patterns, ...files];
 }
 
-export function buildRerunArgv(argv, failed, kind = 'auto') {
+export function buildRerunArgv(argv, failed, kind = 'auto', cwd = process.cwd()) {
   const list = normalizeFailed(failed);
   if (!list.length) return null;
   let resolved = kind;
@@ -203,7 +263,7 @@ export function buildRerunArgv(argv, failed, kind = 'auto') {
     else return null;
   }
   if (resolved === 'pytest') return buildPytestRerunArgv(argv, list);
-  if (resolved === 'node-test') return buildNodeTestRerunArgv(argv, list);
+  if (resolved === 'node-test') return buildNodeTestRerunArgv(argv, list, cwd);
   return null;
 }
 
@@ -253,7 +313,7 @@ export async function rerunFailed({
   spawnImpl = defaultSpawn,
   maxBytes = DEFAULT_MAX_BYTES,
 } = {}) {
-  const rerunArgv = buildRerunArgv(argv, failed, kind);
+  const rerunArgv = buildRerunArgv(argv, failed, kind, cwd ?? process.cwd());
   if (!rerunArgv) {
     return {
       ok: false,

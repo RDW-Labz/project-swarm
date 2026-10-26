@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { test } from 'node:test';
 import {
   parseFailedTests,
@@ -8,20 +9,40 @@ import {
   redactRerunTail,
 } from '../tools/gate-rerun.mjs';
 
+const SUMMARY_LINE = '=========================== short test summary info ===========================';
+
 const PYTEST_OUT = [
+  'some earlier failure noise',
+  SUMMARY_LINE,
   'FAILED tests/test_wheel.py::test_one - AssertionError',
   'ERROR tests/test_wheel.py::test_two - boom',
   'FAILED tests/test_wheel.py::test_three',
-  '2 failed',
+  '============================== 2 failed in 0.1s ==============================',
 ].join('\n');
 
-test('parseFailedTests reads pytest FAILED and ERROR lines', () => {
+test('parseFailedTests reads pytest FAILED and ERROR lines from short summary only', () => {
   const got = parseFailedTests(PYTEST_OUT, 'pytest');
   assert.deepEqual(got.map(entry => entry.id), [
     'tests/test_wheel.py::test_one',
     'tests/test_wheel.py::test_two',
     'tests/test_wheel.py::test_three',
   ]);
+  const noSummary = [
+    'FAILED tests/ignored.py::test_x - AssertionError',
+  ].join('\n');
+  assert.deepEqual(parseFailedTests(noSummary, 'pytest'), []);
+});
+
+test('parseFailedTests rejects unsafe pytest ids in short summary', () => {
+  const out = [
+    SUMMARY_LINE,
+    'FAILED -evil.py::test_x - x',
+    'FAILED ../escape.py::test_y - x',
+    'FAILED /abs/test_z.py::test_z - x',
+    'FAILED tests/../other.py::test_w - x',
+    'FAILED tests/ok.py::test_ok - x',
+  ].join('\n');
+  assert.deepEqual(parseFailedTests(out, 'pytest').map(e => e.id), ['tests/ok.py::test_ok']);
 });
 
 test('parseFailedTests reads node:test TAP with location', () => {
@@ -38,22 +59,57 @@ test('parseFailedTests reads node:test TAP with location', () => {
   ]);
 });
 
+test('parseFailedTests rejects unsafe node:test file paths', () => {
+  const out = [
+    'not ok 1 - bad path',
+    '  location: -evil.test.mjs:1:1',
+    'not ok 2 - parent escape',
+    '  test at tests/../outside.test.mjs:1:1',
+    'not ok 3 - absolute',
+    `  location: ${path.resolve('tests/abs.test.mjs')}:1:1`,
+    'not ok 4 - not a test file',
+    '  location: tests/_isolate-config.mjs:1:1',
+    'not ok 5 - good',
+    '  location: tests/safe.test.mjs:2:3',
+  ].join('\n');
+  const got = parseFailedTests(out, 'node-test');
+  for (const entry of got) {
+    if (!entry.file) continue;
+    assert.ok(!entry.file.startsWith('-'));
+    assert.ok(!entry.file.includes('..'));
+    assert.ok(!path.isAbsolute(entry.file));
+    assert.match(entry.file, /\.test\.(mjs|cjs|js|ts)$/i);
+  }
+  assert.deepEqual(
+    got.filter(entry => entry.file),
+    [{ id: 'tests/safe.test.mjs::good', name: 'good', file: 'tests/safe.test.mjs' }],
+  );
+});
+
 test('parseFailedTests auto detects pytest vs node:test', () => {
   assert.equal(parseFailedTests(PYTEST_OUT, 'auto')[0].id, 'tests/test_wheel.py::test_one');
   assert.equal(parseFailedTests('not ok 1 - only name', 'auto')[0].name, 'only name');
 });
 
 test('parseFailedTests caps at fifty ids', () => {
-  const lines = [];
+  const lines = [SUMMARY_LINE];
   for (let i = 0; i < 60; i++) lines.push(`FAILED tests/t.py::test_${i} - x`);
   assert.equal(parseFailedTests(lines.join('\n'), 'pytest').length, 50);
 });
 
-test('buildRerunArgv builds pytest rerun argv', () => {
+test('buildRerunArgv builds pytest rerun argv with -- before ids', () => {
   const argv = ['python3', '-m', 'pytest', '-q', 'tests/', '{affected}', '--maxfail=1'];
   const failed = ['tests/a.py::test_x'];
   assert.deepEqual(buildRerunArgv(argv, failed, 'pytest'), [
-    'python3', '-m', 'pytest', '--maxfail=1', '-rA', '-p', 'no:cacheprovider', 'tests/a.py::test_x',
+    'python3', '-m', 'pytest', '--maxfail=1', '-rA', '-p', 'no:cacheprovider', '--', 'tests/a.py::test_x',
+  ]);
+});
+
+test('buildRerunArgv filters unsafe pytest ids from failed list', () => {
+  const argv = ['pytest'];
+  const failed = ['-evil.py::t', 'tests/../x.py::t', 'tests/good.py::t'];
+  assert.deepEqual(buildRerunArgv(argv, failed, 'pytest'), [
+    'pytest', '-rA', '-p', 'no:cacheprovider', '--', 'tests/good.py::t',
   ]);
 });
 
@@ -73,11 +129,38 @@ test('buildRerunArgv builds node:test rerun argv', () => {
   ];
   const got = buildRerunArgv(argv, failed, 'node-test');
   assert.ok(got.includes('--test'));
-  assert.ok(got.includes('--test-name-pattern=alpha'));
-  assert.ok(got.includes('--test-name-pattern=beta'));
+  assert.ok(got.includes('--test-name-pattern=^alpha$'));
+  assert.ok(got.includes('--test-name-pattern=^beta$'));
   assert.ok(got.includes('tests/a.test.mjs'));
   assert.ok(got.includes('tests/b.test.mjs'));
+  assert.ok(got.includes('./tests/_isolate-config.mjs'));
   assert.equal(got.filter(a => a === 'tests/a.test.mjs').length, 1);
+});
+
+test('buildRerunArgv preserves --import and drops placeholder for node:test', () => {
+  const argv = [
+    'node',
+    '--import',
+    './tests/_isolate-config.mjs',
+    '--test',
+    '{affected}',
+  ];
+  const failed = [{ id: 'tests/x.test.mjs::case', name: 'case', file: 'tests/x.test.mjs' }];
+  assert.deepEqual(buildRerunArgv(argv, failed, 'node-test'), [
+    'node',
+    '--import',
+    './tests/_isolate-config.mjs',
+    '--test',
+    '--test-name-pattern=^case$',
+    'tests/x.test.mjs',
+  ]);
+});
+
+test('buildRerunArgv anchors regex metacharacters in test name patterns', () => {
+  const argv = ['node', '--test', 'tests/a.test.mjs'];
+  const failed = [{ id: 'tests/a.test.mjs::a*b', name: 'a*b', file: 'tests/a.test.mjs' }];
+  const got = buildRerunArgv(argv, failed, 'node-test');
+  assert.ok(got.includes('--test-name-pattern=^a\\*b$'));
 });
 
 test('buildRerunArgv returns null for unsafe argv', () => {
