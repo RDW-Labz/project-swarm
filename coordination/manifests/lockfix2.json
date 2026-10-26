@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockfix2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus review findings on the autopilot lock change already in this branch (tools/autopilot-lock.mjs and tools/autopilot-ready-deps.mjs); fix them without changing anything else. (1) HIGH: in tools/autopilot-ready-deps.mjs the spawned detached go --scope child gets stdio ['ignore','ignore','pipe'] and the parent destroys its end of the pipe after the early-exit window or when autopilot exits, so any later stderr write by the long-running child can fail and crash it. Do not give a detached long-lived child a pipe. Instead open an append-mode log file for the child's stderr inside the project's .swarm/project folder (name scope-child.err, opened with the existing safe file helpers or fs.openSync with flags 'a' and mode 0o600, refusing a symlink, trimmed to its last 64 KB when it is larger than 256 KB before opening), pass its file descriptor as the child's stderr in stdio, close the parent's descriptor right after spawn, and on an early exit within the window read the last 300 bytes the child wrote during this run (record the file size before spawn and read from that offset) into the result text. No pipes, no data listeners. The fd and file path must be injectable for tests (default real files). (2) MED: build the early-exit result after the 'exit' event by reading that file offset (no stream drain race). (3) MED: keep the timer handle for the early-exit window, call unref on it and clearTimeout when exit or error settles first. (4) LOW: in tools/autopilot-lock.mjs apply the name must be autopilot check to an explicitly passed allowOwnerPid too, so the parent-lock allowance never applies to other lock names. Update tests/autopilot-lock-parent.test.mjs and tests/autopilot-ready-deps.test.mjs (they already exist in this branch) so they cover: stderr goes to a file descriptor and never a pipe, early exit reports the child's last bytes, timer is cleared, explicit allowOwnerPid ignored for non-autopilot names. Keep every other existing test passing.",
+   "context": [
+    "tools/autopilot-lock.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-lock-parent.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-lock.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-lock-parent.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
