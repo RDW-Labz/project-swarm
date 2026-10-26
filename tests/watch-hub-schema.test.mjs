@@ -90,3 +90,49 @@ test('empty entries directory returns no entries and no errors', async () => {
   assert.deepEqual(entries, []);
   assert.deepEqual(errors, []);
 });
+
+function loadEntrySchema() {
+  return JSON.parse(fs.readFileSync(watchHubEntrySchemaPath, 'utf8'));
+}
+
+function minimalValidEntry(schema) {
+  const entry = {};
+  for (const key of schema.required) {
+    if (key === 'at') entry[key] = '2024-06-01T12:00:00.000Z';
+    else entry[key] = `sample-${key}`;
+  }
+  return entry;
+}
+
+test('object with schema-required fields validates against entry-schema.json via validateWatchHubEntry', () => {
+  const schema = loadEntrySchema();
+  const entry = minimalValidEntry(schema);
+  const check = validateWatchHubEntry(entry);
+  assert.equal(check.ok, true, check.errors.join('; '));
+});
+
+test('object missing a schema-required field fails validation without throwing', () => {
+  const schema = loadEntrySchema();
+  const entry = minimalValidEntry(schema);
+  const missingKey = schema.required[0];
+  delete entry[missingKey];
+  const check = validateWatchHubEntry(entry);
+  assert.equal(check.ok, false);
+  assert.ok(
+    check.errors.some((message) => message.toLowerCase().includes(missingKey)),
+    check.errors.join('; '),
+  );
+});
+
+test('object with wrong property type per entry-schema.json fails validation without throwing', () => {
+  loadEntrySchema();
+  const entry = {
+    id: 'typed-check',
+    title: 'Type check',
+    at: '2024-06-01T12:00:00.000Z',
+    tags: 'not-an-array',
+  };
+  const check = validateWatchHubEntry(entry);
+  assert.equal(check.ok, false);
+  assert.match(check.errors.join('; '), /tags/i);
+});
