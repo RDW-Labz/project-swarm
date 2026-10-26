@@ -1616,13 +1616,6 @@ const omNodeRunsInstallSwarm = args => {
   } catch { return false; }
 };
 
-const OM_SWARM_ALLOWED_TOP = new Set([
-  'status', 'brief', 'board', 'watch', 'jobs', 'tickets', 'run', 'integrate', 'merge', 'update', 'note',
-  'version', 'doctor', 'rollup', 'scope', 'msg', 'diagnose', 'go', 'change', 'handbuild', 'ticket', 'ask',
-  'decision', 'handoff', 'lesson', 'backlog', 'time', 'decide',
-]);
-const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
-
 const omSwarmRootValueOk = (raw, ctx) => {
   if (!ctx?.root || raw === undefined) return false;
   let p = String(raw);
@@ -1633,8 +1626,6 @@ const omSwarmRootValueOk = (raw, ctx) => {
     return real === want;
   } catch { return false; }
 };
-
-const OM_SWARM_RUN_FLAGS = new Set(['--lane', '--ticket', '--job', '--run', '--worktree', '--yes', '--no', '--dry-run', '--json', '--quiet', '-q', '-j']);
 
 const omSwarmArgsAfterGlobals = (args, ctx) => {
   let i = 0;
@@ -1657,58 +1648,6 @@ const omSwarmArgsAfterGlobals = (args, ctx) => {
     break;
   }
   return { ok: true, i, sub: (args[i] ?? '').toLowerCase(), rest: args.slice(i + 1) };
-};
-
-const omSwarmScopeReadOnly = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === '--yes' || a.startsWith('--yes='))) return false;
-  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
-  if (!verb || ['show', 'list', 'status', 'read', 'check', 'help'].includes(verb)) return true;
-  return false;
-};
-
-const omSwarmRunIntegrateFlagsOk = rest => {
-  let i = 0;
-  while (i < rest.length) {
-    const a = String(rest[i]);
-    const low = a.toLowerCase();
-    const eq = low.indexOf('=');
-    const name = eq === -1 ? low : low.slice(0, eq);
-    if (OM_SWARM_RUN_FLAGS.has(name) || OM_SWARM_RUN_FLAGS.has(a)) {
-      if (eq === -1 && (a === '--lane' || a === '--ticket' || a === '--job' || a === '--run' || a === '--worktree')) {
-        if (i + 1 >= rest.length) return false;
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-    if (a.startsWith('-')) return false;
-    i += 1;
-  }
-  return true;
-};
-
-const omSwarmDecideReadOnly = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === '--yes' || a.startsWith('--yes='))) return false;
-  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
-  if (!verb) return true;
-  return ['show', 'list', 'status', 'read', 'check', 'help'].includes(verb);
-};
-
-const omSwarmRunLikeAllowed = (sub, rest) => {
-  if (!['run', 'integrate', 'merge', 'update', 'go'].includes(sub)) return true;
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (sub === 'merge') return lower.length === 1 && /^\d+$/.test(lower[0]);
-  if (sub === 'update') return lower.length === 0;
-  if (sub === 'go') return lower.length === 0 || (lower.length === 1 && !lower[0].startsWith('-'));
-  if (sub === 'run' || sub === 'integrate') {
-    const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
-    if (!pos.every(a => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a))) return false;
-    return omSwarmRunIntegrateFlagsOk(rest);
-  }
-  return false;
 };
 
 const omSwarmSubcommandAllowed = (args, ctx) => {

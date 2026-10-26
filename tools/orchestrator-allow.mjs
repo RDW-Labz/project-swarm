@@ -5,6 +5,14 @@ import path from 'node:path';
 
 export const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
 
+export const OM_SWARM_ALLOWED_TOP = new Set([
+  'status', 'brief', 'board', 'watch', 'jobs', 'tickets', 'run', 'integrate', 'merge', 'update', 'note',
+  'version', 'doctor', 'rollup', 'scope', 'msg', 'diagnose', 'go', 'change', 'handbuild', 'ticket', 'ask',
+  'decision', 'handoff', 'lesson', 'backlog', 'time', 'decide',
+  'resume', 'cancel', 'inbox', 'queue', 'think', 'digest', 'validate', 'preflight', 'history', 'usage',
+  'budget', 'budgets', 'lanes', 'projects', 'orphans',
+]);
+
 const HANDBUILD_OWNER_VERBS = new Set(['approve', 'deny', 'on', 'off', 'install', 'uninstall']);
 const SWARM_HANDBUILD_FILE_OPS = new Set(['request', 'status', 'show', 'list', 'log', 'check', 'help']);
 
@@ -50,39 +58,77 @@ const DECIDE_READONLY_VERBS = new Set(['show', 'list', 'status', 'read', 'check'
 
 export const OM_SWARM_RUN_FLAGS = new Set([
   '--lane', '--ticket', '--job', '--run', '--worktree', '--no', '--dry-run', '--json', '--quiet', '-q', '-j',
-  '--queue', '--no-checks', '--no-commit', '--jobs', '--skip-skeleton', '--scope', '--max-jobs',
-  '--wave', '--max-waves', '--allow-main-branch', '--leads', '--concurrency', '--max-usd', '--max-tokens',
-  '--commit-message', '--repo', '--pr', '--require-section', '--mutants', '--merge-method', '--timeout',
-  '--tag-timeout', '--no-flake-check', '--no-watch', '--exempt', '--plan', '--accept-stale', '--batch',
-  '--adaptive', '--batch-size', '--max-requeues', '--require-checks', '--accept-failed-checks',
-  '--mutants-file', '--mutant-check', '--accept-blocked', '--salvage', '--accept-deviation', '--accept-result-shape',
-  '--sync', '--evidence', '--accept-red-base', '--reason',
+  '--queue', '--no-checks', '--no-commit', '--jobs', '--skip-skeleton', '--scope', '--max-jobs', '--wave',
+  '--max-waves',
 ]);
 
 const OM_SWARM_RUN_FLAGS_WITH_VALUE = new Set([
-  '--lane', '--ticket', '--job', '--run', '--worktree', '--jobs', '--max-jobs', '--batch-size', '--max-requeues',
-  '--commit-message', '--repo', '--pr', '--require-section', '--merge-method', '--timeout', '--tag-timeout',
-  '--exempt', '--leads', '--concurrency', '--max-usd', '--max-tokens', '--mutant-check', '--evidence', '--reason',
-  '--accept-red-base', '--accept-failed-check',
+  '--lane', '--ticket', '--job', '--run', '--worktree', '--jobs', '--max-jobs', '--max-waves',
 ]);
 
+const TICKET_YES_PAIR_FLAGS = new Set([
+  '--set', '--release', '--delivered', '--add-acceptance', '--acceptance', '--context', '--files',
+]);
+
+const swarmArgTokens = rest => rest.map(w => String(w).toLowerCase());
+
 const swarmArgsHaveYes = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  return lower.some(a => a === '--yes' || a.startsWith('--yes='));
+  const lower = swarmArgTokens(rest);
+  return lower.some(a => a === '--yes' || a.startsWith('--yes=') || a === '-y');
 };
 
 const swarmArgsHaveApprove = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  return lower.some(a => a === '--approve' || a.startsWith('--approve='));
+  const lower = swarmArgTokens(rest);
+  return lower.some(a => a === 'approve' || a === '--approve' || a.startsWith('--approve='));
 };
 
 const swarmArgsHaveForceBypass = rest => {
   for (const a of rest) {
     const low = String(a).toLowerCase();
     if (low === '--force' || low.startsWith('--force=')) return true;
+    if (low === '--force-unsafe' || low.startsWith('--force-unsafe=')) return true;
     if (low === '-f') return true;
   }
   return false;
+};
+
+const swarmArgsHaveOwnerOverrideFlags = rest => {
+  for (const a of rest) {
+    const low = String(a).toLowerCase();
+    if (low === '--no-guard' || low.startsWith('--no-guard=')) return true;
+    if (low.startsWith('--accept-')) return true;
+    if (low.startsWith('--allow-')) return true;
+  }
+  return false;
+};
+
+const swarmTicketsYesVetted = rest => {
+  const lower = swarmArgTokens(rest);
+  return lower.some(a => TICKET_YES_PAIR_FLAGS.has(a) || TICKET_YES_PAIR_FLAGS.has(a.split('=')[0]));
+};
+
+const swarmTicketsSetDone = rest => {
+  const lower = swarmArgTokens(rest);
+  for (let i = 0; i < lower.length; i += 1) {
+    const a = lower[i];
+    if (a === '--set' && lower[i + 1] === 'done') return true;
+    if (a.startsWith('--set=') && a.slice('--set='.length) === 'done') return true;
+  }
+  return false;
+};
+
+const omSwarmInboxAllowed = rest => {
+  const lower = swarmArgTokens(rest);
+  const pos = lower.filter(a => a !== '' && !a.startsWith('-'));
+  if (pos.length === 0) return true;
+  return pos.length === 1 && pos[0] === 'list';
+};
+
+const omSwarmOrphansAllowed = rest => {
+  const lower = swarmArgTokens(rest);
+  const pos = lower.filter(a => a !== '' && !a.startsWith('-'));
+  if (pos.length === 0) return true;
+  return pos.length === 1 && pos[0] === 'list';
 };
 
 const omSwarmRunIntegrateFlagsOk = rest => {
@@ -143,7 +189,10 @@ const omSwarmRunLikeAllowed = (sub, rest) => {
 };
 
 const omSwarmTicketsAllowed = rest => {
-  if (swarmArgsHaveApprove(rest) || swarmArgsHaveYes(rest)) return false;
+  if (swarmArgsHaveApprove(rest) || swarmArgsHaveForceBypass(rest)) return false;
+  if (swarmArgsHaveOwnerOverrideFlags(rest)) return false;
+  if (swarmTicketsSetDone(rest)) return false;
+  if (swarmArgsHaveYes(rest) && !swarmTicketsYesVetted(rest)) return false;
   return true;
 };
 
@@ -151,8 +200,11 @@ const omSwarmTicketsAllowed = rest => {
 export function swarmSubcommandAlwaysAllowed(sub, rest) {
   const s = String(sub ?? '').toLowerCase();
   if (!s || OM_SWARM_DENIED_TOP.has(s)) return false;
-  if (swarmArgsHaveForceBypass(rest)) return false;
+  if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
   if (s === 'restore') return false;
+  if (swarmArgsHaveApprove(rest)) return false;
+  if (swarmArgsHaveForceBypass(rest)) return false;
+  if (swarmArgsHaveOwnerOverrideFlags(rest)) return false;
   if (s === 'backup') {
     const verb = String(rest[0] ?? '').toLowerCase();
     if (verb === 'restore') return false;
@@ -169,6 +221,9 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (s === 'scope') return omSwarmScopeReadOnly(rest);
   if (s === 'decide') return omSwarmDecideReadOnly(rest);
   if (s === 'tickets') return omSwarmTicketsAllowed(rest);
+  if (s === 'inbox') return omSwarmInboxAllowed(rest);
+  if (s === 'orphans') return omSwarmOrphansAllowed(rest);
+  if (swarmArgsHaveYes(rest)) return false;
   if (!omSwarmRunLikeAllowed(s, rest)) return false;
   return true;
 }

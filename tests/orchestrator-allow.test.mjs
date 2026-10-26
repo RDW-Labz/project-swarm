@@ -36,15 +36,26 @@ const tmp = async t => {
 
 test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--max-jobs', '2']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--skip-skeleton']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--retry-note', 'x']), true);
-  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'done']), true);
-  assert.equal(swarmSubcommandAlwaysAllowed('resolve', []), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'done']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress', '--yes']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('resolve', []), false);
   assert.equal(swarmSubcommandAlwaysAllowed('inbox', ['list']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('inbox', ['--json']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('orphans', ['list']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('orphans', ['prune']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('resume', ['run-abc']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('backlog', ['add', 'goal']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('merge', ['42']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('integrate', ['run-1', '--queue']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('run', ['manifest.json', '--jobs', 'j1']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('shell', []), false);
   assert.equal(swarmSubcommandAlwaysAllowed('exec', ['npm', 'test']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('with-concurrency', ['2', 'status']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('ship', []), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('gpu', []), false);
 });
 
 test('swarmSubcommandAlwaysAllowed: owner-approval and bypass shapes stay denied', () => {
@@ -54,12 +65,24 @@ test('swarmSubcommandAlwaysAllowed: owner-approval and bypass shapes stay denied
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--approve']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--approve', '--yes']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('change', ['apply', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('restore', ['backup-id', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('backup', ['restore', 'backup-id']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('run', ['--evil', 'x']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('run', ['manifest.json', '--accept-failed-checks']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--force']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--allow-main-branch']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('update', ['--force']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('merge', ['42', '--yes']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('redcheck', ['--test', 'npm', 'test']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('draft', ['--out', 'src/x.js']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('migrations', ['check', '--yes']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('report', ['--client', '--approve']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('gallery', ['approve', 'item-1']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('done', []), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('policy', []), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('gc', ['--apply', '--force-unsafe']), false);
 });
 
 test('helpOnly', () => {
@@ -93,6 +116,9 @@ test('orchestratorModeCommandAllowed: bug-report allows', async t => {
     'swarm go --scope wave --max-jobs 2',
     'swarm tickets T-0001 --retry-note "x"',
     'swarm tickets --help',
+    'swarm backlog add "goal"',
+    'swarm resume run-abc',
+    'swarm inbox --json',
     'gh pr view 12',
     'gh run view 5',
     'grep -rn foo src',
@@ -132,8 +158,32 @@ test('orchestratorModeCommandAllowed: stays blocked', async t => {
     'swarm exec npm test',
     'swarm decide handbuild-hb-1 approve',
     'swarm run --evil x',
+    'swarm run manifest.json --accept-failed-checks',
     'swarm tickets T-0001 --approve --yes',
     'swarm scope approve --yes',
+    'swarm with-concurrency 2 status',
+    'swarm redcheck --test npm test',
+    'swarm draft --out src/x.js',
+    'swarm ship',
+    'swarm gpu',
+    'swarm burst',
+    'swarm sweep',
+    'swarm autopilot',
+    'swarm gc --apply --force-unsafe',
+    'swarm squash',
+    'swarm clean-branch',
+    'swarm remote',
+    'swarm tunnel',
+    'swarm phone',
+    'swarm pin',
+    'swarm forget',
+    'swarm policy',
+    'swarm resolve',
+    'swarm done',
+    'swarm gallery approve item-1',
+    'swarm migrations check --yes',
+    'swarm report --client --approve',
+    'swarm backup restore backup-id',
     'tee src/a.js',
     'cp src/a.js src/b.js',
     'curl -o src/x.bin https://example.com/x',
@@ -199,6 +249,10 @@ test('guardDecision: test runners and help attacks through full guard', async t 
     'tee src/a.js --help',
     'node docs/plans/x.mjs --help',
     'swarm handbuild off --help',
+    'swarm with-concurrency 2 status',
+    'swarm ship',
+    'swarm resolve',
+    'swarm tickets T-0001 --approve',
     'npx vitest run --config docs/plans/evil.mjs',
     'npx playwright test -c .swarm/x.js',
     'npx vitest run -u',
@@ -209,6 +263,11 @@ test('guardDecision: test runners and help attacks through full guard', async t 
     'npx playwright test tests/ok.test.mjs',
     'gh pr view 12',
     'git status',
+    'swarm go --scope wave --max-jobs 2',
+    'swarm tickets T-0001 --retry-note "note text"',
+    'swarm backlog add "goal"',
+    'swarm resume run-abc',
+    'swarm inbox --json',
   ];
   const handbuildAllow = [
     'npm test',
