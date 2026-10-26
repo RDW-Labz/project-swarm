@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockfix3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "In tools/autopilot-ready-deps.mjs the early-exit timer of the spawned go --scope child is now unref'd. That makes the tests in tests/autopilot-ready-deps.test.mjs fail with 'Promise resolution is still pending but the event loop has already resolved' (startScope tests, readyAutopilotDeps memory tests and others, about 13 tests) because a fake child that never exits leaves nothing keeping the event loop alive. Fix in the production code, not by editing existing tests: remove the unref call on that early-exit timer (the window is only 1.5 s, so holding the loop open is harmless) but keep clearTimeout when exit or error settles first. Keep the log-file stderr handling and everything else unchanged. Then make sure the whole of tests/autopilot-ready-deps.test.mjs and tests/autopilot-lock-parent.test.mjs pass; if the test that checks the timer is cleared asserts unref, change only that assertion to check clearTimeout.",
+   "context": [
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-lock-parent.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-ready-deps.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/needs-you-triage.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

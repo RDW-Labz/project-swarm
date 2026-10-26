@@ -8,7 +8,22 @@ const alive = pid => {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 };
 
-export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = alive, name = 'autopilot' } = {}) {
+function resolveAllowOwnerPid(name, allowOwnerPid, env) {
+  if (name !== 'autopilot') return undefined;
+  if (allowOwnerPid !== undefined && allowOwnerPid !== null) return allowOwnerPid;
+  const fromEnv = Number(env?.SWARM_AUTOPILOT_PID);
+  return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : undefined;
+}
+
+export async function acquireAutopilotLock(root, {
+  pid = process.pid,
+  isAlive = alive,
+  name = 'autopilot',
+  allowOwnerPid,
+  parentPid = process.ppid,
+  env = process.env,
+} = {}) {
+  const allowedOwnerPid = resolveAllowOwnerPid(name, allowOwnerPid, env);
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, `${name}.lock`);
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -30,8 +45,21 @@ export async function acquireAutopilotLock(root, { pid = process.pid, isAlive = 
     }
     let owner = null;
     try { owner = JSON.parse(await fs.readFile(file, 'utf8')); } catch { owner = null; }
-    if (Number.isInteger(owner?.pid) && owner.pid > 0 && owner.pid !== pid && isAlive(owner.pid)) {
-      throw Object.assign(new Error(`${name}-running: pid ${owner.pid} already runs ${name} for this project`), { code: `${name}-running` });
+    if (Number.isInteger(owner?.pid) && owner.pid > 0 && isAlive(owner.pid)) {
+      if (
+        allowedOwnerPid !== undefined
+        && owner.pid === allowedOwnerPid
+        && parentPid === allowedOwnerPid
+      ) {
+        let released = false;
+        return async () => {
+          if (released) return;
+          released = true;
+        };
+      }
+      if (owner.pid !== pid) {
+        throw Object.assign(new Error(`${name}-running: pid ${owner.pid} already runs ${name} for this project`), { code: `${name}-running` });
+      }
     }
     // Dead owner or unreadable lock: clear it and try again.
     await fs.rm(file, { force: true });

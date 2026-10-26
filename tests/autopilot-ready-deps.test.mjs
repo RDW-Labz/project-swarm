@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { readyAutopilotDeps, sameRoot } from '../tools/autopilot-ready-deps.mjs';
 
@@ -16,14 +17,14 @@ function makeDeps(overrides = {}) {
   const spawnCalls = [];
   const spawnImpl = (execPath, args, opts) => {
     spawnCalls.push({ execPath, args, opts });
-    const child = {
-      pid: 4242,
-      unref() { this.unrefed = true; },
-      once(event, fn) {
-        if (event === 'error' && overrides.spawnAsyncError) {
-          queueMicrotask(() => fn(overrides.spawnAsyncError));
-        }
-      },
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.unref = function unref() { this.unrefed = true; };
+    child.once = function once(event, fn) {
+      if (event === 'error' && overrides.spawnAsyncError) {
+        queueMicrotask(() => fn(overrides.spawnAsyncError));
+      }
+      return EventEmitter.prototype.once.call(this, event, fn);
     };
     if (overrides.spawnThrows) throw overrides.spawnThrows;
     return child;
@@ -105,7 +106,7 @@ test('capRoom is false when checkProjectCap reports capped', async () => {
   assert.equal(await capped.deps.capRoom(ROOT), false);
 });
 
-test('startScope spawns detached swarm go --scope and unrefs', async () => {
+test('startScope spawns detached swarm go --scope, unrefs, and sets SWARM_AUTOPILOT_PID', async () => {
   const { deps, spawnCalls } = makeDeps();
   const out = await deps.startScope({ root: ROOT });
   assert.equal(out.ok, true);
@@ -114,8 +115,9 @@ test('startScope spawns detached swarm go --scope and unrefs', async () => {
   assert.equal(spawnCalls[0].execPath, process.execPath);
   assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope', '--max-jobs', '1']);
   assert.equal(spawnCalls[0].opts.detached, true);
-  assert.deepEqual(spawnCalls[0].opts.stdio, 'ignore');
+  assert.equal(spawnCalls[0].opts.stdio, 'ignore');
   assert.equal(spawnCalls[0].opts.env.TEST_ENV, '1');
+  assert.equal(spawnCalls[0].opts.env.SWARM_AUTOPILOT_PID, '1000');
 });
 
 test('startScope returns ok false when spawn throws', async () => {

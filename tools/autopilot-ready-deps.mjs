@@ -353,7 +353,7 @@ export function readyAutopilotDeps(projectRoot, {
         const child = spawnImpl(process.execPath, args, {
           detached: true,
           stdio: 'ignore',
-          env,
+          env: { ...env, SWARM_AUTOPILOT_PID: String(selfPid) },
           cwd,
         });
         return await new Promise((resolve) => {
