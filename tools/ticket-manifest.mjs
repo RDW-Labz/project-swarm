@@ -208,9 +208,38 @@ export function ticketsToManifest(tickets,opts={}){
   let list=ready?tickets.filter(t=>(t.status==='todo'||t.status==='ready')&&!unapproved(t)&&depsDone(t,byId)):tickets.filter(t=>!unapproved(t));
   list=list.slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
   const selected=[];
-  for(const t of list){
-    if(maxJobs&&selected.length>=maxJobs){skipped.push(t.id);warnings.push(t.id+': over maxJobs, skipped');continue;}
-    selected.push(t);
+  if(maxJobs){
+    const humans=list.filter(t=>t.type==='human');
+    const reals=list.filter(t=>t.type!=='human');
+    const byStage=new Map();
+    for(const t of reals){
+      const stage=t.stage??'';
+      if(!byStage.has(stage))byStage.set(stage,[]);
+      byStage.get(stage).push(t);
+    }
+    const stages=[...byStage.keys()].sort((a,b)=>a<b?-1:a>b?1:0);
+    for(const s of stages)byStage.get(s).sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    const chosen=[];
+    for(let round=0;chosen.length<maxJobs;round++){
+      let progressed=false;
+      for(const stage of stages){
+        const bucket=byStage.get(stage);
+        if(round<bucket.length){
+          chosen.push(bucket[round]);
+          progressed=true;
+          if(chosen.length>=maxJobs)break;
+        }
+      }
+      if(!progressed)break;
+    }
+    const chosenSet=new Set(chosen.map(t=>t.id));
+    for(const t of reals){
+      if(!chosenSet.has(t.id)){skipped.push(t.id);warnings.push(t.id+': over maxJobs, skipped');}
+    }
+    selected.push(...humans,...chosen);
+    selected.sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+  }else{
+    selected.push(...list);
   }
   const inSet=new Set(selected.map(t=>t.id));
   const reqs=reqLookup(scope);
