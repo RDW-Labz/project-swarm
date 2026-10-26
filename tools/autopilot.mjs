@@ -23,6 +23,10 @@ import {
   openBlockerIds,
 } from './journal.mjs';
 import { runNeedsYouTriagePass } from './needs-you-triage.mjs';
+import { readLockOwner, isAlive as defaultIsAlive } from './autopilot-lock.mjs';
+
+/** Pids of go --scope children spawned by this autopilot process (not orphaned predecessors). */
+const spawnedScopeLoopPids = new Set();
 
 const POLICY_PASS_KINDS = new Set([
   'hand-build-request',
@@ -1163,20 +1167,36 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         let ok = true;
         let result = 'ok';
         try {
-          if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
-          const out = await deps.startScope({
-            root,
-            ticketIds: waveTickets.map(t => t.id),
-            maxJobs: waveTickets.length || slotLimit,
-            skipSkeleton: waveSettings?.skipSkeleton === true,
-            batched: waveTickets.length > 1,
-          });
-          ok = out?.ok !== false;
-          if (ok) {
-            result = out?.result ?? 'ok';
-            if (result === 'held-memory') memory.startReadyHoldAt = nowMs;
-            else memory.startReadyLastAt = nowMs;
-          } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+          const readScopeLoopLock = typeof deps.readScopeLoopLock === 'function'
+            ? deps.readScopeLoopLock
+            : rootArg => readLockOwner(rootArg, 'scope-loop');
+          const isAliveCheck = typeof deps.isAlive === 'function' ? deps.isAlive : defaultIsAlive;
+          const lockOwner = await safe(() => readScopeLoopLock(root), null);
+          const orphanedScopeLoop = lockOwner
+            && Number.isInteger(lockOwner.pid)
+            && lockOwner.pid > 0
+            && isAliveCheck(lockOwner.pid)
+            && !spawnedScopeLoopPids.has(lockOwner.pid);
+          if (orphanedScopeLoop) {
+            ok = true;
+            result = 'held-orphaned-scope-loop';
+          } else {
+            if (typeof deps.waitBeforeLaunchingWork === 'function') await deps.waitBeforeLaunchingWork(root);
+            const out = await deps.startScope({
+              root,
+              ticketIds: waveTickets.map(t => t.id),
+              maxJobs: waveTickets.length || slotLimit,
+              skipSkeleton: waveSettings?.skipSkeleton === true,
+              batched: waveTickets.length > 1,
+            });
+            ok = out?.ok !== false;
+            if (ok) {
+              result = out?.result ?? 'ok';
+              if (Number.isInteger(out?.pid) && out.pid > 0) spawnedScopeLoopPids.add(out.pid);
+              if (result === 'held-memory') memory.startReadyHoldAt = nowMs;
+              else memory.startReadyLastAt = nowMs;
+            } else result = String(out?.result ?? 'failed').slice(0, RESULT_LIMIT);
+          }
         } catch (error) {
           ok = false;
           result = String(error?.message ?? error).slice(0, RESULT_LIMIT);
@@ -1184,7 +1204,7 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         if (ok && waveTickets.length > 1) {
           await write({ kind: 'note', text: `batched ${waveTickets.length} tickets into one wave` }, { incidental: true });
         }
-        const startReadyIncidental = ok && result === 'held-memory';
+        const startReadyIncidental = ok && (result === 'held-memory' || result === 'held-orphaned-scope-loop');
         await write({ kind: 'action', action: 'start-ready', reason, result }, { incidental: startReadyIncidental });
         actions.push({ action: 'start-ready', ok, result, reason });
       }
