@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { sessionsOf } from '../tools/orchestrator-events.mjs';
 import {
   cockpitOrchestratorState,
+  cockpitOrchestratorFromSessions,
   isDispatchDoing,
   isReviewDoing,
 } from '../tools/watch-assets/cockpit-orchestrator.js';
@@ -209,6 +210,55 @@ test('headline clamp resolves to 68px at 1440px and text fits one line', () => {
   );
 });
 
+test('renderCockpit surfaces orchestrator label and detail from session fixture', () => {
+  installDom();
+  const sid = 'sess-render-orch-01';
+  const events = [
+    { at: iso(NOW - 6000), s: sid, e: 'prompt' },
+    { at: iso(NOW - 1000), s: sid, e: 'pre', t: 'Task', u: 'task-1' },
+  ];
+  const session = sessionFromEvents(events);
+  const ledger = makeLedgerFixture();
+  const host = document.createElement('div');
+  const view = renderCockpit(host, { ledger, sessions: [session] }, { now: NOW });
+  assert.equal(view.orchestrator.label, 'dispatching');
+  const nav = host.children.find(c => c.classList.contains('cockpit-nav'));
+  assert.ok(nav, 'cockpit nav');
+  const navText = collectText(nav);
+  assert.match(navText, /orchestrator/i);
+  assert.match(navText, /dispatching/);
+  const tagline = host.children.find(c => c.tagName === 'HEADER')?.children?.find(c => c.classList?.contains('tagline'));
+  assert.ok(tagline);
+  assert.match(collectText(tagline), /Task/);
+});
+
+test('primary session wins when multiple orchestrator states are live', () => {
+  installDom();
+  const thinkingEvents = [
+    { at: iso(NOW - 8000), s: 'sess-multi-think', e: 'prompt' },
+    { at: iso(NOW - 7000), s: 'sess-multi-think', e: 'pre', t: 'Read', f: 'a.mjs', u: 'r1' },
+    { at: iso(NOW - 6500), s: 'sess-multi-think', e: 'post', t: 'Read', u: 'r1' },
+  ];
+  const waitingEvents = [
+    { at: iso(NOW - 20000), s: 'sess-multi-wait', e: 'prompt' },
+    { at: iso(NOW - 10000), s: 'sess-multi-wait', e: 'stop' },
+  ];
+  const primary = sessionFromEvents(thinkingEvents);
+  const secondary = sessionsOf([...thinkingEvents, ...waitingEvents], NOW).find(s => s.id === 'sess-multi-wait');
+  assert.ok(secondary);
+  assert.equal(primary.state, 'thinking');
+  assert.equal(secondary.state, 'waiting');
+  const merged = cockpitOrchestratorFromSessions([primary, secondary], NOW);
+  assert.equal(merged.label, 'thinking');
+  const ledger = makeLedgerFixture();
+  const host = document.createElement('div');
+  const view = renderCockpit(host, { ledger, sessions: [primary, secondary] }, { now: NOW });
+  assert.equal(view.orchestrator.label, 'thinking');
+  const navText = collectText(host.children.find(c => c.classList.contains('cockpit-nav')));
+  assert.match(navText, /thinking/);
+  assert.doesNotMatch(navText, /waiting on you/);
+});
+
 test('stage rings reflect ledgerStats done per stage', () => {
   installDom();
   const ledger = makeLedgerFixture();
@@ -235,6 +285,56 @@ test('stage rings reflect ledgerStats done per stage', () => {
   assert.equal(rings[0].dataset.stage, 'S1');
   assert.equal(rings[1].dataset.stage, 'S2');
 });
+
+test('stage ring progress is computed independently per stage', () => {
+  installDom();
+  const ledger = makePerStageRatioLedgerFixture();
+  const expected = stageRingProgress(ledger);
+  assert.deepEqual(
+    expected.map(r => ({ id: r.id, done: r.done, total: r.total, pct: r.pct })),
+    [
+      { id: 'S1', done: 2, total: 2, pct: 100 },
+      { id: 'S2', done: 0, total: 2, pct: 0 },
+      { id: 'S3', done: 1, total: 3, pct: 33 },
+    ],
+  );
+  const host = document.createElement('div');
+  renderCockpit(host, { ledger }, { now: NOW });
+  const stagesWrap = host.children.find(c => c.classList.contains('cockpit-stage-rings'));
+  const rings = stagesWrap.children.filter(c => c.classList.contains('cockpit-stage-ring'));
+  assert.equal(rings.length, 3);
+  const fills = rings.map(r => r.children.find(c => c.classList?.contains('cockpit-stage-track'))?.children?.[0]);
+  assert.equal(fills[0].dataset.pct, '100');
+  assert.equal(fills[1].dataset.pct, '0');
+  assert.equal(fills[2].dataset.pct, '33');
+  const counts = rings.map(r => r.children.find(c => c.classList.contains('cockpit-stage-count')));
+  assert.equal(counts[0].textContent, '2/2');
+  assert.equal(counts[1].textContent, '0/2');
+  assert.equal(counts[2].textContent, '1/3');
+});
+
+function makePerStageRatioLedgerFixture() {
+  return {
+    scope: {
+      stages: [
+        { id: 'S1', name: 'Complete' },
+        { id: 'S2', name: 'Not started' },
+        { id: 'S3', name: 'Partial' },
+      ],
+    },
+    tickets: [
+      { id: 'T-0101', status: 'done', stage: 'S1' },
+      { id: 'T-0102', status: 'done', stage: 'S1' },
+      { id: 'T-0201', status: 'todo', stage: 'S2' },
+      { id: 'T-0202', status: 'running', stage: 'S2' },
+      { id: 'T-0301', status: 'done', stage: 'S3' },
+      { id: 'T-0302', status: 'todo', stage: 'S3' },
+      { id: 'T-0303', status: 'blocked', stage: 'S3' },
+      { id: 'T-9900', status: 'proposed', stage: 'S1' },
+      { id: 'T-9901', status: 'cancelled', stage: 'S2' },
+    ],
+  };
+}
 
 function collectText(node) {
   if (!node) return '';
