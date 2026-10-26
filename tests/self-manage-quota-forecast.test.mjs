@@ -156,6 +156,29 @@ test('default warn ratio matches budget manager convention', () => {
   assert.equal(DEFAULT_LANE_WARN_RATIO, 0.85);
 });
 
+test('invalid warnRatio falls back to default so near-cap lanes still warn', () => {
+  const at99 = { spentUsd: 99, projectedUsd: 99, capUsd: 100 };
+  assert.deepEqual(laneQuotaPhase({ ...at99, warnRatio: NaN }), {
+    phase: 'warn',
+    headroomUsd: 1,
+  });
+  assert.deepEqual(laneQuotaPhase({ ...at99, warnRatio: 1.5 }), {
+    phase: 'warn',
+    headroomUsd: 1,
+  });
+
+  for (const warnRatio of [NaN, 1.5]) {
+    const result = forecastLaneQuotas({
+      now: NOW,
+      lanes: [{ name: 'claude', spentUsd: 99, capUsd: 100, burnRatePerHour: 0, warnRatio }],
+    });
+    assertNoCapMutationFields(result);
+    assert.equal(result.lanes[0].phase, 'warn');
+    assert.notEqual(result.lanes[0].phase, 'ok');
+    assert.equal(result.lanes[0].recommendation, 'shift-work');
+  }
+});
+
 test('missing or non-numeric spentUsd is unknown and never healthiestLane or reroute target', () => {
   const stringSpent = forecastLaneQuotas({
     now: NOW,

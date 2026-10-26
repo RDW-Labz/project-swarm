@@ -60,6 +60,17 @@ function isValidCapUsd(capUsd) {
 }
 
 /**
+ * @param {unknown} warnRatio
+ * @returns {number}
+ */
+function resolveWarnRatio(warnRatio) {
+  if (typeof warnRatio === 'number' && Number.isFinite(warnRatio) && warnRatio >= 0 && warnRatio <= 1) {
+    return warnRatio;
+  }
+  return DEFAULT_LANE_WARN_RATIO;
+}
+
+/**
  * @param {LaneQuotaInput} lane
  * @returns {number | null}
  */
@@ -102,7 +113,7 @@ export function laneQuotaPhase({ spentUsd, projectedUsd, capUsd, warnRatio = DEF
   if (spent >= cap || projected >= cap) {
     return { phase: 'at-cap', headroomUsd: 0 };
   }
-  const threshold = cap * warnRatio;
+  const threshold = cap * resolveWarnRatio(warnRatio);
   const headroomUsd = roundUsd(cap - projected);
   if (projected >= threshold) {
     return { phase: 'warn', headroomUsd };
@@ -180,7 +191,7 @@ export function forecastLaneQuotas({ lanes, now } = {}) {
   /** @type {LaneQuotaForecast[]} */
   const forecasts = normalized.map(lane => {
     const capUsd = lane.capUsd;
-    const warnRatio = lane.warnRatio ?? DEFAULT_LANE_WARN_RATIO;
+    const warnRatio = resolveWarnRatio(lane.warnRatio);
 
     if (!isValidSpentUsd(lane.spentUsd)) {
       return unknownLaneForecast(lane.name);
