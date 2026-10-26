@@ -12,6 +12,98 @@ import { readMachine } from '../autotune.mjs';
 const DEFAULT_AGE_THRESHOLD_MS = 60 * 60 * 1000;
 const DEFAULT_REPROBE_DELAY_MS = 250;
 
+/** mkdtemp prefix convention: path.join(os.tmpdir(), 'swarm-…') */
+const OS_TMP_SWARM_DIR_PREFIX = 'swarm-';
+
+const SWARM_SCRATCH_SEGMENT_NAMES = new Set(['.swarm', '.project-swarm-scratch']);
+
+/**
+ * @param {string} token
+ */
+function tokenHasSwarmScratchPathSegment(token) {
+  const text = String(token ?? '');
+  if (!text) return false;
+  for (const name of SWARM_SCRATCH_SEGMENT_NAMES) {
+    if (text === name) return true;
+    const anchored = `${name}${path.sep}`;
+    if (text.startsWith(anchored)) return true;
+  }
+  for (const segment of text.split(path.sep)) {
+    if (SWARM_SCRATCH_SEGMENT_NAMES.has(segment)) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {string} token
+ * @param {string} normalizedTmp
+ */
+function tokenHasOsTmpSwarmWorkspace(token, normalizedTmp) {
+  if (!normalizedTmp) return false;
+  const text = path.normalize(String(token ?? ''));
+  const prefix = `${normalizedTmp}${path.sep}${OS_TMP_SWARM_DIR_PREFIX}`;
+  return text === prefix || text.startsWith(prefix);
+}
+
+/**
+ * @param {ProcessRecord} proc
+ * @param {number} now
+ * @returns {number | null}
+ */
+function processStartTimeMs(proc, now) {
+  if (proc.startTimeMs != null) return proc.startTimeMs;
+  if (proc.ageMs != null) return now - proc.ageMs;
+  return null;
+}
+
+/**
+ * @param {ProcessRecord} original
+ * @param {ProcessRecord} fresh
+ * @param {number} now
+ */
+function isSameProcessInstance(original, fresh, now) {
+  const oStart = processStartTimeMs(original, now);
+  const fStart = processStartTimeMs(fresh, now);
+  if (oStart != null && fStart != null) return oStart === fStart;
+  if (original.ageMs != null && fresh.ageMs != null) return original.ageMs === fresh.ageMs;
+  return false;
+}
+
+/**
+ * @param {number | undefined} ownPgid
+ * @returns {number | null}
+ */
+function resolveWatchdogProcessGroupId(ownPgid) {
+  if (ownPgid != null && Number.isFinite(ownPgid)) return ownPgid;
+  const getpgid = process.getpgid;
+  if (typeof getpgid !== 'function') return null;
+  try {
+    const pgid = getpgid(process.pid);
+    return Number.isFinite(pgid) ? pgid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {number} id
+ * @param {{ ownPgid: number | null }} ctx
+ */
+function isSafeKillProcessId(id, { ownPgid }) {
+  if (!Number.isFinite(id) || !Number.isInteger(id) || id <= 1) return false;
+  if (id === process.pid || id === process.ppid) return false;
+  if (ownPgid != null && id === ownPgid) return false;
+  return true;
+}
+
+/**
+ * @param {number} pgid
+ * @param {{ ownPgid: number | null }} ctx
+ */
+function isSafeProcessGroupId(pgid, ctx) {
+  return isSafeKillProcessId(pgid, ctx);
+}
+
 /**
  * @typedef {Object} ProcessRecord
  * @property {number} pid
@@ -30,11 +122,12 @@ const DEFAULT_REPROBE_DELAY_MS = 250;
  * @param {{ osTmpDir?: string }} [options]
  */
 export function isSwarmScratchProcessPath(argvOrCmd, { osTmpDir = os.tmpdir() } = {}) {
-  const text = Array.isArray(argvOrCmd) ? argvOrCmd.join('\0') : String(argvOrCmd ?? '');
-  if (text.includes('.project-swarm-scratch')) return true;
-  if (text.includes('.swarm')) return true;
+  const tokens = Array.isArray(argvOrCmd) ? argvOrCmd : [String(argvOrCmd ?? '')];
   const normalizedTmp = path.normalize(osTmpDir);
-  if (normalizedTmp && text.includes(normalizedTmp) && /\bswarm\b/i.test(text)) return true;
+  for (const token of tokens) {
+    if (tokenHasSwarmScratchPathSegment(token)) return true;
+    if (tokenHasOsTmpSwarmWorkspace(token, normalizedTmp)) return true;
+  }
   return false;
 }
 
@@ -142,9 +235,32 @@ export function buildResourceSnapshot(machine, disk = null) {
  * @param {(pid: number, signal: string) => Promise<void> | void} kill
  * @param {{ log?: (msg: string, detail?: object) => void }} [options]
  */
-export async function terminateProcessGroup(proc, kill, { log = () => {} } = {}) {
+export async function terminateProcessGroup(proc, kill, { log = () => {}, ownPgid } = {}) {
   const pgid = proc.pgid ?? proc.pid;
-  const target = -Math.abs(pgid);
+  const watchdogPgid = resolveWatchdogProcessGroupId(ownPgid);
+  const ctx = { ownPgid: watchdogPgid };
+
+  if (!isSafeProcessGroupId(pgid, ctx)) {
+    log('watchdog: skip kill (unsafe pgid)', { pid: proc.pid, pgid });
+    return { pid: proc.pid, pgid, status: 'skipped', reason: 'unsafe_pgid' };
+  }
+
+  const useProcessGroup = pgid === proc.pid;
+  let target;
+  if (useProcessGroup) {
+    if (watchdogPgid == null) {
+      log('watchdog: skip kill (cannot determine own process group)', { pid: proc.pid, pgid });
+      return { pid: proc.pid, pgid, status: 'skipped', reason: 'unknown_own_pgid' };
+    }
+    target = -pgid;
+  } else {
+    if (!isSafeKillProcessId(proc.pid, ctx)) {
+      log('watchdog: skip kill (unsafe pid)', { pid: proc.pid, pgid });
+      return { pid: proc.pid, pgid, status: 'skipped', reason: 'unsafe_pid' };
+    }
+    target = proc.pid;
+  }
+
   try {
     await kill(target, 'SIGTERM');
   } catch (error) {
@@ -154,7 +270,14 @@ export async function terminateProcessGroup(proc, kill, { log = () => {} } = {})
     }
     throw error;
   }
-  return { pid: proc.pid, pgid, status: 'signaled', signal: 'SIGTERM', target };
+  return {
+    pid: proc.pid,
+    pgid,
+    status: 'signaled',
+    signal: 'SIGTERM',
+    target,
+    processGroup: useProcessGroup,
+  };
 }
 
 /**
@@ -177,6 +300,7 @@ export async function cleanupOrphanedSwarmLeaks({
   now = Date.now(),
   osTmpDir = os.tmpdir(),
   log = () => {},
+  ownPgid,
 } = {}) {
   const candidates = selectOrphanedSwarmLeakCandidates(processes, {
     ageThresholdMs,
@@ -184,17 +308,36 @@ export async function cleanupOrphanedSwarmLeaks({
     osTmpDir,
   });
   const outcomes = [];
+  const verifyOptions = { ageThresholdMs, now, osTmpDir };
   for (const proc of candidates) {
-    const signaled = await terminateProcessGroup(proc, kill, { log });
+    const freshList = getProcesses();
+    const freshProc = freshList.find(p => p.pid === proc.pid);
+    if (
+      !freshProc ||
+      !isOrphanedSwarmLeakCandidate(freshProc, verifyOptions) ||
+      !isSameProcessInstance(proc, freshProc, now)
+    ) {
+      outcomes.push({
+        pid: proc.pid,
+        pgid: proc.pgid ?? proc.pid,
+        status: 'skipped',
+        reason: 'stale_candidate',
+      });
+      continue;
+    }
+    const signaled = await terminateProcessGroup(freshProc, kill, { log, ownPgid });
     if (signaled.status === 'skipped') {
       outcomes.push(signaled);
       continue;
     }
     await wait(reprobeDelayMs);
     const after = getProcesses();
-    const pgid = proc.pgid ?? proc.pid;
+    const pgid = freshProc.pgid ?? freshProc.pid;
     const stillThere = after.some(
-      p => p.pid === proc.pid || (p.pgid != null && p.pgid === pgid) || p.pid === pgid,
+      p =>
+        p.pid === freshProc.pid ||
+        (p.pgid != null && p.pgid === pgid) ||
+        p.pid === pgid,
     );
     outcomes.push({
       ...signaled,
@@ -231,6 +374,7 @@ export async function runWatchdog({
   reprobeDelayMs = DEFAULT_REPROBE_DELAY_MS,
   getProcesses,
   log = () => {},
+  ownPgid,
 } = {}) {
   const resources = buildResourceSnapshot(machine, disk);
   const orphanedSwarmProcesses = listOrphanedSwarmPathProcesses(processes, { osTmpDir });
@@ -247,6 +391,7 @@ export async function runWatchdog({
       now,
       osTmpDir,
       log,
+      ownPgid,
     });
   }
   const lastChecked = new Date(now).toISOString();
