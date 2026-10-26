@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Bug: the autopilot service starts each wave by spawning a child process 'swarm go --scope' (in tools/autopilot-ready-deps.mjs), but go --scope takes the project's autopilot lock (acquireAutopilotLock with name autopilot, in tools/autopilot-lock.mjs, called from the go --scope branch of tools/swarm.mjs) and the parent autopilot already holds that lock, so the child dies within about 80 ms with 'autopilot-running: pid N already runs autopilot' and the start-ready action still reports ok. No wave ever starts from a running autopilot. Fix, keeping the rule that a second independent autopilot or go --scope is still refused: (1) In tools/autopilot-lock.mjs add an optional parameter allowOwnerPid to acquireAutopilotLock. When the existing lock owner is alive, equals allowOwnerPid and the current process's parent pid (process.ppid, injectable for tests as parentPid) equals allowOwnerPid, return a release function that does nothing and does not touch the lock file (the parent keeps owning it); in every other case behave exactly as today. (2) In tools/autopilot-ready-deps.mjs set the environment variable SWARM_AUTOPILOT_PID to the autopilot's own process.pid in the env passed to the spawned go --scope child, and after the spawn wait up to 1500 ms (injectable) for an early exit: if the child exits in that window with a non-zero code or a signal, return ok:false with a result string that includes the exit code and the first 300 bytes of the child's stderr (pipe stderr for that window only, then stop reading, close the pipe and unref so the child can outlive autopilot as it does today); if it is still running after the window return ok:true as today. (3) In tools/swarm.mjs the go --scope lock line is 'for(const name of [\"scope-loop\",\"autopilot\"])releases.push(await acquireAutopilotLock(root,{name}))'. Change only that call so the autopilot name passes allowOwnerPid taken from Number(process.env.SWARM_AUTOPILOT_PID) when it is a positive integer. Keep tools/swarm.mjs formatting exactly in its dense style, touch nothing else in it, and do not add new top-level lines at column 0 inside existing items (tests/split-scan.test.mjs checks the layout). Add tests/autopilot-lock-parent.test.mjs (node:test, fake pids, no real autopilot) covering: child of the owner is allowed and release does not delete the lock; a non-child with the same env value is refused; an unrelated live owner is refused; a dead owner is cleared as before; plus add cases to the existing tests/autopilot-ready-deps.test.mjs for the env variable and for the early-exit failure result with a fake spawn. Keep tests/autopilot-lock.test.mjs passing without editing it.",
+   "context": [
+    "tools/autopilot-lock.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-lock.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/swarm.mjs",
+    "tests/autopilot-lock-parent.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
