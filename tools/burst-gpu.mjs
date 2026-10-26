@@ -24,7 +24,7 @@ export async function startBurstGpu(inputs, ticket, provision = async () => {}) 
     };
   }
 
-  if (ticket != null && ticket.sensitive !== false) {
+  if (ticket == null || ticket.sensitive !== false) {
     return {
       ok: false,
       exitCode: 1,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // `swarm queue claim|release`: single-machine lease claim and expired-lease sweep (cluster queue CLI).
 import path from 'node:path';
-import { claim, sweepExpiredLeases } from './ledger-lease.mjs';
+import { claim, release, sweepExpiredLeases } from './ledger-lease.mjs';
 import { getNodeId } from './node-identity.mjs';
 import {
   createJobGrant as defaultCreateJobGrant,
@@ -44,9 +44,9 @@ export function formatIsolatedGrantStdout(grant) {
 
 export async function readQueueProject(root, { project, readProject } = {}) {
   if (project !== undefined) return project;
-  if (typeof readProject === 'function') return await readProject(root);
-  const { readRunnerPointer } = await import('./runner-pointer.mjs');
   try {
+    if (typeof readProject === 'function') return await readProject(root);
+    const { readRunnerPointer } = await import('./runner-pointer.mjs');
     return await readRunnerPointer(root, { allowMissing: true });
   } catch {
     return {};
@@ -68,17 +68,25 @@ export async function runQueueCommand(root, args, {
       const ticketId = args[1];
       const holderId = await getNodeId({ env, home: home ?? env.HOME });
       const projectConfig = await readQueueProject(root, { project, readProject });
+      let isolatedSpec;
+      if (isProjectIsolationEnabled(projectConfig)) {
+        isolatedSpec = isolatedGrantSpec(projectConfig, env);
+      }
       const result = await claim(root, ticketId, holderId, { now: at() });
       let stdout = `claimed ${result.ticketId} for ${result.holderId}\n`;
-      if (isProjectIsolationEnabled(projectConfig)) {
-        const spec = isolatedGrantSpec(projectConfig, env);
-        const grant = await createJobGrant({
-          grantsRoot: jobGrantsRootForProject(root, projectConfig),
-          jobId: result.ticketId,
-          needs: spec.needs,
-          values: spec.values,
-        });
-        stdout += formatIsolatedGrantStdout(grant);
+      if (isolatedSpec) {
+        try {
+          const grant = await createJobGrant({
+            grantsRoot: jobGrantsRootForProject(root, projectConfig),
+            jobId: result.ticketId,
+            needs: isolatedSpec.needs,
+            values: isolatedSpec.values,
+          });
+          stdout += formatIsolatedGrantStdout(grant);
+        } catch (grantError) {
+          await release(root, result.ticketId, result.fencingToken, { now: at() });
+          throw grantError;
+        }
       }
       return { stdout, exitCode: 0 };
     }

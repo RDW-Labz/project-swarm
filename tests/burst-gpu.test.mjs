@@ -339,6 +339,25 @@ describe('startBurstGpu', () => {
     assert.match(result.message, /not allowed on rented lane/);
   });
 
+  for (const ticket of [
+    null,
+    undefined,
+    { sensitive: null },
+    { sensitive: 'false' },
+  ]) {
+    test(`missing or non-explicit non-sensitive ticket is refused (${JSON.stringify(ticket)})`, async () => {
+      let calls = 0;
+      const result = await startBurstGpu(
+        passingGateInputs(),
+        ticket,
+        () => { calls += 1; },
+      );
+      assert.equal(calls, 0);
+      assert.equal(result.exitCode, 1);
+      assert.match(result.message, /not allowed on rented lane/);
+    });
+  }
+
   test('non-sensitive ticket with passing gates invokes provision exactly once', async () => {
     let calls = 0;
     const result = await startBurstGpu(

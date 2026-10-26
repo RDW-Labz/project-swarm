@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runQueueCommand, JOB_GRANTS_DIR } from '../tools/queue-commands.mjs';
 import { claim } from '../tools/ledger-lease.mjs';
-import { createLedger, writeLedger } from '../tools/tickets.mjs';
+import { createLedger, readLedger, writeLedger } from '../tools/tickets.mjs';
 import { SWARM_JOB_GRANT_FILE, SWARM_JOB_ID, loadJobGrantSecrets } from '../tools/job-grants.mjs';
 
 const NODE_ID = 'a1b2c3d4-e5f6-4789-a012-3456789abcde';
@@ -123,6 +123,49 @@ test('failed queue claim on an isolated project does not create an orphaned gran
   assert.notEqual(res.exitCode, 0);
   assert.match(res.stdout, /claim rejected/);
   assert.equal(grantCalls, 0);
+  await assert.rejects(
+    () => fs.access(path.join(root, JOB_GRANTS_DIR, id, 'grant.env')),
+    /ENOENT/,
+  );
+});
+
+test('isolated queue claim releases the lease when grant creation fails so the ticket is claimable again', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  await writeIsolatedProject(root);
+  const env = await nodeEnv(root);
+  const t0 = Date.now();
+  const grantError = new Error('grant creation failed');
+  const failRes = await runQueueCommand(root, ['claim', id], {
+    env,
+    now: t0,
+    createJobGrant: async () => {
+      throw grantError;
+    },
+  });
+  assert.notEqual(failRes.exitCode, 0);
+  assert.match(failRes.stdout, /grant creation failed/);
+  const ledgerAfterFail = await readLedger(root);
+  assert.equal(ledgerAfterFail.tickets[0].status, 'ready');
+  const retryRes = await runQueueCommand(root, ['claim', id], { env, now: t0 + 1000 });
+  assert.equal(retryRes.exitCode, 0);
+  assert.match(retryRes.stdout, new RegExp(`claimed ${id}`));
+});
+
+test('legacy queue claim succeeds when project config read fails', async t => {
+  const root = await tmp(t);
+  const id = await seed(root);
+  const env = await nodeEnv(root);
+  const t0 = Date.now();
+  const res = await runQueueCommand(root, ['claim', id], {
+    env,
+    now: t0,
+    readProject: async () => {
+      throw new Error('project config unreadable');
+    },
+  });
+  assert.equal(res.exitCode, 0);
+  assert.equal(res.stdout, `claimed ${id} for ${NODE_ID}\n`);
   await assert.rejects(
     () => fs.access(path.join(root, JOB_GRANTS_DIR, id, 'grant.env')),
     /ENOENT/,

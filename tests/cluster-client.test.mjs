@@ -14,6 +14,8 @@ import {
 } from '../tools/cluster-ledger-api.mjs';
 import {
   CLUSTER_LEDGER_CLAIM_PATH,
+  CLUSTER_LEDGER_READ_PATH,
+  clusterLedgerRemoteFetch,
   followerRemoteClusterConfigured,
   remoteClusterClaim,
   remoteClusterRead,
@@ -152,4 +154,101 @@ test('followerRemoteClusterConfigured follows clusterCanonicalHost', async t => 
 
   const blank = await isolatedHome(t, { clusterCanonicalHost: '   ' });
   assert.equal(followerRemoteClusterConfigured({ env: blank.env, home: blank.home }), false);
+});
+
+test('stalled remote fetch rejects with cluster-request-timeout', async t => {
+  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: 9448 });
+  const fullEnv = await seedNodeIdentity(home, env);
+
+  const hangForever = (_url, { signal }) =>
+    new Promise((resolve, reject) => {
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          const err = new Error('The operation was aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }
+    });
+
+  await assert.rejects(
+    () =>
+      clusterLedgerRemoteFetch(CLUSTER_LEDGER_READ_PATH, {
+        env: fullEnv,
+        home,
+        fetch: hangForever,
+        timeoutMs: 25,
+      }),
+    err => err.code === 'cluster-request-timeout',
+  );
+});
+
+test('HTTP redirect responses are not followed', async t => {
+  const { port } = await listenMock(t, (_req, res) => {
+    res.writeHead(302, { Location: 'http://127.0.0.1:9/steal' });
+    res.end();
+  });
+
+  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: port });
+  const fullEnv = await seedNodeIdentity(home, env);
+
+  await assert.rejects(
+    () => remoteClusterRead({ env: fullEnv, home }),
+    err => err.code === 'cluster-request-failed',
+  );
+});
+
+test('malicious clusterCanonicalHost is rejected before any request', async t => {
+  let fetchCalled = false;
+  const fetchSpy = () => {
+    fetchCalled = true;
+    return Promise.resolve({ ok: true, text: async () => '{}' });
+  };
+
+  for (const badHost of ['trusted@evil.example', 'evil.example/extra', 'evil:bad']) {
+    const { env, home } = await isolatedHome(t, { clusterCanonicalHost: badHost, clusterLedgerPort: 9448 });
+    const fullEnv = await seedNodeIdentity(home, env);
+    fetchCalled = false;
+    await assert.rejects(
+      () => clusterLedgerRemoteFetch(CLUSTER_LEDGER_READ_PATH, { env: fullEnv, home, fetch: fetchSpy }),
+      err => err.code === 'cluster-host-invalid',
+    );
+    assert.equal(fetchCalled, false);
+  }
+});
+
+test('malformed node registry does not leak file contents in errors', async t => {
+  const secretSnippet = 'super-secret-token-xyz-12345';
+  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: 9448 });
+  const install = path.join(home, '.project-swarm');
+  await fs.mkdir(path.join(install, 'nodes'), { recursive: true });
+  await fs.writeFile(path.join(install, 'nodes', 'self'), `${NODE_ID}\n`);
+  await fs.writeFile(path.join(install, 'nodes', 'registry.json'), `{ not json and ${secretSnippet}\n`);
+  const fullEnv = { ...env, SWARM_HOME: install };
+
+  await assert.rejects(
+    () => clusterLedgerRemoteFetch(CLUSTER_LEDGER_READ_PATH, { env: fullEnv, home }),
+    err => {
+      assert.equal(err.code, 'cluster-registry-invalid');
+      assert.equal(err.message, 'cluster-client: node registry is invalid or unreadable');
+      assert.equal(err.cause, undefined);
+      assert.doesNotMatch(String(err.message), new RegExp(secretSnippet));
+      return true;
+    },
+  );
+});
+
+test('weak node signing secret is rejected', async t => {
+  const { port } = await listenMock(t, (_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ version: 1, leases: {}, maxTokenByTicket: {} }));
+  });
+
+  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: port });
+  const fullEnv = await seedNodeIdentity(home, env, { secret: 'changeme' });
+
+  await assert.rejects(
+    () => remoteClusterRead({ env: fullEnv, home }),
+    err => err.code === 'cluster-node-unregistered',
+  );
 });
