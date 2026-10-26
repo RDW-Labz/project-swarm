@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "gatefixD",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix the remaining findings from the Opus re-review in tools/gate-rerun.mjs (existing module, not wired) and extend tests/gate-rerun.test.mjs; leave the TAP parsing and rerun verification as they are. MED: each output stream keeps a rolling buffer of about half of maxBytes, so a secret cut at the head of a buffer survives in part and single-stream output is limited to half of maxBytes. Fix: let each stream keep up to maxBytes, remember whether a stream was truncated, and after redaction drop at least the redaction margin (or everything up to the first newline) from the head of any truncated stream, then combine and bound the total to maxBytes keeping the tail. Add a test where an environment secret value is cut at the head of the buffer and no fragment of it remains. LOW: the pytest argv filter drops any argument containing '/', including option values, and keeps an existing '--'. Fix: walk the argv, skip the value after options that take one (--basetemp, --rootdir, -c, --confcutdir, -p, -o, --junitxml, --log-file and similar), drop any existing '--', and drop only positional arguments that look like test paths or '::' ids; test that 'pytest --basetemp /tmp/bt tests/' keeps the option and its value and drops tests/. LOW: widen redaction: add credentials in URLs (scheme://user:pass@host pattern), GitHub tokens gh[pousr]_ and Slack tokens xox[a-z]-, and add URL to the env-name pattern (names containing URL when the value contains an @ with credentials). IMPORTANT: the repository's secret scanner blocks test files with literal secret-looking assignments: in tests build fake secret values at run time (concatenation or repeat) and use neutral variable names. Keep every other existing test passing.",
+   "context": [
+    "tools/gate-rerun.mjs",
+    "tests/gate-rerun.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/gate-rerun.mjs",
+    "tests/gate-rerun.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
