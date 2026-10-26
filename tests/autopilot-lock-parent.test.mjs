@@ -63,6 +63,53 @@ test('an unrelated live owner is refused even when SWARM_AUTOPILOT_PID points el
   );
 });
 
+test('SWARM_AUTOPILOT_PID env does not bypass a non-autopilot lock name', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  const scopeLock = path.join(root, '.swarm/project/scope-loop.lock');
+  await fs.writeFile(scopeLock, `${JSON.stringify({ pid: OWNER_PID })}\n`);
+  await assert.rejects(
+    acquireAutopilotLock(root, {
+      name: 'scope-loop',
+      pid: CHILD_PID,
+      parentPid: OWNER_PID,
+      env: { SWARM_AUTOPILOT_PID: String(OWNER_PID) },
+      isAlive: pid => pid === OWNER_PID,
+    }),
+    /scope-loop-running: pid 40001/,
+  );
+});
+
+test('invalid explicit allowOwnerPid falls through to env; absent env still refuses', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  await fs.writeFile(lockFile(root), `${JSON.stringify({ pid: OWNER_PID })}\n`);
+  await assert.rejects(
+    acquireAutopilotLock(root, {
+      pid: STRANGER_PID,
+      parentPid: 1,
+      allowOwnerPid: 0,
+      isAlive: pid => pid === OWNER_PID,
+    }),
+    /autopilot-running: pid 40001/,
+  );
+});
+
+test('invalid explicit allowOwnerPid falls through to a valid SWARM_AUTOPILOT_PID env', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  await fs.writeFile(lockFile(root), `${JSON.stringify({ pid: OWNER_PID })}\n`);
+  const release = await acquireAutopilotLock(root, {
+    pid: CHILD_PID,
+    parentPid: OWNER_PID,
+    allowOwnerPid: 'not-a-pid',
+    env: { SWARM_AUTOPILOT_PID: String(OWNER_PID) },
+    isAlive: pid => pid === OWNER_PID,
+  });
+  assert.equal(JSON.parse(await fs.readFile(lockFile(root), 'utf8')).pid, OWNER_PID);
+  await release();
+});
+
 test('explicit allowOwnerPid does not bypass a non-autopilot lock name', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });

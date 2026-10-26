@@ -10,9 +10,23 @@ const alive = pid => {
 
 function resolveAllowOwnerPid(name, allowOwnerPid, env) {
   if (name !== 'autopilot') return undefined;
-  if (allowOwnerPid !== undefined && allowOwnerPid !== null) return allowOwnerPid;
+  if (allowOwnerPid !== undefined && allowOwnerPid !== null) {
+    if (Number.isInteger(allowOwnerPid) && allowOwnerPid > 0) return allowOwnerPid;
+  }
   const fromEnv = Number(env?.SWARM_AUTOPILOT_PID);
   return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : undefined;
+}
+
+export async function readLockOwner(root, name = 'autopilot') {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const file = path.join(dir, `${name}.lock`);
+  try {
+    const owner = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (!Number.isInteger(owner?.pid) || owner.pid <= 0) return null;
+    return { pid: owner.pid, startedAt: owner.startedAt };
+  } catch {
+    return null;
+  }
 }
 
 export async function acquireAutopilotLock(root, {
