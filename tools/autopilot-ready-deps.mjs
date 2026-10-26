@@ -441,8 +441,8 @@ export function readyAutopilotDeps(projectRoot, {
           };
           const earlyExitTimer = setTimeout(() => {
             if (settled) return;
-            child.unref();
-            finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
+            child.unref?.();
+            finish({ ok: true, result: `started go --scope (pid ${child?.pid})` });
           }, spawnEarlyExitMs);
           const settleEarlyExit = async (out) => {
             clearTimeout(earlyExitTimer);
@@ -454,7 +454,9 @@ export function readyAutopilotDeps(projectRoot, {
           child.once('exit', (code, signal) => {
             if (settled) return;
             void (async () => {
-              if (code !== 0 || signal) {
+              const exitFailed = Boolean(signal)
+                || (typeof code === 'number' && code !== 0);
+              if (exitFailed) {
                 const parts = [`exit code ${code ?? 'null'}`];
                 if (signal) parts.push(`signal ${signal}`);
                 const errText = await readScopeChildErrSnippet(stderrFilePath, startOffset);
@@ -462,7 +464,7 @@ export function readyAutopilotDeps(projectRoot, {
                 await settleEarlyExit({ ok: false, result: parts.join(': ') });
                 return;
               }
-              await settleEarlyExit({ ok: true, result: `started go --scope (pid ${child.pid})` });
+              await settleEarlyExit({ ok: true, result: `started go --scope (pid ${child?.pid})` });
             })();
           });
         });

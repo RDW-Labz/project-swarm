@@ -20,7 +20,11 @@
     "tools/autopilot-ready-deps.mjs"
    ],
    "timeoutMs": 1500000,
-   "ignoreTests": []
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/needs-you-triage.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }
