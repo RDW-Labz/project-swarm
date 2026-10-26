@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0315",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0315 (S10, R-079): write tools/watch-assets/cc-phone.css, phone-width (390px) responsive styling for the command-center mockup (read docs/design/command-center-mockup/hive.html and docs/design/command-center-mockup/shared.css as context for the existing markup/class names and design tokens - this new stylesheet should target those same classes/structure, not invent new markup). Do NOT edit tools/watch-server.mjs, tools/board-data.mjs, tools/watch-assets/board.js, or tools/watch-assets/project.js - this ticket is CSS-only, additive, and must not touch those files even if related UI is implied there. Acceptance, all at a 390px viewport width: (1) the Hive view has no horizontal scroll; (2) interactive targets (buttons, tappable cards, nav items) are at least 44x44px; (3) neither the Hive nor the Cockpit view overflows horizontally - `scrollWidth` must equal `clientWidth` on their containers, and grid/flex children need `min-width: 0` (or equivalent) wherever a long text/number child would otherwise force overflow; (4) the Hive's radial/ring visualization is capped at 60% of the viewport width at this breakpoint; (5) cards stack into one full-width column (not a multi-column grid) with their full body content visible (not clipped/truncated). Write tests/command-center-phone.spec.mjs as a Playwright test (check for an existing pattern/config first; if none exists, write it as Playwright and say plainly if the runner isn't installed rather than claiming a run that didn't happen) that loads hive.html at a 390px viewport and asserts each of the 5 acceptance points programmatically. No Docker needed. Keep this focused and move quickly - write the CSS first, then the test; do not over-polish.",
+      "context": ["docs/design/command-center-mockup/hive.html", "docs/design/command-center-mockup/shared.css"],
+      "outputs": ["tools/watch-assets/cc-phone.css", "tests/command-center-phone.spec.mjs"],
+      "timeoutMs": 2400000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs", "tests/watch-assets.test.mjs"],
+      "ignoreTestsReason": "these enumerate tools/ (or tools/watch-assets/) generically for a brand-new unrelated file; full suite runs before integrate anyway"
+    },
+    {
+      "id": "T-0449",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0449 (S11, R-081/082/083): types-only ticket for self-managing swarm infrastructure - no behavior, no wiring, just shared type/shape definitions. Write tools/self-manage/types.mjs exporting plain JSDoc typedefs for: (1) a lane health record - status one of 'healthy'|'degraded'|'down'|'paused', plus `reason` (string, nullable when healthy) and `lastChecked` (ISO timestamp string); (2) a lease record shape (ticket/job id, holder, expiry, fencing token); (3) a routing record shape (lane/agent/model a ticket is routed to, plus reason/route source). Keep every type small and exactly what's named - this is explicitly scoped as types only, not an implementation. No test file required for a pure JSDoc-types module. Keep this short - this should be a quick, small file.",
+      "context": ["tools/lanes.mjs"],
+      "outputs": ["tools/self-manage/types.mjs"],
+      "timeoutMs": 1800000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs"],
+      "ignoreTestsReason": "these enumerate tools/ generically for a brand-new unrelated file; full suite runs before integrate anyway"
+    }
+  ]
+}

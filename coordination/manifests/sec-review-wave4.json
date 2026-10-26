@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "sec-review-t0422",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Ticket marked sensitive (coverage audit for the real-money GPU rental gate epic); owner-approved Opus review via the Anthropic API lane.",
+      "prompt": "Review T-0422: tests/burst-gpu.test.mjs is the test suite for the GPU burst epic (gates in tools/burst-gates.mjs, the rental start gate in tools/burst-gpu.mjs, and the daily-limit-gated auto-scaler in tools/burst-gpu-scale.mjs - all already built and independently reviewed in prior rounds this wave). T-0422's own work was a coverage AUDIT - it added an all-three-gates-fail test and a realistic multi-sample scaler timing test, concluding existing coverage otherwise covers the epic's acceptance. Check: (1) does the test suite genuinely exercise 'any single gate FAIL blocks rental entirely with gates not met and zero provision calls' for EACH of the three gates individually, not just the already-added all-three-fail case; (2) is the sensitive/null-ticket refusal (the bug fixed in an earlier T-0420 review round) still covered here or could it have regressed silently; (3) does the new scaler timing test actually prove the 10-minute windows (DEFAULT_START_SUSTAIN_MS, IDLE_STOP_MS) using real millisecond boundary values, or does it use suspiciously round/approximate numbers that could pass even with an off-by-one in the implementation; (4) any vacuous assertion anywhere in the file (an assertion that would pass regardless of correct behavior) similar to the kind a prior T-0409 audit on this project missed. Report only real, concretely demonstrable problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0422\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" when there is any high or medium finding.",
+      "context": ["tests/burst-gpu.test.mjs", "tools/burst-gates.mjs", "tools/burst-gpu.mjs", "tools/burst-gpu-scale.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    },
+    {
+      "id": "sec-review-t0423",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Ticket marked sensitive (mounts the real-money GPU rental CLI route); owner-approved Opus review via the Anthropic API lane.",
+      "prompt": "Review T-0423: tools/burst-commands.mjs mounts `swarm burst gpu status|start` as a real CLI route (not yet wired into tools/swarm.mjs's dispatcher - that's a deliberate follow-up). A prior self-review already caught and fixed one bug: an omitted --ticket flag previously synthesized a fake {sensitive:false} object (defeating startBurstGpu's fail-closed null-ticket handling); it now passes null through unchanged. Check for any REMAINING issue: (1) is there any other path where a missing, malformed, or partially-valid --ticket JSON file could end up treated as non-sensitive when it shouldn't be (e.g. a ticket file that parses to `null`, `{}`, or a non-object value); (2) does `swarm burst gpu status` ever call `provision`/gpuUp under any input, given status must be purely informational and never provision anything; (3) is the default `defaultProvision` wired to the REAL gpuUp (tools/gpu.mjs) in a way that could accidentally fire during a test run that doesn't inject its own provision stub - walk whether any existing test in tests/burst-gpu-route.test.mjs could accidentally reach defaultProvision and call real gpuUp; (4) any argument-parsing gap where `--metrics`/`--ticket` flag values could be confused with each other or with the subcommand (e.g. a value starting with `-` silently treated as a flag's value or vice versa). Report only real, concretely demonstrable problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0423\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" when there is any high or medium finding.",
+      "context": ["tools/burst-commands.mjs", "tests/burst-gpu-route.test.mjs", "tools/burst-gpu.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    }
+  ]
+}

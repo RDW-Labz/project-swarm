@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0423-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix a real bug in tools/burst-commands.mjs's `swarm burst gpu start` handler (T-0423) found during review. Current code: `const ticket = ticketPath ? await loadTicket(ticketPath) : { sensitive: false };` - when the caller OMITS `--ticket` entirely, this synthesizes a fake `{ sensitive: false }` ticket, which tells startBurstGpu (tools/burst-gpu.mjs, read as context) the ticket is explicitly non-sensitive and safe to rent for. This is backwards and dangerous: startBurstGpu was specifically fixed in a prior review round so that a MISSING/null/undefined ticket is treated as sensitive and REFUSED (fail closed) - this CLI wrapper defeats that fix by inventing a fake safe ticket whenever the caller simply forgets to pass --ticket. Fix: when `--ticket` is omitted, pass `null` through to startBurstGpu unchanged (let its own existing null-handling refuse it), not a synthesized `{sensitive: false}` object. Only when `--ticket FILE` is explicitly given and its JSON content has `sensitive: false` should a start be allowed to proceed past that check. Update tests/burst-gpu-route.test.mjs (read it as context): the existing test for 'start with no ticket' almost certainly currently asserts a successful start (since it relied on the buggy default) - that assertion needs to flip to expect a refusal ('not allowed on rented lane', exit 1, provisioner never called) when --ticket is omitted; add a separate test where an explicit --ticket file containing `{\"sensitive\":false}` DOES allow a start when gates pass. Run the test file when done.",
+      "context": ["tools/burst-commands.mjs", "tests/burst-gpu-route.test.mjs", "tools/burst-gpu.mjs"],
+      "outputs": ["tools/burst-commands.mjs", "tests/burst-gpu-route.test.mjs"],
+      "timeoutMs": 1200000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

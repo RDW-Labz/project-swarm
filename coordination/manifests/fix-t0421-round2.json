@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0421-fix2",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix two remaining review findings on tools/burst-gpu-scale.mjs's resolveBurstScalerAction (T-0421). (1) MEDIUM: the destructuring default `billedTodayUsd = 0` in `const { billedTodayUsd = 0, hourlyUsd, settings = {}, notifiedLevels = [] } = limitContext ?? {};` makes an OMITTED billedTodayUsd silently count as $0 billed - a caller that forgets to pass real today's-spend gets a start allowed even though real spend might already be near the limit. Fix: remove the `= 0` default so that an omitted/undefined billedTodayUsd is rejected by the existing finite/non-negative validation (throw), the same way a negative or non-numeric value is already rejected - require the caller to always explicitly supply it. Add a test: calling resolveBurstScalerAction with limitContext that omits billedTodayUsd entirely throws, rather than silently treating it as 0. (2) LOW: `scaler.update(sample)` currently runs BEFORE the limitContext (hourlyUsd/billedTodayUsd) validation, so a call that throws on bad inputs has already mutated the scaler's internal longSince/emptySince sustain timers; a caller that catches the error and retries with corrected inputs would see those timers already advanced from the failed call. Fix: validate limitContext's hourlyUsd and billedTodayUsd BEFORE calling scaler.update(sample), so a validation failure never has a side effect on the scaler's internal state. Run tests/burst-gpu.test.mjs at least twice when done to confirm stability.",
+      "context": ["tools/burst-gpu-scale.mjs", "tools/daily-limit.mjs", "tests/burst-gpu.test.mjs"],
+      "outputs": ["tools/burst-gpu-scale.mjs", "tests/burst-gpu.test.mjs"],
+      "timeoutMs": 1200000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

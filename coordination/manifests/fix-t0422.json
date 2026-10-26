@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0422-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix a review finding on tests/burst-gpu.test.mjs's new scaler timing test (T-0422). The test 'long queue sustains 10 minutes before start, then idle 10 minutes before stop' builds its boundary offsets from the imported DEFAULT_START_SUSTAIN_MS and IDLE_STOP_MS constants (tools/burst-gpu-scale.mjs, read as context) rather than literal values, so it only checks internal consistency - if those constants were accidentally changed from their spec'd 10-minute value, the test would silently pass against the new (wrong) value instead of catching the regression. Fix: add two explicit assertions near the top of that test (or describe block) pinning the actual spec'd values: `assert.equal(DEFAULT_START_SUSTAIN_MS, 600_000)` and `assert.equal(IDLE_STOP_MS, 600_000)` (10 minutes in ms), so a future change to either constant away from 10 minutes fails this test directly, in addition to the existing relative-boundary checks. Run the test file when done.",
+      "context": ["tests/burst-gpu.test.mjs", "tools/burst-gpu-scale.mjs"],
+      "outputs": ["tests/burst-gpu.test.mjs"],
+      "timeoutMs": 900000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}
