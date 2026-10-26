@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockfix4",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "In tools/autopilot-ready-deps.mjs the early-exit handler for the spawned go --scope child treats any exit event as a failure unless code === 0. Existing tests in other files (tests/memory-fixes.test.mjs, tests/memory-wiring.test.mjs, tests/autopilot-wide-waves.test.mjs; do not edit them) use a fake child whose once(event, cb) calls cb() with no arguments for every event except 'error' and which has no stderr or stdio; they expect startScope to return ok true with the normal 'started go --scope' result and to have recorded the spawn args. Fix the production code so these pass: an exit callback with no numeric code and no signal (code undefined or null and signal falsy) is not a failure, only a numeric non-zero code or a truthy signal is; the code must also not require child.stderr, child.pid or child.unref beyond optional chaining. A real early failing exit (numeric non-zero code or signal) must still return ok false with the exit code and last bytes. Keep the log-file stderr handling. Make tests/memory-fixes.test.mjs, tests/memory-wiring.test.mjs, tests/autopilot-wide-waves.test.mjs, tests/autopilot-ready-deps.test.mjs and tests/autopilot-lock-parent.test.mjs all pass.",
+   "context": [
+    "tools/autopilot-ready-deps.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-ready-deps.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": []
+  }
+ ]
+}
