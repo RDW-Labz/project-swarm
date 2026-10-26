@@ -15,14 +15,23 @@ const OTHER = '/tmp/project-b';
 
 function makeDeps(overrides = {}) {
   const spawnCalls = [];
+  let lastSpawnChild = null;
   const spawnImpl = (execPath, args, opts) => {
     spawnCalls.push({ execPath, args, opts });
     const child = new EventEmitter();
-    child.pid = 4242;
+    child.pid = overrides.spawnPid ?? 4242;
+    lastSpawnChild = child;
     child.unref = function unref() { this.unrefed = true; };
     child.once = function once(event, fn) {
       if (event === 'error' && overrides.spawnAsyncError) {
         queueMicrotask(() => fn(overrides.spawnAsyncError));
+      }
+      if (event === 'exit') {
+        child._exitListener = fn;
+        if (overrides.spawnEarlyExit !== undefined) {
+          const { code, signal } = overrides.spawnEarlyExit;
+          queueMicrotask(() => fn(code, signal));
+        }
       }
       return EventEmitter.prototype.once.call(this, event, fn);
     };
@@ -34,6 +43,7 @@ function makeDeps(overrides = {}) {
     memoryAware: false,
     spawnImpl,
     selfPid: 1000,
+    waitStartScopeExitGrace: () => Promise.resolve(),
     liveBusyMarkers: async () => overrides.markers ?? [],
     listLiveRuns: async () => overrides.liveRuns ?? [],
     checkProjectCap: async () => overrides.capped ?? null,
@@ -42,7 +52,7 @@ function makeDeps(overrides = {}) {
     ...overrides.injected,
   };
   const deps = readyAutopilotDeps(ROOT, injected);
-  return { deps, spawnCalls, injected };
+  return { deps, spawnCalls, injected, lastSpawnChild: () => lastSpawnChild };
 }
 
 test('readyTickets returns only ready tickets from readTickets', async () => {
@@ -106,36 +116,103 @@ test('capRoom is false when checkProjectCap reports capped', async () => {
   assert.equal(await capped.deps.capRoom(ROOT), false);
 });
 
-test('startScope spawns detached swarm go --scope, unrefs, and sets SWARM_AUTOPILOT_PID', async () => {
-  const { deps, spawnCalls } = makeDeps();
-  const out = await deps.startScope({ root: ROOT });
+test('startScope spawns detached swarm go --scope, unrefs, and sets SWARM_AUTOPILOT_PID', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-scope-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { deps, spawnCalls, lastSpawnChild } = makeDeps();
+  const out = await deps.startScope({ root: dir });
   assert.equal(out.ok, true);
+  assert.equal(out.pid, 4242);
   assert.equal(out.result, 'started go --scope (pid 4242)');
   assert.equal(spawnCalls.length, 1);
   assert.equal(spawnCalls[0].execPath, process.execPath);
-  assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope', '--max-jobs', '1']);
+  assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(dir), 'go', '--scope', '--max-jobs', '1']);
   assert.equal(spawnCalls[0].opts.detached, true);
-  assert.equal(spawnCalls[0].opts.stdio, 'ignore');
+  assert.ok(Array.isArray(spawnCalls[0].opts.stdio));
+  assert.equal(spawnCalls[0].opts.stdio[0], 'ignore');
+  assert.equal(spawnCalls[0].opts.stdio[1], 'ignore');
+  assert.equal(typeof spawnCalls[0].opts.stdio[2], 'number');
   assert.equal(spawnCalls[0].opts.env.TEST_ENV, '1');
   assert.equal(spawnCalls[0].opts.env.SWARM_AUTOPILOT_PID, '1000');
+  assert.equal(lastSpawnChild()?.unrefed, true);
 });
 
-test('startScope returns ok false when spawn throws', async () => {
+test('startScope returns ok false when spawn throws', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-spawn-throw-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { deps } = makeDeps({ spawnThrows: new Error('spawn failed') });
-  const out = await deps.startScope({ root: ROOT });
+  const out = await deps.startScope({ root: dir });
   assert.deepEqual(out, { ok: false, result: 'spawn failed' });
 });
 
-test('startScope returns ok false on an asynchronous spawn error', async () => {
+test('startScope returns ok false on an asynchronous spawn error', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-spawn-async-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { deps } = makeDeps({ spawnAsyncError: new Error('async spawn failed') });
-  const out = await deps.startScope({ root: ROOT });
+  const out = await deps.startScope({ root: dir });
   assert.deepEqual(out, { ok: false, result: 'async spawn failed' });
 });
 
-test('startScope passes cwd as the resolved project root', async () => {
+test('startScope passes cwd as the resolved project root', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-cwd-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const rel = path.join(dir, 'nested');
+  await fs.mkdir(rel, { recursive: true });
   const { deps, spawnCalls } = makeDeps();
-  await deps.startScope({ root: './relative-root' });
-  assert.equal(spawnCalls[0].opts.cwd, path.resolve('./relative-root'));
+  await deps.startScope({ root: rel });
+  assert.equal(spawnCalls[0].opts.cwd, path.resolve(rel));
+});
+
+test('startScope reports ok false with exit code and log tail when child exits quickly', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-exit-code-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const logDir = path.join(dir, '.swarm', 'project');
+  await fs.mkdir(logDir, { recursive: true });
+  const logPath = path.join(logDir, 'go-scope-spawn.log');
+  await fs.writeFile(logPath, 'earlier\nfatal: boom\n', 'utf8');
+  const { deps } = makeDeps({
+    spawnEarlyExit: { code: 2, signal: null },
+    injected: { waitStartScopeExitGrace: () => new Promise(() => {}) },
+  });
+  const out = await deps.startScope({ root: dir, waitExitGrace: () => new Promise(() => {}) });
+  assert.equal(out.ok, false);
+  assert.match(out.result, /^exit code 2:/);
+  assert.match(out.result, /fatal: boom/);
+});
+
+test('startScope reports ok false when child is killed by signal', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-exit-sig-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dir, '.swarm', 'project'), { recursive: true });
+  const { deps } = makeDeps({
+    spawnEarlyExit: { code: null, signal: 'SIGTERM' },
+    injected: { waitStartScopeExitGrace: () => new Promise(() => {}) },
+  });
+  const out = await deps.startScope({ root: dir, waitExitGrace: () => new Promise(() => {}) });
+  assert.equal(out.ok, false);
+  assert.match(out.result, /^killed by SIGTERM/);
+});
+
+test('startScope treats bare exit callback with no code or signal as non-failure', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-exit-bare-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { deps, lastSpawnChild } = makeDeps({
+    spawnEarlyExit: { code: undefined, signal: undefined },
+  });
+  const out = await deps.startScope({ root: dir });
+  assert.equal(out.ok, true);
+  assert.equal(out.pid, 4242);
+  assert.equal(lastSpawnChild()?.unrefed, true);
+});
+
+test('startScope resolves ok true when child does not exit within grace period', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ready-deps-grace-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const { deps, lastSpawnChild } = makeDeps();
+  const out = await deps.startScope({ root: dir });
+  assert.equal(out.ok, true);
+  assert.equal(out.result, 'started go --scope (pid 4242)');
+  assert.equal(lastSpawnChild()?.unrefed, true);
 });
 
 test('startScope does not spawn under hard memory pressure when memoryAware', async () => {

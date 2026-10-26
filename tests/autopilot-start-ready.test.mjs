@@ -74,8 +74,10 @@ function scopeDeps(overrides = {}) {
   deps.startScope = async arg => {
     deps.calls.push(['startScope', arg]);
     overrides.onStartScope?.(arg);
-    return overrides.startScopeResult ?? { ok: true, result: 'started' };
+    return overrides.startScopeResult ?? { ok: true, result: 'started', pid: overrides.startScopePid ?? 7001 };
   };
+  if (typeof overrides.readScopeLoopLock === 'function') deps.readScopeLoopLock = overrides.readScopeLoopLock;
+  if (typeof overrides.isAlive === 'function') deps.isAlive = overrides.isAlive;
   return deps;
 }
 
@@ -320,4 +322,46 @@ test('two start-ready attempts in one step are impossible (memory within pass)',
   });
   await autopilotStep(root, deps, { now: () => NOW });
   assert.equal(starts, 1);
+});
+
+test('start-ready skips startScope when an orphaned live scope-loop lock holder exists', async t => {
+  const root = await tempRoot(t);
+  const journal = [];
+  const deps = scopeDeps({
+    readScopeLoopLock: async () => ({ pid: 8888, startedAt: '2030-01-01T00:00:00.000Z' }),
+    isAlive: () => true,
+    deps: {
+      readJournal: async () => journal,
+      appendEvent: async (_r, event) => { journal.push(event); },
+    },
+  });
+  const step = await autopilotStep(root, deps, { now: () => NOW });
+  assert.equal(callsNamed(deps, 'startScope').length, 0);
+  const action = step.actions.find(a => a.action === 'start-ready');
+  assert.ok(action);
+  assert.equal(action.ok, true);
+  assert.equal(action.result, 'held-orphaned-scope-loop');
+});
+
+test('start-ready does not treat this process own scope child pid as orphaned', async t => {
+  const root = await tempRoot(t);
+  const ownPid = 7001;
+  const deps = scopeDeps({
+    startScopePid: ownPid,
+    readScopeLoopLock: async () => ({ pid: ownPid, startedAt: '2030-01-01T00:00:00.000Z' }),
+    isAlive: () => true,
+  });
+  const memory = new Set();
+  await autopilotStep(root, deps, { now: () => NOW, memory });
+  await autopilotStep(root, deps, { now: () => NOW + START_READY_STALE_MS + 1000, memory });
+  assert.equal(callsNamed(deps, 'startScope').length, 2);
+});
+
+test('start-ready still calls startScope when no scope-loop lock is present', async t => {
+  const root = await tempRoot(t);
+  const deps = scopeDeps({
+    readScopeLoopLock: async () => null,
+  });
+  await autopilotStep(root, deps, { now: () => NOW });
+  assert.equal(callsNamed(deps, 'startScope').length, 1);
 });

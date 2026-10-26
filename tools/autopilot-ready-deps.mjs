@@ -16,6 +16,7 @@ import { markDone } from './inbox.mjs';
 import { inboxDeps } from './inbox-commands.mjs';
 import {
   integrateBlockerRunIdFromId,
+  safeWritableDir,
 } from './journal.mjs';
 import {
   integrationBlocker,
@@ -24,6 +25,7 @@ import {
 } from './autopilot.mjs';
 import { integrateCheckoutGitState } from './generated-state.mjs';
 import { buildHandlersMap } from './needs-you-triage.mjs';
+import { readLockOwner, isAlive as defaultIsAlive } from './autopilot-lock.mjs';
 
 async function defaultGitExec(root, cmd, args, opts) {
   const { execFile } = await import('node:child_process');
@@ -262,6 +264,8 @@ export function readyAutopilotDeps(projectRoot, {
   installRoot = null,
   loadRuns = null,
   listRuns = null,
+  startScopeExitGraceMs = 300,
+  waitStartScopeExitGrace = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   const runLoader = typeof listRuns === 'function' ? listRuns : loadRuns;
   const rootForMarkers = projectRoot;
@@ -329,7 +333,10 @@ export function readyAutopilotDeps(projectRoot, {
       return { ...settings, maxJobs: Math.min(ceiling, effective) };
     },
 
-    async startScope({ root, maxJobs, skipSkeleton = false }) {
+    readScopeLoopLock: root => readLockOwner(root, 'scope-loop'),
+    isAlive: defaultIsAlive,
+
+    async startScope({ root, maxJobs, skipSkeleton = false, exitGraceMs, waitExitGrace } = {}) {
       const cwd = path.resolve(typeof root === 'string' && root ? root : projectRoot);
       let jobs = Number.isInteger(maxJobs) && maxJobs > 0 ? maxJobs : 1;
       if (memoryAware) {
@@ -349,10 +356,24 @@ export function readyAutopilotDeps(projectRoot, {
       }
       const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
       if (skipSkeleton) args.push('--skip-skeleton');
+      const graceMs = Number.isFinite(exitGraceMs) ? exitGraceMs : startScopeExitGraceMs;
+      const waitGrace = typeof waitExitGrace === 'function' ? waitExitGrace : waitStartScopeExitGrace;
+      let stderrFd;
+      let logPath;
+      // Opening the log file is best-effort: a root that doesn't exist on disk (as in many
+      // unit-test fixtures) must not block spawning go --scope, only the early-failure tail read.
+      try {
+        const scratchDir = await safeWritableDir(cwd, ['.swarm', 'project']);
+        logPath = path.join(scratchDir, 'go-scope-spawn.log');
+        stderrFd = fs.openSync(logPath, 'a');
+      } catch {
+        stderrFd = undefined;
+        logPath = undefined;
+      }
       try {
         const child = spawnImpl(process.execPath, args, {
           detached: true,
-          stdio: 'ignore',
+          stdio: ['ignore', 'ignore', stderrFd !== undefined ? stderrFd : 'ignore'],
           env: { ...env, SWARM_AUTOPILOT_PID: String(selfPid) },
           cwd,
         });
@@ -361,17 +382,45 @@ export function readyAutopilotDeps(projectRoot, {
           const finish = (out) => {
             if (settled) return;
             settled = true;
+            try { fs.closeSync(stderrFd); } catch { /* ignore */ }
             resolve(out);
           };
+          const readLogTail = () => {
+            try {
+              const buf = fs.readFileSync(logPath);
+              const tail = buf.length > 4096 ? buf.subarray(buf.length - 4096) : buf;
+              return tail.toString('utf8').trim();
+            } catch {
+              return '';
+            }
+          };
+          const spawnFailure = (code, signal) => {
+            if (signal != null && signal !== '') return true;
+            if (typeof code === 'number' && code !== 0) return true;
+            return false;
+          };
           child.once('error', (error) => finish({ ok: false, result: String(error?.message ?? error) }));
-          // Deliberately detached: the child may outlive autopilot and is guarded by its own busy marker.
-          queueMicrotask(() => {
+          child.once('exit', (code, signal) => {
+            if (!spawnFailure(code, signal)) return;
+            const tail = readLogTail();
+            const suffix = tail ? `: ${tail}` : '';
+            if (signal != null && signal !== '') {
+              finish({ ok: false, result: `killed by ${signal}${suffix}` });
+            } else {
+              finish({ ok: false, result: `exit code ${code}${suffix}` });
+            }
+          });
+          waitGrace(graceMs).then(() => {
             if (settled) return;
             child.unref();
-            finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
+            const pid = child.pid;
+            finish({ ok: true, pid, result: `started go --scope (pid ${pid})` });
           });
         });
       } catch (error) {
+        if (stderrFd !== undefined) {
+          try { fs.closeSync(stderrFd); } catch { /* ignore */ }
+        }
         return { ok: false, result: String(error?.message ?? error) };
       }
     },

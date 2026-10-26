@@ -4,9 +4,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { safeWritableDir, assertRegularOrMissing } from './journal.mjs';
 
-const alive = pid => {
+export const isAlive = pid => {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 };
+
+const alive = isAlive;
 
 function resolveAllowOwnerPid(name, allowOwnerPid, env) {
   if (name !== 'autopilot') return undefined;
