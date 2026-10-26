@@ -8,6 +8,7 @@ import {
   paletteModifierForPlatform,
   isPaletteToggleEvent,
 } from '../tools/watch-assets/command-palette.js';
+import { ccNavigate, CC_INITIAL_STATE } from '../tools/watch-assets/cc-router.js';
 
 function makeClassList() {
   const set = new Set();
@@ -228,5 +229,69 @@ test('Escape closes without navigating', () => {
   doc.dispatchKey({ key: 'Escape' });
   assert.equal(doc.isPaletteOpen(), false);
   assert.equal(navigated.length, 0);
+  palette.unbind();
+});
+
+const NAV_ITEMS = [
+  {
+    id: 'nav-project-alpha',
+    label: 'Open project Alpha',
+    type: 'project',
+    projectId: 'project-alpha',
+  },
+  {
+    id: 'nav-doc-build-plan',
+    label: 'Open build plan',
+    type: 'doc',
+    docId: 'docs/scope/build-plan.md',
+  },
+];
+
+test('Enter on project palette item passes item to onNavigate and projectId drives ccNavigate', () => {
+  const doc = makeDoc();
+  const navigated = [];
+  const palette = createCommandPalette({
+    doc,
+    items: NAV_ITEMS,
+    platform: 'Win32',
+    onNavigate: (item) => navigated.push(item),
+  });
+  palette.bind();
+  doc.dispatchKey({ key: 'k', ctrlKey: true });
+  assert.equal(palette.selectedIndex, 0);
+  doc.dispatchKey({ key: 'Enter' });
+  assert.equal(doc.isPaletteOpen(), false);
+  assert.equal(navigated.length, 1);
+  assert.deepEqual(navigated[0], NAV_ITEMS[0]);
+
+  const cockpitState = ccNavigate(CC_INITIAL_STATE, {
+    type: 'select-project',
+    projectId: navigated[0].projectId,
+  });
+  assert.deepEqual(cockpitState, { view: 'cockpit', projectId: 'project-alpha' });
+  palette.unbind();
+});
+
+test('Enter on doc palette item passes correctly shaped item for future Resources hub router', () => {
+  // Routing doc items into the Resources hub is out of scope here (T-0341/T-0342);
+  // this test only proves the palette hands off the correct item at its boundary.
+  const doc = makeDoc();
+  const navigated = [];
+  const palette = createCommandPalette({
+    doc,
+    items: NAV_ITEMS,
+    platform: 'Win32',
+    onNavigate: (item) => navigated.push(item),
+  });
+  palette.bind();
+  doc.dispatchKey({ key: 'k', ctrlKey: true });
+  doc.dispatchKey({ key: 'ArrowDown' });
+  assert.equal(palette.selectedIndex, 1);
+  doc.dispatchKey({ key: 'Enter' });
+  assert.equal(doc.isPaletteOpen(), false);
+  assert.equal(navigated.length, 1);
+  assert.deepEqual(navigated[0], NAV_ITEMS[1]);
+  assert.equal(navigated[0].type, 'doc');
+  assert.equal(navigated[0].docId, 'docs/scope/build-plan.md');
   palette.unbind();
 });

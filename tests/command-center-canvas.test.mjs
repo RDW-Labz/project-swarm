@@ -15,8 +15,10 @@ import {
   HIVE_STREAM_DENSITY_PER_ACTIVE_AGENT,
   HIVE_STREAM_SPEED_BASE,
   HIVE_STREAM_SPEED_PER_TICKET_PER_HOUR,
+  HIVE_STREAM_FRAME_MS,
   bezierPoint,
   buildHiveStreams,
+  advanceAndDrawHiveStreamComets,
 } from '../tools/watch-assets/hive-streams.js';
 import {
   hiveBrainStateFromEvents,
@@ -142,4 +144,120 @@ test('hiveBrain reduced motion returns still frame not animation descriptor', ()
   const motion = hiveBrainMotionDescriptor('merge');
   assert.equal(typeof motion.animation, 'string');
   assert.equal(motion.loop, false);
+});
+
+function createFakeCanvas2DContext() {
+  return {
+    save() {},
+    restore() {},
+    globalCompositeOperation: 'source-over',
+    strokeStyle: '',
+    fillStyle: '',
+    lineWidth: 1,
+    strokeCalls: 0,
+    fillCalls: 0,
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    stroke() {
+      this.strokeCalls += 1;
+    },
+    arc() {},
+    fill() {
+      this.fillCalls += 1;
+    },
+  };
+}
+
+function particleAdvancementSignature(particles) {
+  let sig = particles.length;
+  for (const p of particles) {
+    sig += p.t * 1e6 + p.speed * 1e3;
+  }
+  return sig;
+}
+
+test('hive stream comets sustain 30fps frame budget over 5s with four projects (fake clock + rAF)', () => {
+  const SIM_WINDOW_MS = 5000;
+  const MIN_FRAMES = 150;
+
+  const projects = [
+    { activeAgents: 8 },
+    { activeAgents: 6 },
+    { activeAgents: 10 },
+    { activeAgents: 12 },
+  ];
+  const targetPerStream = Math.max(
+    ...projects.map((project) => hiveStreamDensityForProject(project)),
+  );
+  const ticketsPerHour = 400;
+
+  const geom = { cx: 400, cy: 300, ringR: 100, phone: false };
+  const lanes = ['route', 'safety', 'context', 'control'];
+  const sides = ['left', 'right', 'left', 'right'];
+  const nodeEntries = projects.map((_, i) => ({
+    node: { lane: lanes[i], side: sides[i] },
+    angle: (Math.PI * 2 * i) / projects.length,
+    box: {
+      left: 10 + i * 130,
+      top: 80,
+      right: 110 + i * 130,
+      bottom: 140,
+      width: 100,
+      height: 60,
+    },
+  }));
+  const streams = buildHiveStreams(nodeEntries, geom);
+  assert.equal(streams.length, 4);
+
+  const particles = [];
+  const ctx = createFakeCanvas2DContext();
+
+  let now = 0;
+  const rafQueue = [];
+  const requestAnimationFrame = (callback) => {
+    rafQueue.push(callback);
+    return rafQueue.length;
+  };
+  const flushAnimationFrameQueue = () => {
+    while (rafQueue.length > 0) {
+      const callback = rafQueue.shift();
+      callback(now);
+    }
+  };
+
+  let framesProcessed = 0;
+  let totalStrokeCalls = 0;
+
+  const onAnimationFrame = () => {
+    const before = particleAdvancementSignature(particles);
+    advanceAndDrawHiveStreamComets(ctx, streams, particles, targetPerStream, ticketsPerHour);
+    const after = particleAdvancementSignature(particles);
+    assert.ok(
+      particles.length > 0 && after !== before,
+      'advanceAndDrawHiveStreamComets must mutate particle state each frame',
+    );
+    totalStrokeCalls += ctx.strokeCalls;
+    assert.ok(ctx.fillCalls > 0, 'expected comet head fills each frame');
+    framesProcessed += 1;
+    now += HIVE_STREAM_FRAME_MS;
+    if (framesProcessed < MIN_FRAMES) {
+      requestAnimationFrame(onAnimationFrame);
+    }
+  };
+
+  requestAnimationFrame(onAnimationFrame);
+  while (rafQueue.length > 0) {
+    flushAnimationFrameQueue();
+  }
+
+  assert.ok(
+    Math.abs(now - SIM_WINDOW_MS) < 1e-6,
+    `simulated clock should advance ${SIM_WINDOW_MS}ms, got ${now}`,
+  );
+  assert.ok(
+    framesProcessed >= MIN_FRAMES,
+    `expected at least ${MIN_FRAMES} frames in ${SIM_WINDOW_MS}ms simulated time, got ${framesProcessed}`,
+  );
+  assert.ok(totalStrokeCalls > 0, 'expected trail stroke work across the simulated window');
 });

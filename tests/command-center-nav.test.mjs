@@ -2,7 +2,13 @@
 import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ccNavigate, CC_INITIAL_STATE, mountCcRouter } from '../tools/watch-assets/cc-router.js';
+import {
+  ccNavigate,
+  ccPathFromState,
+  ccStateFromPath,
+  CC_INITIAL_STATE,
+  mountCcRouter,
+} from '../tools/watch-assets/cc-router.js';
 
 function makeClassList() {
   const set = new Set();
@@ -147,6 +153,81 @@ const SAMPLE_PROJECTS = [
   { id: 'proj-alpha', name: 'Alpha', lane: 'safety' },
   { id: 'proj-beta', name: 'Beta', lane: 'route' },
 ];
+
+function mountRenderSnapshot(container, router) {
+  return {
+    state: router.getState(),
+    cockpitNav: Boolean(container.querySelector('.cockpit-nav')),
+    cockpitRoot: Boolean(container.querySelector('.cc-cockpit-root')),
+    hiveNodeCount: container.querySelectorAll('.hive-node').length,
+  };
+}
+
+test('ccStateFromPath: /command-center and trailing slash resolve to hive', () => {
+  assert.deepEqual(ccStateFromPath('/command-center'), { view: 'hive' });
+  assert.deepEqual(ccStateFromPath('/command-center/'), { view: 'hive' });
+});
+
+test('ccStateFromPath: project deep links resolve to cockpit with exact projectId', () => {
+  assert.deepEqual(ccStateFromPath('/command-center/project/abc-123'), {
+    view: 'cockpit',
+    projectId: 'abc-123',
+  });
+  assert.deepEqual(ccStateFromPath('/command-center/project/xyz-999'), {
+    view: 'cockpit',
+    projectId: 'xyz-999',
+  });
+});
+
+test('ccStateFromPath: malformed paths fall back to hive without throwing', () => {
+  for (const path of [
+    '/command-center/project/',
+    '/totally-unrelated',
+    '/command-center/project',
+    '/command-center/foo/bar',
+  ]) {
+    assert.deepEqual(ccStateFromPath(path), { view: 'hive' });
+  }
+  assert.deepEqual(ccStateFromPath(null), { view: 'hive' });
+});
+
+test('ccPathFromState inverts ccStateFromPath for hive and cockpit', () => {
+  assert.equal(ccPathFromState({ view: 'hive' }), '/command-center');
+  assert.equal(ccPathFromState(ccStateFromPath('/command-center/project/p-42')), '/command-center/project/p-42');
+});
+
+test('deep link initialState renders same as select-project navigate', () => {
+  installFakeDocument();
+  const projectId = 'proj-alpha';
+  const path = `/command-center/project/${projectId}`;
+  const cockpitOpts = { now: 1_700_000_000_000 };
+  const getCockpitData = (id) => ({
+    ledger: { tickets: [] },
+    meta: { project: id },
+  });
+
+  const deepContainer = document.createElement('div');
+  const deepRouter = mountCcRouter(deepContainer, {
+    projects: SAMPLE_PROJECTS,
+    getCockpitData,
+    cockpitOpts,
+    initialState: ccStateFromPath(path),
+  });
+
+  const clickContainer = document.createElement('div');
+  const clickRouter = mountCcRouter(clickContainer, {
+    projects: SAMPLE_PROJECTS,
+    getCockpitData,
+    cockpitOpts,
+  });
+  clickRouter.navigate({ type: 'select-project', projectId });
+
+  assert.deepEqual(
+    mountRenderSnapshot(deepContainer, deepRouter),
+    mountRenderSnapshot(clickContainer, clickRouter),
+  );
+  assert.deepEqual(deepRouter.getState(), { view: 'cockpit', projectId });
+});
 
 test('ccNavigate select-project: hive -> cockpit(projectId) table-driven', () => {
   for (const projectId of ['proj-alpha', 'proj-beta', 'proj-gamma-99']) {
