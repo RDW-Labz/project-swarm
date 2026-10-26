@@ -10,13 +10,13 @@ const KILL_AFTER_TERM_MS = 250;
 const EXIT_DRAIN_MS = 50;
 
 const SHELL_BINS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe', 'powershell', 'pwsh']);
-const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)$/i;
+const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN|URL)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN|URL)$/i;
 const BEARER_RE = /bearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const SK_RE = /sk-[A-Za-z0-9_-]{8,}/g;
-const GHP_RE = /ghp_[A-Za-z0-9]+/g;
-const GHO_RE = /gho_[A-Za-z0-9]+/g;
+const GH_TOKEN_RE = /gh[pousr]_[A-Za-z0-9]+/g;
 const GITHUB_PAT_RE = /github_pat_[A-Za-z0-9_]+/g;
-const XOX_RE = /xox[abp]-[A-Za-z0-9-]+/gi;
+const XOX_RE = /xox[a-z]-[A-Za-z0-9-]+/gi;
+const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s/]+@[^\s/]+/gi;
 const AKIA_RE = /AKIA[0-9A-Z]{16}/g;
 const REDACT_MARGIN_BYTES = 4096;
 const MIN_ENV_REDACT_LEN = 6;
@@ -199,14 +199,58 @@ function isUnsafeShellArgv(argv) {
   return false;
 }
 
-function isPytestTailArg(arg) {
+const PYTEST_OPT_CONSUMES_NEXT = new Set([
+  '--basetemp',
+  '--rootdir',
+  '-c',
+  '--confcutdir',
+  '-p',
+  '-o',
+  '--junitxml',
+  '--log-file',
+  '--override-ini',
+  '--pythonpath',
+  '--config-file',
+  '--import-mode',
+]);
+
+function pytestOptConsumesNext(arg) {
+  return PYTEST_OPT_CONSUMES_NEXT.has(arg);
+}
+
+function isPytestPositionalToDrop(arg) {
   if (arg === '-q' || arg === '--quiet' || arg === '{affected}') return true;
   if (arg.startsWith('-')) return false;
   if (arg.includes('::')) return true;
   if (/\.py$/i.test(arg)) return true;
   if (arg.startsWith('./')) return true;
-  if (arg.includes('/')) return true;
+  if (/^tests?(?:\/|$)/i.test(arg)) return true;
+  if (arg.endsWith('/') && !/^[a-z][a-z0-9+.-]*:\/\//i.test(arg)) return true;
   return false;
+}
+
+function filterPytestArgvTail(argv) {
+  const out = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--') continue;
+    if (arg === '-q' || arg === '--quiet') continue;
+    if (pytestOptConsumesNext(arg)) {
+      out.push(arg);
+      if (i + 1 < argv.length) {
+        out.push(argv[i + 1]);
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      out.push(arg);
+      continue;
+    }
+    if (isPytestPositionalToDrop(arg)) continue;
+    out.push(arg);
+  }
+  return out;
 }
 
 function pytestIds(failed) {
@@ -220,7 +264,7 @@ function buildPytestRerunArgv(argv, failed) {
   const ids = pytestIds(failed);
   if (!ids.length) return null;
   const prefix = argv.slice(0, pytestAt + 1);
-  const tail = argv.slice(pytestAt + 1).filter(arg => !isPytestTailArg(arg));
+  const tail = filterPytestArgvTail(argv.slice(pytestAt + 1));
   return [...prefix, ...tail, '-rA', '-p', 'no:cacheprovider', '--', ...ids];
 }
 
@@ -342,12 +386,21 @@ export function buildRerunArgv(argv, failed, kind = 'auto', cwd = process.cwd())
   return null;
 }
 
+function envValueLooksLikeUrlCredentials(value) {
+  return /:\/\//.test(value) && /@[^@]+/.test(value) && /:[^@\s/]+@/.test(value);
+}
+
+function shouldRedactEnvPair(key, value) {
+  if (typeof value !== 'string' || value.length < MIN_ENV_REDACT_LEN) return false;
+  if (SECRET_ENV_RE.test(key)) return true;
+  if (/URL/i.test(key) && envValueLooksLikeUrlCredentials(value)) return true;
+  return false;
+}
+
 function redactEnvValues(text, env) {
   let out = String(text ?? '');
   const pairs = Object.entries(env ?? {})
-    .filter(([key, value]) => typeof value === 'string'
-      && value.length >= MIN_ENV_REDACT_LEN
-      && SECRET_ENV_RE.test(key))
+    .filter(([key, value]) => shouldRedactEnvPair(key, value))
     .sort((a, b) => b[1].length - a[1].length);
   for (const [, value] of pairs) {
     out = out.split(value).join('[redacted]');
@@ -359,10 +412,10 @@ export function redactRerunTail(text, env) {
   let out = redactEnvValues(text, env);
   out = out.replace(BEARER_RE, 'Bearer [redacted]');
   out = out.replace(SK_RE, 'sk-[redacted]');
-  out = out.replace(GHP_RE, 'ghp_[redacted]');
-  out = out.replace(GHO_RE, 'gho_[redacted]');
+  out = out.replace(GH_TOKEN_RE, (m) => `${m.slice(0, 4)}[redacted]`);
   out = out.replace(GITHUB_PAT_RE, 'github_pat_[redacted]');
-  out = out.replace(XOX_RE, 'xox[redacted]');
+  out = out.replace(XOX_RE, (m) => `${m.slice(0, 3)}[redacted]`);
+  out = out.replace(URL_CREDENTIALS_RE, (m) => m.replace(/:\/\/[^@\s/]+/, '://[redacted]'));
   out = out.replace(AKIA_RE, 'AKIA[redacted]');
   return out;
 }
@@ -379,6 +432,37 @@ function utf8TailBytes(text, maxBytes) {
     else start = mid + 1;
   }
   return s.slice(start);
+}
+
+function utf8DropHeadBytes(text, dropBytes) {
+  const s = String(text ?? '');
+  if (dropBytes <= 0) return s;
+  if (Buffer.byteLength(s, 'utf8') <= dropBytes) return '';
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const head = s.slice(0, mid);
+    if (Buffer.byteLength(head, 'utf8') <= dropBytes) lo = mid + 1;
+    else hi = mid;
+  }
+  return s.slice(lo);
+}
+
+function dropTruncatedStreamHeadAfterRedaction(text, truncated) {
+  if (!truncated) return String(text ?? '');
+  const s = String(text ?? '');
+  const totalBytes = Buffer.byteLength(s, 'utf8');
+  const newlineIdx = s.indexOf('\n');
+  if (totalBytes <= REDACT_MARGIN_BYTES) {
+    if (newlineIdx >= 0) return s.slice(newlineIdx + 1);
+    return s;
+  }
+  let dropBytes = REDACT_MARGIN_BYTES;
+  if (newlineIdx >= 0) {
+    dropBytes = Math.max(dropBytes, Buffer.byteLength(s.slice(0, newlineIdx + 1), 'utf8'));
+  }
+  return utf8DropHeadBytes(s, Math.min(dropBytes, totalBytes));
 }
 
 function trimTail(stdout, stderr, maxBytes) {
@@ -423,9 +507,11 @@ function killProcessGroup(child, signal, killImpl = defaultKill) {
   }
 }
 
-function appendStreamTail(current, chunk, maxBytes) {
-  const next = current + String(chunk);
-  return utf8TailBytes(next, maxBytes);
+function appendStreamTail(state, chunk, maxBytes) {
+  const prev = typeof state === 'string' ? { text: state, truncated: false } : state;
+  const next = prev.text + String(chunk);
+  const truncated = prev.truncated || Buffer.byteLength(next, 'utf8') > maxBytes;
+  return { text: utf8TailBytes(next, maxBytes), truncated };
 }
 
 export async function rerunFailed({
@@ -471,8 +557,8 @@ export async function rerunFailed({
       });
       return;
     }
-    let stdout = '';
-    let stderr = '';
+    let stdout = { text: '', truncated: false };
+    let stderr = { text: '', truncated: false };
     let exitCode = null;
     let signal = null;
     let timedOut = false;
@@ -480,8 +566,7 @@ export async function rerunFailed({
     let timeoutTimer = null;
     let killTimer = null;
     let drainTimer = null;
-    const captureMax = maxBytes + REDACT_MARGIN_BYTES;
-    const streamCaptureMax = Math.max(Math.floor(captureMax / 2), Math.floor(captureMax / 4));
+    const streamCaptureMax = maxBytes;
     const finish = () => {
       if (done) return;
       done = true;
@@ -490,22 +575,30 @@ export async function rerunFailed({
       clearTimeout(drainTimer);
       child.stdout?.destroy();
       child.stderr?.destroy();
-      const full = `${stdout}${stderr}`;
-      const redacted = redactRerunTail(full, env);
-      const outLen = Buffer.byteLength(stdout, 'utf8');
-      const errLen = Buffer.byteLength(stderr, 'utf8');
+      const outText = stdout.text;
+      const errText = stderr.text;
+      const full = `${outText}${errText}`;
+      const redactedOut = dropTruncatedStreamHeadAfterRedaction(
+        redactRerunTail(outText, env),
+        stdout.truncated,
+      );
+      const redactedErr = dropTruncatedStreamHeadAfterRedaction(
+        redactRerunTail(errText, env),
+        stderr.truncated,
+      );
+      const outLen = Buffer.byteLength(redactedOut, 'utf8');
+      const errLen = Buffer.byteLength(redactedErr, 'utf8');
       let tail;
       if (outLen + errLen === 0) {
         tail = '';
-      } else if (Buffer.byteLength(redacted, 'utf8') <= maxBytes) {
-        tail = redacted;
+      } else if (outLen + errLen <= maxBytes) {
+        tail = redactedOut + redactedErr;
       } else if (errLen === 0) {
-        tail = utf8TailBytes(redacted, maxBytes);
+        tail = utf8TailBytes(redactedOut, maxBytes);
       } else if (outLen === 0) {
-        tail = utf8TailBytes(redacted, maxBytes);
+        tail = utf8TailBytes(redactedErr, maxBytes);
       } else {
-        const splitIdx = Math.round(redacted.length * (outLen / (outLen + errLen)));
-        tail = trimTail(redacted.slice(0, splitIdx), redacted.slice(splitIdx), maxBytes);
+        tail = trimTail(redactedOut, redactedErr, maxBytes);
       }
       let ok = exitCode === 0 && !timedOut;
       let reason;

@@ -141,6 +141,22 @@ test('buildRerunArgv builds pytest rerun argv with -- before ids', () => {
   ]);
 });
 
+test('buildRerunArgv keeps pytest path options and drops test path positionals', () => {
+  const basetemp = ['/tmp', 'bt'].join('/');
+  const argv = ['pytest', '--basetemp', basetemp, 'tests/'];
+  const failed = ['tests/a.py::test_x'];
+  assert.deepEqual(buildRerunArgv(argv, failed, 'pytest'), [
+    'pytest',
+    '--basetemp',
+    basetemp,
+    '-rA',
+    '-p',
+    'no:cacheprovider',
+    '--',
+    'tests/a.py::test_x',
+  ]);
+});
+
 test('buildRerunArgv filters unsafe pytest ids from failed list', () => {
   const argv = ['pytest'];
   const failed = ['-evil.py::t', 'tests/../x.py::t', 'tests/good.py::t'];
@@ -317,28 +333,89 @@ test('redactRerunTail skips short env secret values', () => {
 test('redactRerunTail redacts new token patterns and case-insensitive bearer', () => {
   const ghp = ['ghp', '_'].join('') + 'A'.repeat(20);
   const gho = ['gho', '_'].join('') + 'B'.repeat(20);
+  const ghu = ['ghu', '_'].join('') + 'F'.repeat(20);
   const githubPat = ['github', '_pat', '_'].join('') + 'C'.repeat(20);
   const xox = ['xox', 'b', '-'].join('') + 'D'.repeat(12);
+  const xoxs = ['xox', 's', '-'].join('') + 'G'.repeat(12);
   const akia = 'AKIA' + 'E'.repeat(16);
+  const urlCred = ['https', '://', 'alice', ':', 's3cr3t', '@', 'example.com', '/path'].join('');
   const raw = [
     ghp,
     gho,
+    ghu,
     githubPat,
     xox,
+    xoxs,
     akia,
+    urlCred,
     'auth: BeArEr tok.en.value',
   ].join(' ');
   const tail = redactRerunTail(raw, {});
   assert.ok(!tail.includes(ghp));
   assert.ok(!tail.includes(gho));
+  assert.ok(!tail.includes(ghu));
   assert.ok(!tail.includes(githubPat));
   assert.ok(!tail.includes(xox));
+  assert.ok(!tail.includes(xoxs));
   assert.ok(!tail.includes(akia));
+  assert.ok(!tail.includes('alice'));
+  assert.ok(!tail.includes('s3cr3t'));
   assert.match(tail, /Bearer \[redacted\]/);
   assert.match(tail, /ghp_\[redacted\]/);
   assert.match(tail, /gho_\[redacted\]/);
+  assert.match(tail, /ghu_\[redacted\]/);
   assert.match(tail, /github_pat_\[redacted\]/);
   assert.match(tail, /AKIA\[redacted\]/);
+  assert.match(tail, /https:\/\/\[redacted\]@example\.com\/path/);
+});
+
+test('redactRerunTail redacts credential URLs from URL-named env values', () => {
+  const user = 'svc';
+  const pass = 'p'.repeat(12);
+  const host = 'db.internal';
+  const value = ['postgres', '://', user, ':', pass, '@', host, '/app'].join('');
+  const envKey = ['DATABASE', '_', 'URL'].join('');
+  const env = { [envKey]: value };
+  const tail = redactRerunTail(`connect ${value} done`, env);
+  assert.ok(!tail.includes(pass));
+  assert.ok(!tail.includes(user));
+  assert.match(tail, /\[redacted\]/);
+});
+
+test('rerunFailed drops env secret fragments when value was cut at stream head', async () => {
+  const secret = 'Q'.repeat(32);
+  const envKey = ['GATE', '_', 'API', '_', 'TOKEN'].join('');
+  const env = { [envKey]: secret };
+  const filler = 'z'.repeat(200);
+  const spawnImpl = () => {
+    const handlers = {};
+    const child = {
+      pid: 9002,
+      stdout: { setEncoding() {}, on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
+      stderr: { setEncoding() {}, on: () => {}, destroy() {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+      kill() {},
+    };
+    setImmediate(() => {
+      handlers.stdout?.(secret + filler);
+      handlers.exit?.(1, null);
+    });
+    return child;
+  };
+  const result = await rerunFailed({
+    argv: ['pytest', 'tests/a.py::t'],
+    failed: ['tests/a.py::t'],
+    kind: 'pytest',
+    env,
+    spawnImpl,
+    maxBytes: 80,
+    timeoutMs: 5000,
+  });
+  assert.ok(!result.tail.includes(secret));
+  for (let len = 4; len <= secret.length; len++) {
+    assert.ok(!result.tail.includes(secret.slice(0, len)), `leaked prefix len ${len}`);
+  }
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 80);
 });
 
 test('rerunFailed redacts before byte trim so split secrets do not leak', async () => {
