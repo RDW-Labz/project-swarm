@@ -10,9 +10,16 @@ const KILL_AFTER_TERM_MS = 250;
 const EXIT_DRAIN_MS = 50;
 
 const SHELL_BINS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe', 'powershell', 'pwsh']);
-const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT)$/i;
-const BEARER_RE = /Bearer\s+[A-Za-z0-9._~+/=-]+/g;
+const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)$/i;
+const BEARER_RE = /bearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const SK_RE = /sk-[A-Za-z0-9_-]{8,}/g;
+const GHP_RE = /ghp_[A-Za-z0-9]+/g;
+const GHO_RE = /gho_[A-Za-z0-9]+/g;
+const GITHUB_PAT_RE = /github_pat_[A-Za-z0-9_]+/g;
+const XOX_RE = /xox[abp]-[A-Za-z0-9-]+/gi;
+const AKIA_RE = /AKIA[0-9A-Z]{16}/g;
+const REDACT_MARGIN_BYTES = 4096;
+const MIN_ENV_REDACT_LEN = 6;
 const PYTEST_ID_RE = /^[\w./-]+\.py(?:::\S.*)?$/;
 const SHORT_SUMMARY_HEADER_RE = /^={3,}\s*short test summary info\s*={3,}\s*$/i;
 
@@ -168,7 +175,6 @@ function isUnsafeShellArgv(argv) {
   if (!Array.isArray(argv) || argv.length === 0) return true;
   const bin = basename(argv[0]);
   if (SHELL_BINS.has(bin)) return true;
-  if (argv.includes('-c') && SHELL_BINS.has(bin)) return true;
   return false;
 }
 
@@ -270,7 +276,9 @@ export function buildRerunArgv(argv, failed, kind = 'auto', cwd = process.cwd())
 function redactEnvValues(text, env) {
   let out = String(text ?? '');
   const pairs = Object.entries(env ?? {})
-    .filter(([key, value]) => typeof value === 'string' && value && SECRET_ENV_RE.test(key))
+    .filter(([key, value]) => typeof value === 'string'
+      && value.length >= MIN_ENV_REDACT_LEN
+      && SECRET_ENV_RE.test(key))
     .sort((a, b) => b[1].length - a[1].length);
   for (const [, value] of pairs) {
     out = out.split(value).join('[redacted]');
@@ -282,25 +290,73 @@ export function redactRerunTail(text, env) {
   let out = redactEnvValues(text, env);
   out = out.replace(BEARER_RE, 'Bearer [redacted]');
   out = out.replace(SK_RE, 'sk-[redacted]');
+  out = out.replace(GHP_RE, 'ghp_[redacted]');
+  out = out.replace(GHO_RE, 'gho_[redacted]');
+  out = out.replace(GITHUB_PAT_RE, 'github_pat_[redacted]');
+  out = out.replace(XOX_RE, 'xox[redacted]');
+  out = out.replace(AKIA_RE, 'AKIA[redacted]');
   return out;
 }
 
-function trimTail(stdout, stderr, maxBytes) {
-  const combined = `${stdout ?? ''}${stderr ?? ''}`;
-  if (combined.length <= maxBytes) return combined;
-  return combined.slice(-maxBytes);
+function utf8TailBytes(text, maxBytes) {
+  const s = String(text ?? '');
+  if (Buffer.byteLength(s, 'utf8') <= maxBytes) return s;
+  let start = 0;
+  let end = s.length;
+  while (start < end) {
+    const mid = Math.floor((start + end) / 2);
+    const slice = s.slice(mid);
+    if (Buffer.byteLength(slice, 'utf8') <= maxBytes) end = mid;
+    else start = mid + 1;
+  }
+  return s.slice(start);
 }
 
-function killProcessGroup(child, signal) {
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
+function trimTail(stdout, stderr, maxBytes) {
+  const out = String(stdout ?? '');
+  const err = String(stderr ?? '');
+  const total = Buffer.byteLength(out, 'utf8') + Buffer.byteLength(err, 'utf8');
+  if (total <= maxBytes) return out + err;
+  const minEach = Math.floor(maxBytes / 4);
+  const outBytes = Buffer.byteLength(out, 'utf8');
+  const errBytes = Buffer.byteLength(err, 'utf8');
+  let outBudget = Math.max(minEach, Math.floor((maxBytes * outBytes) / total));
+  let errBudget = Math.max(minEach, maxBytes - outBudget);
+  if (outBudget + errBudget > maxBytes) {
+    const excess = outBudget + errBudget - maxBytes;
+    if (outBudget >= errBudget) outBudget -= excess;
+    else errBudget -= excess;
+  }
+  let combined = utf8TailBytes(out, outBudget) + utf8TailBytes(err, errBudget);
+  if (Buffer.byteLength(combined, 'utf8') > maxBytes) {
+    combined = utf8TailBytes(combined, maxBytes);
+  }
+  return combined;
+}
+
+function defaultKill(pid, signal) {
+  process.kill(pid, signal);
+}
+
+function killProcessGroup(child, signal, killImpl = defaultKill) {
+  if (Number.isInteger(child.pid) && child.pid > 1) {
     try {
-      child.kill(signal);
+      killImpl(-child.pid, signal);
+      return;
     } catch {
-      /* gone */
+      /* fall through */
     }
   }
+  try {
+    child.kill(signal);
+  } catch {
+    /* gone */
+  }
+}
+
+function appendStreamTail(current, chunk, maxBytes) {
+  const next = current + String(chunk);
+  return utf8TailBytes(next, maxBytes);
 }
 
 export async function rerunFailed({
@@ -311,6 +367,7 @@ export async function rerunFailed({
   kind = 'auto',
   timeoutMs = DEFAULT_TIMEOUT_MS,
   spawnImpl = defaultSpawn,
+  killImpl = defaultKill,
   maxBytes = DEFAULT_MAX_BYTES,
 } = {}) {
   const rerunArgv = buildRerunArgv(argv, failed, kind, cwd ?? process.cwd());
@@ -351,20 +408,36 @@ export async function rerunFailed({
     let signal = null;
     let timedOut = false;
     let done = false;
+    let timeoutTimer = null;
     let killTimer = null;
-    const keep = (current, chunk) => {
-      const next = current + String(chunk);
-      return next.length > maxBytes ? next.slice(-maxBytes) : next;
-    };
+    let drainTimer = null;
+    const captureMax = maxBytes + REDACT_MARGIN_BYTES;
+    const streamCaptureMax = Math.max(Math.floor(captureMax / 2), Math.floor(captureMax / 4));
     const finish = () => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      clearTimeout(timeoutTimer);
       clearTimeout(killTimer);
       clearTimeout(drainTimer);
       child.stdout?.destroy();
       child.stderr?.destroy();
-      const tail = redactRerunTail(trimTail(stdout, stderr, maxBytes), env);
+      const full = `${stdout}${stderr}`;
+      const redacted = redactRerunTail(full, env);
+      const outLen = Buffer.byteLength(stdout, 'utf8');
+      const errLen = Buffer.byteLength(stderr, 'utf8');
+      let tail;
+      if (outLen + errLen === 0) {
+        tail = '';
+      } else if (Buffer.byteLength(redacted, 'utf8') <= maxBytes) {
+        tail = redacted;
+      } else if (errLen === 0) {
+        tail = utf8TailBytes(redacted, maxBytes);
+      } else if (outLen === 0) {
+        tail = utf8TailBytes(redacted, maxBytes);
+      } else {
+        const splitIdx = Math.round(redacted.length * (outLen / (outLen + errLen)));
+        tail = trimTail(redacted.slice(0, splitIdx), redacted.slice(splitIdx), maxBytes);
+      }
       resolve({
         ok: exitCode === 0 && !timedOut,
         exitCode,
@@ -374,24 +447,25 @@ export async function rerunFailed({
         argv: rerunArgv,
       });
     };
-    let drainTimer = null;
-    child.stdout?.on('data', chunk => { stdout = keep(stdout, chunk); });
-    child.stderr?.on('data', chunk => { stderr = keep(stderr, chunk); });
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup(child, 'SIGTERM', killImpl);
+      killTimer = setTimeout(() => killProcessGroup(child, 'SIGKILL', killImpl), KILL_AFTER_TERM_MS);
+      drainTimer = setTimeout(finish, KILL_AFTER_TERM_MS + EXIT_DRAIN_MS + 50);
+    }, timeoutMs);
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', chunk => { stdout = appendStreamTail(stdout, chunk, streamCaptureMax); });
+    child.stderr?.on('data', chunk => { stderr = appendStreamTail(stderr, chunk, streamCaptureMax); });
     child.on('error', error => {
-      stderr = keep(stderr, error?.message ?? error);
+      stderr = appendStreamTail(stderr, error?.message ?? error, streamCaptureMax);
       finish();
     });
     child.on('exit', (code, sig) => {
       exitCode = code;
       signal = sig;
-      killProcessGroup(child, 'SIGKILL');
+      killProcessGroup(child, 'SIGKILL', killImpl);
       drainTimer = setTimeout(finish, EXIT_DRAIN_MS);
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killProcessGroup(child, 'SIGTERM');
-      killTimer = setTimeout(() => killProcessGroup(child, 'SIGKILL'), KILL_AFTER_TERM_MS);
-      drainTimer = setTimeout(finish, KILL_AFTER_TERM_MS + EXIT_DRAIN_MS + 50);
-    }, timeoutMs);
   });
 }

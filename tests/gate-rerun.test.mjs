@@ -189,8 +189,8 @@ test('rerunFailed trims output to maxBytes', async () => {
     const handlers = {};
     const child = {
       pid: 4242,
-      stdout: { on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
-      stderr: { on: (ev, fn) => { handlers.stderr = fn; }, destroy() {} },
+      stdout: { setEncoding() {}, on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
+      stderr: { setEncoding() {}, on: (ev, fn) => { handlers.stderr = fn; }, destroy() {} },
       on: (ev, fn) => { handlers[ev] = fn; },
       kill() {},
     };
@@ -208,7 +208,7 @@ test('rerunFailed trims output to maxBytes', async () => {
     maxBytes: 50,
     timeoutMs: 5000,
   });
-  assert.equal(result.tail.length, 50);
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 50);
   assert.equal(result.ok, false);
   assert.equal(result.exitCode, 1);
 });
@@ -219,34 +219,123 @@ test('rerunFailed kills the process group on timeout', async () => {
     const handlers = {};
     const child = {
       pid: 5150,
-      stdout: { on: () => {}, destroy() {} },
-      stderr: { on: () => {}, destroy() {} },
+      stdout: { setEncoding() {}, on: () => {}, destroy() {} },
+      stderr: { setEncoding() {}, on: () => {}, destroy() {} },
       on: (ev, fn) => { handlers[ev] = fn; },
       kill(sig) { signals.push(['child', sig]); },
     };
     return child;
   };
-  const realKill = process.kill.bind(process);
-  process.kill = (pid, sig) => {
+  const killImpl = (pid, sig) => {
     signals.push([pid, sig]);
-    if (pid === -5150) return;
-    return realKill(pid, sig);
   };
-  try {
-    const result = await rerunFailed({
+  const result = await rerunFailed({
+    argv: ['pytest', 'tests/a.py::t'],
+    failed: ['tests/a.py::t'],
+    kind: 'pytest',
+    spawnImpl,
+    killImpl,
+    timeoutMs: 30,
+    maxBytes: 1024,
+  });
+  assert.equal(result.timedOut, true);
+  assert.ok(signals.some(([pid, sig]) => pid === -5150 && sig === 'SIGTERM'));
+  assert.ok(signals.some(([pid, sig]) => pid === -5150 && sig === 'SIGKILL'));
+});
+
+test('rerunFailed does not kill a negative process group for invalid pid', async () => {
+  const groupKills = [];
+  const childKills = [];
+  for (const pid of [undefined, 0, 1, 1.5, '2']) {
+    const spawnImpl = () => ({
+      pid,
+      stdout: { setEncoding() {}, on: () => {}, destroy() {} },
+      stderr: { setEncoding() {}, on: () => {}, destroy() {} },
+      on(ev, fn) {
+        if (ev === 'exit') setImmediate(() => fn(0, null));
+      },
+      kill(sig) { childKills.push([pid, sig]); },
+    });
+    await rerunFailed({
       argv: ['pytest', 'tests/a.py::t'],
       failed: ['tests/a.py::t'],
       kind: 'pytest',
       spawnImpl,
-      timeoutMs: 30,
+      killImpl: (p, sig) => { groupKills.push([p, sig]); },
+      timeoutMs: 5000,
       maxBytes: 1024,
     });
-    assert.equal(result.timedOut, true);
-    assert.ok(signals.some(([pid, sig]) => pid === -5150 && sig === 'SIGTERM'));
-    assert.ok(signals.some(([pid, sig]) => pid === -5150 && sig === 'SIGKILL'));
-  } finally {
-    process.kill = realKill;
   }
+  assert.equal(groupKills.length, 0);
+  assert.ok(childKills.length > 0);
+});
+
+test('redactRerunTail skips short env secret values', () => {
+  const shortVal = 'x'.repeat(5);
+  const envKey = ['MY', '_', 'SEC', 'RET'].join('');
+  const env = { [envKey]: shortVal };
+  const raw = `leak ${shortVal} end`;
+  assert.match(redactRerunTail(raw, env), new RegExp(`leak ${shortVal} end`));
+});
+
+test('redactRerunTail redacts new token patterns and case-insensitive bearer', () => {
+  const ghp = ['ghp', '_'].join('') + 'A'.repeat(20);
+  const gho = ['gho', '_'].join('') + 'B'.repeat(20);
+  const githubPat = ['github', '_pat', '_'].join('') + 'C'.repeat(20);
+  const xox = ['xox', 'b', '-'].join('') + 'D'.repeat(12);
+  const akia = 'AKIA' + 'E'.repeat(16);
+  const raw = [
+    ghp,
+    gho,
+    githubPat,
+    xox,
+    akia,
+    'auth: BeArEr tok.en.value',
+  ].join(' ');
+  const tail = redactRerunTail(raw, {});
+  assert.ok(!tail.includes(ghp));
+  assert.ok(!tail.includes(gho));
+  assert.ok(!tail.includes(githubPat));
+  assert.ok(!tail.includes(xox));
+  assert.ok(!tail.includes(akia));
+  assert.match(tail, /Bearer \[redacted\]/);
+  assert.match(tail, /ghp_\[redacted\]/);
+  assert.match(tail, /gho_\[redacted\]/);
+  assert.match(tail, /github_pat_\[redacted\]/);
+  assert.match(tail, /AKIA\[redacted\]/);
+});
+
+test('rerunFailed redacts before byte trim so split secrets do not leak', async () => {
+  const secret = ['sk', '-'].join('') + 'z'.repeat(24);
+  const pad = 'p'.repeat(80);
+  const spawnImpl = () => {
+    const handlers = {};
+    const child = {
+      pid: 9001,
+      stdout: { setEncoding() {}, on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
+      stderr: { setEncoding() {}, on: (ev, fn) => { handlers.stderr = fn; }, destroy() {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+      kill() {},
+    };
+    setImmediate(() => {
+      handlers.stdout?.(pad + secret.slice(0, 12));
+      handlers.stderr?.(secret.slice(12) + pad);
+      handlers.exit?.(1, null);
+    });
+    return child;
+  };
+  const result = await rerunFailed({
+    argv: ['pytest', 'tests/a.py::t'],
+    failed: ['tests/a.py::t'],
+    kind: 'pytest',
+    spawnImpl,
+    maxBytes: 40,
+    timeoutMs: 5000,
+  });
+  assert.ok(!result.tail.includes(secret));
+  assert.doesNotMatch(result.tail, /sk-[A-Za-z0-9_-]{4,}/);
+  assert.match(result.tail, /sk-\[redacted\]/);
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 40);
 });
 
 test('rerunFailed returns null argv when rerun cannot be built', async () => {
