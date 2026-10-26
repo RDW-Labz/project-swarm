@@ -9,12 +9,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ORCHESTRATOR_OWN, insideProject, realOf, projectRootOf } from './orchestrator-events.mjs';
+import {
+  swarmSubcommandAlwaysAllowed,
+  readOnlyCommandAllowed,
+  helpOnly,
+  localTestRunAllowed,
+} from './orchestrator-allow.mjs';
+
+export { localTestRunAllowed };
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_TEST_MARKER_REL = '.swarm/orchestrator-mode/test-harness-signed';
 export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
 export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
-export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm diagnose "<question>" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.';
+export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help). Hand shell work (scripts, debugging, edits) belongs to workers.';
 export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
 export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
@@ -1706,44 +1714,7 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
   const parsed = omSwarmArgsAfterGlobals(args, ctx);
   if (!parsed.ok) return false;
   const { sub, rest } = parsed;
-  if (!sub || OM_SWARM_DENIED_TOP.has(sub)) return false;
-  if (!OM_SWARM_ALLOWED_TOP.has(sub)) return false;
-  if (!omSwarmRunLikeAllowed(sub, rest)) return false;
-  if (sub === 'tickets') {
-    let i = 0;
-    while (i < rest.length) {
-      const a = String(rest[i]);
-      const low = a.toLowerCase();
-      if (low === '--status' || low === '--kind') {
-        if (i + 1 >= rest.length) return false;
-        i += 2;
-        continue;
-      }
-      if (low.startsWith('--status=') || low.startsWith('--kind=')) { i += 1; continue; }
-      if (!a.startsWith('-')) { i += 1; continue; }
-      return false;
-    }
-    return true;
-  }
-  if (sub === 'handbuild') {
-    const verb = String(rest[0] ?? '').toLowerCase();
-    if (!verb || verb === '--help' || verb.startsWith('-')) return true;
-    if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
-    return SWARM_HANDBUILD_FILE_OPS.has(verb);
-  }
-  if (sub === 'change') {
-    const lower = rest.map(w => String(w).toLowerCase());
-    return !lower.some(a => a === '--yes' || a.startsWith('--yes='));
-  }
-  if (sub === 'scope') return omSwarmScopeReadOnly(rest);
-  if (sub === 'decide') return omSwarmDecideReadOnly(rest);
-  if (sub === 'run' || sub === 'integrate' || sub === 'merge' || sub === 'update') return true;
-  if (sub === 'jobs' || sub === 'board' || sub === 'watch' || sub === 'brief' || sub === 'status') return true;
-  if (sub === 'tickets') return true;
-  if (sub === 'msg' || sub === 'note' || sub === 'diagnose' || sub === 'ticket' || sub === 'ask') return true;
-  if (sub === 'version' || sub === 'doctor' || sub === 'rollup' || sub === 'go') return true;
-  if (sub === 'decision' || sub === 'handoff' || sub === 'lesson' || sub === 'backlog' || sub === 'time' || sub === 'decide') return true;
-  return false;
+  return swarmSubcommandAlwaysAllowed(sub, rest);
 };
 
 const omSwarmInvocation = (cmd, args, ctx) => {
@@ -1979,6 +1950,8 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   const cmd = path.basename(rawCmd);
   const args = plain.slice(k + 1);
+  const segment = plain.slice(k);
+  if (helpOnly(segment)) return true;
   if (cmd === 'git' && !omTrustedCommandWordOk(rawCmd, 'git')) return false;
   if (cmd === 'gh' && !omTrustedCommandWordOk(rawCmd, 'gh')) return false;
   if (cmd === 'vercel' && !omTrustedCommandWordOk(rawCmd, 'vercel')) return false;
@@ -2017,6 +1990,18 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'ls') return omLsOk(args, ctx);
   if (cmd === 'wc') return omFilterOperandsOk(cmd, args, ctx);
   const feedsPipe = words.sepAfter === '|';
+  if (ctx.root && readOnlyCommandAllowed(segment)) {
+    if (['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) {
+      return omGrepRgOk(cmd, args) && omFilterOperandsOk(cmd, args, ctx);
+    }
+    if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args) && omFilterOperandsOk(cmd, args, ctx);
+    if (cmd === 'ls') return omLsOk(args, ctx);
+    if (cmd === 'wc') return omFilterOperandsOk(cmd, args, ctx);
+    if (cmd === 'cat') {
+      const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+      return pos.length > 0 && pos.every(p => omReadOperandOk(p, ctx));
+    }
+  }
   if (!words.piped && !feedsPipe && ['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) return false;
   if (!words.piped && !feedsPipe && (cmd === 'cat' || cmd === 'cut' || cmd === 'sort' || cmd === 'uniq' || cmd === 'jq')) return false;
   if (feedsPipe && ['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) return omGrepRgOk(cmd, args) && omFilterOperandsOk(cmd, args, ctx);
@@ -2117,7 +2102,25 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
     }
     const tokenized = tokenize(text);
     if (tokenized.unclosedQuote) return false;
-    return omValidateTokenized(tokenized, ctx);
+    if (omValidateTokenized(tokenized, ctx)) return true;
+    if (tokenized.length !== 1) return false;
+    const words = tokenized[0];
+    const { plain } = omPlainWords(words);
+    let k = 0;
+    while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) return false;
+      k += 1;
+    }
+    const segment = plain.slice(k);
+    if (!localTestRunAllowed(segment)) return false;
+    const runCmd = path.basename(String(segment[0] ?? ''));
+    if (runCmd === 'node' && segment.includes('--test')) return false;
+    if (runCmd === 'npm' || runCmd === 'pnpm' || runCmd === 'yarn' || runCmd === 'pytest' || runCmd === 'python' || runCmd === 'python3') return false;
+    for (let i = 0; i < words.length; i += 1) {
+      const w = words[i];
+      if (w === '2>&1' || w === '2>' || /[<>]/.test(w) || w.includes('&')) return false;
+    }
+    return true;
   } catch {
     return false;
   }

@@ -967,7 +967,7 @@ export const OFF_FILE = '.swarm/handbuild/off';
 export { AUTO_OFF_FILE, STATS_FILE, POLICY_ID, POLICY_VERSION };
 export const GUARD_ERRORS_FILE = '.swarm/handbuild/guard-errors.ndjson';
 export const GUARD_VERSION = 1;
-export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm diagnose "<question>" or swarm ticket ...)';
+export const GUARD_ERROR_DENY_REASON = 'guard error: retry or make a ticket (swarm ticket ... or swarm tickets ... or swarm backlog add "goal")';
 export const DEFAULT_GUARD_TIMEOUT_MS = 15000;
 export {
   ORCHESTRATOR_MODE_OFF_FILE,
