@@ -1,0 +1,41 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccmount2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Command Center browser side. In this branch the server serves GET /command-center and /command-center/project/<id> (flag SWARM_COMMAND_CENTER=1) as the asset command-center.html and the JSON endpoints /api/command-center and /api/command-center/project?id=ID exist. Create: (1) tools/watch-assets/command-center.html: a page in the style of tools/watch-assets/index.html and board.html (same head, theme tokens, token handling) that loads the existing modules as ES modules (<script type=\"module\">): command-center.js, command-center-data.js, hive-layout.js, hive-stat-strip.js, hive-panels.js, hive-streams.js, hive-brain.js, cockpit-view.js, cockpit-orchestrator.js, cockpit-lists.js, cockpit-run-stream.js, cc-router.js, cc-glitch.js, cc-tour.js, command-palette.js, robot-avatar.js and the stylesheet cc-phone.css plus a new tools/watch-assets/command-center.css; look at how tools/watch-assets/board.html loads its ES modules and how assets are served (assets/ prefix, content types in tools/watch-server.mjs) and use the same convention; some modules are UMD (command-center.js, command-center-data.js) and some are ES modules: import what works in each form and read each file's header to see which. (2) New ES module tools/watch-assets/command-center-boot.js exporting mountCommandCenter(root, deps) (deps: document, fetchJson, location, history, now, requestAnimationFrame, storage; all injectable) that: fetches /api/command-center with the page token, parses it with CommandCenterData, renders the HIVE at /command-center: stat strip (hive-stat-strip), project nodes in the two bowed staircase columns around the ring with the brain in the middle (hive-layout, hive-brain), legend chips, particle streams (hive-streams, canvas, 30 fps, pauses when hidden, static under prefers-reduced-motion), bottom panels (hive-panels), robot heads on agent avatars (robot-avatar) and glitch on updates (cc-glitch); clicking a project node navigates with cc-router to /command-center/project/<id> via history.pushState and renders the COCKPIT: headline and completed-of-total counter, orchestrator state, stage rings (cockpit-view, cockpit-orchestrator), ticket lists (cockpit-lists) and run stream (cockpit-run-stream) from /api/command-center/project?id=ID; breadcrumb back to the Hive in one action; the command palette (command-palette) on Cmd-K/Ctrl-K with project and doc entries; tour (cc-tour) only on first visit; refreshes data every 5 s without flicker; empty and error states explain what is missing in plain words; numbers without a source are never drawn; every number has its label and a hover explanation from the snapshot. Match the design in docs/design/command-center-mockup/hive.html, cockpit.html and shared.css (read them: layout, colours, card rows asks/out/fails with meter bars fully visible at 1440x900, ten cards around the ring in two staircase columns without overlap, dense curved particle streams, Cockpit headline fitting one line at 1440 px, stack tiles without overlap). (3) tests/command-center-boot.test.mjs (node:test) with a small fake DOM and a fake fetch: mount renders the stat strip with 4 labelled figures, one node per project (up to ten), a legend, panels; clicking a node renders the Cockpit with the headline, rings and list ids; back returns to the Hive; an error response renders an explanatory message; reduced motion draws one still frame. Do not edit tools/watch-server.mjs or any existing module; if an existing module's API does not fit, adapt in command-center-boot.js and report the mismatch in a comment at its top. IMPORTANT: the repository's secret scanner blocks test files with literal secret-looking assignments (names like token/secret/password/key assigned a quoted value): in tests build any fake secret at run time and use neutral names. tools/watch-server.mjs has a strict dense layout checked by tests/split-scan.test.mjs: make only small edits in the existing style and add new logic in the new modules, not in that file. Keep every existing test passing.",
+   "context": [
+    "tools/watch-assets/command-center.js",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/hive-layout.js",
+    "tools/watch-assets/hive-stat-strip.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/hive-streams.js",
+    "tools/watch-assets/hive-brain.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-orchestrator.js",
+    "tools/watch-assets/cockpit-lists.js",
+    "tools/watch-assets/cockpit-run-stream.js",
+    "tools/watch-assets/cc-router.js",
+    "tools/watch-assets/command-palette.js",
+    "tools/watch-assets/robot-avatar.js",
+    "tools/watch-assets/board.html",
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/command-center.html",
+    "tools/watch-assets/command-center.css",
+    "tools/watch-assets/command-center-boot.js",
+    "tests/command-center-boot.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}

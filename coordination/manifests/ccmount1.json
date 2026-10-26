@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccmount1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Command Center server side, behind a flag. Current state in this branch: tools/watch-server.mjs already parses /command-center and /command-center/project/<id> (parseCommandCenterPath) and serves an asset named by the option commandCenterPage (default command-center.html) for them, but (a) there is no flag, so the routes are always on, (b) the page file does not exist, (c) there is no data endpoint for the shared data layer. Do: (1) New module tools/command-center-flag.mjs exporting commandCenterEnabled(env = process.env, config = null): true only when env.SWARM_COMMAND_CENTER === '1' or config?.commandCenter === true (the board config key commandCenter). (2) New module tools/command-center-snapshot.mjs exporting buildCommandCenterSnapshot(board, options): turns the board payload that the existing /api/board route returns (see tools/board-data.mjs and the existing board tests for its shape: projects with their tickets, runs, live agents, needs-you counts, spend) into the Command Center snapshot that tools/watch-assets/command-center-data.js parses and contracts/command-center.json describes: stats {projectsTotal, agentsLive, needsYouCount, spendUsd} each a labelled number {label, value, unit ('count'|'usd'), source (the board field it came from), explanation (one plain sentence)} and a projects array of cards {id, name, liveAgents, needsYou, spendUsd, plus the fields the contract and the Hive modules need such as percent done, tickets building, machine, asks/out/fails rows each with value and source}; a number with no trusted source is OMITTED, never zero-filled. Read tools/watch-assets/command-center-data.js, tools/watch-assets/hive-layout.js, hive-stat-strip.js, hive-panels.js, cockpit-view.js and cockpit-lists.js for the fields they read and make the snapshot carry them. Also export buildProjectCockpit(board, projectId) returning what the Cockpit modules need (ledger tickets with status, orchestrator session/doing state, stage progress, recent run stream items) read from the same board payload, or null for an unknown id. (3) In tools/watch-server.mjs: add a route GET /api/command-center (token protected like the other /api/* board routes, only when the flag is on) returning buildCommandCenterSnapshot of the same payload /api/board returns, and GET /api/command-center/project?id=<id> returning buildProjectCockpit (404 for unknown); gate the existing /command-center page routes behind the flag (createWatchServer option commandCenter, default from commandCenterEnabled(process.env)); with the flag off every Command Center path answers 404 exactly like an unknown path and the classic board is unchanged. Keep these edits to a few dense lines calling the new modules. (4) Tests tests/command-center-flag.test.mjs and tests/command-center-snapshot.test.mjs (node:test, fake board data, plus a route test with the existing fake-server patterns: flag off gives 404 for /command-center and /api/command-center, flag on gives 200 HTML, 200 JSON with token, 401/403 without token, unknown project 404, a number without a trusted source is omitted). IMPORTANT: the repository's secret scanner blocks test files with literal secret-looking assignments (names like token/secret/password/key assigned a quoted value): in tests build any fake secret at run time and use neutral names. tools/watch-server.mjs has a strict dense layout checked by tests/split-scan.test.mjs: make only small edits in the existing style and add new logic in the new modules, not in that file. Keep every existing test passing.",
+   "context": [
+    "tools/watch-server.mjs",
+    "tools/board-data.mjs",
+    "contracts/command-center.json",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/hive-layout.js",
+    "tools/watch-assets/hive-stat-strip.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/command-center-flag.mjs",
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-server.mjs",
+    "tests/command-center-flag.test.mjs",
+    "tests/command-center-snapshot.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
