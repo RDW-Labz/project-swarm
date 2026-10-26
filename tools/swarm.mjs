@@ -3307,6 +3307,14 @@ async function mainInner() {
     if(res.exitCode)process.exitCode=res.exitCode;
     return;
   }
+  if(args[0]==='burst'){
+    root=await fs.realpath(root);
+    const {runBurstCommand}=await import('./burst-commands.mjs');
+    const res=await runBurstCommand(root,args.slice(1));
+    process.stdout.write(res.stdout);
+    if(res.exitCode)process.exitCode=res.exitCode;
+    return;
+  }
   if(args[0]==='status'&&args[1]==='--all'&&args.length===2)args.splice(0,2,'watch','--all','--text');
   if(args[0]==='watch'||args[0]==='gallery'){
     root=await fs.realpath(root);
