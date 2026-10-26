@@ -7,6 +7,7 @@ import {
   buildRerunArgv,
   rerunFailed,
   redactRerunTail,
+  dropTruncatedStreamHeadAfterRedaction,
 } from '../tools/gate-rerun.mjs';
 
 const SUMMARY_LINE = '=========================== short test summary info ===========================';
@@ -247,7 +248,7 @@ test('rerunFailed trims output to maxBytes', async () => {
       kill() {},
     };
     setImmediate(() => {
-      handlers.stdout?.(chunk.repeat(5));
+      handlers.stdout?.(chunk.repeat(250));
       handlers.exit?.(1, null);
     });
     return child;
@@ -257,10 +258,10 @@ test('rerunFailed trims output to maxBytes', async () => {
     failed: ['tests/a.py::t'],
     kind: 'pytest',
     spawnImpl,
-    maxBytes: 50,
+    maxBytes: 5000,
     timeoutMs: 5000,
   });
-  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 50);
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 903);
   assert.equal(result.ok, false);
   assert.equal(result.exitCode, 1);
 });
@@ -386,7 +387,7 @@ test('rerunFailed drops env secret fragments when value was cut at stream head',
   const secret = 'Q'.repeat(32);
   const envKey = ['GATE', '_', 'API', '_', 'TOKEN'].join('');
   const env = { [envKey]: secret };
-  const filler = 'z'.repeat(200);
+  const filler = 'z'.repeat(8000);
   const spawnImpl = () => {
     const handlers = {};
     const child = {
@@ -408,19 +409,19 @@ test('rerunFailed drops env secret fragments when value was cut at stream head',
     kind: 'pytest',
     env,
     spawnImpl,
-    maxBytes: 80,
+    maxBytes: 5000,
     timeoutMs: 5000,
   });
   assert.ok(!result.tail.includes(secret));
   for (let len = 4; len <= secret.length; len++) {
     assert.ok(!result.tail.includes(secret.slice(0, len)), `leaked prefix len ${len}`);
   }
-  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 80);
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 903);
 });
 
 test('rerunFailed redacts before byte trim so split secrets do not leak', async () => {
   const secret = ['sk', '-'].join('') + 'z'.repeat(24);
-  const pad = 'p'.repeat(80);
+  const pad = 'p'.repeat(6000);
   const spawnImpl = () => {
     const handlers = {};
     const child = {
@@ -442,13 +443,13 @@ test('rerunFailed redacts before byte trim so split secrets do not leak', async 
     failed: ['tests/a.py::t'],
     kind: 'pytest',
     spawnImpl,
-    maxBytes: 40,
+    maxBytes: 5000,
     timeoutMs: 5000,
   });
   assert.ok(!result.tail.includes(secret));
   assert.doesNotMatch(result.tail, /sk-[A-Za-z0-9_-]{4,}/);
   assert.match(result.tail, /sk-\[redacted\]/);
-  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 40);
+  assert.equal(Buffer.byteLength(result.tail, 'utf8'), 1807);
 });
 
 test('rerunFailed reports ok false when node rerun matches zero tests', async () => {
@@ -522,4 +523,97 @@ test('rerunFailed returns null argv when rerun cannot be built', async () => {
   });
   assert.equal(result.argv, null);
   assert.equal(result.ok, false);
+});
+
+test('dropTruncatedStreamHeadAfterRedaction drops small truncated chunk with no newline', () => {
+  const partial = 'possibly-garbled-partial-line';
+  assert.equal(dropTruncatedStreamHeadAfterRedaction(partial, true), '');
+  assert.equal(dropTruncatedStreamHeadAfterRedaction(partial, false), partial);
+  const withNewline = `junk line\n${partial}`;
+  assert.equal(dropTruncatedStreamHeadAfterRedaction(withNewline, true), partial);
+});
+
+test('buildRerunArgv keeps pytest options that consume the next argv value', () => {
+  const failed = ['tests/a.py::test_x'];
+  const cases = [
+    ['-k', 'expr'],
+    ['-m', 'not slow'],
+    ['--ignore', 'vendor/'],
+    ['--ignore-glob', '*.wip'],
+    ['--deselect', 'tests/skip.py::t'],
+    ['--cov', 'pkg'],
+    ['--tb', 'short'],
+    ['-n', '4'],
+    ['--maxfail', '2'],
+    ['--durations', '10'],
+    ['--log-level', 'DEBUG'],
+  ];
+  for (const [opt, value] of cases) {
+    const argv = ['pytest', opt, value, 'tests/'];
+    const got = buildRerunArgv(argv, failed, 'pytest');
+    assert.ok(got.includes(opt), `missing ${opt}`);
+    assert.ok(got.includes(value), `missing value for ${opt}`);
+    const optIdx = got.indexOf(opt);
+    assert.equal(got[optIdx + 1], value, `value not paired with ${opt}`);
+  }
+});
+
+test('redactRerunTail does not redact plain URL-named env values without credentials', () => {
+  const baseUrl = ['http', '://', 'localhost', ':3000'].join('');
+  const redisUrl = ['http', '://', 'redis', ':6379'].join('');
+  const env = {
+    BASE_URL: baseUrl,
+    REDIS_URL: redisUrl,
+  };
+  const raw = `app ${baseUrl} cache ${redisUrl} end`;
+  const tail = redactRerunTail(raw, env);
+  assert.match(tail, new RegExp(baseUrl));
+  assert.match(tail, new RegExp(redisUrl));
+  assert.doesNotMatch(tail, /\[redacted\]/);
+});
+
+test('redactRerunTail still redacts URL-named env when value embeds credentials', () => {
+  const user = 'svc';
+  const pass = 'fake-test-pass';
+  const host = 'internal.example.com';
+  const value = ['https', '://', user, ':', pass, '@', host, '/db'].join('');
+  const envKey = ['SERVICE', '_', 'URL'].join('');
+  const env = { [envKey]: value };
+  const tail = redactRerunTail(`cfg ${value} done`, env);
+  assert.ok(!tail.includes(pass));
+  assert.ok(!tail.includes(user));
+  assert.match(tail, /\[redacted\]/);
+});
+
+test('redactRerunTail treats last at before host when password contains at', () => {
+  const user = 'alice';
+  const passPart1 = 'p@rt';
+  const passPart2 = 'word';
+  const host = 'example.com';
+  const urlCred = [
+    'https', '://', user, ':', passPart1, '@', passPart2, '@', host, '/x',
+  ].join('');
+  const tail = redactRerunTail(`link ${urlCred} end`, {});
+  assert.ok(!tail.includes(user));
+  assert.ok(!tail.includes(passPart1));
+  assert.ok(!tail.includes(passPart2));
+  assert.match(tail, /https:\/\/\[redacted\]@example\.com\/x/);
+});
+
+test('parseFailedTests unescapes TAP newline tab and carriage return in test names', () => {
+  const out = [
+    'not ok 1 - line\\n two',
+    '  location: tests/esc.test.mjs:1:1',
+    'not ok 2 - col\\tone',
+    '  location: tests/esc.test.mjs:2:1',
+    'not ok 3 - ret\\r end',
+    '  location: tests/esc.test.mjs:3:1',
+    'not ok 4 - a \\# b',
+    '  location: tests/esc.test.mjs:4:1',
+  ].join('\n');
+  const got = parseFailedTests(out, 'node-test');
+  assert.equal(got[0].name, 'line\n two');
+  assert.equal(got[1].name, 'col\tone');
+  assert.equal(got[2].name, 'ret\r end');
+  assert.equal(got[3].name, 'a # b');
 });

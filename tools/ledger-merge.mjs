@@ -320,7 +320,7 @@ export async function mergeTicketLedgers({ mini, book, target, apply = false, ap
   if (apply) {
     let releaseLock;
     try {
-      releaseLock = await acquireAutopilotLock(target, lockOptions);
+      releaseLock = await acquireAutopilotLock(target, { ...(lockOptions ?? {}), env: lockOptions?.env ?? {} });
       await applyMergedOutputs(
         target,
         { ledger: mergedLedger, reviewRecords: mergedRecords, journalEvents: mergedJournal },
