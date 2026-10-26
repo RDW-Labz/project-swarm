@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Follow-up to the orchestrator-mode guard hotfix in this branch (tools/orchestrator-allow.mjs and its use in tools/shell-writes.mjs). The hotfix made every swarm subcommand always allowed with any flags, but that removed owner-approval protections the old guard had: the orchestrator must NEVER be able to approve things for itself. tests/orchestrator-mode-review4.test.mjs 'R4-10 swarm --root must match project; run flags limited' now fails: 'swarm decide handbuild-hb-1 approve' must stay DENIED, 'swarm run --evil x' must stay DENIED (unknown flags for run, integrate and merge stay limited to the existing OM_SWARM_RUN_FLAGS plus the real documented flags of those commands, add the real flags like --queue --no-checks --no-commit --jobs --skip-skeleton --scope --max-jobs as needed), and 'swarm --root /tmp status' must stay denied. Fix the always-allow rule so these stay denied for the orchestrator: (a) swarm decide and swarm handbuild approve/deny/accept verbs (anything that approves or denies a hand-build exception: keep the previous handbuild verb handling exactly as before the hotfix), (b) swarm scope approve (and any --approve or --yes that approves a scope or a proposed ticket: 'swarm tickets ID --approve', 'swarm scope approve'), (c) swarm backup restore and swarm restore (state overwrite), (d) anything with --force that bypasses a guard, (e) swarm update --force stays allowed only if it was allowed before the hotfix. Everything else the hotfix allows (go --scope, tickets with --retry-note/--set/--release/--delivered/--add-acceptance/--acceptance/--context/--files, --help, resolve, inbox, backlog, merge, integrate, run with the real flags) stays allowed. Update tests/orchestrator-allow.test.mjs to assert both the allowed forms and these denied forms. Make tests/orchestrator-allow.test.mjs, tests/orchestrator-mode*.test.mjs and tests/shell-writes*.test.mjs all pass without editing the old tests' assertions. IMPORTANT: secret scanner: no credential-looking literals.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
