@@ -10,13 +10,13 @@ const KILL_AFTER_TERM_MS = 250;
 const EXIT_DRAIN_MS = 50;
 
 const SHELL_BINS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'cmd', 'cmd.exe', 'powershell', 'pwsh']);
-const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN|URL)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN|URL)$/i;
+const SECRET_ENV_RE = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)(?:_|$)|(?:KEY|TOKEN|SECRET|PASSWORD|PAT|AUTH|CREDENTIAL|PASSWD|PRIVATE|COOKIE|DSN)$/i;
 const BEARER_RE = /bearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const SK_RE = /sk-[A-Za-z0-9_-]{8,}/g;
 const GH_TOKEN_RE = /gh[pousr]_[A-Za-z0-9]+/g;
 const GITHUB_PAT_RE = /github_pat_[A-Za-z0-9_]+/g;
 const XOX_RE = /xox[a-z]-[A-Za-z0-9-]+/gi;
-const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s/]+@[^\s/]+/gi;
+const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^\s/]+@[^\s/]+/gi;
 const AKIA_RE = /AKIA[0-9A-Z]{16}/g;
 const REDACT_MARGIN_BYTES = 4096;
 const MIN_ENV_REDACT_LEN = 6;
@@ -99,7 +99,12 @@ function isSafeRelativeTestFile(file, cwd = process.cwd()) {
 }
 
 function unescapeTapName(name) {
-  return String(name ?? '').replace(/\\(.)/g, (_, ch) => ch);
+  return String(name ?? '').replace(/\\(.)/g, (_, ch) => {
+    if (ch === 'n') return '\n';
+    if (ch === 't') return '\t';
+    if (ch === 'r') return '\r';
+    return ch;
+  });
 }
 
 function normalizeLocationPath(raw, cwd = process.cwd()) {
@@ -212,6 +217,17 @@ const PYTEST_OPT_CONSUMES_NEXT = new Set([
   '--pythonpath',
   '--config-file',
   '--import-mode',
+  '-k',
+  '-m',
+  '--ignore',
+  '--ignore-glob',
+  '--deselect',
+  '--cov',
+  '--tb',
+  '-n',
+  '--maxfail',
+  '--durations',
+  '--log-level',
 ]);
 
 function pytestOptConsumesNext(arg) {
@@ -415,7 +431,12 @@ export function redactRerunTail(text, env) {
   out = out.replace(GH_TOKEN_RE, (m) => `${m.slice(0, 4)}[redacted]`);
   out = out.replace(GITHUB_PAT_RE, 'github_pat_[redacted]');
   out = out.replace(XOX_RE, (m) => `${m.slice(0, 3)}[redacted]`);
-  out = out.replace(URL_CREDENTIALS_RE, (m) => m.replace(/:\/\/[^@\s/]+/, '://[redacted]'));
+  out = out.replace(URL_CREDENTIALS_RE, (m) => {
+    const credAt = m.lastIndexOf('@');
+    const schemeSlash = m.indexOf('://');
+    if (schemeSlash === -1 || credAt <= schemeSlash) return m;
+    return `${m.slice(0, schemeSlash + 3)}[redacted]${m.slice(credAt)}`;
+  });
   out = out.replace(AKIA_RE, 'AKIA[redacted]');
   return out;
 }
@@ -449,14 +470,14 @@ function utf8DropHeadBytes(text, dropBytes) {
   return s.slice(lo);
 }
 
-function dropTruncatedStreamHeadAfterRedaction(text, truncated) {
+export function dropTruncatedStreamHeadAfterRedaction(text, truncated) {
   if (!truncated) return String(text ?? '');
   const s = String(text ?? '');
   const totalBytes = Buffer.byteLength(s, 'utf8');
   const newlineIdx = s.indexOf('\n');
   if (totalBytes <= REDACT_MARGIN_BYTES) {
     if (newlineIdx >= 0) return s.slice(newlineIdx + 1);
-    return s;
+    return '';
   }
   let dropBytes = REDACT_MARGIN_BYTES;
   if (newlineIdx >= 0) {
