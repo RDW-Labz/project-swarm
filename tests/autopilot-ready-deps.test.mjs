@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { readyAutopilotDeps, sameRoot } from '../tools/autopilot-ready-deps.mjs';
 
@@ -16,15 +18,25 @@ function makeDeps(overrides = {}) {
   const spawnCalls = [];
   const spawnImpl = (execPath, args, opts) => {
     spawnCalls.push({ execPath, args, opts });
-    const child = {
-      pid: 4242,
-      unref() { this.unrefed = true; },
-      once(event, fn) {
-        if (event === 'error' && overrides.spawnAsyncError) {
-          queueMicrotask(() => fn(overrides.spawnAsyncError));
-        }
-      },
+    const stderr = new PassThrough();
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stderr = stderr;
+    child.unref = function unref() { this.unrefed = true; };
+    child.once = function once(event, fn) {
+      if (event === 'error' && overrides.spawnAsyncError) {
+        queueMicrotask(() => fn(overrides.spawnAsyncError));
+      }
+      return EventEmitter.prototype.once.call(this, event, fn);
     };
+    if (overrides.spawnEarlyExit) {
+      queueMicrotask(() => {
+        const { code = 1, signal = null, stderrText = '' } = overrides.spawnEarlyExit;
+        if (stderrText) stderr.write(stderrText);
+        stderr.end();
+        child.emit('exit', code, signal);
+      });
+    }
     if (overrides.spawnThrows) throw overrides.spawnThrows;
     return child;
   };
@@ -33,6 +45,7 @@ function makeDeps(overrides = {}) {
     memoryAware: false,
     spawnImpl,
     selfPid: 1000,
+    spawnEarlyExitMs: overrides.spawnEarlyExitMs ?? 0,
     liveBusyMarkers: async () => overrides.markers ?? [],
     listLiveRuns: async () => overrides.liveRuns ?? [],
     checkProjectCap: async () => overrides.capped ?? null,
@@ -114,8 +127,23 @@ test('startScope spawns detached swarm go --scope and unrefs', async () => {
   assert.equal(spawnCalls[0].execPath, process.execPath);
   assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope', '--max-jobs', '1']);
   assert.equal(spawnCalls[0].opts.detached, true);
-  assert.deepEqual(spawnCalls[0].opts.stdio, 'ignore');
+  assert.deepEqual(spawnCalls[0].opts.stdio, ['ignore', 'ignore', 'pipe']);
   assert.equal(spawnCalls[0].opts.env.TEST_ENV, '1');
+  assert.equal(spawnCalls[0].opts.env.SWARM_AUTOPILOT_PID, '1000');
+});
+
+test('startScope reports ok false when the child exits early with failure stderr', async () => {
+  const tailMarker = 'TAIL_MARKER_ONLY';
+  const longMsg = `${'x'.repeat(300)}${tailMarker}`;
+  const { deps } = makeDeps({
+    spawnEarlyExitMs: 500,
+    spawnEarlyExit: { code: 1, stderrText: longMsg },
+  });
+  const out = await deps.startScope({ root: ROOT });
+  assert.equal(out.ok, false);
+  assert.match(out.result, /exit code 1/);
+  assert.ok(out.result.includes('x'.repeat(50)));
+  assert.ok(!out.result.includes(tailMarker));
 });
 
 test('startScope returns ok false when spawn throws', async () => {

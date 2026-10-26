@@ -247,11 +247,19 @@ export function buildNeedsYouTriageHandlers(projectRoot, inject = {}) {
 }
 
 /** Dependency bundle for autopilot start-ready (live runs, busy markers, cap, go --scope). */
+function closeStderrPipe(stderr) {
+  if (!stderr || typeof stderr.destroy !== 'function') return;
+  try { stderr.removeAllListeners('data'); } catch { /* ignore */ }
+  try { stderr.destroy(); } catch { /* ignore */ }
+  try { stderr.unref?.(); } catch { /* ignore */ }
+}
+
 export function readyAutopilotDeps(projectRoot, {
   env = process.env,
   memoryAware = true,
   spawnImpl,
   selfPid = process.pid,
+  spawnEarlyExitMs = 1500,
   liveBusyMarkers,
   listLiveRuns,
   checkProjectCap,
@@ -349,13 +357,19 @@ export function readyAutopilotDeps(projectRoot, {
       }
       const args = [swarmEntry, '--root', cwd, 'go', '--scope', '--max-jobs', String(jobs)];
       if (skipSkeleton) args.push('--skip-skeleton');
+      const childEnv = { ...env, SWARM_AUTOPILOT_PID: String(selfPid) };
       try {
         const child = spawnImpl(process.execPath, args, {
           detached: true,
-          stdio: 'ignore',
-          env,
+          stdio: ['ignore', 'ignore', 'pipe'],
+          env: childEnv,
           cwd,
         });
+        const stderr = child.stderr;
+        const stderrChunks = [];
+        if (stderr && typeof stderr.on === 'function') {
+          stderr.on('data', chunk => { stderrChunks.push(chunk); });
+        }
         return await new Promise((resolve) => {
           let settled = false;
           const finish = (out) => {
@@ -363,13 +377,33 @@ export function readyAutopilotDeps(projectRoot, {
             settled = true;
             resolve(out);
           };
-          child.once('error', (error) => finish({ ok: false, result: String(error?.message ?? error) }));
-          // Deliberately detached: the child may outlive autopilot and is guarded by its own busy marker.
-          queueMicrotask(() => {
+          const stderrSnippet = () => {
+            const buf = Buffer.concat(stderrChunks);
+            return buf.subarray(0, Math.min(buf.length, 300)).toString('utf8');
+          };
+          child.once('error', (error) => {
+            closeStderrPipe(stderr);
+            finish({ ok: false, result: String(error?.message ?? error) });
+          });
+          child.once('exit', (code, signal) => {
             if (settled) return;
-            child.unref();
+            closeStderrPipe(stderr);
+            if (code !== 0 || signal) {
+              const parts = [`exit code ${code ?? 'null'}`];
+              if (signal) parts.push(`signal ${signal}`);
+              const errText = stderrSnippet();
+              if (errText) parts.push(errText);
+              finish({ ok: false, result: parts.join(': ') });
+              return;
+            }
             finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
           });
+          setTimeout(() => {
+            if (settled) return;
+            closeStderrPipe(stderr);
+            child.unref();
+            finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
+          }, spawnEarlyExitMs);
         });
       } catch (error) {
         return { ok: false, result: String(error?.message ?? error) };
