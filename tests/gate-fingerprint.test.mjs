@@ -154,7 +154,9 @@ test('saveGateCapture trims tail to stay under 256KB', async (t) => {
     await fsPromises.rm(runDir, { recursive: true, force: true });
   });
 
-  const huge = 'x'.repeat(300 * 1024);
+  const endMark = ['_', 'T', 'A', 'I', 'L', '_', 'E', 'N', 'D'].join('');
+  const huge =
+    'x'.repeat(300 * 1024 - endMark.length) + endMark;
   const outPath = await saveGateCapture(runDir, 'big-tail', {
     meta: 'gate-failure',
     tail: huge,
@@ -164,4 +166,61 @@ test('saveGateCapture trims tail to stay under 256KB', async (t) => {
   const parsed = JSON.parse(buf.toString('utf8'));
   assert.ok(typeof parsed.tail === 'string');
   assert.ok(parsed.tail.length < huge.length);
+  assert.ok(parsed.tail.endsWith(endMark), 'trim must keep the end of the tail field');
+});
+
+test('saveGateCapture redacts Bearer tokens in capture strings', async (t) => {
+  const runDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'gate-cap-redact-'));
+  t.after(async () => {
+    await fsPromises.rm(runDir, { recursive: true, force: true });
+  });
+
+  const opaque = ['A', 'b', 'c', '1', '2', '3'].join('').repeat(4);
+  const rawLine = ['Bearer', ' ', opaque].join('');
+  const outPath = await saveGateCapture(
+    runDir,
+    'redact-bearer',
+    { tail: rawLine, nested: { log: rawLine } },
+    makeEnv(),
+  );
+  const parsed = JSON.parse(await fsPromises.readFile(outPath, 'utf8'));
+  const serialized = JSON.stringify(parsed);
+  assert.ok(!serialized.includes(opaque));
+  assert.match(parsed.tail, /Bearer \[redacted\]/);
+  assert.match(parsed.nested.log, /Bearer \[redacted\]/);
+});
+
+test('saveGateCapture refuses symlinked capture destination', async (t) => {
+  const base = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'gate-cap-sym-dest-'));
+  t.after(async () => {
+    await fsPromises.rm(base, { recursive: true, force: true });
+  });
+
+  const runDir = path.join(base, 'run');
+  await fsPromises.mkdir(runDir, { recursive: true });
+  const failuresDir = path.join(runDir, 'gate-failures');
+  await fsPromises.mkdir(failuresDir, { recursive: true });
+  const realFile = path.join(base, 'real-capture.json');
+  await fsPromises.writeFile(realFile, '{}\n', 'utf8');
+  const destLink = path.join(failuresDir, 'planted.json');
+  await fsPromises.symlink(realFile, destLink);
+
+  await assert.rejects(
+    () => saveGateCapture(runDir, 'planted', { tail: 'ok' }),
+    /must not be a symlink/,
+  );
+});
+
+test('saveGateCapture rejects capture that cannot fit in 256KB', async (t) => {
+  const runDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'gate-cap-oversize-'));
+  t.after(async () => {
+    await fsPromises.rm(runDir, { recursive: true, force: true });
+  });
+
+  const filler = 'q';
+  const items = Array.from({ length: 120_000 }, () => filler);
+  await assert.rejects(
+    () => saveGateCapture(runDir, 'oversize', { tail: '', items }),
+    /exceeds.*bytes/,
+  );
 });
