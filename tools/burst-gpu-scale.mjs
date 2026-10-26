@@ -82,15 +82,16 @@ export function createBurstScaler(options = {}) {
 // this function with fresh inputs before each actual start; do not reuse one result for
 // multiple starts.
 export function resolveBurstScalerAction(scaler, sample, limitContext) {
-  const base = scaler.update(sample);
   const {
-    billedTodayUsd = 0,
+    billedTodayUsd,
     hourlyUsd,
     settings = {},
     notifiedLevels = [],
   } = limitContext ?? {};
   assertNonNegativeFiniteNumber('billedTodayUsd', billedTodayUsd);
   assertPositiveFiniteNumber('hourlyUsd', hourlyUsd);
+
+  const base = scaler.update(sample);
 
   const evaluate = (reserveUsd) => evaluateDailyLimit({
     settings,

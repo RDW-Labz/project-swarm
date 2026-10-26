@@ -497,6 +497,10 @@ describe('burst gpu scaler daily limit', () => {
     const scaler = createBurstScaler({ startSustainMs: 0, idleStopMs: IDLE_STOP_MS });
     const ctx = { hourlyUsd, settings: stopSettings };
     assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(6_000_000), ctx),
+      /billedTodayUsd must be a finite number/,
+    );
+    assert.throws(
       () => resolveBurstScalerAction(scaler, longQueueSample(6_000_000), {
         ...ctx,
         billedTodayUsd: '4.6',
@@ -517,6 +521,25 @@ describe('burst gpu scaler daily limit', () => {
       }),
       /billedTodayUsd must be a finite number/,
     );
+  });
+
+  test('limitContext validation failure does not advance scaler sustain timers', () => {
+    const sustainMs = 10_000;
+    const scaler = createBurstScaler({ startSustainMs: sustainMs, idleStopMs: IDLE_STOP_MS });
+    const t0 = 8_000_000;
+    assert.throws(
+      () => resolveBurstScalerAction(scaler, longQueueSample(t0), {
+        hourlyUsd,
+        settings: stopSettings,
+      }),
+      /billedTodayUsd must be a finite number/,
+    );
+    const result = resolveBurstScalerAction(scaler, longQueueSample(t0 + sustainMs), {
+      billedTodayUsd: 0,
+      hourlyUsd,
+      settings: stopSettings,
+    });
+    assert.equal(result.action, 'none');
   });
 
   test('running worker in notify mode returns dailyLimit with notify below hard ceiling', () => {
