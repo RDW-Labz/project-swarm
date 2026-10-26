@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0315-css",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0315 (S10, R-079), CSS only: write tools/watch-assets/cc-phone.css, phone-width (390px) responsive styling for the command-center mockup (read docs/design/command-center-mockup/hive.html and docs/design/command-center-mockup/shared.css as context for the existing markup/class names and design tokens - target those same classes/structure, do not invent new markup). Do NOT edit tools/watch-server.mjs, tools/board-data.mjs, tools/watch-assets/board.js, or tools/watch-assets/project.js. Acceptance, all at a 390px viewport width: (1) the Hive view has no horizontal scroll; (2) interactive targets (buttons, tappable cards, nav items) are at least 44x44px; (3) neither the Hive nor the Cockpit view overflows horizontally - scrollWidth equals clientWidth on their containers, and grid/flex children get min-width:0 wherever a long text/number child would otherwise force overflow; (4) the Hive's radial/ring visualization is capped at 60% of the viewport width at this breakpoint; (5) cards stack into one full-width column with full body content visible. Just the CSS file - move quickly, no test file in this job.",
+      "context": ["docs/design/command-center-mockup/hive.html", "docs/design/command-center-mockup/shared.css"],
+      "outputs": ["tools/watch-assets/cc-phone.css"],
+      "timeoutMs": 900000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs", "tests/watch-assets.test.mjs"],
+      "ignoreTestsReason": "these enumerate tools/watch-assets/ generically for a brand-new unrelated CSS file"
+    }
+  ]
+}

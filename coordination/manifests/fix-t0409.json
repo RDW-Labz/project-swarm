@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0409-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix review findings on tests/job-sandbox.test.mjs (T-0409). Opus review findings: (1) MEDIUM: the concurrent-isolation test (around 'two concurrent isolated jobs cannot read each other DATABASE_URL value', line ~120) does not actually prove the two jobs have different grants/keys - a worker loading the peer's grant file with its OWN SWARM_JOB_ID throws JobGrantAccessError ('grant job id does not match') regardless of whether the two jobs share the same SWARM_JOB_GRANT_KEY, so the test would pass even against a broken implementation that reused one key for both jobs. Fix: add an explicit assertion that the two jobs' grantKey/containerEnv values actually differ (e.g. `assert.notEqual(grantA.grantKey, grantB.grantKey)` and that their containerEnv DATABASE_URL values differ), and additionally have the worker attempt to read the peer's grant file using the PEER's SWARM_JOB_ID but THIS job's own SWARM_JOB_GRANT_KEY, asserting that attempt also throws JobGrantAccessError - this actually exercises key-based isolation, not just id-mismatch. (2) MEDIUM: the legacy-mode test ('legacy (non-isolated) project jobs may still run git push as before') contains dead `runChild` setup that is never invoked, so 'legacy unaffected' is only asserted at the guard-decision level, not that the command actually runs. Fix: either remove the dead `runChild` setup, or better, actually invoke it with a harmless argv (e.g. `['git', '--version']`) under the legacy grant via simulateServiceRun (or whatever the test's existing harness function is called - read the file to find it), and assert `invoked === true` and a successful exit code, so the test proves the command genuinely executes in legacy mode, not just that the guard decision allows it. Read tools/job-grants.mjs and tools/job-sandbox.mjs as context to get the real exported shapes (JobGrantAccessError, grant fields, guard function signatures) right. Run the full test file at least twice when done to confirm stability.",
+      "context": ["tests/job-sandbox.test.mjs", "tools/job-grants.mjs", "tools/job-sandbox.mjs"],
+      "outputs": ["tests/job-sandbox.test.mjs"],
+      "timeoutMs": 1500000
+    }
+  ]
+}

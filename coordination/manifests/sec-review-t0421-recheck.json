@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "sec-review-t0421-recheck",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Recheck of a sensitive ticket after fixes for the prior review's findings.",
+      "prompt": "Recheck T-0421 (tools/burst-gpu-scale.mjs) after fixes for a prior Opus review's findings: (1) hourlyUsd must now be finite AND > 0 (throws otherwise), and billedTodayUsd must be finite and >= 0 (throws otherwise, rather than being coerced to 0 by evaluateDailyLimit's lenient Number(x)||0); (2) when sample.running is true, the computed dailyLimit result is now always returned alongside the action (not discarded to null when the ceiling isn't hit), so notify-mode notices surface for a running worker; (3) a contract comment was added above resolveBurstScalerAction. Confirm both fixes genuinely close the findings with no new gap. Report only real, concretely demonstrable remaining problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0421\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" only for a genuine remaining high or medium finding.",
+      "context": ["tools/burst-gpu-scale.mjs", "tools/daily-limit.mjs", "tests/burst-gpu.test.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    }
+  ]
+}

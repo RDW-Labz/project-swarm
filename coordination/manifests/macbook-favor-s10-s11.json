@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "jobs": [
+    {
+      "id": "T-0313",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0313 (S10, R-078): validated JSON or Markdown entries dropped into tools/watch-hub/entries/ (a new directory - create it with a .gitkeep or a sample entry if useful, but the loader must work even if it's empty) must surface without any code changes elsewhere. Write tools/watch-hub/entry-schema.json: a JSON Schema (draft 2020-12 is fine) describing a valid watch-hub entry - keep it reasonably generic for a small dashboard/log-style entry (e.g. required fields like `id` (string), `title` (string), `at` (ISO timestamp string); optional `body`/`notes` (string), `tags` (array of strings), `status` (string enum if you think one is warranted) - infer sensible fields from the ticket's own framing (a 'watch hub' surfacing dashboard entries) since there's no existing consumer to match against; keep it small and focused, don't over-design). Write tools/watch-hub/load-entries.mjs exporting a function (e.g. `loadWatchHubEntries(dir)`) that reads every `.json` and `.md` file in the given entries directory, parses/validates JSON files against entry-schema.json (reject invalid ones with a clear per-file error rather than crashing the whole load), and for Markdown files extracts a reasonable entry shape (e.g. front-matter if present, else title from the first `# heading` and the rest as body, plus the file's mtime as `at` if no explicit timestamp is given) - returns an array of validated entries, sorted by `at` descending, with per-file errors collected separately rather than thrown. Write tests/watch-hub-schema.test.mjs covering: a valid JSON entry file loads and validates against the schema; an invalid JSON entry (missing a required field) is reported as a per-file error, not a crash, and doesn't prevent other valid entries from loading; a Markdown entry file loads with a sensible extracted title/body; an empty entries directory returns an empty array with no errors. Run the test file when done.",
+      "context": [],
+      "outputs": [
+        "tools/watch-hub/entry-schema.json",
+        "tools/watch-hub/load-entries.mjs",
+        "tests/watch-hub-schema.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/claude-shell.test.mjs",
+        "tests/config-private-names.test.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/scout.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "these enumerate tools/ (or tools/watch-assets/) generically for a brand-new unrelated file; full suite runs before integrate anyway"
+    },
+    {
+      "id": "T-0315",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0315 (S10, R-079): write tools/watch-assets/cc-phone.css, phone-width (390px) responsive styling for the command-center mockup (read docs/design/command-center-mockup/hive.html and docs/design/command-center-mockup/shared.css as context for the existing markup/class names and design tokens - this new stylesheet should target those same classes/structure, not invent new markup). Do NOT edit tools/watch-server.mjs, tools/board-data.mjs, tools/watch-assets/board.js, or tools/watch-assets/project.js - this ticket is CSS-only, additive, and must not touch those files even if related UI is implied there. Acceptance, all at a 390px viewport width: (1) the Hive view has no horizontal scroll; (2) interactive targets (buttons, tappable cards, nav items) are at least 44x44px; (3) neither the Hive nor the Cockpit view overflows horizontally - `scrollWidth` must equal `clientWidth` on their containers, and grid/flex children need `min-width: 0` (or equivalent) wherever a long text/number child would otherwise force overflow; (4) the Hive's radial/ring visualization is capped at 60% of the viewport width at this breakpoint; (5) cards stack into one full-width column (not a multi-column grid) with their full body content visible (not clipped/truncated). Write tests/command-center-phone.spec.mjs as a Playwright (or whatever spec runner this repo's existing spec-dot-mjs test files use - check for an existing pattern/config before assuming Playwright; if none exists, write it as a Playwright test since that's the standard for this kind of viewport/overflow assertion and note the runner needs installing) test that loads hive.html at a 390px viewport and asserts each of the 5 acceptance points programmatically (actual scrollWidth/clientWidth equality, actual computed min-width, actual button bounding-box dimensions >= 44px, actual ring element width <= 60vw, actual single-column layout via computed grid-template-columns or flex-direction). No Docker needed. Run the test if the runner is available in this environment; if a spec runner isn't installed, say so plainly rather than claiming a run that didn't happen.",
+      "context": [
+        "docs/design/command-center-mockup/hive.html",
+        "docs/design/command-center-mockup/shared.css"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-phone.css",
+        "tests/command-center-phone.spec.mjs"
+      ],
+      "timeoutMs": 1500000,
+      "ignoreTests": [
+        "tests/claude-shell.test.mjs",
+        "tests/config-private-names.test.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/scout.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ],
+      "ignoreTestsReason": "these enumerate tools/ (or tools/watch-assets/) generically for a brand-new unrelated file; full suite runs before integrate anyway"
+    },
+    {
+      "id": "T-0449",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "T-0449 (S11, R-081/082/083): types-only ticket for self-managing swarm infrastructure - no behavior, no wiring, just shared type/shape definitions to build later tickets against. Write tools/self-manage/types.mjs exporting plain JSDoc typedefs (or lightweight runtime shape-validators if that fits this codebase's existing conventions better - check tools/lanes.mjs, given as context, for whether this codebase prefers JSDoc-only types or small runtime validator functions, and follow whichever pattern is already established there) for: (1) a lane health record - status one of 'healthy'|'degraded'|'down'|'paused', plus a `reason` (string, nullable when healthy) and `lastChecked` (ISO timestamp string); (2) a lease record shape (whatever fields a self-managing system would need to track an active lease: ticket/job id, holder, expiry, fencing token - use conventional field names consistent with a lease-claim system; this file should have no runtime dependency on other modules, just type definitions); (3) a routing record shape (which lane/agent/model a ticket is currently routed to, plus whatever minimal routing-decision metadata self-management would need, e.g. reason/route source). Keep every type small and exactly what's named - this is explicitly scoped as 'types only, keep it small' per the ticket, not an implementation. No test file is required for a pure-types module with no runtime logic, but if you add any small runtime validator functions (not just JSDoc), add a minimal test file for those specific functions only.",
+      "context": [
+        "tools/lanes.mjs"
+      ],
+      "outputs": [
+        "tools/self-manage/types.mjs"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/claude-shell.test.mjs",
+        "tests/config-private-names.test.mjs",
+        "tests/field-lessons-batch-ah-runtime.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/scout.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "these enumerate tools/ (or tools/watch-assets/) generically for a brand-new unrelated file; full suite runs before integrate anyway"
+    }
+  ]
+}

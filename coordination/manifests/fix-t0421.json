@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0421-fix",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Fix review findings on tools/burst-gpu-scale.mjs's resolveBurstScalerAction (T-0421). Opus review findings to fix: (1) MEDIUM: assertFiniteNumber only checks that hourlyUsd is finite, so a negative value is accepted; with billedTodayUsd close to (but under) the limit, a negative hourlyUsd can make `exposure = billed + reserve` come out below the limit even though it should be treated as invalid, letting a 'start' through it shouldn't. Fix: require hourlyUsd to be finite AND greater than 0 (throw otherwise, same assertFiniteNumber-style error). Also validate billedTodayUsd is a finite number >= 0 before use (today a non-numeric value silently becomes 0 inside evaluateDailyLimit's own `Number(x)||0`, which would let a start through instead of blocking it - make resolveBurstScalerAction itself reject a non-finite/negative billedTodayUsd up front with a clear thrown error, rather than relying on evaluateDailyLimit's lenient coercion). (2) MEDIUM: when the worker IS running, the daily-limit result computed to check for a ceiling hit is discarded if the ceiling isn't hit (`dailyLimit: null` returned for 'none'), so in 'notify' mode a running worker whose billed spend crosses notify levels 1/2/3 below the ceiling never surfaces a notice - the caller has no way to know. Fix: when `sample.running` is true, always return the dailyLimit result alongside whatever action is decided ('stop' on ceiling hit, otherwise 'none' or whatever the base scaler decision is) so callers always receive `notify`/`reason`, not just on the ceiling-hit path. Also add a short code comment above resolveBurstScalerAction documenting the contract Opus flagged as undocumented (low severity, worth fixing while here): billedTodayUsd must include in-progress unbilled rental cost the caller already knows about, a returned 'start' action commits that one hour of hourlyUsd exposure, and the result must be freshly re-evaluated before each actual start decision (never reused across multiple starts from one evaluation). Extend tests/burst-gpu.test.mjs (read it as context, don't duplicate existing tests) covering: a negative hourlyUsd throws rather than silently allowing a start; a non-finite/negative billedTodayUsd throws rather than being coerced to 0; a running worker in notify mode with billed spend past a notify level (but below the hard ceiling) returns a dailyLimit result with the notify array populated, not null. Run the test file when done.",
+      "context": ["tools/burst-gpu-scale.mjs", "tools/daily-limit.mjs", "tests/burst-gpu.test.mjs"],
+      "outputs": ["tools/burst-gpu-scale.mjs", "tests/burst-gpu.test.mjs"],
+      "timeoutMs": 1500000,
+      "ignoreTests": ["tests/split-module.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

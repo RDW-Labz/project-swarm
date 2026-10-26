@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "T-0315-test",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Write tests/command-center-phone.spec.mjs as a plain node:test file (import from 'node:test'/'node:assert' - this project has NO Playwright, NO jsdom, and no browser-automation tooling installed, and you must NOT attempt to install any package or run npm install; a prior attempt at this ticket timed out twice, almost certainly from trying to set up Playwright, so do not repeat that). Instead, write static assertions against the actual CSS text in tools/watch-assets/cc-phone.css (read it as context) that verify the acceptance criteria are structurally present in the stylesheet: (1) a `@media` rule scoped to a 390px-or-narrower viewport (e.g. `max-width: 390px` or `max-width: 400px`) exists; (2) within that media block, interactive-target classes (buttons/tabs/nav items - read the file to find their actual class names, e.g. cc-tab/cc-btn/hive-node/view-tabs/btn-pill per the file's own content) have a `min-width`/`min-height` or `width`/`height` of at least 44px; (3) `min-width: 0` (or `min-width:0`) appears on grid/flex child rules; (4) a rule capping the hive ring/core visualization at 60% of viewport width (`60vw` or `max-width: 60%`) exists; (5) a single-column layout rule (`grid-template-columns: 1fr` or `flex-direction: column` or similar, matched against whatever the file actually uses) exists for the card list at this breakpoint. For each check, read the actual CSS source as text and use a regex or simple string search matched against what's really in the file (read it first, then write assertions against its real selectors/values - do not guess generic selector names). This is a structural/static test, not a rendered-DOM test - say so plainly in a comment at the top of the file, and note that true viewport-overflow verification needs a browser-based follow-up once this project has that tooling. Run the test file when done (plain `node --test`, nothing else).",
+      "context": ["tools/watch-assets/cc-phone.css", "docs/design/command-center-mockup/hive.html"],
+      "outputs": ["tests/command-center-phone.spec.mjs"],
+      "timeoutMs": 900000,
+      "ignoreTests": ["tests/claude-shell.test.mjs", "tests/config-private-names.test.mjs", "tests/field-lessons-batch-ah-runtime.test.mjs", "tests/lanes.test.mjs", "tests/scout.test.mjs", "tests/shell-writes-hardening.test.mjs", "tests/split-module.test.mjs", "tests/swarm.test.mjs", "tests/watch-token-urls.test.mjs", "tests/watch-ui.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory enumeration unaffected by a brand-new unrelated test file"
+    }
+  ]
+}
