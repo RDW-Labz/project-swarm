@@ -52,7 +52,13 @@ function listenMock(t, handler) {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const port = server.address().port;
-      t.after(() => new Promise(done => server.close(() => done())));
+      t.after(
+        () =>
+          new Promise((done) => {
+            server.closeAllConnections();
+            server.close(() => done());
+          }),
+      );
       resolve({ server, port });
     });
   });
@@ -157,8 +163,11 @@ test('followerRemoteClusterConfigured follows clusterCanonicalHost', async t => 
 });
 
 test('AbortSignal.timeout on real fetch rejects with cluster-request-timeout', async t => {
-  const { port, server } = await listenMock(t, () => {
-    // Never call res.end() — stall until the client aborts.
+  const { port } = await listenMock(t, (req, res) => {
+    // Never call res.end() — stall until the client aborts; tear down socket when it does.
+    req.once('close', () => {
+      if (!res.writableEnded) res.destroy();
+    });
   });
 
   const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: port });
@@ -173,8 +182,6 @@ test('AbortSignal.timeout on real fetch rejects with cluster-request-timeout', a
       }),
     err => err.code === 'cluster-request-timeout',
   );
-
-  server.closeAllConnections();
 });
 
 test('stalled remote fetch rejects with cluster-request-timeout', async t => {
@@ -182,14 +189,18 @@ test('stalled remote fetch rejects with cluster-request-timeout', async t => {
   const fullEnv = await seedNodeIdentity(home, env);
 
   const hangForever = (_url, { signal }) =>
-    new Promise((resolve, reject) => {
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          const err = new Error('The operation was aborted');
-          err.name = 'AbortError';
-          reject(err);
-        });
+    new Promise((_resolve, reject) => {
+      if (!signal) return;
+      const onAbort = () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
       }
+      signal.addEventListener('abort', onAbort, { once: true });
     });
 
   await assert.rejects(
