@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-swarm.local/schemas/watch-hub-entry.json",
+  "title": "Watch hub entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "body": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "archived", "draft"]
+    }
+  }
+}
