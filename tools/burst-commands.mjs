@@ -53,7 +53,7 @@ export async function runBurstCommand(root, args, { env = process.env, provision
     }
 
     const ticketPath = readArg(flagArgs, '--ticket');
-    const ticket = ticketPath ? await loadTicket(ticketPath) : { sensitive: false };
+    const ticket = ticketPath ? await loadTicket(ticketPath) : null;
     const runProvision = provision ?? defaultProvision({ env, gpuUpOptions, gpuUpDeps });
     const result = await startBurstGpu(metrics, ticket, runProvision);
     const stdout = `${result.lines.join('\n')}\n${result.message}\n`;

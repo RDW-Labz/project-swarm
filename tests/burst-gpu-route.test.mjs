@@ -77,7 +77,7 @@ test('swarm burst gpu start provisions once and exits 0 when gates pass with non
   assert.ok(gateLines(res.stdout).every((line) => line.endsWith(' PASS')));
 });
 
-test('swarm burst gpu start without --ticket provisions once when gates pass', async (t) => {
+test('swarm burst gpu start without --ticket exits 1 with not allowed on rented lane and never provisions', async (t) => {
   const root = await tmp(t);
   const metricsPath = await writeJson(root, 'metrics.json', allPassMetrics());
   let provisionCalls = 0;
@@ -85,8 +85,9 @@ test('swarm burst gpu start without --ticket provisions once when gates pass', a
   const res = await runBurstCommand(root, ['gpu', 'start', '--metrics', metricsPath], {
     provision: async () => { provisionCalls += 1; },
   });
-  assert.equal(res.exitCode, 0);
-  assert.equal(provisionCalls, 1);
+  assert.equal(res.exitCode, 1);
+  assert.equal(provisionCalls, 0);
+  assert.match(res.stdout, /not allowed on rented lane/);
 });
 
 test('swarm burst gpu start exits 1 with gates not met and never provisions when a gate fails', async (t) => {
