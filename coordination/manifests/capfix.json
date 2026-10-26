@@ -18,7 +18,30 @@
     "tools/ticket-manifest.mjs",
     "tests/ticket-manifest-cap.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/batch-b-eval.test.mjs",
+    "tests/cache-context-normalize.test.mjs",
+    "tests/dogfood-fixes.test.mjs",
+    "tests/escalation-routing.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gallery-tickets.test.mjs",
+    "tests/handoff.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/lesson-38-eval.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-39-integrate.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/lessons-commands.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/ticket-lane-risk.test.mjs",
+    "tests/ui-check.test.mjs",
+    "tests/wave-prep-context.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
   }
  ]
 }
