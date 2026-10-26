@@ -9,8 +9,8 @@ const alive = pid => {
 };
 
 function resolveAllowOwnerPid(name, allowOwnerPid, env) {
-  if (allowOwnerPid !== undefined && allowOwnerPid !== null) return allowOwnerPid;
   if (name !== 'autopilot') return undefined;
+  if (allowOwnerPid !== undefined && allowOwnerPid !== null) return allowOwnerPid;
   const fromEnv = Number(env?.SWARM_AUTOPILOT_PID);
   return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : undefined;
 }

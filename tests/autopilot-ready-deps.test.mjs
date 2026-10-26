@@ -3,10 +3,10 @@ import './_isolate-config.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { readyAutopilotDeps, sameRoot } from '../tools/autopilot-ready-deps.mjs';
 
@@ -14,14 +14,27 @@ const swarmEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), '..',
 const ROOT = '/tmp/project-a';
 const OTHER = '/tmp/project-b';
 
+async function defaultOpenScopeChildStderr() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scope-child-err-'));
+  const filePath = path.join(dir, 'scope-child.err');
+  const fd = fssync.openSync(filePath, 'a', 0o600);
+  return { filePath, fd, startOffset: 0, openedHere: true, _tmpdir: dir };
+}
+
 function makeDeps(overrides = {}) {
   const spawnCalls = [];
+  const stderrLogCleanups = [];
+  let lastStderrLog = null;
+  const openScopeChildStderr = overrides.openScopeChildStderr ?? (async () => {
+    const log = await defaultOpenScopeChildStderr();
+    lastStderrLog = log;
+    if (log._tmpdir) stderrLogCleanups.push(log._tmpdir);
+    return log;
+  });
   const spawnImpl = (execPath, args, opts) => {
     spawnCalls.push({ execPath, args, opts });
-    const stderr = new PassThrough();
     const child = new EventEmitter();
     child.pid = 4242;
-    child.stderr = stderr;
     child.unref = function unref() { this.unrefed = true; };
     child.once = function once(event, fn) {
       if (event === 'error' && overrides.spawnAsyncError) {
@@ -30,10 +43,11 @@ function makeDeps(overrides = {}) {
       return EventEmitter.prototype.once.call(this, event, fn);
     };
     if (overrides.spawnEarlyExit) {
-      queueMicrotask(() => {
+      queueMicrotask(async () => {
         const { code = 1, signal = null, stderrText = '' } = overrides.spawnEarlyExit;
-        if (stderrText) stderr.write(stderrText);
-        stderr.end();
+        if (stderrText && lastStderrLog?.filePath) {
+          await fs.appendFile(lastStderrLog.filePath, stderrText).catch(() => {});
+        }
         child.emit('exit', code, signal);
       });
     }
@@ -51,10 +65,20 @@ function makeDeps(overrides = {}) {
     checkProjectCap: async () => overrides.capped ?? null,
     readTickets: async () => overrides.tickets ?? [],
     readPending: async () => overrides.pending ?? [],
+    openScopeChildStderr,
     ...overrides.injected,
   };
   const deps = readyAutopilotDeps(ROOT, injected);
-  return { deps, spawnCalls, injected };
+  return {
+    deps,
+    spawnCalls,
+    injected,
+    cleanupStderrLogs: async () => {
+      for (const dir of stderrLogCleanups) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  };
 }
 
 test('readyTickets returns only ready tickets from readTickets', async () => {
@@ -118,8 +142,9 @@ test('capRoom is false when checkProjectCap reports capped', async () => {
   assert.equal(await capped.deps.capRoom(ROOT), false);
 });
 
-test('startScope spawns detached swarm go --scope and unrefs', async () => {
-  const { deps, spawnCalls } = makeDeps();
+test('startScope spawns detached swarm go --scope and unrefs', async t => {
+  const { deps, spawnCalls, cleanupStderrLogs } = makeDeps();
+  t.after(() => cleanupStderrLogs());
   const out = await deps.startScope({ root: ROOT });
   assert.equal(out.ok, true);
   assert.equal(out.result, 'started go --scope (pid 4242)');
@@ -127,39 +152,65 @@ test('startScope spawns detached swarm go --scope and unrefs', async () => {
   assert.equal(spawnCalls[0].execPath, process.execPath);
   assert.deepEqual(spawnCalls[0].args, [swarmEntry, '--root', path.resolve(ROOT), 'go', '--scope', '--max-jobs', '1']);
   assert.equal(spawnCalls[0].opts.detached, true);
-  assert.deepEqual(spawnCalls[0].opts.stdio, ['ignore', 'ignore', 'pipe']);
+  assert.equal(spawnCalls[0].opts.stdio[0], 'ignore');
+  assert.equal(spawnCalls[0].opts.stdio[1], 'ignore');
+  assert.equal(typeof spawnCalls[0].opts.stdio[2], 'number');
+  assert.notEqual(spawnCalls[0].opts.stdio[2], 'pipe');
   assert.equal(spawnCalls[0].opts.env.TEST_ENV, '1');
   assert.equal(spawnCalls[0].opts.env.SWARM_AUTOPILOT_PID, '1000');
 });
 
-test('startScope reports ok false when the child exits early with failure stderr', async () => {
+test('startScope reports ok false when the child exits early with failure stderr', async t => {
+  const headMarker = 'HEAD_MARKER_ONLY';
   const tailMarker = 'TAIL_MARKER_ONLY';
-  const longMsg = `${'x'.repeat(300)}${tailMarker}`;
-  const { deps } = makeDeps({
+  const longMsg = `${headMarker}${'x'.repeat(400)}${tailMarker}`;
+  const { deps, cleanupStderrLogs } = makeDeps({
     spawnEarlyExitMs: 500,
     spawnEarlyExit: { code: 1, stderrText: longMsg },
   });
+  t.after(() => cleanupStderrLogs());
   const out = await deps.startScope({ root: ROOT });
   assert.equal(out.ok, false);
   assert.match(out.result, /exit code 1/);
-  assert.ok(out.result.includes('x'.repeat(50)));
-  assert.ok(!out.result.includes(tailMarker));
+  assert.ok(!out.result.includes(headMarker));
+  assert.ok(out.result.includes(tailMarker));
 });
 
-test('startScope returns ok false when spawn throws', async () => {
-  const { deps } = makeDeps({ spawnThrows: new Error('spawn failed') });
+test('startScope clears the early-exit timer when the child exits first', async (t) => {
+  let timerCleared = false;
+  const origClear = globalThis.clearTimeout;
+  globalThis.clearTimeout = (handle) => {
+    timerCleared = true;
+    return origClear(handle);
+  };
+  t.after(() => { globalThis.clearTimeout = origClear; });
+  const { deps, cleanupStderrLogs } = makeDeps({
+    spawnEarlyExitMs: 60_000,
+    spawnEarlyExit: { code: 1, stderrText: 'boom' },
+  });
+  t.after(() => cleanupStderrLogs());
+  const out = await deps.startScope({ root: ROOT });
+  assert.equal(out.ok, false);
+  assert.equal(timerCleared, true);
+});
+
+test('startScope returns ok false when spawn throws', async t => {
+  const { deps, cleanupStderrLogs } = makeDeps({ spawnThrows: new Error('spawn failed') });
+  t.after(() => cleanupStderrLogs());
   const out = await deps.startScope({ root: ROOT });
   assert.deepEqual(out, { ok: false, result: 'spawn failed' });
 });
 
-test('startScope returns ok false on an asynchronous spawn error', async () => {
-  const { deps } = makeDeps({ spawnAsyncError: new Error('async spawn failed') });
+test('startScope returns ok false on an asynchronous spawn error', async t => {
+  const { deps, cleanupStderrLogs } = makeDeps({ spawnAsyncError: new Error('async spawn failed') });
+  t.after(() => cleanupStderrLogs());
   const out = await deps.startScope({ root: ROOT });
   assert.deepEqual(out, { ok: false, result: 'async spawn failed' });
 });
 
-test('startScope passes cwd as the resolved project root', async () => {
-  const { deps, spawnCalls } = makeDeps();
+test('startScope passes cwd as the resolved project root', async t => {
+  const { deps, spawnCalls, cleanupStderrLogs } = makeDeps();
+  t.after(() => cleanupStderrLogs());
   await deps.startScope({ root: './relative-root' });
   assert.equal(spawnCalls[0].opts.cwd, path.resolve('./relative-root'));
 });

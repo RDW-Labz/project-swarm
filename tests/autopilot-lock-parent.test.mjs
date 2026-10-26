@@ -63,6 +63,23 @@ test('an unrelated live owner is refused even when SWARM_AUTOPILOT_PID points el
   );
 });
 
+test('explicit allowOwnerPid does not bypass a non-autopilot lock name', async t => {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+  const customLock = path.join(root, '.swarm/project/custom.lock');
+  await fs.writeFile(customLock, `${JSON.stringify({ pid: OWNER_PID })}\n`);
+  await assert.rejects(
+    acquireAutopilotLock(root, {
+      name: 'custom',
+      pid: CHILD_PID,
+      parentPid: OWNER_PID,
+      allowOwnerPid: OWNER_PID,
+      isAlive: pid => pid === OWNER_PID,
+    }),
+    /custom-running: pid 40001/,
+  );
+});
+
 test('a dead owner lock is cleared for a child caller as before', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
