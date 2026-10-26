@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus review of the guard hotfix FAILED; fix the swarm-subcommand part in tools/orchestrator-allow.mjs (and its call site in tools/shell-writes.mjs) and extend tests/orchestrator-allow.test.mjs. The hotfix replaced the old explicit allowlist of swarm subcommands by 'anything not denied', which opens: swarm with-concurrency (runs swarm <rest>, bypasses everything), swarm redcheck --test (runs a command), swarm draft --out (writes app code), swarm ship (merges bypassing swarm merge), spend commands (gpu, burst, sweep, autopilot), machine commands (gc --apply --force-unsafe, squash, clean-branch, remote, tunnel, phone, pin, forget, policy), and owner approvals (resolve, done, gallery approve, migrations approve/check --yes, report --client --approve, backup ... restore found after global flags). Required: (1) go back to an EXPLICIT allowlist of top-level swarm subcommands: the old OM_SWARM_ALLOWED_TOP set (status, brief, board, watch, jobs, tickets, run, integrate, merge, update, note, version, doctor, rollup, scope, msg, diagnose, go, change, handbuild, ticket, ask, decision, handoff, lesson, backlog, time, decide) plus read or orchestration commands the orchestrator really needs: resume, cancel, inbox (list only), queue, think, digest, validate, preflight, history, usage, budget, budgets, lanes, projects, orphans (list), status. Everything else is denied. (2) Inside the allowed subcommands any flags are accepted EXCEPT owner overrides and approvals which stay denied exactly as before the hotfix and also under new spellings: any word 'approve' as an argument or flag (scope approve, tickets --approve, handbuild approve/accept/deny/off, decide, gallery approve), --yes and -y and --force and --force-unsafe on every subcommand EXCEPT a small vetted list where the old guard allowed it (tickets ID --set/--release/--delivered/--add-acceptance/--acceptance/--context/--files with --yes, change ... --yes, merge, update --force only if the old guard allowed it; check how origin/main's guard treated each and keep it identical), --accept-failed-checks, --accept-red-base, --accept-blocked, --accept-unreviewed, --accept-unmet, --allow-main-branch, --no-guard and similar --accept-*/--allow-* override flags; and restore found anywhere in the verb position after global flags (swarm backup --root . restore x is denied). (3) swarm tickets: allow --retry-note, --note, --files, --context, --acceptance, --add-acceptance, --release, --delivered PR, --status, --kind, --json, --stage, --type, --risk, --lane, --set STATUS with any status EXCEPT done (owner-only without review) , --question, --reopen --reason. Deny --approve, --yes unless paired with one of the vetted ticket edit flags above, --force. (4) swarm go --scope with --max-jobs N --skip-skeleton is allowed; swarm run, integrate and merge keep their existing run-flag limits plus the real documented non-override flags (--queue --no-checks --no-commit --jobs --skip-skeleton --scope --max-jobs --max-waves). Tests: every allowed form from the bug report (swarm go --scope --max-jobs 2, swarm tickets T-0001 --retry-note \"x\", swarm tickets --help via the help path of the next job, swarm backlog add \"goal\", swarm resume RUN, swarm inbox --json) and every denied form listed above, through the full guard. IMPORTANT: secret scanner: no credential-looking literals in tests. Keep tests/orchestrator-mode*.test.mjs and tests/shell-writes*.test.mjs passing (do not edit their assertions). Test through the FULL guard (the exported guard decision entry used by the pre-tool hook, with the hand-build guard both on and off), not only the helper functions.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}

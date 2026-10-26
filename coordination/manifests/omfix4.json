@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix4",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus review of the guard hotfix FAILED; fix the help, test-runner and gh/read-only parts in tools/orchestrator-allow.mjs and tools/shell-writes.mjs and extend tests/orchestrator-allow.test.mjs (the swarm subcommand allowlist was already fixed in the previous step; leave it). (1) HIGH helpOnly: any command whose only flag is --help, -h or --version is allowed before other checks, but on macOS tools stop reading flags at the first filename, so 'rm src/a.js -h' deletes, 'touch src/new.js --help' creates, 'tee src/a.js --help' truncates, 'node docs/plans/x.mjs --help' runs a script, 'swarm handbuild off --help' turns the guard off, 'swarm handbuild approve ID --help' approves. Fix: remove the early return. Accept --help, -h or --version only when it is the LAST word, the command name is on a fixed list of read-only tools or swarm itself, and there are no positional words after the verb that could be file operands for a writer (for swarm: the help applies to the verb and the verb must still pass the explicit subcommand allowlist and the approval denials; 'swarm handbuild off --help' and 'swarm handbuild approve X --help' stay denied). (2) HIGH test runners: playwright, vitest, npm test, pytest, node --test accept any flags and so run or write anything ('npx vitest run --config docs/plans/evil.mjs', 'npx playwright test -c .swarm/x.js', '--globalSetup', '--outputFile src/a.js', '-u' updating snapshots, 'npx --package=evilpkg vitest'). Fix: allow only the verbs test or run, test file paths that resolve inside the project, and a small set of flags: -t, --grep, -g, --project, --reporter=<line|list|dot|json|html no> (builtin names only), --workers N, -x, --bail, --retries N, --timeout N, --headed no (deny), -k, -m, -q, -v, --maxfail N. Deny -c/--config, --globalSetup, --globalTeardown, --setupFiles, --outputFile, --output, -u/--update/--update-snapshots, --ui, --root, --dir, --require, -r, --import, --eval, -e, -p, --loader, and any npx flag before the tool name (npx --package, npx -p, npx --yes with an unknown package); npm run only for the scripts test, test:e2e and test:unit read from package.json scripts in the project (exact names). (3) MED: npm test, pytest, python -m pytest and node --test are still denied by the full guard because a fallback refuses npm, pytest, python and node --test: route them through the same narrow rules so they really are allowed, and add tests that go through the full guard. (4) Keep read-only commands (gh pr/run/issue view/list, gh pr checks/diff, grep, egrep, fgrep, rg without --pre, cat, head, tail, wc, ls, git status/log/diff/show without --output/-c/--ext-diff/--textconv, git branch list only, git rev-parse) allowed and every writer denied; chained, piped and substituted commands stay denied when they mix in a writer. Tests: the exact attack commands above must be denied through the full guard with the hand-build guard on and off; the allowed forms from the bug report must be allowed. IMPORTANT: secret scanner: no credential-looking literals in tests. Keep tests/orchestrator-mode*.test.mjs and tests/shell-writes*.test.mjs passing (do not edit their assertions). Test through the FULL guard (the exported guard decision entry used by the pre-tool hook, with the hand-build guard both on and off), not only the helper functions.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
