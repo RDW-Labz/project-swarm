@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "capfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix two bugs in ticketsToManifest in tools/ticket-manifest.mjs, the function that picks which ready tickets become jobs in a wave. Today it sorts the ready tickets by id and cuts the list at maxJobs. (1) Human tickets count against maxJobs, then callers drop them from the manifest, so with a small maxJobs the human tickets fill the cap and the wave gets zero or one real job while real tickets are ready. Fix: human tickets never count against maxJobs (keep returning them in the manifest the way it does now so callers behave the same). (2) Starvation: because of the id sort, lower-id tickets of earlier stages always fill the cap and tickets of later stages never run. Fix: when maxJobs cuts the list, pick fairly across stages: go round-robin over the stages (stages in ascending order, tickets inside a stage by ascending id), taking one ticket per stage per round until maxJobs real jobs are chosen; then sort the chosen tickets by id again for the output so the rest of the function sees the same order as before. Without maxJobs nothing changes. A ticket skipped by the cap still gets the existing warning text id + ': over maxJobs, skipped' and goes in skipped. Add a new test file tests/ticket-manifest-cap.test.mjs (node:test, plain fake ledger objects, no network) covering: humans do not use the cap; with 6 human tickets of low ids and maxJobs 2 two real jobs are chosen; round-robin across stages (an S10 ticket with a high id is chosen next to an S3 ticket with a low id when maxJobs is 2); no maxJobs keeps every ready ticket; skipped warnings still appear. Keep tests/ticket-manifest.test.mjs and tests/ticket-manifest-owns.test.mjs passing without editing them.",
+   "context": [
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest.test.mjs",
+    "tests/ticket-manifest-owns.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest-cap.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
