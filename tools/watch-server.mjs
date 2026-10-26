@@ -47,7 +47,38 @@ export function watchBoardRoutePaths({ remote = false } = {}) {
 
 export const WATCH_NAV_PATHS = Object.freeze(['/api/nav', '/nav/board', '/nav/project']);
 
-/** Every GET path the board Watch server serves (non-remote, with nav). Built from the same arrays as the router. */
+/** HTML pages that existed before Command Center; same URLs still serve the same assets (R-067). */
+export const WATCH_CLASSIC_PAGE_PATHS = Object.freeze(['/', '/project', '/run']);
+
+const COMMAND_CENTER_PROJECT = /^\/command-center\/project\/([^/]+)$/;
+
+export function watchCommandCenterRoutePaths() {
+  return Object.freeze(['/command-center']);
+}
+
+/** Command Center shell pages (Hive and Project Cockpit); not part of pre-upgrade WATCH_ROUTES. */
+export const WATCH_COMMAND_CENTER_PATHS = Object.freeze([
+  ...watchCommandCenterRoutePaths(),
+]);
+
+/**
+ * Parse a Command Center browser path. Project ids must be a single path segment (no slashes).
+ * @returns {{ view: 'hive' } | { view: 'project', projectId: string } | null}
+ */
+export function parseCommandCenterPath(pathname) {
+  if (pathname === '/command-center') return { view: 'hive' };
+  const match = COMMAND_CENTER_PROJECT.exec(pathname);
+  if (!match) return null;
+  const projectId = decodeURIComponent(match[1]);
+  if (!projectId || projectId.includes('/') || projectId.includes('\\') || projectId.includes('..')) return null;
+  return { view: 'project', projectId };
+}
+
+export function isWatchClassicPagePath(pathname) {
+  return WATCH_CLASSIC_PAGE_PATHS.includes(pathname);
+}
+
+/** Every GET path the board Watch server served before Command Center (non-remote, with nav). Built from the same arrays as the router. */
 export const WATCH_ROUTES = Object.freeze([
   ...WATCH_CORE_PATHS,
   ...watchBoardRoutePaths({ remote: false }),
@@ -428,6 +459,7 @@ export function createWatchServer(opts) {
     board,
     nav,
     indexName = 'index.html',
+    commandCenterPage = 'command-center.html',
     commandList,
     contextCommands,
     assetDir,
@@ -619,6 +651,8 @@ export function createWatchServer(opts) {
     const parts = pathname.split('/');
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+    const commandCenter = board ? parseCommandCenterPath(pathname) : null;
+    const isCommandCenter = commandCenter !== null;
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
     const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
@@ -626,8 +660,8 @@ export function createWatchServer(opts) {
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav) return sendText(res, method, 404, 'not found');
-    const isHtmlPage = pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'));
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter) return sendText(res, method, 404, 'not found');
+    const isHtmlPage = (pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
     const cookieName = `swarm_watch_${port}`;
@@ -644,6 +678,7 @@ export function createWatchServer(opts) {
       'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
     } : {};
     if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
+    if (isCommandCenter) return sendAsset(res, method, commandCenterPage, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
     if (isBoard) return sendJson(res, method, (await getBoard()) ?? { runs: [] });
