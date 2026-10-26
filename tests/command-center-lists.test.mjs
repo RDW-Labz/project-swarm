@@ -124,6 +124,32 @@ function collectTicketIds(host) {
   return host.querySelectorAll('[data-ticket-id]').map(n => n.getAttribute('data-ticket-id'));
 }
 
+test('cockpit ticket list ids match queue for mixed-status fixture ledger', async t => {
+  const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
+  t.after(fixture.cleanup);
+  const ledgerFile = path.join(fixture.root, '.swarm', 'project', 'tickets.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8'));
+  const live = ledger.tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
+  assert.ok(live.length >= 4, 'fixture should include several live tickets');
+  const statusCycle = ['done', 'running', 'ready', 'blocked', 'todo'];
+  for (let i = 0; i < live.length; i++) {
+    live[i].status = statusCycle[i % statusCycle.length];
+    if (live[i].status === 'blocked') {
+      live[i].blockReason = 'deps';
+      live[i].dependsOn = live[0]?.id ? [live[0].id] : [];
+    }
+  }
+  const expected = queueVisibleJobs(ledger, {}, queueDeps).map(j => j.id);
+  assert.ok(expected.length > 0, 'mixed ledger should still expose queue jobs');
+
+  const document = makeDocument();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  renderCockpitTicketList(host, ledger, { projectConfig: {}, queueDeps });
+  const rendered = collectTicketIds(host);
+  assert.deepEqual(rendered, expected);
+});
+
 test('cockpit ticket list ids match swarm queue list for fixture ledger', async t => {
   const fixture = await makeBoardFixture({ ledger: 'roadmap-ledger.json' });
   t.after(fixture.cleanup);
