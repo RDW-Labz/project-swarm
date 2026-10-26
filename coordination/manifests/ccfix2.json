@@ -8,8 +8,12 @@
    "model": "composer-2.5",
    "tier": "cheap",
    "prompt": "In tests/watch-assets.test.mjs, the test 'tab scripts register under one of the four tab names' already skips scripts whose names start with cc- or command-center-. The new file tools/watch-assets/classic-tab.js (the Classic tab wrapper for the Command Center, an ES module that exports helpers and never calls register()) is also not a legacy tab script and currently fails that test with 'classic-tab.js does not register a tab'. Update only that test so classic-tab.js is skipped too (add it to the existing explicit skip list with a short comment). Keep every other assertion unchanged and make sure the test still fails for a real tab script that does not register. Do not edit anything else.",
-   "context": ["tests/watch-assets.test.mjs", "tools/watch-assets/classic-tab.js"],
-   "outputs": ["tests/watch-assets.test.mjs"],
+   "context": [
+    "tests/watch-assets.test.mjs"
+   ],
+   "outputs": [
+    "tests/watch-assets.test.mjs"
+   ],
    "timeoutMs": 900000
   }
  ]
