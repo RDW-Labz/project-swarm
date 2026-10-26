@@ -12,6 +12,8 @@ import { listProjects, projectsFile } from './projects.mjs';
 import { projectFamilyRoots } from './board-data.mjs';
 import { runDetail, RUN_ID } from './board-run.mjs';
 import { listPeers } from './board-peers.mjs';
+import { commandCenterEnabled } from './command-center-flag.mjs';
+import { buildCommandCenterSnapshot, buildProjectCockpit } from './command-center-snapshot.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -477,6 +479,7 @@ export function createWatchServer(opts) {
     remote,
     ownerActions,
     env = process.env,
+    commandCenter = commandCenterEnabled(env),
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
@@ -651,8 +654,9 @@ export function createWatchServer(opts) {
     const parts = pathname.split('/');
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
-    const commandCenter = board ? parseCommandCenterPath(pathname) : null;
-    const isCommandCenter = commandCenter !== null;
+    const commandCenterPath = commandCenter && board ? parseCommandCenterPath(pathname) : null;
+    const isCommandCenter = commandCenterPath !== null;
+    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project');
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
     const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
@@ -660,7 +664,7 @@ export function createWatchServer(opts) {
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter) return sendText(res, method, 404, 'not found');
+    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter && !isCommandCenterApi) return sendText(res, method, 404, 'not found');
     const isHtmlPage = (pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
@@ -688,6 +692,17 @@ export function createWatchServer(opts) {
       const target = await nav.openBoard(pathname === '/nav/project' ? nav.project?.id ?? null : null);
       if (!target) return sendText(res, method, 404, 'not found');
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
+    }
+    if (isCommandCenterApi) {
+      const q = Object.fromEntries(u.searchParams);
+      delete q.t;
+      const localOnly = q.local === '1';
+      const payload = { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() };
+      if (pathname === '/api/command-center/project') {
+        const cockpit = buildProjectCockpit(payload, String(q.id ?? ''));
+        return cockpit ? sendJson(res, method, cockpit) : sendText(res, method, 404, 'not found');
+      }
+      return sendJson(res, method, buildCommandCenterSnapshot(payload));
     }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
