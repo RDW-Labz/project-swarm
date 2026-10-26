@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "gatefixB",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix these remaining Opus review findings (parsing and argv were already fixed in the previous step; leave them) in tools/gate-rerun.mjs and extend tests/gate-rerun.test.mjs (existing module, not wired). MED 4: redaction runs after cutting to maxBytes so a secret crossing the cut survives in part: redact the full captured output first (keep a margin) and then cut to maxBytes. MED 9: Bearer pattern case-insensitive; add ghp_, gho_, github_pat_, xox[abp]-, AKIA[0-9A-Z]{16}; add AUTH, CREDENTIAL, PASSWD, PRIVATE, COOKIE, DSN to the env-name pattern. LOW 10: kill the group only when Number.isInteger(child.pid) && child.pid > 1. LOW 11: keep separate timer variables and declare the timeout timer before attaching handlers (a spawn that emits error synchronously must not hit a TDZ error). LOW 12: only redact env values of 6 or more characters. LOW 13: setEncoding utf8 and count bytes with Buffer.byteLength; keep tail bytes of stdout and stderr fairly (each gets at least a quarter). LOW 15: remove the dead line. Make the kill function injectable (killImpl option) and use it in the timeout test instead of replacing the global process.kill. Add tests for: a secret crossing the trim point, an invalid or missing pid, short secrets not redacted, the new secret patterns. IMPORTANT: the repository's secret scanner blocks test files with literal secret-looking assignments: in tests build fake secret values at run time (concatenation or repeat) and use neutral variable names. Keep every existing test passing unless it asserts the buggy behaviour described here (then fix that assertion).",
+   "context": [
+    "tools/gate-rerun.mjs",
+    "tests/gate-rerun.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/gate-rerun.mjs",
+    "tests/gate-rerun.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
