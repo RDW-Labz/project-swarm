@@ -14,6 +14,7 @@ import {
   readOnlyCommandAllowed,
   helpOnly,
   localTestRunAllowed,
+  orchestratorTestRunAllowed,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -1768,6 +1769,15 @@ const omRedirectTokenHarmless = (words, i) => {
   return null;
 };
 
+const omTestRunnerRedirectForbidden = words => {
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === '2>&1' || w === '2>' || /[<>]/.test(w) || w.includes('&')) return true;
+    if (/^\d+$/.test(w) && (words[i + 1] === '>&' || words[i + 1] === '>')) return true;
+  }
+  return false;
+};
+
 const omRedirectsForbidden = words => {
   let heredocOnly = false;
   for (let i = 0; i < words.length; i += 1) {
@@ -1796,6 +1806,28 @@ const omOperandUnsafe = raw => {
   const s = String(raw ?? '');
   if (!s || s === '-') return false;
   return /[$`*?[\{~]/.test(s);
+};
+
+const omPackageScripts = root => {
+  if (!root) return null;
+  try {
+    const p = path.join(fs.realpathSync.native(root), 'package.json');
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const scripts = data?.scripts;
+    return scripts && typeof scripts === 'object' && !Array.isArray(scripts) ? scripts : {};
+  } catch {
+    return null;
+  }
+};
+
+const omOrchestratorTestRunAllowed = (segment, ctx) => {
+  if (!ctx?.root) return false;
+  const packageScripts = omPackageScripts(ctx.root);
+  return orchestratorTestRunAllowed(segment, {
+    ...ctx,
+    inProject: raw => omReadOperandOk(raw, ctx),
+    packageScripts,
+  });
 };
 
 const omReadOperandOk = (raw, ctx) => {
@@ -1951,7 +1983,29 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   const cmd = path.basename(rawCmd);
   const args = plain.slice(k + 1);
   const segment = plain.slice(k);
-  if (helpOnly(segment)) return true;
+  const trailingHelp = segment.length > 1 && ['-h', '--help', '--version'].includes(String(segment[segment.length - 1]));
+  if (trailingHelp) {
+    if (!helpOnly(segment)) return false;
+    const argsNoHelp = args.slice(0, -1);
+    if (cmd === 'git') return omGitInvocationAllowed(argsNoHelp);
+    if (cmd === 'gh') return omGhReadOnly(argsNoHelp, commandText, words.piped || words.sepAfter === '|');
+    if (omSwarmInvocation(cmd, argsNoHelp, ctx)) return true;
+    const base = segment.slice(0, -1);
+    if (ctx.root && readOnlyCommandAllowed(base)) {
+      if (['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) {
+        return omGrepRgOk(cmd, argsNoHelp) && omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      }
+      if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(argsNoHelp) && omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      if (cmd === 'ls') return omLsOk(argsNoHelp, ctx);
+      if (cmd === 'wc') return omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      if (cmd === 'cat') {
+        const pos = argsNoHelp.filter(a => a !== '' && !a.startsWith('-'));
+        return pos.length > 0 && pos.every(p => omReadOperandOk(p, ctx));
+      }
+      return true;
+    }
+    return false;
+  }
   if (cmd === 'git' && !omTrustedCommandWordOk(rawCmd, 'git')) return false;
   if (cmd === 'gh' && !omTrustedCommandWordOk(rawCmd, 'gh')) return false;
   if (cmd === 'vercel' && !omTrustedCommandWordOk(rawCmd, 'vercel')) return false;
@@ -2016,6 +2070,10 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
     }
     if (cmd === 'jq') return omJqOk(args, ctx);
     return omSortUniqOk(cmd, args);
+  }
+  if (!words.piped && !feedsPipe && omOrchestratorTestRunAllowed(segment, ctx)) {
+    if (omTestRunnerRedirectForbidden(words)) return false;
+    return true;
   }
   if (omNaturallySmall(cmd, args)) return true;
   if (cmd === 'true' || cmd === 'false' || cmd === ':') return true;
@@ -2112,14 +2170,8 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
       k += 1;
     }
     const segment = plain.slice(k);
-    if (!localTestRunAllowed(segment)) return false;
-    const runCmd = path.basename(String(segment[0] ?? ''));
-    if (runCmd === 'node' && segment.includes('--test')) return false;
-    if (runCmd === 'npm' || runCmd === 'pnpm' || runCmd === 'yarn' || runCmd === 'pytest' || runCmd === 'python' || runCmd === 'python3') return false;
-    for (let i = 0; i < words.length; i += 1) {
-      const w = words[i];
-      if (w === '2>&1' || w === '2>' || /[<>]/.test(w) || w.includes('&')) return false;
-    }
+    if (!omOrchestratorTestRunAllowed(segment, ctx)) return false;
+    if (omTestRunnerRedirectForbidden(words)) return false;
     return true;
   } catch {
     return false;

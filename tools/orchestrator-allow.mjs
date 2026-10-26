@@ -20,7 +20,30 @@ const GH_READONLY_SUBS = new Set([
 
 const READONLY_BINARIES = new Set(['grep', 'egrep', 'fgrep', 'rg', 'cat', 'head', 'tail', 'wc', 'ls']);
 
-const NPM_TEST_RUNS = new Set(['test', 'test:e2e']);
+const NPM_TEST_RUNS = new Set(['test', 'test:e2e', 'test:unit']);
+
+const WRITER_BINARIES = new Set([
+  'rm', 'touch', 'tee', 'cp', 'mv', 'mkdir', 'truncate', 'chmod', 'chown', 'install',
+  'sed', 'curl', 'wget', 'tar', 'zip', 'unzip', 'dd', 'shred', 'nano', 'vim', 'vi', 'emacs',
+]);
+
+const TEST_RUNNER_DENIED_FLAGS = new Set([
+  '-c', '--config', '--globalSetup', '--globalTeardown', '--setupFiles', '--outputFile', '--output',
+  '-u', '--update', '--update-snapshots', '--ui', '--root', '--dir', '--require', '-r', '--import',
+  '--eval', '-e', '-p', '--loader', '--headed', '--package',
+]);
+
+const TEST_RUNNER_DENIED_PREFIXES = ['--config=', '--globalSetup=', '--globalTeardown=', '--setupFiles=', '--outputFile=', '--output=', '--root=', '--dir=', '--require=', '--import=', '--package='];
+
+const TEST_REPORTER_NAMES = new Set(['line', 'list', 'dot', 'json', 'html']);
+
+const TEST_FLAG_VALUE = new Set([
+  '-t', '--grep', '-g', '--project', '--workers', '--retries', '--timeout', '--maxfail', '--reporter',
+]);
+
+const TEST_FLAG_ALONE = new Set([
+  '-x', '--bail', '-k', '-m', '-q', '-v',
+]);
 
 const SCOPE_READONLY_VERBS = new Set(['show', 'list', 'status', 'read', 'check', 'help']);
 const DECIDE_READONLY_VERBS = new Set(['show', 'list', 'status', 'read', 'check', 'help']);
@@ -150,19 +173,61 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   return true;
 }
 
-/** True when the only flags are --help, -h, or --version (subcommand tokens allowed). */
-export function helpOnly(words) {
-  if (!words?.length) return false;
-  let sawHelp = false;
-  for (let i = 1; i < words.length; i += 1) {
-    const a = String(words[i]);
-    if (a.startsWith('-')) {
-      if (!HELP_FLAGS.has(a)) return false;
-      sawHelp = true;
+const trailingHelpToken = words => {
+  if (!words?.length) return null;
+  const last = String(words[words.length - 1]);
+  return HELP_FLAGS.has(last) ? last : null;
+};
+
+const swarmArgsWithoutHelp = args => {
+  const last = args[args.length - 1];
+  if (last !== undefined && HELP_FLAGS.has(String(last))) return args.slice(0, -1);
+  return args;
+};
+
+const swarmHelpSubcommandOk = args => {
+  let i = 0;
+  while (i < args.length) {
+    const a = String(args[i]);
+    const low = a.toLowerCase();
+    if (low === '--root') {
+      if (i + 1 >= args.length) return false;
+      i += 2;
       continue;
     }
+    if (low.startsWith('--root=')) {
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) return false;
+    break;
   }
-  return sawHelp;
+  const sub = String(args[i] ?? '').toLowerCase();
+  const rest = args.slice(i + 1);
+  return swarmSubcommandAlwaysAllowed(sub, rest);
+};
+
+/** True when --help, -h, or --version is the last token and the command shape is safe (macOS stops flags at the first filename). */
+export function helpOnly(words) {
+  if (!trailingHelpToken(words)) return false;
+  const base = words.slice(0, -1);
+  if (base.length < 1) return false;
+  const rawCmd = String(base[0]);
+  const cmd = path.basename(rawCmd);
+  const args = base.slice(1);
+  if (WRITER_BINARIES.has(cmd)) {
+    const pos = args.filter(a => a !== '' && !String(a).startsWith('-'));
+    if (pos.length > 0) return false;
+  }
+  if (cmd === 'node') {
+    const scriptAt = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
+    if (scriptAt === -1) return false;
+    const script = String(args[scriptAt]);
+    if (!script.endsWith('swarm.mjs')) return false;
+    return swarmHelpSubcommandOk(args.slice(scriptAt + 1));
+  }
+  if (cmd === 'swarm') return swarmHelpSubcommandOk(args);
+  return readOnlyCommandAllowed(base);
 }
 
 const ghReadonlySub = pos => {
@@ -201,63 +266,170 @@ export function readOnlyCommandAllowed(words) {
   return false;
 }
 
-const isPytest = words => {
-  if (!words.length) return false;
+const testRunnerFlagDenied = a => {
+  const s = String(a);
+  if (TEST_RUNNER_DENIED_FLAGS.has(s)) return true;
+  return TEST_RUNNER_DENIED_PREFIXES.some(p => s.startsWith(p));
+};
+
+const testRunnerFlagsOk = args => {
+  let i = 0;
+  while (i < args.length) {
+    const a = String(args[i]);
+    if (testRunnerFlagDenied(a)) return false;
+    if (a.startsWith('--reporter=')) {
+      const v = a.slice('--reporter='.length);
+      if (!TEST_REPORTER_NAMES.has(v)) return false;
+      i += 1;
+      continue;
+    }
+    if (TEST_FLAG_VALUE.has(a)) {
+      if (i + 1 >= args.length) return false;
+      if (a === '--reporter' && !TEST_REPORTER_NAMES.has(String(args[i + 1]))) return false;
+      i += 2;
+      continue;
+    }
+    if (TEST_FLAG_ALONE.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      if (a.length === 2 && TEST_FLAG_ALONE.has(a)) {
+        i += 1;
+        continue;
+      }
+      if (/^-[kmqxv]+$/.test(a)) {
+        i += 1;
+        continue;
+      }
+      return false;
+    }
+    i += 1;
+  }
+  return true;
+};
+
+const positionalOperandsOk = (args, ctx) => {
+  const inProject = ctx?.inProject;
+  if (!inProject) return true;
+  for (const a of args) {
+    if (!a || String(a).startsWith('-')) continue;
+    if (!inProject(a)) return false;
+  }
+  return true;
+};
+
+const packageRunnerTool = (cmd, args) => {
+  if (cmd !== 'npx' && cmd !== 'pnpm' && cmd !== 'yarn') return null;
+  let i = 0;
+  if (cmd === 'npx') {
+    for (let j = 0; j < args.length; j += 1) {
+      if (String(args[j]).startsWith('-')) return null;
+      i = j;
+      break;
+    }
+  } else {
+    while (i < args.length && String(args[i]).startsWith('-')) i += 1;
+    if (args[i] === 'exec' || args[i] === 'dlx') i += 1;
+  }
+  const tool = String(args[i] ?? '');
+  if (!tool || tool.startsWith('-')) return null;
+  return { tool, rest: args.slice(i + 1) };
+};
+
+const npmScriptAllowed = (scriptName, ctx) => {
+  if (!NPM_TEST_RUNS.has(scriptName)) return false;
+  const scripts = ctx?.packageScripts;
+  if (!scripts || typeof scripts !== 'object') return scriptName === 'test';
+  return Object.prototype.hasOwnProperty.call(scripts, scriptName);
+};
+
+const npmTestShapeOk = (cmd, args, ctx) => {
+  if (cmd !== 'npm' && cmd !== 'pnpm' && cmd !== 'yarn') return false;
+  const i = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
+  if (i === -1) return false;
+  const verb = String(args[i]);
+  if (verb === 'test') return testRunnerFlagsOk(args.slice(i + 1)) && positionalOperandsOk(args.slice(i + 1), ctx);
+  if (verb === 'run') {
+    const script = String(args[i + 1] ?? '');
+    if (!npmScriptAllowed(script, ctx)) return false;
+    return testRunnerFlagsOk(args.slice(i + 2)) && positionalOperandsOk(args.slice(i + 2), ctx);
+  }
+  return false;
+};
+
+const pytestArgs = words => {
   const cmd = path.basename(String(words[0]));
-  if (cmd === 'pytest') return true;
+  if (cmd === 'pytest') return words.slice(1);
   if (cmd === 'python' || cmd === 'python3') {
     const m = words.indexOf('-m');
-    return m !== -1 && String(words[m + 1] ?? '') === 'pytest';
+    if (m === -1 || String(words[m + 1] ?? '') !== 'pytest') return null;
+    return words.slice(m + 2);
   }
-  return false;
+  return null;
 };
 
-const isPlaywright = (cmd, args) => {
-  if (cmd === 'playwright') return args[0] === 'test';
-  if (cmd === 'npx' || cmd === 'pnpm' || cmd === 'yarn') {
-    const i = args.findIndex(a => a !== '' && !a.startsWith('-'));
-    return i !== -1 && args[i] === 'playwright' && args[i + 1] === 'test';
+const playwrightRunnerOk = (cmd, args, ctx) => {
+  let verb;
+  let rest;
+  if (cmd === 'playwright') {
+    verb = String(args[0] ?? '');
+    rest = args.slice(1);
+  } else {
+    const pkg = packageRunnerTool(cmd, args);
+    if (!pkg || pkg.tool !== 'playwright') return false;
+    verb = String(pkg.rest[0] ?? '');
+    rest = pkg.rest.slice(1);
   }
-  return false;
+  if (verb !== 'test' && verb !== 'run') return false;
+  return testRunnerFlagsOk(rest) && positionalOperandsOk(rest, ctx);
 };
 
-const isVitest = (cmd, args) => {
-  if (cmd === 'vitest') return true;
-  if (cmd === 'npx' || cmd === 'pnpm' || cmd === 'yarn') {
-    const i = args.findIndex(a => a !== '' && !a.startsWith('-'));
-    return i !== -1 && args[i] === 'vitest';
+const vitestRunnerOk = (cmd, args, ctx) => {
+  let rest;
+  if (cmd === 'vitest') rest = args;
+  else {
+    const pkg = packageRunnerTool(cmd, args);
+    if (!pkg || pkg.tool !== 'vitest') return false;
+    rest = pkg.rest;
   }
-  return false;
+  const i = rest.findIndex(a => a !== '' && !String(a).startsWith('-'));
+  const verb = i === -1 ? 'run' : String(rest[i]);
+  if (verb !== 'test' && verb !== 'run') return false;
+  const flagArgs = i === -1 ? [] : rest.slice(i + 1);
+  return testRunnerFlagsOk(flagArgs) && positionalOperandsOk(flagArgs, ctx);
 };
 
-const isNpmTest = (cmd, args) => {
-  if (cmd === 'npm') {
-    const i = args.findIndex(a => a !== '' && !a.startsWith('-'));
-    if (i === -1) return false;
-    if (args[i] === 'test') return true;
-    if (args[i] === 'run' && NPM_TEST_RUNS.has(String(args[i + 1] ?? ''))) return true;
-    return false;
-  }
-  if (cmd === 'pnpm' || cmd === 'yarn') {
-    const i = args.findIndex(a => a !== '' && !a.startsWith('-'));
-    if (i === -1) return false;
-    if (args[i] === 'test') return true;
-    if (args[i] === 'run' && NPM_TEST_RUNS.has(String(args[i + 1] ?? ''))) return true;
-    return false;
-  }
-  return false;
+const nodeTestRunnerOk = (args, ctx) => {
+  if (!args.includes('--test')) return false;
+  const testIdx = args.indexOf('--test');
+  const before = args.slice(0, testIdx);
+  const after = args.slice(testIdx + 1);
+  if (before.some(a => String(a).startsWith('-'))) return false;
+  return testRunnerFlagsOk(after) && positionalOperandsOk(after, ctx);
 };
 
-/** Local test runners (no redirects/tee/sed -i in the same segment; checked in shell-writes). */
-export function localTestRunAllowed(words) {
+/** Vitest and Playwright only (orchestrator-mode narrow test-runner allowlist). */
+export function orchestratorTestRunAllowed(words, ctx = undefined) {
   if (!words?.length) return false;
   const rawCmd = String(words[0]);
   const cmd = path.basename(rawCmd);
   const args = words.slice(1);
-  if (isPytest(words)) return true;
-  if (cmd === 'node' && args.includes('--test')) return true;
-  if (isPlaywright(cmd, args)) return true;
-  if (isVitest(cmd, args)) return true;
-  if (isNpmTest(cmd, args)) return true;
+  if (playwrightRunnerOk(cmd, args, ctx)) return true;
+  if (vitestRunnerOk(cmd, args, ctx)) return true;
+  return false;
+}
+
+/** Local test runners (no redirects/tee/sed -i in the same segment; checked in shell-writes). */
+export function localTestRunAllowed(words, ctx = undefined) {
+  if (!words?.length) return false;
+  const rawCmd = String(words[0]);
+  const cmd = path.basename(rawCmd);
+  const args = words.slice(1);
+  if (orchestratorTestRunAllowed(words, ctx)) return true;
+  const pyArgs = pytestArgs(words);
+  if (pyArgs) return testRunnerFlagsOk(pyArgs) && positionalOperandsOk(pyArgs, ctx);
+  if (cmd === 'node') return nodeTestRunnerOk(args, ctx);
+  if (npmTestShapeOk(cmd, args, ctx)) return true;
   return false;
 }

@@ -15,7 +15,7 @@ import {
   orchestratorModeCommandAllowed,
   ORCHESTRATOR_MODE_DENY_REASON,
 } from '../tools/shell-writes.mjs';
-import { GUARD_ERROR_DENY_REASON } from '../tools/handbuild.mjs';
+import { GUARD_ERROR_DENY_REASON, guardDecision } from '../tools/handbuild.mjs';
 import { fileURLToPath } from 'node:url';
 
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -64,9 +64,12 @@ test('swarmSubcommandAlwaysAllowed: owner-approval and bypass shapes stay denied
 
 test('helpOnly', () => {
   assert.equal(helpOnly(['swarm', 'tickets', '--help']), true);
-  assert.equal(helpOnly(['node', '--help']), true);
-  assert.equal(helpOnly(['gh', 'pr', '--help']), true);
+  assert.equal(helpOnly(['node', '--help']), false);
+  assert.equal(helpOnly(['gh', 'pr', 'view', '--help']), true);
   assert.equal(helpOnly(['swarm', 'status']), false);
+  assert.equal(helpOnly(['rm', 'src/a.js', '-h']), false);
+  assert.equal(helpOnly(['touch', 'src/new.js', '--help']), false);
+  assert.equal(helpOnly(['swarm', 'handbuild', 'off', '--help']), false);
 });
 
 test('readOnlyCommandAllowed and localTestRunAllowed shapes', () => {
@@ -84,6 +87,7 @@ test('orchestratorModeCommandAllowed: bug-report allows', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
   await fs.writeFile(path.join(root, 'README.md'), '# x\n');
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
   const ctx = { root, cwd: root };
   const guardAllow = [
     'swarm go --scope wave --max-jobs 2',
@@ -108,11 +112,21 @@ test('orchestratorModeCommandAllowed: bug-report allows', async t => {
 test('orchestratorModeCommandAllowed: stays blocked', async t => {
   const root = await tmp(t);
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'package.json'),
+    JSON.stringify({ scripts: { test: 'node --test', 'test:unit': 'vitest run' } }),
+  );
   const ctx = { root, cwd: root };
   const deny = [
     'echo x > src/a.js',
     'sed -i s/a/b/ src/a.js',
     'rm src/a.js',
+    'rm src/a.js -h',
+    'touch src/new.js --help',
+    'tee src/a.js --help',
+    'node docs/plans/x.mjs --help',
+    'swarm handbuild off --help',
+    'swarm handbuild approve hb-1 --help',
     'git commit -m x',
     'swarm shell',
     'swarm exec npm test',
@@ -125,8 +139,102 @@ test('orchestratorModeCommandAllowed: stays blocked', async t => {
     'curl -o src/x.bin https://example.com/x',
     'npx vitest run | tee out.log',
     'npm test | tee out.log',
+    'npx vitest run --config docs/plans/evil.mjs',
+    'npx playwright test -c .swarm/x.js',
+    'npx playwright test --globalSetup evil.js',
+    'npx playwright test --outputFile src/a.js',
+    'npx vitest run -u',
+    'npx --package=evilpkg vitest',
+    'npm run test:unit -- --config evil.mjs',
   ];
   for (const c of deny) assert.equal(orchestratorModeCommandAllowed(c, ctx), false, c);
+});
+
+async function projectWithSwarm(t) {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tests'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tests', 'ok.test.mjs'), 'export {}\n');
+  await fs.writeFile(
+    path.join(root, 'package.json'),
+    JSON.stringify({
+      scripts: {
+        test: 'node --test tests/ok.test.mjs',
+        'test:e2e': 'playwright test',
+        'test:unit': 'vitest run',
+      },
+    }),
+  );
+  return root;
+}
+
+function guardBash(command, root, { handbuildOff = false, orchestrator = true } = {}) {
+  if (handbuildOff) {
+    return fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true }).then(() =>
+      fs.writeFile(path.join(root, '.swarm', 'handbuild', 'off'), ''),
+    ).then(() => guardDecision({
+      tool: 'Bash',
+      toolInput: { command },
+      root,
+      cwd: root,
+      now: () => 1,
+      enforceOrchestratorMode: orchestrator,
+    }));
+  }
+  return Promise.resolve(guardDecision({
+    tool: 'Bash',
+    toolInput: { command },
+    root,
+    cwd: root,
+    now: () => 1,
+    enforceOrchestratorMode: orchestrator,
+  }));
+}
+
+test('guardDecision: test runners and help attacks through full guard', async t => {
+  const root = await projectWithSwarm(t);
+  const deny = [
+    'rm src/a.js -h',
+    'touch src/new.js --help',
+    'tee src/a.js --help',
+    'node docs/plans/x.mjs --help',
+    'swarm handbuild off --help',
+    'npx vitest run --config docs/plans/evil.mjs',
+    'npx playwright test -c .swarm/x.js',
+    'npx vitest run -u',
+    'npx --package=evilpkg vitest run',
+  ];
+  const orchAllow = [
+    'npx vitest run tests/ok.test.mjs',
+    'npx playwright test tests/ok.test.mjs',
+    'gh pr view 12',
+    'git status',
+  ];
+  const handbuildAllow = [
+    'npm test',
+    'npm run test:unit',
+    'pytest tests/ok.test.mjs',
+    'python -m pytest tests/ok.test.mjs',
+    'node --test tests/ok.test.mjs',
+  ];
+  for (const handbuildOff of [false, true]) {
+    for (const c of deny) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'}: ${c}`);
+    }
+    for (const c of orchAllow) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'}: ${c}`);
+    }
+  }
+  for (const c of handbuildAllow) {
+    const d = await guardBash(c, root, { handbuildOff: false, orchestrator: false });
+    assert.equal(d.allow, true, `handbuild-only: ${c}`);
+  }
+  for (const c of handbuildAllow) {
+    const d = await guardBash(c, root, { handbuildOff: false, orchestrator: true });
+    assert.equal(d.allow, false, `orchestrator denies: ${c}`);
+  }
 });
 
 test('deny reasons no longer mention swarm diagnose', () => {
