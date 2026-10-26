@@ -445,6 +445,9 @@ describe('burst gpu scaler queue timing', () => {
   };
 
   test('long queue sustains 10 minutes before start, then idle 10 minutes before stop', () => {
+    assert.equal(DEFAULT_START_SUSTAIN_MS, 600_000);
+    assert.equal(IDLE_STOP_MS, 600_000);
+
     const scaler = createBurstScaler();
     const t0 = 10_000_000;
 
