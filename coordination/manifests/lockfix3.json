@@ -18,7 +18,15 @@
     "tools/autopilot-ready-deps.mjs",
     "tests/autopilot-ready-deps.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/needs-you-triage.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }

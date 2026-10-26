@@ -444,7 +444,6 @@ export function readyAutopilotDeps(projectRoot, {
             child.unref();
             finish({ ok: true, result: `started go --scope (pid ${child.pid})` });
           }, spawnEarlyExitMs);
-          earlyExitTimer.unref?.();
           const settleEarlyExit = async (out) => {
             clearTimeout(earlyExitTimer);
             finish(out);
