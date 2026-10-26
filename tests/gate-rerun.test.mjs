@@ -45,6 +45,42 @@ test('parseFailedTests rejects unsafe pytest ids in short summary', () => {
   assert.deepEqual(parseFailedTests(out, 'pytest').map(e => e.id), ['tests/ok.py::test_ok']);
 });
 
+test('parseFailedTests handles realistic quoted absolute TAP locations', () => {
+  const insideAbs = path.resolve('tests/inside.test.mjs');
+  const outsideAbs = path.resolve(process.cwd(), '..', 'peer-outside.test.mjs');
+  const out = [
+    'TAP version 13',
+    'not ok 1 - inside quoted abs',
+    `  location: '${insideAbs}:2:1'`,
+    '  failureType: testCodeFailure',
+    '  error: boom',
+    '  code: ERR_TEST_FAILURE',
+    'not ok 2 - outside quoted abs',
+    `  location: '${outsideAbs}:2:1'`,
+    '  failureType: testCodeFailure',
+    'not ok 3 - no location',
+  ].join('\n');
+  const got = parseFailedTests(out, 'node-test');
+  assert.deepEqual(
+    got.filter(entry => entry.file),
+    [{ id: 'tests/inside.test.mjs::inside quoted abs', name: 'inside quoted abs', file: 'tests/inside.test.mjs' }],
+  );
+  assert.equal(got.find(entry => entry.name === 'outside quoted abs')?.file, undefined);
+});
+
+test('parseFailedTests unescapes TAP hash in test names', () => {
+  const out = [
+    'not ok 1 - a \\# b',
+    '  location: tests/hash.test.mjs:1:1',
+  ].join('\n');
+  const got = parseFailedTests(out, 'node-test');
+  assert.equal(got[0].name, 'a # b');
+  assert.equal(got[0].id, 'tests/hash.test.mjs::a # b');
+  const argv = ['node', '--test', 'tests/hash.test.mjs'];
+  const rerun = buildRerunArgv(argv, got, 'node-test');
+  assert.ok(rerun.includes('--test-name-pattern=^a # b$'));
+});
+
 test('parseFailedTests reads node:test TAP with location', () => {
   const out = [
     'not ok 1 - alpha fails',
@@ -65,8 +101,8 @@ test('parseFailedTests rejects unsafe node:test file paths', () => {
     '  location: -evil.test.mjs:1:1',
     'not ok 2 - parent escape',
     '  test at tests/../outside.test.mjs:1:1',
-    'not ok 3 - absolute',
-    `  location: ${path.resolve('tests/abs.test.mjs')}:1:1`,
+    'not ok 3 - absolute outside cwd',
+    `  location: ${path.resolve(process.cwd(), '..', 'outside.test.mjs')}:1:1`,
     'not ok 4 - not a test file',
     '  location: tests/_isolate-config.mjs:1:1',
     'not ok 5 - good',
@@ -336,6 +372,68 @@ test('rerunFailed redacts before byte trim so split secrets do not leak', async 
   assert.doesNotMatch(result.tail, /sk-[A-Za-z0-9_-]{4,}/);
   assert.match(result.tail, /sk-\[redacted\]/);
   assert.equal(Buffer.byteLength(result.tail, 'utf8'), 40);
+});
+
+test('rerunFailed reports ok false when node rerun matches zero tests', async () => {
+  const spawnImpl = () => {
+    const handlers = {};
+    const child = {
+      pid: 6060,
+      stdout: { setEncoding() {}, on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
+      stderr: { setEncoding() {}, on: () => {}, destroy() {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+      kill() {},
+    };
+    setImmediate(() => {
+      handlers.stdout?.([
+        '# tests 0',
+        '# pass 0',
+        '# fail 0',
+      ].join('\n'));
+      handlers.exit?.(0, null);
+    });
+    return child;
+  };
+  const failed = [{ id: 'tests/x.test.mjs::missing', name: 'missing', file: 'tests/x.test.mjs' }];
+  const result = await rerunFailed({
+    argv: ['node', '--test', 'tests/x.test.mjs'],
+    failed,
+    kind: 'node-test',
+    spawnImpl,
+    timeoutMs: 5000,
+    maxBytes: 4096,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.reason, 'rerun ran no matching tests');
+});
+
+test('rerunFailed reports ok false when pytest rerun output has no pass or fail summary', async () => {
+  const spawnImpl = () => {
+    const handlers = {};
+    const child = {
+      pid: 7070,
+      stdout: { setEncoding() {}, on: (ev, fn) => { handlers.stdout = fn; }, destroy() {} },
+      stderr: { setEncoding() {}, on: () => {}, destroy() {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+      kill() {},
+    };
+    setImmediate(() => {
+      handlers.stdout?.('collected 0 items\n\n');
+      handlers.exit?.(0, null);
+    });
+    return child;
+  };
+  const result = await rerunFailed({
+    argv: ['pytest', 'tests/a.py::t'],
+    failed: ['tests/a.py::t'],
+    kind: 'pytest',
+    spawnImpl,
+    timeoutMs: 5000,
+    maxBytes: 4096,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'rerun ran no matching tests');
 });
 
 test('rerunFailed returns null argv when rerun cannot be built', async () => {

@@ -98,15 +98,36 @@ function isSafeRelativeTestFile(file, cwd = process.cwd()) {
   return resolved === root || resolved.startsWith(prefix);
 }
 
+function unescapeTapName(name) {
+  return String(name ?? '').replace(/\\(.)/g, (_, ch) => ch);
+}
+
+function normalizeLocationPath(raw, cwd = process.cwd()) {
+  let loc = String(raw ?? '').trim();
+  if (
+    (loc.startsWith("'") && loc.endsWith("'"))
+    || (loc.startsWith('"') && loc.endsWith('"'))
+  ) {
+    loc = loc.slice(1, -1);
+  }
+  loc = loc.replace(/:\d+:\d+$/, '');
+  if (path.isAbsolute(loc)) {
+    const rel = path.relative(cwd, loc);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    return rel;
+  }
+  return loc;
+}
+
 function fileFromLocationLine(line, cwd = process.cwd()) {
   const location = /^\s*location:\s*(.+)$/i.exec(line)?.[1]?.trim();
   if (location) {
-    const file = location.split(':')[0]?.trim();
+    const file = normalizeLocationPath(location, cwd);
     if (file && isSafeRelativeTestFile(file, cwd)) return file;
   }
   const testAt = /^\s*test at\s+(.+)$/i.exec(line)?.[1]?.trim();
   if (testAt) {
-    const file = testAt.split(':')[0]?.trim();
+    const file = normalizeLocationPath(testAt, cwd);
     if (file && isSafeRelativeTestFile(file, cwd)) return file;
   }
   return undefined;
@@ -119,7 +140,7 @@ function parseNodeTestFailures(output, cwd = process.cwd()) {
   for (let i = 0; i < lines.length; i++) {
     const match = /^\s*not ok \d+ - (.+?)(?:\s+#\s.*)?$/.exec(lines[i]);
     if (!match) continue;
-    const name = match[1].trim();
+    const name = unescapeTapName(match[1].trim());
     if (!name) continue;
     let file;
     for (let j = i + 1; j < Math.min(lines.length, i + 12); j++) {
@@ -257,6 +278,54 @@ function buildNodeTestRerunArgv(argv, failed, cwd = process.cwd()) {
   }
   const patterns = names.map(name => `--test-name-pattern=^${escapeRegExp(name)}$`);
   return [...kept, ...patterns, ...files];
+}
+
+function resolveRerunKind(argv, kind) {
+  if (kind === 'pytest' || kind === 'node-test') return kind;
+  if (kind === 'auto') {
+    if (findPytestIndex(argv) >= 0) return 'pytest';
+    if (argv.includes('--test')) return 'node-test';
+  }
+  return null;
+}
+
+function nodeTestResultNames(output) {
+  const names = [];
+  for (const line of String(output ?? '').split('\n')) {
+    const match = /^\s*(?:ok|not ok) \d+ - (.+?)(?:\s+#\s.*)?$/.exec(line);
+    if (match) names.push(unescapeTapName(match[1].trim()));
+  }
+  return names;
+}
+
+function verifyRerunRanMatchingTests(output, failed, resolvedKind) {
+  const entries = normalizeFailed(failed);
+  if (!entries.length) {
+    return { ran: false, reason: 'rerun ran no matching tests' };
+  }
+  const text = String(output ?? '');
+  if (resolvedKind === 'node-test') {
+    const testsMatch = /#\s*tests\s+(\d+)/.exec(text);
+    const testCount = testsMatch ? Number(testsMatch[1]) : 0;
+    if (!Number.isFinite(testCount) || testCount <= 0) {
+      return { ran: false, reason: 'rerun ran no matching tests' };
+    }
+    const ranNames = new Set(nodeTestResultNames(text));
+    const targets = [...new Set(entries.map(entry => entry.name))];
+    for (const name of targets) {
+      if (!ranNames.has(name)) {
+        return { ran: false, reason: 'rerun ran no matching tests' };
+      }
+    }
+    return { ran: true };
+  }
+  if (resolvedKind === 'pytest') {
+    if (!/\d+\s+passed\b/i.test(text) && !/\d+\s+failed\b/i.test(text)) {
+      return { ran: false, reason: 'rerun ran no matching tests' };
+    }
+    return { ran: true };
+  }
+  return { ran: true };
 }
 
 export function buildRerunArgv(argv, failed, kind = 'auto', cwd = process.cwd()) {
@@ -438,13 +507,24 @@ export async function rerunFailed({
         const splitIdx = Math.round(redacted.length * (outLen / (outLen + errLen)));
         tail = trimTail(redacted.slice(0, splitIdx), redacted.slice(splitIdx), maxBytes);
       }
+      let ok = exitCode === 0 && !timedOut;
+      let reason;
+      if (!timedOut) {
+        const resolvedKind = resolveRerunKind(rerunArgv, kind);
+        const check = verifyRerunRanMatchingTests(full, failed, resolvedKind);
+        if (!check.ran) {
+          ok = false;
+          reason = check.reason;
+        }
+      }
       resolve({
-        ok: exitCode === 0 && !timedOut,
+        ok,
         exitCode,
         signal,
         timedOut,
         tail,
         argv: rerunArgv,
+        ...(reason ? { reason } : {}),
       });
     };
     timeoutTimer = setTimeout(() => {
