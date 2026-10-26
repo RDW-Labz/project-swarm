@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "HOTFIX for the orchestrator-mode pre-tool guard (tools/shell-writes.mjs: orchestratorModeCommandAllowed, omValidateTokenized, omSwarmSubcommandAllowed, OM_SWARM_ALLOWED_TOP and friends; tools/handbuild.mjs: ORCHESTRATOR_MODE_DENY_REASON use and GUARD_ERROR_DENY_REASON). In parts-request-app the guard blocks the orchestrator's own legitimate commands: 'swarm go --scope ...', 'swarm tickets ID --retry-note TEXT' and other tickets flags (omSwarmSubcommandAllowed only accepts --status and --kind for tickets, and the run-like flag set rejects --scope and --max-jobs), '--help', gh, grep. The deny text also tells the orchestrator to use 'swarm diagnose', which does not exist in the installed swarm. Required behaviour: (1) Any swarm subcommand that exists in the swarm CLI is always allowed for the orchestrator, with ANY flags, EXCEPT the subcommands in OM_SWARM_DENIED_TOP (init, mutants, mutant, scaffold, eval, shell, exec) which stay denied; keep the existing global-flag handling (--root must resolve to the project root); keep denying swarm used as a way to run shell (no 'swarm shell', no exec). Add any real top-level swarm subcommands that are missing from OM_SWARM_ALLOWED_TOP (read the swarm.mjs usage text: for example autopilot, backup, restore, resolve, inbox, queue, projects, history, budget, budgets, policy, cancel, resume, sweep, gallery, ui, stop, validate, preflight, orphans, gc, usage, tunnel, remote, lanes) but never the denied ones. (2) Always allowed read-only commands (no writes, no redirects to files in the project, still subject to the existing capped-output pipe rules where they exist): gh pr view/list/checks/diff, gh run view/list, gh issue view/list, gh api GET reads, grep, egrep, fgrep, rg, cat, head, tail, wc, ls, git status, git log, git diff, git show, git branch (list only), git rev-parse, and ANY command whose only arguments are --help, -h or --version (for example 'swarm tickets --help', 'node --help', 'gh pr --help'). (3) Always allowed local test runs: playwright test, npx playwright test, vitest, npx vitest, npm test, npm run test, npm run test:e2e, pnpm and yarn equivalents, node --test, pytest, python -m pytest, with any flags; but not when combined with redirects, tee, sed -i, or other writer commands in the same command (those stay blocked). (4) Keep blocking hand edits to app code: redirects, tee, sed -i, mv, cp, rm, touch, mkdir into the project outside the orchestrator's own folders (.swarm/, docs/plans/), inline scripts that write files, git commands that change the tree or history, curl -o and tar -x. Nothing in (1) to (3) may weaken this; the existing tests for blocking must still pass. (5) Replace every reference to 'swarm diagnose' in the deny reasons (ORCHESTRATOR_MODE_DENY_REASON in tools/shell-writes.mjs and GUARD_ERROR_DENY_REASON in tools/handbuild.mjs) with commands that exist: make a ticket with 'swarm ticket ...' or 'swarm tickets ...' (and 'swarm backlog add \"goal\"'); the text must name the specific allowed forms. Update any test that asserts the old text. Put the new allow rules in a NEW module tools/orchestrator-allow.mjs (pure functions, no I/O: swarmSubcommandAlwaysAllowed(sub, rest), readOnlyCommandAllowed(words), localTestRunAllowed(words), helpOnly(words)) and call them from tools/shell-writes.mjs with the smallest possible edit; keep the dense style of the file. Add tests/orchestrator-allow.test.mjs covering every allowed form above with the exact commands from the bug report (swarm go --scope --max-jobs 2, swarm tickets T-0001 --retry-note \"x\", swarm tickets --help, gh pr view 12, gh run view 5, grep -rn foo src, cat README.md, git status, git log --oneline -5, npx playwright test, npx vitest run, npm test) plus the commands that must STAY blocked (echo x > src/a.js, sed -i s/a/b/ src/a.js, rm src/a.js, git commit, swarm shell, swarm exec, tee, cp, curl -o, a test run piped into tee, swarm diagnose is no longer mentioned in the deny text). Keep all tests/orchestrator-mode*.test.mjs and tests/shell-writes*.test.mjs passing except assertions about the old 'swarm diagnose' text. IMPORTANT: secret scanner: never write credential-looking literals in tests.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 3000000
+  }
+ ]
+}
