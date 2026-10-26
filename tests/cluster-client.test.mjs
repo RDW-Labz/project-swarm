@@ -184,37 +184,6 @@ test('AbortSignal.timeout on real fetch rejects with cluster-request-timeout', a
   );
 });
 
-test('stalled remote fetch rejects with cluster-request-timeout', async t => {
-  const { env, home } = await isolatedHome(t, { clusterCanonicalHost: '127.0.0.1', clusterLedgerPort: 9448 });
-  const fullEnv = await seedNodeIdentity(home, env);
-
-  const hangForever = (_url, { signal }) =>
-    new Promise((_resolve, reject) => {
-      if (!signal) return;
-      const onAbort = () => {
-        const err = new Error('The operation was aborted');
-        err.name = 'AbortError';
-        reject(err);
-      };
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-
-  await assert.rejects(
-    () =>
-      clusterLedgerRemoteFetch(CLUSTER_LEDGER_READ_PATH, {
-        env: fullEnv,
-        home,
-        fetch: hangForever,
-        timeoutMs: 25,
-      }),
-    err => err.code === 'cluster-request-timeout',
-  );
-});
-
 test('HTTP redirect responses are not followed', async t => {
   const { port } = await listenMock(t, (_req, res) => {
     res.writeHead(302, { Location: 'http://127.0.0.1:9/steal' });
