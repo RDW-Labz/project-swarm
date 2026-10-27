@@ -92,9 +92,9 @@ export const SCOPE_USAGE = [
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
-  '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
+  '       swarm tickets ID --clear-note | --retry-note TEXT | --note TEXT | --reopen --reason "why"   (--retry-note replaces the system note a failed attempt left, shown to the next worker as untrusted failure text; --clear-note removes that retry note and any owner guidance note; --note alone leaves guidance for the next worker)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
-  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
+  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; --note with --set ready, todo or blocked saves owner guidance for the next worker; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
   '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -928,6 +928,19 @@ export function redactNote(text) {
     .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, '***')
     .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIAL)[A-Za-z0-9_]*)(\s*[=:]\s*)\S+/gi, '$1$2***')
     .replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, '***');
+}
+
+/** Owner or orchestrator guidance for the next worker attempt (not the system retryNote). */
+export function applyOwnerNote(ticket, raw) {
+  const text = redactNote(String(raw ?? '')).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
+  if (!text) {
+    delete ticket.ownerNote;
+    delete ticket.ownerNoteAt;
+    return null;
+  }
+  ticket.ownerNote = text;
+  ticket.ownerNoteAt = new Date().toISOString();
+  return text;
 }
 
 // Ticket moves share the wave lock, so an owner command, a wave start and a sync cannot overwrite each other.
@@ -3512,6 +3525,24 @@ async function releaseTickets(root, ids, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+// swarm tickets T-xxxx --note TEXT: owner guidance for the next worker (quoted in the job prompt; does not change retryNote).
+async function ownerNoteCommand(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --note needs one ticket id');
+  try {
+    return await withLock(root, async () => {
+      const ledger = await readLedger(root);
+      const t = ledger.tickets.find(x => x.id === rest[0]);
+      if (!t) return out(`no ticket ${rest[0]}`, 1);
+      if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
+      const saved = applyOwnerNote(t, flags.note);
+      ledger.updatedAt = new Date().toISOString();
+      await writeLedger(root, ledger);
+      await appendLog(root, { event: 'owner-note', by: 'owner', id: t.id, action: saved ? 'set' : 'cleared' });
+      return out(saved ? `${t.id}: owner note saved` : `${t.id}: owner note cleared`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
 // swarm tickets T-xxxx --clear-note | --retry-note TEXT: the note a failed attempt left (it is quoted into the next attempt's prompt) can be dropped or replaced by the owner.
 async function retryNoteCommand(root, rest, flags) {
   if (rest.length !== 1) return bad('tickets --clear-note and --retry-note need one ticket id');
@@ -3522,7 +3553,11 @@ async function retryNoteCommand(root, rest, flags) {
       if (!t) return out(`no ticket ${rest[0]}`, 1);
       if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
       const before = t.retryNote ?? null;
-      if (flags['clear-note'] === true) delete t.retryNote;
+      if (flags['clear-note'] === true) {
+        delete t.retryNote;
+        delete t.ownerNote;
+        delete t.ownerNoteAt;
+      }
       else {
         const text = String(flags['retry-note'] ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
         if (!text) return out('--retry-note needs the new text (use --clear-note to remove it)', 1);
@@ -3697,7 +3732,7 @@ async function setTicketStatus(root, rest, flags) {
     holdQuestion = text;
   }
   try {
-    const t = await lockedTransition(root, rest[0], to, {
+    let t = await lockedTransition(root, rest[0], to, {
       by: 'owner',
       note: flags.note,
       ...(holdQuestion !== undefined ? { holdQuestion } : {}),
@@ -3705,6 +3740,17 @@ async function setTicketStatus(root, rest, flags) {
       source: 'tickets-set',
       confirmation,
     });
+    if (flags.note !== undefined && ['ready', 'todo', 'blocked'].includes(to)) {
+      t = await lockedUpdate(root, async () => {
+        const fresh = await readLedger(root);
+        const ticket = fresh.tickets.find(x => x.id === rest[0]);
+        applyOwnerNote(ticket, flags.note);
+        fresh.updatedAt = new Date().toISOString();
+        await writeLedger(root, fresh);
+        await appendLog(root, { event: 'owner-note', by: 'owner', id: ticket.id, action: ticket.ownerNote ? 'set' : 'cleared', source: 'tickets-set' });
+        return ticket;
+      });
+    }
     await refreshPlan(root);
     return out(`${t.id} is now ${t.status}`);
   } catch (error) {
@@ -3727,6 +3773,7 @@ export async function runTicketsCommand(root, args) {
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) return setTicketStatus(root, rest, flags);
+  if (flags.note !== undefined && rest.length === 1) return ownerNoteCommand(root, rest, flags);
   if (rest.length === 1) {
     const t = ledger.tickets.find(x => x.id === rest[0]);
     if (!t) return out(`no ticket ${rest[0]}`, 1);
