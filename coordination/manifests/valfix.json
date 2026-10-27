@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "valfix",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Fix a manifest validator bug that has failed jobs three times. In tools/swarm/core-31.mjs the function promptPathsNotInWorkspaceWarnings (called from validate and run in tools/swarm/core-51.mjs, and its result makes a job refuse with the text prompt-path-not-in-workspace) scans the job's PROMPT TEXT for words that look like paths using the PROMPT_PATH_RE regular expression in tools/swarm/patterns.mjs. Two kinds of words in the prompt text wrongly fail a job: (1) asterisk wildcard patterns written in prose (for example a pattern that names every test file with a common prefix, or option names that end in an asterisk): they are not paths the worker must read, and the check says they match no tracked, context or resource file; (2) a plain path followed by sentence punctuation, for example a period or colon right after a file name, because the regex keeps the trailing dot as part of the path so the covered file does not match. Required behaviour: (a) a candidate that contains an asterisk NEVER produces a hit (skip it); (b) strip trailing punctuation (dots, commas, colons, semicolons, closing brackets and quotes) from every candidate before the coverage check, and a single trailing slash as now; (c) KEEP the existing protection of field lesson 281 for plain paths: a plain repo-relative path that exists on disk but is neither tracked, nor in the job's context, nor in the manifest resources still produces the hit, and traversal spelling stays refused; (d) text between triple angle brackets stays ignored as now. Only the manifest's declared fields stay authoritative for what a worker gets. Update the one existing assertion that expects an asterisk pattern to produce a hit (tests/field-lessons-batch-ah-runtime.test.mjs, the case that reads a source folder with an asterisk and an extension, around the lines that call promptPathsNotInWorkspaceWarnings and name globHits): it now expects no hit, with a comment that this is an owner-ordered change because wildcard words in prose are not paths. Add tests/prompt-path-wildcards.test.mjs (node:test, temp folders, no network): wildcard words give no hit; a covered tracked file name followed by a period gives no hit; an uncovered existing plain path still gives a hit; a path with traversal is still refused; the full validate of a manifest whose prompt mentions a test file pattern with an asterisk and an option name ending in an asterisk passes. Keep tests/s13-live-bugs.test.mjs and tests/field-lessons-batch-x.test.mjs passing. IMPORTANT: secret scanner: no credential-looking literals in tests.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/patterns.mjs",
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/prompt-path-wildcards.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
