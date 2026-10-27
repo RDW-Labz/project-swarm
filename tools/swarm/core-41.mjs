@@ -257,7 +257,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       if (reason || settled) return;
       reason = why;
       termination ??= stopChildForJob();
-      termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
+      termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
     };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
@@ -370,7 +370,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
         termination??=stopChildForJob();
-        termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
+        termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
       });
       child.on('close', code => { streamsClosed = true; finishAndRevoke(code); });
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {

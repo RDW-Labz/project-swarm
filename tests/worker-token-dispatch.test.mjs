@@ -2,6 +2,7 @@
 import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { accessSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -143,7 +144,21 @@ test('token revoked after failure exit', { timeout: TEST_TIMEOUT_MS }, async t =
 
 test('token revoked after timeout kill without injectable killImpl', { timeout: TEST_TIMEOUT_MS }, async t => {
   const { root, runId, jobId, workspace, logDirectory } = await makeDispatchFixture(t);
-  const { spawnImpl } = createFakeSpawn(t, () => {});
+  const owned = [];
+  const spawnImpl = (_command, _args, options) => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], options);
+    owned.push(child);
+    return child;
+  };
+  t.after(() => {
+    for (const child of owned) {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already exited */
+      }
+    }
+  });
   const result = await execute(
     { ...baseJob, id: jobId, timeoutMs: 40 },
     workspace,
@@ -355,5 +370,98 @@ test('ssh cli host spawn omits worker token from argv and env', { timeout: TEST_
   assert.ok(!joined.includes(WORKER_TOKEN_ENV));
   assert.equal(captures[0].options.env[WORKER_TOKEN_ENV], undefined);
   assert.equal(captures[0].options.env[SWARM_WORKER_RUN_ID_ENV], undefined);
+  await assert.rejects(() => fs.access(tokenRecordPath(root, runId, jobId)));
+});
+
+/** Real CLI children set exitCode on `exit`; stopChild then reaps before `close` drains stdout. */
+function killImplProcessAlreadyExited() {
+  return (_target, _signal) => {
+    const error = new Error('ESRCH');
+    error.code = 'ESRCH';
+    throw error;
+  };
+}
+
+function finishChildAfterExit(child, { stdout = '', exitCode = 0 } = {}) {
+  if (stdout) child.stdout.push(stdout);
+  child.exitCode = exitCode;
+  child.emit('exit', exitCode);
+  // Delay close so a buggy early finishAndRevoke(null) settles before the real exit code arrives.
+  setTimeout(() => child.emit('close', exitCode), 25);
+}
+
+const cliEnvelopeValue = {
+  summary: 'Generated from supplied text only.',
+  files: [{ path: 'report.md', content: 'Reviewed.' }],
+};
+
+function extraCliStdoutLine(agent) {
+  const payload = JSON.stringify(cliEnvelopeValue);
+  const init = JSON.stringify({ type: 'system', subtype: 'init', model: 'observed-model' });
+  const result =
+    agent === 'hermes'
+      ? JSON.stringify({ type: 'result', exit_code: 0, text: payload, tokens: { input: 1, output: 1 } })
+      : JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: payload,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+  return `${init}\n${result}\n`;
+}
+
+for (const agent of ['claude', 'hermes', 'qwen']) {
+  test(`${agent} exit-before-close success keeps exit code 0 and revokes token`, { timeout: TEST_TIMEOUT_MS }, async t => {
+    const { root, runId, jobId, workspace, logDirectory } = await makeDispatchFixture(t);
+    const job = {
+      ...baseJob,
+      id: jobId,
+      agent,
+      model: 'sonnet',
+      outputs: agent === 'claude' ? [] : ['report.md'],
+      timeoutMs: 30_000,
+    };
+    const stdout = agent === 'claude' ? completeEnvelopeLine() : extraCliStdoutLine(agent);
+    const { spawnImpl, killImpl } = createFakeSpawn(t, child => {
+      finishChildAfterExit(child, { stdout, exitCode: 0 });
+    });
+    const result = await execute(job, workspace, 'go', {
+      spawnImpl,
+      killImpl: killImplProcessAlreadyExited(),
+      logDirectory,
+    });
+    assert.equal(result.status, 'complete');
+    assert.equal(result.exitCode, 0);
+    await assert.rejects(() => fs.access(tokenRecordPath(root, runId, jobId)));
+  });
+}
+
+test('failing child exit code 3 is preserved when exit precedes close', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const { root, runId, jobId, workspace, logDirectory } = await makeDispatchFixture(t);
+  const { spawnImpl, killImpl } = createFakeSpawn(t, child => {
+    finishChildAfterExit(child, { exitCode: 3 });
+  });
+  const result = await execute(
+    { ...baseJob, id: jobId },
+    workspace,
+    'go',
+    { spawnImpl, killImpl: killImplProcessAlreadyExited(), logDirectory },
+  );
+  assert.equal(result.status, 'failed');
+  assert.equal(result.exitCode, 3);
+  await assert.rejects(() => fs.access(tokenRecordPath(root, runId, jobId)));
+});
+
+test('timeout still ends as timeout when exit-before-close would otherwise race', { timeout: TEST_TIMEOUT_MS }, async t => {
+  const { root, runId, jobId, workspace, logDirectory } = await makeDispatchFixture(t);
+  const { spawnImpl, killImpl } = createFakeSpawn(t, () => {});
+  const result = await execute(
+    { ...baseJob, id: jobId, timeoutMs: 40 },
+    workspace,
+    'go',
+    { spawnImpl, killImpl, logDirectory },
+  );
+  assert.equal(result.status, 'timeout');
   await assert.rejects(() => fs.access(tokenRecordPath(root, runId, jobId)));
 });
