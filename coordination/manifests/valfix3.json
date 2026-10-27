@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "valfix3",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Two small fixes, nothing else. (1) tools/swarm/core-31.mjs, function promptPathsNotInWorkspaceWarnings, the candidates pipeline: the rule that a candidate must contain a slash is now applied AFTER the trailing slash and leading dot-slash are stripped, so a directory spelled with a trailing slash (a word like uncovered followed by one slash) no longer counts. The original code required the slash BEFORE stripping it. Reorder the pipeline: first drop values containing an asterisk, then strip trailing sentence punctuation (period, comma, colon, semicolon, closing bracket or quote), then keep only values that contain a slash, and only then strip the leading dot-slash and the trailing slash. (2) tests/prompt-path-wildcards.test.mjs, test 'traversal spelling is skipped by the prompt-path check, as before; the plain spelling still refuses': its fixture has no git repository, so validateProject treats every file on disk as tracked and cannot refuse; delete the last assertion line of that test (the assert.rejects on validateProject) and keep the others; the refusal for a plain uncovered path inside a git repository is already covered by tests/field-lessons-batch-ah-runtime.test.mjs. No credential-looking literals.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tests/prompt-path-wildcards.test.mjs",
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-31.mjs",
+    "tests/prompt-path-wildcards.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ]
+}
