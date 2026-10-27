@@ -77,8 +77,12 @@ async function swarmProject(t) {
 
 const omReason = d => d.reason === ORCHESTRATOR_MODE_DENY_REASON && d.ruleId === ORCHESTRATOR_MODE_RULE_ID;
 
-test('orchestratorModeCommandAllowed: swarm and read-only git', async () => {
+test('orchestratorModeCommandAllowed: swarm and read-only git', async t => {
   await installLocalSwarmShim();
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
+  const ctx = { root, cwd: root };
   const allow = [
     'swarm status',
     'swarm tickets list',
@@ -97,7 +101,7 @@ test('orchestratorModeCommandAllowed: swarm and read-only git', async () => {
     'git remote -v',
     'git branch --list',
   ];
-  for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c), true, c);
+  for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
 });
 
 test('orchestratorModeCommandAllowed: read-only gh and capped reads', async () => {

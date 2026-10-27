@@ -203,15 +203,17 @@ test('handbuild-guard denies invalid JSON when CLAUDE_PROJECT_DIR is set and std
   assert.equal(parsed.hookSpecificOutput.permissionDecisionReason, GUARD_ERROR_DENY_REASON);
 });
 
-test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', async () => {
+test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', async t => {
   const binDir = path.join(process.env.HOME, '.local', 'bin');
   await fs.mkdir(binDir, { recursive: true });
   const swarmMjs = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
   const wrapper = `#!/bin/sh\n# managed by project-swarm\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(swarmMjs)} "$@"\n`;
   await fs.writeFile(path.join(binDir, 'swarm'), wrapper, { mode: 0o755 });
   process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
-  assert.equal(orchestratorModeCommandAllowed('swarm init'), false);
-  assert.equal(orchestratorModeCommandAllowed('swarm mutants'), false);
-  assert.equal(orchestratorModeCommandAllowed('swarm status'), true);
-  assert.equal(orchestratorModeCommandAllowed('swarm tickets --status blocked'), true);
+  const root = await swarmProject(t);
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed('swarm init', ctx), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm mutants', ctx), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm status', ctx), true);
+  assert.equal(orchestratorModeCommandAllowed('swarm tickets --status blocked', ctx), true);
 });
