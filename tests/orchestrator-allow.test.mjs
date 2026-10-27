@@ -40,6 +40,11 @@ test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--retry-note', 'x']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'done']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--delivered', 'PR-1']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--accept']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--evil']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('budget', ['set', '10']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('budgets', ['set', 'daily', '5']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress', '--yes']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('resolve', []), false);
   assert.equal(swarmSubcommandAlwaysAllowed('inbox', ['list']), true);
@@ -102,13 +107,24 @@ test('readOnlyCommandAllowed and localTestRunAllowed shapes', () => {
   assert.equal(readOnlyCommandAllowed(['git', 'status']), true);
   assert.equal(localTestRunAllowed(['npx', 'playwright', 'test']), true);
   assert.equal(localTestRunAllowed(['npx', 'vitest', 'run']), true);
-  assert.equal(localTestRunAllowed(['npm', 'test']), true);
+  assert.equal(localTestRunAllowed(['npm', 'test'], { packageScripts: { test: 'node --test' } }), true);
+  assert.equal(localTestRunAllowed(['npx', 'vitest', '--config=.swarm/evil.mjs']), false);
+  assert.equal(localTestRunAllowed(['npx', 'vitest', '-u']), false);
+  assert.equal(localTestRunAllowed(['npx', 'vitest', '--config=x', 'run']), false);
+  assert.equal(localTestRunAllowed(['pnpm', 'dlx', 'vitest', 'run']), false);
+  assert.equal(localTestRunAllowed(['yarn', 'dlx', 'vitest', 'run']), false);
+  assert.equal(localTestRunAllowed(['node', '--test', '--import', './x.mjs']), false);
+  assert.equal(localTestRunAllowed(['npm', 'test', '--', '--config', 'x']), false);
+  assert.equal(localTestRunAllowed(['pytest', '-c', 'x.ini']), false);
+  assert.equal(localTestRunAllowed(['pytest', '-p', 'plugin']), false);
+  assert.equal(localTestRunAllowed(['python3', '-m', 'pytest', '--rootdir', '/tmp']), false);
 });
 
 test('orchestratorModeCommandAllowed: bug-report allows', async t => {
   await installLocalSwarmShim();
   const root = await tmp(t);
   await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.mkdir(path.join(root, 'tests'), { recursive: true });
   await fs.writeFile(path.join(root, 'README.md'), '# x\n');
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
   const ctx = { root, cwd: root };
@@ -127,10 +143,19 @@ test('orchestratorModeCommandAllowed: bug-report allows', async t => {
     'git log --oneline -5',
   ];
   for (const c of guardAllow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
-  for (const c of ['npx playwright test', 'npx vitest run']) {
+  for (const c of [
+    'npx playwright test',
+    'npx vitest run',
+    'npm test',
+    'npm run test',
+    'node --test',
+    'node --test tests',
+    'pytest',
+    'python3 -m pytest',
+  ]) {
     assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
   }
-  assert.equal(localTestRunAllowed('npm test'.split(/\s+/)), true);
+  assert.equal(localTestRunAllowed('npm test'.split(/\s+/), { packageScripts: { test: 'node --test' } }), true);
   assert.equal(localTestRunAllowed('npx vitest run'.split(/\s+/)), true);
   assert.equal(orchestratorModeCommandAllowed('npm test 2>&1', ctx), false);
 });
@@ -194,8 +219,20 @@ test('orchestratorModeCommandAllowed: stays blocked', async t => {
     'npx playwright test --globalSetup evil.js',
     'npx playwright test --outputFile src/a.js',
     'npx vitest run -u',
+    'npx vitest --config=.swarm/evil.mjs',
+    'npx vitest -u',
     'npx --package=evilpkg vitest',
+    'pnpm dlx vitest run',
     'npm run test:unit -- --config evil.mjs',
+    'npm test -- --config x',
+    'node --test --import ./x.mjs',
+    'pytest -c x.ini',
+    'pytest -p plugin',
+    'python -m pytest --rootdir /tmp',
+    'swarm budget set 10',
+    'swarm budgets set daily 5',
+    'swarm tickets T-0001 --delivered PR-1',
+    'swarm tickets T-0001 --take-from T-0002',
   ];
   for (const c of deny) assert.equal(orchestratorModeCommandAllowed(c, ctx), false, c);
 });
@@ -269,30 +306,50 @@ test('guardDecision: test runners and help attacks through full guard', async t 
     'swarm resume run-abc',
     'swarm inbox --json',
   ];
-  const handbuildAllow = [
+  const localTestAllow = [
     'npm test',
     'npm run test:unit',
     'pytest tests/ok.test.mjs',
     'python -m pytest tests/ok.test.mjs',
+    'python3 -m pytest tests/ok.test.mjs',
     'node --test tests/ok.test.mjs',
+    'node --test',
+  ];
+  const localTestDeny = [
+    'node --test --import ./x.mjs',
+    'npm test -- --config x',
+    'pytest -c x.ini',
+    'pytest -p plugin',
+    'python -m pytest --rootdir /tmp',
+    'npx vitest run .swarm/x.test.mjs',
+    'npx vitest run docs/plans/x.test.mjs',
+    'npx playwright test .swarm/x.spec.js',
+    'node --test .swarm/x.test.mjs',
+    'npx vitest --config=.swarm/evil.mjs',
+    'npx vitest -u',
+    'pnpm dlx vitest run',
   ];
   for (const handbuildOff of [false, true]) {
     for (const c of deny) {
       const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
       assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'}: ${c}`);
     }
+    for (const c of localTestDeny) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny: ${c}`);
+    }
     for (const c of orchAllow) {
       const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
       assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'}: ${c}`);
     }
+    for (const c of localTestAllow) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} local: ${c}`);
+    }
   }
-  for (const c of handbuildAllow) {
+  for (const c of localTestAllow) {
     const d = await guardBash(c, root, { handbuildOff: false, orchestrator: false });
     assert.equal(d.allow, true, `handbuild-only: ${c}`);
-  }
-  for (const c of handbuildAllow) {
-    const d = await guardBash(c, root, { handbuildOff: false, orchestrator: true });
-    assert.equal(d.allow, false, `orchestrator denies: ${c}`);
   }
 });
 

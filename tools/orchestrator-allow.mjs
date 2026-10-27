@@ -37,11 +37,11 @@ const WRITER_BINARIES = new Set([
 
 const TEST_RUNNER_DENIED_FLAGS = new Set([
   '-c', '--config', '--globalSetup', '--globalTeardown', '--setupFiles', '--outputFile', '--output',
-  '-u', '--update', '--update-snapshots', '--ui', '--root', '--dir', '--require', '-r', '--import',
+  '-u', '--update', '--update-snapshots', '--ui', '--root', '--rootdir', '--dir', '--require', '-r', '--import',
   '--eval', '-e', '-p', '--loader', '--headed', '--package',
 ]);
 
-const TEST_RUNNER_DENIED_PREFIXES = ['--config=', '--globalSetup=', '--globalTeardown=', '--setupFiles=', '--outputFile=', '--output=', '--root=', '--dir=', '--require=', '--import=', '--package='];
+const TEST_RUNNER_DENIED_PREFIXES = ['--config=', '--globalSetup=', '--globalTeardown=', '--setupFiles=', '--outputFile=', '--output=', '--root=', '--rootdir=', '--dir=', '--require=', '--import=', '--package='];
 
 const TEST_REPORTER_NAMES = new Set(['line', 'list', 'dot', 'json', 'html']);
 
@@ -67,7 +67,17 @@ const OM_SWARM_RUN_FLAGS_WITH_VALUE = new Set([
 ]);
 
 const TICKET_YES_PAIR_FLAGS = new Set([
-  '--set', '--release', '--delivered', '--add-acceptance', '--acceptance', '--context', '--files',
+  '--set', '--release', '--add-acceptance', '--acceptance', '--context', '--files',
+]);
+
+const SWARM_TICKET_DENIED_FLAGS = new Set([
+  '--delivered', '--take-from', '--deletes', '--mark-deps', '--accept',
+]);
+
+const SWARM_TICKET_ALLOWED_FLAGS = new Set([
+  '--retry-note', '--note', '--files', '--context', '--acceptance', '--add-acceptance', '--status',
+  '--kind', '--stage', '--type', '--risk', '--json', '--release', '--question', '--reopen', '--reason',
+  '--set', '--help', '-h',
 ]);
 
 const swarmArgTokens = rest => rest.map(w => String(w).toLowerCase());
@@ -115,6 +125,53 @@ const swarmTicketsSetDone = rest => {
     if (a.startsWith('--set=') && a.slice('--set='.length) === 'done') return true;
   }
   return false;
+};
+
+const swarmTicketFlagName = a => {
+  const low = String(a).toLowerCase();
+  const eq = low.indexOf('=');
+  return eq === -1 ? low : low.slice(0, eq);
+};
+
+const swarmTicketsFlagsOk = rest => {
+  const lower = swarmArgTokens(rest);
+  if (lower.includes('--reopen') && !lower.includes('--reason')) return false;
+  let i = 0;
+  while (i < rest.length) {
+    const a = String(rest[i]);
+    if (!a.startsWith('-')) {
+      i += 1;
+      continue;
+    }
+    const name = swarmTicketFlagName(a);
+    if (name === '--yes' || name === '-y' || name.startsWith('--yes=')) {
+      i += 1;
+      continue;
+    }
+    if (SWARM_TICKET_DENIED_FLAGS.has(name)) return false;
+    if (!SWARM_TICKET_ALLOWED_FLAGS.has(name)) return false;
+    if (name === '--set') {
+      const val = a.includes('=')
+        ? a.slice(a.indexOf('=') + 1)
+        : String(rest[i + 1] ?? '');
+      const v = String(val).toLowerCase();
+      if (v === 'done' || v === 'delivered') return false;
+      if (!a.includes('=')) i += 2;
+      else i += 1;
+      continue;
+    }
+    const needsValue = new Set([
+      '--retry-note', '--note', '--files', '--context', '--acceptance', '--add-acceptance', '--status',
+      '--kind', '--stage', '--type', '--risk', '--release', '--question', '--reason',
+    ]);
+    if (needsValue.has(name) && !a.includes('=')) {
+      if (i + 1 >= rest.length) return false;
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return true;
 };
 
 const omSwarmInboxAllowed = rest => {
@@ -191,6 +248,7 @@ const omSwarmRunLikeAllowed = (sub, rest) => {
 const omSwarmTicketsAllowed = rest => {
   if (swarmArgsHaveApprove(rest) || swarmArgsHaveForceBypass(rest)) return false;
   if (swarmArgsHaveOwnerOverrideFlags(rest)) return false;
+  if (!swarmTicketsFlagsOk(rest)) return false;
   if (swarmTicketsSetDone(rest)) return false;
   if (swarmArgsHaveYes(rest) && !swarmTicketsYesVetted(rest)) return false;
   return true;
@@ -220,6 +278,10 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   }
   if (s === 'scope') return omSwarmScopeReadOnly(rest);
   if (s === 'decide') return omSwarmDecideReadOnly(rest);
+  if (s === 'budget' || s === 'budgets') {
+    const verb = String(rest.find(a => a !== '' && !String(a).startsWith('-')) ?? '').toLowerCase();
+    if (verb === 'set') return false;
+  }
   if (s === 'tickets') return omSwarmTicketsAllowed(rest);
   if (s === 'inbox') return omSwarmInboxAllowed(rest);
   if (s === 'orphans') return omSwarmOrphansAllowed(rest);
@@ -365,11 +427,11 @@ const testRunnerFlagsOk = args => {
 };
 
 const positionalOperandsOk = (args, ctx) => {
-  const inProject = ctx?.inProject;
-  if (!inProject) return true;
+  const operandOk = ctx?.testOperandOk ?? ctx?.inProject;
+  if (!operandOk) return true;
   for (const a of args) {
     if (!a || String(a).startsWith('-')) continue;
-    if (!inProject(a)) return false;
+    if (!operandOk(a)) return false;
   }
   return true;
 };
@@ -385,7 +447,7 @@ const packageRunnerTool = (cmd, args) => {
     }
   } else {
     while (i < args.length && String(args[i]).startsWith('-')) i += 1;
-    if (args[i] === 'exec' || args[i] === 'dlx') i += 1;
+    if (args[i] === 'exec') i += 1;
   }
   const tool = String(args[i] ?? '');
   if (!tool || tool.startsWith('-')) return null;
@@ -395,7 +457,7 @@ const packageRunnerTool = (cmd, args) => {
 const npmScriptAllowed = (scriptName, ctx) => {
   if (!NPM_TEST_RUNS.has(scriptName)) return false;
   const scripts = ctx?.packageScripts;
-  if (!scripts || typeof scripts !== 'object') return scriptName === 'test';
+  if (!scripts || typeof scripts !== 'object') return false;
   return Object.prototype.hasOwnProperty.call(scripts, scriptName);
 };
 
@@ -404,7 +466,10 @@ const npmTestShapeOk = (cmd, args, ctx) => {
   const i = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
   if (i === -1) return false;
   const verb = String(args[i]);
-  if (verb === 'test') return testRunnerFlagsOk(args.slice(i + 1)) && positionalOperandsOk(args.slice(i + 1), ctx);
+  if (verb === 'test') {
+    if (!npmScriptAllowed('test', ctx)) return false;
+    return testRunnerFlagsOk(args.slice(i + 1)) && positionalOperandsOk(args.slice(i + 1), ctx);
+  }
   if (verb === 'run') {
     const script = String(args[i + 1] ?? '');
     if (!npmScriptAllowed(script, ctx)) return false;
@@ -424,20 +489,25 @@ const pytestArgs = words => {
   return null;
 };
 
+const runnerArgsWithoutVerb = (rest, { implicitRun = false } = {}) => {
+  const i = rest.findIndex(a => a !== '' && !String(a).startsWith('-'));
+  if (i === -1) return implicitRun ? rest : null;
+  const verb = String(rest[i]);
+  if (verb !== 'test' && verb !== 'run') return null;
+  return [...rest.slice(0, i), ...rest.slice(i + 1)];
+};
+
 const playwrightRunnerOk = (cmd, args, ctx) => {
-  let verb;
   let rest;
-  if (cmd === 'playwright') {
-    verb = String(args[0] ?? '');
-    rest = args.slice(1);
-  } else {
+  if (cmd === 'playwright') rest = args;
+  else {
     const pkg = packageRunnerTool(cmd, args);
     if (!pkg || pkg.tool !== 'playwright') return false;
-    verb = String(pkg.rest[0] ?? '');
-    rest = pkg.rest.slice(1);
+    rest = pkg.rest;
   }
-  if (verb !== 'test' && verb !== 'run') return false;
-  return testRunnerFlagsOk(rest) && positionalOperandsOk(rest, ctx);
+  const body = runnerArgsWithoutVerb(rest, { implicitRun: false });
+  if (body === null) return false;
+  return testRunnerFlagsOk(body) && positionalOperandsOk(body, ctx);
 };
 
 const vitestRunnerOk = (cmd, args, ctx) => {
@@ -448,11 +518,9 @@ const vitestRunnerOk = (cmd, args, ctx) => {
     if (!pkg || pkg.tool !== 'vitest') return false;
     rest = pkg.rest;
   }
-  const i = rest.findIndex(a => a !== '' && !String(a).startsWith('-'));
-  const verb = i === -1 ? 'run' : String(rest[i]);
-  if (verb !== 'test' && verb !== 'run') return false;
-  const flagArgs = i === -1 ? [] : rest.slice(i + 1);
-  return testRunnerFlagsOk(flagArgs) && positionalOperandsOk(flagArgs, ctx);
+  const body = runnerArgsWithoutVerb(rest, { implicitRun: true });
+  if (body === null) return false;
+  return testRunnerFlagsOk(body) && positionalOperandsOk(body, ctx);
 };
 
 const nodeTestRunnerOk = (args, ctx) => {

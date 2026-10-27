@@ -14,7 +14,6 @@ import {
   readOnlyCommandAllowed,
   helpOnly,
   localTestRunAllowed,
-  orchestratorTestRunAllowed,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -1759,12 +1758,47 @@ const omPackageScripts = root => {
   }
 };
 
+const omTestOperandOrchestratorOwnedRel = norm => {
+  if (norm === 'docs/plans' || norm.startsWith('docs/plans/')) return true;
+  return ORCHESTRATOR_OWN.some(prefix => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
+};
+
+const omTestOperandOk = (raw, ctx) => {
+  if (!omReadOperandOk(raw, ctx)) return false;
+  if (!ctx.root || raw === '-' || raw === undefined) return true;
+  const home = ctx.home ?? os.homedir();
+  let p = String(raw);
+  if (p === '~' || p.startsWith('~/')) {
+    if (p === '~') return false;
+    p = path.join(home, p.slice(2));
+  }
+  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
+  let real;
+  try { real = fs.realpathSync.native(abs); } catch {
+    try {
+      real = fs.realpathSync.native(path.dirname(abs));
+    } catch {
+      const relGuess = insideProject(ctx.root, abs);
+      if (relGuess === null) return false;
+      return !omTestOperandOrchestratorOwnedRel(relGuess.replace(/\\/g, '/').toLowerCase());
+    }
+    if (omSensitiveAbs(real, home)) return false;
+    const relParent = insideProject(ctx.root, real);
+    if (relParent === null) return false;
+    return !omTestOperandOrchestratorOwnedRel(relParent.replace(/\\/g, '/').toLowerCase());
+  }
+  const rel = insideProject(ctx.root, real);
+  if (rel === null) return false;
+  return !omTestOperandOrchestratorOwnedRel(rel.replace(/\\/g, '/').toLowerCase());
+};
+
 const omOrchestratorTestRunAllowed = (segment, ctx) => {
   if (!ctx?.root) return false;
   const packageScripts = omPackageScripts(ctx.root);
-  return orchestratorTestRunAllowed(segment, {
+  return localTestRunAllowed(segment, {
     ...ctx,
     inProject: raw => omReadOperandOk(raw, ctx),
+    testOperandOk: raw => omTestOperandOk(raw, ctx),
     packageScripts,
   });
 };
