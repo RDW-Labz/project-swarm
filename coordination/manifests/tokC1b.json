@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokC1b",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Finish the worker token dispatcher (a partial swarm-built version is already in tools/swarm/core-41.mjs, tools/cli-adapters.mjs, tools/orchestrator-events.mjs, tools/worker-token.mjs and tests/worker-token-dispatch.test.mjs; read them first). Its test tests/worker-token-dispatch.test.mjs HUNG at 0 percent CPU for over 30 minutes: find which test hangs (a fake child that never exits, a promise never settled, a timer) and fix the test and, if the cause is in the dispatcher, the dispatcher. Requirements: (1) the token is issued with issueWorkerToken just before the worker process of a job is spawned and handed ONLY through the child's environment (SWARM_WORKER_TOKEN plus SWARM_WORKER_RUN_ID), never in argv, a prompt, the manifest, run state or the ledger, and revoked in a finally block when the job ends for any reason (done, failed, killed, cancelled, timed out), and every token of a run is revoked when the run finishes or is cancelled; (2) the owner requires the token to reach EVERY lane whose worker session runs the guard hook, above all the Claude lane: in the execute function of tools/swarm/core-41.mjs there are separate spawn sites for codex, cursor, the sandboxed Claude shell (claudeShell), a remote CLI host over ssh (cliHost) and the plain agent spawn (claude and other CLI agents); set the token in the env of each local spawn site (also when wrapped in sandbox-exec), and for the ssh remote host do NOT forward it (a remote worker is never exempt: document that in a comment and test that the token is absent from the ssh invocation args and env); (3) tests with a fake spawn per lane (claude plain, claude sandboxed shell, codex, cursor, other cli agent): token present in env only, absent from argv, record exists while the fake child runs, revoked after exit, failure, kill and timeout, two jobs get different tokens bound to their own workspaces. STANDING TEST RULE (owner order): every test that spawns a process (child_process spawn, spawnSync, fork, execFile, a hook run as a process, a fake server) must set a per-test timeout of 60000 ms or less through the test options object, must pass a timeout to spawnSync, must start children in their own process group when it can and kill the whole group in the test's after hook (also when the test fails or times out), and must never leave a child running: a test hung at 0 percent CPU has to fail within 60 seconds. IMPORTANT: secret scanner: build fake token values at run time (join or repeat), never as literals.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/orchestrator-events.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/worker-token.mjs",
+    "tests/worker-token-dispatch.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

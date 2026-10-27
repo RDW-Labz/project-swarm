@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokC2b",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Make sure the worker token never leaks into logs, transcripts, the ledger or error messages. Use redactWorkerToken and WORKER_TOKEN_ENV from tools/worker-token.mjs. (1) Pass every captured worker output, error message and logged command text through redactWorkerToken before it is stored or printed, in the places where job output and errors are saved (find the functions that save a job's output tail and error text in the swarm core files and adapters, keep the change minimal); (2) make the existing command and environment masking helpers (maskCommand in tools/orchestrator-events.mjs and any environment dump written into a job or run record) never include SWARM_WORKER_TOKEN: its value is always shown as redacted; (3) add tests/worker-token-redaction.test.mjs: a fake job whose output and error text contain the token (built at run time) is stored redacted; maskCommand on a command containing the token returns it masked; an environment dump omits it; the run state file written by a fake run never contains the token string. Keep existing tests passing. STANDING TEST RULE (owner order): every test that spawns a process (child_process spawn, spawnSync, fork, execFile, a hook run as a process, a fake server) must set a per-test timeout of 60000 ms or less through the test options object, must pass a timeout to spawnSync, must start children in their own process group when it can and kill the whole group in the test's after hook (also when the test fails or times out), and must never leave a child running: a test hung at 0 percent CPU has to fail within 60 seconds. IMPORTANT: secret scanner: build fake token values at run time (join or repeat), never as literals.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tools/orchestrator-events.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-events.mjs",
+    "tests/worker-token-redaction.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
