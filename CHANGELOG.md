@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.167.16
+
+The orchestrator guard stops blocking the orchestrator's own commands.
+- **Guard:** swarm commands (go --scope, tickets with --note, --retry-note and the other edit flags, change --yes, backlog, integrate, merge, update) are always allowed in orchestrator mode; owner approvals (resolve, done, scope approve, decide, handbuild approve) stay denied.
+- **Reads:** gh pr and run view, grep, cat, git status and log, --help as the last word, and read-only paths under the home claude folder are allowed, and the word claude only counts when it is the program being launched.
+- **Tests:** playwright, vitest, npm test, node --test and pytest run with a narrow flag set, and a bare test run is refused while code files sit in the orchestrator's own folders.
+- **Writes:** the orchestrator may write only ledger, plan, manifest, handoff and state files in text formats (md, json, jsonl, yaml); source, node_modules, build output and the swarm workspaces are denied, and there is no worker exemption any more because swarm workers never load project hooks.
+- **Messages:** the deny text names real commands (swarm ticket, swarm tickets, swarm backlog add) instead of swarm diagnose.
+
 ## 1.167.15
 
 Notes reach workers, longer check timeouts, waves start again.
