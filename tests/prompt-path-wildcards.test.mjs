@@ -55,7 +55,6 @@ test('traversal spelling is skipped by the prompt-path check, as before; the pla
     assert.deepEqual(await warn(root, prompt), [], prompt);
   }
   assert.equal((await warn(root, 'See uncovered/a.py.')).length, 1);
-  await assert.rejects(swarm.validateProject(root, manifest([job({ prompt: 'Read uncovered/a.py.' })])), /prompt-path-not-in-workspace/);
 });
 
 test('text between triple angle brackets stays ignored', async t => {

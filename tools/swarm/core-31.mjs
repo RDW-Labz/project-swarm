@@ -54,8 +54,9 @@ export async function promptPathsNotInWorkspaceWarnings(root, job, context, { tr
   // Sentence punctuation after a path (period, colon, closing bracket or quote) is not part of it.
   const candidates = new Set([...promptText.matchAll(PROMPT_PATH_RE)]
     .map(m => m[1]).filter(value => !value.includes('*'))
-    .map(value => value.replace(/[.,:;)\]}>"'`]+$/, '').replace(/^\.\//, '').replace(/\/$/, ''))
-    .filter(value => value.includes('/')));
+    .map(value => value.replace(/[.,:;)\]}>"'`]+$/, ''))
+    .filter(value => value.includes('/'))
+    .map(value => value.replace(/^\.\//, '').replace(/\/$/, '')));
   const hits = [];
   for (const candidate of candidates) {
     // Validate spelling before coverage: normalization must never erase traversal.
