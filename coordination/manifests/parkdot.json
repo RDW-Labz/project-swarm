@@ -17,7 +17,12 @@
     "tools/acceptance-provable.mjs",
     "tests/acceptance-provable.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/owned-paths.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }

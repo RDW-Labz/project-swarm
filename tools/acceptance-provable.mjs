@@ -92,7 +92,9 @@ export function pathsInAcceptanceText(text) {
     if (p.includes('://')) continue;
     if (p.includes('/') || /\.[a-z0-9]+$/i.test(p)) out.add(p);
   }
-  for (const m of s.matchAll(/\b([a-z0-9][a-z0-9._-]*(?:\/[a-z0-9._*-]+)+\.[a-z][a-z0-9]{0,9})\b/gi)) {
+  const plainPathRe =
+    /(?<![a-z0-9./-])(?:\.\/)?((?:\.[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)(?:\/[a-z0-9._*-]+)+\.[a-z][a-z0-9]{0,9})\b/gi;
+  for (const m of s.matchAll(plainPathRe)) {
     out.add(norm(m[1]));
   }
   return [...out].sort();
