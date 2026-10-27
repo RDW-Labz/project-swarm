@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokC",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Hand the worker token to every real worker process the dispatcher spawns, and revoke it when the job ends. Find the code that starts a worker for a job: the CLI adapters in tools/cli-adapters.mjs (spawn with options and env), the cursor lane in tools/swarm/core-41.mjs, and any other lane that starts a local agent process (claude, codex, hermes, cursor); API lanes that start no process need no token. Rules: (1) just before spawning a job's worker call issueWorkerToken from tools/worker-token.mjs for the run id, job id and the job's workspace real path with ttl equal to the job timeout plus 10 minutes, and put the token ONLY in the child's environment under the name SWARM_WORKER_TOKEN (also set SWARM_WORKER_RUN_ID for compatibility); NEVER in argv, never in a prompt, never in the manifest, run state, ledger, logs, transcripts or error messages; (2) revoke it in a finally block when the job ends for ANY reason: done, failed, killed, cancelled or timed out, and when the dispatcher itself is interrupted (also revoke every token of a run when the run finishes or is cancelled); (3) pass every captured output, error message and logged command text through redactWorkerToken before it is stored or printed, and make the existing command and environment masking helpers (maskCommand in tools/orchestrator-events.mjs and any env dump for the job record) never include SWARM_WORKER_TOKEN; (4) a child spawned by the worker inherits the env as usual (no change). Add tests/worker-token-dispatch.test.mjs with a fake spawn implementation that captures args and env: token only in env, absent from argv; token record exists while the fake child runs; revoked after normal exit, after failure, after kill, after timeout; the token never appears in the stored run state or in any logged line; two jobs get different tokens bound to their own workspaces. Keep the existing adapter and core tests passing. IMPORTANT: the repository's secret scanner blocks credential-looking literals in files: in tests build any fake token or secret value at run time (join or repeat) and never assign one to a name like token, secret or key as a literal. Do not use wildcard patterns or file-looking words in comments that name files that do not exist.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/orchestrator-events.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tools/cli-adapters.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/orchestrator-events.mjs",
+    "tools/worker-token.mjs",
+    "tests/worker-token-dispatch.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}

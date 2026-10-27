@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokD",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Add the end-to-end guard tests with REAL processes and no faked environment. (1) tests/worker-guard-e2e.test.mjs (node:test, hermetic, no model calls): build a temp swarm project, issue a worker token for two jobs with the dispatcher helper from tools/worker-token.mjs, and run the real guard hook script as a separate process (the same hook command the project settings use, see tools/handbuild.mjs and the hook entry in the repository) with a Write tool payload: (a) as the worker of job one with the token in the child's environment and cwd inside its own workspace writing a file there: allowed (no deny output); (b) as the orchestrator session (no token, cwd the project root) writing the same path: denied; (c) the worker of job one writing into job two's workspace: denied; (d) the same worker writing into the project root checkout: denied; (e) the orchestrator with SWARM_WORKER_RUN_ID set to a run id whose run record and workspace it created by hand and cwd in that workspace: denied; (f) after revokeWorkerToken the worker's write is denied. Use child_process.spawnSync for the hook so the environment is real. (2) A manual live script evals/worker-guard-live.mjs (NOT matched by the npm test glob; plain node script with a usage comment) that dispatches a real Claude worker through swarm run with a tiny manifest on the cheapest Claude lane (one job whose prompt asks it to create one text file in its own workspace and then try to create a file in the repository root and in a sibling folder), then prints PASS or FAIL for: the in-workspace write succeeded, the outside writes were refused by the guard, and the orchestrator's own attempt to write the same path is denied. It must refuse to run without an explicit --yes flag and print that it spends a small amount on the Claude lane. Do not run it in this job. IMPORTANT: the repository's secret scanner blocks credential-looking literals in files: in tests build any fake token or secret value at run time (join or repeat) and never assign one to a name like token, secret or key as a literal. Do not use wildcard patterns or file-looking words in comments that name files that do not exist.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tools/handbuild.mjs",
+    "tools/shell-writes.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tests/worker-guard-e2e.test.mjs",
+    "evals/worker-guard-live.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}

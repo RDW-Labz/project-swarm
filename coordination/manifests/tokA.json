@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokA",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Create a new module tools/worker-token.mjs (ES module, no dependencies) and tests/worker-token.test.mjs (node:test, temp folders, no network) for a PER-JOB WORKER TOKEN that proves a process is a swarm worker. Owner design: only the dispatcher can create the proof; a token is handed only to the spawned worker process, never on the command line, never printed or logged, and stored only as a hash in a run folder the orchestrator session cannot write. API: async issueWorkerToken({ root, runId, jobId, workspace, ttlMs, now }) creates 32 random bytes (crypto.randomBytes), returns the hex token string once, and writes a record to the dot swarm folder runs folder, subfolder for the run id, folder named worker-tokens, file named after the job id plus dot json, containing only: the sha256 hash of the token, runId, jobId, the real path of the workspace, issuedAt, expiresAt (ttlMs default 2 hours, maximum 6 hours) and revoked false. The folder is created with mode 0o700 and the file with 0o600 by write to a temp file with the exclusive flag then rename; refuse a symlinked folder or file; runId and jobId must match a strict safe pattern of letters, digits, dot, underscore and dash up to 80 characters. async revokeWorkerToken({ root, runId, jobId }) deletes the record file (idempotent, never throws for missing). async verifyWorkerToken({ root, token, cwd, now }) returns { ok, runId, jobId, workspace } or { ok: false, reason }: the token must be a 64 hex character string; find the record by scanning the worker-tokens folders of existing runs under the swarm runs folder (limit 200 runs), compare the sha256 hash in constant time (crypto.timingSafeEqual), check not revoked, not expired, and that the resolved real path of cwd is inside the recorded workspace real path (the worker may only act inside ITS OWN workspace). A token for one job never validates a cwd in another job's workspace. Also export redactWorkerToken(text, token) which replaces the token and any 64 hex character string preceded by SWARM_WORKER_TOKEN with the word redacted, and export WORKER_TOKEN_ENV = 'SWARM_WORKER_TOKEN'. Tests: issue then verify ok inside the workspace and in a subfolder; fails for another job's workspace, the repo root, a different token, an expired token (inject now), a revoked token, a symlinked folder, a malformed token and bad ids; the stored file never contains the token, only its hash; file modes; revoke is idempotent; a token never works after revoke even if the same job id is issued again (new token differs, the old one fails). IMPORTANT: the repository's secret scanner blocks credential-looking literals in files: in tests build any fake token or secret value at run time (join or repeat) and never assign one to a name like token, secret or key as a literal. Do not use wildcard patterns or file-looking words in comments that name files that do not exist.",
+   "context": [
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/worker-token.mjs",
+    "tests/worker-token.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
