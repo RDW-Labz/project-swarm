@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccm5",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Bug: the Command Center page shows a blank screen in a real browser because two browser modules import server modules that a browser cannot load: tools/watch-assets/cc-cockpit-mount.js imports ticketToQueueJob from ../queue-commands.mjs, listQueueJobsForProject from ../burst-route.mjs and readyTickets from ../tickets.mjs, and tools/watch-assets/cockpit-view.js imports ledgerStats from ../tickets.mjs. A browser requests those files outside the assets folder, gets 404, and the whole module graph of command-center-boot.js fails to load. Fix: (1) Create tools/watch-assets/cc-ledger-browser.js, an ES module with no imports at all, exporting ledgerStats(ledger), readyTickets(tickets), ticketToQueueJob(ticket) and listQueueJobsForProject(jobs, projectConfig) with the same behaviour as the server functions of the same names (read them in tools/tickets.mjs, tools/queue-commands.mjs and tools/burst-route.mjs and copy only the pure logic they need, with plain functions and no node: modules, no process, no fs). (2) In tools/watch-assets/cc-cockpit-mount.js and tools/watch-assets/cockpit-view.js replace those imports with imports from ./cc-ledger-browser.js and change nothing else in them. (3) Add tests/cc-ledger-browser.test.mjs that compares each of the four browser functions with the server function of the same name on a small fixture ledger (several statuses, dependencies, stages) and asserts equal results. (4) Add tests/watch-assets-browser-safe.test.mjs that starts at tools/watch-assets/command-center-boot.js, follows every relative import (static import lines) recursively inside tools/watch-assets and asserts: every imported file exists inside tools/watch-assets (no path that leaves that folder with ..), and no file in that graph imports a node: builtin or a bare package name. Keep tests/cc-cockpit-mount.test.mjs and the cockpit tests passing (they may inject their own functions). Tests must build any fake secret-like value at run time and never assign quoted secret-looking literals to variables named like token, secret, password or key. Keep every existing test passing.",
+   "context": [
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js",
+    "tools/tickets.mjs",
+    "tools/queue-commands.mjs",
+    "tools/burst-route.mjs",
+    "tools/watch-assets/command-center-boot.js",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-ledger-browser.js",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tests/cc-ledger-browser.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
