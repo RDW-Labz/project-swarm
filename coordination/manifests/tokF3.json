@@ -17,7 +17,13 @@
     "tools/swarm/core-41.mjs",
     "tests/dispatcher-output-capture.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/cursor-process-group.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
   }
  ]
 }

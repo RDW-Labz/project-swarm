@@ -257,12 +257,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       if (reason || settled) return;
       reason = why;
       termination ??= stopChildForJob();
-      termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
     };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
       settled = true;
+      const outputComplete = streamsClosed;
       clearTimeout(timeout); clearInterval(poll); signal?.removeEventListener('abort', onAbort);
       let cleanup;
       try { cleanup = await (termination ?? stopChildForJob()); }
@@ -273,7 +273,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       if (error) error = Object.assign(error, { message: scrubError(error.message) });
       const cleanupError = scrubError(cleanup.error);
       if (logFailure) {
-        resolve({ ...setupFailedResult(scrubError(logFailure.message)), setupFailed: false, refusedBeforeStart: false, code: 'adapter-log-failed', stream: logFailure.stream, stdout, stderr, exitCode: code, cleanupError, terminationReason: reason ?? null });
+        resolve({ ...setupFailedResult(scrubError(logFailure.message)), setupFailed: false, refusedBeforeStart: false, code: 'adapter-log-failed', stream: logFailure.stream, stdout, stderr, exitCode: code, outputComplete, cleanupError, terminationReason: reason ?? null });
         return;
       }
       if(cleanupError){child?.unref?.();child?.stdin?.destroy?.();child?.stdout?.destroy?.();child?.stderr?.destroy?.();}
@@ -289,7 +289,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
           else { failed = 'Invalid Cursor result envelope'; envelopeInvalid = true; }
         }
         const usage = parsed?.usage && Number.isSafeInteger(parsed.usage.total_tokens ?? parsed.usage.totalTokens) ? { total_tokens: parsed.usage.total_tokens ?? parsed.usage.totalTokens } : null;
-        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), blipText: scrubText(parsed?.isError ? parsed.response : ''), exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), blipText: scrubText(parsed?.isError ? parsed.response : ''), exitCode: code, outputComplete, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
         return;
       }
       if(job.agent === 'codex') {
@@ -300,12 +300,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
           if (resolved) { envelopeFallback = resolved.fallback; finalObject = resolved.result; }
           else { failed = 'Invalid Codex result envelope'; envelopeInvalid = true; }
         }
-        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), exitCode: code, outputComplete, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
         const cliOutcome = extraCliResult(job,{stdout,code,reason,error,cleanupError,cliHost});
-        resolve({ ...cliOutcome, stdout: scrubText(cliOutcome.stdout), stderr: scrubText(cliOutcome.stderr), response: scrubText(cliOutcome.response), error: scrubError(cliOutcome.error) });
+        resolve({ ...cliOutcome, stdout: scrubText(stdout), stderr: scrubText(stderr), response: scrubText(cliOutcome.response), error: scrubError(cliOutcome.error), exitCode: cliOutcome.exitCode ?? code, outputComplete });
         return;
       }
       let result, parseError; const events=[];
@@ -317,7 +317,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       if (job.agent === 'claude' && !cleanupError && !reason && !error) {
         const quota = claudeQuotaSignal(stdout, stderr, code, events);
         if (quota) {
-          resolve({ cleanupError, terminationReason: null, status: 'provider-limit', error: `provider-limit: resets ${quota.resetsAt}`, resetsAt: quota.resetsAt, stdout, stderr, response: '', exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null });
+          resolve({ cleanupError, terminationReason: null, status: 'provider-limit', error: `provider-limit: resets ${quota.resetsAt}`, resetsAt: quota.resetsAt, stdout, stderr, response: '', exitCode: code, outputComplete, actualModel: null, modelsSeen: [], modelMismatch: false, usage: null, modelUsage: null, costUsd: null });
           return;
         }
       }
@@ -341,7 +341,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         if (estimate.costUsd !== null) { costUsd = estimate.costUsd; costSource = 'estimated-from-transcript'; }
         else if (estimate.usage) costWarning = `cost-rate-unknown: ${job.model}`;
       }
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed || null), permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: scrubText(typeof result?.result === 'string' ? result.result : ''), exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd, costSource, ...(costWarning ? { costWarning } : {}), apiErrorStatus, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed || null), permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: scrubText(typeof result?.result === 'string' ? result.result : ''), exitCode: code, outputComplete, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd, costSource, ...(costWarning ? { costWarning } : {}), apiErrorStatus, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
       return;
     };
     const finishAndRevoke = async (code, err) => {
@@ -370,7 +370,6 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
         termination??=stopChildForJob();
-        termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
       });
       child.on('close', code => { streamsClosed = true; finishAndRevoke(code); });
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {
