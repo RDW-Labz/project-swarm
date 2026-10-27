@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockL5",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Fix two findings from the Opus lock review in tools/file-lock.mjs, and add tests in tests/file-lock.test.mjs. (1) HIGH: the process-reuse check compares the text printed by ps with the lstart option, recorded by the holder and compared by a waiter; that text changes with each process's time zone and locale (the same process prints different text under a UTC time zone setting or a French locale), so a waiter in another time zone wrongly decides the owner is gone and breaks a live lock (two holders at once, reproduced). Fix: every ps call that reads a process start time must run with a fixed environment (time zone set to UTC and locale category variable LC_ALL set to C, copied over process.env), both when the holder records it and when a waiter checks it. Test: spawn a holder child process whose environment has the time zone set to UTC (own process group, per-test timeout, kill in teardown), then in the parent (normal time zone) a second acquire with a short waitMs must fail with the wait-timeout error and must NOT get the lock. (2) LOW: stale detection after a machine sleep. A lock may only be called stale when its heartbeat is older than maxHoldMs AND it has stayed unchanged for at least two heartbeat intervals measured with process.hrtime.bigint (which does not advance during sleep), not only across two quick polls. Keep every existing behaviour and export. STANDING TEST RULE: per-test timeout at most 60 s, children in their own process group, killed in teardown. No credential-looking literals.",
+   "context": [
+    "tools/file-lock.mjs",
+    "tests/file-lock.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/file-lock.mjs",
+    "tests/file-lock.test.mjs"
+   ],
+   "timeoutMs": 1500000
+  }
+ ]
+}
