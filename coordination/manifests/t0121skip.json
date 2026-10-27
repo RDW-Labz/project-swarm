@@ -1,0 +1,20 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "t0121skip",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "The new script tools/watch-assets/split-quality-panel.js (the S4 Split quality panel module, a panel used by the board pages, not a legacy tab) makes tests/watch-assets.test.mjs fail: the test 'tab scripts register under one of the four tab names' treats it as a tab script that never calls register(). Update ONLY that test so split-quality-panel.js is skipped like the other panel modules (add it to the existing explicit skip list, with a short comment: a board panel module, not a tab). Keep every other assertion unchanged and the test must still fail for a real tab script that does not register. Do not edit anything else.",
+   "context": [
+    "tests/watch-assets.test.mjs"
+   ],
+   "outputs": [
+    "tests/watch-assets.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}
