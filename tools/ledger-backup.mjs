@@ -65,14 +65,22 @@ async function lstatRegularOrMissing(fs, abs) {
 
 async function mkdirPrivate(fs, dir) {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  await fs.chmod(dir, 0o700).catch(() => {});
+  await fs.chmod(dir, 0o700).catch((error) => {
+    if (error?.code !== 'EPERM' && error?.code !== 'ENOENT') {
+      console.error('[tools/ledger-backup.mjs] mkdirPrivate chmod:', error?.message ?? error);
+    }
+  });
 }
 
 async function writeAtomic(fs, dest, data) {
   await mkdirPrivate(fs, path.dirname(dest));
   const tmp = `${dest}.${randomBytes(4).toString('hex')}.tmp`;
   await fs.writeFile(tmp, data, { mode: 0o600, flag: 'wx' });
-  await fs.chmod(tmp, 0o600).catch(() => {});
+  await fs.chmod(tmp, 0o600).catch((error) => {
+    if (error?.code !== 'EPERM' && error?.code !== 'ENOENT') {
+      console.error('[tools/ledger-backup.mjs] writeAtomic chmod:', error?.message ?? error);
+    }
+  });
   await fs.rename(tmp, dest);
 }
 
@@ -141,7 +149,11 @@ async function newestSnapshotMeta(fs, keyDir) {
     try {
       const meta = await readMeta(fs, path.join(keyDir, ids[i], 'meta.json'));
       return { id: ids[i], meta };
-    } catch { /* incomplete */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.message !== 'bad meta') {
+        console.error('[tools/ledger-backup.mjs] newestSnapshotMeta:', error?.message ?? error);
+      }
+    }
   }
   return null;
 }
@@ -161,7 +173,9 @@ async function pruneIncompleteSnapshots(fs, keyDir, nowMs) {
       let mtime = 0;
       try {
         mtime = (await fs.stat(snapDir)).mtimeMs;
-      } catch { /* */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/ledger-backup.mjs] pruneIncomplete stat staging:', error?.message ?? error);
+      }
       if (mtime && mtime < cutoff) {
         await fs.rm(snapDir, { recursive: true, force: true });
       }
@@ -175,7 +189,9 @@ async function pruneIncompleteSnapshots(fs, keyDir, nowMs) {
       let mtime = 0;
       try {
         mtime = (await fs.stat(snapDir)).mtimeMs;
-      } catch { /* */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/ledger-backup.mjs] pruneIncomplete stat:', error?.message ?? error);
+      }
       if (mtime && mtime < cutoff) {
         await fs.rm(snapDir, { recursive: true, force: true });
       }
@@ -203,7 +219,11 @@ async function pruneChangeSnapshots(fs, keyDir) {
     try {
       await readMeta(fs, path.join(keyDir, id, 'meta.json'));
       complete.push(id);
-    } catch { /* incomplete */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.message !== 'bad meta') {
+        console.error('[tools/ledger-backup.mjs] pruneChangeSnapshots:', error?.message ?? error);
+      }
+    }
   }
   for (const id of complete.slice(0, Math.max(0, complete.length - MAX_CHANGE_SNAPSHOTS))) {
     await fs.rm(path.join(keyDir, id), { recursive: true, force: true });
@@ -287,10 +307,13 @@ export async function backupLedger(root, { reason = 'manual', home, now = Date.n
     } catch (e) {
       try {
         await fs.rm(stagingDir, { recursive: true, force: true });
-      } catch {
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/ledger-backup.mjs] snapshot staging rm:', error?.message ?? error);
         try {
           rmSync(stagingDir, { recursive: true, force: true });
-        } catch { /* best effort */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/ledger-backup.mjs] snapshot staging rmSync:', error?.message ?? error);
+        }
       }
       throw e;
     }
@@ -318,7 +341,11 @@ export async function listLedgerBackups(root, { home, all = false, fs = defaultF
       try {
         const meta = await readMeta(fs, path.join(keyDir, id, 'meta.json'));
         out.push({ key, id, ...meta });
-      } catch { /* skip */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.message !== 'bad meta') {
+          console.error('[tools/ledger-backup.mjs] listLedgerBackups meta:', error?.message ?? error);
+        }
+      }
     }
     return out;
   }
@@ -341,7 +368,11 @@ export async function listLedgerBackups(root, { home, all = false, fs = defaultF
         const meta = await readMeta(fs, path.join(keyDir, id, 'meta.json'));
         rootPath = meta.root;
         break;
-      } catch { /* try older */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.message !== 'bad meta') {
+          console.error('[tools/ledger-backup.mjs] listLedgerBackups root:', error?.message ?? error);
+        }
+      }
     }
     out.push({ key, root: rootPath, snapshots: ids.length });
   }
@@ -355,7 +386,11 @@ async function resolveSnapshotId(fs, keyDir, idOrLatest) {
     try {
       await readMeta(fs, path.join(keyDir, id, 'meta.json'));
       complete.push(id);
-    } catch { /* skip incomplete */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.message !== 'bad meta') {
+        console.error('[tools/ledger-backup.mjs] resolveSnapshotId:', error?.message ?? error);
+      }
+    }
   }
   if (!complete.length) return null;
   if (!idOrLatest || idOrLatest === 'latest') return complete[complete.length - 1];
@@ -478,7 +513,9 @@ export async function restoreLedgerSnapshot(
   try {
     const data = await fs.readFile(ticketsPath);
     hashOk = createHash('sha256').update(data).digest('hex') === meta.ledgerSha256;
-  } catch { /* */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/ledger-backup.mjs] restore verify read:', error?.message ?? error);
+  }
   stages.push({ name: 'verify', done: hashOk ? 1 : 0, total: 1 });
   if (!hashOk) return { ok: false, reason: 'ledger hash mismatch after restore', stages, id: snapId, key };
 
