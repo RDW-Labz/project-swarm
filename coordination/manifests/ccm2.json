@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccm2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create tools/watch-assets/cc-cockpit-mount.js, an ES module exporting renderProjectCockpit(host, project, deps). The project value is what buildProjectCockpit in tools/command-center-snapshot.mjs returns (read it): ledger tickets with status, the orchestrator session state, stage progress and recent run stream items. deps is {document, now, onBack} and everything is injectable. renderProjectCockpit clears the host and builds the Cockpit described in docs/design/command-center-mockup/cockpit.html and shared.css: a breadcrumb with a back action that calls deps.onBack in one action, the headline and the large completed-of-total counter through renderCockpit and headlineTicketText in cockpit-view.js (the headline fits on one line at 1440 px using the clamp size there), the orchestrator state label through cockpitOrchestratorState in cockpit-orchestrator.js, stage rings through stageRingProgress, the ticket lists through renderCockpitTicketList in cockpit-lists.js, the stack summary tiles through renderStackSummaryTiles (tiles never overlap labels or the footnote), and the run stream through renderRunStream in cockpit-run-stream.js. Empty lists show the explanation from emptyReadyExplanation in plain words. A number with no source is never drawn. Return an object with update(project) and destroy(). Write tests/cc-cockpit-mount.test.mjs with a small fake DOM: headline and counter appear, orchestrator label is one of the four labels, rings count matches stages, list ids match the ledger tickets, empty state explains why, back calls onBack once. Tests must build any fake secret-like value at run time and never assign quoted secret-looking literals to variables named like token, secret, password or key. Do not edit any existing file. Keep every existing test passing.",
+   "context": [
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-orchestrator.js",
+    "tools/watch-assets/cockpit-lists.js",
+    "tools/watch-assets/cockpit-run-stream.js",
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tests/cc-cockpit-mount.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

@@ -1,0 +1,34 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccm3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create the page shell for the Command Center: tools/watch-assets/command-center.html, tools/watch-assets/command-center.css and tools/watch-assets/command-center-boot.js. The server serves the HTML for GET /command-center and /command-center/project/ID when the flag is on, and the JSON endpoints /api/command-center and /api/command-center/project?id=ID (read tools/watch-server.mjs for the asset serving convention and the token handling, and read tools/watch-assets/board.html and board.js to see how the existing board page loads its ES modules and passes the page token to its fetch calls; copy that convention). command-center.html has the same head and theme tokens as board.html, a root element, the stylesheets cc-phone.css and command-center.css, and one module script for command-center-boot.js. command-center-boot.js exports mountCommandCenter(root, deps) with injectable deps {document, fetchJson, location, history, now, setInterval, clearInterval, requestAnimationFrame, cancelAnimationFrame, matchMedia, storage}. It reads the path: /command-center renders the Hive with renderHive from cc-hive-mount.js, and /command-center/project/ID renders the Cockpit with renderProjectCockpit from cc-cockpit-mount.js (both already exist in this branch; read their headers for the call shape). Use ccNavigate and mountCcRouter from cc-router.js for navigation: onOpenProject pushes the project path with history.pushState, onBack pushes /command-center, and the browser back button works. It fetches the data with fetchJson (which sends the page token), parses it with CommandCenterData from command-center-data.js, refreshes every 5 seconds by calling update on the mounted view without clearing it, and shows a plain-words error or empty state when the fetch fails or the snapshot has no projects. It also starts the command palette from command-palette.js on Command-K or Control-K with the project names as entries, and the guided tour from cc-tour.js only on the first visit using the storage dep. command-center.css only holds layout for the shell (full viewport dark theme matching shared.css). Write tests/command-center-boot.test.mjs with a fake DOM and fake fetch: the Hive path renders cards, the project path renders the Cockpit, clicking a card changes the path with pushState, back returns to the Hive, a failed fetch shows an explanatory message, the refresh timer calls update, and the tour runs once. Tests must build any fake secret-like value at run time and never assign quoted secret-looking literals to variables named like token, secret, password or key. Do not edit any existing file. Keep every existing test passing.",
+   "context": [
+    "tools/watch-server.mjs",
+    "tools/watch-assets/board.html",
+    "tools/watch-assets/board.js",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/cc-router.js",
+    "tools/watch-assets/command-palette.js",
+    "tools/watch-assets/cc-tour.js",
+    "tools/watch-assets/cc-phone.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "docs/design/command-center-mockup/shared.css",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/command-center.html",
+    "tools/watch-assets/command-center.css",
+    "tools/watch-assets/command-center-boot.js",
+    "tests/command-center-boot.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

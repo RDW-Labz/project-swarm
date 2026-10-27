@@ -1,0 +1,30 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccm1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create tools/watch-assets/cc-hive-mount.js, an ES module exporting renderHive(host, snapshot, deps). The snapshot is what buildCommandCenterSnapshot in tools/command-center-snapshot.mjs returns (read it and read command-center-data.js to see the fields: stats with labelled numbers, and a projects array of cards). deps is {document, now, requestAnimationFrame, cancelAnimationFrame, matchMedia, onOpenProject} so everything is injectable. renderHive clears the host and builds the Hive described in docs/design/command-center-mockup/hive.html and shared.css: the stat strip through renderHiveStatStrip, the brain element in the middle with its state from hiveBrainStateFromEvents and hiveBrainMotionDescriptor in hive-brain.js, up to ten project cards in two bowed staircase columns around a ring using assignHiveSideSlots and the slot constants in hive-layout.js (each card shows name, status colour, percent done, tickets building, needs-you, machine label, the three labelled rows asks, out, fails each with a hover explanation from its source field, and a meter bar that is fully visible), legend chips that use the same colours as the nodes, the bottom panels from hive-panels.js, and a canvas for the particle streams drawn with hive-streams.js at 30 frames per second that stops when document.hidden is true and draws one static frame when matchMedia reports reduced motion. A click or Enter key on a card calls deps.onOpenProject(projectId). A number that has no source in the snapshot is never drawn. Return an object with update(snapshot) that re-renders without clearing the canvas and destroy() that cancels animation frames and removes listeners. Write tests/cc-hive-mount.test.mjs with a small fake DOM and fake animation frame functions: four labelled stat figures appear, one card per project up to ten, legend chips match node colours, click calls onOpenProject, hidden document pauses the loop, reduced motion draws once, destroy cancels the frame. Tests must build any fake secret-like value at run time and never assign quoted secret-looking literals to variables named like token, secret, password or key. Do not edit any existing file. Keep every existing test passing.",
+   "context": [
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/hive-layout.js",
+    "tools/watch-assets/hive-stat-strip.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/hive-streams.js",
+    "tools/watch-assets/hive-brain.js",
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive-mount.js",
+    "tests/cc-hive-mount.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

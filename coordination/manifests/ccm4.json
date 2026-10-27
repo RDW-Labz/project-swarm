@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccm4",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create tests/command-center-routes-flag.test.mjs, a route level test for the flag in tools/watch-server.mjs (read it, tools/command-center-flag.mjs and the existing tests/command-center-flag.test.mjs and the watch server tests such as tests/watch-server.test.mjs for the fake server pattern: createWatchServer with fake board and nav callbacks on a free port, node:test, no browser). Cases: with the flag off (option or environment unset) GET /command-center, /command-center/project/abc, /api/command-center and /api/command-center/project?id=abc all answer 404 exactly like an unknown path, and GET / still serves the classic board page unchanged; with the flag on GET /command-center with the page token answers 200 HTML that contains the script tag for command-center-boot.js, and without a token answers the same forbidden or redirect the classic page gives; /api/command-center answers 200 JSON with stats and projects built from the fake board and answers forbidden without the token; /api/command-center/project?id= with a known project answers 200 and with an unknown id answers 404; a project id containing a slash or two dots is rejected; the classic routes /, /project and /run still answer as before in both modes. Do not edit any file except creating this test. Tests must build any fake secret-like value at run time and never assign quoted secret-looking literals to variables named like token, secret, password or key. Do not edit any existing file. Keep every existing test passing.",
+   "context": [
+    "tools/watch-server.mjs",
+    "tools/command-center-flag.mjs",
+    "tests/command-center-flag.test.mjs",
+    "tests/watch-server.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/command-center-routes-flag.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
