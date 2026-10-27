@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "parkdot",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Parts bug (owner order): the ticket park check reads an acceptance line such as 'CI runs from .github/workflows/ci.yml on push' as the path github/workflows/ci.yml (leading dot dropped), so a valid CI ticket is parked as owned by nobody. Cause: pathsInAcceptanceText in tools/acceptance-provable.mjs, the second regular expression (plain text paths, not backticked) starts its match with a letter or digit, so a path that begins with a dot (.github/..., .eslintrc/..., .husky/...) loses the dot; backticked paths already keep it. Fix: let that expression match an optional single leading dot (a dot-folder name), without matching in the middle of a longer word or path (add a lookbehind so it cannot start right after a letter, digit, dot, slash or dash), keep the existing ./ strip in norm, keep every currently matched path matching exactly as before (same results for all existing tests), and make sure ../ is not turned into a dot path. Then search the other places that pull repo paths out of free text for the same leading-dot loss (search the tools folder for similar path-in-text regular expressions used by the park check, ticket files and acceptance provability, for example in tools/scope-commands.mjs, tools/ticket-context.mjs, tools/context-check.mjs) and fix any that drop a leading dot the same way, each with a test. Tests in tests/acceptance-provable.test.mjs: .github/workflows/ci.yml in plain text and in backticks give the same dotted path; .eslintrc/base.json and .husky/pre-commit.sh (plain text) keep the dot; ./docs/x.md gives docs/x.md; a path in the middle of a word is not matched; all previous expectations stay. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/acceptance-provable.mjs",
+    "tests/acceptance-provable.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/acceptance-provable.mjs",
+    "tests/acceptance-provable.test.mjs"
+   ],
+   "timeoutMs": 1500000
+  }
+ ]
+}
