@@ -168,6 +168,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | - | d-fix-gc-ledger-autopilot: 37 flagged catches updated; checksRun all passed; gc: 12 narrowed, 3 visi | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-27 | - | ask-1793115390244-d531b567: complete | claude | opus | pass | 25,389 | $0.18 |
 | 2026-10-27 | - | d-fix-board-data-board: checksRun: [{"name":"board tests","status":"passed"}]; board.mjs:72 (a) unli | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-27 | - | d-fix-watch-cli: complete | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -186,5 +187,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
 | 2026-10-27 | claude | 1 | 1 | 0 | 25,389 | $0.18 |
-| 2026-10-27 | cursor | 2 | 2 | 0 | 0 | subscription |
-| **total** | all | 164 | 149 | 15 | 14,736,764 | $26.85 (incl. estimates) |
+| 2026-10-27 | cursor | 3 | 3 | 0 | 0 | subscription |
+| **total** | all | 165 | 150 | 15 | 14,736,764 | $26.85 (incl. estimates) |

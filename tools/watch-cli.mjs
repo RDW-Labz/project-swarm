@@ -73,7 +73,10 @@ const WEEK = 7 * 86400000;
 async function projectTestFacts(project, { now, liveRuns = [], env = process.env } = {}) {
   const root = await fs.realpath(project.root).catch(() => path.resolve(project.root));
   const pointer = await readJson(path.join(root, '.project-swarm.json'));
-  const ledger = await readLedger(root).catch(() => null);
+  const ledger = await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] projectTestFacts readLedger:', error?.message ?? error);
+    return null;
+  });
   const familyRoots = await projectFamilyRoots(root, { env });
   const runs = await readProjectRunStates(root, { env, familyRoots });
   const scopeFile = await Promise.any([
@@ -205,12 +208,18 @@ export function runSnapshotLoader(root, runId) {
     if (!state) return null;
     const manifest = await readJson(path.join(dir, 'manifest.json'));
     const snapshot = buildRunSnapshot(state, { manifest, now: Date.now() });
-    snapshot.project = await projectSummary(root).then(summary => ({ ...summary, capBasis: summary.capBasis ?? (typeof summary.billedUsd === 'number' ? 'billed' : 'billed+list') })).catch(() => null);
+    snapshot.project = await projectSummary(root).then(summary => ({ ...summary, capBasis: summary.capBasis ?? (typeof summary.billedUsd === 'number' ? 'billed' : 'billed+list') })).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] runSnapshotLoader projectSummary:', error?.message ?? error);
+      return null;
+    });
     return snapshot;
   };
 }
 
-const planLoader = root => async () => buildPlanSnapshot(await readLedger(root).catch(() => null));
+const planLoader = root => async () => buildPlanSnapshot(await readLedger(root).catch((error) => {
+  if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] planLoader readLedger:', error?.message ?? error);
+  return null;
+}));
 
 function parseWatchArgs(args) {
   const opts = { all: false, keepUp: false, port: null, tui: false, open: false, json: false, text: false, run: null };
@@ -255,7 +264,10 @@ export async function startWatchBackground(root, runId, { entry = path.join(here
   try {
     await fs.mkdir(path.dirname(logFile), { recursive: true });
     // Never through a symlink or onto a file that is not ours: the log holds the page's token.
-    const existing = await fs.lstat(logFile).catch(() => null);
+    const existing = await fs.lstat(logFile).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] startWatchBackground lstat watch.log:', error?.message ?? error);
+      return null;
+    });
     if (existing && !existing.isFile()) return null;
     fd = openSync(logFile, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o600);
     const child = spawnImpl(process.execPath, [entry, '--root', root, 'watch', runId], { detached: true, windowsHide: true, stdio: ['ignore', fd, 'ignore'], env: { ...process.env, SWARM_NO_WATCH: '1' } });
@@ -263,12 +275,18 @@ export async function startWatchBackground(root, runId, { entry = path.join(here
     child.unref?.();
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      const match = /^(http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]+)$/m.exec(await fs.readFile(logFile, 'utf8').catch(() => ''));
+      const match = /^(http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]+)$/m.exec(await fs.readFile(logFile, 'utf8').catch((error) => {
+        if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] startWatchBackground read watch.log:', error?.message ?? error);
+        return '';
+      }));
       if (match) return match[1];
       await new Promise(resolve => setTimeout(resolve, pollMs));
     }
     return null;
-  } catch { return null; } finally { if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } } }
+  } catch (error) {
+    console.error('[tools/watch-cli.mjs] startWatchBackground:', error?.message ?? error);
+    return null;
+  } finally { if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } } }
 }
 
 function openUrl(url) {
@@ -292,7 +310,10 @@ async function boardText({ env = process.env } = {}) {
   const { runs } = await safeBoard();
   const opts = boardProjectOpts(env);
   const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
-  const needs = inboxText(await boardInbox({ projects, env, forOwner: true }).catch(() => null));
+  const needs = inboxText(await boardInbox({ projects, env, forOwner: true }).catch((error) => {
+    console.error('[tools/watch-cli.mjs] boardText boardInbox:', error?.message ?? error);
+    return null;
+  }));
   if (!runs.length) return `No live runs on this machine.\n${needs}`;
   return runs.map(run => {
     const done = run.jobs.filter(job => job.status === 'complete').length;
@@ -388,7 +409,9 @@ export async function serverRecordVersion(importMetaUrl = import.meta.url) {
   try {
     const fromRunner = await runnerVersion(importMetaUrl);
     if (fromRunner) return fromRunner;
-  } catch { /* fall through */ }
+  } catch (error) {
+    console.error('[tools/watch-cli.mjs] serverRecordVersion runnerVersion:', error?.message ?? error);
+  }
   const fromPkg = await readPackageVersion();
   if (fromPkg) return fromPkg;
   throw new Error('could not determine swarm runner version for server record');
@@ -406,7 +429,9 @@ async function installedVersionFor(env, versionState = {}) {
 function runnerFieldsForRegistry(entry = path.join(here, 'swarm.mjs')) {
   const runner = entry;
   let runnerRealpath = runner;
-  try { runnerRealpath = realpathSync(runner); } catch { /* keep literal path */ }
+  try { runnerRealpath = realpathSync(runner); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/watch-cli.mjs] runnerFieldsForRegistry realpathSync:', error?.message ?? error);
+  }
   return { runner, runnerRealpath };
 }
 // A board of ours belongs to this user: a process that exists but is not ours (EPERM) is not one.
@@ -442,7 +467,9 @@ export async function readBoardFile({ env = process.env, fetchImpl = fetch } = {
   try {
     const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
     if (data && pidAlive(data.pid) && typeof data.url === 'string' && await boardAnswers(data.url, fetchImpl)) { const u = new URL(data.url); return `${u.origin}/?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`; }
-  } catch { /* no board, or a stale file */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/watch-cli.mjs] readBoardFile:', error?.message ?? error);
+  }
   return null;
 }
 
@@ -454,7 +481,14 @@ export function boardProjectUrl(boardUrl, projectId) {
 
 let ownedBoard = null;   // a board this process started for a run page that was opened directly
 export function ownedBoardDone() { return ownedBoard?.server.done ?? Promise.resolve(); }
-export async function closeOwnedBoard() { if (ownedBoard) { const b = ownedBoard; ownedBoard = null; await b.server.close().catch(() => {}); await b.api.close().catch(() => {}); } }
+export async function closeOwnedBoard() {
+  if (ownedBoard) {
+    const b = ownedBoard;
+    ownedBoard = null;
+    await b.server.close().catch((error) => { console.error('[tools/watch-cli.mjs] closeOwnedBoard server.close:', error?.message ?? error); });
+    await b.api.close().catch((error) => { console.error('[tools/watch-cli.mjs] closeOwnedBoard api.close:', error?.message ?? error); });
+  }
+}
 
 // The board that exists, or a new one started here. `start` is injectable for tests.
 let pendingBoard = null;
@@ -659,7 +693,10 @@ function buildOwnerActions({ env, now, live, remoteLogin }) {
     listItems: async () => {
       const opts = boardProjectOpts(env);
       const projects = await listProjects({ file: projectsFile(env), forOwner: true, ...opts }).catch(() => []);
-      const inbox = await boardInbox({ projects, env, forOwner: true, now: now() }).catch(() => null);
+      const inbox = await boardInbox({ projects, env, forOwner: true, now: now() }).catch((error) => {
+        console.error('[tools/watch-cli.mjs] buildOwnerActions boardInbox:', error?.message ?? error);
+        return null;
+      });
       return ownerItemsFromBoardInbox(inbox ?? { items: [] });
     },
     appendAudit,
@@ -778,7 +815,9 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const familyRoots = await projectFamilyRoots(project.root, { env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root) });
       const liveRuns = (await live()).filter(r => familyRoots.includes(path.resolve(String(r.root ?? project.root))));
       let max = null;
-      try { max = machineConcurrency(loadLocalConfig({ env })); } catch { /* invalid local config leaves split quality without a slot limit */ }
+      try { max = machineConcurrency(loadLocalConfig({ env })); } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/watch-cli.mjs] createBoardApi.project loadLocalConfig:', error?.message ?? error);
+      }
       return stripMoney(await projectDetail(project, { now: now(), liveRunIds: new Set(liveRuns.map(r => r.runId)), slots: max, env, extraRoots: (await listProjects({ file: projectsFile(env) })).map(item => item.root), deployStatus: root => isBoardTempRoot(root, boardProjectOpts(env)) ? null : deployTracker.get(root) }));
     },
     // Every run alive in one project, combined (the Live tab of the project page).
@@ -823,7 +862,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
       const entry = { closed: false, server: null, pending: null };
       entry.pending = (async () => {
         const open = [...watchers.entries()].filter(([, w]) => !w.closed);
-        while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch(() => {}); }
+        while (open.length >= MAX_WATCHERS) { const [oldKey, old] = open.shift(); old.closed = true; watchers.delete(oldKey); await old.server?.close().catch((error) => { console.error('[tools/watch-cli.mjs] openRun close evicted watcher:', error?.message ?? error); }); }
         entry.server = runServer(project.root, runId, { idleMs: BOARD_RUN_IDLE_MS, nav: { project: { id: project.id, name: project.name }, runId, openBoard: async pid => (boardUrl ? (pid ? boardProjectUrl(boardUrl, pid) : boardUrl) : null) } });
         const { url } = await entry.server.listen();
         entry.server.done.then(() => { entry.closed = true; });
@@ -836,7 +875,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
     // The board tells the api its own address once it is listening: the run pages it opens link back to it.
     setBoardUrl(url) { boardUrl = url; },
     watcherCount: () => [...watchers.values()].filter(w => !w.closed).length,
-    async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch(() => {}); watchers.clear(); },
+    async close() { for (const w of watchers.values()) if (!w.closed) await w.server?.close().catch((error) => { console.error('[tools/watch-cli.mjs] createBoardApi.close watcher:', error?.message ?? error); }); watchers.clear(); },
   };
   if (remote) api.ownerActions = buildOwnerActions({ env, now, live, remoteLogin: remote.login });
   return api;
@@ -847,7 +886,7 @@ export function createBoardApi({ env = process.env, now = Date.now, live = () =>
 // and it does not stop when idle.
 export async function startBoardServer({ env = process.env, root, remote, keepUp = null, registry = null, now = Date.now } = {}) {
   const api = createBoardApi({ env, remote, now });
-  backfillHistory({ env }).catch(() => {});
+  backfillHistory({ env }).catch((error) => { console.error('[tools/watch-cli.mjs] startBoardServer backfillHistory:', error?.message ?? error); });
   const server = createWatchServer({
     root,
     getRunSnapshot: async () => null,
@@ -905,22 +944,28 @@ export async function startBoardServer({ env = process.env, root, remote, keepUp
     try {
       // The run pages this board opened must not point back at a board that is gone, and they close with it.
       api.setBoardUrl(null);
-      await api.close().catch(() => {});
+      await api.close().catch((error) => { console.error('[tools/watch-cli.mjs] startBoardServer cleanup api.close:', error?.message ?? error); });
       if (!remote) {
         try {
           const data = JSON.parse(await fs.readFile(boardFile(env), 'utf8'));
           if (data.pid === process.pid && data.url === url) await fs.rm(boardFile(env), { force: true });
-        } catch { /* already gone */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/watch-cli.mjs] startBoardServer cleanup boardFile:', error?.message ?? error);
+        }
       } else {
         try {
           const { remoteServerFile } = await import('./server-restart.mjs');
           const file = remoteServerFile(env);
           const data = JSON.parse(await fs.readFile(file, 'utf8'));
           if (data.pid === process.pid && data.url === url) await fs.rm(file, { force: true });
-        } catch { /* already gone */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/watch-cli.mjs] startBoardServer cleanup remoteServerFile:', error?.message ?? error);
+        }
       }
-    } catch { /* cleaned must never reject */ }
-  }).catch(() => {});
+    } catch (error) {
+      console.error('[tools/watch-cli.mjs] startBoardServer cleanup:', error?.message ?? error);
+    }
+  }).catch((error) => { console.error('[tools/watch-cli.mjs] startBoardServer cleaned promise:', error?.message ?? error); });
   return { server, api, url, cleaned };
 }
 
