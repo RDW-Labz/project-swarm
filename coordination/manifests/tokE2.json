@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokE2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Three guard tests fail on this branch; fix them without weakening the guard. (1) tests/handbuild-guard.test.mjs test 'second review: the project is the one Claude Code names, whatever the folder the session is in; a swarm workspace may be written, the checkout from inside it may not; too-large input is refused': since the worker token change a verified worker is proven ONLY by a real token from tools/worker-token.mjs (issueWorkerToken for the run, job and workspace, the token handed in the child environment as SWARM_WORKER_TOKEN) bound to its own workspace; the test still fakes a worker with only the run id environment variable. Update the TEST SETUP to issue a real token for a real temp workspace and pass it in the hook process environment, keep every assertion's intent (a worker may write inside its own workspace; the checkout from inside the workspace may not; too-large input is refused). (2) tests/orchestrator-mode-review2.test.mjs 'orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands' and (3) tests/orchestrator-mode.test.mjs 'orchestratorModeCommandAllowed: swarm and read-only git' now fail because of the new rule that a swarm command is allowed only when the session working folder (resolved real path) equals the project root. Find why they fail: if the tests call orchestratorModeCommandAllowed with a cwd that is not the project root only because of test setup, change the test setup to pass the project root as cwd; if the code treats the project root wrongly (symlinked temp folders such as /var versus /private/var, trailing slash, case), fix the CODE to compare resolved real paths. Do not remove or loosen the nested-root denial (a nested dot swarm folder or project marker below the root, and swarm run from a subfolder of the project, must stay denied; tests in tests/orchestrator-allow.test.mjs cover it and must keep passing). Make these three tests and all tests/orchestrator-allow.test.mjs, tests/orchestrator-mode tests, tests/shell-writes tests, tests/auto-approve.test.mjs and tests/handbuild tests pass. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tools/worker-token.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}
