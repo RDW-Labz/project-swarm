@@ -2,6 +2,7 @@
 // Claude shell adapter (decision #154): argv, env, profile, presets, validation, key handling,
 // the integrate/ship key guard, and (macOS only) the generated profile under real sandbox-exec.
 // No network and no real model: the claude CLI is always a fake here.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
