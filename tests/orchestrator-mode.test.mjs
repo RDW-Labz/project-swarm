@@ -14,7 +14,6 @@ import {
   ORCHESTRATOR_MODE_OFF_FILE,
   ORCHESTRATOR_TEST_MARKER_REL,
   ORCHESTRATOR_TEST_MARKER_BODY,
-  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
 import {
   guardDecision,
@@ -76,8 +75,12 @@ async function swarmProject(t) {
 
 const omReason = d => d.reason === ORCHESTRATOR_MODE_DENY_REASON && d.ruleId === ORCHESTRATOR_MODE_RULE_ID;
 
-test('orchestratorModeCommandAllowed: swarm and read-only git', async () => {
+test('orchestratorModeCommandAllowed: swarm and read-only git', async t => {
   await installLocalSwarmShim();
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
+  const ctx = { root, cwd: root };
   const allow = [
     'swarm status',
     'swarm tickets list',
@@ -96,7 +99,7 @@ test('orchestratorModeCommandAllowed: swarm and read-only git', async () => {
     'git remote -v',
     'git branch --list',
   ];
-  for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c), true, c);
+  for (const c of allow) assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
 });
 
 test('orchestratorModeCommandAllowed: read-only gh and capped reads', async () => {
@@ -172,21 +175,26 @@ test('guardDecision allows git status under orchestrator mode', async t => {
   assert.equal(bash('git status -sb').allow, true);
 });
 
-test('worker cwd is not subject to orchestrator mode', async t => {
+test('worker workspace cwd is subject to orchestrator mode', async t => {
   const { root, bash } = await swarmProject(t);
-  const runId = 'run1';
-  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
-  const workspace = path.join(root, '.swarm/workspaces/run1/job-1');
+  const workspace = path.join(root, '.swarm/workspaces/run1', 'job-1');
   await fs.mkdir(workspace, { recursive: true });
-  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  const prev = {
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    SWARM_WORKER_RUN_ID: process.env.SWARM_WORKER_RUN_ID,
+  };
+  process.env.CLAUDE_PROJECT_DIR = root;
+  process.env.SWARM_WORKER_RUN_ID = 'run1';
   try {
-    assert.equal(bash('npm test', workspace).allow, true);
-    assert.equal(orchestratorModeEnabled(root, workspace), false);
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const d = bash('npm test', workspace);
+    assert.equal(d.allow, false);
+    assert.ok(omReason(d));
   } finally {
-    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev.SWARM_WORKER_RUN_ID === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prev.SWARM_WORKER_RUN_ID;
   }
 });
 

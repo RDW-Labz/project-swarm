@@ -13,8 +13,6 @@ import {
   orchestratorModeApplies,
   orchestratorResolvedRoot,
   orchestratorTestHarnessSigned,
-  isVerifiedSwarmWorkerCwd,
-  SWARM_WORKER_RUN_ID_ENV,
   ORCHESTRATOR_TEST_MARKER_REL,
   ORCHESTRATOR_TEST_MARKER_BODY,
 } from '../tools/shell-writes.mjs';
@@ -218,21 +216,35 @@ test('L3: path-qualified swarm binary is refused', async () => {
   assert.equal(orchestratorModeCommandAllowed('/tmp/evil-swarm status'), false);
 });
 
-test('worker exemption requires launcher run id env', async t => {
+test('workspace cwd with run record and SWARM_WORKER_RUN_ID is not exempt from orchestrator mode', async t => {
   const root = await swarmRoot(t);
   const runId = 'run-env-only';
   await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
+  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}\n');
   const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job');
   await fs.mkdir(workspace, { recursive: true });
-  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
-  const prev = process.env[SWARM_WORKER_RUN_ID_ENV];
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  const prev = {
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    SWARM_WORKER_RUN_ID: process.env.SWARM_WORKER_RUN_ID,
+  };
+  process.env.CLAUDE_PROJECT_DIR = root;
+  process.env.SWARM_WORKER_RUN_ID = runId;
   try {
-    assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const d = guardDecision({
+      tool: 'Bash',
+      toolInput: { command: 'npm test' },
+      root,
+      cwd: workspace,
+      now: () => T0,
+    });
+    assert.equal(d.allow, false);
+    assert.ok(omReason(d));
   } finally {
-    if (prev === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev;
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev.SWARM_WORKER_RUN_ID === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prev.SWARM_WORKER_RUN_ID;
   }
 });
 

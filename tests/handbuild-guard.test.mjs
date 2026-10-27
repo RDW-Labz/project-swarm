@@ -19,7 +19,6 @@ import { inboxDeps } from '../tools/inbox-commands.mjs';
 import { readJournal } from '../tools/journal.mjs';
 import { ensureHandbuildGuard, removeHandbuildGuard } from '../tools/install.mjs';
 import { buildEvent, handBuiltOf, readEvents, sessionsOf, EVENTS_FILE } from '../tools/orchestrator-events.mjs';
-
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta.url));
 const T0 = Date.UTC(2026, 9, 20, 12, 0, 0);
@@ -189,10 +188,19 @@ test('the guard hook as a process: deny output with the reason, allow prints not
   assert.equal(handBuiltOf(readEvents(root)).blocked, 1);
   assert.equal(run({ session_id: 's1', cwd: root, tool_name: 'Write', tool_input: { file_path: path.join(root, 'docs/plans/p.md') } }).stdout, '');
   assert.equal(run({ session_id: 's1', cwd: root, tool_name: 'Bash', tool_input: { command: 'npm test' } }).stdout, '');
-  // a swarm worker workspace: edits there are the swarm's own
   const workspace = path.join(root, '.swarm/workspaces/run1/job-1');
-  await fs.mkdir(workspace, { recursive: true });
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Edit', tool_input: { file_path: path.join(workspace, 'src/a.ts') } }).stdout, '', 'worktree edits allowed');
+  await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
+  assert.equal(
+    run({
+      session_id: 'w',
+      cwd: workspace,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(workspace, 'src/a.ts') },
+    }, undefined, { env: { CLAUDE_PROJECT_DIR: root } }).stdout.includes('deny'),
+    true,
+    'workspace edits follow orchestrator rules when CLAUDE_PROJECT_DIR is set',
+  );
   assert.equal(run({ session_id: 'w', cwd: root, tool_name: 'Edit', tool_input: { file_path: '/tmp/other/a.ts' } }).stdout, '', 'outside the checkout');
   await fs.mkdir(path.join(root, '.swarm'), { recursive: true });
   for (const junk of ['not json', 'null']) {
@@ -388,20 +396,29 @@ test('second review: requests cannot be broad, protected or stale; the state is 
   assert.deepEqual(fsSync.readdirSync(path.join(root, '.swarm/handbuild')).filter(n => n.includes('.tmp-') || n === 'state.lock'), [], 'no temp or lock file left');
 });
 
-test('second review: the project is the one Claude Code names, whatever the folder the session is in; a swarm workspace may be written, the checkout from inside it may not; too-large input is refused', async t => {
+test('second review: the project is the one Claude Code names, whatever the folder the session is in; workspace cwd has no orchestrator exemption; too-large input is refused', { timeout: 60000 }, async t => {
   const root = await project(t);
   const elsewhere = await tmp(t);
-  const run = (input, env = {}, raw) => spawnSync(process.execPath, [GUARD], { input: raw ?? JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+  const run = (input, env = {}, raw) => spawnSync(process.execPath, [GUARD], {
+    input: raw ?? JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 60000,
+    env: { ...process.env, ...env },
+  });
   // the session has moved out of the project; an absolute path into the checkout is still guarded
   const out = run({ session_id: 's', cwd: elsewhere, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/new.ts') } }, { CLAUDE_PROJECT_DIR: root });
   assert.equal(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(run({ session_id: 's', cwd: elsewhere, tool_name: 'Bash', tool_input: { command: `echo x > ${path.join(root, 'src/q.ts')}` } }, { CLAUDE_PROJECT_DIR: root }).stdout.includes('deny'), true);
-  // inside a swarm workspace: the workspace is the swarm's, the checkout is not
   const workspace = path.join(root, '.swarm/workspaces/run1/job-1');
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
   await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: 'src/a.ts' } }, { CLAUDE_PROJECT_DIR: root }).stdout, '', 'relative write in the workspace');
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, { CLAUDE_PROJECT_DIR: root }).stdout.includes('deny'), true, 'the checkout from inside a workspace');
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }).stdout.includes('deny'), true, 'also found from the workspace path alone');
+  const workerEnv = {
+    CLAUDE_PROJECT_DIR: root,
+    SWARM_WORKER_RUN_ID: 'run1',
+  };
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: 'src/a.ts' } }, workerEnv).stdout.includes('deny'), true, 'relative write in the workspace');
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, workerEnv).stdout.includes('deny'), true, 'the checkout from inside a workspace');
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, { SWARM_WORKER_RUN_ID: 'run1' }).stdout.includes('deny'), true, 'SWARM_WORKER_RUN_ID alone does not exempt');
   // input too large to read is refused, not waved through
   const huge = JSON.stringify({ session_id: 's', cwd: root, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/big.ts'), content: 'x'.repeat(2100000) } });
   const big = run(null, { CLAUDE_PROJECT_DIR: root }, huge);
