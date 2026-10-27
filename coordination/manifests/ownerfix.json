@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ownerfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Parts bug (owner order; real cause of the trimmed outputs of T-0619, T-0620 and T-0621): in tools/ticket-manifest.mjs the function hasOtherTestOwner builds its list of other owners with a filter that skips only cancelled tickets, so a test file that a DONE ticket already owns still counts as owned by someone else; the block that follows (the loop over the ticket's tests, around the blockedTestFiles code) then removes that file from the job's outputs and moves it to context, leaving the job with empty outputs. pendingOutputOwner in the same file already skips done and cancelled tickets. Fix: in hasOtherTestOwner also skip tickets whose status is done (keep skipping cancelled), so only open tickets can own a file for the purpose of dropping it from another ticket's outputs; keep the rest of the function exactly as it is, including the rule that two open build tickets claiming the same test leave the earlier id as the sole writer. Tests (extend tests/ticket-manifest-owns.test.mjs, following how its existing tests build tickets and call the manifest builder): a build or test ticket that names a test file already listed under the tests or files of a DONE ticket keeps that file in its outputs (not in context); the same file owned by an OPEN ticket is still dropped from outputs and added to context; owned by a cancelled ticket stays owned by this ticket; two open build tickets claiming one test still leave only the earlier id writing it. All existing assertions must stay. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest-owns.test.mjs",
+    "tests/ticket-manifest.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest-owns.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ]
+}
