@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "t0121b",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Two changes for the new board panel module tools/watch-assets/split-quality-panel.js (a UMD module exporting METRIC_ORDER, collectMetrics, render and renderSplitQuality; a board panel, NOT a tab script, it never calls register). (1) tests/watch-assets.test.mjs test 'tab scripts register under one of the four tab names' fails because it treats the file as a tab: add split-quality-panel.js to that test's existing explicit skip list with a one-line comment (board panel module, not a tab; covered by tests/split-quality-panel.test.mjs); keep every other assertion unchanged. (2) Add tests/split-quality-panel.test.mjs (node:test, no network) so the skip cannot hide a real failure: require the module through createRequire, build a tiny fake document with createElement returning nodes that record tagName, className, textContent, attributes and children (appendChild, setAttribute), and test: render(null host) does nothing; render with null or empty split quality shows the text Split quality unavailable; render with a split quality object in the contract shape (fields overheadRatio, firstTryPassRate, criticalPath, waveFill, collisions, reviewUsdPerTicket, ticketSizes, plus grade and at; read the module to get the exact shapes) renders the overall header and exactly 7 metric rows in METRIC_ORDER order with the expected labels; green, amber and red (and unknown) grades produce the matching dot grade classes and pill classes; a metric note becomes the row title; collectMetrics maps contract fields to display strings (ratio, usd, count, sizes). Use fixtures with values that give each grade. Add a note in the test file header that a real-browser render check comes with the board mount ticket and the browser smoke test. STANDING TEST RULE: tests that spawn processes need a 60000 ms timeout; these do not spawn any.",
+   "context": [
+    "tests/watch-assets.test.mjs",
+    "tools/watch-assets/split-quality-panel.js"
+   ],
+   "outputs": [
+    "tests/watch-assets.test.mjs",
+    "tests/split-quality-panel.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}
