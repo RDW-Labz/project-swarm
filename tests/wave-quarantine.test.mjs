@@ -234,3 +234,19 @@ test('AC2: buildWaveFailureRecord records passing tickets that integrated in the
   });
   assert.deepEqual(record.passingTicketIds, ['T-0201', 'T-0202']);
 });
+
+test('AC2: quarantining a failed ticket leaves passing ticket outputs in place', async (t) => {
+  const root = await tempProjectRoot(t);
+  await fs.writeFile(path.join(root, 'pass.txt'), 'ok', 'utf8');
+  await fs.writeFile(path.join(root, 'bad.txt'), 'bad', 'utf8');
+  const records = await quarantineScopeWaveFailures({
+    root,
+    runId: 'wave-mixed',
+    wave: 1,
+    passingTicketIds: ['T-0400'],
+    failedTickets: [{ ticketId: 'T-0401', jobId: 'T-0401', outputPaths: ['bad.txt'] }],
+  });
+  assert.deepEqual(records[0].passingTicketIds, ['T-0400']);
+  assert.equal(await fs.readFile(path.join(root, 'pass.txt'), 'utf8'), 'ok');
+  await assert.rejects(() => fs.access(path.join(root, 'bad.txt')));
+});
