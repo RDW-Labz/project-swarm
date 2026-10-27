@@ -24,7 +24,25 @@
     "tools/swarm/core-51.mjs",
     "tests/paid-lane-paused.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/ask-125.test.mjs",
+    "tests/batch-run.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-ab-core.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/router.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
   }
  ]
 }

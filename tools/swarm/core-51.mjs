@@ -6,7 +6,8 @@ import { contextDirectoryWarnings, findUncoveredTests, isTestFile, listProjectFi
 import { windowsCiGotchasWarnings } from '../gotchas.mjs';
 import { resolveLanes } from '../lanes.mjs';
 import { loadLocalConfig } from '../local-config.mjs';
-import { defaultMaxOutputTokens } from '../openrouter.mjs';
+import { anthropicLanePausedProblem, ANTHROPIC_LANE_PAUSED } from '../anthropic.mjs';
+import { defaultMaxOutputTokens, openrouterLanePausedProblem, OPENROUTER_LANE_PAUSED } from '../openrouter.mjs';
 import { packagingWithoutBuildCheckWarning } from '../packaging-check.mjs';
 import { resolvePortBlock } from '../ports.mjs';
 import { loadRentedConfig, rentedSensitiveOk } from '../rented.mjs';
@@ -358,9 +359,18 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? withoutApiOnlyFields({ ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model }) : job) };
     validateManifest(manifest);
   }
+  const machineConfig = loadLocalConfig({ env, home });
   if (manifest.jobs.some(job => job.shell === true)) {
-    const shellPauseProblem = claudeShellPausedProblem(loadLocalConfig({ env, home }));
+    const shellPauseProblem = claudeShellPausedProblem(machineConfig);
     if (shellPauseProblem) fail(shellPauseProblem, CLAUDE_SHELL_PAUSED);
+  }
+  if (manifest.jobs.some(job => job.agent === 'anthropic')) {
+    const problem = anthropicLanePausedProblem(machineConfig);
+    if (problem) fail(problem, ANTHROPIC_LANE_PAUSED);
+  }
+  if (manifest.jobs.some(job => job.agent === 'openrouter')) {
+    const problem = openrouterLanePausedProblem(machineConfig);
+    if (problem) fail(problem, OPENROUTER_LANE_PAUSED);
   }
   scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   if (!scopesExpanded) manifest = await expandOpenScopes(root, manifest);
