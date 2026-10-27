@@ -5,6 +5,30 @@ import path from 'node:path';
 
 const ORCHESTRATOR_OWN_PREFIXES = Object.freeze(['.swarm/', 'docs/plans/']);
 
+const ORCHESTRATOR_OWN_CODE_EXTS = new Set([
+  'js', 'mjs', 'cjs', 'ts', 'mts', 'cts', 'jsx', 'tsx', 'py', 'pyi', 'sh', 'bash', 'zsh', 'rb', 'pl', 'php',
+]);
+
+const ORCHESTRATOR_OWN_TEST_DIR_NAMES = new Set(['test', 'tests', 'spec', 'specs', '__tests__']);
+
+const ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES = [
+  '.swarm/workspaces/',
+  '.swarm/worktrees/',
+  '.swarm/runs/',
+  '.swarm/backups/',
+  '.swarm/orchestrator-mode/',
+];
+
+/** Orchestrator-mode code-write guard applies under docs/plans and .swarm except swarm-managed subtrees. */
+export function orchestratorOwnWriteGuardRel(normRel) {
+  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!orchestratorOwnRel(norm)) return false;
+  if (ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p))) {
+    return false;
+  }
+  return true;
+}
+
 const ORCHESTRATOR_OWN_JS_TEST = /\.(test|spec)\.(js|mjs|cjs|ts|mts|cts|jsx|tsx)$/i;
 const ORCHESTRATOR_OWN_PYTEST_INI = /^pytest\.(ini|cfg)$/i;
 const ORCHESTRATOR_OWN_RUNNER_CONFIG = [
@@ -25,20 +49,49 @@ export function orchestratorOwnRel(normRel) {
   return ORCHESTRATOR_OWN_PREFIXES.some(prefix => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
 }
 
-/** Test or test-runner artifacts the orchestrator must not create under orchestrator-owned folders. */
-export function orchestratorOwnForbiddenTestOrRunnerBasename(basename) {
+const basenameStemExt = basename => {
   const name = path.basename(String(basename ?? ''));
+  const lower = name.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  if (dot <= 0) return { name, lower, stem: lower, ext: '' };
+  return { name, lower, stem: lower.slice(0, dot), ext: lower.slice(dot + 1) };
+};
+
+/** True when a basename is executable/code or test-runner config under orchestrator-owned folders. */
+export function orchestratorOwnForbiddenWriteBasename(basename) {
+  const { name, lower, stem, ext } = basenameStemExt(basename);
   if (!name) return false;
   if (ORCHESTRATOR_OWN_JS_TEST.test(name)) return true;
   if (/^package\.json$/i.test(name)) return true;
   if (ORCHESTRATOR_OWN_PYTEST_INI.test(name) || ORCHESTRATOR_OWN_RUNNER_CONFIG.some(re => re.test(name))) {
     return true;
   }
+  if (ext && ORCHESTRATOR_OWN_CODE_EXTS.has(ext)) return true;
+  if (stem === 'conftest' || stem === 'makefile' || stem === 'dockerfile' || lower === 'makefile' || lower === 'dockerfile') {
+    return true;
+  }
+  if (/^test/i.test(stem) || /test$/i.test(stem)) return true;
   if (/\.py$/i.test(name)) {
-    const stem = name.slice(0, -3);
-    if (/^test_/i.test(stem) || /_test$/i.test(stem) || /^conftest$/i.test(stem)) return true;
+    if (/^test_/i.test(stem) || /_test$/i.test(stem) || stem === 'conftest') return true;
   }
   return false;
+}
+
+/** Test or test-runner artifacts the orchestrator must not create under orchestrator-owned folders. */
+export function orchestratorOwnForbiddenTestOrRunnerBasename(basename) {
+  return orchestratorOwnForbiddenWriteBasename(basename);
+}
+
+/** True when a project-relative path under orchestrator-owned folders must not be written. */
+export function orchestratorOwnForbiddenWriteRel(normRel) {
+  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!orchestratorOwnWriteGuardRel(norm)) return false;
+  const parts = norm.split('/').filter(Boolean);
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (ORCHESTRATOR_OWN_TEST_DIR_NAMES.has(parts[i])) return true;
+  }
+  const base = parts[parts.length - 1] ?? '';
+  return orchestratorOwnForbiddenWriteBasename(base);
 }
 
 export const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
@@ -596,4 +649,56 @@ export function localTestRunAllowed(words, ctx = undefined) {
   if (cmd === 'node') return nodeTestRunnerOk(args, ctx);
   if (npmTestShapeOk(cmd, args, ctx)) return true;
   return false;
+}
+
+const looksLikeExplicitTestOperand = raw => {
+  const s = String(raw ?? '');
+  if (!s || s.startsWith('-')) return false;
+  if (s.includes('/') || s.includes('\\')) return true;
+  const { ext, lower, stem } = basenameStemExt(s);
+  if (ext && ORCHESTRATOR_OWN_CODE_EXTS.has(ext)) return true;
+  if (ORCHESTRATOR_OWN_TEST_DIR_NAMES.has(lower)) return true;
+  if (/^test/i.test(stem) || /test$/i.test(stem)) return true;
+  if (/\.(test|spec)\./i.test(s)) return true;
+  return false;
+};
+
+const testRunBodyArgs = words => {
+  if (!words?.length) return null;
+  const rawCmd = String(words[0]);
+  const cmd = path.basename(rawCmd);
+  const args = words.slice(1);
+  const pyArgs = pytestArgs(words);
+  if (pyArgs) return pyArgs;
+  if (cmd === 'node' && args.includes('--test')) {
+    const testIdx = args.indexOf('--test');
+    return args.slice(testIdx + 1);
+  }
+  if (cmd === 'npm' || cmd === 'pnpm' || cmd === 'yarn') {
+    const i = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
+    if (i === -1) return null;
+    const verb = String(args[i]);
+    if (verb === 'test') return args.slice(i + 1);
+    if (verb === 'run') return args.slice(i + 2);
+    return null;
+  }
+  if (cmd === 'pytest') return args;
+  if (cmd === 'playwright') return runnerArgsWithoutVerb(args, { implicitRun: false }) ?? [];
+  if (cmd === 'vitest') return runnerArgsWithoutVerb(args, { implicitRun: true }) ?? [];
+  const pkg = packageRunnerTool(cmd, args);
+  if (pkg) {
+    if (pkg.tool === 'playwright') return runnerArgsWithoutVerb(pkg.rest, { implicitRun: false }) ?? [];
+    if (pkg.tool === 'vitest') return runnerArgsWithoutVerb(pkg.rest, { implicitRun: true }) ?? [];
+  }
+  return null;
+};
+
+/** True when an allowed local test run has no explicit test file or directory operand (name filters only). */
+export function localTestRunIsBare(words, ctx = undefined) {
+  if (!localTestRunAllowed(words, ctx)) return false;
+  const body = testRunBodyArgs(words);
+  if (body === null) return false;
+  const pos = body.filter(a => a !== '' && !String(a).startsWith('-'));
+  if (!pos.length) return true;
+  return !pos.some(looksLikeExplicitTestOperand);
 }

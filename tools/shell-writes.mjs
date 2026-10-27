@@ -14,7 +14,9 @@ import {
   readOnlyCommandAllowed,
   helpOnly,
   localTestRunAllowed,
+  localTestRunIsBare,
   orchestratorOwnRel,
+  orchestratorOwnForbiddenWriteRel,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -1761,6 +1763,86 @@ const omPackageScripts = root => {
 
 const omTestOperandOrchestratorOwnedRel = norm => orchestratorOwnRel(norm);
 
+const OM_BARE_SCAN_MAX_DEPTH = 8;
+const OM_BARE_SCAN_MAX_ENTRIES = 5000;
+const OM_BARE_SCAN_SKIP_PREFIXES = [
+  '.swarm/workspaces/',
+  '.swarm/worktrees/',
+  '.swarm/runs/',
+  '.swarm/backups/',
+  '.swarm/orchestrator-mode/',
+];
+
+const omBareScanSkipRel = normRel => {
+  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!norm) return true;
+  if (norm === 'node_modules' || norm.startsWith('node_modules/')) return true;
+  return OM_BARE_SCAN_SKIP_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p));
+};
+
+/** Fail closed: true when orchestrator-owned folders contain runnable code/tests (blocks bare test runs). */
+export function orchestratorOwnFoldersBlockBareTestRun(root) {
+  if (!root) return true;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(root);
+  } catch {
+    return true;
+  }
+  let entriesSeen = 0;
+  const scanDir = (absDir, relPosix, depth) => {
+    if (depth > OM_BARE_SCAN_MAX_DEPTH) return 'limit';
+    if (omBareScanSkipRel(relPosix)) return 'ok';
+    let names;
+    try {
+      names = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return 'error';
+    }
+    for (const ent of names) {
+      entriesSeen += 1;
+      if (entriesSeen > OM_BARE_SCAN_MAX_ENTRIES) return 'limit';
+      const name = ent.name;
+      const childRel = relPosix ? `${relPosix}/${name}` : name;
+      const normChild = childRel.replace(/\\/g, '/').toLowerCase();
+      if (omBareScanSkipRel(normChild)) continue;
+      const childAbs = path.join(absDir, name);
+      let st;
+      try {
+        st = fs.lstatSync(childAbs);
+      } catch {
+        return 'error';
+      }
+      if (st.isSymbolicLink()) {
+        if (orchestratorOwnForbiddenWriteRel(normChild)) return 'hit';
+        continue;
+      }
+      if (st.isDirectory()) {
+        const sub = scanDir(childAbs, normChild, depth + 1);
+        if (sub !== 'ok') return sub;
+        continue;
+      }
+      if (st.isFile() && orchestratorOwnForbiddenWriteRel(normChild)) return 'hit';
+    }
+    return 'ok';
+  };
+  for (const top of ['.swarm', 'docs/plans']) {
+    const abs = path.join(rootReal, top);
+    let st;
+    try {
+      st = fs.lstatSync(abs);
+    } catch (err) {
+      if (err?.code === 'ENOENT') continue;
+      return true;
+    }
+    if (!st.isDirectory()) continue;
+    const relTop = top.replace(/\\/g, '/').toLowerCase();
+    const outcome = scanDir(abs, relTop, 0);
+    if (outcome === 'hit' || outcome === 'limit' || outcome === 'error') return true;
+  }
+  return false;
+}
+
 const omTestOperandOk = (raw, ctx) => {
   if (!omReadOperandOk(raw, ctx)) return false;
   if (!ctx.root || raw === '-' || raw === undefined) return true;
@@ -1793,12 +1875,15 @@ const omTestOperandOk = (raw, ctx) => {
 const omOrchestratorTestRunAllowed = (segment, ctx) => {
   if (!ctx?.root) return false;
   const packageScripts = omPackageScripts(ctx.root);
-  return localTestRunAllowed(segment, {
+  const runCtx = {
     ...ctx,
     inProject: raw => omReadOperandOk(raw, ctx),
     testOperandOk: raw => omTestOperandOk(raw, ctx),
     packageScripts,
-  });
+  };
+  if (!localTestRunAllowed(segment, runCtx)) return false;
+  if (localTestRunIsBare(segment, runCtx) && orchestratorOwnFoldersBlockBareTestRun(ctx.root)) return false;
+  return true;
 };
 
 const omReadOperandOk = (raw, ctx) => {

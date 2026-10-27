@@ -37,8 +37,7 @@ import {
   swarmChangeShellPolicy,
 } from './self-approval.mjs';
 import {
-  orchestratorOwnRel,
-  orchestratorOwnForbiddenTestOrRunnerBasename,
+  orchestratorOwnForbiddenWriteRel,
 } from './orchestrator-allow.mjs';
 import {
   AUTO_OFF_FILE,
@@ -1985,6 +1984,21 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
   if (sessionProtectedHandbuildRel(rel)) return true;
   if (rel === null || rel === undefined) return false;
   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
+  const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
+  if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
+  if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
+  if (orchestratorOwnForbiddenWriteRel(normFromRel)) return true;
+  try {
+    const lst = fs.lstatSync(candidate);
+    if (lst.isSymbolicLink()) {
+      const linkTarget = fs.readlinkSync(candidate);
+      const resolved = path.resolve(path.dirname(candidate), linkTarget);
+      const linkRel = insideProject(root, resolved);
+      if (linkRel !== null && orchestratorOwnForbiddenWriteRel(String(linkRel).replace(/\\/g, '/').toLowerCase())) {
+        return true;
+      }
+    }
+  } catch { /* missing path: fall through to resolved check */ }
   const tail = [];
   let cur = candidate;
   let abs = candidate;
@@ -2006,7 +2020,7 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
   const norm = String(inside ?? rel).replace(/\\/g, '/').toLowerCase();
   if (norm === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || norm === OFF_FILE.toLowerCase()) return true;
   if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
-  if (orchestratorOwnRel(norm) && orchestratorOwnForbiddenTestOrRunnerBasename(path.basename(norm))) return true;
+  if (orchestratorOwnForbiddenWriteRel(norm)) return true;
   return false;
 };
 

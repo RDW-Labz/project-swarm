@@ -9,9 +9,13 @@ import {
   swarmSubcommandAlwaysAllowed,
   readOnlyCommandAllowed,
   localTestRunAllowed,
+  localTestRunIsBare,
   helpOnly,
   orchestratorOwnForbiddenTestOrRunnerBasename,
+  orchestratorOwnForbiddenWriteBasename,
+  orchestratorOwnForbiddenWriteRel,
 } from '../tools/orchestrator-allow.mjs';
+import { orchestratorOwnFoldersBlockBareTestRun } from '../tools/shell-writes.mjs';
 import {
   orchestratorModeCommandAllowed,
   ORCHESTRATOR_MODE_DENY_REASON,
@@ -136,6 +140,29 @@ test('orchestratorOwnForbiddenTestOrRunnerBasename', () => {
   assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('package.json'), true);
   assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('scale-plan-v2.md'), false);
   assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('ideas.md'), false);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('x-test.mjs'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('x_test.mjs'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('test-x.mjs'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('test.mjs'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('test.js'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('x.py'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('x.sh'), true);
+  assert.equal(orchestratorOwnForbiddenWriteBasename('NOTE.MJS'), true);
+  assert.equal(orchestratorOwnForbiddenWriteRel('docs/plans/tests/note.txt'), true);
+  assert.equal(orchestratorOwnForbiddenWriteRel('docs/plans/plan.json'), false);
+});
+
+test('localTestRunIsBare', () => {
+  const scripts = { test: 'node --test' };
+  assert.equal(localTestRunIsBare('node --test'.split(/\s+/)), true);
+  assert.equal(localTestRunIsBare('npx vitest run'.split(/\s+/)), true);
+  assert.equal(localTestRunIsBare('pytest'.split(/\s+/)), true);
+  assert.equal(
+    localTestRunIsBare('npm test'.split(/\s+/), { packageScripts: scripts }),
+    true,
+  );
+  assert.equal(localTestRunIsBare('node --test tests/ok.test.mjs'.split(/\s+/)), false);
+  assert.equal(localTestRunIsBare('npx vitest run tests/ok.test.mjs'.split(/\s+/)), false);
 });
 
 test('orchestratorModeCommandAllowed: bug-report allows', async t => {
@@ -407,6 +434,15 @@ test('guardDecision: orchestrator-owned writes block test artifacts', async t =>
     'docs/plans/vitest.config.mjs',
     'docs/plans/package.json',
     '.swarm/hidden.test.mjs',
+    'docs/plans/x-test.mjs',
+    'docs/plans/x_test.mjs',
+    'docs/plans/test-x.mjs',
+    'docs/plans/test.mjs',
+    'docs/plans/test.js',
+    'docs/plans/x.py',
+    'docs/plans/x.sh',
+    'docs/plans/tests/notes.txt',
+    '.swarm/NOTE.MJS',
   ];
   for (const handbuildOff of [false, true]) {
     for (const rel of allowWrites) {
@@ -418,6 +454,46 @@ test('guardDecision: orchestrator-owned writes block test artifacts', async t =>
       assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny write ${rel}`);
     }
   }
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'evil.test.mjs'), 'export {}\n');
+  const linkPath = path.join(root, 'docs', 'plans', 'innocent.md');
+  await fs.symlink(path.join(root, 'docs', 'plans', 'evil.test.mjs'), linkPath);
+  for (const handbuildOff of [false, true]) {
+    const d = await guardWrite('docs/plans/innocent.md', root, { handbuildOff, orchestrator: true });
+    assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny symlink write`);
+  }
+});
+
+test('guardDecision: bare test runs blocked when orchestrator folders hold code', async t => {
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  const ctx = { root, cwd: root };
+  const bareCommands = [
+    'npx vitest run',
+    'npx playwright test',
+    'npm test',
+    'node --test',
+    'pytest',
+    'python3 -m pytest',
+  ];
+  for (const c of bareCommands) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), true, `clean: ${c}`);
+  }
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'stray.mjs'), 'export {}\n');
+  assert.equal(orchestratorOwnFoldersBlockBareTestRun(root), true);
+  for (const c of bareCommands) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), false, `blocked: ${c}`);
+  }
+  await fs.rm(path.join(root, 'docs', 'plans', 'stray.mjs'));
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'notes.md'), '# ok\n');
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'meta.json'), '{}\n');
+  assert.equal(orchestratorOwnFoldersBlockBareTestRun(root), false);
+  for (const c of bareCommands) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), true, `notes only: ${c}`);
+  }
+  assert.equal(
+    orchestratorModeCommandAllowed('npx vitest run tests/ok.test.mjs', ctx),
+    true,
+  );
 });
 
 test('deny reasons no longer mention swarm diagnose', () => {
