@@ -1,6 +1,14 @@
 import { API_AGENTS } from '../api-adapters.mjs';
 import { claudeShellArgs } from '../claude-shell.mjs';
-import { claudeQuotaSignal, EXTRA_CLI_AGENTS, extraCliArgs, extraCliEnvironment, summarizeModels } from '../cli-adapters.mjs';
+import { claudeQuotaSignal, EXTRA_CLI_AGENTS, extraCliArgs, extraCliEnvironment, mergeWorkerDispatchEnv, summarizeModels } from '../cli-adapters.mjs';
+import {
+  issueWorkerToken,
+  redactWorkerToken,
+  registerActiveWorkerToken,
+  resolveWorkerDispatchContext,
+  revokeWorkerToken,
+  unregisterActiveWorkerToken,
+} from '../worker-token.mjs';
 import { resolveCliHosts, sshEnv, sshInvocation } from '../cli-host.mjs';
 import { codexArgs, codexUsage, createAdapterLogSink, git, parseCodexReply, resolveCodexEnvelope } from '../codex-adapter.mjs';
 import { cursorLaunchArgs, parseCursorOutput, resolveCursorEnvelope } from '../cursor-adapter.mjs';
@@ -195,7 +203,7 @@ async function stopCursorChild(child, groupPid, { killImpl, killGroupImpl = kill
   return await waitForChildClose(child, { isStreamsClosed });
 }
 
-export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, killGroupImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey }) {
+export async function execute(job, cwd, message, { spawnImpl, signal, cancelled = () => false, killImpl, killGroupImpl, onOutput = () => {}, codex, cursor, claudeShell, resumeSessionId, logDirectory, workerKey, dispatcherRoot, runId: runIdOption } = {}) {
   // Hermes/Qwen may run on another machine over ssh (machine config `cliHosts`). A bad config fails
   // this job only.
   let cliHost = null;
@@ -206,13 +214,51 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
   let sink;
   try { if (logDirectory) sink = await createAdapterLogSink(logDirectory, { privateData: job.privateData === true, workerKey }); }
   catch (error) { return { ...setupFailedResult(error.message), setupFailed: false, code: error.code, stream: error.stream }; }
+  const dispatchCtx = resolveWorkerDispatchContext({ cwd, logDirectory, jobId: job.id })
+    ?? (typeof dispatcherRoot === 'string' && dispatcherRoot && typeof runIdOption === 'string' && runIdOption
+      ? { root: dispatcherRoot, runId: runIdOption, jobId: job.id }
+      : null);
+  const issueLocalWorkerToken = Boolean(dispatchCtx) && !(EXTRA_CLI_AGENTS.includes(job.agent) && cliHost);
+  let workerProof = null;
+  if (issueLocalWorkerToken) {
+    try {
+      const ttlMs = (job.timeoutMs ?? 300000) + 10 * 60 * 1000;
+      workerProof = await issueWorkerToken({
+        root: dispatchCtx.root,
+        runId: dispatchCtx.runId,
+        jobId: dispatchCtx.jobId,
+        workspace: cwd,
+        ttlMs,
+      });
+      registerActiveWorkerToken(dispatchCtx, workerProof);
+    } catch (error) {
+      return { ...setupFailedResult(error.message), setupFailed: false, code: error.code };
+    }
+  }
+  const workerRunId = dispatchCtx?.runId ?? null;
+  const withWorkerEnv = base => mergeWorkerDispatchEnv(base, { proof: workerProof, runId: workerRunId });
+  const scrubText = text => {
+    if (typeof text !== 'string' || !text) return text;
+    return workerProof ? redactWorkerToken(text, workerProof) : text;
+  };
+  const scrubError = value => {
+    if (value == null) return value;
+    const text = typeof value === 'string' ? value : String(value?.message ?? value);
+    return scrubText(text);
+  };
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
     let timeout, poll, termination, logFailure, cursorGroupPid, streamsClosed = false;
+    let workerTokenRevoked = false;
     const stopChildForJob = () => job.agent === 'cursor'
       ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl, isStreamsClosed: () => streamsClosed })
       : stopChild(child, { killImpl });
-    const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null)); };
+    const stop = why => {
+      if (reason || settled) return;
+      reason = why;
+      termination ??= stopChildForJob();
+      termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
+    };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
@@ -222,9 +268,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       try { cleanup = await (termination ?? stopChildForJob()); }
       catch { cleanup = { error: 'Cursor child cleanup failed' }; }
       try { await sink?.close(); } catch (problem) { logFailure ??= problem; }
-      const cleanupError=cleanup.error;
+      stdout = scrubText(stdout);
+      stderr = scrubText(stderr);
+      if (error) error = Object.assign(error, { message: scrubError(error.message) });
+      const cleanupError = scrubError(cleanup.error);
       if (logFailure) {
-        resolve({ ...setupFailedResult(logFailure.message), setupFailed: false, refusedBeforeStart: false, code: 'adapter-log-failed', stream: logFailure.stream, stdout, stderr, exitCode: code, cleanupError, terminationReason: reason ?? null });
+        resolve({ ...setupFailedResult(scrubError(logFailure.message)), setupFailed: false, refusedBeforeStart: false, code: 'adapter-log-failed', stream: logFailure.stream, stdout, stderr, exitCode: code, cleanupError, terminationReason: reason ?? null });
         return;
       }
       if(cleanupError){child?.unref?.();child?.stdin?.destroy?.();child?.stdout?.destroy?.();child?.stderr?.destroy?.();}
@@ -240,7 +289,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
           else { failed = 'Invalid Cursor result envelope'; envelopeInvalid = true; }
         }
         const usage = parsed?.usage && Number.isSafeInteger(parsed.usage.total_tokens ?? parsed.usage.totalTokens) ? { total_tokens: parsed.usage.total_tokens ?? parsed.usage.totalTokens } : null;
-        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, blipText: parsed?.isError ? parsed.response : '', exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), blipText: scrubText(parsed?.isError ? parsed.response : ''), exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage, modelUsage: null, costUsd: null });
         return;
       }
       if(job.agent === 'codex') {
@@ -251,11 +300,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
           if (resolved) { envelopeFallback = resolved.fallback; finalObject = resolved.result; }
           else { failed = 'Invalid Codex result envelope'; envelopeInvalid = true; }
         }
-        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed, envelopeInvalid, envelopeFallback, stdout, stderr, response, exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
+        resolve({ finalObject, cleanupError, terminationReason: reason ?? null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed), envelopeInvalid, envelopeFallback, stdout, stderr, response: scrubText(response), exitCode: code, actualModel: null, modelsSeen: [], modelMismatch: false, usage: codexUsage(stdout + '\n' + stderr), modelUsage: null, costUsd: null });
         return;
       }
       if(EXTRA_CLI_AGENTS.includes(job.agent)){
-        resolve(extraCliResult(job,{stdout,code,reason,error,cleanupError,cliHost}));
+        const cliOutcome = extraCliResult(job,{stdout,code,reason,error,cleanupError,cliHost});
+        resolve({ ...cliOutcome, stdout: scrubText(cliOutcome.stdout), stderr: scrubText(cliOutcome.stderr), response: scrubText(cliOutcome.response), error: scrubError(cliOutcome.error) });
         return;
       }
       let result, parseError; const events=[];
@@ -291,28 +341,38 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         if (estimate.costUsd !== null) { costUsd = estimate.costUsd; costSource = 'estimated-from-transcript'; }
         else if (estimate.usage) costWarning = `cost-rate-unknown: ${job.model}`;
       }
-      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: failed || null, permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: typeof result?.result === 'string' ? result.result : '', exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd, costSource, ...(costWarning ? { costWarning } : {}), apiErrorStatus, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
+      resolve({ cleanupError, terminationReason:reason??null, status: cleanupError ? 'failed' : reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : failed ? 'failed' : 'complete', error: scrubError(failed || null), permissionDenials: Array.isArray(result?.permission_denials) ? result.permission_denials : [], stdout, stderr, response: scrubText(typeof result?.result === 'string' ? result.result : ''), exitCode: code, actualModel: actualModel ?? null, modelsSeen, modelMismatch, usage: result?.usage ?? null, modelUsage: result?.modelUsage ?? null, costUsd, costSource, ...(costWarning ? { costWarning } : {}), apiErrorStatus, ...(reason === 'timeout' ? { lastActivity: transcriptLastActivity(stdout) } : {}) });
+      return;
     };
-    if (signal?.aborted) { reason = 'cancelled'; return finish(null); }
+    const finishAndRevoke = async (code, err) => {
+      if (dispatchCtx && !workerTokenRevoked) {
+        workerTokenRevoked = true;
+        await revokeWorkerToken(dispatchCtx);
+        unregisterActiveWorkerToken(dispatchCtx);
+      }
+      await finish(code, err);
+    };
+    if (signal?.aborted) { reason = 'cancelled'; return finishAndRevoke(null); }
     try {
       child = job.agent === 'codex'
-        ? spawnImpl('sandbox-exec', codexArgs(job, { ...codex, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: codex.env })
+        ? spawnImpl('sandbox-exec', codexArgs(job, { ...codex, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withWorkerEnv(codex.env) })
         // The whole cursor-agent process runs inside the profile; the key travels only in env.
-        : job.agent === 'cursor' ? spawnImpl('sandbox-exec', cursorLaunchArgs(job, { ...cursor, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: cursor.env })
+        : job.agent === 'cursor' ? spawnImpl('sandbox-exec', cursorLaunchArgs(job, { ...cursor, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withWorkerEnv(cursor.env) })
         // Decision #154: the whole claude process, not each command, runs inside the profile.
-        : claudeShell ? spawnImpl('sandbox-exec', ['-f', claudeShell.profile, claudeShell.bin, ...claudeShellArgs(job)], { cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: claudeShell.env })
-        // Over ssh the local environment never travels: ssh gets only what it needs to find its own key.
+        : claudeShell ? spawnImpl('sandbox-exec', ['-f', claudeShell.profile, claudeShell.bin, ...claudeShellArgs(job)], { cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: withWorkerEnv(claudeShell.env) })
+        // Over ssh the worker token never travels: sshEnv is a fixed allowlist (no SWARM_WORKER_TOKEN).
+        // A remote cli host still runs the guard hook on its own machine; it must issue its own token there.
         : cliHost ? (() => { const ssh = sshInvocation(cliHost, extraCliArgs(job)); return spawnImpl(ssh.command, ssh.args, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: sshEnv(process.env) }); })()
-        : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: job.agent==='claude'?process.env:extraCliEnvironment(job.agent) });
+        : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: withWorkerEnv(job.agent==='claude'?process.env:extraCliEnvironment(job.agent)) });
       if (job.agent === 'cursor' && child?.pid) cursorGroupPid = child.pid;
-      child.on('error', error => finish(null, error));
+      child.on('error', error => finishAndRevoke(null, error));
       child.once('exit',()=>{
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
         termination??=stopChildForJob();
-        termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null));
+        termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
       });
-      child.on('close', code => { streamsClosed = true; finish(code); });
+      child.on('close', code => { streamsClosed = true; finishAndRevoke(code); });
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {
         try { sink?.write(key, data); } catch (error) { logFailure ??= error; stop('adapter-log-failed'); return; }
         const bytes = Buffer.byteLength(data);
@@ -326,7 +386,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       timeout = setTimeout(() => stop('timeout'), job.timeoutMs ?? 300000);
       poll = setInterval(async () => { try { if (await cancelled()) stop('cancelled'); } catch (error) { stop(error.message); } }, 100);
       signal?.addEventListener('abort', onAbort, { once: true });
-    } catch (error) { finish(null, error); }
+    } catch (error) { finishAndRevoke(null, error); }
   });
 }
 

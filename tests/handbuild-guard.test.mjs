@@ -19,6 +19,7 @@ import { inboxDeps } from '../tools/inbox-commands.mjs';
 import { readJournal } from '../tools/journal.mjs';
 import { ensureHandbuildGuard, removeHandbuildGuard } from '../tools/install.mjs';
 import { buildEvent, handBuiltOf, readEvents, sessionsOf, EVENTS_FILE } from '../tools/orchestrator-events.mjs';
+import { issueWorkerToken, WORKER_TOKEN_ENV, SWARM_WORKER_RUN_ID_ENV } from '../tools/worker-token.mjs';
 
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
 const HOOK = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta.url));
@@ -388,20 +389,34 @@ test('second review: requests cannot be broad, protected or stale; the state is 
   assert.deepEqual(fsSync.readdirSync(path.join(root, '.swarm/handbuild')).filter(n => n.includes('.tmp-') || n === 'state.lock'), [], 'no temp or lock file left');
 });
 
-test('second review: the project is the one Claude Code names, whatever the folder the session is in; a swarm workspace may be written, the checkout from inside it may not; too-large input is refused', async t => {
+test('second review: the project is the one Claude Code names, whatever the folder the session is in; a swarm workspace may be written, the checkout from inside it may not; too-large input is refused', { timeout: 60000 }, async t => {
   const root = await project(t);
   const elsewhere = await tmp(t);
-  const run = (input, env = {}, raw) => spawnSync(process.execPath, [GUARD], { input: raw ?? JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ...env } });
+  const run = (input, env = {}, raw) => spawnSync(process.execPath, [GUARD], {
+    input: raw ?? JSON.stringify(input),
+    encoding: 'utf8',
+    timeout: 60000,
+    env: { ...process.env, ...env },
+  });
   // the session has moved out of the project; an absolute path into the checkout is still guarded
   const out = run({ session_id: 's', cwd: elsewhere, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/new.ts') } }, { CLAUDE_PROJECT_DIR: root });
   assert.equal(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(run({ session_id: 's', cwd: elsewhere, tool_name: 'Bash', tool_input: { command: `echo x > ${path.join(root, 'src/q.ts')}` } }, { CLAUDE_PROJECT_DIR: root }).stdout.includes('deny'), true);
   // inside a swarm workspace: the workspace is the swarm's, the checkout is not
+  const runId = 'run1';
+  const jobId = 'job-1';
   const workspace = path.join(root, '.swarm/workspaces/run1/job-1');
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
   await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: 'src/a.ts' } }, { CLAUDE_PROJECT_DIR: root }).stdout, '', 'relative write in the workspace');
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, { CLAUDE_PROJECT_DIR: root }).stdout.includes('deny'), true, 'the checkout from inside a workspace');
-  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }).stdout.includes('deny'), true, 'also found from the workspace path alone');
+  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
+  const workerEnv = {
+    CLAUDE_PROJECT_DIR: root,
+    [WORKER_TOKEN_ENV]: proof,
+    [SWARM_WORKER_RUN_ID_ENV]: runId,
+  };
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: 'src/a.ts' } }, workerEnv).stdout, '', 'relative write in the workspace');
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, workerEnv).stdout.includes('deny'), true, 'the checkout from inside a workspace');
+  assert.equal(run({ session_id: 'w', cwd: workspace, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/real.ts') } }, { [WORKER_TOKEN_ENV]: proof, [SWARM_WORKER_RUN_ID_ENV]: runId }).stdout.includes('deny'), true, 'also found from the workspace path alone');
   // input too large to read is refused, not waved through
   const huge = JSON.stringify({ session_id: 's', cwd: root, tool_name: 'Write', tool_input: { file_path: path.join(root, 'src/big.ts'), content: 'x'.repeat(2100000) } });
   const big = run(null, { CLAUDE_PROJECT_DIR: root }, huge);

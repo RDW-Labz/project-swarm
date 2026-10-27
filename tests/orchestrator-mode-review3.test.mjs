@@ -18,6 +18,7 @@ import {
   ORCHESTRATOR_TEST_MARKER_REL,
   ORCHESTRATOR_TEST_MARKER_BODY,
 } from '../tools/shell-writes.mjs';
+import { issueWorkerToken, WORKER_TOKEN_ENV } from '../tools/worker-token.mjs';
 import {
   guardDecision,
   guardTimeoutMs,
@@ -218,21 +219,28 @@ test('L3: path-qualified swarm binary is refused', async () => {
   assert.equal(orchestratorModeCommandAllowed('/tmp/evil-swarm status'), false);
 });
 
-test('worker exemption requires launcher run id env', async t => {
+test('worker exemption requires valid worker token not run id env alone', async t => {
   const root = await swarmRoot(t);
   const runId = 'run-env-only';
-  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
-  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job');
+  const jobId = 'job';
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, jobId);
   await fs.mkdir(workspace, { recursive: true });
   assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
-  const prev = process.env[SWARM_WORKER_RUN_ID_ENV];
+  const prev = {
+    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
+  };
   process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
   try {
+    assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+    const proof = await issueWorkerToken({ root, runId, jobId, workspace });
+    process.env[WORKER_TOKEN_ENV] = proof;
     assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
   } finally {
-    if (prev === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev;
+    if (prev[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev[SWARM_WORKER_RUN_ID_ENV];
+    if (prev[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prev[WORKER_TOKEN_ENV];
   }
 });
 
