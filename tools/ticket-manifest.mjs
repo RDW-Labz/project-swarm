@@ -175,7 +175,7 @@ export function dropPendingTicketContext(context,ticketId,allTickets,waveIds,war
 }
 
 function hasOtherTestOwner(t,file,all){
-  const open=all.filter(o=>o.id!==t.id&&o.status!=='cancelled');
+  const open=all.filter(o=>o.id!==t.id&&o.status!=='cancelled'&&o.status!=='done');
   if(open.some(o=>(o.files||[]).includes(file)||(o.deletes||[]).includes(file)))return true;
   if(open.some(o=>o.type==='test'&&(o.tests||[]).includes(file)))return true;
   // If two build tickets claim the same test, the earlier id is the sole writer.
