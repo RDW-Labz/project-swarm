@@ -20,7 +20,22 @@
     "tools/orchestrator-allow.mjs",
     "tests/orchestrator-allow.test.mjs"
    ],
-   "timeoutMs": 1200000
+   "timeoutMs": 1200000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }

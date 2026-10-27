@@ -889,10 +889,10 @@ test('orchestrator swarm cwd: cd back to the project root recovers the session',
   for (const c of ['cd ../..', `cd ${root}`, 'cd "$CLAUDE_PROJECT_DIR"', 'cd ../.. && swarm status', 'cd ../..; swarm status']) {
     assert.equal(orchestratorModeCommandAllowed(c, ctxPlans), true, c);
   }
-  assert.equal(orchestratorModeCommandAllowed('cd -', { ...ctxPlans, oldCwd: root }), true, 'cd - back to root');
+  assert.equal(orchestratorModeCommandAllowed('cd -', { ...ctxPlans, oldCwd: root }), false, 'cd - is always denied');
   assert.equal(orchestratorModeCommandAllowed('cd -', { ...ctxPlans, oldCwd: plans }), false, 'cd - to a subfolder');
   assert.equal(orchestratorModeCommandAllowed('cd -', ctxPlans), false, 'cd - with unknown previous folder');
-  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && cd - && swarm status', ctxRoot), true);
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && cd - && swarm status', ctxRoot), false);
   // standalone cds that do not land on the root stay denied
   for (const c of ['cd docs/plans', 'cd ..', 'cd', 'cd /', 'cd ~', 'cd ../.. | cat', 'cd docs/plans; swarm status']) {
     assert.equal(orchestratorModeCommandAllowed(c, ctxPlans), false, c);

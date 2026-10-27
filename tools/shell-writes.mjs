@@ -1720,8 +1720,7 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
       if (k < plain.length && path.basename(plain[k]) === 'cd') {
         if (subshellDepth > 0) continue;
         const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
-        if (!omCdStepAllowed(words, target, local)) continue;
-        local.oldCwd = cwd;
+        if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) continue;
         cwd = omResolveCd(target, { ...local, cwd });
         local.cwd = cwd;
         cwdStack[cwdStack.length - 1] = cwd;
@@ -2261,13 +2260,15 @@ const omRealOrNull = p => {
 
 const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']);
 
-/** True when a `cd` target lands exactly on the project root (real path), by path, "$CLAUDE_PROJECT_DIR", or `cd -` when the previous folder (ctx.oldCwd) was the root. */
+// `cd -` is always denied: the hook session cannot know the previous folder.
+const omCdHasDash = cdArgs => cdArgs.some(a => a === '-');
+
+/** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
 const omCdRootTarget = (target, ctx) => {
   if (!ctx?.root || target === undefined || target === '') return false;
   const rootReal = omRealOrNull(ctx.root);
   if (!rootReal) return false;
   const t = String(target);
-  if (t === '-') return !!ctx.oldCwd && omRealOrNull(ctx.oldCwd) === rootReal;
   if (OM_CD_ROOT_ENV_FORMS.has(t)) {
     const envDir = process.env.CLAUDE_PROJECT_DIR;
     return !!envDir && omRealOrNull(envDir) === rootReal;
@@ -2290,7 +2291,6 @@ const omCdStepAllowed = (words, target, ctx) => {
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
-  if (p === '-' && ctx.oldCwd) return path.resolve(ctx.oldCwd);
   if (OM_CD_ROOT_ENV_FORMS.has(p)) return path.resolve(ctx.root);
   if (p.startsWith('~/')) p = path.join(home, p.slice(2));
   return path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
@@ -2357,6 +2357,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'node' && !omTrustedCommandWordOk(rawCmd, 'node')) return false;
   if (cmd === 'swarm' && !omSwarmCommandWordOk(rawCmd)) return false;
   if (cmd === 'cd') {
+    if (omCdHasDash(args)) return false;
     const target = args.filter(a => a !== '' && !a.startsWith('-'))[0];
     return target !== undefined && omCdTargetOk(target, ctx);
   }
@@ -2448,8 +2449,7 @@ const omValidateTokenized = (tokenized, ctx) => {
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
       if (subshellDepth > 0) return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
-      if (!omCdStepAllowed(words, target, local)) return false;
-      local.oldCwd = cwd;
+      if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) return false;
       cwd = omResolveCd(target, { ...local, cwd });
       local.cwd = cwd;
       cwdStack[cwdStack.length - 1] = cwd;
