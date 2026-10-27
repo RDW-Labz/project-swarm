@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.17
+
+The orchestrator guard closes the last bypasses found in review.
+- **Runners:** npm, pnpm and yarn flags that load code or change the folder (node-options, userconfig, prefix, workspace, filter, cwd, script-shell, require, import, loader, custom reporters) are denied, and a runner operand that the orchestrator may write (a plan, handoff or ledger file) is refused whatever its extension.
+- **Tickets:** swarm ticket with a check option, swarm ship, and swarm tickets with a tests option are denied, and setting a ticket to approved stays denied.
+- **Folders:** a cd back to the project root from a plan or docs folder works, cd with a dash and a cd that stops short of the root are denied, and writes chained after it are still checked.
+
 ## 1.167.16
 
 The orchestrator guard stops blocking the orchestrator's own commands.

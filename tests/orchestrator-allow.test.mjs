@@ -3,6 +3,7 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -25,6 +26,7 @@ import {
   orchestratorModeCommandAllowed,
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_SWARM_CWD_DENY_REASON,
+  orchestratorSwarmCwdDenyReason,
   orchestratorSwarmSubfolderBlocked,
 } from '../tools/shell-writes.mjs';
 import { GUARD_ERROR_DENY_REASON, guardDecision } from '../tools/handbuild.mjs';
@@ -686,7 +688,11 @@ test('deny reasons explain tickets and allow-list writes', () => {
   assert.match(ORCHESTRATOR_MODE_DENY_REASON, /docs\/plans/);
   assert.match(ORCHESTRATOR_MODE_DENY_REASON, /Swarm CLI/);
   assert.match(GUARD_ERROR_DENY_REASON, /swarm tickets/);
-  assert.match(ORCHESTRATOR_SWARM_CWD_DENY_REASON, /--root/);
+  assert.match(ORCHESTRATOR_SWARM_CWD_DENY_REASON, /run cd followed by the project root path first/);
+  assert.equal(
+    orchestratorSwarmCwdDenyReason(os.tmpdir()),
+    `Orchestrator mode: swarm commands are only allowed from the project root: run cd ${fsSync.realpathSync.native(os.tmpdir())} first.`,
+  );
 });
 
 test('orchestratorWriteMarkerDeniedRel blocks fake project roots', () => {
@@ -720,10 +726,11 @@ test('orchestrator swarm cwd: subfolder session and cd chains', async t => {
     assert.equal(allowRoot.allow, true, `root swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
     const denyChain = await guardBash('cd docs/plans && swarm run evil.json', root, { handbuildOff });
     assert.equal(denyChain.allow, false, `chained swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
-    assert.equal(denyChain.reason, ORCHESTRATOR_SWARM_CWD_DENY_REASON);
+    assert.equal(denyChain.reason, orchestratorSwarmCwdDenyReason(root));
     const denyCwd = await guardBash('swarm status', root, { handbuildOff, cwd: plans });
     assert.equal(denyCwd.allow, false, `plans cwd swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
-    assert.equal(denyCwd.reason, ORCHESTRATOR_SWARM_CWD_DENY_REASON);
+    assert.equal(denyCwd.reason, orchestratorSwarmCwdDenyReason(root));
+    assert.ok(denyCwd.reason.includes(`run cd ${root} first`), denyCwd.reason);
   }
 });
 
@@ -747,6 +754,163 @@ test('fake project root exploit steps denied via full guard', async t => {
     assert.equal(gitChain.allow, true, `${handbuildOff ? 'off' : 'on'} git status from plans`);
     const runChain = await guardBash('cd docs/plans && swarm run run-manifest.json', root, { handbuildOff });
     assert.equal(runChain.allow, false, `${handbuildOff ? 'off' : 'on'} swarm run from plans`);
+  }
+});
+
+test('npm-family test runs: flags that run orchestrator-written code are denied', { timeout: 60_000 }, async t => {
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'x.md'), 'process.exit(0)\n');
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'rc.md'), 'x=1\n');
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'data.json'), '{}\n');
+  const deny = [
+    'npm --node-options=--require=./docs/plans/x.md test',
+    'npm --userconfig=docs/plans/rc.md test',
+    'npm --globalconfig=docs/plans/rc.md run test',
+    'npm --prefix=docs/plans test',
+    'npm --workspace=x test',
+    'npm --workspaces test',
+    'npm -w x test',
+    'npm -C docs/plans test',
+    'npm -g test',
+    'npm --script-shell=sh test',
+    'npm --cache=docs/plans test',
+    'npm --registry=http://example.invalid test',
+    'npm --config=x test',
+    'npm --loglevel=docs/plans/x.md test',
+    'npm test --prefix=docs/plans',
+    'npm run test --workspace=x',
+    'npm run test:e2e --node-options=--require=./docs/plans/x.md',
+    'npm -- test',
+    'pnpm --filter x test',
+    'pnpm -C docs/plans test',
+    'pnpm --dir docs/plans test',
+    'pnpm -C docs/plans exec vitest run',
+    'yarn --cwd docs/plans test',
+    'npm test -- docs/plans/x.md',
+    'npm test docs/plans/x.md',
+    'npm test docs/plans/data.json',
+    'npm run test:e2e -- docs/plans/rc.md',
+    'npm test -- --require ./docs/plans/x.md',
+    'npm test -- --import ./docs/plans/x.md',
+    'npm test -- --config docs/plans/data.json',
+    'node --test docs/plans/x.md',
+    'npm run lint',
+    'npm run-script lint',
+  ];
+  const allow = [
+    'npm test',
+    'npm run test',
+    'npm run-script test',
+    'npm run test:e2e',
+    'npm run test:unit',
+    'npm test --silent',
+    'npm run --if-present test',
+    'npm test -- --grep foo',
+    'npm test -- tests/ok.test.mjs',
+    'pnpm test',
+    'pnpm run test',
+    'yarn test',
+    'yarn run test',
+  ];
+  const scripts = { test: 'node --test', 'test:e2e': 'playwright test', 'test:unit': 'vitest run' };
+  const ctx = { root, cwd: root };
+  for (const c of deny) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), false, c);
+    assert.equal(localTestRunAllowed(c.split(/\s+/), { packageScripts: scripts }), false, `words: ${c}`);
+    for (const handbuildOff of [false, true]) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny: ${c}`);
+    }
+  }
+  for (const c of allow) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
+    for (const handbuildOff of [false, true]) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} allow: ${c}`);
+    }
+  }
+});
+
+test('swarm ticket --check/--test and tickets --set approved are denied', { timeout: 60_000 }, async t => {
+  await installLocalSwarmShim();
+  const root = await projectWithSwarm(t);
+  assert.equal(swarmSubcommandAlwaysAllowed('ticket', ['x']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('ticket', ['x', '--check', '[{"argv":["sh","-c","id"]}]']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('ticket', ['x', '--check=[{"argv":["id"]}]']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('ticket', ['x', '--check']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('ticket', ['x', '--test', 'npm test']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('ship', ['x', '--check', '[{"argv":["id"]}]']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('go', ['--check', 'x']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('doctor', ['--check=sh -c id']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'approved']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set=approved']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'cancelled']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--acceptance', 'it works']), true);
+  const deny = [
+    'swarm ticket "x" --check \'[{"argv":["sh","-c","id"]}]\'',
+    'swarm ticket "x" --check=foo',
+    'swarm ticket "x" --test "npm test"',
+    'swarm ship "x" --check \'[{"argv":["id"]}]\'',
+    'swarm tickets T-0001 --set approved',
+  ];
+  const allow = [
+    'swarm ticket "x"',
+    'swarm tickets T-0001 --set cancelled',
+    'swarm tickets T-0001 --acceptance "it works"',
+  ];
+  for (const handbuildOff of [false, true]) {
+    for (const c of deny) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny: ${c}`);
+    }
+    for (const c of allow) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} allow: ${c}`);
+    }
+  }
+});
+
+test('orchestrator swarm cwd: cd back to the project root recovers the session', { timeout: 60_000 }, async t => {
+  await installLocalSwarmShim();
+  const root = await projectWithSwarm(t);
+  const plans = path.join(root, 'docs', 'plans');
+  await fs.mkdir(plans, { recursive: true });
+  const prevEnv = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  t.after(() => {
+    if (prevEnv === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prevEnv;
+  });
+  const ctxRoot = { root, cwd: root };
+  const ctxPlans = { root, cwd: plans };
+  // the session ends up in docs/plans after an allowed chain
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && git status', ctxRoot), true);
+  for (const c of ['cd ../..', `cd ${root}`, 'cd "$CLAUDE_PROJECT_DIR"', 'cd ../.. && swarm status', 'cd ../..; swarm status']) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctxPlans), true, c);
+  }
+  assert.equal(orchestratorModeCommandAllowed('cd -', { ...ctxPlans, oldCwd: root }), false, 'cd - is always denied');
+  assert.equal(orchestratorModeCommandAllowed('cd -', { ...ctxPlans, oldCwd: plans }), false, 'cd - to a subfolder');
+  assert.equal(orchestratorModeCommandAllowed('cd -', ctxPlans), false, 'cd - with unknown previous folder');
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && cd - && swarm status', ctxRoot), false);
+  // standalone cds that do not land on the root stay denied
+  for (const c of ['cd docs/plans', 'cd ..', 'cd', 'cd /', 'cd ~', 'cd ../.. | cat', 'cd docs/plans; swarm status']) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctxPlans), false, c);
+  }
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans', ctxRoot), false);
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans; swarm status', ctxRoot), false);
+  assert.equal(orchestratorModeCommandAllowed('cd ../..; cd docs/plans; swarm status', ctxPlans), false);
+  for (const handbuildOff of [false, true]) {
+    for (const c of ['cd ../..', `cd ${root}`, 'cd "$CLAUDE_PROJECT_DIR"']) {
+      const d = await guardBash(c, root, { handbuildOff, cwd: plans });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} recover: ${c}`);
+    }
+    const stuck = await guardBash('swarm status', root, { handbuildOff, cwd: plans });
+    assert.equal(stuck.allow, false);
+    assert.equal(stuck.reason, orchestratorSwarmCwdDenyReason(root));
+    assert.ok(stuck.reason.includes(`run cd ${root} first`), stuck.reason);
+    const back = await guardBash('swarm status', root, { handbuildOff, cwd: root });
+    assert.equal(back.allow, true, `${handbuildOff ? 'off' : 'on'} swarm from root after recovery`);
   }
 });
 

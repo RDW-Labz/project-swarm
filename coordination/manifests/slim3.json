@@ -1,0 +1,41 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "slim3",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "In tests/orchestrator-allow.test.mjs the test 'orchestrator swarm cwd: cd back to the project root recovers the session' fails at the assertion that a cd with a dash (go back to the previous folder) is allowed when an oldCwd is passed: the hook session cannot know the previous folder, the guard has no such input, so that nicety cannot be implemented safely. Decision: a cd with a dash is ALWAYS denied. Change the test: replace the four assertions about cd with a dash (the ones with oldCwd root, oldCwd plans, unknown previous folder, and the chain 'cd docs/plans && cd - && swarm status') so that every one of them expects the command to be denied (false); keep every other assertion of that test unchanged. Then check tools/orchestrator-allow.mjs and tools/shell-writes.mjs: make sure a cd with a dash is denied there (remove any half-implemented oldCwd handling) and that the recovery forms still work: cd to the project root real path, cd with the project dir environment variable in double quotes, cd with relative steps whose target resolves to the root, standalone or at the start of a chain. The deny message for a swarm command from a non-root folder must say: run cd with the project root path first, printing the real root path. Make tests/orchestrator-allow.test.mjs, the orchestrator-mode test files, the shell-writes test files, tests/auto-approve.test.mjs and the handbuild test files all pass. IMPORTANT: secret scanner: no credential-looking literals in tests.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 1200000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}
