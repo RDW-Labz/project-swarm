@@ -159,81 +159,11 @@ const projectRelOfAbs = (abs, projectRoot) => {
   return rel.split(path.sep).join('/').toLowerCase();
 };
 
-/** Project-relative posix path to the swarm worker tree when `cwd` is inside `.swarm/workspaces/` or `.swarm/worktrees/`. */
-export function swarmWorkerTreeRel(root, cwd) {
-  if (!root || !cwd) return null;
-  try {
-    const rootReal = fs.realpathSync.native(root);
-    const cwdReal = fs.realpathSync.native(cwd);
-    const rel = path.relative(rootReal, cwdReal);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    const norm = rel.split(path.sep).join('/').toLowerCase();
-    const m = norm.match(/^(\.swarm\/(?:workspaces|worktrees)\/[^/]+(?:\/[^/]+)*)/);
-    return m?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * True when orchestrator-mode write allow-list should decide this project-relative path.
- * Skips verified worker sessions (scoped separately) and paths outside the project (no rel).
- */
-export function orchestratorWriteAllowListAppliesRel(normRel, root, cwd, isVerifiedWorker = false) {
-  if (isVerifiedWorker) return false;
+/** True when orchestrator-mode write allow-list should decide this project-relative path. */
+export function orchestratorWriteAllowListAppliesRel(normRel, root, cwd) {
   const norm = normPosixRel(normRel);
   if (!norm) return false;
   return true;
-}
-
-const WORKER_ALWAYS_DENIED_PREFIXES = [
-  '.swarm/handbuild/',
-  '.swarm/orchestrator-mode/',
-  '.swarm/runs/',
-  '.swarm/backups/',
-];
-
-/** Paths every session (including verified workers) must not write. */
-export function workerSessionProtectedRel(normRel) {
-  const norm = normPosixRel(normRel);
-  if (!norm) return false;
-  if (norm === '.swarm/handbuild' || norm.startsWith('.swarm/handbuild/')) return true;
-  if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
-  if (norm === '.swarm/orchestrator-mode/off') return true;
-  if (norm === '.git' || norm.startsWith('.git/')) return true;
-  if (WORKER_ALWAYS_DENIED_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p))) return true;
-  return false;
-}
-
-const absInsideWorkspace = (absPath, root, workspaceReal) => {
-  let targetReal;
-  try {
-    targetReal = fs.realpathSync.native(absPath);
-  } catch {
-    try {
-      const parent = fs.realpathSync.native(path.dirname(absPath));
-      targetReal = path.join(parent, path.basename(absPath));
-    } catch {
-      return false;
-    }
-  }
-  let wsReal;
-  try {
-    wsReal = fs.realpathSync.native(workspaceReal);
-  } catch {
-    return false;
-  }
-  if (targetReal === wsReal) return true;
-  return targetReal.startsWith(`${wsReal}${path.sep}`);
-};
-
-/** True when a verified worker must not write this project-relative path. */
-export function workerWriteTargetDenied(normRel, root, workspaceReal) {
-  const norm = normPosixRel(normRel);
-  if (!norm) return true;
-  if (workerSessionProtectedRel(norm)) return true;
-  const candidate = path.isAbsolute(normRel) ? normRel : path.join(root, normRel);
-  return !absInsideWorkspace(candidate, root, workspaceReal);
 }
 
 /** True when an absolute or project-relative path may be written (resolves symlinks; default deny). */
@@ -619,7 +549,9 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
     return SWARM_HANDBUILD_FILE_OPS.has(verb);
   }
   if (s === 'change') {
-    return !swarmArgsHaveYes(rest);
+    if (!swarmArgsHaveYes(rest)) return true;
+    const pos = rest.filter(a => a !== '' && !String(a).startsWith('-'));
+    return pos.length >= 2;
   }
   if (s === 'decide') return false;
   if (s === 'scope') return omSwarmScopeReadOnly(rest);

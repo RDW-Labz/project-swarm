@@ -10,12 +10,9 @@ import { fileURLToPath } from 'node:url';
 import {
   orchestratorModeCommandAllowed,
   orchestratorModeEnabled,
-  isVerifiedSwarmWorkerCwd,
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_MODE_OFF_FILE,
-  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
-import { issueWorkerToken, WORKER_TOKEN_ENV } from '../tools/worker-token.mjs';
 import {
   guardDecision,
   ORCHESTRATOR_MODE_RULE_ID,
@@ -49,7 +46,6 @@ test('orchestrator mode stays on when cwd is an unverified workspaces path (cd b
   const prev = process.env.CLAUDE_PROJECT_DIR;
   process.env.CLAUDE_PROJECT_DIR = root;
   try {
-    assert.equal(isVerifiedSwarmWorkerCwd(root, fakeWs), false);
     assert.equal(orchestratorModeEnabled(root, root), true);
     const d = guardDecision({
       tool: 'Bash',
@@ -66,31 +62,31 @@ test('orchestrator mode stays on when cwd is an unverified workspaces path (cd b
   }
 });
 
-test('verified worker workspace cwd exempts orchestrator mode', async t => {
+test('workspace cwd with SWARM_WORKER_RUN_ID still has orchestrator mode on', async t => {
   const root = await swarmProject(t);
   const runId = 'run-verified';
-  const jobId = 'job-1';
-  const workspace = path.join(root, '.swarm', 'workspaces', runId, jobId);
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
   await fs.mkdir(workspace, { recursive: true });
-  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
   const prev = process.env.CLAUDE_PROJECT_DIR;
-  const prevEnv = {
-    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
-    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
-  };
+  const prevRun = process.env.SWARM_WORKER_RUN_ID;
   process.env.CLAUDE_PROJECT_DIR = root;
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
-  process.env[WORKER_TOKEN_ENV] = proof;
+  process.env.SWARM_WORKER_RUN_ID = runId;
   try {
-    assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
-    assert.equal(orchestratorModeEnabled(root, workspace), false);
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const d = guardDecision({
+      tool: 'Bash',
+      toolInput: { command: 'npm test' },
+      root,
+      cwd: workspace,
+      now: () => T0,
+    });
+    assert.equal(d.allow, false);
+    assert.ok(omReason(d));
   } finally {
     if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev;
-    if (prevEnv[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevEnv[SWARM_WORKER_RUN_ID_ENV];
-    if (prevEnv[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
-    else process.env[WORKER_TOKEN_ENV] = prevEnv[WORKER_TOKEN_ENV];
+    if (prevRun === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prevRun;
   }
 });
 

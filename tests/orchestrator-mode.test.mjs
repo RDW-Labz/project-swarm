@@ -14,9 +14,7 @@ import {
   ORCHESTRATOR_MODE_OFF_FILE,
   ORCHESTRATOR_TEST_MARKER_REL,
   ORCHESTRATOR_TEST_MARKER_BODY,
-  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
-import { issueWorkerToken, WORKER_TOKEN_ENV } from '../tools/worker-token.mjs';
 import {
   guardDecision,
   ORCHESTRATOR_MODE_RULE_ID,
@@ -177,27 +175,26 @@ test('guardDecision allows git status under orchestrator mode', async t => {
   assert.equal(bash('git status -sb').allow, true);
 });
 
-test('worker cwd is not subject to orchestrator mode', async t => {
+test('worker workspace cwd is subject to orchestrator mode', async t => {
   const { root, bash } = await swarmProject(t);
-  const runId = 'run1';
-  const jobId = 'job-1';
-  const workspace = path.join(root, '.swarm/workspaces/run1', jobId);
+  const workspace = path.join(root, '.swarm/workspaces/run1', 'job-1');
   await fs.mkdir(workspace, { recursive: true });
-  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
   const prev = {
-    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
-    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
+    CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
+    SWARM_WORKER_RUN_ID: process.env.SWARM_WORKER_RUN_ID,
   };
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
-  process.env[WORKER_TOKEN_ENV] = proof;
+  process.env.CLAUDE_PROJECT_DIR = root;
+  process.env.SWARM_WORKER_RUN_ID = 'run1';
   try {
-    assert.equal(bash('npm test', workspace).allow, true);
-    assert.equal(orchestratorModeEnabled(root, workspace), false);
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const d = bash('npm test', workspace);
+    assert.equal(d.allow, false);
+    assert.ok(omReason(d));
   } finally {
-    if (prev[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev[SWARM_WORKER_RUN_ID_ENV];
-    if (prev[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
-    else process.env[WORKER_TOKEN_ENV] = prev[WORKER_TOKEN_ENV];
+    if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
+    if (prev.SWARM_WORKER_RUN_ID === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prev.SWARM_WORKER_RUN_ID;
   }
 });
 

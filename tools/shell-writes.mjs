@@ -18,17 +18,13 @@ import {
   orchestratorOwnRel,
   orchestratorOwnForbiddenWriteRel,
   orchestratorBareTestScanRelPrefixes,
-  workerSessionProtectedRel,
-  workerWriteTargetDenied,
   orchestratorSwarmSessionCwdOk,
 } from './orchestrator-allow.mjs';
-import { WORKER_TOKEN_ENV, verifyWorkerTokenSync } from './worker-token.mjs';
 
 export { localTestRunAllowed };
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_TEST_MARKER_REL = '.swarm/orchestrator-mode/test-harness-signed';
 export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
-export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
 export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: writes are only allowed under .swarm/ (except workspaces, worktrees, runs, backups, orchestrator-mode), docs/plans/, coordination/manifests/ (.json), coordination/HANDOFF*.md, docs/state/ (.md), and TASK.md at the project root — text formats md/json/jsonl/ndjson/yaml/yml only (never package.json). Swarm CLI commands are allowed. For anything else, make a ticket: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help).';
 export const ORCHESTRATOR_SWARM_CWD_DENY_REASON = 'Orchestrator mode: swarm commands are only allowed with the session working directory at the project root; cd back to the project root or pass --root with the project root path.';
@@ -72,35 +68,10 @@ export function orchestratorResolvedRoot(cwd = process.cwd()) {
   return projectRootOf(cwd);
 }
 
-/** Verified worker session from `SWARM_WORKER_TOKEN` (hash match, not revoked/expired, cwd inside recorded workspace). */
-export function swarmWorkerSession(root, cwd, now = Date.now()) {
-  if (!root || !cwd) return null;
-  const proof = process.env[WORKER_TOKEN_ENV];
-  if (!proof || typeof proof !== 'string') return null;
-  const verified = verifyWorkerTokenSync({ root, token: proof, cwd, now });
-  return verified.ok ? verified : null;
-}
-
-/** True when the session cwd is a verified swarm worker (valid worker token for this cwd). */
-export function isVerifiedSwarmWorkerCwd(root, cwd, now = Date.now()) {
-  return swarmWorkerSession(root, cwd, now) !== null;
-}
-
-const orchestratorWorkerSessionExempt = (root, cwd) => isVerifiedSwarmWorkerCwd(root, cwd);
-
-/** True when a verified worker must not write this project-relative path (outside its workspace or always forbidden). */
-export function workerScopedWriteRelDenied(rel, root, cwd, now = Date.now()) {
-  const session = swarmWorkerSession(root, cwd ?? root, now);
-  if (!session) return false;
-  if (workerSessionProtectedRel(rel)) return true;
-  return workerWriteTargetDenied(rel, root, session.workspace);
-}
-
-/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless `.swarm/orchestrator-mode/off` exists. Verified workers are exempt from orchestrator mode only with a valid worker token. */
+/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless `.swarm/orchestrator-mode/off` exists. */
 export function orchestratorModeEnabled(root, cwd = root) {
   const projectRoot = root || orchestratorResolvedRoot(cwd);
   if (!projectRoot || !swarmProjectMarkers(projectRoot)) return false;
-  if (orchestratorWorkerSessionExempt(projectRoot, cwd)) return false;
   try {
     const rootReal = fs.realpathSync.native(projectRoot);
     return !fs.existsSync(path.join(rootReal, ORCHESTRATOR_MODE_OFF_FILE));
@@ -2160,11 +2131,6 @@ const omOrchestratorTestRunAllowed = (segment, ctx) => {
   return true;
 };
 
-const omPathInsideWorkerWorkspace = (real, workspaceReal) => {
-  const ws = fs.realpathSync.native(workspaceReal);
-  return real === ws || real.startsWith(`${ws}${path.sep}`);
-};
-
 const omReadOperandOk = (raw, ctx) => {
   if (!ctx.root || raw === '-' || raw === undefined) return true;
   if (omOperandUnsafe(raw)) return false;
@@ -2175,23 +2141,19 @@ const omReadOperandOk = (raw, ctx) => {
     p = path.join(home, p.slice(2));
   }
   const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
-  const session = swarmWorkerSession(ctx.root, ctx.cwd ?? ctx.root);
   let real;
   try { real = fs.realpathSync.native(abs); } catch {
     try {
       real = fs.realpathSync.native(path.dirname(abs));
     } catch {
-      if (session) return false;
       return insideProject(ctx.root, abs) !== null;
     }
     if (omSensitiveAbs(real, home)) return false;
     if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
-    if (session) return omPathInsideWorkerWorkspace(real, session.workspace);
     return insideProject(ctx.root, real) !== null;
   }
   if (omSensitiveAbs(real, home)) return false;
   if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
-  if (session) return omPathInsideWorkerWorkspace(real, session.workspace);
   return insideProject(ctx.root, real) !== null;
 };
 
@@ -2278,11 +2240,6 @@ const omCdTargetOk = (target, ctx) => {
   const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
   let real;
   try { real = fs.realpathSync.native(abs); } catch { return false; }
-  const session = swarmWorkerSession(ctx.root, ctx.cwd ?? ctx.root);
-  if (session) {
-    const wsReal = fs.realpathSync.native(session.workspace);
-    return real === wsReal || real.startsWith(`${wsReal}${path.sep}`);
-  }
   const rel = insideProject(ctx.root, real);
   if (rel === null) return false;
   const norm = rel.replace(/\\/g, '/').toLowerCase();

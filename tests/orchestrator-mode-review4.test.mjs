@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url';
 import {
   orchestratorModeCommandAllowed,
   orchestratorModeEnabled,
-  SWARM_WORKER_RUN_ID_ENV,
   initOrchestratorModeTrustedBins,
 } from '../tools/shell-writes.mjs';
 import {
@@ -170,18 +169,30 @@ test('R4-10 swarm --root must match project; run flags limited', async t => {
   assert.equal(orchestratorModeCommandAllowed('swarm decide handbuild-hb-1 approve', { root, cwd: root }), false);
 });
 
-test('R4-11 worker exemption requires verified cwd not env alone', async t => {
+test('R4-11 SWARM_WORKER_RUN_ID does not disable orchestrator mode in a workspace', async t => {
   const root = await swarmRoot(t);
   const runId = 'run-r4';
   await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
-  const prev = process.env[SWARM_WORKER_RUN_ID_ENV];
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  await fs.mkdir(workspace, { recursive: true });
+  const prev = process.env.SWARM_WORKER_RUN_ID;
+  process.env.SWARM_WORKER_RUN_ID = runId;
   try {
     assert.equal(orchestratorModeEnabled(root, root), true);
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const d = guardDecision({
+      tool: 'Bash',
+      toolInput: { command: 'npm test' },
+      root,
+      cwd: workspace,
+      now: () => T0,
+      enforceOrchestratorMode: true,
+    });
+    assert.ok(omReason(d));
   } finally {
-    if (prev === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev;
+    if (prev === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prev;
   }
 });
 

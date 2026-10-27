@@ -3,8 +3,8 @@
 // a valid reason, for named files, for a short time. Orchestrator mode (shell allowlist) is on by default at the project root; the owner disables it with `.swarm/orchestrator-mode/off`.
 // This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
 // command, and tools/handbuild-commands.mjs is `swarm handbuild request | approve | deny | status | log`.
-//   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout, and swarm worker
-//   workspaces. Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
+//   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout.
+//   Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,8 +27,6 @@ import {
   ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
   orchestratorCommandTooLong,
   orchestratorModeAgentLaunchBlocked,
-  swarmWorkerSession,
-  workerScopedWriteRelDenied,
   orchestratorSwarmSubfolderBlocked,
   ORCHESTRATOR_SWARM_CWD_DENY_REASON,
 } from './shell-writes.mjs';
@@ -1966,7 +1964,6 @@ const policyOpDenyLabel = (policyGitOps, command, policyOps) => {
 const ORCHESTRATOR_MODE_PRESERVE_DENY = new Set([
   HANDBUILD_SELF_APPROVAL_RULE_ID,
   'handbuild-owner-verb',
-  'handbuild-change-record',
 ]);
 
 const orchestratorModeBlockedOps = command => {
@@ -1992,21 +1989,10 @@ const orchestratorModeProtectedWriteRel = (rel, root, cwd) => {
   const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
   if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
   if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
-  const session = swarmWorkerSession(root, cwd ?? root);
-  if (session) {
-    return workerScopedWriteRelDenied(rel, root, cwd ?? root);
-  }
-  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root, false)) return false;
+  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root)) return false;
   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
   return !orchestratorWriteAllowed(candidate, root);
 };
-
-const workerScopeOmDeny = files => ({
-  allow: false,
-  files,
-  reason: ORCHESTRATOR_MODE_DENY_REASON,
-  ruleId: ORCHESTRATOR_MODE_RULE_ID,
-});
 
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
   applyGuardTestFault(root);
@@ -2057,6 +2043,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     if (decision.reason?.includes(DENY_ADVICE)) return decision;
     if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) return omSwarmCwdDeny(decision.files ?? []);
+    if (!decision.allow && decision.ruleId === 'handbuild-change-record') {
+      return { allow: true, files: [] };
+    }
     return decision;
   };
   const approvals = activeApprovals(root, now());
@@ -2099,7 +2088,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (rel !== null && sessionProtectedHandbuildRel(rel)) {
         return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
       }
-      if (rel !== null && workerScopedWriteRelDenied(rel, root, cwd)) return workerScopeOmDeny([rel]);
       if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) return omDeny([rel]);
       return { allow: true };
     }
@@ -2114,9 +2102,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel !== null && sessionProtectedHandbuildRel(rel)) {
       return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
-    }
-    if (rel !== null && workerScopedWriteRelDenied(rel, root, cwd)) {
-      return workerScopeOmDeny([rel]);
     }
     if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) {
       return omDeny([rel]);
@@ -2160,8 +2145,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       }
       if (omActive) {
         const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
-        const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
-        if (workerScopedWrites.length) return workerScopeOmDeny(workerScopedWrites);
         const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
           .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
         if (protectedWrites.length) return omDeny(protectedWrites);
@@ -2171,10 +2154,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
             ? omDeny(a.writes ?? [], ORCHESTRATOR_SWARM_CWD_DENY_REASON)
             : omDeny(a.writes ?? []);
         }
-      } else if (swarmWorkerSession(root, cwd ?? root)) {
-        const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
-        const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
-        if (workerScopedWrites.length) return workerScopeOmDeny(workerScopedWrites);
       }
       return { allow: true };
     }
@@ -2187,8 +2166,6 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       });
     }
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
-    const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
-    if (workerScopedWrites.length) return finishBash(workerScopeOmDeny(workerScopedWrites));
     if (omActive) {
       const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
         .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));

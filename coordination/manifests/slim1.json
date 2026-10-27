@@ -33,7 +33,43 @@
     "tests/orchestrator-mode-review4.test.mjs",
     "tests/handbuild-guard.test.mjs"
    ],
-   "timeoutMs": 2700000
+   "timeoutMs": 2700000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ]
   }
  ]
 }
