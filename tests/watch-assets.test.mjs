@@ -105,7 +105,8 @@ test('every js file parses as a classic script (syntax only)', () => {
 test('tab scripts register under one of the four tab names', () => {
   // Command Center scripts (cc-*, command-center*, hive-*, cockpit-*, command-palette*) are not legacy tab panes and do not call register().
   // classic-tab.js is the Classic tab ES module wrapper; it exports helpers and never calls register().
-  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && f !== 'board-owner-actions.js' && f !== 'orchestrator-view.js' && f !== 'classic-tab.js' && !f.startsWith('robot-') && !f.startsWith('cc-') && !f.startsWith('command-center') && !f.startsWith('hive-') && !f.startsWith('cockpit-') && !f.startsWith('command-palette'));
+  // split-quality-panel.js is a board panel module, not a tab; covered by tests/split-quality-panel.test.mjs
+  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && f !== 'board-owner-actions.js' && f !== 'orchestrator-view.js' && f !== 'classic-tab.js' && f !== 'split-quality-panel.js' && !f.startsWith('robot-') && !f.startsWith('cc-') && !f.startsWith('command-center') && !f.startsWith('hive-') && !f.startsWith('cockpit-') && !f.startsWith('command-palette'));
   assert.ok(tabFiles.length > 0, 'no tab scripts found');
   const re = /register\(\s*['"](run|plan|commands|gallery)['"]/;
   for (const name of tabFiles) {
