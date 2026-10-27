@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseE",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "In tests/claude-shell.test.mjs, the plain (non-shell) claude run in the test 'non-shell claude argv, env and prompt stay byte-identical to 1.18.0' now compares seen[0].options.env with a copy of process.env minus two keys, which proves nothing when the parent has neither key. Make it a real test: before runManifest, set process.env.ANTHROPIC_API_KEY and process.env.SWARM_CLAUDE_WORKER_API_KEY to fake values built at run time (for example 'ab'.repeat(16)) plus one marker variable (SWARM_TEST_ENV_MARKER set to 'kept'), and restore all three (delete or put back the original value) in t.after. After the run assert: (a) seen[0].options.env does not have ANTHROPIC_API_KEY and does not have SWARM_CLAUDE_WORKER_API_KEY; (b) every other key of process.env is present in the child env with an identical value (loop over Object.keys(process.env) except the two keys; this includes the marker); (c) the child env has no extra keys the parent lacks; (d) seen[0].options.env is a copy, not the same object as process.env. Keep the one-line comment about the intended change. Do not change anything else. No credential-looking literals: build values at run time.",
+   "context": [
+    "tests/claude-shell.test.mjs",
+    "tools/swarm/core-41.mjs"
+   ],
+   "outputs": [
+    "tests/claude-shell.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}
