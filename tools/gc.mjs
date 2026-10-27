@@ -290,7 +290,8 @@ async function removeGitWorktree(root, worktreePath, { gitImpl = git, caller = '
   if (guardCtx) await logCheckoutDeletionAttempt(worktreePath, caller, 'allowed', guardCtx);
   try {
     await gitImpl(root, ['worktree', 'remove', '--force', worktreePath]);
-  } catch (_gitError) {
+  } catch (gitError) {
+    console.error('[tools/gc.mjs] removeGitWorktree git-remove:', gitError?.message ?? gitError);
     try { await fs.rm(worktreePath, { recursive: true, force: true }); } catch (error) {
       if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] removeGitWorktree rm:', error?.message ?? error);
     }
@@ -488,7 +489,10 @@ async function worktreeUnsafeToRemove(worktreePath, { gitImpl = git, forceUnsafe
     const branch = (await gitImpl(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
     if (branch && branch !== 'HEAD') {
       const unpushed = await gitImpl(worktreePath, ['log', `@{u}..`, '--oneline']).catch((error) => {
-        console.error('[tools/gc.mjs] worktreeUnsafeToRemove unpushed-check (likely no upstream):', error?.message ?? error);
+        const message = error?.message ?? String(error);
+        if (!/no upstream/i.test(message)) {
+          console.error('[tools/gc.mjs] worktreeUnsafeToRemove unpushed-check:', message);
+        }
         return '';
       });
       if (unpushed.trim()) return { unsafe: true, reason: 'unpushed-commits' };

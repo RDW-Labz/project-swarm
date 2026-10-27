@@ -66,7 +66,7 @@ async function lstatRegularOrMissing(fs, abs) {
 async function mkdirPrivate(fs, dir) {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await fs.chmod(dir, 0o700).catch((error) => {
-    if (error?.code !== 'EPERM' && error?.code !== 'ENOENT') {
+    if (error?.code !== 'ENOENT') {
       console.error('[tools/ledger-backup.mjs] mkdirPrivate chmod:', error?.message ?? error);
     }
   });
@@ -77,7 +77,7 @@ async function writeAtomic(fs, dest, data) {
   const tmp = `${dest}.${randomBytes(4).toString('hex')}.tmp`;
   await fs.writeFile(tmp, data, { mode: 0o600, flag: 'wx' });
   await fs.chmod(tmp, 0o600).catch((error) => {
-    if (error?.code !== 'EPERM' && error?.code !== 'ENOENT') {
+    if (error?.code !== 'ENOENT') {
       console.error('[tools/ledger-backup.mjs] writeAtomic chmod:', error?.message ?? error);
     }
   });
