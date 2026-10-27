@@ -303,7 +303,11 @@ const GH_READONLY_SUBS = new Set([
 
 const READONLY_BINARIES = new Set(['grep', 'egrep', 'fgrep', 'rg', 'cat', 'head', 'tail', 'wc', 'ls']);
 
-const NPM_TEST_RUNS = new Set(['test', 'test:e2e', 'test:unit']);
+const NPM_TEST_RUNS = new Set(['test', 'test:e2e', 'test:unit', 'e2e']);
+
+// The only npm/pnpm/yarn-level flags a test run may carry (anywhere before the `--` separator); every other flag
+// (--node-options, --userconfig, --prefix, --workspace, -w, -C, --filter, --dir, --cwd, --script-shell, ...) changes what code runs.
+const NPM_HARMLESS_FLAGS = new Set(['--silent', '--if-present']);
 
 const WRITER_BINARIES = new Set([
   'rm', 'touch', 'tee', 'cp', 'mv', 'mkdir', 'truncate', 'chmod', 'chown', 'install',
@@ -387,6 +391,24 @@ const swarmArgsHaveOwnerOverrideFlags = rest => {
   return false;
 };
 
+// --check / --test choose a command that runs after a worker run integrates. On the ticket and run families they are never allowed;
+// anywhere else they are denied when they carry argv (an =value, or a following JSON / multi-word value).
+const SWARM_CHECK_ALWAYS_DENIED_SUBS = new Set(['ticket', 'ship', 'tickets', 'run', 'go', 'integrate']);
+
+const swarmArgsHaveCheckCommand = (sub, rest) => {
+  const always = SWARM_CHECK_ALWAYS_DENIED_SUBS.has(sub);
+  for (let i = 0; i < rest.length; i += 1) {
+    const low = String(rest[i]).toLowerCase();
+    const eq = low.indexOf('=');
+    const name = eq === -1 ? low : low.slice(0, eq);
+    if (name !== '--check' && name !== '--test') continue;
+    if (always || eq !== -1) return true;
+    const next = rest[i + 1];
+    if (next !== undefined && !String(next).startsWith('-') && /^[[{]|\s/.test(String(next))) return true;
+  }
+  return false;
+};
+
 const swarmTicketsYesVetted = rest => {
   const lower = swarmArgTokens(rest);
   return lower.some(a => TICKET_YES_PAIR_FLAGS.has(a) || TICKET_YES_PAIR_FLAGS.has(a.split('=')[0]));
@@ -430,7 +452,7 @@ const swarmTicketsFlagsOk = rest => {
         ? a.slice(a.indexOf('=') + 1)
         : String(rest[i + 1] ?? '');
       const v = String(val).toLowerCase();
-      if (v === 'done' || v === 'delivered') return false;
+      if (v === 'done' || v === 'delivered' || v === 'approved') return false;
       if (!a.includes('=')) i += 2;
       else i += 1;
       continue;
@@ -538,6 +560,8 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (swarmArgsHaveApprove(rest)) return false;
   if (swarmArgsHaveForceBypass(rest)) return false;
   if (swarmArgsHaveOwnerOverrideFlags(rest)) return false;
+  if (swarmArgsHaveCheckCommand(s, rest)) return false;
+  if (s === 'ship') return false;
   if (s === 'backup') {
     const verb = String(rest[0] ?? '').toLowerCase();
     if (verb === 'restore') return false;
@@ -713,12 +737,20 @@ const testRunnerFlagsOk = args => {
   return true;
 };
 
+// A runner operand that names a file the orchestrator may write is code, whatever its extension (a node runner executes it).
+const operandOrchestratorWritable = raw => {
+  const s = String(raw ?? '');
+  if (!s || path.isAbsolute(s) || s.startsWith('~')) return false;
+  const norm = path.posix.normalize(s.replace(/\\/g, '/')).replace(/^\.\//, '').toLowerCase();
+  return orchestratorOwnRel(norm) || orchestratorWriteAllowedRel(norm);
+};
+
 const positionalOperandsOk = (args, ctx) => {
   const operandOk = ctx?.testOperandOk ?? ctx?.inProject;
-  if (!operandOk) return true;
   for (const a of args) {
     if (!a || String(a).startsWith('-')) continue;
-    if (!operandOk(a)) return false;
+    if (operandOrchestratorWritable(a)) return false;
+    if (operandOk && !operandOk(a)) return false;
   }
   return true;
 };
@@ -733,7 +765,8 @@ const packageRunnerTool = (cmd, args) => {
       break;
     }
   } else {
-    while (i < args.length && String(args[i]).startsWith('-')) i += 1;
+    // a leading flag (-C, --dir, --filter, --cwd, ...) moves the run elsewhere: not a vetted shape
+    if (String(args[0] ?? '').startsWith('-')) return null;
     if (args[i] === 'exec') i += 1;
   }
   const tool = String(args[i] ?? '');
@@ -748,21 +781,38 @@ const npmScriptAllowed = (scriptName, ctx) => {
   return Object.prototype.hasOwnProperty.call(scripts, scriptName);
 };
 
+// Exact shapes only: `test`, `run SCRIPT`, `run-script SCRIPT`, harmless reporter flags, and optionally `-- RUNNER-ARGS`.
+// Returns { script, operands, runnerArgs } or null for anything else (any other npm-level flag, before or after the verb).
+const npmTestParts = args => {
+  const sep = args.indexOf('--');
+  const head = sep === -1 ? args : args.slice(0, sep);
+  const runnerArgs = sep === -1 ? [] : args.slice(sep + 1);
+  const pos = [];
+  for (const a of head) {
+    const s = String(a);
+    if (s === '') return null;
+    if (s.startsWith('-')) {
+      if (!NPM_HARMLESS_FLAGS.has(s)) return null;
+      continue;
+    }
+    pos.push(s);
+  }
+  const verb = pos[0];
+  if (verb === 'test') return { script: 'test', operands: pos.slice(1), runnerArgs };
+  if (verb === 'run' || verb === 'run-script') {
+    if (pos.length < 2) return null;
+    return { script: pos[1], operands: pos.slice(2), runnerArgs };
+  }
+  return null;
+};
+
 const npmTestShapeOk = (cmd, args, ctx) => {
   if (cmd !== 'npm' && cmd !== 'pnpm' && cmd !== 'yarn') return false;
-  const i = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
-  if (i === -1) return false;
-  const verb = String(args[i]);
-  if (verb === 'test') {
-    if (!npmScriptAllowed('test', ctx)) return false;
-    return testRunnerFlagsOk(args.slice(i + 1)) && positionalOperandsOk(args.slice(i + 1), ctx);
-  }
-  if (verb === 'run') {
-    const script = String(args[i + 1] ?? '');
-    if (!npmScriptAllowed(script, ctx)) return false;
-    return testRunnerFlagsOk(args.slice(i + 2)) && positionalOperandsOk(args.slice(i + 2), ctx);
-  }
-  return false;
+  const parts = npmTestParts(args);
+  if (!parts) return false;
+  if (!npmScriptAllowed(parts.script, ctx)) return false;
+  const body = [...parts.operands, ...parts.runnerArgs];
+  return testRunnerFlagsOk(parts.runnerArgs) && positionalOperandsOk(body, ctx);
 };
 
 const pytestArgs = words => {
@@ -871,12 +921,8 @@ const testRunBodyArgs = words => {
     return args.slice(testIdx + 1);
   }
   if (cmd === 'npm' || cmd === 'pnpm' || cmd === 'yarn') {
-    const i = args.findIndex(a => a !== '' && !String(a).startsWith('-'));
-    if (i === -1) return null;
-    const verb = String(args[i]);
-    if (verb === 'test') return args.slice(i + 1);
-    if (verb === 'run') return args.slice(i + 2);
-    return null;
+    const parts = npmTestParts(args);
+    return parts ? [...parts.operands, ...parts.runnerArgs] : null;
   }
   if (cmd === 'pytest') return args;
   if (cmd === 'playwright') return runnerArgsWithoutVerb(args, { implicitRun: false }) ?? [];
