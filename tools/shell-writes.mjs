@@ -19,6 +19,7 @@ import {
   orchestratorOwnForbiddenWriteRel,
   orchestratorBareTestScanRelPrefixes,
   orchestratorSwarmSessionCwdOk,
+  orchestratorWriteAllowedRel,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -27,7 +28,13 @@ export const ORCHESTRATOR_TEST_MARKER_REL = '.swarm/orchestrator-mode/test-harne
 export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
 export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: writes are only allowed under .swarm/ (except workspaces, worktrees, runs, backups, orchestrator-mode), docs/plans/, coordination/manifests/ (.json), coordination/HANDOFF*.md, docs/state/ (.md), and TASK.md at the project root — text formats md/json/jsonl/ndjson/yaml/yml only (never package.json). Swarm CLI commands are allowed. For anything else, make a ticket: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help).';
-export const ORCHESTRATOR_SWARM_CWD_DENY_REASON = 'Orchestrator mode: swarm commands are only allowed with the session working directory at the project root; cd back to the project root or pass --root with the project root path.';
+export const ORCHESTRATOR_SWARM_CWD_DENY_REASON = 'Orchestrator mode: swarm commands are only allowed with the session working directory at the project root; run cd followed by the project root path first.';
+/** Deny message for a swarm command run from a folder below the project root; prints the real root path. */
+export const orchestratorSwarmCwdDenyReason = root => {
+  let real = String(root ?? '');
+  try { real = fs.realpathSync.native(real); } catch { /* keep the given path */ }
+  return real ? `Orchestrator mode: swarm commands are only allowed from the project root: run cd ${real} first.` : ORCHESTRATOR_SWARM_CWD_DENY_REASON;
+};
 export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
 export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
@@ -1712,9 +1719,8 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
       }
       if (k < plain.length && path.basename(plain[k]) === 'cd') {
         if (subshellDepth > 0) continue;
-        if (words.sepAfter !== '&&') continue;
         const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
-        if (!omCdTargetOk(target, local)) continue;
+        if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) continue;
         cwd = omResolveCd(target, { ...local, cwd });
         local.cwd = cwd;
         cwdStack[cwdStack.length - 1] = cwd;
@@ -2002,7 +2008,8 @@ const omPackageScripts = root => {
   }
 };
 
-const omTestOperandOrchestratorOwnedRel = norm => orchestratorOwnRel(norm);
+// Any file the orchestrator may write (docs/plans, .swarm, manifests, handoffs, TASK.md...) counts as code as a runner operand, whatever its extension.
+const omTestOperandOrchestratorOwnedRel = norm => orchestratorOwnRel(norm) || orchestratorWriteAllowedRel(norm);
 
 const OM_BARE_SCAN_MAX_DEPTH = 8;
 const OM_BARE_SCAN_MAX_ENTRIES = 5000;
@@ -2247,9 +2254,44 @@ const omCdTargetOk = (target, ctx) => {
   return true;
 };
 
+const omRealOrNull = p => {
+  try { return fs.realpathSync.native(p); } catch { return null; }
+};
+
+const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']);
+
+// `cd -` is always denied: the hook session cannot know the previous folder.
+const omCdHasDash = cdArgs => cdArgs.some(a => a === '-');
+
+/** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
+const omCdRootTarget = (target, ctx) => {
+  if (!ctx?.root || target === undefined || target === '') return false;
+  const rootReal = omRealOrNull(ctx.root);
+  if (!rootReal) return false;
+  const t = String(target);
+  if (OM_CD_ROOT_ENV_FORMS.has(t)) {
+    const envDir = process.env.CLAUDE_PROJECT_DIR;
+    return !!envDir && omRealOrNull(envDir) === rootReal;
+  }
+  if (omOperandUnsafe(t) || t === '~' || t.startsWith('~')) return false;
+  if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(t)) return false;
+  const abs = path.isAbsolute(t) ? path.resolve(t) : path.resolve(ctx.cwd ?? ctx.root, t);
+  return omRealOrNull(abs) === rootReal;
+};
+
+const omCdAllowed = (target, ctx) => omCdRootTarget(target, ctx) || omCdTargetOk(target, ctx);
+
+// A cd that is not the first half of `cd DIR && ...` only passes when it returns to the project root (a standalone `cd`, or before `;`).
+const omCdStepAllowed = (words, target, ctx) => {
+  if (words.sepAfter === '&&') return omCdAllowed(target, ctx);
+  if (words.sepAfter !== ';' || words.piped) return false;
+  return omCdRootTarget(target, ctx);
+};
+
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
+  if (OM_CD_ROOT_ENV_FORMS.has(p)) return path.resolve(ctx.root);
   if (p.startsWith('~/')) p = path.join(home, p.slice(2));
   return path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
 };
@@ -2315,6 +2357,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'node' && !omTrustedCommandWordOk(rawCmd, 'node')) return false;
   if (cmd === 'swarm' && !omSwarmCommandWordOk(rawCmd)) return false;
   if (cmd === 'cd') {
+    if (omCdHasDash(args)) return false;
     const target = args.filter(a => a !== '' && !a.startsWith('-'))[0];
     return target !== undefined && omCdTargetOk(target, ctx);
   }
@@ -2405,9 +2448,8 @@ const omValidateTokenized = (tokenized, ctx) => {
     }
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
       if (subshellDepth > 0) return false;
-      if (words.sepAfter !== '&&') return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
-      if (!omCdTargetOk(target, local)) return false;
+      if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) return false;
       cwd = omResolveCd(target, { ...local, cwd });
       local.cwd = cwd;
       cwdStack[cwdStack.length - 1] = cwd;

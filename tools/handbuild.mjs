@@ -28,7 +28,7 @@ import {
   orchestratorCommandTooLong,
   orchestratorModeAgentLaunchBlocked,
   orchestratorSwarmSubfolderBlocked,
-  ORCHESTRATOR_SWARM_CWD_DENY_REASON,
+  orchestratorSwarmCwdDenyReason,
 } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
@@ -2025,7 +2025,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   const omShellCtx = { root, cwd, home: h };
   const omSwarmCwdDeny = files => (
     orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
-      ? omDeny(files, ORCHESTRATOR_SWARM_CWD_DENY_REASON)
+      ? omDeny(files, orchestratorSwarmCwdDenyReason(root))
       : omDeny(files)
   );
   const applyOrchestratorMode = decision => {
@@ -2151,7 +2151,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
         if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
         if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
           return orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
-            ? omDeny(a.writes ?? [], ORCHESTRATOR_SWARM_CWD_DENY_REASON)
+            ? omDeny(a.writes ?? [], orchestratorSwarmCwdDenyReason(root))
             : omDeny(a.writes ?? []);
         }
       }
