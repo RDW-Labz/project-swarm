@@ -3,6 +3,21 @@
 // No model call and no POST is made here; probes are supplied by the caller and must be free checks.
 
 import { redactSecrets } from './lane-events.mjs';
+import { isPaidLane } from '../daily-limit.mjs';
+import { LOOPBACK_HOSTS } from '../local-lane.mjs';
+
+/** True when the endpoint URL host is loopback or a private LAN IPv4 address. */
+export function isLocalOrLanEndpoint(endpoint) {
+  if (typeof endpoint !== 'string' || !endpoint) return false;
+  let host;
+  try { host = new URL(endpoint).hostname; } catch { return false; }
+  if (LOOPBACK_HOSTS.includes(host)) return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (m.slice(1).some(x => Number(x) > 255)) return false;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
 
 export const LANE_MONITOR_INTERVAL_MS = 120000;
 export const LANE_PROBE_TIMEOUT_MS = 10000;
@@ -168,7 +183,10 @@ export async function probeLane(lane, probes = {}, { now = Date.now, probeTimeou
   const timeoutMs = Math.max(1, Number(probeTimeoutMs) || LANE_PROBE_TIMEOUT_MS);
   const probeOpts = { timeoutMs };
 
-  const spend = lane.noCap === true
+  // Security: noCap is honored only for verifiably local/LAN lanes or non-paid adapters.
+  // A known paid lane with a non-local or missing endpoint ignores noCap and still gets the real spend-cap probe.
+  const noCapHonored = lane.noCap === true && (isLocalOrLanEndpoint(lane.endpoint) || !isPaidLane(lane.id));
+  const spend = noCapHonored
     ? { ok: true, paused: false, reason: limitReason('spend-cap: skipped (noCap)') }
     : await runProbe('spend-cap', probes.spendCap, lane, probeOpts);
   const rate = await runProbe('rate-limit', probes.rateLimit, lane, probeOpts);
