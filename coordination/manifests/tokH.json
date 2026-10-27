@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokH",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "REGRESSION in tools/swarm/core-41.mjs execute (found by running tests/cursor-process-group.test.mjs on this branch: 12 tests pass and then the 13th, 'execute cursor stop resolves when stdio close times out after group kill', hangs and the whole file is cancelled after the test timeout; on main the file passes 15 of 15). Cause: the original code had, in stop() and in the child 'exit' handler, the line termination.then(cleanup => { if (cleanup.error) finish(null); }).catch(() => finish(null)) so that when the child exited or was stopped but the close event never arrives (descendants keep stdio open) the job still finishes once the cleanup (the kill sequence and the wait for close) reports an error. The worker token work first replaced it with an unconditional finish on exit (a bug that lost exit codes), and the follow-up fix then REMOVED the handler completely: stop() now only does termination ??= stopChildForJob() and the exit handler only starts termination, so nothing ever finishes the job when close never arrives. Restore exactly the original behaviour with the token revoke added: in BOTH places (stop and the exit handler) after termination is started, attach termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null)); a clean cleanup must NOT finish the job (the real exit code and drained output come with the close event). Compare with the original in git (origin/main version of the same function) so nothing else differs from the original apart from the token issue, revoke and redaction code. Then make these pass, each run alone: tests/cursor-process-group.test.mjs (all 15), tests/cli-adapters.test.mjs, tests/worker-token-dispatch.test.mjs, tests/dispatcher-output-capture.test.mjs, tests/codex-adapter.test.mjs, tests/worker-guard-e2e.test.mjs. In tests/dispatcher-output-capture.test.mjs make sure a scenario exists where the child exits but close is delayed and the real exit code and full output are still captured, and one where close never arrives and the job still finishes after the cleanup error (use real child processes that keep a stdio pipe open through a grandchild). STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/dispatcher-output-capture.test.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/dispatcher-output-capture.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
