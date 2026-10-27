@@ -15,6 +15,7 @@ import {
   ORCHESTRATOR_MODE_OFF_FILE,
   SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
+import { issueWorkerToken, WORKER_TOKEN_ENV } from '../tools/worker-token.mjs';
 import {
   guardDecision,
   ORCHESTRATOR_MODE_RULE_ID,
@@ -68,22 +69,28 @@ test('orchestrator mode stays on when cwd is an unverified workspaces path (cd b
 test('verified worker workspace cwd exempts orchestrator mode', async t => {
   const root = await swarmProject(t);
   const runId = 'run-verified';
-  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
-  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  const jobId = 'job-1';
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, jobId);
   await fs.mkdir(workspace, { recursive: true });
+  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
   const prev = process.env.CLAUDE_PROJECT_DIR;
-  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
+  const prevEnv = {
+    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
+  };
   process.env.CLAUDE_PROJECT_DIR = root;
   process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  process.env[WORKER_TOKEN_ENV] = proof;
   try {
     assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
     assert.equal(orchestratorModeEnabled(root, workspace), false);
   } finally {
     if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev;
-    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+    if (prevEnv[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevEnv[SWARM_WORKER_RUN_ID_ENV];
+    if (prevEnv[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prevEnv[WORKER_TOKEN_ENV];
   }
 });
 
@@ -196,15 +203,17 @@ test('handbuild-guard denies invalid JSON when CLAUDE_PROJECT_DIR is set and std
   assert.equal(parsed.hookSpecificOutput.permissionDecisionReason, GUARD_ERROR_DENY_REASON);
 });
 
-test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', async () => {
+test('orchestratorModeCommandAllowed refuses non-allowlisted swarm subcommands', async t => {
   const binDir = path.join(process.env.HOME, '.local', 'bin');
   await fs.mkdir(binDir, { recursive: true });
   const swarmMjs = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
   const wrapper = `#!/bin/sh\n# managed by project-swarm\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(swarmMjs)} "$@"\n`;
   await fs.writeFile(path.join(binDir, 'swarm'), wrapper, { mode: 0o755 });
   process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`;
-  assert.equal(orchestratorModeCommandAllowed('swarm init'), false);
-  assert.equal(orchestratorModeCommandAllowed('swarm mutants'), false);
-  assert.equal(orchestratorModeCommandAllowed('swarm status'), true);
-  assert.equal(orchestratorModeCommandAllowed('swarm tickets --status blocked'), true);
+  const root = await swarmProject(t);
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed('swarm init', ctx), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm mutants', ctx), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm status', ctx), true);
+  assert.equal(orchestratorModeCommandAllowed('swarm tickets --status blocked', ctx), true);
 });
