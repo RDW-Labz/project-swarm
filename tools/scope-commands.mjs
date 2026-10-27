@@ -900,7 +900,35 @@ export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {
   return null;
 }
 
-export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs, ticket } = {}) {
+/** Last characters of ticket-spec output kept in a worker retry note (before retryNote max length). */
+export const TICKET_SPEC_RETRY_TAIL = 4000;
+/** Max stored retryNote length (must fit ticket-spec prefix, optional first-failing line, and tail excerpt). */
+export const RETRY_NOTE_MAX = 5000;
+
+export function firstFailingTest(text) {
+  for (const line of String(text ?? '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let match = trimmed.match(/^not ok \d+ - (.+)$/);
+    if (match) return match[1].trim();
+    match = trimmed.match(/^FAILED (.+)$/);
+    if (match) return match[1].trim();
+    match = trimmed.match(/^(?:FAIL|×|✗|✕)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s*(?:>|›)\s*(.+)$/i);
+    if (match) return `${match[1]} > ${match[2].trim()}`;
+    if (/^\d+\) \[.+\] › .+ › .+$/.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+export function formatTicketSpecRetryNote(specPath, tail) {
+  const raw = String(tail ?? '');
+  const excerpt = raw.slice(-TICKET_SPEC_RETRY_TAIL);
+  const failing = firstFailingTest(raw);
+  const detail = failing ? `first failing test: ${failing}; ${excerpt}` : excerpt;
+  return `failed checks: ticket spec ${specPath}${detail ? `; ${detail}` : ''}`;
+}
+
+export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs, ticket, run = runCheckArgv } = {}) {
   const argv = argvForTicketSpec(file, { profile, checks, pkg, files });
   if (!argv?.length) return { ok: false, reason: `no runner configured for ${file}` };
   let limit = timeoutMs;
@@ -910,15 +938,21 @@ export async function runTicketSpec(root, file, { profile, checks, pkg, files, t
   }
   if (limit === undefined) limit = (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
   try {
-    const { exitCode, stdout, stderr } = await runCheckArgv(argv, { cwd: root, timeoutMs: limit });
+    const { exitCode, stdout, stderr } = await run(argv, { cwd: root, timeoutMs: limit });
     const tail = [stdout, stderr].filter(Boolean).join('\n').slice(-8000);
     if (exitCode !== 0) return { ok: false, failed: true, tail };
     const { count } = countTests(tail);
     if (count === 0) return { ok: false, failed: true, tail: `${tail}\nno-tests: the check passed but ran 0 tests (wrong test runner for these files?)` };
     return { ok: true };
   } catch (error) {
-    const tail = String(error?.message ?? error);
-    return { ok: false, failed: true, tail: /timed out/i.test(tail) ? tail : tail };
+    const msg = String(error?.message ?? error);
+    if (/timed out/i.test(msg)) {
+      const parts = [msg];
+      if (error?.stdout) parts.push(String(error.stdout));
+      if (error?.stderr) parts.push(String(error.stderr));
+      return { ok: false, failed: true, tail: parts.join('\n').slice(-8000) };
+    }
+    return { ok: false, failed: true, tail: msg };
   }
 }
 
@@ -2537,7 +2571,7 @@ async function applyRetry(root, id, note, runId) {
         ticket.attempts = attempts;
         ticket.escalation = step.level;
         const safeNote = redactNote(note);
-        ticket.retryNote = safeNote.slice(0, 600);
+        ticket.retryNote = safeNote.slice(0, RETRY_NOTE_MAX);
         ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: safeNote.slice(0, 200), level: step.level }].slice(-5);
         ticket.status = step.status;
         if (step.status === 'blocked') ticket.blockReason = 'failure';
@@ -2575,7 +2609,7 @@ async function applyEscalation(root, id, note, runId) {
         ticket.escalation = step.level;
         delete ticket.infraRetries;
         const safeNote = redactNote(note);
-        ticket.retryNote = safeNote.slice(0, 600);
+        ticket.retryNote = safeNote.slice(0, RETRY_NOTE_MAX);
         ticket.retryHistory = [...(ticket.retryHistory ?? []), { run: runId, note: safeNote.slice(0, 200), level: step.level }].slice(-5);
         ticket.status = step.status;
         if (step.status === 'blocked') ticket.blockReason = 'failure';
@@ -3077,7 +3111,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         for (const f of specPaths) {
           const outcome = await runSpec(root, f, { ...specCtx, ticket: t });
           if (outcome?.failed) {
-            const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
+            const result = await applyRetry(root, t.id, formatTicketSpecRetryNote(f, outcome.tail), rest[0]);
             (result === 'blocked' ? blocked : retried).push(t.id);
             specStop = true;
             break;

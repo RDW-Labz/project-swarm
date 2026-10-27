@@ -165,7 +165,12 @@ export function runCheckArgv(argv, { cwd, timeoutMs }) {
       child.stderr.destroy();
       action();
     };
-    const timer = setTimeout(() => finish(() => reject(new Error(`timed out after ${timeoutMs} ms`))), timeoutMs);
+    const timer = setTimeout(() => finish(() => {
+      const error = new Error(`timed out after ${timeoutMs} ms`);
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    }), timeoutMs);
     child.on('error', error => finish(() => reject(error)));
     child.on('exit', code => setTimeout(() => finish(() => resolve({ exitCode: code ?? 1, stdout, stderr })), 50));
   });
