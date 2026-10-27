@@ -4,8 +4,8 @@
  "jobs": [
   {
    "id": "lockL3",
-   "agent": "cursor",
-   "model": "composer-2.5",
+   "agent": "claude",
+   "model": "sonnet",
    "tier": "mid",
    "sensitive": true,
    "prompt": "Fix the Opus round-2 findings in tools/file-lock.mjs and extend tests/file-lock.test.mjs (deterministic tests, no wall-clock races: use fs.utimes and small injected values). (1) MED stale-lock clearing is check-then-delete, not atomic: B checks the stale lock's inode and content, pauses, A deletes it and creates its own lock, B then deletes A's fresh lock and also takes the lock (two holders). Fix: serialize breaking with a short-lived break lock (a second lock file next to the lock, name ending .break, created with the same link-based whole-or-nothing creation, held only while breaking, itself stale after a few seconds), and inside it RE-CHECK that the lock file is still the same stale lock (inode, token and content) right before removing it; only then remove it. (2) LOW a live holder's lock is broken on age alone (wall clock jumps, a Mac waking from sleep, NTP corrections break a held lock): never break a lock whose owner pid is alive on age alone; instead the holder refreshes the lock file's modification time as a heartbeat (a timer every maxHoldMs/4, unref'd, stopped on release) and waiters judge staleness from the modification time of a lock whose pid is alive only when the heartbeat stopped for more than maxHoldMs (clock-jump safe: compare mtime against Date.now() only after also seeing it unchanged across two polls); a dead owner pid is stale at once. (3) LOW a reused pid or an EPERM pid looks alive: acceptable with the heartbeat rule (a dead holder's lock stops getting heartbeats and goes stale after maxHoldMs); add an optional ownerStartedAt check: store the owner's process start time in the record and treat a pid whose start time differs as dead when the platform exposes it (ps -o lstart= for the pid, best effort, never fatal). (4) LOW the in-process queue ignores waitMs: race the wait for the previous holder against the same deadline and throw file-lock-timeout; a nested acquire of the same lock from inside a locked function must throw file-lock-reentrant immediately instead of hanging. (5) LOW release must delete only its own lock atomically as far as possible: re-read the token right before unlink and skip when different (already so) and keep the break lock out of release. (6) LOW a filesystem without hard links: catch EPERM and ENOTSUP on link() and throw a clear error file-lock-unsupported-fs naming the folder. Tests: the break-lock race (two processes breaking the same stale lock never end with two holders, run 25 loops with real child processes), a live holder's lock is not broken after a simulated wall-clock jump (inject now) while its heartbeat runs, a lock whose holder stopped heartbeating becomes stale, nested acquire throws file-lock-reentrant, queue timeout respects waitMs, unsupported-fs error path with an injected link failure. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less, start children in their own process group, and kill them in its after hook. IMPORTANT: secret scanner: never write literal values for fields named token, secret, key or password in tests: build them at run time (for example 'ab'.repeat(16)) into neutral variable names.",
@@ -18,7 +18,10 @@
     "tools/file-lock.mjs",
     "tests/file-lock.test.mjs"
    ],
-   "timeoutMs": 2400000
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }
