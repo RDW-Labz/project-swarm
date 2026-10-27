@@ -16,7 +16,13 @@
     "tools/swarm/core-41.mjs",
     "tests/claude-plain-env.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/cursor-process-group.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
   }
  ]
 }

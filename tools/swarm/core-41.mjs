@@ -128,6 +128,14 @@ export async function expandOpenScopes(root, manifest) {
 // Descendants that call setsid() (or otherwise start a new session) are not in the leader's
 // process group and will not receive this group-directed SIGTERM/SIGKILL (known limit).
 /** Kill a detached cursor lane leader's process group; injectable for tests. */
+/** Child env for plain (non-shell) subscription Claude workers: never inherit ambient API keys. */
+export function plainClaudeJobEnv(env = process.env) {
+  const childEnv = { ...env };
+  delete childEnv.ANTHROPIC_API_KEY;
+  delete childEnv.SWARM_CLAUDE_WORKER_API_KEY;
+  return childEnv;
+}
+
 export async function killCursorProcessGroup(pid, { killImpl = process.kill.bind(process), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), pollIntervalMs = 75, graceMs = 5000, now = () => Date.now() } = {}) {
   try {
     if (!Number.isInteger(pid) || pid <= 1) return { refused: true, error: null };
@@ -303,7 +311,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         : claudeShell ? spawnImpl('sandbox-exec', ['-f', claudeShell.profile, claudeShell.bin, ...claudeShellArgs(job)], { cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: claudeShell.env })
         // Over ssh the local environment never travels: ssh gets only what it needs to find its own key.
         : cliHost ? (() => { const ssh = sshInvocation(cliHost, extraCliArgs(job)); return spawnImpl(ssh.command, ssh.args, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: sshEnv(process.env) }); })()
-        : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: job.agent==='claude'?process.env:extraCliEnvironment(job.agent) });
+        : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: job.agent==='claude'?plainClaudeJobEnv(process.env):extraCliEnvironment(job.agent) });
       if (job.agent === 'cursor' && child?.pid) cursorGroupPid = child.pid;
       child.on('error', error => finish(null, error));
       child.once('exit',()=>{
