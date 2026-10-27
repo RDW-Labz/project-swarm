@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseI",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Strengthen the three plain-claude env assertions. Create a shared test helper tests/_plain-claude-env.mjs exporting two functions. (a) withPaidKeys(t): sets process.env.ANTHROPIC_API_KEY and process.env.SWARM_CLAUDE_WORKER_API_KEY to fake values built at run time (for example 'ab'.repeat(16) and 'cd'.repeat(16); no credential-looking literals) plus a marker process.env.SWARM_TEST_ENV_MARKER set to 'kept', and registers t.after to restore each variable to its previous value (delete when it was unset). (b) assertPlainClaudeEnv(env): with node:assert/strict asserts that env is an object that is NOT the same object as process.env; that ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY are NOT own keys of env; that every key of process.env except those two is an own key of env with an identical value (check the marker is among them); and that env has no key that process.env lacks. Then use them in exactly these three places, replacing the assertion that job shellpauseH just wrote there (an assert.deepEqual of the env against a spread copy of process.env minus two keys, with a comment about the one intended env change): (1) tests/field-lessons-batch-u.test.mjs, test 'a non-shell claude job env and prompt are unchanged' (the shell job test above it must keep its own explicit key); (2) tests/ports.test.mjs, test containing 'non-shell claude jobs get no scratch dir and no env change: byte-identical to before' (keep its SWARM_PORT_BASE assertion); (3) tests/shell-scratch.test.mjs, the test around the message 'env is untouched: no scratch dir is merged in' (keep that message as the assertion message by wrapping the call, or keep a separate assertion with that message). In each of the three tests call withPaidKeys(t) BEFORE the manifest run that produces seen[0], so the keys really are in the parent env during the run, then call assertPlainClaudeEnv(seen[0].options.env) after it; keep a short comment: the one intended env change, ambient paid keys never reach a subscription lane. Do not weaken or change any other assertion. Import the helper with a relative path. The helper is not a test file (underscore name, like tests/_isolate-config.mjs). STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/_isolate-config.mjs",
+    "tools/swarm/core-41.mjs"
+   ],
+   "outputs": [
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/_plain-claude-env.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}

@@ -2,6 +2,7 @@
 // Claude shell adapter (decision #154): argv, env, profile, presets, validation, key handling,
 // the integrate/ship key guard, and (macOS only) the generated profile under real sandbox-exec.
 // No network and no real model: the claude CLI is always a fake here.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -69,13 +70,37 @@ test('non-shell claude argv, env and prompt stay byte-identical to 1.18.0', asyn
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-shell-plain-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'input.txt'), 'original');
+  const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+  const prevWorker = process.env.SWARM_CLAUDE_WORKER_API_KEY;
+  const prevMarker = process.env.SWARM_TEST_ENV_MARKER;
+  const fakeChunk = 'ab'.repeat(16);
+  process.env.ANTHROPIC_API_KEY = fakeChunk;
+  process.env.SWARM_CLAUDE_WORKER_API_KEY = `${fakeChunk}-w`;
+  process.env.SWARM_TEST_ENV_MARKER = 'kept';
+  t.after(() => {
+    if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    if (prevWorker === undefined) delete process.env.SWARM_CLAUDE_WORKER_API_KEY;
+    else process.env.SWARM_CLAUDE_WORKER_API_KEY = prevWorker;
+    if (prevMarker === undefined) delete process.env.SWARM_TEST_ENV_MARKER;
+    else process.env.SWARM_TEST_ENV_MARKER = prevMarker;
+  });
   const seen = [];
   const spawnImpl = (command, args, options) => { seen.push({ command, args, options }); return spawn(process.execPath, ['-e', `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}))`], options); };
   const state = await runManifest(root, manifest([plainJob()]), { spawnImpl, keyExec: noKeychain });
   assert.equal(state.status, 'complete');
   assert.equal(seen[0].command, 'claude');
   assert.deepEqual(seen[0].args, [...base, '--model', 'sonnet']);
-  assert.equal(seen[0].options.env, process.env);
+  // The one intended env change from 1.18.0: ambient paid keys must never reach a subscription lane.
+  const childEnv = seen[0].options.env;
+  assert.equal('ANTHROPIC_API_KEY' in childEnv, false);
+  assert.equal('SWARM_CLAUDE_WORKER_API_KEY' in childEnv, false);
+  for (const key of Object.keys(process.env)) {
+    if (key === 'ANTHROPIC_API_KEY' || key === 'SWARM_CLAUDE_WORKER_API_KEY') continue;
+    assert.equal(childEnv[key], process.env[key], key);
+  }
+  for (const key of Object.keys(childEnv)) assert.equal(key in process.env, true, `unexpected child env key: ${key}`);
+  assert.notEqual(childEnv, process.env);
   assert.equal(seen[0].options.cwd, path.join(root, '.swarm/workspaces', state.id, 'writer'));
   // Field lesson #256 is the one intended deviation from 1.18.0: a sentence telling the worker to
   // report an unmet contract MUST in `deviations` instead of silently substituting a design. Every

@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { ship } from '../tools/ship.mjs';
 import { runManifest, integrateRun, inspectResults, checkPathMissingWarnings } from '../tools/swarm.mjs';
+import { withPaidKeys, assertPlainClaudeEnv } from './_plain-claude-env.mjs';
 
 const FAKE_SHELL_BIN = '/opt/fake-claude/bin/claude.exe';
 const shellHooksWithScratch = createScratchDir => ({ access: async () => {}, resolveClaude: async () => FAKE_SHELL_BIN, scanListeningPorts: async () => [], createScratchDir });
@@ -371,10 +372,12 @@ describe('#263: a shell job\'s launch env has TMPDIR/TMP/TEMP under its own scra
   });
 
   test('(p) a non-shell job\'s env is unchanged', async t => {
+    withPaidKeys(t);
     const root = await fixture(t);
     const seen = [];
     const spawnImpl = (command, args, options) => { seen.push({ command, args, options }); return spawn(process.execPath, ['-e', `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}))`], options); };
     await runManifest(root, manifest([job()]), { spawnImpl });
-    assert.equal(seen[0].options.env, process.env);
+    // the one intended env change, ambient paid keys never reach a subscription lane
+    assertPlainClaudeEnv(seen[0].options.env);
   });
 });

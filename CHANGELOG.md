@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.18
+
+Claude shell jobs now obey the paid-lane pause.
+- **Pause:** a claude shell job (the sonnet-shell and opus-shell models) uses the paid worker API key, so it is now refused when the anthropic lane is paused or lanes.claude.shellPaused is true, at swarm validate and again before the key is read at run start; finished shell runs can still be integrated and shipped while paused
+- **Keys:** plain subscription claude jobs no longer inherit an ambient ANTHROPIC_API_KEY or the worker key from the shell environment
+- **Config:** lanes.claude.shellPaused is a new accepted lane setting
+- **Tests:** the claude shell tests isolate the machine config by themselves
+
 ## 1.167.17
 
 The orchestrator guard closes the last bypasses found in review.

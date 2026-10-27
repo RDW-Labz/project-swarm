@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseH",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Plain (non-shell) claude jobs now get plainClaudeJobEnv(process.env) from tools/swarm/core-41.mjs as their child env: a copy of process.env without ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY, no longer the same object. Three tests still assert the old identity and fail in CI. Fix exactly three assertions and nothing else: (1) tests/field-lessons-batch-u.test.mjs, in the test whose title starts with 'a non-shell claude job env and prompt are unchanged' (around line 36 of that block), the assertion comparing seen[0].options.env to process.env by reference; (2) tests/ports.test.mjs, in the test whose title contains 'non-shell claude jobs get no scratch dir and no env change: byte-identical to before' (around line 15 of that block), same kind of assertion; keep the next assertion about SWARM_PORT_BASE unchanged; (3) tests/shell-scratch.test.mjs, in the test around line 175 with the message 'env is untouched: no scratch dir is merged in'. In each, replace the reference comparison with assert.deepEqual of seen[0].options.env against a copy of process.env from which ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY were deleted (build the copy at the assertion with a spread, then delete the two keys), keep the original message text, and add one short comment: the one intended env change, ambient paid keys never reach a subscription lane. Do not weaken any other assertion. No credential-looking literals.",
+   "context": [
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tools/swarm/core-41.mjs"
+   ],
+   "outputs": [
+    "tests/field-lessons-batch-u.test.mjs",
+    "tests/ports.test.mjs",
+    "tests/shell-scratch.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}

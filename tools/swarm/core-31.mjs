@@ -150,7 +150,7 @@ async function mutantReviewTexts(root, overlay = new Map()) {
   return texts;
 }
 
-export function validateManifest(manifest, { outputJobIds = null } = {}) {
+export function validateManifest(manifest, { outputJobIds = null, env = process.env } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || typeof manifest !== 'object') fail('Manifest is missing');
   if (manifest.version !== 1) fail('Manifest requires version: 1');

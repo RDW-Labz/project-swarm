@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseG",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "In tests/claude-shell.test.mjs add the line import './_isolate-config.mjs'; as the FIRST import statement of the file (right after the header comment lines, same spelling other test files use), so the file isolates the developer's machine config by itself when run directly. Change nothing else. Reason: since the claude shell pause, resolveWorkerKey and validateProject read the machine config (lanes.anthropic.paused) and without the isolation import 8 of its 17 tests fail on a machine where the paid lane is paused. After the change the file must pass both with and without the node --import flag.",
+   "context": [
+    "tests/claude-shell.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/claude-shell.test.mjs"
+   ],
+   "timeoutMs": 600000
+  }
+ ]
+}

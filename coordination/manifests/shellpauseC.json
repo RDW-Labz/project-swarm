@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseC",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Strip ambient paid keys from plain subscription claude jobs. tools/swarm/core-41.mjs around line 306 spawns plain claude jobs with the full process environment: remove ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY from that child env exactly as runJobSetup already does around line 360, so an ambient key in the shell or launchd environment can never bill a subscription lane. Keep every other behaviour. Test in tests/claude-plain-env.test.mjs: the env passed to a plain claude job has neither variable even when both are set in the parent (build the values at run time); find the smallest exported function to test, or export one that builds the env. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain (inject exec). STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/claude-plain-env.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/cursor-process-group.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}
