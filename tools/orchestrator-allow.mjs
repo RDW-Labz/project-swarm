@@ -62,6 +62,13 @@ export const ORCHESTRATOR_WRITE_RULES = Object.freeze([
     denySubfolders: [],
     exactBasename: 'task.md',
   },
+  {
+    comment: 'Canonical scope document for parts-style projects (docs/scope/scope.md only).',
+    folderPrefix: 'docs/scope/',
+    extensions: ['md'],
+    denySubfolders: [],
+    exactBasename: 'scope.md',
+  },
 ]);
 
 const normPosixRel = normRel => String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
@@ -381,11 +388,14 @@ const swarmArgsHaveForceBypass = rest => {
   return false;
 };
 
-const swarmArgsHaveOwnerOverrideFlags = rest => {
+const swarmArgsHaveOwnerOverrideFlags = (rest, { allowAcceptWaves = false } = {}) => {
   for (const a of rest) {
     const low = String(a).toLowerCase();
     if (low === '--no-guard' || low.startsWith('--no-guard=')) return true;
-    if (low.startsWith('--accept-')) return true;
+    if (low.startsWith('--accept-')) {
+      if (allowAcceptWaves && low === '--accept-waves') continue;
+      return true;
+    }
     if (low.startsWith('--allow-')) return true;
   }
   return false;
@@ -507,11 +517,24 @@ const omSwarmRunIntegrateFlagsOk = rest => {
   return true;
 };
 
-const omSwarmScopeReadOnly = rest => {
-  if (swarmArgsHaveYes(rest)) return false;
+const SCOPE_OWNER_VERBS = new Set(['approve']);
+const CHANGE_YES_OWNER_POS = new Set(['apply']);
+
+const scopeSplitInvocation = rest => {
   const lower = rest.map(w => String(w).toLowerCase());
   const verb = lower.find(a => a !== '' && !a.startsWith('-'));
-  if (!verb || SCOPE_READONLY_VERBS.has(verb)) return true;
+  return verb === 'split';
+};
+
+const omSwarmScopeAllowed = rest => {
+  const lower = rest.map(w => String(w).toLowerCase());
+  if (lower.some(a => a === 'approve' || a === '--approve' || a.startsWith('--approve='))) return false;
+  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
+  if (!verb) return true;
+  if (SCOPE_OWNER_VERBS.has(verb)) return false;
+  if (verb === 'gate') return true;
+  if (verb === 'split') return !lower.includes('approve');
+  if (SCOPE_READONLY_VERBS.has(verb)) return !swarmArgsHaveYes(rest);
   return false;
 };
 
@@ -551,15 +574,26 @@ const omSwarmTicketsAllowed = rest => {
   return true;
 };
 
+/** Swarm argv after --root (if any): top-level help/version, or a subcommand plus rest. */
+export function swarmArgvSubcommand(tail) {
+  if (!tail?.length) return { kind: 'top' };
+  if (tail.every(t => HELP_FLAGS.has(String(t)))) return { kind: 'top' };
+  const first = String(tail[0]);
+  if (first.startsWith('-')) return null;
+  return { kind: 'sub', sub: first.toLowerCase(), rest: tail.slice(1) };
+}
+
 /** Swarm subcommand allow rules after global flags (--root) are validated in shell-writes.mjs. */
 export function swarmSubcommandAlwaysAllowed(sub, rest) {
   const s = String(sub ?? '').toLowerCase();
-  if (!s || OM_SWARM_DENIED_TOP.has(s)) return false;
+  if (!s) return false;
+  if (OM_SWARM_DENIED_TOP.has(s)) return false;
   if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
   if (s === 'restore') return false;
   if (swarmArgsHaveApprove(rest)) return false;
   if (swarmArgsHaveForceBypass(rest)) return false;
-  if (swarmArgsHaveOwnerOverrideFlags(rest)) return false;
+  const allowAcceptWaves = s === 'scope' && scopeSplitInvocation(rest);
+  if (swarmArgsHaveOwnerOverrideFlags(rest, { allowAcceptWaves })) return false;
   if (swarmArgsHaveCheckCommand(s, rest)) return false;
   if (s === 'ship') return false;
   if (s === 'backup') {
@@ -575,10 +609,12 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (s === 'change') {
     if (!swarmArgsHaveYes(rest)) return true;
     const pos = rest.filter(a => a !== '' && !String(a).startsWith('-'));
-    return pos.length >= 2;
+    if (pos.length === 0) return false;
+    if (pos.length === 1 && CHANGE_YES_OWNER_POS.has(String(pos[0]).toLowerCase())) return false;
+    return true;
   }
   if (s === 'decide') return false;
-  if (s === 'scope') return omSwarmScopeReadOnly(rest);
+  if (s === 'scope') return omSwarmScopeAllowed(rest);
   if (s === 'budget' || s === 'budgets') {
     const verb = rest.find(a => a !== '' && !String(a).startsWith('-'));
     if (verb !== undefined && String(verb).toLowerCase() !== 'show') return false;
@@ -617,12 +653,12 @@ const swarmHelpSubcommandOk = args => {
       i += 1;
       continue;
     }
-    if (a.startsWith('-')) return false;
     break;
   }
-  const sub = String(args[i] ?? '').toLowerCase();
-  const rest = args.slice(i + 1);
-  return swarmSubcommandAlwaysAllowed(sub, rest);
+  const parsed = swarmArgvSubcommand(args.slice(i));
+  if (!parsed) return false;
+  if (parsed.kind === 'top') return true;
+  return swarmSubcommandAlwaysAllowed(parsed.sub, parsed.rest);
 };
 
 /** True when --help, -h, or --version is the last token and the command shape is safe (macOS stops flags at the first filename). */

@@ -2041,12 +2041,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (decision.reason?.startsWith('Hand-build guard:') && /belongs to the owner|session transcripts|swarm run state|deletes outside|too large|force push to a protected branch/.test(decision.reason)) {
       return decision;
     }
-    if (decision.reason?.includes(DENY_ADVICE)) return decision;
-    if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) return omSwarmCwdDeny(decision.files ?? []);
-    if (!decision.allow && decision.ruleId === 'handbuild-change-record') {
-      return { allow: true, files: [] };
+    if (decision.reason?.includes(DENY_ADVICE) && !orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+      return decision;
     }
-    return decision;
+    if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) return omSwarmCwdDeny(decision.files ?? []);
+    return { allow: true, files: decision.files ?? [] };
   };
   const approvals = activeApprovals(root, now());
   const ownerApprovals = approvals.filter(a => !handbuildRowIsPolicy(a));
@@ -2179,6 +2178,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     }
     const changePol = swarmChangeShellPolicy(ti.command);
     if (changePol.applies && !changePol.allow) {
+      if (omActive && orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+        return finishBash({ allow: true });
+      }
       return finishBash({ allow: false, files: [], reason: changePol.reason, ruleId: changePol.ruleId });
     }
     if (changePol.applies && changePol.allow) {

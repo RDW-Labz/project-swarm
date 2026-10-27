@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { ORCHESTRATOR_OWN, insideProject, realOf, projectRootOf } from './orchestrator-events.mjs';
 import {
   swarmSubcommandAlwaysAllowed,
+  swarmArgvSubcommand,
   readOnlyCommandAllowed,
   helpOnly,
   localTestRunAllowed,
@@ -1305,9 +1306,17 @@ const omLauncherSwarmRunner = () => {
     const wrapper = path.join(os.homedir(), '.local', 'bin', 'swarm');
     const text = fs.readFileSync(wrapper, 'utf8');
     if (!text.includes('managed by project-swarm')) { omLauncherRunnerPath = null; return null; }
-    const m = /^exec "\$NODE" '((?:[^']|'\\'')*)'/m.exec(text);
-    if (!m) { omLauncherRunnerPath = null; return null; }
-    omLauncherRunnerPath = fs.realpathSync.native(m[1].replaceAll("'\\''", "'"));
+    const legacy = /^exec "\$NODE" '((?:[^']|'\\'')*)'/m.exec(text);
+    if (legacy) {
+      omLauncherRunnerPath = fs.realpathSync.native(legacy[1].replaceAll("'\\''", "'"));
+      return omLauncherRunnerPath;
+    }
+    const quoted = /^exec\s+"[^"]*"\s+"([^"]+)"\s/m.exec(text);
+    if (quoted) {
+      omLauncherRunnerPath = fs.realpathSync.native(quoted[1]);
+      return omLauncherRunnerPath;
+    }
+    omLauncherRunnerPath = null;
   } catch { omLauncherRunnerPath = null; }
   return omLauncherRunnerPath;
 };
@@ -1617,15 +1626,15 @@ const omGitInvocationAllowed = args => {
 };
 
 const omNodeRunsInstallSwarm = args => {
-  const install = omSwarmMjsRealpath();
-  if (!install) return false;
+  const runner = omLauncherSwarmRunner() ?? omSwarmMjsRealpath();
+  if (!runner) return false;
   const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
   if (scriptAt === -1) return false;
   if (scriptAt !== 0) return false;
   const script = args[scriptAt];
   try {
     const abs = path.isAbsolute(script) ? script : path.resolve(script);
-    return fs.realpathSync.native(abs) === install;
+    return fs.realpathSync.native(abs) === runner;
   } catch { return false; }
 };
 
@@ -1657,10 +1666,12 @@ const omSwarmArgsAfterGlobals = (args, ctx) => {
       i += 1;
       continue;
     }
-    if (a.startsWith('-')) return { ok: false };
     break;
   }
-  return { ok: true, i, sub: (args[i] ?? '').toLowerCase(), rest: args.slice(i + 1) };
+  const parsed = swarmArgvSubcommand(args.slice(i));
+  if (!parsed) return { ok: false };
+  if (parsed.kind === 'top') return { ok: true, i, sub: '', rest: [] };
+  return { ok: true, i, sub: parsed.sub, rest: parsed.rest };
 };
 
 const omSwarmSubcommandAllowed = (args, ctx) => {
@@ -1668,6 +1679,7 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
   const parsed = omSwarmArgsAfterGlobals(args, ctx);
   if (!parsed.ok) return false;
   const { sub, rest } = parsed;
+  if (!sub) return true;
   return swarmSubcommandAlwaysAllowed(sub, rest);
 };
 
@@ -2323,7 +2335,9 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (expands[k] || /^\$/.test(plain[k])) return false;
   const rawCmd = plain[k];
   if (rawCmd.includes('/') && rawCmd !== '2>&1') {
-    if (!(rawCmd.endsWith('swarm.mjs') && omNodeRunsInstallSwarm(plain.slice(k + 1)))) return false;
+    const trustedNode = path.basename(rawCmd) === 'node' && omTrustedCommandWordOk(rawCmd, 'node');
+    const trustedSwarmMjs = rawCmd.endsWith('swarm.mjs') && omNodeRunsInstallSwarm(plain.slice(k + 1));
+    if (!trustedNode && !trustedSwarmMjs) return false;
   }
   const cmd = path.basename(rawCmd);
   const args = plain.slice(k + 1);

@@ -69,6 +69,8 @@ test('ORCHESTRATOR_WRITE_RULES shape', () => {
   assert.equal(orchestratorWriteAllowedRel('coordination/TASK.md'), false);
   assert.equal(orchestratorWriteAllowedRel('task.md'), true);
   assert.equal(orchestratorWriteAllowedRel('docs/state/usage-ledger.md'), true);
+  assert.equal(orchestratorWriteAllowedRel('docs/scope/scope.md'), true);
+  assert.equal(orchestratorWriteAllowedRel('docs/scope/other.md'), false);
 });
 
 test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
@@ -114,6 +116,12 @@ test('swarmSubcommandAlwaysAllowed: owner-approval and bypass shapes stay denied
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('change', ['apply', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('change', ['reason', 'docs/scope/scope.md', '--yes']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('change', ['description text', '--yes']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('change', ['--yes']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['gate']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['gate', '--help']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['split', '--ingest', 'RUNID', '--merge', '--max-repairs', '0', '--accept-waves']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['split', '--ingest', 'RUNID', '--accept-waves']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('restore', ['backup-id', '--yes']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('backup', ['restore', 'backup-id']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('run', ['--evil', 'x']), false);
@@ -133,6 +141,9 @@ test('swarmSubcommandAlwaysAllowed: owner-approval and bypass shapes stay denied
 });
 
 test('helpOnly', () => {
+  assert.equal(helpOnly(['swarm', '--help']), true);
+  assert.equal(helpOnly(['swarm', '-h']), true);
+  assert.equal(helpOnly(['swarm', '--version']), true);
   assert.equal(helpOnly(['swarm', 'tickets', '--help']), true);
   assert.equal(helpOnly(['node', '--help']), false);
   assert.equal(helpOnly(['gh', 'pr', 'view', '--help']), true);
@@ -466,6 +477,7 @@ test('guardDecision: orchestrator-owned writes block test artifacts', async t =>
     'coordination/manifests/wave.json',
     'coordination/HANDOFF.md',
     'docs/state/usage-ledger.md',
+    'docs/scope/scope.md',
     'TASK.md',
   ];
   const denyWrites = [
@@ -492,6 +504,8 @@ test('guardDecision: orchestrator-owned writes block test artifacts', async t =>
     'docs/plans/x.py',
     'docs/plans/x.sh',
     'docs/plans/tests/notes.txt',
+    'docs/scope/other.md',
+    'src/a.js',
     '.swarm/NOTE.MJS',
   ];
   for (const handbuildOff of [false, true]) {
@@ -919,6 +933,73 @@ test('docs/state allow-listed writes pass with hand-build guard on', async t => 
   await fs.mkdir(path.join(root, 'docs', 'state'), { recursive: true });
   const d = await guardWrite('docs/state/usage-ledger.md', root, { handbuildOff: false, orchestrator: true });
   assert.equal(d.allow, true);
+});
+
+test('orchestrator mode: parts scope, change, grep, and node swarm spellings', { timeout: 60_000 }, async t => {
+  await installLocalSwarmShim();
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'scope'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'scope', 'scope.md'), '# scope\n');
+  const ctx = { root, cwd: root };
+  const nodeSwarm = (args) => `${process.execPath} ${JSON.stringify(SWARM_MJS)} --root ${JSON.stringify(root)} ${args}`;
+  const bothSpellings = (args) => [`swarm ${args}`, nodeSwarm(args)];
+  const allowArgs = [
+    '--help',
+    '-h',
+    '--version',
+    'scope gate',
+    'scope gate --help',
+    'scope split --ingest RUNID --merge --max-repairs 0 --accept-waves',
+    'scope split --ingest RUNID --accept-waves',
+    'change "description text" --yes',
+    'change "x" --yes',
+    'go --scope',
+  ];
+  const grepAllow = [
+    'grep -rn foo docs',
+    "grep -E 'a|b' file",
+    'grep foo file | head -5',
+    'grep -c x file',
+  ];
+  const denyArgs = [
+    'scope approve',
+    'scope approve --yes',
+    'scope split --ingest RUNID approve',
+    'resolve',
+    'done',
+    'decide hb-1 approve',
+    'handbuild approve hb-1',
+    'tickets T-0001 --approve',
+    'change --yes',
+    'with-concurrency 2 status',
+    'exec npm test',
+    'shell',
+  ];
+  for (const args of allowArgs) {
+    for (const c of bothSpellings(args)) {
+      assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
+      const d = await guardBash(c, root, { orchestrator: true });
+      assert.equal(d.allow, true, c);
+    }
+  }
+  for (const c of grepAllow) {
+    assert.equal(orchestratorModeCommandAllowed(c, ctx), true, c);
+    const d = await guardBash(c, root, { orchestrator: true });
+    assert.equal(d.allow, true, c);
+  }
+  for (const args of denyArgs) {
+    for (const c of bothSpellings(args)) {
+      assert.equal(orchestratorModeCommandAllowed(c, ctx), false, c);
+      const d = await guardBash(c, root, { orchestrator: true });
+      assert.equal(d.allow, false, c);
+    }
+  }
+  const scopeWrite = await guardWrite('docs/scope/scope.md', root, { orchestrator: true });
+  assert.equal(scopeWrite.allow, true);
+  const otherScope = await guardWrite('docs/scope/other.md', root, { orchestrator: true });
+  assert.equal(otherScope.allow, false);
+  const srcWrite = await guardWrite('src/a.js', root, { orchestrator: true });
+  assert.equal(srcWrite.allow, false);
 });
 
 test('orchestrator guard: claude word false positives and agent launches', { timeout: 60_000 }, async t => {
