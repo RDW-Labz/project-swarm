@@ -1,0 +1,33 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpause2",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Follow-up fixes for the claude shell pause (tools/claude-shell.mjs claudeShellPausedProblem and resolveWorkerKey), from an Opus review. Fix all of these and add tests for each in tests/claude-shell-paused.test.mjs. (1) tools/lanes.mjs: resolveLanes rejects the new machine setting lanes.claude.shellPaused with lanes-invalid unknown field, which stops every run; accept shellPaused (must be true or false, like the paused field validation) in the claude lane fields. Test: resolveLanes with that setting true and false works, and a non-boolean value is refused. (2) tools/swarm/core-32.mjs line ~28 workerKeyGuard only reads the worker key to scan run output for leaks and must keep working while the lane is paused, otherwise finished shell runs cannot be integrated or shipped: split an internal readWorkerKey in tools/claude-shell.mjs with NO pause check (same env-then-keychain read, same shape check, exported), keep resolveWorkerKey (with the pause check, calling readWorkerKey) for dispatch only, and use readWorkerKey in workerKeyGuard. Test: with anthropic paused, workerKeyGuard still resolves the key through an injected exec while resolveWorkerKey refuses. (3) Validate: tools/swarm/core-31.mjs must refuse a manifest that has any job with shell mode when claudeShellPausedProblem(loadLocalConfig({ env })) returns text: find where shell presets are expanded (expandShellPreset, near line 259) and where validateManifest or validateProject can fail a job, and add the refusal with that text, so a paused shell manifest is refused at validate. Test: validate refuses a shell job while paused (config injected or isolated config), passes while not paused, and passes a plain claude job while paused. (4) tools/swarm.mjs around line 986 where each shell job starts: re-check claudeShellPausedProblem with a freshly loaded local config before starting each shell job so a pause set mid-run stops the next shell job; keep it small, test if it can be done without a real run. (5) tools/swarm/core-41.mjs around line 306: plain subscription claude jobs are spawned with the full process environment; remove ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY from that child env exactly as runJobSetup does at line ~360, so an ambient key can never bill a subscription lane. Test: the env passed to a plain claude job has neither variable even when set in the parent. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain (inject exec). STANDING TEST RULE: per-test timeout at most 60 s; process-spawning tests use their own process group and kill children in teardown.",
+   "context": [
+    "tools/claude-shell.mjs",
+    "tools/lanes.mjs",
+    "tools/swarm/core-32.mjs",
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/swarm.mjs",
+    "tests/claude-shell-paused.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/claude-shell.mjs",
+    "tools/lanes.mjs",
+    "tools/swarm/core-32.mjs",
+    "tools/swarm/core-31.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/swarm.mjs",
+    "tests/claude-shell-paused.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
