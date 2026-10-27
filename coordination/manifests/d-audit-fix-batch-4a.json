@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-ship",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/ship.mjs (search for '### tools/ship.mjs' - it lists exact line numbers and the catch form found there: try-catch-no-binding, dot-catch-arrow, or dot-catch-noop-expr).\n\nIMPORTANT - this file is sensitive: it drives `swarm ship`'s push/PR/check/merge pipeline. I already read every one of the 13 flagged lines myself and confirmed NONE of them are part of the actual pass/fail check gate - they fall into three safe categories, and your fix must keep them that way:\n  - Lines 78, 283, 354, 873, 880, 242: best-effort utility fallbacks (finding a toolchain binary, detecting the default branch, loading private-names config, scanning a diff for a secrets check) - none of these decide whether ship merges or refuses.\n  - Lines 1005, 1006, 1201, 1202: cleanup code in a `finally` block that runs AFTER the real check/eligibility result (`checked`, `eligible`, `reason`) has already been computed and is about to be returned - these clean up a worktree/temp dir and must never be able to change or overwrite that already-decided return value.\n  - Lines 1217, 1220, 2189: explicitly documented in the file's own comments as a heads-up-only feature ('this is only a heads-up for a follow-up fix', 'ship still ships either way') - these must never become something that can block or refuse a ship.\n\nFor EACH flagged line in tools/ship.mjs only (do not touch any other file, do not touch any pass/fail check-gate logic even though it is in this file):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next). Confirm for yourself, before touching it, that the catch is in one of the three safe categories above (or is otherwise clearly non-gating) - if you find a flagged line that actually DOES affect whether a check passes or ship proceeds, stop and do not touch that one; note it in your summary as a concern instead of guessing.\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. a candidate binary that doesn't exist at this path yet, a git command whose target doesn't exist, an optional config file that may be absent. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally where a narrower code check makes sense, narrow it and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own (checked) - use `console.error('[tools/ship.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call where you are not simply preserving an already-safe silent fallback per (a) above - do not just rename-and-ignore a binding.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above. Do not change anything about what `checked`, `eligible`, `checksPassed`, or any ship/merge decision ends up being.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed by Opus before merge given the sensitivity, and will send back any issue as a follow-up. List, in your final summary, which of the 13 flagged lines you touched, case (a) vs (b), with one line each, and confirm none of them changed what any check/gate function returns.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/ship.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/config-private-names.test.mjs",
+        "tests/field-lesson-t81-cli.test.mjs",
+        "tests/field-lesson-t81-pipeline.test.mjs",
+        "tests/field-lesson183.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-ship.test.mjs",
+        "tests/field-lessons-batch-ah-process.test.mjs",
+        "tests/field-lessons-batch-ai-ship.test.mjs",
+        "tests/field-lessons-batch-b.test.mjs",
+        "tests/field-lessons-batch-d.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-h.test.mjs",
+        "tests/field-lessons-batch-j.test.mjs",
+        "tests/field-lessons-batch-k.test.mjs",
+        "tests/field-lessons-batch-m1.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/field-lessons-batch-m3.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-p.test.mjs",
+        "tests/field-lessons-batch-r.test.mjs",
+        "tests/field-lessons-batch-t1.test.mjs",
+        "tests/field-lessons-batch-u.test.mjs",
+        "tests/field-lessons-batch-v.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/go.test.mjs",
+        "tests/lessons115.test.mjs",
+        "tests/lessons120-ship.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/private-names-125.test.mjs",
+        "tests/ship-125.test.mjs",
+        "tests/ship-preflight.test.mjs",
+        "tests/ship.test.mjs"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}
