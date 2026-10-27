@@ -3,12 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { safeWritableDir, assertRegularOrMissing, sanitizeText } from './journal.mjs';
+import { acquireAutopilotLock } from './autopilot-lock.mjs';
 
 const MAX_ITEMS = 50;
 const GOAL_LIMIT = 2000;
 const PATH_LIMIT = 300;
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const STATUSES = new Set(['queued', 'started', 'done']);
+const MAX_BACKUPS = 10;
 
 function fail(code, detail = '') {
   return new Error(detail ? `${code}: ${detail}` : code);
@@ -41,6 +43,12 @@ function validateStored(item) {
   }
 }
 
+function normalizeVersion(value) {
+  if (value === undefined || value === null) return 0;
+  if (!Number.isInteger(value) || value < 0) throw fail('backlog-invalid', 'version must be a non-negative integer');
+  return value;
+}
+
 // Returns the project folder when it exists; refuses symlinks on the way.
 async function existingProjectDir(root) {
   const realRoot = await fs.realpath(root);
@@ -60,16 +68,26 @@ async function existingProjectDir(root) {
   return current;
 }
 
-export async function readBacklog(root) {
+async function resolvedRoot(root) {
+  return fs.realpath(root);
+}
+
+async function backlogFile(root) {
   const dir = await existingProjectDir(root);
-  if (!dir) return { items: [] };
-  const file = path.join(dir, 'backlog.json');
+  if (!dir) {
+    const writable = await safeWritableDir(await resolvedRoot(root), ['.swarm', 'project']);
+    return path.join(writable, 'backlog.json');
+  }
+  return path.join(dir, 'backlog.json');
+}
+
+async function parseBacklogFile(file) {
   await assertRegularOrMissing(file);
   let text;
   try {
     text = await fs.readFile(file, 'utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') return { items: [] };
+    if (error.code === 'ENOENT') return { items: [], version: 0 };
     throw error;
   }
   let data;
@@ -80,20 +98,73 @@ export async function readBacklog(root) {
   }
   if (!data || typeof data !== 'object' || !Array.isArray(data.items)) throw fail('backlog-invalid', 'items missing');
   data.items.forEach(item => validateStored(item));
-  return { items: data.items };
+  return { items: data.items, version: normalizeVersion(data.version) };
 }
 
-async function writeBacklog(root, data) {
-  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+export async function readBacklog(root) {
+  const dir = await existingProjectDir(root);
+  if (!dir) {
+    const file = path.join(await resolvedRoot(root), '.swarm', 'project', 'backlog.json');
+    return parseBacklogFile(file);
+  }
+  return parseBacklogFile(path.join(dir, 'backlog.json'));
+}
+
+async function readBacklogOnDisk(root) {
+  return parseBacklogFile(await backlogFile(root));
+}
+
+async function rotateBacklogBackup(root, version, payloadText) {
+  try {
+    const dir = await safeWritableDir(await resolvedRoot(root), ['.swarm', 'project', 'backlog-backups']);
+    const backupFile = path.join(dir, `backlog.${version}.json`);
+    await fs.writeFile(backupFile, payloadText, { mode: 0o600 });
+    const entries = await fs.readdir(dir);
+    const versions = entries
+      .filter(name => /^backlog\.\d+\.json$/.test(name))
+      .map(name => Number(name.slice('backlog.'.length, -'.json'.length)))
+      .filter(n => Number.isInteger(n))
+      .sort((a, b) => b - a);
+    for (const old of versions.slice(MAX_BACKUPS)) {
+      await fs.rm(path.join(dir, `backlog.${old}.json`), { force: true });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function writeBacklog(root, items, expectedVersion, { allowSingleRemoval = false, allowBulkReplace = false } = {}) {
+  const current = await readBacklogOnDisk(root);
+  if (current.version !== expectedVersion) throw fail('backlog-stale-write');
+  const drop = current.items.length - items.length;
+  if (drop > 0) {
+    if (allowBulkReplace) {
+      // intentional bulk replace
+    } else if (drop === 1 && allowSingleRemoval) {
+      // single removeGoal
+    } else {
+      throw fail('backlog-unexpected-drop');
+    }
+  }
+  const nextVersion = expectedVersion + 1;
+  const payload = { items, version: nextVersion };
+  const payloadText = JSON.stringify(payload, null, 2) + '\n';
+  const dir = await safeWritableDir(await resolvedRoot(root), ['.swarm', 'project']);
   const file = path.join(dir, 'backlog.json');
   await assertRegularOrMissing(file);
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
-  const handle = await fs.open(file, flags, 0o600);
+  const tmp = path.join(dir, `.backlog.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   try {
-    await handle.writeFile(JSON.stringify(data, null, 2) + '\n');
-  } finally {
+    await handle.writeFile(payloadText);
+    await handle.sync();
     await handle.close();
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.rm(tmp, { force: true });
+    throw error;
   }
+  await rotateBacklogBackup(root, nextVersion, payloadText);
 }
 
 function normalizeList(paths) {
@@ -109,41 +180,56 @@ export async function addGoal(root, { goal, paths = [], maxUsd, id } = {}, { now
   const list = normalizeList(paths);
   if (maxUsd !== undefined && !(Number.isFinite(maxUsd) && maxUsd > 0)) throw fail('backlog-max-usd-invalid');
   if (id !== undefined && (typeof id !== 'string' || !ID_RE.test(id))) throw fail('backlog-id-invalid');
-  const data = await readBacklog(root);
-  if (data.items.length >= MAX_ITEMS) throw fail('backlog-full', `at most ${MAX_ITEMS} items`);
-  const itemId = id ?? `g-${crypto.randomBytes(4).toString('hex')}`;
-  if (data.items.some(entry => entry.id === itemId)) throw fail('backlog-duplicate-id', itemId);
-  const item = {
-    id: itemId,
-    goal: sanitizeText(goal.trim()),
-    paths: list,
-    ...(maxUsd !== undefined ? { maxUsd } : {}),
-    addedAt: new Date(now()).toISOString(),
-    status: 'queued',
-  };
-  await writeBacklog(root, { items: [...data.items, item] });
-  return item;
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    const data = await readBacklogOnDisk(root);
+    if (data.items.length >= MAX_ITEMS) throw fail('backlog-full', `at most ${MAX_ITEMS} items`);
+    const itemId = id ?? `g-${crypto.randomBytes(4).toString('hex')}`;
+    if (data.items.some(entry => entry.id === itemId)) throw fail('backlog-duplicate-id', itemId);
+    const item = {
+      id: itemId,
+      goal: sanitizeText(goal.trim()),
+      paths: list,
+      ...(maxUsd !== undefined ? { maxUsd } : {}),
+      addedAt: new Date(now()).toISOString(),
+      status: 'queued',
+    };
+    await writeBacklog(root, [...data.items, item], data.version);
+    return item;
+  } finally {
+    await releaseLock();
+  }
 }
 
 export async function removeGoal(root, id) {
-  const data = await readBacklog(root);
-  const index = data.items.findIndex(entry => entry.id === id);
-  if (index < 0) throw fail('backlog-unknown', String(id));
-  const [removed] = data.items.splice(index, 1);
-  await writeBacklog(root, data);
-  return removed;
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    const data = await readBacklogOnDisk(root);
+    const index = data.items.findIndex(entry => entry.id === id);
+    if (index < 0) throw fail('backlog-unknown', String(id));
+    const nextItems = data.items.filter(entry => entry.id !== id);
+    await writeBacklog(root, nextItems, data.version, { allowSingleRemoval: true });
+    return data.items[index];
+  } finally {
+    await releaseLock();
+  }
 }
 
 async function transition(root, id, from, to, extra) {
-  const data = await readBacklog(root);
-  const item = data.items.find(entry => entry.id === id);
-  if (!item) throw fail('backlog-unknown', String(id));
-  if (item.status !== from) {
-    throw fail(from === 'queued' ? 'backlog-not-queued' : 'backlog-not-started', `${id} is ${item.status}`);
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    const data = await readBacklogOnDisk(root);
+    const item = data.items.find(entry => entry.id === id);
+    if (!item) throw fail('backlog-unknown', String(id));
+    if (item.status !== from) {
+      throw fail(from === 'queued' ? 'backlog-not-queued' : 'backlog-not-started', `${id} is ${item.status}`);
+    }
+    const nextItems = data.items.map(entry => (entry.id === id ? { ...entry, status: to, ...extra } : entry));
+    await writeBacklog(root, nextItems, data.version);
+    return nextItems.find(entry => entry.id === id);
+  } finally {
+    await releaseLock();
   }
-  Object.assign(item, { status: to }, extra);
-  await writeBacklog(root, data);
-  return item;
 }
 
 export async function markStarted(root, id, runId) {
@@ -153,6 +239,60 @@ export async function markStarted(root, id, runId) {
 
 export async function markDone(root, id) {
   return transition(root, id, 'started', 'done', {});
+}
+
+export async function moveGoal(root, id, { to } = {}) {
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    const data = await readBacklogOnDisk(root);
+    const fromIndex = data.items.findIndex(entry => entry.id === id);
+    if (fromIndex < 0) throw fail('backlog-unknown', String(id));
+    const nextItems = [...data.items];
+    const [moved] = nextItems.splice(fromIndex, 1);
+    if (to === 'top') {
+      nextItems.unshift(moved);
+    } else if (to === 'bottom') {
+      nextItems.push(moved);
+    } else if (to && typeof to === 'object' && typeof to.after === 'string') {
+      const afterIndex = nextItems.findIndex(entry => entry.id === to.after);
+      if (afterIndex < 0) throw fail('backlog-unknown', String(to.after));
+      nextItems.splice(afterIndex + 1, 0, moved);
+    } else {
+      throw fail('backlog-invalid', 'move target is malformed');
+    }
+    if (nextItems.length !== data.items.length) throw fail('backlog-invalid', 'move changed item count');
+    await writeBacklog(root, nextItems, data.version);
+    return moved;
+  } finally {
+    await releaseLock();
+  }
+}
+
+export async function exportBacklog(root) {
+  return readBacklog(root);
+}
+
+export async function importBacklog(root, { items } = {}) {
+  if (!Array.isArray(items)) throw fail('backlog-invalid', 'items missing');
+  items.forEach(item => validateStored(item));
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    const data = await readBacklogOnDisk(root);
+    await writeBacklog(root, items.map(item => ({ ...item })), data.version, { allowBulkReplace: true });
+    return { items, version: data.version + 1 };
+  } finally {
+    await releaseLock();
+  }
+}
+
+/** @internal Used by tests to exercise write guards without a public mutation API. */
+export async function __testWriteBacklog(root, items, expectedVersion, options) {
+  const releaseLock = await acquireAutopilotLock(root, { name: 'backlog' });
+  try {
+    await writeBacklog(root, items, expectedVersion, options);
+  } finally {
+    await releaseLock();
+  }
 }
 
 export function nextStartable(items, { activeClaims = [] } = {}) {

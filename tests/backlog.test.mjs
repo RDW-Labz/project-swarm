@@ -2,15 +2,28 @@
 import './_isolate-config.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readBacklog, addGoal, removeGoal, markStarted, markDone, nextStartable } from '../tools/backlog.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  readBacklog,
+  addGoal,
+  removeGoal,
+  markStarted,
+  markDone,
+  nextStartable,
+  moveGoal,
+  exportBacklog,
+  importBacklog,
+  __testWriteBacklog,
+} from '../tools/backlog.mjs';
 
 const now = () => Date.parse('2024-01-02T03:04:05Z');
 
 async function tmpRoot() {
-  return fs.mkdtemp(path.join(os.tmpdir(), 'backlog-test-'));
+  return fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'backlog-test-')));
 }
 
 function item(id, paths, status = 'queued') {
@@ -19,7 +32,7 @@ function item(id, paths, status = 'queued') {
 
 test('a missing backlog reads as empty', async () => {
   const root = await tmpRoot();
-  assert.deepEqual(await readBacklog(root), { items: [] });
+  assert.deepEqual(await readBacklog(root), { items: [], version: 0 });
 });
 
 test('addGoal stores a queued item with normalized paths and an ISO timestamp', async () => {
@@ -156,4 +169,133 @@ test('a malformed backlog file is refused', async () => {
   await assert.rejects(readBacklog(root), /backlog-invalid/);
   await fs.writeFile(path.join(root, '.swarm', 'project', 'backlog.json'), JSON.stringify({ items: 'nope' }));
   await assert.rejects(readBacklog(root), /backlog-invalid/);
+});
+
+test('two concurrent addGoal calls never lose an item', { timeout: 60000, concurrency: false }, async (t) => {
+  const root = await tmpRoot();
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  const modUrl = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/backlog.mjs')).href;
+  const children = [];
+  t.after(() => {
+    for (const child of children) child.kill('SIGKILL');
+  });
+  const runAddGoal = (id, goal) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `import { addGoal, readBacklog } from '${modUrl}';
+const now = () => Date.parse('2024-01-02T03:04:05Z');
+const root = ${JSON.stringify(root)};
+const id = ${JSON.stringify(id)};
+for (let attempt = 0; attempt < 200; attempt += 1) {
+  try {
+    await addGoal(root, { goal: ${JSON.stringify(goal)}, id }, { now });
+    const data = await readBacklog(root);
+    if (!data.items.some(entry => entry.id === id)) throw new Error('goal missing after write');
+    process.exit(0);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (!message.includes('running') && !message.includes('backlog-stale-write')) throw error;
+    await new Promise(resolve => setTimeout(resolve, 40));
+  }
+}
+throw new Error('backlog lock never became available');`,
+    ], { stdio: 'inherit' });
+    children.push(child);
+    child.on('error', reject);
+    child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}`))));
+  });
+  await Promise.all([
+    runAddGoal('one', 'first'),
+    runAddGoal('two', 'second'),
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const data = await readBacklog(root);
+  assert.equal(data.items.length, 2);
+  assert.deepEqual(new Set(data.items.map(entry => entry.id)), new Set(['one', 'two']));
+});
+
+test('a stale on-disk version is refused with backlog-stale-write', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'a', id: 'a' }, { now });
+  const file = path.join(root, '.swarm', 'project', 'backlog.json');
+  const onDisk = JSON.parse(await fs.readFile(file, 'utf8'));
+  const { items, version } = await readBacklog(root);
+  onDisk.version = version + 50;
+  await fs.writeFile(file, JSON.stringify(onDisk));
+  await assert.rejects(__testWriteBacklog(root, [...items, {
+    id: 'b',
+    goal: 'b',
+    paths: [],
+    addedAt: '2024-01-02T03:04:05.000Z',
+    status: 'queued',
+  }], version), /backlog-stale-write/);
+});
+
+test('an attempted write dropping more than one item outside removeGoal/importBacklog is refused', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (const id of ['a', 'b', 'c']) await addGoal(root, { goal: id, id }, { now });
+  const { items, version } = await readBacklog(root);
+  await assert.rejects(
+    __testWriteBacklog(root, items.slice(0, 1), version, {}),
+    /backlog-unexpected-drop/,
+  );
+});
+
+test('moveGoal reorders for top, bottom, and after id without changing count', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (const id of ['a', 'b', 'c']) await addGoal(root, { goal: id, id }, { now });
+  await moveGoal(root, 'c', { to: 'top' });
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['c', 'a', 'b']);
+  await moveGoal(root, 'c', { to: 'bottom' });
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['a', 'b', 'c']);
+  await moveGoal(root, 'a', { to: { after: 'c' } });
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['b', 'c', 'a']);
+  assert.equal((await readBacklog(root)).items.length, 3);
+});
+
+test('moveGoal refuses unknown ids', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'a', id: 'a' }, { now });
+  await assert.rejects(moveGoal(root, 'missing', { to: 'top' }), /backlog-unknown/);
+  await assert.rejects(moveGoal(root, 'a', { to: { after: 'missing' } }), /backlog-unknown/);
+});
+
+test('exportBacklog and importBacklog round-trip exactly', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'one', id: 'one', paths: ['src'] }, { now });
+  await markStarted(root, 'one', 'run-1');
+  const exported = await exportBacklog(root);
+  const root2 = await tmpRoot();
+  const imported = await importBacklog(root2, { items: exported.items });
+  assert.deepEqual(imported.items, exported.items);
+  assert.equal(imported.version, 1);
+  assert.deepEqual(await exportBacklog(root2), imported);
+});
+
+test('importBacklog rejects a malformed item', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await assert.rejects(
+    importBacklog(root, { items: [{ id: 'bad id', goal: 'x', paths: [], status: 'queued' }] }),
+    /backlog-invalid/,
+  );
+});
+
+test('rotating backups keep at most 10 files after many writes', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (let i = 0; i < 12; i += 1) await addGoal(root, { goal: `g${i}`, id: `g${i}` }, { now });
+  const backupDir = path.join(root, '.swarm', 'project', 'backlog-backups');
+  const backups = (await fs.readdir(backupDir)).filter(name => name.startsWith('backlog.'));
+  assert.ok(backups.length <= 10);
+  assert.ok(backups.length >= 10);
+});
+
+test('a backup-write failure does not block the real write', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'first', id: 'first' }, { now });
+  const backupDir = path.join(root, '.swarm', 'project', 'backlog-backups');
+  await fs.rm(backupDir, { recursive: true, force: true });
+  await fs.writeFile(backupDir, 'not a directory');
+  await addGoal(root, { goal: 'second', id: 'second' }, { now });
+  assert.equal((await readBacklog(root)).items.length, 2);
 });
