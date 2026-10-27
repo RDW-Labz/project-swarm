@@ -1,0 +1,71 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "partsguard",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Fix the orchestrator-mode guard for the parts project (installed 1.167.17). Real denied commands, all from the parts session, in two spellings: 'swarm ARGS' and 'node /Users/bean/.project-swarm/current/tools/swarm.mjs --root ROOT ARGS' (the node form must be treated exactly like swarm, with --root and its value skipped). They are wrongly denied with the text 'Orchestrator mode: writes are only allowed under...': (a) scope gate and scope gate --help; (b) the top-level help forms: ARGS = --help, -h, --version; (c) scope split --ingest RUNID --merge --max-repairs 0 --accept-waves (and without --merge, without --max-repairs; any of those flags together); (d) change \"description text\" --yes (one quoted description plus --yes: today change needs two positional words, which wrongly denies a one-description change order); and edits by the Write or Edit tool of docs/scope/scope.md (md only; no other file under docs/scope/, no other extension, no path tricks: reuse the existing path checks in tools/orchestrator-allow.mjs write allow-list and add exactly this one file). Root cause for most: omSwarmScopeReadOnly in tools/orchestrator-allow.mjs allows only the verbs show, list, status, read, check, help, and swarmArgsHaveYes and the owner-override flag helpers deny --yes and the flags that start with accept; also handbuild.mjs ORCHESTRATOR_MODE_PRESERVE_DENY contains the rule id handbuild-change-record which denies change; investigate and fix each so (a) to (d) are allowed, while ALL owner-only commands stay denied exactly as now: scope approve (any flags), scope split with approve in it, resolve, done, decide, handbuild approve/deny/off, tickets approve, a bare 'change --yes' with no description text (that approves an existing change order), with-concurrency, exec, shell. --accept-waves is allowed ONLY for scope split. Also: read-only commands must never be denied: add tests that grep in forms grep -rn foo docs, grep -E 'a|b' file, grep foo file | head -5, grep -c x file, plus swarm --help and swarm scope gate, are allowed in orchestrator mode; if any of them is denied, fix the cause. Tests (extend tests/orchestrator-allow.test.mjs, or tests/orchestrator-parts-flow.test.mjs for the new ones): build a fixture project root (with the swarm project markers the guard needs; look at how the existing orchestrator-mode tests build one), call the REAL guard decision (runGuardDecisionForHook or guardDecision with enforceOrchestratorMode true and root set) for every command above in BOTH spellings; assert (a) to (d) and scope.md allowed, scope approve and the other owner verbs denied, docs/scope/other.md and src/a.js denied. Required: the parts flow test must pass: change \"x\" --yes, scope split --ingest ID --merge --accept-waves, tickets T-0001 --files a.js --yes, scope gate, go --scope. Do not weaken any existing assertion; the existing tests must still pass. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-parts-flow.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/git-hooks.test.mjs",
+    "tests/guard-change-preview.test.mjs",
+    "tests/guard-free-text.test.mjs",
+    "tests/guard-readonly-forms.test.mjs",
+    "tests/guard-word-false-positive.test.mjs",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-allowlist.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard-verbs.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hardening.test.mjs",
+    "tests/handbuild-hardening2.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/handbuild-switch.test.mjs",
+    "tests/handbuild-vercel-merge.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-fail-closed.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/policy-commit-window.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/registry-round3.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/scratch-strict-broad.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-produced-hash.test.mjs"
+   ]
+  }
+ ]
+}
