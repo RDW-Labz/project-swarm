@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext, parseCheckTimeoutMs, resolveTicketCheckTimeoutMs, isE2eSpecPath } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import {
   ROOT_RULES,
@@ -94,6 +94,7 @@ export const SCOPE_USAGE = [
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
   '       swarm tickets ID --clear-note | --retry-note TEXT | --note TEXT | --reopen --reason "why"   (--retry-note replaces the system note a failed attempt left, shown to the next worker as untrusted failure text; --clear-note removes that retry note and any owner guidance note; --note alone leaves guidance for the next worker)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
+  '       swarm tickets ID --check-timeout MS | --check-timeout auto [--yes]   (per-ticket merge-queue check timeout 60000–1800000 ms; logged; an approved ledger is sealed again)',
   '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; --note with --set ready, todo or blocked saves owner guidance for the next worker; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
   '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
@@ -127,7 +128,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -837,7 +838,6 @@ export async function qualityFor(root, profile) {
 
 const SPEC_TESTS_TOKEN = '{tests}';
 const SPEC_AFFECTED_TOKEN = '{affected}';
-const E2E_SPEC_PATH = /(?:(^|\/)(e2e|playwright|cypress\/e2e)\/|\.e2e\.[cm]?[jt]sx?$)/i;
 const specTestArg = p => `./${p}`;
 
 async function readProjectChecks(root) {
@@ -845,10 +845,6 @@ async function readProjectChecks(root) {
     const parsed = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8'));
     return Array.isArray(parsed?.checks) ? parsed.checks : [];
   } catch { return []; }
-}
-
-function isE2eSpecPath(file) {
-  return E2E_SPEC_PATH.test(file);
 }
 
 function argvLooksE2e(argv) {
@@ -904,10 +900,15 @@ export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {
   return null;
 }
 
-export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs } = {}) {
+export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs, ticket } = {}) {
   const argv = argvForTicketSpec(file, { profile, checks, pkg, files });
   if (!argv?.length) return { ok: false, reason: `no runner configured for ${file}` };
-  const limit = timeoutMs ?? (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
+  let limit = timeoutMs;
+  if (limit === undefined && ticket && isE2eSpecPath(file)) {
+    const custom = resolveTicketCheckTimeoutMs(ticket, profile?.verify);
+    if (custom !== undefined) limit = custom;
+  }
+  if (limit === undefined) limit = (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
   try {
     const { exitCode, stdout, stderr } = await runCheckArgv(argv, { cwd: root, timeoutMs: limit });
     const tail = [stdout, stderr].filter(Boolean).join('\n').slice(-8000);
@@ -3074,7 +3075,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       if (specPaths.length) {
         let specStop = false;
         for (const f of specPaths) {
-          const outcome = await runSpec(root, f, specCtx);
+          const outcome = await runSpec(root, f, { ...specCtx, ticket: t });
           if (outcome?.failed) {
             const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
             (result === 'blocked' ? blocked : retried).push(t.id);
@@ -3463,7 +3464,7 @@ async function setTicketRoute(root, rest, flags) {
   const risk = flags.risk;
   const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
   const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
-  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered'].filter(k => flags[k] !== undefined);
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'check-timeout'].filter(k => flags[k] !== undefined);
   if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
   if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
   if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
@@ -3490,6 +3491,45 @@ async function setTicketRoute(root, rest, flags) {
       saved.updatedAt = new Date().toISOString();
       await writeLedger(root, saved);
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields, before: Object.fromEntries(fields.map(k => [k, ticket[k] ?? null])), after: Object.fromEntries(fields.map(k => [k, next[k] ?? null])), note: flags.note ?? null, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
+async function setTicketCheckTimeout(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --check-timeout needs one ticket id');
+  const raw = flags['check-timeout'];
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'lane', 'risk'].filter(k => flags[k] !== undefined);
+  if (others.length) return bad(`tickets --check-timeout cannot be combined with --${others[0]}; run them one at a time`);
+  const clear = raw === 'auto';
+  let parsed;
+  if (!clear) {
+    parsed = parseCheckTimeoutMs(raw);
+    if (!parsed.ok) return out(parsed.error, 1);
+  }
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      if (!['proposed', 'todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a proposed, todo, ready or blocked ticket can change its check timeout (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
+      const next = { ...ticket };
+      if (clear) delete next.checkTimeoutMs;
+      else next.checkTimeoutMs = parsed.value;
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const before = ticket.checkTimeoutMs ?? null;
+      const after = next.checkTimeoutMs ?? null;
+      if (before === after) return out(`${ticket.id}: nothing to change`);
+      const summary = `  checkTimeoutMs: ${before ?? 'default'}  ->  ${after ?? 'default'}`;
+      const wasApproved = isApproved(fresh);
+      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${wasApproved ? ' (the approval is renewed over the change)' : ''}.`);
+      fresh.tickets = fresh.tickets.map(x => x.id === ticket.id ? next : x);
+      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: ['checkTimeoutMs'], before: { checkTimeoutMs: before }, after: { checkTimeoutMs: after }, note: flags.note ?? null, reapproved: wasApproved });
       await refreshPlan(root);
       return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
     });
@@ -3770,6 +3810,7 @@ export async function runTicketsCommand(root, args) {
   if (flags.release === true) return releaseTickets(root, rest, flags);
   if (flags.delivered !== undefined) return deliverTicketsCommand(root, rest, flags);
   if (flags.approve === true) return approveProposed(root, rest, flags);
+  if (flags['check-timeout'] !== undefined) return setTicketCheckTimeout(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) return setTicketStatus(root, rest, flags);
