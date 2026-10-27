@@ -126,9 +126,8 @@ export function assertClaudeShellNotPaused(config) {
   if (problem) throw Object.assign(Error(problem), { code: CLAUDE_SHELL_PAUSED });
 }
 
-export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+export async function readWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
   const resolvedConfig = config ?? loadConfig({ env });
-  assertClaudeShellNotPaused(resolvedConfig);
   let key = typeof env[WORKER_KEY_ENV] === 'string' ? env[WORKER_KEY_ENV].trim() : '';
   const item = workerKeyItem(resolvedConfig);
   if (!key) {
@@ -138,6 +137,12 @@ export async function resolveWorkerKey({ env = process.env, exec = execFileAsync
   if (!key) throw Error(`claude shell jobs need a worker API key: set ${WORKER_KEY_ENV} or keychain item service ${item.service} account ${item.account}; never falls back to your claude login`);
   if (!/^[\x21-\x7e]{8,512}$/.test(key)) throw Error('worker API key has an invalid shape');
   return key;
+}
+
+export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env });
+  assertClaudeShellNotPaused(resolvedConfig);
+  return readWorkerKey({ env, exec, config: resolvedConfig, loadConfig });
 }
 
 export function claudeShellArgs(job) {

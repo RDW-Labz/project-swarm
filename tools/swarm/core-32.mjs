@@ -1,5 +1,5 @@
 import { apiDoctor, probeLocalProvider } from '../api-adapters.mjs';
-import { containsKey, resolveWorkerKey } from '../claude-shell.mjs';
+import { containsKey, readWorkerKey } from '../claude-shell.mjs';
 import { execViaFile, EXTRA_CLI_AGENTS, extraCliDoctor } from '../cli-adapters.mjs';
 import { remoteExec, resolveCliHosts } from '../cli-host.mjs';
 import { codexDoctor } from '../codex-adapter.mjs';
@@ -25,7 +25,7 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (state.jobs.some(job => job.workerKeyExposed)) fail(`Refusing: run ${id} exposed the worker API key during a ${hasShell ? 'shell' : 'cursor'} job`);
   const keys = [];
   if (hasShell) {
-    try { keys.push(await resolveWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
+    try { keys.push(await readWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
   }
   { const cursorKey = hasCursor ? readCursorKey(env) : undefined; if (cursorKey) keys.push(cursorKey); }
   if (!keys.length) return;

@@ -28,6 +28,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
 
 // The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
 const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
+const CLAUDE_EXTRA_FIELDS = Object.freeze(['shellPaused']);
 const LOCAL_LANE_FIELDS = Object.freeze(['endpoints', 'agencyConcurrency']);
 function invalid(agent, field, reason) {
   return Object.assign(new Error(`lanes-invalid: ${agent}.${field} ${reason}`), { code: 'lanes-invalid' });
@@ -56,6 +57,7 @@ function validate(agent, lane) {
     throw invalid(agent, 'model', 'must be null or a valid model name');
   }
   if (Object.hasOwn(lane, 'paused') && lane.paused !== true && lane.paused !== false) throw invalid(agent, 'paused', 'must be true or false');
+  if (agent === 'claude' && Object.hasOwn(lane, 'shellPaused') && lane.shellPaused !== true && lane.shellPaused !== false) throw invalid(agent, 'shellPaused', 'must be true or false');
 }
 
 export function resolveLanes({ config = {}, manifest = {}, env = process.env } = {}) {
@@ -76,7 +78,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
       for (const [field, value] of Object.entries(override)) {
         if (agent === 'local' && LOCAL_LANE_FIELDS.includes(field)) continue;
-        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field)) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
+        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && (CLAUDE_TIER_FIELDS.includes(field) || CLAUDE_EXTRA_FIELDS.includes(field))) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
         if (field === 'backoff') {
           if (!object(value)) throw invalid(agent, field, 'must be an object');
           for (const [key, entry] of Object.entries(value)) {
