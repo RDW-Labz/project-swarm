@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokF2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "REAL BUG in the dispatcher change (confirmed by reading the diff and reproducing: a hermes job whose fake child exits normally ends 'failed' with 'exit null: no stderr output; CLI process failed'; it happens with a 30 second job timeout too, so it is not timing and not token issuance, which takes 4 ms and works): in tools/swarm/core-41.mjs function execute, the original handlers were termination.then(cleanup=>{if(cleanup.error)finish(null);}).catch(()=>finish(null)) in the child exit handler and in stop(). The token change replaced them with termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null)) (two places, around lines 260 and 373). That finishes the job with exit code null as soon as the process EXITS, before the close event delivers the real exit code and the drained stdout, so EVERY CLI worker (hermes, qwen, and the plain claude spawn, which shares this path) is reported as failed with a null exit code. Fix: restore the original condition: termination.then(cleanup => { if (cleanup && cleanup.error) finishAndRevoke(null); }).catch(() => finishAndRevoke(null)) in BOTH places, so a normal exit still waits for the close event with the real code. Keep the token issue, revoke in finally and redaction as they are. Add tests (tests/worker-token-dispatch.test.mjs and tests/cli-adapters.test.mjs additions allowed): a fake child that writes a valid result and exits with code 0 yields status complete and exit code 0 for each of claude (plain spawn path), hermes and qwen, while a token is issued and revoked afterwards; the exit code of a failing child (exit 3) is preserved as 3; a timeout still ends as timeout. These tests must FAIL on the current code and pass after the fix (run them before and after and say so in the final summary). Make tests/cli-adapters.test.mjs, tests/worker-token-dispatch.test.mjs, tests/worker-token.test.mjs, tests/cursor-process-group.test.mjs and tests/worker-guard-e2e.test.mjs pass. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/worker-token.mjs",
+    "tests/cli-adapters.test.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tests/cli-adapters.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
