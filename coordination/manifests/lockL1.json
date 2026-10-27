@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockL1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Create a robust generic file lock: tools/file-lock.mjs (ES module, no dependencies) and tests/file-lock.test.mjs. Background (Opus review of the backlog lock): the existing acquireAutopilotLock in tools/autopilot-lock.mjs is NOT safe as a lock: it creates the lock file with O_EXCL and writes the owner afterwards, so another process sees an empty file, treats it as dead and deletes it (two holders); two callers in the same process both see owner.pid equal to their own pid and the second steals the lock; there is no wait or retry. Do NOT edit autopilot-lock.mjs in this job. API: async acquireFileLock(lockPath, { waitMs = 10000, graceMs = 5000, maxHoldMs = 600000, pollMs = 25 } = {}) returns an async release function; async withFileLock(lockPath, fn, options) runs fn under the lock and always releases (finally). Requirements: (1) the lock appears WHOLE or not at all: write the owner record (JSON with pid, random token of 16 bytes hex, startedAt) to a temp file in the same folder (name includes the pid and random bytes, open flags O_CREAT|O_EXCL|O_WRONLY, mode 0600, no symlink following), fsync it, then fs.link(temp, lockPath) (EEXIST means held) and unlink the temp file in a finally; (2) an in-process mutex per resolved lockPath (a Map of promise chains) so a second caller in the SAME process waits for the first and never takes or steals the lock; (3) when the lock file exists: read it; if it parses and the owner pid is alive (process.kill(pid, 0), EPERM counts as alive) and it is younger than maxHoldMs, it is held: wait with jittered backoff (pollMs to 4 times pollMs) until waitMs, then throw an Error with code file-lock-timeout and a message naming the holder pid and age; if the owner pid is dead, or the lock is older than maxHoldMs, it is stale: clear it with a compare-and-delete (stat the file, re-read, only unlink when the inode and content still match what you judged stale, so a lock someone else just took is never deleted) and retry; an unreadable or empty or half-written lock file is treated as BUSY until its modification time is older than graceMs, then as stale; (4) release removes the lock file only if its token still equals ours (never delete another holder's lock), is idempotent, and never throws for a missing file; (5) at acquire time remove stray temp files of dead pids in the lock's folder that match your own temp naming; (6) refuse a lockPath whose parent is a symlink or whose existing lock path is a symlink. Tests (real processes, no fakes of the lock): at least 6 child processes started with child_process.spawn each doing 20 read-modify-write increments of a counter file under withFileLock with no retry code in the child: the final counter equals the total and no increment is lost, repeat the whole scenario 3 times; 10 concurrent withFileLock calls inside one process never overlap (an in-critical-section counter never exceeds 1); a stale lock left by a dead pid (spawn and kill a child, write its pid) is cleared and acquired; an empty lock file is treated as busy within the grace period and cleared after (use a small graceMs); a lock held by a live process is not stolen (acquire attempt times out with file-lock-timeout when waitMs is short); release by a non-owner leaves the lock; symlinked parent refused. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, start children in their own process group when it can, and kill children in its after hook. IMPORTANT: secret scanner: no credential-looking literals.",
+   "context": [
+    "tools/autopilot-lock.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/file-lock.mjs",
+    "tests/file-lock.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}

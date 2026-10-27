@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockL2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Rebuild the locking of tools/backlog.mjs on the new tools/file-lock.mjs (withFileLock from the previous step) and fix every finding of the Opus review of the first version. Replace every use of acquireAutopilotLock in tools/backlog.mjs with withFileLock on a lock file next to backlog.json (name backlog.lock in the same folder), with the wait and retry INSIDE the library (the callers never see busy errors; a timeout gives backlog-lock-timeout). Apply: (1) every mutation (addGoal, removeGoal, markStarted, markDone, moveGoal, importBacklog) runs wholly inside the lock and computes its change from the state read UNDER the lock; (2) after the atomic rename re-read the file and assert the written version is the expected next version and the changed item is present, throw backlog-write-lost otherwise (tripwire); (3) importBacklog needs an explicit option replace: true whenever it would remove more than one existing item or import an empty list (otherwise refuse with backlog-unexpected-drop), and validates imported items with exactly the same rules as addGoal (unique ids, the 50 item cap, normalizePath on paths, goal length limit and sanitizeText); (4) the rotating backup stores the CURRENT on-disk text (the version being replaced, also the very first unversioned file) before the rename, opened with O_CREAT|O_TRUNC|O_NOFOLLOW and mode 0600, pruned by modification time keeping the 10 newest, backup failures never fail the write; (5) fsync the folder after the rename and remove stray temp files of dead pids while holding the lock; (6) the test-only writer export must not be usable in production: gate it on an environment variable that the test runner sets (NODE_TEST_CONTEXT) or move it into a test helper; (7) keep readBacklog returning { items, version } (version 0 for an old unversioned file) and keep the other callers working (tools/inbox-commands.mjs, tools/swarm.mjs autopilot start, tools/autopilot-ready-deps.mjs only read items). Tests in tests/backlog.test.mjs (extend): at least 6 real child processes each adding 10 goals concurrently with NO retry code in the child (the library waits): every goal reported added is in the final file and the version increased by exactly the number of successful writes, repeat 3 times; 8 concurrent addGoal and removeGoal promises in one process lose nothing; a stale lock from a dead pid does not block; a corrupt backlog.json refuses writes and is left intact; an empty import without replace is refused; duplicate ids in an import are refused; the backup of version N exists after write N+1 and the first write after upgrade backs up the original; symlink planted at a backup path is not followed. Keep every existing test passing. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, start children in their own process group when it can, and kill children in its after hook. IMPORTANT: secret scanner: no credential-looking literals.",
+   "context": [
+    "tools/backlog.mjs",
+    "tools/file-lock.mjs",
+    "tests/backlog.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/backlog.mjs",
+    "tests/backlog.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
