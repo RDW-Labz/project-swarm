@@ -26,6 +26,7 @@ import {
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
   orchestratorCommandTooLong,
+  orchestratorModeAgentLaunchBlocked,
   swarmWorkerSession,
   workerScopedWriteRelDenied,
   orchestratorSwarmSubfolderBlocked,
@@ -1969,6 +1970,7 @@ const ORCHESTRATOR_MODE_PRESERVE_DENY = new Set([
 ]);
 
 const orchestratorModeBlockedOps = command => {
+  if (orchestratorModeAgentLaunchBlocked(command)) return true;
   for (const op of buildPolicyOps(command)) {
     if (op.tool === 'git' && (op.sub === 'commit' || op.sub === 'push')) return true;
     if (op.tool === 'gh' && (op.sub === 'pr create' || op.sub === 'pr merge' || op.ghPrMerge)) return true;

@@ -1519,23 +1519,44 @@ const omGhApiArgsOk = rest => {
 
 const omGhAuthStatusOk = args => args.length === 0;
 
+const OM_GH_READ_ONLY_FLAGS = new Set([
+  '--json', '--jq', '--template', '--limit', '--app', '--hostname', '-q', '-t',
+]);
+
+const omGhReadOnlyFlagOk = a => {
+  const s = String(a);
+  if (s === '-R' || s === '--repo' || s === '--repository') return 'skip2';
+  if (s.startsWith('--repo=') || s.startsWith('--repository=')) return 'skip1';
+  if (s === '-w' || s === '--web' || s.startsWith('--we')) return 'deny';
+  const eq = s.indexOf('=');
+  const name = eq === -1 ? s : s.slice(0, eq);
+  if (OM_GH_READ_ONLY_FLAGS.has(name) || name.startsWith('--jq=') || name.startsWith('--template=')) {
+    return eq === -1 ? 'skip2' : 'skip1';
+  }
+  if (s === '--version' || s === '-v') return 'skip1';
+  if (s.startsWith('-')) return 'deny';
+  return 'pos';
+};
+
 const omGhReadOnly = (args, commandText, piped) => {
   if (omGhPrMerge(args)) return false;
   if (omGhWebFlag(args, commandText)) return false;
+  const pos = [];
   let i = 0;
-  while (i < args.length && args[i].startsWith('-')) {
-    if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
-    else if (args[i] === '-w' || args[i] === '--web' || args[i].startsWith('--we')) return false;
-    else return false;
+  while (i < args.length) {
+    const kind = omGhReadOnlyFlagOk(args[i]);
+    if (kind === 'deny') return false;
+    if (kind === 'skip2') { i += 2; continue; }
+    if (kind === 'skip1') { i += 1; continue; }
+    pos.push(args[i]);
+    i += 1;
   }
-  const pos = args.slice(i);
   if (pos[0] === 'api') return false;
   if (pos[0] === 'pr' && pos[1] === 'create') return false;
   if (pos[0] === 'auth' && pos[1] === 'status') return omGhAuthStatusOk(pos.slice(2));
   const sub = pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
   if (sub === 'run watch') return false;
   if ((args.includes('--version') || args.includes('-v')) && pos.length === 0) return true;
-  if (pos.some(a => a.startsWith('-'))) return false;
   return sub !== null && OM_GH_ALLOWED.has(sub);
 };
 
@@ -1560,8 +1581,11 @@ const omGitSubAllowed = (sub, rest) => {
   if (rest.some(omArgPoisoned)) return false;
   const statusShort = new Set(['-s', '-b', '-u', '-v', '-z', '-t']);
   const statusLong = new Set(['--short', '--branch', '--porcelain', '--verbose', '--untracked-files', '--no-renames']);
-  const logShort = new Set(['-n', '-p', '--pretty', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9']);
-  const logLong = new Set(['--oneline', '--max-count', '--no-decorate', '--decorate', '--pretty', '--abbrev-commit', '--no-merges']);
+  const logShort = new Set(['-n', '-p', '--pretty', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9', '-i', '-E', '-F']);
+  const logLong = new Set([
+    '--oneline', '--max-count', '--no-decorate', '--decorate', '--pretty', '--abbrev-commit', '--no-merges',
+    '--grep', '--author', '--committer', '--since', '--until', '--after', '--before', '--all', '--walk-reflogs',
+  ]);
   const diffShort = new Set(['-U', '-u', '-w', '-b', '--stat', '-1', '-2', '-3', '-4', '-5']);
   const diffLong = new Set(['--stat', '--name-only', '--numstat', '--no-color', '--color']);
   const fetchShort = new Set(['-p', '-q', '-v', '-n']);
@@ -1570,7 +1594,15 @@ const omGitSubAllowed = (sub, rest) => {
     case 'status':
       return omGitOptsExact(rest, { shorts: statusShort, longs: statusLong });
     case 'log':
-      return omGitOptsExact(rest, { shorts: logShort, longs: logLong, valueShort: new Set(['-n']), valueLong: new Set(['--max-count', '--pretty']), numericShort: true });
+      return omGitOptsExact(rest, {
+        shorts: logShort,
+        longs: logLong,
+        valueShort: new Set(['-n']),
+        valueLong: new Set([
+          '--max-count', '--pretty', '--grep', '--author', '--committer', '--since', '--until', '--after', '--before',
+        ]),
+        numericShort: true,
+      });
     case 'diff':
     case 'show':
       return omGitOptsExact(rest, { shorts: diffShort, longs: diffLong, valueShort: new Set(['-U', '-u']), valueLong: new Set() });
@@ -1794,6 +1826,181 @@ const omRedirectsForbidden = words => {
   return false;
 };
 
+const OM_AGENT_LAUNCH_WRAPPERS = new Set([
+  'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'stdbuf', 'caffeinate', 'sudo', 'xargs',
+  'builtin', 'setsid', 'chrt', 'doas',
+]);
+const OM_AGENT_CLI = new Set(['claude', 'codex', 'cursor-agent']);
+const OM_AGENT_LAUNCH_MAX_DEPTH = 4;
+
+const omAgentPackageToken = token => {
+  if (!token || token.startsWith('-')) return null;
+  const at = token.startsWith('@') ? token.indexOf('@', 1) : token.indexOf('@');
+  const pkg = at === -1 ? token : token.slice(0, at);
+  if (pkg === '@anthropic-ai/claude-code') return 'claude';
+  const base = path.basename(pkg);
+  if (OM_AGENT_CLI.has(base) || base === 'claude-code') return base === 'claude-code' ? 'claude' : base;
+  return null;
+};
+
+const omSkipPackageRunnerFlags = (plain, i) => {
+  while (i < plain.length) {
+    const a = plain[i];
+    if (a === '--') { i += 1; break; }
+    if (!a.startsWith('-')) break;
+    const takes = a === '-p' || a === '--package' || a === '--prefix' || a === '--node-options'
+      || a === '--workspace' || a === '-w' || a === '--cwd' || a === '-C';
+    i += takes ? 2 : 1;
+  }
+  return i;
+};
+
+const omPackageRunnerAgentArgs = (plain, programIndex) => {
+  const cmd = plain[programIndex];
+  let i = programIndex + 1;
+  if (cmd === 'npx' || cmd === 'bunx') {
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'pnpm') {
+    const sub = plain[i];
+    if (sub !== 'dlx' && sub !== 'exec') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'yarn') {
+    if (plain[i] !== 'dlx') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'npm') {
+    if (plain[i] !== 'exec') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  return null;
+};
+
+const omSkipToAgentProgram = plain => {
+  let k = 0;
+  let wrapperName = null;
+  while (k < plain.length) {
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (!wrapperName && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (OM_AGENT_LAUNCH_WRAPPERS.has(plain[k])) {
+      wrapperName = plain[k];
+      k += 1;
+      continue;
+    }
+    if (wrapperName === 'env') {
+      if (plain[k] === '-S' || plain[k] === '--split-string') {
+        return { index: k + 2, envSplit: plain[k + 1] };
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    }
+    if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; continue; }
+    if (wrapperName === 'command' && (plain[k] === '-v' || plain[k] === '-V')) {
+      return { index: plain.length };
+    }
+    if (wrapperName && plain[k].startsWith('-')) {
+      const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) {
+      k += 1;
+      wrapperName = null;
+      continue;
+    }
+    if (wrapperName) wrapperName = null;
+    break;
+  }
+  return { index: k };
+};
+
+const omNodeScriptIsAgent = scriptToken => {
+  if (!scriptToken || scriptToken.startsWith('-')) return false;
+  const base = path.basename(scriptToken);
+  if (base === 'claude' || OM_AGENT_CLI.has(base)) return true;
+  return base === 'cli.js' && /anthropic-ai\/claude-code/.test(scriptToken);
+};
+
+const omPlainWordsFromSegment = words => {
+  const plain = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '&>', '<', '<<<', '<<'].includes(words[i])) {
+      if (words[i] !== '<<') i += 1;
+      continue;
+    }
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
+  }
+  return plain;
+};
+
+const omAgentLaunchInText = (commandText, depth = 0) => {
+  if (depth > OM_AGENT_LAUNCH_MAX_DEPTH) return false;
+  const text = String(commandText ?? '');
+  if (!text) return false;
+  for (const sub of substitutions(text)) {
+    if (omAgentLaunchInText(sub, depth + 1)) return true;
+  }
+  for (const words of tokenize(text)) {
+    const plain = omPlainWordsFromSegment(words);
+    const { index, envSplit } = omSkipToAgentProgram(plain);
+    if (envSplit !== undefined && omAgentLaunchInText(envSplit, depth + 1)) return true;
+    if (index >= plain.length) continue;
+    const cmd = path.basename(plain[index]);
+    const args = plain.slice(index + 1);
+    if (OM_AGENT_CLI.has(cmd) || cmd === 'claude') return true;
+    if (omPackageRunnerAgentArgs(plain, index) !== null) return true;
+    if (cmd === 'node') {
+      const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+      if (scriptAt !== -1 && omNodeScriptIsAgent(args[scriptAt])) return true;
+    }
+    if (SHELLS.has(cmd)) {
+      const at = args.findIndex(codeFlagFor(cmd));
+      if (at !== -1 && args[at + 1] !== undefined && omAgentLaunchInText(args[at + 1], depth + 1)) return true;
+    }
+    if (cmd === 'eval' && args.length && omAgentLaunchInText(args.join(' '), depth + 1)) return true;
+  }
+  return false;
+};
+
+/** True when a command line launches a paid agent CLI (position-based; not mere mention of the word claude). */
+export function orchestratorModeAgentLaunchBlocked(command) {
+  try {
+    return omAgentLaunchInText(command, 0);
+  } catch {
+    return true;
+  }
+};
+
+const omOrchestratorClaudeHomeReadOk = (abs, home) => {
+  let homeReal;
+  try { homeReal = fs.realpathSync.native(home); } catch { return false; }
+  let absReal;
+  try { absReal = fs.realpathSync.native(abs); } catch { return false; }
+  const rel = path.relative(homeReal, absReal);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const norm = rel.split(path.sep).join('/');
+  if (norm === '.claude.json') return false;
+  if (norm === '.claude/projects' || norm.startsWith('.claude/projects/')) return false;
+  if (norm === '.claude' || norm.startsWith('.claude/')) return true;
+  return false;
+};
+
 const omSensitiveAbs = (abs, home) => {
   const rel = path.relative(home, abs);
   if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
@@ -1808,6 +2015,7 @@ const omSensitiveAbs = (abs, home) => {
 const omOperandUnsafe = raw => {
   const s = String(raw ?? '');
   if (!s || s === '-') return false;
+  if (s === '~' || s.startsWith('~/')) return false;
   return /[$`*?[\{~]/.test(s);
 };
 
@@ -1977,10 +2185,12 @@ const omReadOperandOk = (raw, ctx) => {
       return insideProject(ctx.root, abs) !== null;
     }
     if (omSensitiveAbs(real, home)) return false;
+    if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
     if (session) return omPathInsideWorkerWorkspace(real, session.workspace);
     return insideProject(ctx.root, real) !== null;
   }
   if (omSensitiveAbs(real, home)) return false;
+  if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
   if (session) return omPathInsideWorkerWorkspace(real, session.workspace);
   return insideProject(ctx.root, real) !== null;
 };
@@ -2289,6 +2499,7 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
   const text = String(command ?? '');
   if (!text.trim()) return true;
   if (orchestratorCommandTooLong(text)) return false;
+  if (orchestratorModeAgentLaunchBlocked(text)) return false;
   if (/<\(|>\(/.test(text)) return false;
   try {
     for (const sub of substitutions(text)) {

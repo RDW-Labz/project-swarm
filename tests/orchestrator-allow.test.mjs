@@ -785,3 +785,65 @@ test('docs/state allow-listed writes pass with hand-build guard on', async t => 
   const d = await guardWrite('docs/state/usage-ledger.md', root, { handbuildOff: false, orchestrator: true });
   assert.equal(d.allow, true);
 });
+
+test('orchestrator guard: claude word false positives and agent launches', { timeout: 60_000 }, async t => {
+  await installLocalSwarmShim();
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'src'), { recursive: true });
+  await fs.writeFile(path.join(root, 'claude-notes.md'), '# notes\n');
+  const home = process.env.HOME;
+  const claudeDir = path.join(home, '.claude');
+  const projectsDir = path.join(claudeDir, 'projects', 'proj-hash');
+  await fs.mkdir(projectsDir, { recursive: true });
+  const transcript = path.join(projectsDir, 'sess.jsonl');
+  await fs.writeFile(transcript, '{}\n');
+  await fs.mkdir(claudeDir, { recursive: true });
+  await fs.writeFile(path.join(claudeDir, 'settings.json'), '{}\n');
+  const claudeJson = path.join(home, '.claude.json');
+  await fs.writeFile(claudeJson, '{}\n');
+  t.after(async () => {
+    await fs.rm(claudeJson, { force: true }).catch(() => {});
+    await fs.rm(transcript, { force: true }).catch(() => {});
+  });
+  const ctx = { root, cwd: root, home };
+  const allow = [
+    'grep -rn claude src',
+    'grep -rn claude .',
+    'git log --grep claude --oneline',
+    'git log --oneline -5 -- .claude',
+    'swarm tickets T-0001 --note claude in the ticket text',
+    'swarm backlog add goal mentioning claude',
+    'swarm note claude in a note',
+    'ls claude-notes',
+    'cat claude-notes.md',
+    'cat ~/.claude/settings.json',
+    'ls ~/.claude',
+    'gh pr view 12 --json title,body',
+    'gh run view 5 --json status',
+    'gh pr list --json number,title --jq .[0].number --limit 5',
+  ];
+  const deny = [
+    'claude -p hi',
+    'npx claude-code',
+    'npx @anthropic-ai/claude-code',
+    '/usr/local/bin/claude -p x',
+    'env FOO=1 claude -p x',
+    "bash -c 'claude -p x'",
+    'nohup claude -p x',
+    `cat ${transcript}`,
+    `cat ${claudeJson}`,
+    `echo x > ${path.join(claudeDir, 'new-file.txt')}`,
+  ];
+  for (const handbuildOff of [false, true]) {
+    for (const c of allow) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} allow: ${c}`);
+      assert.equal(orchestratorModeCommandAllowed(c, ctx), true, `om allow: ${c}`);
+    }
+    for (const c of deny) {
+      const d = await guardBash(c, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny: ${c}`);
+      assert.equal(orchestratorModeCommandAllowed(c, ctx), false, `om deny: ${c}`);
+    }
+  }
+});

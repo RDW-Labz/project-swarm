@@ -716,13 +716,23 @@ export function readOnlyCommandAllowed(words) {
     return true;
   }
   if (cmd === 'gh') {
+    const GH_READ_FLAGS = new Set(['--json', '--jq', '--template', '--limit', '--app', '--hostname', '-q', '-t']);
+    const pos = [];
     let i = 0;
-    while (i < args.length && args[i].startsWith('-')) {
-      if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
-      else if (args[i].startsWith('--repo=') || args[i].startsWith('--repository=')) i += 1;
-      else return false;
+    while (i < args.length) {
+      const a = args[i];
+      if (!a.startsWith('-')) { pos.push(a); i += 1; continue; }
+      if (a === '-R' || a === '--repo' || a === '--repository') { i += 2; continue; }
+      if (a.startsWith('--repo=') || a.startsWith('--repository=')) { i += 1; continue; }
+      const eq = a.indexOf('=');
+      const name = eq === -1 ? a : a.slice(0, eq);
+      if (GH_READ_FLAGS.has(name) || name.startsWith('--jq=') || name.startsWith('--template=')) {
+        i += eq === -1 ? 2 : 1;
+        continue;
+      }
+      return false;
     }
-    return ghReadonlySub(args.slice(i));
+    return ghReadonlySub(pos);
   }
   if (READONLY_BINARIES.has(cmd)) return true;
   return false;
