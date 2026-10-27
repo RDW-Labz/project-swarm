@@ -91,10 +91,41 @@ const ruleMatchesRel = (rule, norm) => {
   return ext && allowed.has(ext);
 };
 
+/** Nested project markers and secret paths orchestrator sessions must never create (root `.swarm/` stays under allow-list rules). */
+export function orchestratorWriteMarkerDeniedRel(normRel) {
+  const norm = normPosixRel(normRel);
+  if (!norm) return false;
+  const parts = norm.split('/').filter(Boolean);
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i] === '.swarm' && i > 0) return true;
+    if (parts[i] === '.project-swarm.json' && (parts.length > 1 || i > 0)) return true;
+  }
+  if (parts[0] === '.swarm' && parts.slice(1).includes('.swarm')) return true;
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i] !== '.claude') continue;
+    for (let j = i + 1; j < parts.length; j += 1) {
+      const base = parts[j];
+      if (base === '.env' || base === '.envrc' || base === 'settings.json') return true;
+    }
+  }
+  return false;
+}
+
+/** True when the hook session cwd is the project root (required for swarm CLI in orchestrator mode). */
+export function orchestratorSwarmSessionCwdOk(projectRoot, cwd) {
+  if (!projectRoot || !cwd) return false;
+  try {
+    return fs.realpathSync.native(projectRoot) === fs.realpathSync.native(cwd);
+  } catch {
+    return false;
+  }
+}
+
 /** True when a normalized project-relative path may be written in orchestrator mode. */
 export function orchestratorWriteAllowedRel(normRel) {
   const norm = normPosixRel(normRel);
   if (!norm) return false;
+  if (orchestratorWriteMarkerDeniedRel(norm)) return false;
   if (/^package\.json$/i.test(norm.split('/').pop() ?? '') || norm.endsWith('/package.json')) return false;
   return ORCHESTRATOR_WRITE_RULES.some(rule => ruleMatchesRel(rule, norm));
 }

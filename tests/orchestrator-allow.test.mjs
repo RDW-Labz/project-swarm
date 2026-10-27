@@ -17,13 +17,17 @@ import {
   orchestratorOwnForbiddenWriteRel,
   orchestratorWriteAllowedRel,
   orchestratorWriteAllowListAppliesRel,
+  orchestratorWriteMarkerDeniedRel,
+  orchestratorSwarmSessionCwdOk,
 } from '../tools/orchestrator-allow.mjs';
 import { orchestratorOwnFoldersBlockBareTestRun } from '../tools/shell-writes.mjs';
 import {
   orchestratorModeCommandAllowed,
   ORCHESTRATOR_MODE_DENY_REASON,
+  ORCHESTRATOR_SWARM_CWD_DENY_REASON,
   SWARM_WORKER_RUN_ID_ENV,
   isVerifiedSwarmWorkerCwd,
+  orchestratorSwarmSubfolderBlocked,
 } from '../tools/shell-writes.mjs';
 import { GUARD_ERROR_DENY_REASON, guardDecision } from '../tools/handbuild.mjs';
 import {
@@ -352,7 +356,8 @@ function guardWrite(filePath, root, { handbuildOff = false, orchestrator = true 
   }));
 }
 
-function guardBash(command, root, { handbuildOff = false, orchestrator = true } = {}) {
+function guardBash(command, root, { handbuildOff = false, orchestrator = true, cwd = undefined } = {}) {
+  const sessionCwd = cwd ?? root;
   if (handbuildOff) {
     return fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true }).then(() =>
       fs.writeFile(path.join(root, '.swarm', 'handbuild', 'off'), ''),
@@ -360,7 +365,7 @@ function guardBash(command, root, { handbuildOff = false, orchestrator = true } 
       tool: 'Bash',
       toolInput: { command },
       root,
-      cwd: root,
+      cwd: sessionCwd,
       now: () => 1,
       enforceOrchestratorMode: orchestrator,
     }));
@@ -369,7 +374,7 @@ function guardBash(command, root, { handbuildOff = false, orchestrator = true } 
     tool: 'Bash',
     toolInput: { command },
     root,
-    cwd: root,
+    cwd: sessionCwd,
     now: () => 1,
     enforceOrchestratorMode: orchestrator,
   }));
@@ -710,4 +715,73 @@ test('deny reasons explain tickets and allow-list writes', () => {
   assert.match(ORCHESTRATOR_MODE_DENY_REASON, /docs\/plans/);
   assert.match(ORCHESTRATOR_MODE_DENY_REASON, /Swarm CLI/);
   assert.match(GUARD_ERROR_DENY_REASON, /swarm tickets/);
+  assert.match(ORCHESTRATOR_SWARM_CWD_DENY_REASON, /--root/);
+});
+
+test('orchestratorWriteMarkerDeniedRel blocks fake project roots', () => {
+  assert.equal(orchestratorWriteMarkerDeniedRel('docs/plans/.project-swarm.json'), true);
+  assert.equal(orchestratorWriteMarkerDeniedRel('docs/plans/.swarm'), true);
+  assert.equal(orchestratorWriteMarkerDeniedRel('docs/plans/.swarm/x.md'), true);
+  assert.equal(orchestratorWriteMarkerDeniedRel('.claude/.env'), true);
+  assert.equal(orchestratorWriteMarkerDeniedRel('.claude/nested/.envrc'), true);
+  assert.equal(orchestratorWriteMarkerDeniedRel('.claude/settings.json'), true);
+  assert.equal(orchestratorWriteAllowedRel('docs/plans/.project-swarm.json'), false);
+  assert.equal(orchestratorWriteAllowedRel('docs/plans/plan.json'), true);
+  assert.equal(orchestratorWriteAllowedRel('.swarm/notes/x.md'), true);
+});
+
+test('orchestrator swarm cwd: subfolder session and cd chains', async t => {
+  await installLocalSwarmShim();
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  const plans = path.join(root, 'docs', 'plans');
+  const ctxRoot = { root, cwd: root };
+  const ctxPlans = { root, cwd: plans };
+  assert.equal(orchestratorSwarmSessionCwdOk(root, root), true);
+  assert.equal(orchestratorSwarmSessionCwdOk(root, plans), false);
+  assert.equal(orchestratorModeCommandAllowed('swarm status', ctxRoot), true);
+  assert.equal(orchestratorModeCommandAllowed('swarm status', ctxPlans), false);
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && git status', ctxRoot), true);
+  assert.equal(orchestratorModeCommandAllowed('cd docs/plans && swarm run evil.json', ctxRoot), false);
+  assert.equal(orchestratorSwarmSubfolderBlocked('cd docs/plans && swarm run evil.json', ctxRoot), true);
+  for (const handbuildOff of [false, true]) {
+    const allowRoot = await guardBash('swarm go --scope wave --max-jobs 2', root, { handbuildOff });
+    assert.equal(allowRoot.allow, true, `root swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
+    const denyChain = await guardBash('cd docs/plans && swarm run evil.json', root, { handbuildOff });
+    assert.equal(denyChain.allow, false, `chained swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
+    assert.equal(denyChain.reason, ORCHESTRATOR_SWARM_CWD_DENY_REASON);
+    const denyCwd = await guardBash('swarm status', root, { handbuildOff, cwd: plans });
+    assert.equal(denyCwd.allow, false, `plans cwd swarm handbuild ${handbuildOff ? 'off' : 'on'}`);
+    assert.equal(denyCwd.reason, ORCHESTRATOR_SWARM_CWD_DENY_REASON);
+  }
+});
+
+test('fake project root exploit steps denied via full guard', async t => {
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  const markerDenies = [
+    'docs/plans/.project-swarm.json',
+    'docs/plans/.swarm/off',
+    'docs/plans/.swarm',
+  ];
+  const manifestRel = 'docs/plans/run-manifest.json';
+  for (const handbuildOff of [false, true]) {
+    for (const rel of markerDenies) {
+      const d = await guardWrite(rel, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny marker ${rel}`);
+    }
+    const manifest = await guardWrite(manifestRel, root, { handbuildOff, orchestrator: true });
+    assert.equal(manifest.allow, true, `${handbuildOff ? 'off' : 'on'} allow manifest json`);
+    const gitChain = await guardBash('cd docs/plans && git status', root, { handbuildOff });
+    assert.equal(gitChain.allow, true, `${handbuildOff ? 'off' : 'on'} git status from plans`);
+    const runChain = await guardBash('cd docs/plans && swarm run run-manifest.json', root, { handbuildOff });
+    assert.equal(runChain.allow, false, `${handbuildOff ? 'off' : 'on'} swarm run from plans`);
+  }
+});
+
+test('docs/state allow-listed writes pass with hand-build guard on', async t => {
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'state'), { recursive: true });
+  const d = await guardWrite('docs/state/usage-ledger.md', root, { handbuildOff: false, orchestrator: true });
+  assert.equal(d.allow, true);
 });

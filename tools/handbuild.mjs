@@ -28,6 +28,8 @@ import {
   orchestratorCommandTooLong,
   swarmWorkerSession,
   workerScopedWriteRelDenied,
+  orchestratorSwarmSubfolderBlocked,
+  ORCHESTRATOR_SWARM_CWD_DENY_REASON,
 } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
@@ -41,6 +43,7 @@ import {
 import {
   orchestratorWriteAllowed,
   orchestratorWriteAllowListAppliesRel,
+  orchestratorWriteAllowedRel,
 } from './orchestrator-allow.mjs';
 import {
   AUTO_OFF_FILE,
@@ -2025,7 +2028,18 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
   let handbuildOff = false;
   try { handbuildOff = fs.existsSync(path.join(resolvedRoot ?? root ?? '', OFF_FILE)); } catch { handbuildOff = false; }
   if (handbuildOff && !omActive) return { allow: true };
-  const omDeny = (files = []) => ({ allow: false, files, reason: ORCHESTRATOR_MODE_DENY_REASON, ruleId: ORCHESTRATOR_MODE_RULE_ID });
+  const omDeny = (files = [], reason = ORCHESTRATOR_MODE_DENY_REASON) => ({
+    allow: false,
+    files,
+    reason,
+    ruleId: ORCHESTRATOR_MODE_RULE_ID,
+  });
+  const omShellCtx = { root, cwd, home: h };
+  const omSwarmCwdDeny = files => (
+    orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
+      ? omDeny(files, ORCHESTRATOR_SWARM_CWD_DENY_REASON)
+      : omDeny(files)
+  );
   const applyOrchestratorMode = decision => {
     if (!omActive || tool !== 'Bash') return decision;
     if (decision.reason === ORCHESTRATOR_COMMAND_TOO_LONG_REASON) return decision;
@@ -2033,14 +2047,14 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (ORCHESTRATOR_MODE_PRESERVE_DENY.has(decision.ruleId)) return decision;
     if (orchestratorModeBlockedOps(ti.command)) return omDeny(decision.files ?? []);
     if (decision.allow) {
-      if (orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return decision;
-      return omDeny(decision.files ?? []);
+      if (orchestratorModeCommandAllowed(ti.command, omShellCtx)) return decision;
+      return omSwarmCwdDeny(decision.files ?? []);
     }
     if (decision.reason?.startsWith('Hand-build guard:') && /belongs to the owner|session transcripts|swarm run state|deletes outside|too large|force push to a protected branch/.test(decision.reason)) {
       return decision;
     }
     if (decision.reason?.includes(DENY_ADVICE)) return decision;
-    if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(decision.files ?? []);
+    if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) return omSwarmCwdDeny(decision.files ?? []);
     return decision;
   };
   const approvals = activeApprovals(root, now());
@@ -2105,6 +2119,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) {
       return omDeny([rel]);
     }
+    if (omActive && rel !== null && orchestratorWriteAllowedRel(String(rel).replace(/\\/g, '/'))) {
+      return { allow: true };
+    }
     if (rel === null || AllowRel(rel)) return { allow: true };
     if (rel !== null && isRoutingPathResolved(root, rel)) return { allow: true, files: [rel] };
     if (rel !== null && produced.has(rel)) {
@@ -2147,7 +2164,11 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
           .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
         if (protectedWrites.length) return omDeny(protectedWrites);
         if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
-        if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(a.writes ?? []);
+        if (!orchestratorModeCommandAllowed(ti.command, omShellCtx)) {
+          return orchestratorSwarmSubfolderBlocked(ti.command, omShellCtx)
+            ? omDeny(a.writes ?? [], ORCHESTRATOR_SWARM_CWD_DENY_REASON)
+            : omDeny(a.writes ?? []);
+        }
       } else if (swarmWorkerSession(root, cwd ?? root)) {
         const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
         const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));

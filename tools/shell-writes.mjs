@@ -20,6 +20,7 @@ import {
   orchestratorBareTestScanRelPrefixes,
   workerSessionProtectedRel,
   workerWriteTargetDenied,
+  orchestratorSwarmSessionCwdOk,
 } from './orchestrator-allow.mjs';
 import { WORKER_TOKEN_ENV, verifyWorkerTokenSync } from './worker-token.mjs';
 
@@ -30,6 +31,7 @@ export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-te
 export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
 export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: writes are only allowed under .swarm/ (except workspaces, worktrees, runs, backups, orchestrator-mode), docs/plans/, coordination/manifests/ (.json), coordination/HANDOFF*.md, docs/state/ (.md), and TASK.md at the project root — text formats md/json/jsonl/ndjson/yaml/yml only (never package.json). Swarm CLI commands are allowed. For anything else, make a ticket: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help).';
+export const ORCHESTRATOR_SWARM_CWD_DENY_REASON = 'Orchestrator mode: swarm commands are only allowed with the session working directory at the project root; cd back to the project root or pass --root with the project root path.';
 export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
 export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
@@ -1652,6 +1654,7 @@ const omSwarmArgsAfterGlobals = (args, ctx) => {
 };
 
 const omSwarmSubcommandAllowed = (args, ctx) => {
+  if (!orchestratorSwarmSessionCwdOk(ctx?.root, ctx?.cwd ?? ctx?.root)) return false;
   const parsed = omSwarmArgsAfterGlobals(args, ctx);
   if (!parsed.ok) return false;
   const { sub, rest } = parsed;
@@ -1659,6 +1662,7 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
 };
 
 const omSwarmInvocation = (cmd, args, ctx) => {
+  if (!orchestratorSwarmSessionCwdOk(ctx?.root, ctx?.cwd ?? ctx?.root)) return false;
   if (cmd === 'swarm') return omSwarmSubcommandAllowed(args, ctx);
   if (cmd === 'node' && omNodeRunsInstallSwarm(args)) {
     const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
@@ -1667,6 +1671,65 @@ const omSwarmInvocation = (cmd, args, ctx) => {
   }
   return false;
 };
+
+const omSegmentIsSwarmInvocation = (plain, k) => {
+  const rawCmd = plain[k];
+  if (!rawCmd || /^\$/.test(rawCmd)) return false;
+  const cmd = path.basename(rawCmd);
+  const args = plain.slice(k + 1);
+  if (cmd === 'swarm') return true;
+  if (cmd === 'node' && omNodeRunsInstallSwarm(args)) return true;
+  return false;
+};
+
+/** True when a command runs swarm with an effective cwd below the project root (for clearer deny reasons). */
+export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
+  if (!ctx?.root) return false;
+  const text = String(command ?? '');
+  if (!text.trim()) return false;
+  try {
+    const tokenized = tokenize(text);
+    if (tokenized.unclosedQuote) return false;
+    const baseCwd = ctx.cwd ?? ctx.root;
+    let cwd = baseCwd;
+    const local = { ...ctx, cwd };
+    let subshellDepth = 0;
+    const cwdStack = [baseCwd];
+    for (const words of tokenized) {
+      if (words.sepAfter === ')') {
+        subshellDepth = Math.max(0, subshellDepth - 1);
+        if (cwdStack.length > 1) cwdStack.pop();
+        cwd = cwdStack[cwdStack.length - 1];
+        local.cwd = cwd;
+      }
+      const { plain } = omPlainWords(words);
+      let k = 0;
+      while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+        k += 1;
+      }
+      if (k < plain.length && path.basename(plain[k]) === 'cd') {
+        if (subshellDepth > 0) continue;
+        if (words.sepAfter !== '&&') continue;
+        const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
+        if (!omCdTargetOk(target, local)) continue;
+        cwd = omResolveCd(target, { ...local, cwd });
+        local.cwd = cwd;
+        cwdStack[cwdStack.length - 1] = cwd;
+        continue;
+      }
+      if (k < plain.length && omSegmentIsSwarmInvocation(plain, k)) {
+        if (!orchestratorSwarmSessionCwdOk(ctx.root, local.cwd ?? ctx.root)) return true;
+      }
+      if (words.sepAfter === '(') {
+        subshellDepth += 1;
+        cwdStack.push(cwd);
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const omPlainWords = words => {
   const plain = [];
