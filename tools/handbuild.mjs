@@ -26,6 +26,7 @@ import {
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
   orchestratorCommandTooLong,
+  isVerifiedSwarmWorkerCwd,
 } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
@@ -38,6 +39,7 @@ import {
 } from './self-approval.mjs';
 import {
   orchestratorWriteAllowed,
+  orchestratorWriteAllowListAppliesRel,
 } from './orchestrator-allow.mjs';
 import {
   AUTO_OFF_FILE,
@@ -1980,12 +1982,14 @@ const sessionProtectedHandbuildRel = rel => {
   return norm === '.git' || norm.startsWith('.git/');
 };
 
-const orchestratorModeProtectedWriteRel = (rel, root) => {
+const orchestratorModeProtectedWriteRel = (rel, root, cwd) => {
   if (sessionProtectedHandbuildRel(rel)) return true;
   if (rel === null || rel === undefined) return false;
   const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
   if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
   if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
+  const verifiedWorker = isVerifiedSwarmWorkerCwd(root, cwd ?? root);
+  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root, verifiedWorker)) return false;
   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
   return !orchestratorWriteAllowed(candidate, root);
 };
@@ -2070,7 +2074,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (rel !== null && sessionProtectedHandbuildRel(rel)) {
         return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
       }
-      if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) return omDeny([rel]);
+      if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) return omDeny([rel]);
       return { allow: true };
     }
     const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
@@ -2085,7 +2089,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel !== null && sessionProtectedHandbuildRel(rel)) {
       return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     }
-    if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root)) {
+    if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) {
       return omDeny([rel]);
     }
     if (rel === null || AllowRel(rel)) return { allow: true };
@@ -2125,7 +2129,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (omActive) {
         const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
         const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
-          .filter(rel => orchestratorModeProtectedWriteRel(rel, root));
+          .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
         if (protectedWrites.length) return omDeny(protectedWrites);
         if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
         if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(a.writes ?? []);
@@ -2143,7 +2147,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
     if (omActive) {
       const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
-        .filter(rel => orchestratorModeProtectedWriteRel(rel, root));
+        .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
       if (protectedWrites.length) return omDeny(protectedWrites);
     }
     const current = branchOfFn(root);

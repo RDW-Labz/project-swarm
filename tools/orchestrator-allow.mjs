@@ -128,6 +128,35 @@ const projectRelOfAbs = (abs, projectRoot) => {
   return rel.split(path.sep).join('/').toLowerCase();
 };
 
+/** Project-relative posix path to the swarm worker tree when `cwd` is inside `.swarm/workspaces/` or `.swarm/worktrees/`. */
+export function swarmWorkerTreeRel(root, cwd) {
+  if (!root || !cwd) return null;
+  try {
+    const rootReal = fs.realpathSync.native(root);
+    const cwdReal = fs.realpathSync.native(cwd);
+    const rel = path.relative(rootReal, cwdReal);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    const norm = rel.split(path.sep).join('/').toLowerCase();
+    const m = norm.match(/^(\.swarm\/(?:workspaces|worktrees)\/[^/]+(?:\/[^/]+)*)/);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when orchestrator-mode write allow-list should decide this project-relative path.
+ * Skips verified worker sessions, writes under the worker tree while cwd is in that tree, and paths outside the project (no rel).
+ */
+export function orchestratorWriteAllowListAppliesRel(normRel, root, cwd, isVerifiedWorker = false) {
+  if (isVerifiedWorker) return false;
+  const norm = normPosixRel(normRel);
+  if (!norm) return false;
+  const tree = swarmWorkerTreeRel(root, cwd);
+  if (tree && (norm === tree || norm.startsWith(`${tree}/`))) return false;
+  return true;
+}
+
 /** True when an absolute or project-relative path may be written (resolves symlinks; default deny). */
 export function orchestratorWriteAllowed(realPath, projectRoot) {
   if (!realPath || !projectRoot) return false;

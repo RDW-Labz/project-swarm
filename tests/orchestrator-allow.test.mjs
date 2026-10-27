@@ -16,11 +16,14 @@ import {
   orchestratorOwnForbiddenWriteBasename,
   orchestratorOwnForbiddenWriteRel,
   orchestratorWriteAllowedRel,
+  orchestratorWriteAllowListAppliesRel,
 } from '../tools/orchestrator-allow.mjs';
 import { orchestratorOwnFoldersBlockBareTestRun } from '../tools/shell-writes.mjs';
 import {
   orchestratorModeCommandAllowed,
   ORCHESTRATOR_MODE_DENY_REASON,
+  SWARM_WORKER_RUN_ID_ENV,
+  isVerifiedSwarmWorkerCwd,
 } from '../tools/shell-writes.mjs';
 import { GUARD_ERROR_DENY_REASON, guardDecision } from '../tools/handbuild.mjs';
 import { fileURLToPath } from 'node:url';
@@ -532,6 +535,59 @@ test('guardDecision: bare test runs blocked when orchestrator folders hold code'
     orchestratorModeCommandAllowed('npx vitest run tests/ok.test.mjs', ctx),
     true,
   );
+});
+
+test('orchestrator write allow-list: worker tree and verified launcher exemption', async t => {
+  const root = await tmp(t);
+  const runId = 'run-worker-exempt';
+  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}\n');
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
+  const rel = '.swarm/workspaces/run-worker-exempt/job-1/src/a.ts';
+  const abs = path.join(root, rel);
+
+  assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, root, false), true);
+  assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, workspace, false), false);
+
+  const orch = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: abs },
+    root,
+    cwd: root,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(orch.allow, false, 'orchestrator session cannot write worker tree paths');
+
+  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  t.after(() => {
+    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+  });
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
+  const verified = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: abs },
+    root,
+    cwd: workspace,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(verified.allow, true, 'verified worker may write inside its workspace');
+
+  await fs.rm(path.join(root, '.swarm', 'runs', runId), { recursive: true });
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+  const envOnly = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: abs },
+    root,
+    cwd: root,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(envOnly.allow, false, 'run id env alone does not bypass the allow-list from the checkout');
 });
 
 test('deny reasons explain tickets and allow-list writes', () => {
