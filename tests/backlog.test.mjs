@@ -18,7 +18,9 @@ import {
   exportBacklog,
   importBacklog,
   __testWriteBacklog,
+  __testSetLockImpl,
 } from '../tools/backlog.mjs';
+import { withFileLock } from '../tools/file-lock.mjs';
 
 const now = () => Date.parse('2024-01-02T03:04:05Z');
 
@@ -329,7 +331,51 @@ test('importBacklog refuses an empty list without replace', { timeout: 60000 }, 
   assert.equal((await readBacklog(root)).items.length, 1);
 });
 
-test('importBacklog refuses duplicate ids in the payload', { timeout: 60000 }, async () => {
+test('importBacklog over three ids with three different ids needs replace: true', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (const id of ['a', 'b', 'c']) await addGoal(root, { goal: id, id }, { now });
+  const incoming = ['x', 'y', 'z'].map(id => item(id, []));
+  await assert.rejects(importBacklog(root, { items: incoming }, { now }), /backlog-unexpected-drop/);
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['a', 'b', 'c']);
+  const result = await importBacklog(root, { items: incoming, replace: true }, { now });
+  assert.deepEqual(result.items.map(entry => entry.id), ['x', 'y', 'z']);
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['x', 'y', 'z']);
+});
+
+test('importBacklog of two items over three refuses without replace when two ids disappear', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (const id of ['a', 'b', 'c']) await addGoal(root, { goal: id, id }, { now });
+  await assert.rejects(
+    importBacklog(root, { items: [item('x', []), item('y', [])] }, { now }),
+    /backlog-unexpected-drop/,
+  );
+  assert.equal((await readBacklog(root)).items.length, 3);
+});
+
+test('importBacklog that keeps every existing id and adds one needs no replace flag', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  for (const id of ['a', 'b', 'c']) await addGoal(root, { goal: id, id }, { now });
+  const { items } = await readBacklog(root);
+  const result = await importBacklog(root, { items: [...items, item('d', [])] }, { now });
+  assert.equal(result.items.length, 4);
+  assert.deepEqual((await readBacklog(root)).items.map(entry => entry.id), ['a', 'b', 'c', 'd']);
+});
+
+test('withBacklogLock passes small waitMs and maxHoldMs to withFileLock', { timeout: 60000 }, async (t) => {
+  const root = await tmpRoot();
+  const seen = [];
+  const restore = __testSetLockImpl((lockPath, fn, options) => {
+    seen.push(options);
+    return withFileLock(lockPath, fn, options);
+  });
+  t.after(restore);
+  await addGoal(root, { goal: 'spy', id: 'spy' }, { now });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].maxHoldMs, 60000);
+  assert.equal(seen[0].waitMs, 120000);
+});
+
+test('importBacklog refuses duplicate ids in the payload',{ timeout: 60000 }, async () => {
   const root = await tmpRoot();
   const dup = {
     id: 'dup',

@@ -13,6 +13,10 @@ const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const STATUSES = new Set(['queued', 'started', 'done']);
 const MAX_BACKUPS = 10;
 const LOCK_WAIT_MS = 120_000;
+// Backlog holds last milliseconds, so a reused pid must not block writers for the 10 minute default.
+const LOCK_MAX_HOLD_MS = 60_000;
+
+let lockImpl = withFileLock;
 
 const BACKUP_OPEN_FLAGS = fssync.constants.O_WRONLY
   | fssync.constants.O_CREAT
@@ -268,7 +272,7 @@ async function writeBacklog(root, items, expectedVersion, { allowSingleRemoval =
 async function withBacklogLock(root, fn) {
   const lockPath = await backlogLockFile(root);
   try {
-    return await withFileLock(lockPath, fn, { waitMs: LOCK_WAIT_MS });
+    return await lockImpl(lockPath, fn, { waitMs: LOCK_WAIT_MS, maxHoldMs: LOCK_MAX_HOLD_MS });
   } catch (error) {
     if (error.code === 'file-lock-timeout') {
       throw fail('backlog-lock-timeout', error.message);
@@ -418,8 +422,9 @@ export async function importBacklog(root, { items, replace } = {}, { now = Date.
 
   return withBacklogLock(root, async () => {
     const data = await readBacklogOnDisk(root);
-    const drop = data.items.length - normalized.length;
-    const needsReplace = drop > 1 || normalized.length === 0;
+    const incoming = new Set(normalized.map(item => item.id));
+    const disappearing = data.items.filter(entry => !incoming.has(entry.id)).length;
+    const needsReplace = disappearing > 1 || normalized.length === 0;
     if (needsReplace && replace !== true) throw fail('backlog-unexpected-drop');
     await writeBacklog(root, normalized.map(item => ({ ...item })), data.version, {
       allowBulkReplace: true,
@@ -429,6 +434,18 @@ export async function importBacklog(root, { items, replace } = {}, { now = Date.
     });
     return { items: normalized, version: data.version + 1 };
   });
+}
+
+/** @internal Test-only: swap the lock function to spy on its options; returns a restore function. */
+export function __testSetLockImpl(impl) {
+  if (!process.env.NODE_TEST_CONTEXT) {
+    throw new Error('__testSetLockImpl is only available under the test runner');
+  }
+  const previous = lockImpl;
+  lockImpl = impl;
+  return () => {
+    lockImpl = previous;
+  };
 }
 
 /** @internal Used by tests to exercise write guards without a public mutation API. */
