@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.20
+
+The parts session can run its manifests and integrate runs.
+- **Run:** swarm run on a manifest path under the coordination manifests folder or the .swarm manifests folder is allowed in orchestrator mode (worker workspaces, worktrees and run folders are not);
+- **Integrate:** integrate with a comma list of jobs and the approve-manifest flag (integrate only) are allowed;
+- **Tickets:** the depends-on edit flag is allowed in the ticket edit list;
+- **Tests:** the parts-flow test covers every one of these in both spellings and the denied counterparts.
+
 ## 1.167.19
 
 The orchestrator guard stops denying the parts session's own flow.
