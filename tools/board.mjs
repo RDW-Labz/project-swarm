@@ -69,7 +69,9 @@ export async function registerLiveRun({ runId, root, outputs, pid = process.pid,
     await fs.writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
-    await fs.unlink(temporary).catch(() => {});
+    await fs.unlink(temporary).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/board.mjs] registerLiveRun unlink temporary:', error?.message ?? error);
+    });
     throw error;
   }
 }
@@ -86,8 +88,18 @@ export async function listLiveRuns({ dir = liveDir(), isAlive = pidAlive } = {})
     if (!entry.endsWith('.json')) continue;
     const target = path.join(dir, entry);
     let record;
-    try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await fs.unlink(target).catch(() => {}); continue; }
-    if (!isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
+    try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch {
+      await fs.unlink(target).catch((error) => {
+        if (error?.code !== 'ENOENT') console.error('[tools/board.mjs] listLiveRuns unlink corrupt:', error?.message ?? error);
+      });
+      continue;
+    }
+    if (!isAlive(record.pid)) {
+      await fs.unlink(target).catch((error) => {
+        if (error?.code !== 'ENOENT') console.error('[tools/board.mjs] listLiveRuns unlink stale:', error?.message ?? error);
+      });
+      continue;
+    }
     runs.push(record);
   }
   return runs.sort((a, b) => a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0);
@@ -116,7 +128,10 @@ export async function boardSummary({ dir = liveDir(), isAlive } = {}) {
       const state = JSON.parse(await fs.readFile(path.join(run.root, '.swarm/runs', run.runId, 'state.json'), 'utf8'));
       status = state.status;
       jobs = state.jobs.map(job => ({ id: job.id, status: job.status, outputs: job.outputs, ...(job.agent ? { agent: job.agent } : {}) }));
-    } catch {}
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/board.mjs] boardSummary read run state:', error?.message ?? error);
+    }
     summarized.push({ runId: run.runId, root: run.root, repo: run.repo, pid: run.pid, startedAt: run.startedAt, status, jobs });
   }
   return { runs: summarized };
