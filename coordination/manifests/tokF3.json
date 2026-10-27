@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokF3",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Owner requirement on the dispatcher exit handling in tools/swarm/core-41.mjs (the previous job restored the rule that a normal process exit waits for the close event): add tests that a worker's FULL output is captured and its REAL exit code is recorded, using REAL child processes (not an EventEmitter fake), because finishing on the exit event before the close event loses output. Add them to tests/worker-token-dispatch.test.mjs or a new tests/dispatcher-output-capture.test.mjs, going through the real execute path with a spawn implementation that starts a real node child process in the job workspace (the child is a small inline script): (1) the child writes about 300 KB of text to stdout in many chunks, with a recognisable last line, and exits 0: the job's captured stdout is complete (length equal to what was written, last line present) and the exit code recorded is 0; (2) the child writes a valid result envelope after a short delay and exits 0 straight away (output arrives after the exit event): status complete and the result parsed; (3) the child exits with code 3 after writing to stderr: the recorded exit code is 3 and the stderr text is in the job's error; (4) a child killed by the job timeout ends as timeout with the output captured so far; (5) for each of the plain claude spawn path, hermes and qwen. If any of these fail on the current code, fix the production code in core-41.mjs (the exit and close handling, stdout and stderr draining) and say so in the summary; otherwise only add the tests and show they pass. Also make the recorded exit code visible: the job result stored in the run state must carry the real exit code (field exitCode) and a flag outputComplete true when the streams closed before finishing; add that if it is missing, with a test. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tests/cli-adapters.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/dispatcher-output-capture.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
