@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "e2eout",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Make failing ticket-spec check output reach the worker's retry prompt (owner order). Today: tools/init.mjs runCheckArgv rejects on timeout with only the message timed out after N ms, dropping the stdout and stderr gathered so far; tools/scope-commands.mjs runTicketSpec then returns that message alone as the tail, and the retry note built in the ticket-spec block of the review sweep (search for failed checks: ticket spec) keeps only the last 500 characters. Fix, small and exact: (1) tools/init.mjs runCheckArgv: on timeout reject with the same Error message as today, plus properties stdout and stderr holding the partial output captured so far (do not change the resolved value for normal exits, and keep the process-group kill). (2) tools/scope-commands.mjs runTicketSpec: in the catch, build the tail from the error message followed by a newline and the partial stdout and stderr (error.stdout, error.stderr when present), last 8000 characters; normal failing output unchanged. (3) Add an exported helper firstFailingTest(text) in tools/scope-commands.mjs returning the name of the first failing test or null, recognising: TAP lines starting with not ok followed by a number and dash and the name; pytest lines starting with FAILED followed by the node id; vitest and jest lines with a cross or FAIL marker followed by the path and test title; playwright numbered failure headers like 1) [project] \u203a file \u203a title. (4) The retry note: replace the 500-character slice by the last 4000 characters of the tail, passed through redactNote like today, and when firstFailingTest finds a name put 'first failing test: NAME' before the tail. Check the retry note length cap in applyRetry and nextStep (look for any slice or max length on the note) and keep the total within it, raising it only if it would cut the new note. Tests in tests/ticket-spec-output.test.mjs (fake runner or injected runSpec/deps where the code allows, real child processes only with their own process group, per-test timeout at most 60 s, kill children in teardown): a runCheckArgv timeout error carries the partial output; the runTicketSpec tail on timeout contains the partial output; the note keeps 4000 characters and is redacted (build a fake secret-looking value at run time, for example by repeating a short string; no credential-looking literals); short output unchanged; firstFailingTest finds a name for TAP, pytest, vitest and playwright samples and returns null for plain text. No sandbox or lane changes.",
+   "context": [
+    "tools/init.mjs",
+    "tools/scope-commands.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/init.mjs",
+    "tools/scope-commands.mjs",
+    "tests/ticket-spec-output.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
