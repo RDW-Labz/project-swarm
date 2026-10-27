@@ -18,6 +18,11 @@ const tmpDir = async t => {
   return root;
 };
 
+async function setLockMtimeMs(lockPath, mtimeMs) {
+  const mtime = new Date(mtimeMs);
+  await fs.utimes(lockPath, mtime, mtime);
+}
+
 function spawnNodeInGroup(args, options = {}) {
   const child = spawn(process.execPath, args, {
     ...options,
@@ -175,15 +180,18 @@ test('empty lock file is busy within graceMs then cleared', { timeout: 60_000 },
   const lockPath = path.join(root, 'empty.lock');
   await fs.writeFile(lockPath, '', 'utf8');
 
-  const graceMs = 200;
+  const graceMs = 5000;
+  const now = Date.now();
+  await setLockMtimeMs(lockPath, now);
+
   const start = Date.now();
   await assert.rejects(
     acquireFileLock(lockPath, { waitMs: 80, graceMs, pollMs: 10 }),
     err => err.code === 'file-lock-timeout',
   );
-  assert.ok(Date.now() - start < graceMs + 500);
+  assert.ok(Date.now() - start < 500, 'busy refusal should hit waitMs, not graceMs');
 
-  await new Promise(r => setTimeout(r, graceMs + 50));
+  await setLockMtimeMs(lockPath, now - 60_000);
   const release = await acquireFileLock(lockPath, { waitMs: 5000, graceMs, pollMs: 10 });
   await release();
 });
