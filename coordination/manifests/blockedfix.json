@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "blockedfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix false 'complete' and unhelpful 'no summary given' for Codex and Cursor worktree jobs (owner order; found in parts runs: T-0626 finished 'complete' with no changed file although its notes said 'Blocked: Vitest could not create its API token...'; T-0620 and T-0621 became 'blocked: no summary given' although the worker's notes said exactly why). The worker's final reply shape is {files_changed, notes, checksRun} (the prompt asks for it); parseCodexReply in tools/codex-adapter.mjs parses it. The job result handling is in tools/swarm/core-71.mjs, in the function that runs a codex or cursor job (the block that starts with if (result.status === 'complete') and collects the outputs, then handles missing outputs with the 'Field lesson 19' blocked envelope, then calls reaskWorkerReport). Changes, small and exact: (1) Add and export a helper blockedNoteFromReply(reply) in tools/codex-adapter.mjs: returns the first string in reply.notes (an array) that says the job is blocked (case-insensitive: a note that starts with Blocked, or contains the words status: blocked, or contains 'blocked:'), trimmed, or null; also returns null for a missing or non-array notes. (2) In core-71 for a result with status complete: if the parsed reply (parseCodexReply(result.response)) yields a blocked note AND none of the job's declared outputs changed against the launch baseline (use the same outputsChanged and launchBaseline the function already uses for hasWrittenOutputs, so a job that really changed files is never turned blocked by a stray note), set the result to status blocked with error 'blocked: ' plus that note, cut to 300 characters; this also applies when the declared outputs exist but are unchanged (T-0626 case). (3) In the existing blocked paths (the Field lesson 19 branch with missing outputs, and the same text in tools/swarm.mjs around the lines that build 'no summary given' for the prose-blocked rule and the finalMessage blocked rule): when there is no summary and no needs-file text, use blockedNoteFromReply of the parsed reply (or of the finalMessage notes) before falling back to 'no summary given'. In the swarm.mjs lines change only the fallback expression, import the helper next to existing imports from codex-adapter. (4) A job that finishes status complete with NO declared output changed (and no blocked note) must not be silent: add a warning entry (same warnings mechanism the function already has or the result's warnings array) 'completed-without-changes: no declared output changed'; do not change its status. (5) Invalid JSON replies: if parseCodexReply returns null for a worker that was asked for the envelope, reaskWorkerReport already re-asks once; do not change that. Tests in tests/codex-blocked-note.test.mjs: blockedNoteFromReply picks 'T-0620 status: blocked.' and 'Blocked: Vitest could not create its API token' style notes and ignores 'no blocked items'-style text that does not start a blocked statement (a note like 'Lint passed' returns null; a note 'not blocked' returns null); a complete result with a blocked note and unchanged outputs becomes blocked with the note as the reason; a complete result whose outputs changed stays complete even with a blocked note; the no-summary fallback now carries the note. Use the existing test helpers or fakes for executeCodexJob (look at tests that already call it) and no real model. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/codex-adapter.mjs",
+    "tools/swarm/core-71.mjs",
+    "tools/swarm/core-41.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/codex-adapter.mjs",
+    "tools/swarm/core-71.mjs",
+    "tests/codex-blocked-note.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
