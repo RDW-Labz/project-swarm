@@ -1,0 +1,38 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "bump16719",
+   "agent": "cursor",
+   "tier": "cheap",
+   "prompt": "Bump the version from 1.167.18 to 1.167.19. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.18 to 1.167.19. In README.md change every 1.167.18 pin (kickoff text, tag name) to 1.167.19. In these tests replace the current-version pin 1.167.18 with 1.167.19 everywhere it appears, in BOTH spellings: plain (1.167.18) and escaped inside regular expressions (the same digits with backslash-dot): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.167.19 above the 1.167.18 entry (keep it unchanged) with the lead-in line: The orchestrator guard stops denying the parts session's own flow. And these bullets, each starting with a bold lead word: Scope: swarm scope gate and scope split with ingest, merge, max-repairs and accept-waves (accept-waves only for scope split) are allowed, and a change order with one quoted description and the yes flag is allowed, while scope approve, a bare change with yes and every other owner verb stay denied; Help: swarm help, -h and --version are allowed in the node swarm.mjs with --root spelling as well as in plain swarm; Writes: the orchestrator may now edit the scope markdown file under docs and scope (that one file, md only); Tests: a parts-flow test runs the real guard decision for every one of these in both spellings. Do not touch any other file. The version has two digits in the last part: use exact matches so 1.167.19 is never confused with 1.167.1.",
+   "context": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "outputs": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "model": "composer-2.5"
+  }
+ ]
+}
