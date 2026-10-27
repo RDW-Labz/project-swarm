@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-describe('release: 1.167.17', () => {
-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.17 while 1.46.1 history remains', async () => {
+describe('release: 1.167.18', () => {
+  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.18 while 1.46.1 history remains', async () => {
     const [pkgText, lockText, changelog] = await Promise.all(
       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
     );
     const pkg = JSON.parse(pkgText);
     const lock = JSON.parse(lockText);
-    assert.equal(pkg.version, '1.167.17');
-    assert.equal(lock.version, '1.167.17');
-    assert.equal(lock.packages[''].version, '1.167.17');
-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.17\n/);
+    assert.equal(pkg.version, '1.167.18');
+    assert.equal(lock.version, '1.167.18');
+    assert.equal(lock.packages[''].version, '1.167.18');
+    assert.match(changelog, /^# Changelog\n\n## 1\.167\.18\n/);
     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
     const bullets = section.split('\n').filter(line => line.startsWith('- '));
     assert.equal(bullets.length, 3);
