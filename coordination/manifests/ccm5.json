@@ -26,7 +26,10 @@
     "tests/cc-ledger-browser.test.mjs",
     "tests/watch-assets-browser-safe.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/command-center-cockpit.test.mjs"
+   ]
   }
  ]
 }

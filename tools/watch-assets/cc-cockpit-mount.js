@@ -1,24 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 /** Mount Command Center project Cockpit from buildProjectCockpit snapshot data. */
 
-import { ticketToQueueJob } from '../queue-commands.mjs';
-import { listQueueJobsForProject } from '../burst-route.mjs';
-import { readyTickets } from '../tickets.mjs';
-import {
-  renderCockpit,
-  headlineTicketText,
-  stageRingProgress,
-} from './cockpit-view.js';
-import {
-  cockpitOrchestratorState,
-  cockpitOrchestratorFromSessions,
-} from './cockpit-orchestrator.js';
-import {
-  renderCockpitTicketList,
-  renderStackSummaryTiles,
-  renderReadyEmptyState,
-  layoutSummaryTileElement,
-} from './cockpit-lists.js';
+import { ticketToQueueJob, listQueueJobsForProject, readyTickets } from './cc-ledger-browser.js';
+import { renderCockpit, headlineTicketText, stageRingProgress } from './cockpit-view.js';
+import { cockpitOrchestratorState, cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
+import { renderCockpitTicketList, renderStackSummaryTiles, renderReadyEmptyState, layoutSummaryTileElement } from './cockpit-lists.js';
 import { renderRunStream } from './cockpit-run-stream.js';
 
 const queueDeps = { ticketToQueueJob, listQueueJobsForProject };
