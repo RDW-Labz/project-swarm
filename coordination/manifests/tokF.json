@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokF",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "The worker token change in the dispatcher (tools/swarm/core-41.mjs execute and tools/cli-adapters.mjs, using issueWorkerToken and revokeWorkerToken from tools/worker-token.mjs) breaks three existing tests in tests/cli-adapters.test.mjs: 'hermes fresh process consumes serialized context and returns validated files', 'qwen fresh process consumes serialized context and returns validated files' and '#67: eight active jobs drain a larger queue with consistent observed counts' (the jobs end up failed instead of complete; the same tests pass on the version without the token change). Find why (most likely issueWorkerToken throws or the workspace or runs folder does not exist for these jobs, or the revoke in finally throws) and fix the production code: (1) issue a worker token only for the local CLI agents whose worker sessions can run the orchestrator-mode guard hook: claude (plain and the sandboxed shell), codex and cursor; never for hermes, qwen and other agents, and never for API lanes; (2) a failure to issue or to revoke a token must NEVER fail or hang the job: catch it, write one clear warning line to the run's journal or stderr naming the job and the reason (not a silent catch), and continue without the token (a worker without a token is simply not exempt from the guard: fail closed); the revoke runs in a finally block and also swallows-with-warning its own errors. Add tests in tests/worker-token-dispatch.test.mjs: hermes and qwen jobs get no token; claude, codex and cursor jobs get one; a token issue failure still lets the job complete and logs a warning; a revoke failure does not fail the job. Make all of tests/cli-adapters.test.mjs, tests/worker-token-dispatch.test.mjs, tests/worker-token.test.mjs, tests/cursor-process-group.test.mjs pass. STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/worker-token.mjs",
+    "tests/cli-adapters.test.mjs",
+    "tests/worker-token-dispatch.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tools/cli-adapters.mjs",
+    "tests/worker-token-dispatch.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
