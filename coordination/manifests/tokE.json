@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokE",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Close the fake-project-root route found by Opus review 7 in tools/orchestrator-allow.mjs, tools/shell-writes.mjs and tools/handbuild.mjs and add tests to tests/orchestrator-allow.test.mjs (full-guard, hand-build guard on and off). The exploit: the orchestrator writes a project marker file named dot project-swarm json (content empty object) or a dot swarm folder inside docs/plans (both allowed by the allow-list as json), then writes a manifest json in docs/plans whose checks run a shell, then runs cd docs/plans followed by git status (cd is allowed in a chain) and swarm run on the manifest: the installed swarm walks up from the current folder, takes docs/plans as the project root and runs the manifest checks outside any sandbox. Fixes: (1) the write allow-list denies any path (file or folder) named dot swarm or dot project-swarm json at any depth below the project root (the real dot swarm folder at the root stays writable under its existing rules; a nested one never), and any file named dot env or dot envrc or settings json under a dot claude folder; (2) a swarm command (the Bash tool, any swarm subcommand) is allowed only when the hook session's working folder, resolved to its real path, equals the project root real path; a swarm command whose working folder is any subfolder is denied with a clear message (cd back to the project root or pass the project root with the existing root flag: if a root flag is passed its value must resolve to the project root); (3) minor: Write to a file in the docs state folder with a text extension is allowed with the hand-build guard on (it is denied today although the allow-list says allowed): fix the layer that denies it without opening anything else. Tests: each exploit step is denied; legitimate swarm commands from the project root still pass; the bug-report commands still pass. IMPORTANT: secret scanner: no credential-looking literals in tests.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
