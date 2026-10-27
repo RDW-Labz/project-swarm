@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix9",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "The Opus review of the orchestrator-mode guard failed six times because it is a block-list. Owner order: SWITCH TO AN ALLOW-LIST in tools/orchestrator-allow.mjs, tools/shell-writes.mjs and tools/handbuild.mjs, and extend tests/orchestrator-allow.test.mjs (full-guard tests, hand-build guard on and off). Design: (1) WRITES: in orchestrator mode the Write, Edit, MultiEdit and NotebookEdit tools and shell writes (redirects, tee, cp, mv and the other writers the guard already recognises) are allowed ONLY to these explicit places, and everything else is denied (default deny), including node_modules, build, dist, coverage, caches, the swarm workspaces, worktrees, runs and backups folders, source folders and every code file anywhere: (a) ledger and plan paths: files under the dot swarm folder of the project except its workspaces, worktrees, runs, backups, and orchestrator-mode subfolders; and files under the docs plans folder at any depth; (b) text formats only for those: extensions md, json, jsonl, ndjson, yaml, yml (case-insensitive, resolved real path and symlink target, a package manifest named package json is never allowed); (c) these extra places the orchestrator truly needs, each with text formats only: the coordination manifests folder (job manifests, json), the coordination folder files whose names start with HANDOFF (md), the docs state folder (md, for the usage ledger), and a TASK md file in the project root. Define the allow-list in ONE exported constant array of rules (folder prefix, allowed extensions, deny subfolders) with a short comment per rule so the owner can read and extend it, and one exported function orchestratorWriteAllowed(realPath, projectRoot) used by every write path; add a test that lists the allow-list and asserts each rule. (2) SWARM COMMANDS: the swarm CLI is always allowed (the explicit subcommand allowlist and flags already in this branch stay), except the owner-only approvals and overrides that must stay denied because they are self-approval: decide, handbuild approve or off, scope approve, tickets approve, resolve, done, restore, with-concurrency, and the yes, force and accept override flags outside the vetted ticket edit forms. Say this clearly in a comment. (3) KEEP the rule that refuses bare test runs (a test run with no explicit test file path) when the scan finds any code file or test-named file in the allow-listed write folders or the tool folders; with default-deny writes this is only a backstop. Explicit test file paths outside the allow-listed folders stay allowed. Read-only commands (gh view and list, grep, cat, head, tail, wc, ls, git status, git log, git diff, git show) stay allowed as already built. (4) The deny text must say what is allowed in plain words: where writes are allowed (the list from (1)), that swarm commands are allowed, and to make a ticket with swarm ticket or swarm tickets for anything else. (5) REQUIRED TEST: the parts session's own commands must pass through the full guard: swarm go --scope --max-jobs 2, swarm tickets T-0001 --set ready --note ok --yes, swarm tickets T-0001 --retry-note ok, swarm tickets --help, swarm backlog add goal, swarm integrate RUN --queue, swarm resume RUN, swarm inbox --json, gh pr view 12, gh run view 5, grep -rn foo src, cat README.md, git status, git log --oneline -5, npx playwright test, npx vitest run, npm test, node --test, pytest, python3 -m pytest. And these must be denied: a Write to src, to node_modules, to build, to dist, to a swarm workspaces folder, to a file named x test mjs in the plans folder, to a py or sh file in the plans folder, to package json, to a yaml file in src. Keep tests/orchestrator-mode tests, tests/shell-writes tests, tests/auto-approve test and tests/handbuild tests passing without editing their assertions except where one asserts an old block-list message text. IMPORTANT: secret scanner: no credential-looking literals in tests; no wildcard patterns in this prompt are needed.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 3000000
+  }
+ ]
+}
