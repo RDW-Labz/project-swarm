@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokC1",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Hand the worker token to the cursor lane worker process and to the CLI adapter worker processes, and revoke it when the job ends. Use issueWorkerToken, revokeWorkerToken and WORKER_TOKEN_ENV from tools/worker-token.mjs (already merged in this branch). Find the code that starts the worker process for a job in tools/swarm/core-41.mjs (the cursor lane) and in tools/cli-adapters.mjs (the spawn of CLI workers such as claude and codex). Rules: (1) just before spawning a job's worker call issueWorkerToken for the run id, job id and the job's workspace real path with ttl equal to the job timeout plus 10 minutes; put the token ONLY in the child's environment under the name SWARM_WORKER_TOKEN and also set SWARM_WORKER_RUN_ID; NEVER in argv, never in a prompt, manifest, run state or ledger; (2) revoke it in a finally block when the job ends for ANY reason (done, failed, killed, cancelled, timed out); also revoke every token of a run when the run finishes or is cancelled. Keep the change small and local to the spawn path. Add tests/worker-token-dispatch.test.mjs with a fake spawn implementation capturing args and env: token only in env and absent from argv; the token record exists while the fake child runs; revoked after normal exit, after failure, after kill and after timeout; two jobs get different tokens bound to their own workspaces. Keep the existing adapter and core tests passing. IMPORTANT: the repository's secret scanner blocks credential-looking literals in files: in tests build any fake token value at run time (join or repeat) and never assign one to a name like token or secret as a literal. No wildcard patterns or file-looking words for files that do not exist.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tools/cli-adapters.mjs",
+    "tools/swarm/core-41.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tools/cli-adapters.mjs",
+    "tests/worker-token-dispatch.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}

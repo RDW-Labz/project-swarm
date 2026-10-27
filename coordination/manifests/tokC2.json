@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokC2",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Make sure the worker token never leaks into logs, transcripts, the ledger or error messages. Use redactWorkerToken and WORKER_TOKEN_ENV from tools/worker-token.mjs. (1) Pass every captured worker output, error message and logged command text through redactWorkerToken before it is stored or printed, in the places where job output and errors are saved (find the functions that save a job's output tail and error text in the swarm core files and adapters, keep the change minimal); (2) make the existing command and environment masking helpers (maskCommand in tools/orchestrator-events.mjs and any environment dump written into a job or run record) never include the variable SWARM_WORKER_TOKEN: its value is always shown as redacted; (3) add tests/worker-token-redaction.test.mjs: a fake job whose output and error text contain the token (built at run time) is stored redacted; maskCommand on a command containing the token returns it masked; an environment dump omits it; the run state file written by a fake run never contains the token string. Keep existing tests passing. IMPORTANT: the repository's secret scanner blocks credential-looking literals in files: in tests build any fake token value at run time (join or repeat) and never assign one to a name like token or secret as a literal. No wildcard patterns or file-looking words for files that do not exist.",
+   "context": [
+    "tests/_isolate-config.mjs",
+    "tools/orchestrator-events.mjs",
+    "tools/worker-token.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-events.mjs",
+    "tests/worker-token-redaction.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}

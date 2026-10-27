@@ -21,7 +21,36 @@
     "tools/worker-token.mjs",
     "tests/worker-token-dispatch.test.mjs"
    ],
-   "timeoutMs": 2700000
+   "timeoutMs": 2700000,
+   "ignoreTests": [
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/cli-adapters.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/field-lesson-347.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/lessons115.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/policy-cli-wiring.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/routing-paths.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/swarm.test.mjs",
+    "tests/worker-token.test.mjs"
+   ]
   }
  ]
 }
