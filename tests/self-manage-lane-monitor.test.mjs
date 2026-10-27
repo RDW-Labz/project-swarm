@@ -81,6 +81,39 @@ test('noCap lane skips spend-cap and can be healthy', async () => {
   assert.equal(entry.status, 'healthy');
 });
 
+test('noCap is ignored for paid lanes with non-local or missing endpoint', async () => {
+  for (const endpoint of [undefined, 'https://api.example.com', 'http://8.8.8.8']) {
+    let called = 0;
+    const entry = await probeLane({ id: 'openrouter', noCap: true, endpoint }, {
+      spendCap: () => { called += 1; return { ok: false, reason: 'over' }; },
+      rateLimit: okProbe,
+      reachable: okProbe,
+    });
+    assert.equal(called, 1);
+    assert.equal(entry.status, 'paused');
+  }
+});
+
+test('noCap is honored for local/LAN endpoints and non-paid lanes', async () => {
+  const cases = [
+    { id: 'openrouter', endpoint: 'http://127.0.0.1:8080' },
+    { id: 'openai', endpoint: 'http://192.168.1.5:8080' },
+    { id: 'gemini', endpoint: 'http://10.1.2.3' },
+    { id: 'anthropic', endpoint: 'http://172.20.0.1' },
+    { id: 'freelocal', endpoint: 'https://api.example.com' },
+  ];
+  for (const c of cases) {
+    let called = 0;
+    const entry = await probeLane({ ...c, noCap: true }, {
+      spendCap: () => { called += 1; return { ok: false }; },
+      rateLimit: okProbe,
+      reachable: okProbe,
+    });
+    assert.equal(called, 0, c.endpoint);
+    assert.equal(entry.status, 'healthy');
+  }
+});
+
 test('discoverLanes passes noCap from lane config', () => {
   const lanes = discoverLanes({
     config: { lanes: { local: { noCap: true } } },

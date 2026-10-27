@@ -64,6 +64,29 @@ test('redactSecrets widens key-like and token patterns', () => {
   }
 });
 
+test('redactSecrets handles Token auth, Cookie lines and bot URL paths', () => {
+  const val = 'fake' + '-token-' + '123';
+  const sess = 'sess' + 'ion=' + 'abc' + '123; other=xyz';
+  const bot = 'bot' + '123456' + ':' + 'ABC-DEF' + '1234gh';
+  const out = redactSecrets(`pre Authorization: Token ${val}\nCookie: ${sess}\nhttps://api.telegram.org/${bot}/sendMessage post`);
+  assert.match(out, /Authorization: Token \[redacted\]/);
+  assert.match(out, /Cookie: \[redacted\]/);
+  assert.match(out, /api\.telegram\.org\/bot\[redacted\]\/sendMessage post/);
+  assert.doesNotMatch(out, /abc123|ABC-DEF|fake-token/);
+  assert.match(out, /^pre /);
+});
+
+test('trim re-asserts 0o600 permissions', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'lane-events-mode-'));
+  const logPath = path.join(dir, 'big.ndjson');
+  const chunk = `${JSON.stringify({ pad: 'x'.repeat(180) })}\n`;
+  const lineCount = Math.ceil((1024 * 1024) / chunk.length) + 5;
+  await writeFile(logPath, chunk.repeat(lineCount), { mode: 0o600 });
+  fs.chmodSync(logPath, 0o644);
+  await appendLaneEvent({ eventLogPath: logPath, lane: 'm', state: 'up', reason: 'x' });
+  assert.equal(fs.statSync(logPath).mode & 0o777, 0o600);
+});
+
 test('buildLaneEvent slices lane and reason and redacts', () => {
   const longLane = 'L'.repeat(300);
   const secretBit = 'key=' + 'hidden';

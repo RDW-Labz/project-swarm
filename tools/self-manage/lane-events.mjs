@@ -28,6 +28,9 @@ export function redactSecrets(text) {
   );
   out = out.replace(/\bAuthorization\s*:\s*Basic\s+\S+/gi, 'Authorization: Basic [redacted]');
   out = out.replace(/\bAuthorization\s*:\s*Bearer\s+\S+/gi, 'Authorization: Bearer [redacted]');
+  out = out.replace(/\bAuthorization\s*:\s*Token\s+\S+/gi, 'Authorization: Token [redacted]');
+  out = out.replace(/\bCookie\s*:[^\r\n]*/gi, 'Cookie: [redacted]');
+  out = out.replace(/\/bot\d+:[A-Za-z0-9_-]+/g, '/bot[redacted]');
   out = out.replace(/\bBearer\s+[^\s]+/gi, 'Bearer [redacted]');
   out = out.replace(/\bBasic\s+[^\s]+/gi, 'Basic [redacted]');
   out = out.replace(/\bAIza[A-Za-z0-9_-]+\b/g, 'AIza[redacted]');
@@ -112,6 +115,7 @@ async function trimLogIfOversized(filePath) {
   const wfh = await open(filePath, constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW);
   try {
     await wfh.write(slice);
+    await wfh.chmod(0o600);
   } finally {
     await wfh.close();
   }
