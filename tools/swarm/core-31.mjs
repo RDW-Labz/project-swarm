@@ -50,19 +50,20 @@ export async function promptPathsNotInWorkspaceWarnings(root, job, context, { tr
   // Only what the manifest declares is checked. A retry note, a reviewer's evidence or an owner comment is quoted into the prompt between <<< and >>> as untrusted prose ("pr-part-*" in a
   // sentence is not a file glob): those blocks are left out before looking for paths.
   const promptText = String(job.prompt ?? '').replace(/<<<[\s\S]*?>>>/g, ' ');
+  // A word with an asterisk in prose (a file-name pattern, an option name ending in "*") is not a path the worker must read: skipped.
+  // Sentence punctuation after a path (period, colon, closing bracket or quote) is not part of it.
   const candidates = new Set([...promptText.matchAll(PROMPT_PATH_RE)]
-    .map(m => m[1]).filter(value => (value.includes('/') || value.includes('*')) && !value.includes('***'))
-    .map(value => value.replace(/^\.\//, '').replace(/\/$/, '')));
+    .map(m => m[1]).filter(value => !value.includes('*'))
+    .map(value => value.replace(/[.,:;)\]}>"'`]+$/, '').replace(/^\.\//, '').replace(/\/$/, ''))
+    .filter(value => value.includes('/')));
   const hits = [];
   for (const candidate of candidates) {
     // Validate spelling before coverage: normalization must never erase traversal.
     try { relative(candidate); } catch { continue; }
     if (promptPathCovered(candidate, covered)) continue;
-    const glob = candidate.includes('*');
-    const prefix = glob ? candidate.slice(0, candidate.indexOf('*')).replace(/[^/]*$/, '').replace(/\/$/, '') : candidate;
-    let abs; try { abs = prefix ? await safePath(root, prefix) : root; } catch { continue; }
-    try { await access(abs); if (glob && !(await fs.lstat(abs)).isDirectory()) continue; } catch { continue; }
-    hits.push(`prompt-path-not-in-workspace: Job ${job.id}'s prompt names ${candidate}, which ${glob ? 'matches no tracked, context, or resource file' : 'exists on disk but is neither tracked, in context, nor in manifest resources'}; it will be absent from the copied workspace`);
+    let abs; try { abs = await safePath(root, candidate); } catch { continue; }
+    try { await access(abs); } catch { continue; }
+    hits.push(`prompt-path-not-in-workspace: Job ${job.id}'s prompt names ${candidate}, which exists on disk but is neither tracked, in context, nor in manifest resources; it will be absent from the copied workspace`);
   }
   return hits;
 }
