@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix10",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "The new allow-list in the orchestrator-mode guard (tools/orchestrator-allow.mjs, tools/shell-writes.mjs, tools/handbuild.mjs) breaks two existing tests in tests/handbuild-guard.test.mjs: 'the guard hook as a process: deny output with the reason, allow prints nothing, workers and outside paths pass, ...' and 'second review: the project is the one Claude Code names, ...; a swarm workspace may be written, the checkout from inside it may not; ...'. Both expect that a VERIFIED swarm worker session (the existing worker exemption: isVerifiedSwarmWorkerCwd with the run record and launcher run id check) and paths outside the project keep working: the allow-list applies to the ORCHESTRATOR session only. Fix so that: (1) a verified swarm worker session may still write inside its own workspace or worktree exactly as before the allow-list (and the checkout from inside the workspace stays denied as before); (2) a write to a path outside the project root is not decided by the orchestrator allow-list (it behaves as before); (3) the orchestrator session itself is still denied writes to the swarm workspaces, worktrees, runs and backups folders and to everything not on the allow-list. Do not weaken anything else: tests/orchestrator-allow.test.mjs must keep passing and gain tests for the worker exemption (verified worker writes its workspace: allowed; unverified claim with only the environment variable: denied; orchestrator writes the same path: denied). Make tests/handbuild-guard.test.mjs, tests/orchestrator-mode tests, tests/shell-writes tests, tests/auto-approve.test.mjs and tests/handbuild tests all pass without editing their assertions. IMPORTANT: secret scanner: no credential-looking literals in tests.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
