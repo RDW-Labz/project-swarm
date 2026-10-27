@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockL4",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Fix the Opus round-2 findings in tools/backlog.mjs and extend tests/backlog.test.mjs. (1) MED importBacklog counts items instead of ids: importing a list [x, y, z] over [a, b, c] with no replace flag silently replaced all three; importing 2 items over 3 also passed. Fix: compute the existing ids that disappear from the import; require replace: true whenever more than ONE existing id disappears or the import is empty (otherwise throw backlog-unexpected-drop); a plain add of new ids and an update keeping all existing ids need no flag. (2) withBacklogLock passes a small maxHoldMs (60000) and waitMs (120000) to withFileLock because backlog holds last milliseconds, so a reused pid cannot block writers for 10 minutes. Tests: import [x,y,z] over [a,b,c] refused without replace and accepted with replace true; 2 over 3 refused; import that keeps all ids and adds one accepted without the flag; the lock options passed are the small values (spy on the options). STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less, start children in their own process group, and kill them in its after hook. IMPORTANT: secret scanner: never write literal values for fields named token, secret, key or password in tests: build them at run time (for example 'ab'.repeat(16)) into neutral variable names.",
+   "context": [
+    "tools/backlog.mjs",
+    "tools/file-lock.mjs",
+    "tests/backlog.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/backlog.mjs",
+    "tests/backlog.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
