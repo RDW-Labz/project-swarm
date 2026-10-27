@@ -4,7 +4,7 @@
  "jobs": [
   {
    "id": "bump16716",
-   "agent": "cursor",
+   "agent": "claude",
    "tier": "cheap",
    "prompt": "Bump the version from 1.167.15 to 1.167.16. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.15 to 1.167.16. In README.md change every 1.167.15 pin (kickoff text, tag name) to 1.167.16. In these tests replace the 1.167.15 pin with 1.167.16 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.167.16 above the 1.167.15 entry (keep it unchanged) with the lead-in line: The orchestrator guard stops blocking the orchestrator's own commands. And these bullets, each starting with a bold lead word: Guard: swarm commands (go --scope, tickets with --note, --retry-note and the other edit flags, change --yes, backlog, integrate, merge, update) are always allowed in orchestrator mode, owner approvals (resolve, done, scope approve, decide, handbuild approve) stay denied; Reads: gh pr and run view, grep, cat, git status and log, --help as the last word, and read-only paths under the home claude folder are allowed, and the word claude only counts when it is the program being launched; Tests: playwright, vitest, npm test, node --test and pytest run with a narrow flag set, and a bare test run is refused while code files sit in the orchestrator's own folders; Writes: the orchestrator may write only ledger, plan, manifest, handoff and state files in text formats (md, json, jsonl, yaml); source, node_modules, build output and the swarm workspaces are denied, and there is no worker exemption any more because swarm workers never load project hooks; Messages: the deny text names real commands (swarm ticket, swarm tickets, swarm backlog add) instead of swarm diagnose. Do not touch any other file. Note the version has two digits in the last part: pins like 1.167.16 must not be confused with 1.167.1 in assertions (use exact matches).",
    "context": [
@@ -32,7 +32,7 @@
     "tests/field-lessons-batch-ah-release.test.mjs"
    ],
    "timeoutMs": 1500000,
-   "model": "composer-2.5",
+   "model": "haiku",
    "ignoreTests": [
     "tests/acceptance-review-skip.test.mjs",
     "tests/acceptance-review-worktree.test.mjs",
