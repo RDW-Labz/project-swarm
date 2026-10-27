@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "tokG",
+   "agent": "auto",
+   "tier": "mid",
+   "prompt": "Owner finding from review 8: the orchestrator-mode guard is too broad about the word claude. It must match the claude PROGRAM being launched, not the word. Find every place in tools/shell-writes.mjs, tools/orchestrator-allow.mjs and tools/handbuild.mjs that denies or flags a shell command because of the text claude (a regular expression, an includes or startsWith on the word, agent-launcher detection for claude, claude-code, codex, cursor-agent) and change it to look only at the command position of each parsed command segment: the first word (basename of the executable, after env assignments, sudo, env, nohup, command, exec, time prefixes, and inside bash or sh -c strings, subshells and substitutions that the guard already parses) equals claude, or it is npx, pnpm dlx, bunx, npm exec or node running a package or script whose name is claude, claude-code or at anthropic-ai slash claude-code, or a path whose basename is claude. Anything else is not a launch: claude as an argument, inside quotes, in a path, a grep pattern, a commit message, a ticket note or a backlog goal text must not be affected by this rule. Keep denying real launches (claude -p hi, claude with any flags, npx claude-code, a full path to the claude binary, env FOO=1 claude, bash -c 'claude -p x', nohup claude &). Also allow read-only commands (cat, ls, head, tail, wc, grep, rg, find without exec) on paths under the user home .claude folder EXCEPT the projects folder (owner session transcripts stay denied) and the file named .claude.json (credentials stay denied); writes there stay denied as today. Also allow the json flag family for gh read commands (gh pr view 12 --json title,body, gh run view 5 --json status, gh pr list --json number,title with --jq and --limit) because today gh pr view 12 with a json flag is denied. Add tests through the full guard (hand-build guard on and off) for the false positives, each must be ALLOWED: grep -rn claude src; grep -rn claude .; git log --grep claude --oneline; git log --oneline -5 -- .claude; swarm tickets T-0001 --note with the word claude in the text; swarm backlog add with the word claude in the goal; swarm note with the word claude; ls claude-notes; cat of a file named claude-notes.md; cat tilde slash .claude slash settings.json; ls tilde slash .claude slash; gh pr view 12 --json title,body; and each must stay DENIED: claude -p hi; npx claude-code; npx at anthropic-ai slash claude-code; /usr/local/bin/claude -p x; env FOO=1 claude -p x; bash -c 'claude -p x'; nohup claude -p x; cat of a path under the .claude projects folder; cat of the .claude.json file; any write into the .claude folder. Keep every other guard test passing (tests/orchestrator-allow.test.mjs, tests/orchestrator-mode tests, tests/shell-writes tests, tests/auto-approve.test.mjs, tests/handbuild tests, tests/worker-guard-e2e.test.mjs). STANDING TEST RULE: every test that spawns a process must set a per-test timeout of 60000 ms or less in its test options, pass a timeout to spawnSync, and kill children in its after hook. IMPORTANT: secret scanner: build fake token values at run time.",
+   "context": [
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
