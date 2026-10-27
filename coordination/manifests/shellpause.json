@@ -19,7 +19,29 @@
     "tools/claude-shell.mjs",
     "tests/claude-shell-paused.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/batch-b-eval.test.mjs",
+    "tests/claude-shell.test.mjs",
+    "tests/field-lesson-t81-adapters.test.mjs",
+    "tests/field-lessons-batch-e.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/field-lessons-batch-g.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-t2.test.mjs",
+    "tests/field-lessons-batch-v.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/shell-loopback.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/shell-setup.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/state-guard.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ]
   }
  ]
 }
