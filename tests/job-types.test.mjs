@@ -24,12 +24,12 @@ test('untyped jobs remain unchanged and are copied', () => {
 
 test('presets are frozen and match the contract defaults', () => {
   const expected = {
-    build: ['any', ['local', 'anthropic', 'cursor'], 1800000, null], // owner decision 2026-10-22
-    fix: ['any', ['local', 'anthropic', 'cursor'], 1800000, 'diagnosing-bugs'], // owner decision 2026-10-22
-    test: ['tests', ['local', 'codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd'], // owner decision 2026-10-22
-    review: ['none', ['anthropic', 'cursor'], 900000, 'code-review'], // owner decision 2026-10-22
+    build: ['any', ['local', 'cursor', 'anthropic'], 1800000, null], // owner decision 2026-10-22
+    fix: ['any', ['local', 'cursor', 'anthropic'], 1800000, 'diagnosing-bugs'], // owner decision 2026-10-22
+    test: ['tests', ['local', 'cursor', 'codex', 'hermes', 'anthropic'], 1200000, 'tdd'], // owner decision 2026-10-22
+    review: ['none', ['cursor', 'anthropic'], 900000, 'code-review'], // owner decision 2026-10-22
     research: ['none', ['hermes'], 900000, null],
-    docs: ['docs', ['local', 'anthropic', 'hermes', 'cursor'], 900000, null], // owner decision 2026-10-22
+    docs: ['docs', ['local', 'cursor', 'hermes', 'anthropic'], 900000, null], // owner decision 2026-10-22
     merge: ['any', ['codex'], 1800000, 'resolving-merge-conflicts'],
     lead: ['manifest', ['codex'], 900000, null],
   };
@@ -104,7 +104,7 @@ test('unknown types and forged internal routes refuse', () => {
       assert.throws(() => check(input), { code: 'job-type-invalid', message: 'Job typed: unknown type ' + type });
     }
   }
-  validateManifest(manifest(job({ type: 'build', typeRoute: ['local', 'anthropic', 'cursor'] }))); // owner decision 2026-10-22
+  validateManifest(manifest(job({ type: 'build', typeRoute: ['local', 'cursor', 'anthropic'] }))); // owner decision 2026-10-22
   for (const input of [job({ typeRoute: ['codex'] }), job({ type: 'build', typeRoute: ['cursor', 'codex'] }), job({ type: 'build', typeRoute: [] })]) {
     assert.throws(() => validateManifest(manifest(input)), { code: 'job-type-invalid' });
   }
@@ -136,7 +136,7 @@ test('validateProject returns skill warnings and the applied prompt before routi
   const input = job({ type: 'review', context: ['input.txt'] });
   const value = { ...manifest(input), lanes: { hermes: { model: 'test-model' }, anthropic: { model: 'claude-haiku-5-5' }, cursor: { model: 'u' } } };
   const result = await validateProject(root, value);
-  assert.equal(result.routes[0].agent, 'anthropic'); // owner decision 2026-10-22: review routes anthropic (Sonnet), not codex
+  assert.equal(result.routes[0].agent, 'cursor'); // owner decision 2026-10-22: review routes cursor first, then anthropic (Sonnet)
   assert.equal(result.jobs[0].prompt, applyJobType(input).job.prompt);
   assert.equal(result.jobs[0].timeoutMs, 900000);
   assert.equal(result.warnings.filter(warning => warning.code === 'job-type-skill-unavailable').length, 1);
@@ -166,7 +166,7 @@ test('runManifest saves applied presets and surfaces unavailable skill warnings'
   assert.equal(state.warnings.some(warning => warning.includes('job-type-skill-unavailable')), true);
 });
 
-test('research routes to Hermes first; docs and test use it only after Anthropic; the other job types never do', async t => {
+test('research routes to Hermes first; docs and test list Hermes before the paid Anthropic lane; the other job types never do', async t => {
   const root = await fixture(t);
   const lanesConfig = { hermes: { model: 'test-model' }, anthropic: { model: 'claude-haiku-5-5' }, codex: { model: 'gpt-5' } };
   const research = await validateProject(root, { ...manifest(job({ type: 'research', context: ['input.txt'], outputs: [] })), lanes: lanesConfig });
@@ -174,6 +174,6 @@ test('research routes to Hermes first; docs and test use it only after Anthropic
   for (const type of ['build', 'fix', 'review', 'merge', 'lead']) assert.equal(JOB_TYPES[type].route.includes('hermes'), false, type);
   for (const type of ['docs', 'test']) {
     const route = JOB_TYPES[type].route;
-    assert.ok(route.includes('hermes') && route.indexOf('hermes') > route.indexOf('anthropic'), type);
+    assert.ok(route.includes('hermes') && route.indexOf('hermes') < route.indexOf('anthropic'), type);
   }
 });

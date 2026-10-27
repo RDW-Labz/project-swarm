@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

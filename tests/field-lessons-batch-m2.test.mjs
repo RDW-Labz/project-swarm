@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Field lessons #202, #206, #208 (swarm 1.26.0 batch M, job m2-core), plus the swarm.mjs comment scrub.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

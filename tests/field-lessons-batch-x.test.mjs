@@ -14,6 +14,7 @@
 //   sandbox.
 // #288: a codex job's own repo AGENTS.md names required reads the prompt never surfaces as
 //   allowed.
+import './_isolate-config.mjs';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

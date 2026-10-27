@@ -73,18 +73,18 @@ test('a guard marker from before the last boot is stale even if its pid is alive
 
 import { applyJobType } from '../tools/job-types.mjs';
 import { routeJob } from '../tools/router.mjs';
-test('routes by job type: Haiku first for build, fix and docs; codex first for test; paused lane hands on', () => {
+test('routes by job type: Cursor first for build, fix and docs; cursor first for test; paused lane hands on', () => {
   const lanes = { cursor: { model: 'u' }, codex: { model: 'c' }, anthropic: { model: 'h' }, claude: { model: 'sonnet' } };
-  const anthropicPaused = { lanes, health: a => ({ state: a === 'anthropic' ? 'paused' : 'ok' }) };
+  const cursorLanePaused = { lanes: { ...lanes, cursor: { ...lanes.cursor, paused: true } } };
   for (const type of ['build', 'fix', 'docs']) {
     const outputs = type === 'docs' ? ['docs/a.md'] : ['src/a.ts'];
     const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs });
-    assert.equal(routeJob(job, { lanes }).agent, 'anthropic', type);
-    assert.equal(routeJob(job, anthropicPaused).agent, 'cursor', `${type}: paused anthropic hands on`);
+    assert.equal(routeJob(job, { lanes }).agent, 'cursor', type);
+    assert.equal(routeJob(job, cursorLanePaused).agent, 'anthropic', `${type}: paused cursor hands on`);
   }
   for (const type of ['test']) {
     const { job } = applyJobType({ id: 'j', agent: 'auto', type, prompt: 'p', sensitive: false, outputs: ['src/a.test.ts'] });
-    assert.equal(routeJob(job, { lanes }).agent, 'codex', type);
-    assert.equal(routeJob(job, anthropicPaused).agent, 'codex', `${type}: codex first when anthropic paused`);
+    assert.equal(routeJob(job, { lanes }).agent, 'cursor', type);
+    assert.equal(routeJob(job, cursorLanePaused).agent, 'codex', `${type}: paused cursor hands on`);
   }
 });
