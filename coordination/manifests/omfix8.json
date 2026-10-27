@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix8",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus round-5 review of the orchestrator-mode guard found two remaining HIGH holes; fix them in tools/orchestrator-allow.mjs, tools/shell-writes.mjs and tools/handbuild.mjs and extend tests/orchestrator-allow.test.mjs (full-guard tests, hand-build guard on and off). (1) Code files can still be written by the Write, Edit, MultiEdit and NotebookEdit tools into folders the orchestrator is allowed to write and that the bare-test-run scan skips: node_modules (for example node_modules/.bin/vitest and node_modules/vitest/vitest.mjs), build, coverage, dist and .cache (the TOOL_DIRS list in tools/shell-writes.mjs and allowedRel). Fix: apply the existing code-file write ban (code extensions, test and config names, test folders) to EVERY place the orchestrator session is allowed to write, not only the orchestrator-owned folders: node_modules, build, dist, coverage, .cache and every other tool folder in TOOL_DIRS. Simplest rule: the orchestrator may write only non-code files (md, txt, json other than package, ndjson, yaml, yml, csv, log) anywhere it is allowed to write, and its writes into node_modules are denied entirely. Add the same folders to the bare-test-run scan (refuse a bare run when a code file or test-named file exists there; node_modules only the top-level .bin folder and the vitest, jest, playwright and mocha package folders at depth 2 to keep the scan cheap). (2) The skip list is a write hole: .swarm/workspaces, .swarm/worktrees, .swarm/runs and .swarm/backups are skipped by both the write guard and the scan, so the Write tool can create test files and edit a worker's output there. Fix: keep the skip list only for the SCAN (those folders hold swarm-managed copies); DENY every orchestrator write (Write, Edit, MultiEdit, NotebookEdit and shell writes, any file type) under .swarm/workspaces, .swarm/worktrees, .swarm/runs and .swarm/backups regardless of the hand-build guard state, because only the swarm process writes there. Reading stays allowed. Also make a bare vitest run refuse unless a vitest config in the project root excludes the dot swarm folder (use the existing swarm-dir-not-ignored detection if it exists) or an explicit test file path is given. Keep every attack denied and every bug-report command allowed (swarm go --scope wave --max-jobs 2, swarm tickets T-0001 --retry-note x, swarm tickets --help, gh pr view 12, gh run view 5, grep -rn foo src, cat README.md, git status, git log --oneline -5, npx playwright test, npx vitest run with an excluding config, npm test, node --test, pytest, python3 -m pytest). Keep tests/orchestrator-mode*.test.mjs, tests/shell-writes*.test.mjs, tests/auto-approve.test.mjs and tests/handbuild*.test.mjs passing without editing their assertions. IMPORTANT: secret scanner: no credential-looking literals in tests; keep wildcards and file-looking words out of this job's prompt-like text.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
