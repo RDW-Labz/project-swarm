@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
+import { WORKER_TOKEN_ENV } from './worker-token.mjs';
 
 export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'end', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -27,6 +28,7 @@ export function maskCommand(command, max = 80) {
   let text = String(command ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   const KEYWORD = '(?:token|key|secret|passw(?:or)?d|passwd|auth|credential|cookie|bearer)';
   text = text
+    .replace(new RegExp(`\\b${WORKER_TOKEN_ENV}\\s*=\\s*("[^"]*"|'[^']*'|\\S+)`, 'g'), `${WORKER_TOKEN_ENV}=[value]`)
     // credentials in a URL: scheme://user:password@host
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@]+@/g, '$1[value]@')
     // well-known token shapes

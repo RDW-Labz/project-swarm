@@ -5,6 +5,108 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 export const WORKER_TOKEN_ENV = 'SWARM_WORKER_TOKEN';
+export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
+
+const activeJobTokens = new Map();
+let dispatcherSignalsRegistered = false;
+
+function activeKey(ctx) {
+  return `${ctx.root}\0${ctx.runId}\0${ctx.jobId}`;
+}
+
+export function registerActiveWorkerToken(ctx, proof) {
+  if (!ctx || typeof proof !== 'string' || !proof) return;
+  activeJobTokens.set(activeKey(ctx), { ...ctx, proof });
+  ensureDispatcherSignalHandlers();
+}
+
+export function unregisterActiveWorkerToken(ctx) {
+  if (!ctx) return;
+  activeJobTokens.delete(activeKey(ctx));
+}
+
+function ensureDispatcherSignalHandlers() {
+  if (dispatcherSignalsRegistered) return;
+  dispatcherSignalsRegistered = true;
+  const onSignal = () => {
+    revokeActiveWorkerTokens().catch(() => {});
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+}
+
+export async function revokeActiveWorkerTokens() {
+  const entries = [...activeJobTokens.values()];
+  activeJobTokens.clear();
+  for (const ctx of entries) {
+    await revokeWorkerToken(ctx);
+  }
+}
+
+export async function revokeAllWorkerTokensForRun({ root, runId } = {}) {
+  if (!root || typeof root !== 'string') return;
+  if (typeof runId !== 'string' || !SAFE_ID.test(runId)) return;
+  const dir = workerTokensDir(root, runId);
+  let names;
+  try {
+    names = await fsp.readdir(dir);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    await fsp.unlink(path.join(dir, name)).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
+}
+
+/** Resolve project root, run id and job id from a worker cwd or run log directory. */
+export function resolveWorkerDispatchContext({ cwd, logDirectory, jobId } = {}) {
+  const resolvedJobId = typeof jobId === 'string' && SAFE_ID.test(jobId) ? jobId : null;
+  if (typeof logDirectory === 'string' && logDirectory) {
+    const absLog = path.resolve(logDirectory);
+    const logJobId = path.basename(absLog);
+    const runDir = path.dirname(absLog);
+    const runsContainer = path.dirname(runDir);
+    const swarmDot = path.dirname(runsContainer);
+    if (path.basename(runsContainer) === 'runs' && path.basename(swarmDot) === '.swarm') {
+      const runId = path.basename(runDir);
+      const root = path.dirname(swarmDot);
+      const finalJobId = resolvedJobId ?? logJobId;
+      if (SAFE_ID.test(runId) && SAFE_ID.test(finalJobId)) {
+        return { root, runId, jobId: finalJobId };
+      }
+    }
+  }
+  if (typeof cwd === 'string' && cwd) {
+    const norm = path.resolve(cwd).replace(/\\/g, '/');
+    const marker = '/.swarm/workspaces/';
+    const idx = norm.indexOf(marker);
+    if (idx >= 0) {
+      const root = norm.slice(0, idx);
+      const rest = norm.slice(idx + marker.length);
+      const segments = rest.split('/').filter(Boolean);
+      const runId = segments[0];
+      let parsedJobId = null;
+      if (segments[1] === '.attempts' && segments.length >= 3) parsedJobId = segments[2];
+      else if (segments[1]) parsedJobId = segments[1];
+      const finalJobId = resolvedJobId ?? parsedJobId;
+      if (parsedJobId && SAFE_ID.test(runId) && SAFE_ID.test(finalJobId)) {
+        return { root, runId, jobId: finalJobId };
+      }
+    }
+  }
+  return null;
+}
+
+/** Strip worker token values before persisting environment snapshots on a job record. */
+export function maskWorkerEnvForRecord(env) {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return env;
+  if (!(WORKER_TOKEN_ENV in env)) return env;
+  return { ...env, [WORKER_TOKEN_ENV]: '[value]' };
+}
 
 const SAFE_ID = /^[A-Za-z0-9._-]{1,80}$/;
 const TOKEN_HEX = /^[0-9a-f]{64}$/;
