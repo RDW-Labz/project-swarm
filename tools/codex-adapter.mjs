@@ -201,6 +201,17 @@ export function parseCodexReply(text) {
   }
   return lastTopLevelObject(text);
 }
+export function blockedNoteFromReply(reply) {
+  if (!reply || !Array.isArray(reply.notes)) return null;
+  for (const item of reply.notes) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('blocked') || lower.includes('status: blocked') || lower.includes('blocked:')) return trimmed;
+  }
+  return null;
+}
 // Lesson #64: when the reply itself yields nothing, the same `-o` file is re-read directly in
 // case only the captured reply text, not the file, was empty or truncated.
 export async function codexResultFile(worktree, resultRelative) {
