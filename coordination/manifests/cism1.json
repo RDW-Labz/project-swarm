@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "cism1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Create the browser smoke test tests/browser/command-center.smoke.mjs (the name ends .smoke.mjs so the normal npm test pattern of tests/*.test.mjs and tests/*/*.test.mjs does not pick it up) using node:test and the playwright package that is already a devDependency (import { chromium } from 'playwright'; do not add any dependency). The test starts the real watch board server in process with createWatchServer from tools/watch-server.mjs on a free port with the Command Center flag on (set process.env.SWARM_COMMAND_CENTER to 1 before the server is created, restore it afterwards), using the same fake board and fake nav callbacks and fixtures as tests/command-center-routes-flag.test.mjs and tests/command-center-snapshot.test.mjs (read them) so the Hive has at least four projects and one project has tickets, a session and run stream items. It launches chromium headless at a 1440x900 viewport, adds the page token as the cookie or query the existing routes accept (read how the routes test authenticates), and for each of the pages /command-center and /command-center/project/<id> (use the id of a fixture project): collects every browser console message of type error, every pageerror and every failed request (all must be zero; a 404 for /favicon.ico is the only allowed exception); waits for the root selector of the Hive (use the real root selector from tools/watch-assets/command-center.html and command-center-boot.js, and the selectors the Hive and Cockpit mount modules put on their top elements) and of the Cockpit; asserts a non-empty DOM: the visible text length of the main area is over 200 characters and at least 20 elements inside the main area have a non-zero bounding box; takes a screenshot and asserts it is not blank: the PNG is over 20480 bytes AND at least 8 distinct colours appear when sampling a 40 by 40 grid of pixels, decoded with a small inline PNG reader written with node:zlib (support 8-bit RGB and RGBA, all five filter types, no new dependency). It also asserts that with the flag off (a second server created with the environment variable removed) GET /command-center is a 404 and the classic board page at / loads with status 200 and no console errors. Every failure message must name the page and the problem, for example 'Hive page: 2 console errors: ...'. When chromium is not installed the test must fail with a clear message telling to run npx playwright install chromium, never skip silently. Keep the file under about 400 lines with small helper functions at the top. Do not edit any other file. Tests must not contain credential-looking literals: build any fake secret-like value at run time and never assign quoted secret-looking strings to variables named like token, secret, password or key (a page token for the test server is generated with crypto.randomBytes at run time). Keep every existing test passing.",
+   "context": [
+    "tools/watch-server.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tools/watch-assets/command-center.html",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/browser/command-center.smoke.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
