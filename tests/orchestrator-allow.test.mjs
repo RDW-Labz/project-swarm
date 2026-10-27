@@ -26,6 +26,11 @@ import {
   isVerifiedSwarmWorkerCwd,
 } from '../tools/shell-writes.mjs';
 import { GUARD_ERROR_DENY_REASON, guardDecision } from '../tools/handbuild.mjs';
+import {
+  issueWorkerToken,
+  revokeWorkerToken,
+  WORKER_TOKEN_ENV,
+} from '../tools/worker-token.mjs';
 import { fileURLToPath } from 'node:url';
 
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -537,18 +542,19 @@ test('guardDecision: bare test runs blocked when orchestrator folders hold code'
   );
 });
 
-test('orchestrator write allow-list: worker tree and verified launcher exemption', async t => {
+test('orchestrator write allow-list: worker tree and verified token exemption', async t => {
   const root = await tmp(t);
   const runId = 'run-worker-exempt';
+  const jobId = 'job-1';
   await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}\n');
-  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, jobId);
   await fs.mkdir(path.join(workspace, 'src'), { recursive: true });
   const rel = '.swarm/workspaces/run-worker-exempt/job-1/src/a.ts';
   const abs = path.join(root, rel);
 
   assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, root, false), true);
-  assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, workspace, false), false);
+  assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, workspace, false), true);
 
   const orch = await guardDecision({
     tool: 'Write',
@@ -560,11 +566,18 @@ test('orchestrator write allow-list: worker tree and verified launcher exemption
   });
   assert.equal(orch.allow, false, 'orchestrator session cannot write worker tree paths');
 
-  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
+  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
+  const prevEnv = {
+    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
+  };
   process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  process.env[WORKER_TOKEN_ENV] = proof;
   t.after(() => {
-    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+    if (prevEnv[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevEnv[SWARM_WORKER_RUN_ID_ENV];
+    if (prevEnv[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prevEnv[WORKER_TOKEN_ENV];
   });
   assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), true);
   const verified = await guardDecision({
@@ -577,17 +590,117 @@ test('orchestrator write allow-list: worker tree and verified launcher exemption
   });
   assert.equal(verified.allow, true, 'verified worker may write inside its workspace');
 
-  await fs.rm(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
-  const envOnly = await guardDecision({
+  const rootWrite = await guardDecision({
     tool: 'Write',
-    toolInput: { file_path: abs },
+    toolInput: { file_path: path.join(root, 'TASK.md') },
     root,
-    cwd: root,
+    cwd: workspace,
     now: () => 1,
     enforceOrchestratorMode: true,
   });
-  assert.equal(envOnly.allow, false, 'run id env alone does not bypass the allow-list from the checkout');
+  assert.equal(rootWrite.allow, false, 'verified worker cannot write repo root checkout');
+
+  const wsB = path.join(root, '.swarm', 'workspaces', runId, 'job-2');
+  await fs.mkdir(wsB, { recursive: true });
+  const otherJob = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: path.join(wsB, 'x.txt') },
+    root,
+    cwd: workspace,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(otherJob.allow, false, 'token for job A cannot write job B workspace');
+
+  await revokeWorkerToken({ root, runId, jobId });
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+  const revokedWrite = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: abs },
+    root,
+    cwd: workspace,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(revokedWrite.allow, false, 'revoked token gives no exemption');
+
+  delete process.env[WORKER_TOKEN_ENV];
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+  const runIdOnly = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: abs },
+    root,
+    cwd: workspace,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(runIdOnly.allow, false, 'run id env alone is not exempt');
+});
+
+test('workspaces cwd without token is not exempt from allow-list', async t => {
+  const root = await tmp(t);
+  const runId = 'run-cwd-only';
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  await fs.mkdir(workspace, { recursive: true });
+  const rel = '.swarm/workspaces/run-cwd-only/job-1/note.txt';
+  assert.equal(orchestratorWriteAllowListAppliesRel(rel, root, workspace, false), true);
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+});
+
+test('run record plus run id env and workspace cwd without token is not exempt', async t => {
+  const root = await tmp(t);
+  const runId = 'run-fake-launch';
+  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
+  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}\n');
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, 'job-1');
+  await fs.mkdir(workspace, { recursive: true });
+  const prevRun = process.env[SWARM_WORKER_RUN_ID_ENV];
+  const prevTok = process.env[WORKER_TOKEN_ENV];
+  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  delete process.env[WORKER_TOKEN_ENV];
+  t.after(() => {
+    if (prevRun === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
+    else process.env[SWARM_WORKER_RUN_ID_ENV] = prevRun;
+    if (prevTok === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prevTok;
+  });
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace), false);
+  const d = await guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: path.join(workspace, 'out.txt') },
+    root,
+    cwd: workspace,
+    now: () => 1,
+    enforceOrchestratorMode: true,
+  });
+  assert.equal(d.allow, false);
+  assert.equal(d.reason, ORCHESTRATOR_MODE_DENY_REASON);
+});
+
+test('expired worker token gives no exemption', async t => {
+  const root = await tmp(t);
+  const runId = 'run-expired';
+  const jobId = 'job-1';
+  const workspace = path.join(root, '.swarm', 'workspaces', runId, jobId);
+  await fs.mkdir(workspace, { recursive: true });
+  const issuedAt = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const proof = await issueWorkerToken({
+    root,
+    runId,
+    jobId,
+    workspace,
+    ttlMs: 60_000,
+    now: issuedAt,
+  });
+  const prevTok = process.env[WORKER_TOKEN_ENV];
+  process.env[WORKER_TOKEN_ENV] = proof;
+  t.after(() => {
+    if (prevTok === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prevTok;
+  });
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace, issuedAt + 30_000), true);
+  assert.equal(isVerifiedSwarmWorkerCwd(root, workspace, issuedAt + 120_000), false);
 });
 
 test('deny reasons explain tickets and allow-list writes', () => {

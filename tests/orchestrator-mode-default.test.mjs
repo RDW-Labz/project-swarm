@@ -14,6 +14,7 @@ import {
   ORCHESTRATOR_TEST_MARKER_BODY,
   SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
+import { issueWorkerToken, WORKER_TOKEN_ENV } from '../tools/worker-token.mjs';
 
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
@@ -141,17 +142,19 @@ test('worker workspace and scratch tmp cwd are not subject to orchestrator mode'
   const root = await defaultSwarmProject(t);
   await writeOrchestratorTestMarker(root);
   const runId = 'run1';
-  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
-  const workspace = path.join(root, '.swarm', 'workspaces', 'run1', 'job-1');
+  const jobId = 'job-1';
+  const workspace = path.join(root, '.swarm', 'workspaces', 'run1', jobId);
   await fs.mkdir(workspace, { recursive: true });
+  const proof = await issueWorkerToken({ root, runId, jobId, workspace });
   const prev = {
     CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
     [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    [WORKER_TOKEN_ENV]: process.env[WORKER_TOKEN_ENV],
     SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
   };
   process.env.CLAUDE_PROJECT_DIR = root;
   process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  process.env[WORKER_TOKEN_ENV] = proof;
   try {
   assert.equal(orchestratorModeEnabled(root, workspace), false);
   const dWs = guardDecision({
@@ -168,6 +171,8 @@ test('worker workspace and scratch tmp cwd are not subject to orchestrator mode'
     else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
     if (prev[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
     else process.env[SWARM_WORKER_RUN_ID_ENV] = prev[SWARM_WORKER_RUN_ID_ENV];
+    if (prev[WORKER_TOKEN_ENV] === undefined) delete process.env[WORKER_TOKEN_ENV];
+    else process.env[WORKER_TOKEN_ENV] = prev[WORKER_TOKEN_ENV];
     if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
     else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
   }

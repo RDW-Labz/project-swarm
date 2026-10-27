@@ -26,7 +26,8 @@ import {
   ORCHESTRATOR_MODE_DENY_REASON,
   ORCHESTRATOR_COMMAND_TOO_LONG_REASON,
   orchestratorCommandTooLong,
-  isVerifiedSwarmWorkerCwd,
+  swarmWorkerSession,
+  workerScopedWriteRelDenied,
 } from './shell-writes.mjs';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
 import { swarmProducedFiles, isSwarmProducedContent } from './swarm-produced.mjs';
@@ -1986,11 +1987,21 @@ const orchestratorModeProtectedWriteRel = (rel, root, cwd) => {
   const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
   if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
   if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
-  const verifiedWorker = isVerifiedSwarmWorkerCwd(root, cwd ?? root);
-  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root, verifiedWorker)) return false;
+  const session = swarmWorkerSession(root, cwd ?? root);
+  if (session) {
+    return workerScopedWriteRelDenied(rel, root, cwd ?? root);
+  }
+  if (!orchestratorWriteAllowListAppliesRel(rel, root, cwd ?? root, false)) return false;
   const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
   return !orchestratorWriteAllowed(candidate, root);
 };
+
+const workerScopeOmDeny = files => ({
+  allow: false,
+  files,
+  reason: ORCHESTRATOR_MODE_DENY_REASON,
+  ruleId: ORCHESTRATOR_MODE_RULE_ID,
+});
 
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
   applyGuardTestFault(root);
@@ -2072,6 +2083,7 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       if (rel !== null && sessionProtectedHandbuildRel(rel)) {
         return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
       }
+      if (rel !== null && workerScopedWriteRelDenied(rel, root, cwd)) return workerScopeOmDeny([rel]);
       if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) return omDeny([rel]);
       return { allow: true };
     }
@@ -2086,6 +2098,9 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
     if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
     if (rel !== null && sessionProtectedHandbuildRel(rel)) {
       return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
+    }
+    if (rel !== null && workerScopedWriteRelDenied(rel, root, cwd)) {
+      return workerScopeOmDeny([rel]);
     }
     if (omActive && rel !== null && orchestratorModeProtectedWriteRel(rel, root, cwd)) {
       return omDeny([rel]);
@@ -2126,11 +2141,17 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       }
       if (omActive) {
         const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+        const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
+        if (workerScopedWrites.length) return workerScopeOmDeny(workerScopedWrites);
         const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
           .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));
         if (protectedWrites.length) return omDeny(protectedWrites);
         if (orchestratorModeBlockedOps(ti.command)) return omDeny(a.writes ?? []);
         if (!orchestratorModeCommandAllowed(ti.command, { root, cwd, home: h })) return omDeny(a.writes ?? []);
+      } else if (swarmWorkerSession(root, cwd ?? root)) {
+        const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+        const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
+        if (workerScopedWrites.length) return workerScopeOmDeny(workerScopedWrites);
       }
       return { allow: true };
     }
@@ -2143,6 +2164,8 @@ export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home
       });
     }
     const a = analyzeShell(ti.command, { root, cwd, home: h, protectedAbs: protectedAbsolute(h) });
+    const workerScopedWrites = [...new Set(a.writes)].filter(rel => workerScopedWriteRelDenied(rel, root, cwd));
+    if (workerScopedWrites.length) return finishBash(workerScopeOmDeny(workerScopedWrites));
     if (omActive) {
       const protectedWrites = [...new Set([...a.writes, ...orchestratorSwarmRunWrites(ti.command, root, cwd)])]
         .filter(rel => orchestratorModeProtectedWriteRel(rel, root, cwd));

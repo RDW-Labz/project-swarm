@@ -146,15 +146,63 @@ export function swarmWorkerTreeRel(root, cwd) {
 
 /**
  * True when orchestrator-mode write allow-list should decide this project-relative path.
- * Skips verified worker sessions, writes under the worker tree while cwd is in that tree, and paths outside the project (no rel).
+ * Skips verified worker sessions (scoped separately) and paths outside the project (no rel).
  */
 export function orchestratorWriteAllowListAppliesRel(normRel, root, cwd, isVerifiedWorker = false) {
   if (isVerifiedWorker) return false;
   const norm = normPosixRel(normRel);
   if (!norm) return false;
-  const tree = swarmWorkerTreeRel(root, cwd);
-  if (tree && (norm === tree || norm.startsWith(`${tree}/`))) return false;
   return true;
+}
+
+const WORKER_ALWAYS_DENIED_PREFIXES = [
+  '.swarm/handbuild/',
+  '.swarm/orchestrator-mode/',
+  '.swarm/runs/',
+  '.swarm/backups/',
+];
+
+/** Paths every session (including verified workers) must not write. */
+export function workerSessionProtectedRel(normRel) {
+  const norm = normPosixRel(normRel);
+  if (!norm) return false;
+  if (norm === '.swarm/handbuild' || norm.startsWith('.swarm/handbuild/')) return true;
+  if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
+  if (norm === '.swarm/orchestrator-mode/off') return true;
+  if (norm === '.git' || norm.startsWith('.git/')) return true;
+  if (WORKER_ALWAYS_DENIED_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p))) return true;
+  return false;
+}
+
+const absInsideWorkspace = (absPath, root, workspaceReal) => {
+  let targetReal;
+  try {
+    targetReal = fs.realpathSync.native(absPath);
+  } catch {
+    try {
+      const parent = fs.realpathSync.native(path.dirname(absPath));
+      targetReal = path.join(parent, path.basename(absPath));
+    } catch {
+      return false;
+    }
+  }
+  let wsReal;
+  try {
+    wsReal = fs.realpathSync.native(workspaceReal);
+  } catch {
+    return false;
+  }
+  if (targetReal === wsReal) return true;
+  return targetReal.startsWith(`${wsReal}${path.sep}`);
+};
+
+/** True when a verified worker must not write this project-relative path. */
+export function workerWriteTargetDenied(normRel, root, workspaceReal) {
+  const norm = normPosixRel(normRel);
+  if (!norm) return true;
+  if (workerSessionProtectedRel(norm)) return true;
+  const candidate = path.isAbsolute(normRel) ? normRel : path.join(root, normRel);
+  return !absInsideWorkspace(candidate, root, workspaceReal);
 }
 
 /** True when an absolute or project-relative path may be written (resolves symlinks; default deny). */
