@@ -10,6 +10,7 @@ import {
   readOnlyCommandAllowed,
   localTestRunAllowed,
   helpOnly,
+  orchestratorOwnForbiddenTestOrRunnerBasename,
 } from '../tools/orchestrator-allow.mjs';
 import {
   orchestratorModeCommandAllowed,
@@ -45,6 +46,9 @@ test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--evil']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('budget', ['set', '10']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('budgets', ['set', 'daily', '5']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('budget', ['--daily', '1000', 'set']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('budget', ['show']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('budget', ['--json']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress', '--yes']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('resolve', []), false);
   assert.equal(swarmSubcommandAlwaysAllowed('inbox', ['list']), true);
@@ -118,6 +122,20 @@ test('readOnlyCommandAllowed and localTestRunAllowed shapes', () => {
   assert.equal(localTestRunAllowed(['pytest', '-c', 'x.ini']), false);
   assert.equal(localTestRunAllowed(['pytest', '-p', 'plugin']), false);
   assert.equal(localTestRunAllowed(['python3', '-m', 'pytest', '--rootdir', '/tmp']), false);
+  assert.equal(localTestRunAllowed(['python', '-c', 'import os', '-m', 'pytest']), false);
+  assert.equal(localTestRunAllowed(['python3', '-I', '-m', 'pytest']), true);
+});
+
+test('orchestratorOwnForbiddenTestOrRunnerBasename', () => {
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('wave.test.mjs'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('plan.spec.ts'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('test_plan.py'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('plan_test.py'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('conftest.py'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('vitest.config.ts'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('package.json'), true);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('scale-plan-v2.md'), false);
+  assert.equal(orchestratorOwnForbiddenTestOrRunnerBasename('ideas.md'), false);
 });
 
 test('orchestratorModeCommandAllowed: bug-report allows', async t => {
@@ -229,8 +247,10 @@ test('orchestratorModeCommandAllowed: stays blocked', async t => {
     'pytest -c x.ini',
     'pytest -p plugin',
     'python -m pytest --rootdir /tmp',
+    'python -c import -m pytest',
     'swarm budget set 10',
     'swarm budgets set daily 5',
+    'swarm budget --daily 1000 set',
     'swarm tickets T-0001 --delivered PR-1',
     'swarm tickets T-0001 --take-from T-0002',
   ];
@@ -253,6 +273,22 @@ async function projectWithSwarm(t) {
     }),
   );
   return root;
+}
+
+function guardWrite(filePath, root, { handbuildOff = false, orchestrator = true } = {}) {
+  const setup = handbuildOff
+    ? fs.mkdir(path.join(root, '.swarm', 'handbuild'), { recursive: true }).then(() =>
+      fs.writeFile(path.join(root, '.swarm', 'handbuild', 'off'), ''),
+    )
+    : Promise.resolve();
+  return setup.then(() => guardDecision({
+    tool: 'Write',
+    toolInput: { file_path: filePath },
+    root,
+    cwd: root,
+    now: () => 1,
+    enforceOrchestratorMode: orchestrator,
+  }));
 }
 
 function guardBash(command, root, { handbuildOff = false, orchestrator = true } = {}) {
@@ -321,6 +357,7 @@ test('guardDecision: test runners and help attacks through full guard', async t 
     'pytest -c x.ini',
     'pytest -p plugin',
     'python -m pytest --rootdir /tmp',
+    'python -c import -m pytest',
     'npx vitest run .swarm/x.test.mjs',
     'npx vitest run docs/plans/x.test.mjs',
     'npx playwright test .swarm/x.spec.js',
@@ -350,6 +387,36 @@ test('guardDecision: test runners and help attacks through full guard', async t 
   for (const c of localTestAllow) {
     const d = await guardBash(c, root, { handbuildOff: false, orchestrator: false });
     assert.equal(d.allow, true, `handbuild-only: ${c}`);
+  }
+});
+
+test('guardDecision: orchestrator-owned writes block test artifacts', async t => {
+  const root = await projectWithSwarm(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  const allowWrites = [
+    'docs/plans/scale-plan-v2.md',
+    'docs/plans/ideas.md',
+    '.swarm/notes/orchestrator-note.txt',
+  ];
+  const denyWrites = [
+    'docs/plans/evil.test.mjs',
+    'docs/plans/x.spec.ts',
+    'docs/plans/test_wave.py',
+    'docs/plans/wave_test.py',
+    'docs/plans/conftest.py',
+    'docs/plans/vitest.config.mjs',
+    'docs/plans/package.json',
+    '.swarm/hidden.test.mjs',
+  ];
+  for (const handbuildOff of [false, true]) {
+    for (const rel of allowWrites) {
+      const d = await guardWrite(rel, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, true, `${handbuildOff ? 'off' : 'on'} allow write ${rel}`);
+    }
+    for (const rel of denyWrites) {
+      const d = await guardWrite(rel, root, { handbuildOff, orchestrator: true });
+      assert.equal(d.allow, false, `${handbuildOff ? 'off' : 'on'} deny write ${rel}`);
+    }
   }
 });
 

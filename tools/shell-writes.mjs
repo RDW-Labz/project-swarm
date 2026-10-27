@@ -14,6 +14,7 @@ import {
   readOnlyCommandAllowed,
   helpOnly,
   localTestRunAllowed,
+  orchestratorOwnRel,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -1758,10 +1759,7 @@ const omPackageScripts = root => {
   }
 };
 
-const omTestOperandOrchestratorOwnedRel = norm => {
-  if (norm === 'docs/plans' || norm.startsWith('docs/plans/')) return true;
-  return ORCHESTRATOR_OWN.some(prefix => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
-};
+const omTestOperandOrchestratorOwnedRel = norm => orchestratorOwnRel(norm);
 
 const omTestOperandOk = (raw, ctx) => {
   if (!omReadOperandOk(raw, ctx)) return false;

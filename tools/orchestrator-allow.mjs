@@ -3,6 +3,44 @@
 
 import path from 'node:path';
 
+const ORCHESTRATOR_OWN_PREFIXES = Object.freeze(['.swarm/', 'docs/plans/']);
+
+const ORCHESTRATOR_OWN_JS_TEST = /\.(test|spec)\.(js|mjs|cjs|ts|mts|cts|jsx|tsx)$/i;
+const ORCHESTRATOR_OWN_PYTEST_INI = /^pytest\.(ini|cfg)$/i;
+const ORCHESTRATOR_OWN_RUNNER_CONFIG = [
+  /^vitest\.config\./i,
+  /^vitest\.workspace\./i,
+  /^playwright\.config\./i,
+  /^jest\.config\./i,
+  /^tox\.ini$/i,
+  /^pyproject\.toml$/i,
+  /^setup\.cfg$/i,
+  /^\.mocharc(\.|$)/i,
+  /^mocha\.opts$/i,
+];
+
+/** True when a project-relative path (posix, lower) is under orchestrator-owned folders. */
+export function orchestratorOwnRel(normRel) {
+  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  return ORCHESTRATOR_OWN_PREFIXES.some(prefix => norm === prefix.slice(0, -1) || norm.startsWith(prefix));
+}
+
+/** Test or test-runner artifacts the orchestrator must not create under orchestrator-owned folders. */
+export function orchestratorOwnForbiddenTestOrRunnerBasename(basename) {
+  const name = path.basename(String(basename ?? ''));
+  if (!name) return false;
+  if (ORCHESTRATOR_OWN_JS_TEST.test(name)) return true;
+  if (/^package\.json$/i.test(name)) return true;
+  if (ORCHESTRATOR_OWN_PYTEST_INI.test(name) || ORCHESTRATOR_OWN_RUNNER_CONFIG.some(re => re.test(name))) {
+    return true;
+  }
+  if (/\.py$/i.test(name)) {
+    const stem = name.slice(0, -3);
+    if (/^test_/i.test(stem) || /_test$/i.test(stem) || /^conftest$/i.test(stem)) return true;
+  }
+  return false;
+}
+
 export const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
 
 export const OM_SWARM_ALLOWED_TOP = new Set([
@@ -279,8 +317,8 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (s === 'scope') return omSwarmScopeReadOnly(rest);
   if (s === 'decide') return omSwarmDecideReadOnly(rest);
   if (s === 'budget' || s === 'budgets') {
-    const verb = String(rest.find(a => a !== '' && !String(a).startsWith('-')) ?? '').toLowerCase();
-    if (verb === 'set') return false;
+    const verb = rest.find(a => a !== '' && !String(a).startsWith('-'));
+    if (verb !== undefined && String(verb).toLowerCase() !== 'show') return false;
   }
   if (s === 'tickets') return omSwarmTicketsAllowed(rest);
   if (s === 'inbox') return omSwarmInboxAllowed(rest);
@@ -482,9 +520,12 @@ const pytestArgs = words => {
   const cmd = path.basename(String(words[0]));
   if (cmd === 'pytest') return words.slice(1);
   if (cmd === 'python' || cmd === 'python3') {
-    const m = words.indexOf('-m');
-    if (m === -1 || String(words[m + 1] ?? '') !== 'pytest') return null;
-    return words.slice(m + 2);
+    const tail = words.slice(1);
+    let i = 0;
+    while (i < tail.length && tail[i] === '-I') i += 1;
+    if (i >= tail.length || tail[i] !== '-m') return null;
+    if (String(tail[i + 1] ?? '') !== 'pytest') return null;
+    return tail.slice(i + 2);
   }
   return null;
 };

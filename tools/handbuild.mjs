@@ -37,6 +37,10 @@ import {
   swarmChangeShellPolicy,
 } from './self-approval.mjs';
 import {
+  orchestratorOwnRel,
+  orchestratorOwnForbiddenTestOrRunnerBasename,
+} from './orchestrator-allow.mjs';
+import {
   AUTO_OFF_FILE,
   STATS_FILE,
   STATS_INITIALIZED_FILE,
@@ -2002,6 +2006,7 @@ const orchestratorModeProtectedWriteRel = (rel, root) => {
   const norm = String(inside ?? rel).replace(/\\/g, '/').toLowerCase();
   if (norm === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || norm === OFF_FILE.toLowerCase()) return true;
   if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
+  if (orchestratorOwnRel(norm) && orchestratorOwnForbiddenTestOrRunnerBasename(path.basename(norm))) return true;
   return false;
 };
 
