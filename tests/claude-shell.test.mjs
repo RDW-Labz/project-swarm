@@ -75,7 +75,11 @@ test('non-shell claude argv, env and prompt stay byte-identical to 1.18.0', asyn
   assert.equal(state.status, 'complete');
   assert.equal(seen[0].command, 'claude');
   assert.deepEqual(seen[0].args, [...base, '--model', 'sonnet']);
-  assert.equal(seen[0].options.env, process.env);
+  // The one intended env change from 1.18.0: ambient paid keys must never reach a subscription lane.
+  const expectedEnv = { ...process.env };
+  delete expectedEnv.ANTHROPIC_API_KEY;
+  delete expectedEnv.SWARM_CLAUDE_WORKER_API_KEY;
+  assert.deepEqual(seen[0].options.env, expectedEnv);
   assert.equal(seen[0].options.cwd, path.join(root, '.swarm/workspaces', state.id, 'writer'));
   // Field lesson #256 is the one intended deviation from 1.18.0: a sentence telling the worker to
   // report an unmet contract MUST in `deviations` instead of silently substituting a design. Every
