@@ -317,10 +317,10 @@ describe('T80 run queue integration', () => {
   });
 });
 
-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.16', async () => {
+test('T80 release docs describe the bounded loop and pin kickoff to 1.167.17', async () => {
   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
   const pkg = JSON.parse(pkgText);
-  assert.equal(pkg.version, '1.167.16');
+  assert.equal(pkg.version, '1.167.17');
   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
   assert.equal(pkg.scripts.build, undefined);
