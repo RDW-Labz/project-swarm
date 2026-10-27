@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "valfix2",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "The wildcard validator change in tools/swarm/core-31.mjs (a word with an asterisk in prompt text never produces a prompt-path-not-in-workspace hit; trailing punctuation is stripped; plain uncovered existing paths still produce the hit) is correct and stays; three tests now fail and need updating, because they asserted the OLD behaviour or are wrong. Fix ONLY these tests (do not change tools code unless a plain-path check is broken): (1) tests/field-lessons-batch-ah-runtime.test.mjs, the test 'L358 accepts carried directory and full glob paths without prefix leakage' (around line 186): it still expects a rejection for a prompt that mentions an asterisk glob path; an asterisk pattern in prose now never fails, so change those glob expectations to expect NO rejection and NO hit (keep every plain path expectation exactly as it is), with a short comment: owner-ordered change, wildcard words in prose are not paths. (2) tests/s13-live-bugs.test.mjs line ~185: the assertion 'the same words outside a quoted note still warn' expects 1 hit for a prompt that mentions a part-name pattern with an asterisk outside the quoted note: now expects 0 hits (the asterisk word is skipped), with the same comment; keep the assertion that a declared plain path still warns. (3) tests/prompt-path-wildcards.test.mjs, the test 'traversal spelling is still refused': it expects a rejection that the original code never produced; look at the ORIGINAL behaviour (git show origin/main for tools/swarm/core-31.mjs: a candidate whose spelling makes relative() throw is skipped with continue, traversal is refused elsewhere or ignored) and rewrite this test to assert exactly the original behaviour for traversal spellings (same results as origin/main for the same prompts), e.g. by computing the expectation from the plain-path rules, not from a rejection that never existed. Then all of tests/prompt-path-wildcards.test.mjs, tests/s13-live-bugs.test.mjs, tests/field-lessons-batch-ah-runtime.test.mjs and tests/field-lessons-batch-x.test.mjs must pass. IMPORTANT: secret scanner: no credential-looking literals.",
+   "context": [
+    "tools/swarm/core-31.mjs",
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/prompt-path-wildcards.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/field-lessons-batch-ah-runtime.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/prompt-path-wildcards.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ]
+}

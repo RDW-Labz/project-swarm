@@ -192,8 +192,8 @@ test('L358 accepts carried directory and full glob paths without prefix leakage'
   for (const candidate of ['src/pkg', 'src/pkg/', './src/pkg', './src/pkg/', 'context', 'resources', 'src/pkg/*.py', 'src/pkg/**/*.py', './src/pkg/*.py', '**/*.py', '*.txt']) {
     await assert.doesNotReject(swarm.validateProject(root, spec(`Read ${candidate}/`.replace(/\/\/$/, '/') + ' carefully.')), candidate);
   }
-  // Globs are complete matches: carrying Python files cannot cover an unmatched extension.
-  for (const candidate of ['uncovered/a.py', 'uncovered', 'src/pkg/*.js', 'src/pkg/**/*.js', '*.py']) {
+  // Wildcard words are skipped (owner-ordered change); plain uncovered paths still refuse.
+  for (const candidate of ['uncovered/a.py', 'uncovered']) {
     const spelling = candidate.includes('/') ? candidate : candidate + '/';
     await assert.rejects(swarm.validateProject(root, spec(`Read ${spelling} carefully.`)), /prompt-path-not-in-workspace/);
   }
@@ -204,8 +204,9 @@ test('L358 accepts carried directory and full glob paths without prefix leakage'
   const hits = await swarm.promptPathsNotInWorkspaceWarnings(prefixRoot, job({ prompt: 'Read src/pkg carefully.' }), [], { trackedFiles: ['src/pkg-other/a.py'] });
   assert.equal(hits.length, 1);
   assert.match(hits[0], /exists on disk but is neither tracked/);
+  // Owner-ordered change: wildcard words in prose are not paths, so an uncovered glob no longer produces a hit.
   const globHits = await swarm.promptPathsNotInWorkspaceWarnings(root, job({ prompt: 'Read src/pkg/*.js carefully.' }), [], { trackedFiles: ['src/pkg/a.py'] });
-  assert.match(globHits[0], /matches no tracked, context, or resource file/);
+  assert.deepEqual(globHits, []);
   for (const prompt of ['See https://example.invalid/uncovered/a.py', 'See /uncovered/a.py', 'See ../uncovered/a.py', 'See made/up/prose', 'See uncovered/../uncovered/a.py', 'See src/pkg/[ab].py']) {
     assert.deepEqual(await swarm.promptPathsNotInWorkspaceWarnings(root, job({ prompt }), []), [], prompt);
   }
