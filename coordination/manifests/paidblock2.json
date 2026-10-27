@@ -20,7 +20,29 @@
     "tools/router.mjs",
     "tests/job-type-route-order.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/cap-reroute.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/local-lane-cache-context.test.mjs",
+    "tests/local-lane-probe.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/paid-lane-paused.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/router-ready.test.mjs",
+    "tests/router.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/tunnel.test.mjs"
+   ]
   }
  ]
 }

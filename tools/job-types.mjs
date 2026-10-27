@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { isTestFile } from './context-check.mjs';
 
-// API Haiku is the main parallel worker for build/fix/test/docs; Cursor stays in the mix; Codex is skipped when the lane is paused (default).
-const API_WORK_TYPES = ['local', 'anthropic', 'cursor'];
+// Free and flat-rate lanes first; the paid Anthropic lane is last and is skipped while paused.
+const API_WORK_TYPES = ['local', 'cursor', 'anthropic'];
 const preset = (writes, route, timeoutMs, skill, promptLine) => Object.freeze({
   writes, route: Object.freeze(route), timeoutMs, skill, promptLine,
 });
@@ -10,10 +10,10 @@ const preset = (writes, route, timeoutMs, skill, promptLine) => Object.freeze({
 export const JOB_TYPES = Object.freeze({
   build: preset('any', [...API_WORK_TYPES], 1800000, null, 'Implement the change and its tests inside your declared outputs.'),
   fix: preset('any', [...API_WORK_TYPES], 1800000, 'diagnosing-bugs', 'Reproduce the failure first, fix the cause, and keep or add a regression test inside your outputs.'),
-  test: preset('tests', ['local', 'codex', 'anthropic', 'hermes', 'cursor'], 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
-  review: preset('none', ['anthropic', 'cursor'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
+  test: preset('tests', ['local', 'cursor', 'codex', 'hermes', 'anthropic'], 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
+  review: preset('none', ['cursor', 'anthropic'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
   research: preset('none', ['hermes'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
-  docs: preset('docs', ['local', 'anthropic', 'hermes', 'cursor'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
+  docs: preset('docs', ['local', 'cursor', 'hermes', 'anthropic'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
   merge: preset('any', ['codex'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
   lead: preset('manifest', ['codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),
 });
