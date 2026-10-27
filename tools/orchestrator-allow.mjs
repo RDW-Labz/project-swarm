@@ -363,8 +363,45 @@ const SWARM_TICKET_DENIED_FLAGS = new Set([
 const SWARM_TICKET_ALLOWED_FLAGS = new Set([
   '--retry-note', '--note', '--files', '--context', '--acceptance', '--add-acceptance', '--status',
   '--kind', '--stage', '--type', '--risk', '--json', '--release', '--question', '--reopen', '--reason',
-  '--set', '--help', '-h',
+  '--set', '--depends-on', '--help', '-h',
 ]);
+
+const OM_SWARM_INTEGRATE_APPROVE_MANIFEST = '--approve-manifest';
+
+const OM_RUN_MANIFEST_PREFIXES = ['coordination/manifests/', '.swarm/manifests/'];
+
+const omRelativeRunManifestPathOk = raw => {
+  const s = String(raw ?? '');
+  if (!s || path.isAbsolute(s) || s.startsWith('-') || s.startsWith('/')) return false;
+  const norm = path.posix.normalize(s.replace(/\\/g, '/')).replace(/^\.\//, '');
+  if (!norm || norm.startsWith('../') || norm.includes('/../') || norm === '..') return false;
+  const parts = norm.split('/').filter(Boolean);
+  if (parts.some(p => p === '..')) return false;
+  if (!norm.toLowerCase().endsWith('.json')) return false;
+  const lower = norm.toLowerCase();
+  return OM_RUN_MANIFEST_PREFIXES.some(p => lower.startsWith(p));
+};
+
+const omIntegrateApproveManifestPathOk = raw => {
+  const s = String(raw ?? '');
+  if (!s || path.isAbsolute(s) || s.startsWith('-') || s.startsWith('/') || s.startsWith('./')) return false;
+  if (!/^[A-Za-z0-9_@+./-]+$/.test(s)) return false;
+  const norm = path.posix.normalize(s.replace(/\\/g, '/'));
+  if (!norm || norm.startsWith('../') || norm.includes('/../') || norm === '..') return false;
+  return true;
+};
+
+const omSwarmJobsValueOk = val => {
+  const parts = String(val ?? '').split(',');
+  if (!parts.length || parts.some(p => !p || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(p))) return false;
+  return true;
+};
+
+const omTicketDependsOnValueOk = val => {
+  const parts = String(val ?? '').split(',');
+  if (!parts.length) return false;
+  return parts.every(p => p && /^[+-][A-Za-z0-9][A-Za-z0-9._-]*$/.test(p));
+};
 
 const swarmArgTokens = rest => rest.map(w => String(w).toLowerCase());
 
@@ -376,6 +413,11 @@ const swarmArgsHaveYes = rest => {
 const swarmArgsHaveApprove = rest => {
   const lower = swarmArgTokens(rest);
   return lower.some(a => a === 'approve' || a === '--approve' || a.startsWith('--approve='));
+};
+
+const swarmArgsHaveApproveManifest = rest => {
+  const lower = swarmArgTokens(rest);
+  return lower.some(a => a === OM_SWARM_INTEGRATE_APPROVE_MANIFEST || a.startsWith(`${OM_SWARM_INTEGRATE_APPROVE_MANIFEST}=`));
 };
 
 const swarmArgsHaveForceBypass = rest => {
@@ -469,11 +511,16 @@ const swarmTicketsFlagsOk = rest => {
     }
     const needsValue = new Set([
       '--retry-note', '--note', '--files', '--context', '--acceptance', '--add-acceptance', '--status',
-      '--kind', '--stage', '--type', '--risk', '--release', '--question', '--reason',
+      '--kind', '--stage', '--type', '--risk', '--release', '--question', '--reason', '--depends-on',
     ]);
-    if (needsValue.has(name) && !a.includes('=')) {
-      if (i + 1 >= rest.length) return false;
-      i += 2;
+    if (needsValue.has(name)) {
+      const val = a.includes('=')
+        ? a.slice(a.indexOf('=') + 1)
+        : String(rest[i + 1] ?? '');
+      if (!a.includes('=') && i + 1 >= rest.length) return false;
+      if (name === '--depends-on' && !omTicketDependsOnValueOk(val)) return false;
+      if (!a.includes('=')) i += 2;
+      else i += 1;
       continue;
     }
     i += 1;
@@ -495,26 +542,56 @@ const omSwarmOrphansAllowed = rest => {
   return pos.length === 1 && pos[0] === 'list';
 };
 
-const omSwarmRunIntegrateFlagsOk = rest => {
+const omSwarmRunIntegrateFlagStep = (sub, rest, i) => {
+  const a = String(rest[i]);
+  const low = a.toLowerCase();
+  const eq = low.indexOf('=');
+  const name = eq === -1 ? low : low.slice(0, eq);
+  if (sub === 'integrate' && name === OM_SWARM_INTEGRATE_APPROVE_MANIFEST) {
+    const val = eq !== -1 ? a.slice(a.indexOf('=') + 1) : String(rest[i + 1] ?? '');
+    if (eq === -1 && i + 1 >= rest.length) return { ok: false };
+    if (!omIntegrateApproveManifestPathOk(val)) return { ok: false };
+    return { ok: true, next: eq === -1 ? i + 2 : i + 1 };
+  }
+  if (OM_SWARM_RUN_FLAGS.has(name) || OM_SWARM_RUN_FLAGS.has(a)) {
+    if (OM_SWARM_RUN_FLAGS_WITH_VALUE.has(name)) {
+      const val = eq !== -1 ? a.slice(a.indexOf('=') + 1) : String(rest[i + 1] ?? '');
+      if (eq === -1 && i + 1 >= rest.length) return { ok: false };
+      if (name === '--jobs' && !omSwarmJobsValueOk(val)) return { ok: false };
+      return { ok: true, next: eq === -1 ? i + 2 : i + 1 };
+    }
+    return { ok: true, next: i + 1 };
+  }
+  if (a.startsWith('-')) return { ok: false };
+  return { ok: true, next: i + 1, positional: a };
+};
+
+const omSwarmRunLikePositionals = (sub, rest) => {
+  const pos = [];
   let i = 0;
   while (i < rest.length) {
-    const a = String(rest[i]);
-    const low = a.toLowerCase();
-    const eq = low.indexOf('=');
-    const name = eq === -1 ? low : low.slice(0, eq);
-    if (OM_SWARM_RUN_FLAGS.has(name) || OM_SWARM_RUN_FLAGS.has(a)) {
-      if (eq === -1 && OM_SWARM_RUN_FLAGS_WITH_VALUE.has(a)) {
-        if (i + 1 >= rest.length) return false;
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-    if (a.startsWith('-')) return false;
-    i += 1;
+    const step = omSwarmRunIntegrateFlagStep(sub, rest, i);
+    if (!step.ok) return null;
+    if (step.positional !== undefined && step.positional !== '') pos.push(step.positional);
+    i = step.next;
+  }
+  return pos;
+};
+
+const omSwarmRunIntegrateFlagsOk = (rest, { sub } = {}) => {
+  let i = 0;
+  while (i < rest.length) {
+    const step = omSwarmRunIntegrateFlagStep(sub, rest, i);
+    if (!step.ok) return false;
+    i = step.next;
   }
   return true;
+};
+
+const omSwarmRunPositionOk = a => {
+  const s = String(a);
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(s)) return true;
+  return omRelativeRunManifestPathOk(s);
 };
 
 const SCOPE_OWNER_VERBS = new Set(['approve']);
@@ -553,14 +630,18 @@ const omSwarmRunLikeAllowed = (sub, rest) => {
   if (sub === 'merge') return lower.length === 1 && /^\d+$/.test(lower[0]);
   if (sub === 'update') return lower.length === 0;
   if (sub === 'go') {
-    const pos = rest.filter(a => a !== '' && !String(a).startsWith('-'));
+    const pos = omSwarmRunLikePositionals('go', rest);
+    if (pos === null) return false;
     if (!pos.every(a => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(a)))) return false;
-    return omSwarmRunIntegrateFlagsOk(rest);
+    return omSwarmRunIntegrateFlagsOk(rest, { sub: 'go' });
   }
   if (sub === 'run' || sub === 'integrate') {
-    const pos = rest.filter(a => a !== '' && !String(a).startsWith('-'));
-    if (!pos.every(a => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(a)))) return false;
-    return omSwarmRunIntegrateFlagsOk(rest);
+    const pos = omSwarmRunLikePositionals(sub, rest);
+    if (pos === null) return false;
+    if (sub === 'run') {
+      if (!pos.every(a => omSwarmRunPositionOk(a))) return false;
+    } else if (!pos.every(a => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(a)))) return false;
+    return omSwarmRunIntegrateFlagsOk(rest, { sub });
   }
   return false;
 };
@@ -589,6 +670,7 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (!s) return false;
   if (OM_SWARM_DENIED_TOP.has(s)) return false;
   if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
+  if (s !== 'integrate' && swarmArgsHaveApproveManifest(rest)) return false;
   if (s === 'restore') return false;
   if (swarmArgsHaveApprove(rest)) return false;
   if (swarmArgsHaveForceBypass(rest)) return false;
