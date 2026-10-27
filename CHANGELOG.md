@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.167.15
+
+Notes reach workers, longer check timeouts, waves start again.
+- **Notes:** a note from the owner or the orchestrator (swarm tickets ID --set ready --note TEXT, or --note alone) is saved on the ticket and shown to the next worker as guidance; the system retry note stays separate, --retry-note TEXT replaces it and --clear-note clears both.
+- **Timeouts:** a ticket can set a longer check timeout (swarm tickets ID --check-timeout MS, 60 s to 30 min) and the project profile verify block can set timeoutMs for every ticket; the default stays 5 minutes.
+- **Waves:** human tickets no longer use the job cap and the wave builder picks fairly across stages, so later stages are not starved.
+- **Autopilot:** the service can start waves again (the child go --scope runs under its parent's lock) and reports early start failures through a log file.
+- **Gate and lanes:** standalone failing-test rerun and environment fingerprint modules, the lane health core (adapter registry, free GET-only probes, probation) and the lane monitor, reroute, recovery and events modules are in, not wired yet.
+
 ## 1.167.14
 
 Needs-you fixes itself, and the leaked test servers are gone.
