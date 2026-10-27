@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix7",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus round-4 review of the orchestrator-mode guard still fails with two HIGH problems; test files the orchestrator writes in its own folders can still run. Replace the name-pattern approach by a simpler invariant, in tools/orchestrator-allow.mjs, tools/handbuild.mjs and tools/shell-writes.mjs, and extend tests/orchestrator-allow.test.mjs (full-guard tests, hand-build guard on and off). (1) Write guard: the orchestrator session may NEVER create or edit a code file inside its own folders (.swarm/ and docs/plans/ and any other ORCHESTRATOR_OWN folder). Deny, by case-insensitive extension of the resolved real path (and also of the symlink target when the written path is a symlink), the extensions js, mjs, cjs, ts, mts, cts, jsx, tsx, py, pyi, sh, bash, zsh, rb, pl, php, and any file whose base name is conftest, makefile, dockerfile, or whose name starts with test or ends with test (any extension), or that sits under a folder named test, tests, spec, specs, __tests__, plus the runner and package config names already denied (vitest, playwright, jest, pytest ini and cfg, tox, mocha, package json, pyproject toml). Notes and plans (md, txt, json other than package, ndjson, yaml, yml, csv) stay writable so the orchestrator can still keep its plans and notes. Keep this check in the shared function used by Write, Edit, MultiEdit and NotebookEdit and also for shell writes into those folders. The old narrower test-pattern rule can stay as a subset. (2) Bare test runs: before allowing a test run that has no explicit test file path (node --test, npx vitest run, npm test, pnpm and yarn test, pytest, python -m pytest, npx playwright test without a path, and any run with only a name filter), scan the folders docs/plans and .swarm of the project without following symlinks (depth limit 8, entry limit 5000; skip .swarm/workspaces, .swarm/worktrees, .swarm/runs, .swarm/backups, .swarm/orchestrator-mode and node_modules because they hold swarm-managed copies) and REFUSE the run if any file with one of the code extensions or test names listed in (1) exists there; fail closed (refuse) on a scan error or when a limit is hit. Explicit test file paths under non-orchestrator folders stay allowed as before. (3) The existing round-3 LOW about the Write guard checking the link name not the target: check the resolved target too. Keep every attack denied and every bug-report command allowed (swarm go --scope wave --max-jobs 2, swarm tickets T-0001 --retry-note x, swarm tickets --help, gh pr view 12, gh run view 5, grep -rn foo src, cat README.md, git status, git log --oneline -5, npx playwright test, npx vitest run, npm test with a package.json script, node --test, pytest, python3 -m pytest) when the orchestrator folders hold no code files. Tests: for each of these names written through the Write tool must be denied: x-test.mjs, x_test.mjs, test-x.mjs, test.mjs, test.js, a file under a test folder, x.py, x.sh, a symlink to a denied file, upper-case names; and bare runs must be refused when such a file exists in docs/plans or .swarm and allowed when only md and json files exist. Keep tests/orchestrator-mode*.test.mjs, tests/shell-writes*.test.mjs, tests/auto-approve.test.mjs and tests/handbuild*.test.mjs passing without editing their assertions. IMPORTANT: secret scanner: no credential-looking literals in tests; no wildcard patterns or file-looking words in this prompt are needed in tests' text beyond plain names.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
