@@ -1,7 +1,8 @@
 import { expandAffectedArgv } from '../affected.mjs';
 import { assertOpusTier as assertAnthropicModel } from '../anthropic.mjs';
 import { API_AGENTS } from '../api-adapters.mjs';
-import { expandShellPreset, validateLoopbackAllow, validateNetworkAllow, validateShellTestEnvKey } from '../claude-shell.mjs';
+import { CLAUDE_SHELL_PAUSED, claudeShellPausedProblem, expandShellPreset, validateLoopbackAllow, validateNetworkAllow, validateShellTestEnvKey } from '../claude-shell.mjs';
+import { loadLocalConfig } from '../local-config.mjs';
 import { CODEX_MODEL, git, validateReadPaths } from '../codex-adapter.mjs';
 import { CURSOR_MODEL } from '../cursor-adapter.mjs';
 import { validDependencySpec } from '../dep-install.mjs';
@@ -150,7 +151,7 @@ async function mutantReviewTexts(root, overlay = new Map()) {
   return texts;
 }
 
-export function validateManifest(manifest, { outputJobIds = null } = {}) {
+export function validateManifest(manifest, { outputJobIds = null, env = process.env } = {}) {
   normalizeManifestMetadata(manifest);
   if (!manifest || typeof manifest !== 'object') fail('Manifest is missing');
   if (manifest.version !== 1) fail('Manifest requires version: 1');
@@ -242,6 +243,8 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
   const ids = new Set();
   const writers = new Set();
   const outputJobs = outputJobIds === null ? null : new Set(outputJobIds);
+  let claudeShellPauseRefusal = null;
+  let claudeShellPauseResolved = false;
   for (const job of manifest.jobs) {
     if (!job || typeof job.id !== 'string' || !ID.test(job.id) || ids.has(job.id.toLowerCase())) fail(`Invalid or duplicate job id: ${job?.id}`);
     ids.add(job.id.toLowerCase());
@@ -257,6 +260,13 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
     // Decision #154: `sonnet-shell`/`opus-shell` expand to {model, shell: true, tier} here, so
     // every later check (and the saved manifest, state and inspect) sees the real model.
     expandShellPreset(job);
+    if (job.shell === true) {
+      if (!claudeShellPauseResolved) {
+        claudeShellPauseRefusal = claudeShellPausedProblem(loadLocalConfig({ env }));
+        claudeShellPauseResolved = true;
+      }
+      if (claudeShellPauseRefusal) fail(claudeShellPauseRefusal, CLAUDE_SHELL_PAUSED);
+    }
     if (job.shell !== undefined) {
       if (typeof job.shell !== 'boolean') fail(`Job ${job.id}: shell must be true or false`);
       if (job.agent !== 'claude') fail(`Job ${job.id} shell is only supported for agent claude`);
