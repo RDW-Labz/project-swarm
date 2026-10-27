@@ -1,0 +1,29 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix11",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Two old guard tests still fail with the new allow-list in tools/orchestrator-allow.mjs, tools/shell-writes.mjs, tools/handbuild.mjs; fix the production code, do not edit their assertions. (1) tests/orchestrator-mode-review4.test.mjs test 'R4-5 handbuild off still denies npm via orchestrator hook path': the guard hook run as a process with the command npm test in a project that has a swarm folder but NO package.json must print a deny decision (JSON) and exit 0; today it prints nothing (allowed). Rule: npm, pnpm and yarn test or run test forms are allowed only when the project root has a package.json whose scripts contain that exact script name (test, test:e2e, test:unit); with no package.json or no such script they are denied, also through the hook path with the hand-build off file present. (2) tests/orchestrator-mode-review3.test.mjs test 'M3: handbuild off file does not disable orchestrator mode': orchestratorModeEnabled(root, root) must stay true when the handbuild off file exists under the dot swarm folder (the off file switches the hand-build guard off, never orchestrator mode); the allow-list change must not have made that function depend on it. Make both tests pass and keep everything else passing: tests/orchestrator-allow.test.mjs, all tests/orchestrator-mode tests, tests/shell-writes tests, tests/auto-approve.test.mjs, tests/handbuild tests. IMPORTANT: secret scanner: no credential-looking literals in tests.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tools/handbuild.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
