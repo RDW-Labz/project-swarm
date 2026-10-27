@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Pure orchestrator-mode allow rules (no I/O). Called from tools/shell-writes.mjs.
+// Orchestrator-mode allow rules. Called from tools/shell-writes.mjs and tools/handbuild.mjs.
 
+import fs from 'node:fs';
 import path from 'node:path';
 
 const ORCHESTRATOR_OWN_PREFIXES = Object.freeze(['.swarm/', 'docs/plans/']);
@@ -19,14 +20,152 @@ const ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES = [
   '.swarm/orchestrator-mode/',
 ];
 
-/** Orchestrator-mode code-write guard applies under docs/plans and .swarm except swarm-managed subtrees. */
+const ORCHESTRATOR_TEXT_EXTENSIONS = Object.freeze(['md', 'json', 'jsonl', 'ndjson', 'yaml', 'yml']);
+
+/** Default-deny write allow-list for orchestrator mode (folder prefix, extensions, denied subtrees). */
+export const ORCHESTRATOR_WRITE_RULES = Object.freeze([
+  {
+    comment: 'Swarm ledger and metadata under .swarm (never workspaces, worktrees, runs, backups, or orchestrator-mode).',
+    folderPrefix: '.swarm/',
+    extensions: ORCHESTRATOR_TEXT_EXTENSIONS,
+    denySubfolders: ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES,
+  },
+  {
+    comment: 'Plans and ideas at any depth under docs/plans/.',
+    folderPrefix: 'docs/plans/',
+    extensions: ORCHESTRATOR_TEXT_EXTENSIONS,
+    denySubfolders: [],
+  },
+  {
+    comment: 'Job manifests (JSON) for swarm run, integrate, and go.',
+    folderPrefix: 'coordination/manifests/',
+    extensions: ['json'],
+    denySubfolders: [],
+  },
+  {
+    comment: 'Handoff notes: coordination/HANDOFF*.md only (not TASK.md or other coordination files).',
+    folderPrefix: 'coordination/',
+    extensions: ['md'],
+    denySubfolders: [],
+    basenamePrefix: 'handoff',
+  },
+  {
+    comment: 'Usage ledger and orchestrator state markdown under docs/state/.',
+    folderPrefix: 'docs/state/',
+    extensions: ['md'],
+    denySubfolders: [],
+  },
+  {
+    comment: 'Active goal TASK.md at the repository root (not coordination/TASK.md).',
+    folderPrefix: '',
+    extensions: ['md'],
+    denySubfolders: [],
+    exactBasename: 'task.md',
+  },
+]);
+
+const normPosixRel = normRel => String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+
+const extSet = exts => new Set(exts.map(e => String(e).toLowerCase()));
+
+const ruleMatchesRel = (rule, norm) => {
+  const prefix = String(rule.folderPrefix ?? '').toLowerCase();
+  if (prefix) {
+    if (!(norm === prefix.slice(0, -1) || norm.startsWith(prefix))) return false;
+  } else if (norm.includes('/')) return false;
+  const deny = rule.denySubfolders ?? [];
+  if (deny.some(p => {
+    const d = String(p).toLowerCase();
+    return norm === d.slice(0, -1) || norm.startsWith(d);
+  })) return false;
+  const base = norm.split('/').filter(Boolean).pop() ?? '';
+  if (rule.exactBasename && base !== String(rule.exactBasename).toLowerCase()) return false;
+  if (rule.basenamePrefix) {
+    const stem = base.includes('.') ? base.slice(0, base.lastIndexOf('.')) : base;
+    if (!stem.startsWith(String(rule.basenamePrefix).toLowerCase())) return false;
+  }
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot + 1) : '';
+  if (/^package\.json$/i.test(base)) return false;
+  const allowed = extSet(rule.extensions ?? []);
+  return ext && allowed.has(ext);
+};
+
+/** True when a normalized project-relative path may be written in orchestrator mode. */
+export function orchestratorWriteAllowedRel(normRel) {
+  const norm = normPosixRel(normRel);
+  if (!norm) return false;
+  if (/^package\.json$/i.test(norm.split('/').pop() ?? '') || norm.endsWith('/package.json')) return false;
+  return ORCHESTRATOR_WRITE_RULES.some(rule => ruleMatchesRel(rule, norm));
+}
+
+const projectRelOfAbs = (abs, projectRoot) => {
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(projectRoot);
+  } catch {
+    return null;
+  }
+  const tail = [];
+  let cur = abs;
+  let resolved = abs;
+  for (let i = 0; i < 64; i += 1) {
+    try {
+      resolved = path.join(fs.realpathSync.native(cur), ...tail);
+      break;
+    } catch {
+      tail.unshift(path.basename(cur));
+      const up = path.dirname(cur);
+      if (up === cur) {
+        resolved = path.resolve(abs);
+        break;
+      }
+      cur = up;
+    }
+  }
+  const rel = path.relative(rootReal, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join('/').toLowerCase();
+};
+
+/** True when an absolute or project-relative path may be written (resolves symlinks; default deny). */
+export function orchestratorWriteAllowed(realPath, projectRoot) {
+  if (!realPath || !projectRoot) return false;
+  const candidate = path.isAbsolute(realPath) ? realPath : path.join(projectRoot, realPath);
+  try {
+    const lst = fs.lstatSync(candidate);
+    if (lst.isSymbolicLink()) {
+      const linkTarget = fs.readlinkSync(candidate);
+      const resolved = path.resolve(path.dirname(candidate), linkTarget);
+      if (!orchestratorWriteAllowed(resolved, projectRoot)) return false;
+    }
+  } catch { /* missing path: resolve below */ }
+  const rel = projectRelOfAbs(candidate, projectRoot);
+  if (rel === null) return false;
+  return orchestratorWriteAllowedRel(rel);
+}
+
+/** Project-relative folder prefixes scanned for stray code/tests before bare test runs. */
+export function orchestratorBareTestScanRelPrefixes() {
+  const prefixes = [];
+  for (const rule of ORCHESTRATOR_WRITE_RULES) {
+    const p = String(rule.folderPrefix ?? '').toLowerCase();
+    if (p) prefixes.push(p);
+  }
+  return prefixes;
+}
+
+/** Orchestrator-mode bare-test scan applies under allow-list roots (except swarm-managed subtrees). */
 export function orchestratorOwnWriteGuardRel(normRel) {
-  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
-  if (!orchestratorOwnRel(norm)) return false;
+  const norm = normPosixRel(normRel);
   if (ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p))) {
     return false;
   }
-  return true;
+  return ORCHESTRATOR_WRITE_RULES.some(rule => {
+    const prefix = String(rule.folderPrefix ?? '').toLowerCase();
+    if (!prefix) return false;
+    return norm === prefix.slice(0, -1) || norm.startsWith(prefix);
+  });
 }
 
 const ORCHESTRATOR_OWN_JS_TEST = /\.(test|spec)\.(js|mjs|cjs|ts|mts|cts|jsx|tsx)$/i;
@@ -82,24 +221,31 @@ export function orchestratorOwnForbiddenTestOrRunnerBasename(basename) {
   return orchestratorOwnForbiddenWriteBasename(basename);
 }
 
-/** True when a project-relative path under orchestrator-owned folders must not be written. */
+/** True when a path under bare-test scan roots is not an allow-listed write (code/tests backstop). */
 export function orchestratorOwnForbiddenWriteRel(normRel) {
-  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  const norm = normPosixRel(normRel);
   if (!orchestratorOwnWriteGuardRel(norm)) return false;
   const parts = norm.split('/').filter(Boolean);
   for (let i = 0; i < parts.length - 1; i += 1) {
     if (ORCHESTRATOR_OWN_TEST_DIR_NAMES.has(parts[i])) return true;
   }
   const base = parts[parts.length - 1] ?? '';
-  return orchestratorOwnForbiddenWriteBasename(base);
+  if (orchestratorOwnForbiddenWriteBasename(base)) return true;
+  if (orchestratorWriteAllowedRel(norm)) return false;
+  const { ext } = basenameStemExt(base);
+  if (!ext) return false;
+  return true;
 }
 
 export const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
 
+// Swarm CLI subcommands are allowed by default except owner-only self-approval (decide, handbuild approve/on/off,
+// scope approve, tickets approve, resolve, done, restore, with-concurrency) and bypass flags (--yes/--force/--accept*
+// outside vetted ticket edit forms).
 export const OM_SWARM_ALLOWED_TOP = new Set([
   'status', 'brief', 'board', 'watch', 'jobs', 'tickets', 'run', 'integrate', 'merge', 'update', 'note',
   'version', 'doctor', 'rollup', 'scope', 'msg', 'diagnose', 'go', 'change', 'handbuild', 'ticket', 'ask',
-  'decision', 'handoff', 'lesson', 'backlog', 'time', 'decide',
+  'decision', 'handoff', 'lesson', 'backlog', 'time',
   'resume', 'cancel', 'inbox', 'queue', 'think', 'digest', 'validate', 'preflight', 'history', 'usage',
   'budget', 'budgets', 'lanes', 'projects', 'orphans',
 ]);
@@ -367,8 +513,8 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (s === 'change') {
     return !swarmArgsHaveYes(rest);
   }
+  if (s === 'decide') return false;
   if (s === 'scope') return omSwarmScopeReadOnly(rest);
-  if (s === 'decide') return omSwarmDecideReadOnly(rest);
   if (s === 'budget' || s === 'budgets') {
     const verb = rest.find(a => a !== '' && !String(a).startsWith('-'));
     if (verb !== undefined && String(verb).toLowerCase() !== 'show') return false;

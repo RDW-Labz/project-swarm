@@ -17,6 +17,7 @@ import {
   localTestRunIsBare,
   orchestratorOwnRel,
   orchestratorOwnForbiddenWriteRel,
+  orchestratorBareTestScanRelPrefixes,
 } from './orchestrator-allow.mjs';
 
 export { localTestRunAllowed };
@@ -25,7 +26,7 @@ export const ORCHESTRATOR_TEST_MARKER_REL = '.swarm/orchestrator-mode/test-harne
 export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
 export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
-export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help). Hand shell work (scripts, debugging, edits) belongs to workers.';
+export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: writes are only allowed under .swarm/ (except workspaces, worktrees, runs, backups, orchestrator-mode), docs/plans/, coordination/manifests/ (.json), coordination/HANDOFF*.md, docs/state/ (.md), and TASK.md at the project root — text formats md/json/jsonl/ndjson/yaml/yml only (never package.json). Swarm CLI commands are allowed. For anything else, make a ticket: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help).';
 export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
 export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
@@ -1826,8 +1827,13 @@ export function orchestratorOwnFoldersBlockBareTestRun(root) {
     }
     return 'ok';
   };
-  for (const top of ['.swarm', 'docs/plans']) {
-    const abs = path.join(rootReal, top);
+  const scanPrefixes = [
+    ...orchestratorBareTestScanRelPrefixes(),
+    ...TOOL_DIRS.map(d => String(d).toLowerCase()),
+  ];
+  for (const prefix of scanPrefixes) {
+    const relTop = prefix.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+    const abs = path.join(rootReal, ...relTop.split('/').filter(Boolean));
     let st;
     try {
       st = fs.lstatSync(abs);
@@ -1836,7 +1842,6 @@ export function orchestratorOwnFoldersBlockBareTestRun(root) {
       return true;
     }
     if (!st.isDirectory()) continue;
-    const relTop = top.replace(/\\/g, '/').toLowerCase();
     const outcome = scanDir(abs, relTop, 0);
     if (outcome === 'hit' || outcome === 'limit' || outcome === 'error') return true;
   }

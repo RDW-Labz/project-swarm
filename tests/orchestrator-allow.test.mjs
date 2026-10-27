@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ORCHESTRATOR_WRITE_RULES,
   swarmSubcommandAlwaysAllowed,
   readOnlyCommandAllowed,
   localTestRunAllowed,
@@ -14,6 +15,7 @@ import {
   orchestratorOwnForbiddenTestOrRunnerBasename,
   orchestratorOwnForbiddenWriteBasename,
   orchestratorOwnForbiddenWriteRel,
+  orchestratorWriteAllowedRel,
 } from '../tools/orchestrator-allow.mjs';
 import { orchestratorOwnFoldersBlockBareTestRun } from '../tools/shell-writes.mjs';
 import {
@@ -39,6 +41,26 @@ const tmp = async t => {
   return d;
 };
 
+test('ORCHESTRATOR_WRITE_RULES shape', () => {
+  assert.ok(Array.isArray(ORCHESTRATOR_WRITE_RULES));
+  assert.ok(ORCHESTRATOR_WRITE_RULES.length >= 5);
+  for (const rule of ORCHESTRATOR_WRITE_RULES) {
+    assert.equal(typeof rule.folderPrefix, 'string');
+    assert.ok(Array.isArray(rule.extensions) && rule.extensions.length > 0);
+    assert.ok(Array.isArray(rule.denySubfolders));
+    assert.equal(typeof rule.comment, 'string');
+    assert.ok(rule.comment.length > 8);
+  }
+  assert.equal(orchestratorWriteAllowedRel('docs/plans/plan.md'), true);
+  assert.equal(orchestratorWriteAllowedRel('src/plan.md'), false);
+  assert.equal(orchestratorWriteAllowedRel('package.json'), false);
+  assert.equal(orchestratorWriteAllowedRel('coordination/manifests/job.json'), true);
+  assert.equal(orchestratorWriteAllowedRel('coordination/HANDOFF.md'), true);
+  assert.equal(orchestratorWriteAllowedRel('coordination/TASK.md'), false);
+  assert.equal(orchestratorWriteAllowedRel('task.md'), true);
+  assert.equal(orchestratorWriteAllowedRel('docs/state/usage-ledger.md'), true);
+});
+
 test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--max-jobs', '2']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('go', ['--scope', 'wave', '--skip-skeleton']), true);
@@ -53,6 +75,7 @@ test('swarmSubcommandAlwaysAllowed: go scope and ticket flags', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('budget', ['--daily', '1000', 'set']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('budget', ['show']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('budget', ['--json']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'ready', '--note', 'ok', '--yes']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('tickets', ['T-0001', '--set', 'in_progress', '--yes']), true);
   assert.equal(swarmSubcommandAlwaysAllowed('resolve', []), false);
   assert.equal(swarmSubcommandAlwaysAllowed('inbox', ['list']), true);
@@ -174,10 +197,13 @@ test('orchestratorModeCommandAllowed: bug-report allows', async t => {
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
   const ctx = { root, cwd: root };
   const guardAllow = [
+    'swarm go --scope --max-jobs 2',
     'swarm go --scope wave --max-jobs 2',
-    'swarm tickets T-0001 --retry-note "x"',
+    'swarm tickets T-0001 --set ready --note ok --yes',
+    'swarm tickets T-0001 --retry-note ok',
     'swarm tickets --help',
-    'swarm backlog add "goal"',
+    'swarm backlog add goal',
+    'swarm integrate RUN --queue',
     'swarm resume run-abc',
     'swarm inbox --json',
     'gh pr view 12',
@@ -423,9 +449,21 @@ test('guardDecision: orchestrator-owned writes block test artifacts', async t =>
   const allowWrites = [
     'docs/plans/scale-plan-v2.md',
     'docs/plans/ideas.md',
-    '.swarm/notes/orchestrator-note.txt',
+    'docs/plans/plan.json',
+    '.swarm/notes/orchestrator-note.md',
+    'coordination/manifests/wave.json',
+    'coordination/HANDOFF.md',
+    'docs/state/usage-ledger.md',
+    'TASK.md',
   ];
   const denyWrites = [
+    'src/app.md',
+    'node_modules/pkg/readme.md',
+    'build/out.md',
+    'dist/out.md',
+    '.swarm/workspaces/ws/note.md',
+    'src/config.yaml',
+    'package.json',
     'docs/plans/evil.test.mjs',
     'docs/plans/x.spec.ts',
     'docs/plans/test_wave.py',
@@ -496,9 +534,11 @@ test('guardDecision: bare test runs blocked when orchestrator folders hold code'
   );
 });
 
-test('deny reasons no longer mention swarm diagnose', () => {
+test('deny reasons explain tickets and allow-list writes', () => {
   assert.ok(!ORCHESTRATOR_MODE_DENY_REASON.includes('swarm diagnose'));
   assert.ok(!GUARD_ERROR_DENY_REASON.includes('swarm diagnose'));
   assert.match(ORCHESTRATOR_MODE_DENY_REASON, /swarm ticket/);
+  assert.match(ORCHESTRATOR_MODE_DENY_REASON, /docs\/plans/);
+  assert.match(ORCHESTRATOR_MODE_DENY_REASON, /Swarm CLI/);
   assert.match(GUARD_ERROR_DENY_REASON, /swarm tickets/);
 });

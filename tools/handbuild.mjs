@@ -37,7 +37,7 @@ import {
   swarmChangeShellPolicy,
 } from './self-approval.mjs';
 import {
-  orchestratorOwnForbiddenWriteRel,
+  orchestratorWriteAllowed,
 } from './orchestrator-allow.mjs';
 import {
   AUTO_OFF_FILE,
@@ -1983,45 +1983,11 @@ const sessionProtectedHandbuildRel = rel => {
 const orchestratorModeProtectedWriteRel = (rel, root) => {
   if (sessionProtectedHandbuildRel(rel)) return true;
   if (rel === null || rel === undefined) return false;
-  const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
   const normFromRel = String(rel).replace(/\\/g, '/').toLowerCase();
   if (normFromRel === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || normFromRel === OFF_FILE.toLowerCase()) return true;
   if (normFromRel === '.swarm/orchestrator-mode' || normFromRel.startsWith('.swarm/orchestrator-mode/')) return true;
-  if (orchestratorOwnForbiddenWriteRel(normFromRel)) return true;
-  try {
-    const lst = fs.lstatSync(candidate);
-    if (lst.isSymbolicLink()) {
-      const linkTarget = fs.readlinkSync(candidate);
-      const resolved = path.resolve(path.dirname(candidate), linkTarget);
-      const linkRel = insideProject(root, resolved);
-      if (linkRel !== null && orchestratorOwnForbiddenWriteRel(String(linkRel).replace(/\\/g, '/').toLowerCase())) {
-        return true;
-      }
-    }
-  } catch { /* missing path: fall through to resolved check */ }
-  const tail = [];
-  let cur = candidate;
-  let abs = candidate;
-  for (let i = 0; i < 64; i += 1) {
-    try {
-      abs = path.join(fs.realpathSync.native(cur), ...tail);
-      break;
-    } catch {
-      tail.unshift(path.basename(cur));
-      const up = path.dirname(cur);
-      if (up === cur) {
-        abs = path.resolve(candidate);
-        break;
-      }
-      cur = up;
-    }
-  }
-  const inside = insideProject(root, abs);
-  const norm = String(inside ?? rel).replace(/\\/g, '/').toLowerCase();
-  if (norm === ORCHESTRATOR_MODE_OFF_FILE.toLowerCase() || norm === OFF_FILE.toLowerCase()) return true;
-  if (norm === '.swarm/orchestrator-mode' || norm.startsWith('.swarm/orchestrator-mode/')) return true;
-  if (orchestratorOwnForbiddenWriteRel(norm)) return true;
-  return false;
+  const candidate = path.isAbsolute(rel) ? rel : path.join(root, rel);
+  return !orchestratorWriteAllowed(candidate, root);
 };
 
 export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home, branchOf: branchOfFn = branchOf, revParseCommit: revParseCommitFn = revParseCommit, enforceOrchestratorMode = undefined } = {}) {
