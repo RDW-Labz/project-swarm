@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.19
+
+The orchestrator guard stops denying the parts session's own flow.
+- **Scope:** swarm scope gate and scope split with ingest, merge, max-repairs and accept-waves (accept-waves only for scope split) are allowed, and a change order with one quoted description and the yes flag is allowed, while scope approve, a bare change with yes and every other owner verb stay denied
+- **Help:** swarm help, -h and --version are allowed in the node swarm.mjs with --root spelling as well as in plain swarm
+- **Writes:** the orchestrator may now edit the scope markdown file under docs and scope (that one file, md only)
+- **Tests:** a parts-flow test runs the real guard decision for every one of these in both spellings
+
 ## 1.167.18
 
 Claude shell jobs now obey the paid-lane pause.
