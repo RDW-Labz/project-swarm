@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "chktimeout",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Bug from parts-request-app: the e2e ticket checks (build plus Playwright) time out at 900 s because runChecks uses check.timeoutMs or 300000 and tickets cannot set a longer timeout. Add: (1) a ticket field checkTimeoutMs (integer 60000 to 1800000) settable with 'swarm tickets ID --check-timeout MS' (add it to the tickets usage text and flag parsing in tools/scope-commands.mjs, saved with the other ticket fields, logged) and visible in 'swarm tickets ID --json'; (2) in tools/ticket-manifest.mjs, when a ticket has checkTimeoutMs set the timeoutMs of that job's test or verify check (the check built from the project's verify profile) to that value, capped at 1800000 (the existing manifest validation maximum for check timeouts); (3) the project profile verify block may carry timeoutMs (same limits) used for every ticket that has no checkTimeoutMs; (4) a ticket's tests that match the profile's e2e or playwright pattern keep the longer timeout only for that check. Do not change the default 300000. Add tests/ticket-check-timeout.test.mjs (temp ledger root, no network): flag parsing and validation (too small, too large, not a number), the manifest check timeout from the ticket, from the profile, the default unchanged, the cap. Also in the same change reuse of a prebuilt app between checks is out of scope: add one sentence in docs about it being a follow-up. IMPORTANT: secret scanner: no credential-looking literals in tests. Keep the existing tests passing (do not edit their assertions unless they assert the buggy behaviour).",
+   "context": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-check-timeout.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}

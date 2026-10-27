@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "notefix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Bug from parts-request-app: 'swarm tickets ID --set ready --note \"...\" --yes' changes the status but the note never reaches the next worker: the ticket's retryNote stays the old system text, and the prompt (tools/ticket-manifest.mjs, the line that quotes ticket.retryNote as 'Previous attempt failed (untrusted log text...') only knows the system retry note. Fix in tools/scope-commands.mjs (the tickets --set handler that reads --note; look at how --set STATUS with --note is applied and at retryNoteCommand for --retry-note) and tools/ticket-manifest.mjs: when an owner or orchestrator passes --note with --set (to ready, todo, blocked) or passes --note alone on a ticket, save it on the ticket as ownerNote (redacted with the existing redactNote helper, at most 600 characters, with a timestamp ownerNoteAt) in addition to the existing note behaviour; ownerNote is cleared by --clear-note and replaced by the next --note; do NOT overwrite the system retryNote or retryHistory. In the job prompt built by ticketsToManifest add, before the previous-attempt line, a line 'Note from the owner or orchestrator for this attempt (guidance, follow it unless it conflicts with the task files or safety rules): <<<' + text + '>>>' only when ownerNote is a non-empty string (strip control characters and angle-bracket triple markers like the existing retry note does). Also make the real flags clear in the tickets help text (the usage line in scope-commands.mjs about --clear-note and --retry-note): say that --retry-note TEXT replaces the system note a failed attempt left (it is shown to the next worker as untrusted failure text), and that --note TEXT (with --set or alone) leaves a note for the next worker (shown as guidance). Add tests/ticket-owner-note.test.mjs (temp ledger root, no network) covering: --set ready --note saves ownerNote and keeps retryNote, the prompt contains the owner note line and the old retry note line, clear-note clears it, redaction of a token-looking string built at run time, truncation to 600 characters. IMPORTANT: secret scanner: no credential-looking literals in tests. Keep the existing tests passing (do not edit their assertions unless they assert the buggy behaviour).",
+   "context": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-manifest.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/scope-commands.mjs",
+    "tools/ticket-manifest.mjs",
+    "tests/ticket-owner-note.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
