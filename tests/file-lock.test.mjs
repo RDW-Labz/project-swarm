@@ -255,7 +255,233 @@ test('release by a non-owner does not remove the lock', { timeout: 60_000 }, asy
   assert.equal(await fs.readFile(lockPath, 'utf8'), forged);
 });
 
-test('symlinked parent directory is refused', { timeout: 60_000 }, async t => {
+// Lock records are built at run time so no literal secret-looking values appear in this file.
+const fakeId = ch => ch.repeat(32);
+const DEAD_PID = 2_147_483_000;
+const lockRecord = (extra = {}) => `${JSON.stringify({
+  pid: process.pid,
+  token: fakeId('c'),
+  startedAt: new Date().toISOString(),
+  ...extra,
+})}\n`;
+
+const breakRaceWorker = `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { withFileLock } from ${JSON.stringify(fileLockModule)};
+
+const [dir, lockName, markerName, startAt] = process.argv.slice(1);
+const wait = Number(startAt) - Date.now();
+if (wait > 0) await new Promise(r => setTimeout(r, wait));
+await withFileLock(path.join(dir, lockName), async () => {
+  let marker;
+  try {
+    marker = await fs.open(path.join(dir, markerName), 'wx');
+  } catch (e) {
+    if (e.code === 'EEXIST') process.exit(3);
+    throw e;
+  }
+  await marker.close();
+  await new Promise(r => setTimeout(r, 30));
+  await fs.unlink(path.join(dir, markerName));
+}, { waitMs: 30000, pollMs: 2 });
+`;
+
+test('two processes breaking the same stale lock never end with two holders (25 loops)', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const children = [];
+  t.after(() => {
+    for (const child of children) killProcessGroup(child);
+  });
+
+  for (let i = 0; i < 25; i += 1) {
+    const lockName = `race-${i}.lock`;
+    await fs.writeFile(path.join(root, lockName), lockRecord({ pid: DEAD_PID }), 'utf8');
+    const startAt = String(Date.now() + 250);
+    const exits = [0, 1].map(() => {
+      const child = spawnNodeInGroup([
+        '--input-type=module', '-e', breakRaceWorker, '--', root, lockName, `marker-${i}`, startAt,
+      ]);
+      children.push(child);
+      child.stdout.on('data', () => {});
+      child.stderr.on('data', () => {});
+      return new Promise((resolve, reject) => {
+        child.on('error', reject);
+        child.on('exit', (code, signal) => resolve({ code, signal }));
+      });
+    });
+    const results = await Promise.all(exits);
+    for (const r of results) assert.deepEqual(r, { code: 0, signal: null }, `loop ${i}`);
+  }
+});
+
+test('a live breaker holding the .break lock blocks breaking until that lock is stale', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'brk.lock');
+  const breakPath = `${lockPath}.break`;
+  const stale = lockRecord({ pid: DEAD_PID });
+  await fs.writeFile(lockPath, stale, 'utf8');
+  await fs.writeFile(breakPath, lockRecord({ token: fakeId('d') }), 'utf8');
+
+  await assert.rejects(
+    acquireFileLock(lockPath, { waitMs: 100, pollMs: 5 }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.equal(await fs.readFile(lockPath, 'utf8'), stale);
+
+  await setLockMtimeMs(breakPath, Date.now() - 60_000);
+  const release = await acquireFileLock(lockPath, { waitMs: 5000, pollMs: 5 });
+  assert.equal(JSON.parse(await fs.readFile(lockPath, 'utf8')).pid, process.pid);
+  await release();
+  await assert.rejects(fs.stat(breakPath), err => err.code === 'ENOENT');
+});
+
+test('break re-checks inside the break lock: a fresh lock swapped in meanwhile is not removed', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'swap.lock');
+  await fs.writeFile(lockPath, lockRecord({ pid: DEAD_PID }), 'utf8');
+  const fresh = lockRecord({ token: fakeId('e') });
+  let swapped = 0;
+
+  await assert.rejects(
+    acquireFileLock(lockPath, {
+      waitMs: 100,
+      pollMs: 5,
+      hooks: {
+        async onBreakLocked() {
+          if (swapped++) return;
+          await fs.unlink(lockPath);
+          await fs.writeFile(lockPath, fresh, 'utf8');
+        },
+      },
+    }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.equal(swapped >= 1, true);
+  assert.equal(await fs.readFile(lockPath, 'utf8'), fresh);
+});
+
+test('live holder is not broken after a wall-clock jump while its heartbeat runs', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'hb.lock');
+  // heartbeat every 100ms; waiter polls are >= 150ms apart so each poll sees a fresh mtime
+  const release = await acquireFileLock(lockPath, { maxHoldMs: 400 });
+  t.after(() => release());
+  const jumped = () => Date.now() + 10 * 365 * 24 * 3600 * 1000;
+
+  const before = await fs.readFile(lockPath, 'utf8');
+  await assert.rejects(
+    acquireFileLock(lockPath, { waitMs: 1000, pollMs: 150, maxHoldMs: 400, now: jumped }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.equal(await fs.readFile(lockPath, 'utf8'), before);
+});
+
+test('live owner pid is never broken on startedAt age alone', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'age.lock');
+  const body = lockRecord({ startedAt: new Date(Date.now() - 365 * 24 * 3600 * 1000).toISOString() });
+  await fs.writeFile(lockPath, body, 'utf8');
+
+  await assert.rejects(
+    acquireFileLock(lockPath, { waitMs: 150, pollMs: 5, maxHoldMs: 60_000 }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.equal(await fs.readFile(lockPath, 'utf8'), body);
+});
+
+test('a lock whose live holder stopped heartbeating becomes stale after maxHoldMs', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'nohb.lock');
+  await fs.writeFile(lockPath, lockRecord(), 'utf8');
+  await setLockMtimeMs(lockPath, Date.now() - 120_000);
+
+  const release = await acquireFileLock(lockPath, { waitMs: 5000, pollMs: 5, maxHoldMs: 60_000 });
+  const body = JSON.parse(await fs.readFile(lockPath, 'utf8'));
+  assert.notEqual(body.token, fakeId('c'));
+  await release();
+});
+
+test('an owner whose recorded process start time differs is treated as dead', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const probe = path.join(root, 'probe.lock');
+  const releaseProbe = await acquireFileLock(probe);
+  const probeBody = JSON.parse(await fs.readFile(probe, 'utf8'));
+  await releaseProbe();
+  if (!probeBody.ownerStartedAt) {
+    t.skip('platform does not expose process start time');
+    return;
+  }
+
+  const lockPath = path.join(root, 'reuse.lock');
+  await fs.writeFile(lockPath, lockRecord({ ownerStartedAt: 'Thu Jan  1 00:00:00 1970' }), 'utf8');
+  const release = await acquireFileLock(lockPath, { waitMs: 5000, pollMs: 5, maxHoldMs: 600_000 });
+  await release();
+});
+
+test('nested acquire of the same lock from inside withFileLock throws file-lock-reentrant', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'nest.lock');
+  await withFileLock(lockPath, async () => {
+    await assert.rejects(
+      withFileLock(lockPath, () => {}, { waitMs: 30_000 }),
+      err => err.code === 'file-lock-reentrant',
+    );
+    await assert.rejects(
+      acquireFileLock(lockPath, { waitMs: 30_000 }),
+      err => err.code === 'file-lock-reentrant',
+    );
+  });
+  const release = await acquireFileLock(lockPath);
+  await release();
+});
+
+test('in-process queue respects waitMs and keeps later waiters chained', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'queue.lock');
+  const releaseFirst = await acquireFileLock(lockPath);
+
+  const started = Date.now();
+  await assert.rejects(
+    acquireFileLock(lockPath, { waitMs: 60 }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.ok(Date.now() - started < 5000);
+
+  let third = false;
+  const thirdAcquire = acquireFileLock(lockPath, { waitMs: 10_000 }).then(rel => {
+    third = true;
+    return rel;
+  });
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(third, false, 'must still wait for the first holder');
+  await releaseFirst();
+  const releaseThird = await thirdAcquire;
+  await releaseThird();
+});
+
+test('filesystem without hard links gives file-lock-unsupported-fs naming the folder', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'nolink.lock');
+  for (const code of ['EPERM', 'ENOTSUP']) {
+    await assert.rejects(
+      acquireFileLock(lockPath, {
+        link: async () => { throw Object.assign(new Error('link failed'), { code }); },
+      }),
+      err => {
+        assert.equal(err.code, 'file-lock-unsupported-fs');
+        assert.ok(err.message.includes(root));
+        return true;
+      },
+    );
+  }
+  const left = (await fs.readdir(root)).filter(n => n.endsWith('.tmp') || n.endsWith('.lock'));
+  assert.deepEqual(left, []);
+  const release = await acquireFileLock(lockPath);
+  await release();
+});
+
+test('symlinked parent directory is refused',{ timeout: 60_000 }, async t => {
   const root = await tmpDir(t);
   const realDir = path.join(root, 'real');
   const linkDir = path.join(root, 'link');
