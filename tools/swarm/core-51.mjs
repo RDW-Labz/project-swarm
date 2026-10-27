@@ -1,6 +1,6 @@
 import { API_AGENTS, decodeContext } from '../api-adapters.mjs';
 import { listLiveRuns } from '../board.mjs';
-import { resolveRootGitInfo } from '../claude-shell.mjs';
+import { CLAUDE_SHELL_PAUSED, claudeShellPausedProblem, resolveRootGitInfo } from '../claude-shell.mjs';
 import { codexDirtyFiles, git, prepareWorkspaceEnvironment, resolveReadPaths } from '../codex-adapter.mjs';
 import { contextDirectoryWarnings, findUncoveredTests, isTestFile, listProjectFiles, registryPinningWarnings, suggestIgnoreTests } from '../context-check.mjs';
 import { windowsCiGotchasWarnings } from '../gotchas.mjs';
@@ -357,6 +357,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     const byId = new Map(routes.map(route => [route.jobId, route]));
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? withoutApiOnlyFields({ ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model }) : job) };
     validateManifest(manifest);
+  }
+  if (manifest.jobs.some(job => job.shell === true)) {
+    const shellPauseProblem = claudeShellPausedProblem(loadLocalConfig({ env, home }));
+    if (shellPauseProblem) fail(shellPauseProblem, CLAUDE_SHELL_PAUSED);
   }
   scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   if (!scopesExpanded) manifest = await expandOpenScopes(root, manifest);

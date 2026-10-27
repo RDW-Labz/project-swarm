@@ -1,0 +1,47 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpause",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "Money-safety fix. Shell-mode Claude jobs (model values sonnet-shell and opus-shell, agent claude with shell mode) run the claude CLI with a separate worker API key (tools/claude-shell.mjs resolveWorkerKey, read from the environment or the macOS keychain) and are billed to the paid API, but the lane pause setting lanes.anthropic.paused (machine config) does not stop them because they run under the agent name claude. Make the existing pause cover them. (1) In tools/claude-shell.mjs resolveWorkerKey, the single place the key is read: before reading any key, if the machine lane config says lanes.anthropic.paused is true, or lanes.claude.shellPaused is true, throw an Error whose message starts with claude-shell-paused and says claude shell jobs use the paid API key and the anthropic lane is paused; never read the key in that case. Read the lane config the same way tools/router.mjs and tools/lanes.mjs do (look at how they load it; use the same loader, injectable for tests). (2) Make validation refuse such a job up front too: find where swarm validate and run check shell-mode jobs (search tools/swarm.mjs and tools/swarm/*.mjs for SHELL_PRESETS and shell: true) and add a refusal with the same claude-shell-paused code, so the job is refused before dispatch, not mid-run. (3) The router: an auto-routed job must never become a shell job when paused (check; add a test if it can). Plain claude CLI jobs (subscription, no shell mode) must stay allowed. Tests (tests/claude-shell-paused.test.mjs): paused anthropic lane refuses a shell job at validate and at resolveWorkerKey with the keychain exec never called; shellPaused true does the same while anthropic is unpaused; unpaused config still resolves a key via the injected exec; a plain non-shell claude job validates fine while paused. Build fake key values at run time (repeat a short string), no credential-looking literals, never read the real keychain in tests (inject exec). STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/claude-shell.mjs",
+    "tools/router.mjs",
+    "tools/lanes.mjs",
+    "tools/local-config.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/claude-shell.mjs",
+    "tests/claude-shell-paused.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/batch-b-eval.test.mjs",
+    "tests/claude-shell.test.mjs",
+    "tests/field-lesson-t81-adapters.test.mjs",
+    "tests/field-lessons-batch-e.test.mjs",
+    "tests/field-lessons-batch-f.test.mjs",
+    "tests/field-lessons-batch-g.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-q.test.mjs",
+    "tests/field-lessons-batch-t2.test.mjs",
+    "tests/field-lessons-batch-v.test.mjs",
+    "tests/field-lessons-batch-w.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/shell-loopback.test.mjs",
+    "tests/shell-scratch.test.mjs",
+    "tests/shell-setup.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/state-guard.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ]
+  }
+ ]
+}

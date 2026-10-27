@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 import { portBlockFor, resolvePortBlock } from '../tools/ports.mjs';
 import { validateManifest, runManifest, integrateRun } from '../tools/swarm.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { withPaidKeys, assertPlainClaudeEnv } from './_plain-claude-env.mjs';
 
 const BUSY_BLOCK = 24670;
 
@@ -93,6 +94,7 @@ test('integrate: a check sees the resolved SWARM_PORT_BASE for this project root
 });
 
 test('a non-shell claude job env and prompt are unchanged', async t => {
+  withPaidKeys(t);
   // Field lesson 190: save and clear SWARM_PORT_BASE to prevent inherited ambient port from failing this test
   const savedPortBase = process.env.SWARM_PORT_BASE;
   delete process.env.SWARM_PORT_BASE;
@@ -106,7 +108,8 @@ test('a non-shell claude job env and prompt are unchanged', async t => {
   const spawnImpl = (command, args, options) => { seen.push({ command, args, options }); return spawn(process.execPath, ['-e', "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}))"], options); };
   const state = await runManifest(root, manifest([job()]), { spawnImpl });
   assert.equal(state.status, 'complete');
-  assert.equal(seen[0].options.env, process.env);
+  // the one intended env change, ambient paid keys never reach a subscription lane
+  assertPlainClaudeEnv(seen[0].options.env);
   assert.equal('SWARM_PORT_BASE' in seen[0].options.env, false);
   const message = await fs.readFile(path.join(root, '.swarm/runs', state.id, 'writer/message.txt'), 'utf8');
   assert.equal(message.includes('Ports:'), false);

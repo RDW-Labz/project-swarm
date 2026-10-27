@@ -111,9 +111,25 @@ export function validateLoopbackAllow(list, jobId) {
 
 // Parent-only: the environment variable wins, else the existing keychain item. The sandboxed
 // child never touches the keychain; `exec` is injectable so tests never read the real one.
-export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config } = {}) {
+// Shell jobs run under the agent name `claude` but bill the paid API key, so the machine config's
+// `lanes.anthropic.paused` (or the shell-specific `lanes.claude.shellPaused`) must stop them too.
+// Returns the refusal text, or null when shell jobs are allowed. Plain subscription claude jobs
+// never call this.
+export const CLAUDE_SHELL_PAUSED = 'claude-shell-paused';
+export function claudeShellPausedProblem(config) {
+  const lanes = config?.lanes;
+  if (lanes?.anthropic?.paused !== true && lanes?.claude?.shellPaused !== true) return null;
+  return `${CLAUDE_SHELL_PAUSED}: claude shell jobs use the paid API key and the anthropic lane is paused`;
+}
+export function assertClaudeShellNotPaused(config) {
+  const problem = claudeShellPausedProblem(config);
+  if (problem) throw Object.assign(Error(problem), { code: CLAUDE_SHELL_PAUSED });
+}
+
+export async function readWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env });
   let key = typeof env[WORKER_KEY_ENV] === 'string' ? env[WORKER_KEY_ENV].trim() : '';
-  const item = workerKeyItem(config ?? loadLocalConfig({ env }));
+  const item = workerKeyItem(resolvedConfig);
   if (!key) {
     try { key = String((await exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', timeout: 10000 })).stdout ?? '').trim(); }
     catch { key = ''; }
@@ -121,6 +137,12 @@ export async function resolveWorkerKey({ env = process.env, exec = execFileAsync
   if (!key) throw Error(`claude shell jobs need a worker API key: set ${WORKER_KEY_ENV} or keychain item service ${item.service} account ${item.account}; never falls back to your claude login`);
   if (!/^[\x21-\x7e]{8,512}$/.test(key)) throw Error('worker API key has an invalid shape');
   return key;
+}
+
+export async function resolveWorkerKey({ env = process.env, exec = execFileAsync, config, loadConfig = loadLocalConfig } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env });
+  assertClaudeShellNotPaused(resolvedConfig);
+  return readWorkerKey({ env, exec, config: resolvedConfig, loadConfig });
 }
 
 export function claudeShellArgs(job) {

@@ -1,0 +1,21 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "shellpauseD",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "In tests/claude-shell.test.mjs, test 'non-shell claude argv, env and prompt stay byte-identical to 1.18.0' (around line 59): the assertion that seen[0].options.env equals process.env by reference is now an intended deviation, because plain subscription claude jobs now get plainClaudeJobEnv(process.env) from tools/swarm/core-41.mjs, which removes ANTHROPIC_API_KEY and SWARM_CLAUDE_WORKER_API_KEY. Change that one assertion to a deepEqual against process.env with those two keys removed (copy the object and delete them), and add a short comment saying this is the one intended env change (ambient paid keys must never reach a subscription lane). Do not change anything else in the file. Build no credential-looking literals.",
+   "context": [
+    "tests/claude-shell.test.mjs",
+    "tools/swarm/core-41.mjs"
+   ],
+   "outputs": [
+    "tests/claude-shell.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}
