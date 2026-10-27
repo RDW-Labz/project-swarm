@@ -1071,13 +1071,11 @@ export function runGuardDecisionForHook(input, { root, cwd } = {}) {
   const tool = input.tool_name;
   const sessionCwd = cwd ?? input.cwd;
   const projectRoot = root ?? orchestratorResolvedRoot(sessionCwd);
-  const enforceOrchestratorMode = Boolean(projectRoot && orchestratorModeEnabled(projectRoot, sessionCwd));
   const decision = guardDecision({
     tool,
     toolInput: input.tool_input,
     root: projectRoot,
     cwd: sessionCwd,
-    enforceOrchestratorMode,
   });
   return { tool, decision, input };
 }

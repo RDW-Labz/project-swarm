@@ -97,8 +97,6 @@ export function isVerifiedSwarmWorkerCwd(root, cwd) {
 
 const orchestratorWorkerSessionExempt = (root, cwd) => isVerifiedSwarmWorkerCwd(root, cwd);
 
-const HANDBUILD_OFF_FILE = '.swarm/handbuild/off';
-
 /** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless `.swarm/orchestrator-mode/off` exists. Worker sessions are exempt only via launcher run id + run record. */
 export function orchestratorModeEnabled(root, cwd = root) {
   const projectRoot = root || orchestratorResolvedRoot(cwd);
@@ -106,7 +104,6 @@ export function orchestratorModeEnabled(root, cwd = root) {
   if (orchestratorWorkerSessionExempt(projectRoot, cwd)) return false;
   try {
     const rootReal = fs.realpathSync.native(projectRoot);
-    if (fs.existsSync(path.join(rootReal, HANDBUILD_OFF_FILE))) return false;
     return !fs.existsSync(path.join(rootReal, ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
 }
