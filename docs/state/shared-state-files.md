@@ -65,13 +65,60 @@ Every file this project writes that more than one process could plausibly write 
 | 7 | ledger backups | tools/ledger-backup.mjs | n/a | n/a | already exists |
 | 8 | spend logs (anthropic/openrouter) | tools/anthropic.mjs, tools/openrouter.mjs | append | none (append-safe for corruption; cap-check TOCTOU separately) | low-medium (narrow TOCTOU, not corruption) |
 
+## Users of `acquireAutopilotLock` and which of the 4 gaps hit them
+
+The MacBook's Opus review of the backlog lock found `tools/autopilot-lock.mjs`'s `acquireAutopilotLock` itself is not a safe lock, independent of any caller: (1) creates the lock file with `O_EXCL` then writes the owner AFTER - a reader in that window sees an empty file, treats it as dead, deletes it; (2) a second caller in the SAME process sees `owner.pid === its own pid` and is let through without actually serializing against the first call (verified by reading the function: when `owner.pid === pid`, the code falls through past the throw and into the "dead owner, clear it" branch, deleting the first call's lock); (3) no wait or retry - fails fast rather than backing off and retrying; (4) stale-lock clearing is unconditional `rm` then re-`create`, with no compare-before-delete, so two concurrent cleaners can each delete and each recreate, both believing they hold the lock. I verified all four directly against the current `tools/autopilot-lock.mjs` source, not just taking the review's word for it.
+
+Since every caller shares this one implementation, gaps 1/3/4 (cross-process races and no backoff) apply identically to all of them. Gap 2 (same-process, same lock `name`, concurrent calls) only bites a caller whose own call sites can plausibly run concurrently within one process for the same name:
+
+| user | lock name | call sites | gap 2 (same-process concurrent calls) exposure |
+| --- | --- | --- | --- |
+| `tools/ledger-lease.mjs` | `leases` | `claim`, `renew`, `release`, `sweepExpiredLeases` (4 call sites, all same name) | **Real exposure** - claims for different tickets dispatched concurrently (e.g. via `Promise.all`) all take the same `leases` lock name in one process; gap 2 means they do not actually serialize against each other. |
+| `tools/burst-lease.mjs` | `burst-runners` | `registerRunner`, `recordHeartbeat`, `sweepStaleHeartbeats` (3 call sites, all same name) | **Plausible exposure** - a heartbeat timer firing while another burst-lease call is in flight in the same process would hit gap 2. |
+| `tools/ledger-merge.mjs` | `autopilot` (default) | `mergeTicketLedgers`'s single call site | **Low** - this is normally a one-shot CLI invocation, not called concurrently with itself within one process in the current codebase. Still exposed to gaps 1/3/4 from a concurrent `autopilot` process on the same machine. |
+| `tools/swarm.mjs` (`go --scope`) | `scope-loop`, then `autopilot` | one call site, acquiring both names in sequence at start | **Low** for gap 2 (acquired once per process start). Gaps 1/3/4 apply fully - e.g. the orphan-scope-loop-guard added in PR #394 reads this same lock file via `readLockOwner`; gap 1's "empty file mid-write" window would make `readLockOwner` see a malformed/empty file, which it already treats as `null` (fails safe - conservatively NOT flagged as orphaned), so that specific consumer doesn't get WORSE from this bug, but it is still reading an unreliable primitive. |
+| `tools/swarm.mjs` (`autopilot` command) | `autopilot` (default) | one call site, the autopilot daemon's own self-lock | **Low** for gap 2 (one call per daemon start). Gaps 1/3/4 apply the same as any other process-level lock acquisition. |
+
+Per the MacBook's direction: not building a separate `tools/file-lock.mjs` for board.json - will use the MacBook's `tools/file-lock.mjs` once it lands and is confirmed merged, and the tickets.json plan will use it too (not stack a second lock beside `withLock`/`lockedUpdate`). Holding all code changes in this goal until then; this section is read-only investigation.
+
+## Writers of `tickets.json` / `tickets.log`, and lock status
+
+Per-writer-function table, built by tracing every `writeLedger(root, ...)` call site back to its enclosing exported function and checking whether that function's own body calls `lockedUpdate(root, ...)` or `withLock(root, ...)` (both defined in `tools/scope-commands.mjs`, a simple create-exclusive `scope-go.lock` file, separate from `acquireAutopilotLock`) before writing.
+
+**tools/scope-commands.mjs** (its own `withLock`/`lockedUpdate`, `scope-go.lock`):
+
+| function | locked? |
+| --- | --- |
+| `cmdGate`, `applyInfraReturn`, `applyForeignBlock`, `applyRetry`, `applyEscalation`, `setTicketField`, `markReviewBlocked`, `cmdSecurityReview`, `cmdAcceptanceReview`, `markDepsCommand`, `editTicketFiles`, `setTicketRoute`, `setTicketCheckTimeout`, `releaseTickets`, `ownerNoteCommand`, `retryNoteCommand`, `reopenTicket`, `setTicketStatus`, `prepareScopeRun`, `unlockLedger`, `addProposedTicket`, `approveProposed` | **yes** - each calls `lockedUpdate(root, ...)` or `withLock(root, ...)` around its `writeLedger` call |
+| `runSplitIngest` | **no** - writes at lines 2264/2278 with no enclosing lock call found |
+| `cmdApprove` | **no** - write at line 2461 |
+| `cmdSync` | **no** - write at line 3278 |
+| `cmdChange` | **no** - write at line 3883 |
+| `addCiFixTicketLocked` | **no** lock call found in its own body (write at line 4084) - the name suggests its caller is expected to already hold the lock; worth confirming with whoever wrote it rather than assuming it's a live bug |
+
+**tools/tickets.mjs** (the module `writeLedger`/`appendLog` themselves live in): `applyDelivered` (line 441) and one other ledger-mutating export (line 475) call `writeLedger` directly with **no lock at all** - this module does not import `scope-commands.mjs`'s lock or `acquireAutopilotLock`.
+
+**tools/ticket-replan.mjs**: `persistReplans` (line 247) calls `writeLedger` directly, **no lock**.
+
+**tools/watch-cli.mjs**: the board's "approve from board" handler (line 589) calls `writeLedger` directly, **no lock** - this is the owner's board-click path, a real concurrent-writer candidate (a board approve click racing an autopilot ledger write).
+
+**tools/ledger-lease.mjs**: `claim`/`renew`/`release` (3 call sites) call `writeLedger` while already holding `acquireAutopilotLock(root, {name:'leases'})` - locked, but inherits all 4 `acquireAutopilotLock` gaps above.
+
+**tools/ledger-merge.mjs** (the "mini ledger-merge"): `mergeTicketLedgers` writes via `applyMergedOutputs` while holding `acquireAutopilotLock(root, lockOptions)` - locked, same gaps.
+
+**tools/swarm.mjs**: one `writeLedger` call (the `scale` test-fixture command) explicitly uses `withSharedWriteLock(root, 'tickets.json', ...)` - a THIRD, independent lock implementation (`tools/integration-lock.mjs`), not `scope-commands.mjs`'s `withLock` or `acquireAutopilotLock`. Have not yet verified this third implementation's own safety properties given the acquireAutopilotLock findings above - flagging as a follow-up check, not yet done.
+
+**Summary**: tickets.json has at minimum THREE independent, mutually-unaware locking mechanisms in play (`scope-commands.mjs`'s own file lock, `acquireAutopilotLock`, and `integration-lock.mjs`'s `withSharedWriteLock`), plus multiple writer paths (`tools/tickets.mjs`, `tools/ticket-replan.mjs`, `tools/watch-cli.mjs`) that bypass all of them entirely. The MacBook's framing is confirmed: "the race may only be the callers that bypass it" - five named functions in `scope-commands.mjs` plus the three in `tools/tickets.mjs`/`ticket-replan.mjs`/`watch-cli.mjs` are the real gap, not a fundamentally unlocked file.
+
 ## Proposed lock/atomic-write plan (for review before any edit)
 
-In priority order, scoped to only the files NOT owned elsewhere this round:
+**Superseded in part**: the original plan below assumed `acquireAutopilotLock` was a safe, reusable primitive. The MacBook's Opus review of the backlog lock found it is not (see "Users of `acquireAutopilotLock`" above) and is building a new `tools/file-lock.mjs` to replace it everywhere. Per that direction: **holding all code for this goal** until `tools/file-lock.mjs` lands and is confirmed merged - not building a separate lock helper for board.json, and the tickets.json fix will use `tools/file-lock.mjs` (not stacked beside `scope-commands.mjs`'s own `withLock`/`lockedUpdate` - the fix needs to close the five unlocked `scope-commands.mjs` functions plus the three unlocked writers in `tools/tickets.mjs`/`ticket-replan.mjs`/`watch-cli.mjs`, not add a second, parallel lock next to the one `scope-commands.mjs` already has).
 
-1. **tickets.json** (highest priority - real lost-update race, same shape as the backlog-lock problem): wrap `writeLedger` in `acquireAutopilotLock(root, { name: 'tickets' })` using the exact same reusable pattern as `tools/ledger-lease.mjs`/the backlog lock, read-modify-write under the lock. Add a `version`/revision counter to the stored ledger shape the same way the backlog lock is adding one, with a stale-write refusal. This is the most direct parallel to g-08a347e1's design and should reuse its reviewed pattern once that lands, rather than designing a second version in parallel.
-2. **board.json**: wrap `writeBoardFile` in `acquireAutopilotLock(root-equivalent-or-a-fixed-machine-wide-name, { name: 'board' })` - board.json is machine-home-scoped, not project-root-scoped, so this needs a small adaptation of `acquireAutopilotLock`'s root-relative lock-file path (or a separate, smaller lock helper under `~/.project-swarm/`) - flagging this as a design question rather than assuming it fits the existing project-root-scoped helper unchanged.
-3. **Spend-log cap-check TOCTOU**: a narrower fix - wrap the read-then-append-then-check sequence in `tools/anthropic.mjs`/`tools/openrouter.mjs`'s cap-enforcement path in a lock scoped to the spend log itself (e.g. `name: 'anthropic-spend'`), so two concurrent requests can't both pass the same cap check. This does not require touching the log's append format, only the surrounding cap-check call site.
+In priority order, scoped to only the files NOT owned elsewhere this round, to start once `tools/file-lock.mjs` is available:
+
+1. **tickets.json** (highest priority - confirmed real lost-update race via the writer table above: `runSplitIngest`, `cmdApprove`, `cmdSync`, `cmdChange` in `scope-commands.mjs`, plus `tools/tickets.mjs`'s `applyDelivered`, `tools/ticket-replan.mjs`'s `persistReplans`, and `tools/watch-cli.mjs`'s board-approve handler all write with no lock at all): migrate every `writeLedger` call site - both the already-`scope-commands.mjs`-locked ones (onto `file-lock.mjs` instead of the bespoke `scope-go.lock`) and the unlocked ones - onto `tools/file-lock.mjs`, one lock covering the whole file, not two mechanisms side by side. Add a version/revision counter to the stored ledger shape with a stale-write refusal, same shape as the backlog lock.
+2. **board.json**: lock `writeBoardFile` with `tools/file-lock.mjs` once it lands (not a separate helper).
+3. ~~Spend-log cap-check TOCTOU~~ - **not this goal's scope**: folded into g-eb01221a (the single spend-number goal) per the owner's direction; not touching spend code here.
 4. **Run state (`runs/*/state.json`)**: no change proposed - assessed as single-writer-in-practice (see item 2's write-up above). Will revisit if a concrete two-writer scenario is found.
 
-Opus review requested on items 1-3 before any of them is implemented, per the owner's instruction for lock changes. Waiting for a go-ahead on this plan before starting code.
+Opus review requested on every lock change before merge, per the owner's instruction. Reading/investigating only until `tools/file-lock.mjs` is confirmed merged.
