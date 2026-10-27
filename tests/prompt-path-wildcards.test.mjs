@@ -48,11 +48,13 @@ test('an uncovered existing plain path still gives a hit, with or without traili
   }
 });
 
-test('traversal spelling is still refused', async t => {
+test('traversal spelling is skipped by the prompt-path check, as before; the plain spelling still refuses', async t => {
   const root = await fixture(t);
+  // A candidate whose spelling makes relative() throw is skipped (never a hit); only the plain spelling is reported.
   for (const prompt of ['See uncovered/../uncovered/a.py.', 'See ../uncovered/a.py.']) {
     assert.deepEqual(await warn(root, prompt), [], prompt);
   }
+  assert.equal((await warn(root, 'See uncovered/a.py.')).length, 1);
   await assert.rejects(swarm.validateProject(root, manifest([job({ prompt: 'Read uncovered/a.py.' })])), /prompt-path-not-in-workspace/);
 });
 

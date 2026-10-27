@@ -182,7 +182,9 @@ test('a retry note or reviewer text with globs in it is never read as paths; dec
   assert.match(manifest.jobs[0].prompt, /pr-part-\*/, 'the note is in the prompt, as quoted untrusted text');
   await validateProject(root, manifest, { env: { HOME: os.tmpdir(), PATH: process.env.PATH } });
   const job = { id: 'x', prompt: 'Look at pr-part-* now.' };
-  assert.equal((await promptPathsNotInWorkspaceWarnings(root, job, [])).length, 1, 'the same words outside a quoted note still warn');
+  // Owner-ordered change: wildcard words in prose are not paths, so the asterisk word is skipped.
+  assert.equal((await promptPathsNotInWorkspaceWarnings(root, job, [])).length, 0, 'an asterisk word outside a quoted note is skipped');
+  assert.equal((await promptPathsNotInWorkspaceWarnings(root, { id: 'x', prompt: 'Look at pr-part-1/a.txt now.' }, [])).length, 1, 'a declared plain path still warns');
   assert.deepEqual(await promptPathsNotInWorkspaceWarnings(root, { id: 'x', prompt: 'Look at <<<pr-part-*>>> now.' }, []), []);
 });
 
