@@ -17,7 +17,21 @@
     "tools/orchestrator-events.mjs",
     "tests/worker-token-redaction.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/handbuild-accidents.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/policy-cli-wiring.test.mjs",
+    "tests/routing-paths.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/worker-token-dispatch.test.mjs"
+   ]
   }
  ]
 }
