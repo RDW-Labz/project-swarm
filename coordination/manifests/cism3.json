@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "cism3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Owner order for the browser smoke test tests/browser/command-center.smoke.mjs (it already exists in this branch; read it): the browser must be closed as soon as the run ends and a test must never leave a browser behind. Do: (1) Create tests/browser/browser-cleanup.mjs, an ES module with injectable dependencies (listProcesses, killProcess, isAlive, wait) exporting: trackBrowser(browser) that records the pid from browser.process() at launch (Playwright starts the browser as a process group leader on macOS and Linux); descendantPids(rootPid, processList) that returns every pid below rootPid from a list of {pid, ppid} rows (parse the output of ps -axo pid=,ppid= in a small default listProcesses); closeBrowserFully({browser, context, pages, tracked, ...injected}) that closes pages, then the context, then the browser, each in its own try and catch so one failure does not stop the next, waits up to 3000 ms for the recorded pid and its descendants to exit, then kills the process group with process.kill(-pid, 'SIGTERM'), waits 1000 ms and uses 'SIGKILL' on the group only for pids that are still alive, and kills any still-alive descendant by its own pid (only pids that were descendants of the tracked browser pid, never any other process, never pid 0 or 1 or a negative number); and assertNoLeftoverBrowser(tracked, injected) that throws an Error naming the leftover pids and their commands when any descendant of the tracked pid is still alive after cleanup. (2) Change tests/browser/command-center.smoke.mjs so that it launches chromium with a single shared handle, registers it with trackBrowser, closes everything in a finally block that calls closeBrowserFully, also registers an after hook (node:test after) that calls closeBrowserFully again (it must be safe to call twice), and ends with assertNoLeftoverBrowser so a test that leaves a browser behind fails with a clear message. Also close the in-process board server in the same finally block and after hook. (3) Add tests/browser-cleanup.test.mjs, a normal test (it runs in the normal npm test run, so it must not start a browser): with a fake process list and fake kill, alive and wait functions assert: descendantPids walks a multi-level tree and ignores unrelated rows; closeBrowserFully calls close on page, context and browser even when the first throws; it escalates from SIGTERM to SIGKILL on the group only when the pid is still alive; it never kills pid 0, 1, negative numbers or pids outside the tracked tree; assertNoLeftoverBrowser throws naming the leftover pid and passes when none are alive. Do not edit any other file. Tests must not contain credential-looking literals. Keep every existing test passing.",
+   "context": [
+    "tests/browser/command-center.smoke.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/browser/browser-cleanup.mjs",
+    "tests/browser/command-center.smoke.mjs",
+    "tests/browser-cleanup.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
