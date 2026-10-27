@@ -101,6 +101,26 @@ test('#67: eight active jobs drain a larger queue with consistent observed count
  assert.equal(state.status,'complete');assert.equal(peak,8);assert.equal(state.peakConcurrency,8);assert.equal(active,0);assert.equal(state.summary.counts.complete,24);assert.ok(snapshots.some(s=>s.counts.running===8&&s.counts.queued>0));for(const snapshot of snapshots)assert.equal(Object.values(snapshot.counts).reduce((a,b)=>a+b,0),24);
 });
 
+test('runManifest hermes and qwen succeed when child exit precedes close with drained stdout',{timeout:60000},async t=>{
+ const envelope={summary:'Generated from supplied text only.',files:[{path:'report.md',content:'Reviewed.'}]};
+ const exitFirstScript="const fs=require('node:fs');const out=process.argv[1];const code=Number(process.argv[2]);let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{if(!input.includes('selected source'))process.exit(7);process.stdout.write(out);process.exitCode=code;process.emit('exit',code);setImmediate(()=>process.emit('close',code));});";
+ for(const agent of ['hermes','qwen']){
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-exit-race-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await fs.writeFile(path.join(root,'input.md'),'selected source');
+  const stdout=lines(events(agent));
+  const state=await runManifest(root,manifest([{...job(agent),timeoutMs:30000}]),{spawnImpl:(command,args,options)=>spawn(process.execPath,['-e',exitFirstScript,stdout,'0'],options)});
+  assert.equal(state.jobs[0].status,'complete');assert.equal(state.jobs[0].exitCode,0);assert.equal(state.status,'complete');
+ }
+});
+test('runManifest extra CLI preserves nonzero exit when exit precedes close',{timeout:60000},async t=>{
+ const exitFirstScript="process.exitCode=3;process.emit('exit',3);setImmediate(()=>process.emit('close',3));";
+ for(const agent of ['hermes','qwen']){
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-exit-fail-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await fs.writeFile(path.join(root,'input.md'),'selected source');
+  const state=await runManifest(root,manifest([{...job(agent),timeoutMs:30000}]),{spawnImpl:(command,args,options)=>spawn(process.execPath,['-e',exitFirstScript],options)});
+  assert.equal(state.jobs[0].status,'failed');assert.equal(state.jobs[0].exitCode,3);
+ }
+});
 test('parseExtraCli accepts the unknown-toolsets warning real Hermes prints on stdout, and nothing else that is not JSON',()=>{
  const body=lines(events('hermes'));
  const parsed=parseExtraCli('hermes',`Warning: Unknown toolsets: none\n${body}`,0,'test-model');

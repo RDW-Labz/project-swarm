@@ -7,6 +7,39 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isRoutingPath, isRoutingPathResolved } from './routing-paths.mjs';
+import { WORKER_TOKEN_ENV, redactWorkerToken } from './worker-token.mjs';
+
+const JOB_CAPTURE_TEXT_KEYS = Object.freeze([
+  'stdout',
+  'stderr',
+  'error',
+  'outputTail',
+  'stderrTail',
+  'agentError',
+  'tail',
+  'setupError',
+  'response',
+]);
+
+/** Environment snapshot on a job or run record: never persist the raw worker token. */
+export function maskEnvironmentForRecord(env) {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return env;
+  if (!(WORKER_TOKEN_ENV in env)) return env;
+  return { ...env, [WORKER_TOKEN_ENV]: 'redacted' };
+}
+
+/** Redact worker-token substrings from job fields before they are written to run state or logs. */
+export function redactJobRunRecordFields(record, proof) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
+  const out = { ...record };
+  for (const key of JOB_CAPTURE_TEXT_KEYS) {
+    if (typeof out[key] === 'string') out[key] = redactWorkerToken(out[key], proof);
+  }
+  if (out.env && typeof out.env === 'object' && !Array.isArray(out.env)) {
+    out.env = maskEnvironmentForRecord(out.env);
+  }
+  return out;
+}
 
 export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'end', 'blocked']);
 export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -27,12 +60,15 @@ export function maskCommand(command, max = 80) {
   let text = String(command ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   const KEYWORD = '(?:token|key|secret|passw(?:or)?d|passwd|auth|credential|cookie|bearer)';
   text = text
+    .replace(new RegExp(`\\b${WORKER_TOKEN_ENV}\\s*=\\s*("[^"]*"|'[^']*'|\\S+)`, 'gi'), `${WORKER_TOKEN_ENV}=redacted`)
     // credentials in a URL: scheme://user:password@host
     .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@]+@/g, '$1[value]@')
     // well-known token shapes
     .replace(/\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|xox[abprs]|AKIA|ASIA|AIza|ya29|glpat|npm|dop_v1)[-_A-Za-z0-9]{8,}/g, '[secret]')
-    // NAME=value assignments (any name)
-    .replace(/\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/g, '$1=[value]')
+    // NAME=value assignments (any name; worker token already redacted above)
+    .replace(/\b([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S+)/g, (match, name) => (
+      name === WORKER_TOKEN_ENV ? `${WORKER_TOKEN_ENV}=redacted` : `${name}=[value]`
+    ))
     // an option whose name carries a secret word, with its value after = or a space
     .replace(new RegExp(`(--?[\\w-]*${KEYWORD}[\\w-]*)(?:=|\\s+)("[^"]*"|'[^']*'|\\S+)`, 'gi'), '$1 [value]')
     // -p PASSWORD, -pPASSWORD (mysql, psql -W), -u user:password
@@ -42,6 +78,7 @@ export function maskCommand(command, max = 80) {
     .replace(new RegExp(`(${KEYWORD}[\\w-]*\\s*:\\s*)(?:(?:Bearer|Basic|token)\\s+)?[^"'\\s]+`, 'gi'), '$1[value]')
     .replace(/(Bearer|Basic)\s+\S+/gi, '$1 [value]')
     .replace(/\b[A-Za-z0-9+/_-]{32,}\b/g, '[secret]');
+  text = redactWorkerToken(text);
   return text.slice(0, max);
 }
 
