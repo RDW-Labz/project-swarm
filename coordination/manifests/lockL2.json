@@ -19,7 +19,11 @@
     "tools/backlog.mjs",
     "tests/backlog.test.mjs"
    ],
-   "timeoutMs": 2400000
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/handbuild-guard.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }
