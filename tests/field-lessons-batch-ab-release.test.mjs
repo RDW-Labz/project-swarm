@@ -18,7 +18,7 @@ describe('release: 1.167.17', () => {
     assert.equal(pkg.version, '1.167.17');
     assert.equal(lock.version, '1.167.17');
     assert.equal(lock.packages[''].version, '1.167.17');
-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.16\n/);
+    assert.match(changelog, /^# Changelog\n\n## 1\.167\.17\n/);
     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
     const bullets = section.split('\n').filter(line => line.startsWith('- '));
     assert.equal(bullets.length, 3);

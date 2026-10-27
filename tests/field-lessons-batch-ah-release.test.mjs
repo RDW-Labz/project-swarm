@@ -36,7 +36,7 @@ test('AH release pins 1.167.17 and publishes five scrubbed lesson dispositions',
   assert.equal(lock.packages[''].version, '1.167.17');
 
   const changelog = text['CHANGELOG.md'];
-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.16\n/);
+  assert.match(changelog, /^# Changelog\n\n## 1\.167\.17\n/);
   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
   const bullets = current.split('\n').filter(line => line.startsWith('- '));
   assert.equal(bullets.length, 5);
