@@ -55,7 +55,9 @@ function readProcessStartTime(pid) {
   if (process.platform === 'win32') return Promise.resolve(null);
   return new Promise(resolve => {
     try {
-      execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }, (error, stdout) => {
+      // lstart text depends on the caller's time zone and locale; pin both so holder and waiter agree.
+      const env = { ...process.env, TZ: 'UTC', LC_ALL: 'C' };
+      execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, env }, (error, stdout) => {
         if (error) return resolve(null);
         const text = String(stdout).trim().replace(/\s+/g, ' ');
         resolve(text || null);
@@ -151,8 +153,9 @@ async function ownerIsDead(owner) {
 
 /**
  * `watch` carries the previous observation between polls: a live owner's lock is stale only when
- * its mtime (heartbeat) is older than maxHoldMs AND was seen unchanged across two polls, so a
- * wall-clock jump alone never breaks a lock that is still being refreshed.
+ * its mtime (heartbeat) is older than maxHoldMs AND was seen unchanged for at least two heartbeat
+ * intervals of monotonic time (process.hrtime), so neither a wall-clock jump nor a machine sleep
+ * alone breaks a lock that is still being refreshed.
  */
 async function classifyLock(lockPath, { graceMs, maxHoldMs, now }, watch) {
   let snapshot;
@@ -178,12 +181,21 @@ async function classifyLock(lockPath, { graceMs, maxHoldMs, now }, watch) {
   }
 
   const prev = watch.last;
-  watch.last = { inode: snapshot.inode, mtimeMs: snapshot.mtimeMs, content: snapshot.content };
+  const nowNs = process.hrtime.bigint();
   const unchanged = prev
     && prev.inode === snapshot.inode
     && prev.mtimeMs === snapshot.mtimeMs
     && prev.content === snapshot.content;
-  if (unchanged && now() - snapshot.mtimeMs > maxHoldMs) {
+  watch.last = {
+    inode: snapshot.inode,
+    mtimeMs: snapshot.mtimeMs,
+    content: snapshot.content,
+    firstSeenNs: unchanged ? prev.firstSeenNs : nowNs,
+  };
+  // hrtime does not advance during machine sleep, so a wake-up never counts as missed heartbeats.
+  const heartbeatNs = BigInt(heartbeatIntervalMs(maxHoldMs)) * 1_000_000n;
+  const unchangedLongEnough = unchanged && nowNs - watch.last.firstSeenNs >= 2n * heartbeatNs;
+  if (unchangedLongEnough && now() - snapshot.mtimeMs > maxHoldMs) {
     return { kind: 'stale', snapshot };
   }
   return { kind: 'held', owner, holdAge: lockAgeMs(owner, now) };
@@ -306,8 +318,12 @@ async function breakStaleLock(lockPath, snapshot, options) {
   }
 }
 
+function heartbeatIntervalMs(maxHoldMs) {
+  return Math.max(1, Math.floor(maxHoldMs / 4));
+}
+
 function startHeartbeat(lockPath, owner, maxHoldMs) {
-  const intervalMs = Math.max(1, Math.floor(maxHoldMs / 4));
+  const intervalMs = heartbeatIntervalMs(maxHoldMs);
   let stopped = false;
   let busy = false;
   const timer = setInterval(async () => {

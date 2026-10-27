@@ -396,10 +396,65 @@ test('a lock whose live holder stopped heartbeating becomes stale after maxHoldM
   await fs.writeFile(lockPath, lockRecord(), 'utf8');
   await setLockMtimeMs(lockPath, Date.now() - 120_000);
 
-  const release = await acquireFileLock(lockPath, { waitMs: 5000, pollMs: 5, maxHoldMs: 60_000 });
+  const release = await acquireFileLock(lockPath, { waitMs: 5000, pollMs: 5, maxHoldMs: 400 });
   const body = JSON.parse(await fs.readFile(lockPath, 'utf8'));
   assert.notEqual(body.token, fakeId('c'));
   await release();
+});
+
+test('stale needs the lock unchanged for two heartbeat intervals of monotonic time', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'sleep.lock');
+  await fs.writeFile(lockPath, lockRecord(), 'utf8');
+  await setLockMtimeMs(lockPath, Date.now() - 120_000);
+
+  // maxHoldMs 2000 => heartbeat interval 500ms => at least 1000ms unchanged before breaking
+  const started = process.hrtime.bigint();
+  const release = await acquireFileLock(lockPath, { waitMs: 10_000, pollMs: 5, maxHoldMs: 2000 });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs >= 950, `broke after only ${elapsedMs}ms`);
+  await release();
+});
+
+test('a holder running in another time zone is not mistaken for a dead process', { timeout: 60_000 }, async t => {
+  const root = await tmpDir(t);
+  const lockPath = path.join(root, 'tz.lock');
+  // pick a zone that differs from the parent's so the test is not vacuous on a UTC machine
+  const holderTz = new Date().getTimezoneOffset() === 0 ? 'Asia/Tokyo' : 'UTC';
+
+  const holder = spawnNodeInGroup([
+    '--input-type=module',
+    '-e',
+    `
+import { acquireFileLock } from ${JSON.stringify(fileLockModule)};
+await acquireFileLock(${JSON.stringify(lockPath)}, { waitMs: 30000 });
+setInterval(() => {}, 500);
+`,
+  ], { env: { ...process.env, TZ: holderTz } });
+  t.after(() => killProcessGroup(holder));
+  holder.stdout.on('data', () => {});
+  holder.stderr.on('data', () => {});
+
+  await new Promise((resolve, reject) => {
+    const deadline = Date.now() + 10_000;
+    const tick = () => {
+      fs.readFile(lockPath, 'utf8')
+        .then(text => (text.trim() ? resolve() : Promise.reject(new Error('empty'))))
+        .catch(() => {
+          if (Date.now() > deadline) reject(new Error('holder never took lock'));
+          else setTimeout(tick, 25);
+        });
+    };
+    holder.on('error', reject);
+    tick();
+  });
+
+  const before = await fs.readFile(lockPath, 'utf8');
+  await assert.rejects(
+    acquireFileLock(lockPath, { waitMs: 300, pollMs: 20 }),
+    err => err.code === 'file-lock-timeout',
+  );
+  assert.equal(await fs.readFile(lockPath, 'utf8'), before);
 });
 
 test('an owner whose recorded process start time differs is treated as dead', { timeout: 60_000 }, async t => {

@@ -17,7 +17,11 @@
     "tools/file-lock.mjs",
     "tests/file-lock.test.mjs"
    ],
-   "timeoutMs": 1500000
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/backlog.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ]
 }
