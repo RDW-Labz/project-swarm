@@ -8,6 +8,11 @@ import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createWatchServer } from '../../tools/watch-server.mjs';
+import {
+  trackBrowser,
+  closeBrowserFully,
+  assertNoLeftoverBrowser,
+} from './browser-cleanup.mjs';
 
 const deltaFile = fileURLToPath(new URL('../../tools/watch-delta.mjs', import.meta.url));
 const assetDir = fileURLToPath(new URL('../../tools/watch-assets', import.meta.url));
@@ -326,23 +331,51 @@ async function launchChromium() {
   }
 }
 
+let smokeOn;
+let smokeOff;
+let smokeBrowser;
+let smokeContext;
+let smokePages = [];
+let smokeTracked;
+
+async function disposeSmokeServers() {
+  const tasks = [];
+  if (smokeOn) tasks.push(smokeOn.dispose().catch(() => {}));
+  if (smokeOff) tasks.push(smokeOff.dispose().catch(() => {}));
+  smokeOn = undefined;
+  smokeOff = undefined;
+  await Promise.all(tasks);
+}
+
+async function cleanupSmokeBrowser() {
+  await closeBrowserFully({
+    browser: smokeBrowser,
+    context: smokeContext,
+    pages: smokePages,
+    tracked: smokeTracked,
+  });
+}
+
+test.after(async () => {
+  await cleanupSmokeBrowser();
+  await disposeSmokeServers();
+});
+
 test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, async () => {
-  let on;
-  let off;
-  let browser;
   try {
-    on = await startCommandCenterServer({ commandCenterOn: true });
-    off = await startCommandCenterServer({ commandCenterOn: false });
-    browser = await launchChromium();
+    smokeOn = await startCommandCenterServer({ commandCenterOn: true });
+    smokeOff = await startCommandCenterServer({ commandCenterOn: false });
+    smokeBrowser = await launchChromium();
+    smokeTracked = trackBrowser(smokeBrowser);
   } catch (err) {
-    if (on) await on.dispose();
-    if (off) await off.dispose();
+    await disposeSmokeServers();
     throw err;
   }
   const bag = { consoleErrors: [], pageErrors: [], badResponses: [] };
 
   try {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    smokeContext = await smokeBrowser.newContext({ viewport: { width: 1440, height: 900 } });
+    const context = smokeContext;
     await context.addInitScript(() => {
       if (!HTMLCollection.prototype.find) {
         HTMLCollection.prototype.find = function find(fn, thisArg) {
@@ -351,11 +384,12 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
       }
     });
     const page = await context.newPage();
+    smokePages.push(page);
     await installCockpitMountPatch(page);
     attachPageMonitors(page, 'Hive', bag);
     attachPageMonitors(page, 'Cockpit', bag);
 
-    const hiveUrl = `http://127.0.0.1:${on.port}/command-center?${on.pageAuthQuery}`;
+    const hiveUrl = `http://127.0.0.1:${smokeOn.port}/command-center?${smokeOn.pageAuthQuery}`;
     await page.goto(hiveUrl, { waitUntil: 'networkidle', timeout: 60_000 });
     await page.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
     await page.waitForSelector('.hive-shell', { timeout: 30_000 });
@@ -373,26 +407,26 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
     const cockpitShot = await page.screenshot({ type: 'png', fullPage: false });
     assertScreenshotNotBlank(cockpitShot, 'Cockpit page');
 
-    const ccOff = await httpGet({ port: off.port, reqPath: '/command-center' });
+    const ccOff = await httpGet({ port: smokeOff.port, reqPath: '/command-center' });
     assert.equal(ccOff.status, 404, 'Flag-off check: /command-center should be 404');
 
-    const classic = await httpGet({ port: off.port, reqPath: `/?${off.pageAuthQuery}` });
+    const classic = await httpGet({ port: smokeOff.port, reqPath: `/?${smokeOff.pageAuthQuery}` });
     assert.equal(classic.status, 200, 'Classic board page: / should return 200 when flag is off');
 
     const classicBag = { consoleErrors: [], pageErrors: [], badResponses: [] };
     const classicPage = await context.newPage();
+    smokePages.push(classicPage);
     attachPageMonitors(classicPage, 'Classic board', classicBag);
-    await classicPage.goto(`http://127.0.0.1:${off.port}/?${off.pageAuthQuery}`, {
+    await classicPage.goto(`http://127.0.0.1:${smokeOff.port}/?${smokeOff.pageAuthQuery}`, {
       waitUntil: 'networkidle',
       timeout: 60_000,
     });
     assertMonitorBag(classicBag, 'Classic board');
     assert.ok(classic.body.length > 100, 'Classic board page: home HTML body was empty');
 
-    await context.close();
   } finally {
-    if (browser) await browser.close();
-    if (on) await on.dispose();
-    if (off) await off.dispose();
+    await cleanupSmokeBrowser();
+    await disposeSmokeServers();
   }
+  assertNoLeftoverBrowser(smokeTracked);
 });
