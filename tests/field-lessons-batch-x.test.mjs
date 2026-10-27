@@ -14,7 +14,6 @@
 //   sandbox.
 // #288: a codex job's own repo AGENTS.md names required reads the prompt never surfaces as
 //   allowed.
-import './_isolate-config.mjs';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -366,14 +365,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
 });
 
 // ---------------------------------------------------------------------------------------------
-describe('release: 1.167.19', () => {
-  test('package.json and package-lock.json are both at 1.167.19', async () => {
+describe('release: 1.167.20', () => {
+  test('package.json and package-lock.json are both at 1.167.20', async () => {
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(pkg.version, '1.167.19');
-    assert.equal(lock.version, '1.167.19');
-    assert.equal(lock.packages[''].version, '1.167.19');
+    assert.equal(pkg.version, '1.167.20');
+    assert.equal(lock.version, '1.167.20');
+    assert.equal(lock.packages[''].version, '1.167.20');
   });
 
   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
