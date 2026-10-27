@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // OpenRouter worker pool (decisions #226-#228): data_collection deny on every request,
 // anthropic/* pinned to Anthropic, deepseek/* bookkeeping only, $5/job and $25/day caps.
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
