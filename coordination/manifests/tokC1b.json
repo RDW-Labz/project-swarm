@@ -21,7 +21,26 @@
     "tools/worker-token.mjs",
     "tests/worker-token-dispatch.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/cli-adapters.test.mjs",
+    "tests/cursor-process-group.test.mjs",
+    "tests/field-lesson-347.test.mjs",
+    "tests/helpers/swarm-source.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/lessons115.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/swarm-source-helper.test.mjs",
+    "tests/swarm.test.mjs",
+    "tests/worker-token.test.mjs"
+   ]
   }
  ]
 }

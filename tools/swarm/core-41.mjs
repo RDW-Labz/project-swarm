@@ -249,10 +249,16 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
   return new Promise(resolve => {
     let child, stdout = '', stderr = '', reason, settled = false, size = 0;
     let timeout, poll, termination, logFailure, cursorGroupPid, streamsClosed = false;
+    let workerTokenRevoked = false;
     const stopChildForJob = () => job.agent === 'cursor'
       ? stopCursorChild(child, cursorGroupPid, { killImpl, killGroupImpl, isStreamsClosed: () => streamsClosed })
       : stopChild(child, { killImpl });
-    const stop = why => { if (reason || settled) return; reason = why; termination ??= stopChildForJob(); termination.then(cleanup=>{if(cleanup.error)finishAndRevoke(null);}).catch(()=>finishAndRevoke(null)); };
+    const stop = why => {
+      if (reason || settled) return;
+      reason = why;
+      termination ??= stopChildForJob();
+      termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
+    };
     const onAbort = () => stop('cancelled');
     const finish = async (code, error) => {
       if (settled) return;
@@ -339,14 +345,12 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
       return;
     };
     const finishAndRevoke = async (code, err) => {
-      try {
-        await finish(code, err);
-      } finally {
-        if (dispatchCtx) {
-          await revokeWorkerToken(dispatchCtx);
-          unregisterActiveWorkerToken(dispatchCtx);
-        }
+      if (dispatchCtx && !workerTokenRevoked) {
+        workerTokenRevoked = true;
+        await revokeWorkerToken(dispatchCtx);
+        unregisterActiveWorkerToken(dispatchCtx);
       }
+      await finish(code, err);
     };
     if (signal?.aborted) { reason = 'cancelled'; return finishAndRevoke(null); }
     try {
@@ -356,7 +360,8 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         : job.agent === 'cursor' ? spawnImpl('sandbox-exec', cursorLaunchArgs(job, { ...cursor, message }), { cwd, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: withWorkerEnv(cursor.env) })
         // Decision #154: the whole claude process, not each command, runs inside the profile.
         : claudeShell ? spawnImpl('sandbox-exec', ['-f', claudeShell.profile, claudeShell.bin, ...claudeShellArgs(job)], { cwd, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'], env: withWorkerEnv(claudeShell.env) })
-        // Over ssh the local environment never travels: ssh gets only what it needs to find its own key.
+        // Over ssh the worker token never travels: sshEnv is a fixed allowlist (no SWARM_WORKER_TOKEN).
+        // A remote cli host still runs the guard hook on its own machine; it must issue its own token there.
         : cliHost ? (() => { const ssh = sshInvocation(cliHost, extraCliArgs(job)); return spawnImpl(ssh.command, ssh.args, { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: sshEnv(process.env) }); })()
         : spawnImpl(job.agent, job.agent==='claude'?claudeArgs(job,{resume:resumeSessionId}):extraCliArgs(job), { cwd, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], env: withWorkerEnv(job.agent==='claude'?process.env:extraCliEnvironment(job.agent)) });
       if (job.agent === 'cursor' && child?.pid) cursorGroupPid = child.pid;
@@ -365,7 +370,7 @@ export async function execute(job, cwd, message, { spawnImpl, signal, cancelled 
         // Descendants may keep inherited stdio open after the leader exits.
         // Start cleanup now; parse output only after close drains the streams.
         termination??=stopChildForJob();
-        termination.then(cleanup=>{if(cleanup.error)finishAndRevoke(null);}).catch(()=>finishAndRevoke(null));
+        termination.then(() => { if (!settled) finishAndRevoke(null); }).catch(() => finishAndRevoke(null));
       });
       child.on('close', code => { streamsClosed = true; finishAndRevoke(code); });
       for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']]) stream.setEncoding('utf8').on('data', data => {
