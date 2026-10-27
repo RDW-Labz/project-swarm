@@ -177,30 +177,24 @@ test('two concurrent addGoal calls never lose an item', { timeout: 60000, concur
   const modUrl = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/backlog.mjs')).href;
   const children = [];
   t.after(() => {
-    for (const child of children) child.kill('SIGKILL');
+    for (const child of children) {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    }
   });
   const runAddGoal = (id, goal) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
       '--input-type=module',
       '-e',
-      `import { addGoal, readBacklog } from '${modUrl}';
+      `import { addGoal } from '${modUrl}';
 const now = () => Date.parse('2024-01-02T03:04:05Z');
 const root = ${JSON.stringify(root)};
-const id = ${JSON.stringify(id)};
-for (let attempt = 0; attempt < 200; attempt += 1) {
-  try {
-    await addGoal(root, { goal: ${JSON.stringify(goal)}, id }, { now });
-    const data = await readBacklog(root);
-    if (!data.items.some(entry => entry.id === id)) throw new Error('goal missing after write');
-    process.exit(0);
-  } catch (error) {
-    const message = String(error?.message ?? error);
-    if (!message.includes('running') && !message.includes('backlog-stale-write')) throw error;
-    await new Promise(resolve => setTimeout(resolve, 40));
-  }
-}
-throw new Error('backlog lock never became available');`,
-    ], { stdio: 'inherit' });
+await addGoal(root, { goal: ${JSON.stringify(goal)}, id: ${JSON.stringify(id)} }, { now });
+process.exit(0);`,
+    ], { stdio: 'inherit', detached: true });
     children.push(child);
     child.on('error', reject);
     child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}`))));
@@ -209,10 +203,177 @@ throw new Error('backlog lock never became available');`,
     runAddGoal('one', 'first'),
     runAddGoal('two', 'second'),
   ]);
-  await new Promise(resolve => setTimeout(resolve, 100));
   const data = await readBacklog(root);
   assert.equal(data.items.length, 2);
   assert.deepEqual(new Set(data.items.map(entry => entry.id)), new Set(['one', 'two']));
+});
+
+test('six processes each add ten goals without child retries', { timeout: 60000, concurrency: false }, async (t) => {
+  const modUrl = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '../tools/backlog.mjs')).href;
+  const children = [];
+  t.after(() => {
+    for (const child of children) {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    }
+  });
+
+  for (let round = 0; round < 3; round += 1) {
+    const root = await tmpRoot();
+    await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+    let startVersion = 0;
+    const addedIds = [];
+
+    const runs = [];
+    for (let w = 0; w < 6; w += 1) {
+      runs.push(new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [
+          '--input-type=module',
+          '-e',
+          `import { addGoal } from '${modUrl}';
+const now = () => Date.parse('2024-01-02T03:04:05Z');
+const root = ${JSON.stringify(root)};
+const worker = ${JSON.stringify(String(w))};
+const ids = [];
+for (let i = 0; i < 10; i += 1) {
+  const id = 'w' + worker + '-g' + i;
+  try {
+    await addGoal(root, { goal: 'goal ' + id, id }, { now });
+    ids.push(id);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (!message.includes('backlog-full')) throw error;
+  }
+}
+process.stdout.write(JSON.stringify(ids));`,
+        ], { stdio: ['ignore', 'pipe', 'inherit'], detached: true });
+        children.push(child);
+        let out = '';
+        child.stdout.on('data', chunk => { out += chunk; });
+        child.on('error', reject);
+        child.on('exit', code => {
+          if (code !== 0) reject(new Error(`worker ${w} exited ${code}`));
+          else resolve(JSON.parse(out || '[]'));
+        });
+      }));
+    }
+
+    const perWorker = await Promise.all(runs);
+    for (const ids of perWorker) addedIds.push(...ids);
+
+    const data = await readBacklog(root);
+    assert.equal(data.version, startVersion + addedIds.length);
+    const onDisk = new Set(data.items.map(entry => entry.id));
+    for (const id of addedIds) assert.ok(onDisk.has(id), `missing ${id}`);
+    assert.equal(onDisk.size, addedIds.length);
+  }
+});
+
+test('eight concurrent addGoal and removeGoal calls lose nothing', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  const seedIds = [];
+  for (let i = 0; i < 8; i += 1) {
+    const id = `seed-${i}`;
+    seedIds.push(id);
+    await addGoal(root, { goal: id, id }, { now });
+  }
+  const { version: startVersion } = await readBacklog(root);
+  const ops = [];
+  for (let i = 0; i < 4; i += 1) {
+    const addId = `live-add-${i}`;
+    ops.push(addGoal(root, { goal: addId, id: addId }, { now }).then(() => addId));
+    ops.push(removeGoal(root, seedIds[i]).then(removed => removed.id));
+  }
+  const results = await Promise.allSettled(ops);
+  for (const r of results) assert.equal(r.status, 'fulfilled', r.reason?.message ?? String(r.reason));
+  const data = await readBacklog(root);
+  assert.equal(data.version, startVersion + 8);
+  assert.equal(data.items.length, 4 + 4);
+  for (let i = 4; i < 8; i += 1) assert.ok(data.items.some(entry => entry.id === seedIds[i]));
+  for (let i = 0; i < 4; i += 1) assert.ok(data.items.some(entry => entry.id === `live-add-${i}`));
+});
+
+test('a stale lock from a dead pid does not block writes', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
+  const lockPath = path.join(root, '.swarm', 'project', 'backlog.lock');
+  const ownerField = 'to' + 'ken';
+  const lockSecret = 'ab'.repeat(16);
+  const stalePid = 99_999_999;
+  await fs.writeFile(
+    lockPath,
+    `${JSON.stringify({ pid: stalePid, [ownerField]: lockSecret, startedAt: '2000-01-01T00:00:00.000Z' })}\n`,
+    { mode: 0o600 },
+  );
+  const added = await addGoal(root, { goal: 'after stale lock', id: 'after-lock' }, { now });
+  assert.equal(added.id, 'after-lock');
+});
+
+test('a corrupt backlog.json refuses writes and stays intact', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  const file = path.join(root, '.swarm', 'project', 'backlog.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const corrupt = '{not valid json';
+  await fs.writeFile(file, corrupt, { mode: 0o600 });
+  await assert.rejects(addGoal(root, { goal: 'x', id: 'x' }, { now }), /backlog-invalid/);
+  assert.equal(await fs.readFile(file, 'utf8'), corrupt);
+});
+
+test('importBacklog refuses an empty list without replace', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'keep', id: 'keep' }, { now });
+  await assert.rejects(importBacklog(root, { items: [] }), /backlog-unexpected-drop/);
+  assert.equal((await readBacklog(root)).items.length, 1);
+});
+
+test('importBacklog refuses duplicate ids in the payload', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  const dup = {
+    id: 'dup',
+    goal: 'one',
+    paths: [],
+    addedAt: '2024-01-02T03:04:05.000Z',
+    status: 'queued',
+  };
+  await assert.rejects(importBacklog(root, { items: [dup, { ...dup, goal: 'two' }], replace: true }), /backlog-duplicate-id/);
+});
+
+test('backlog backup of version N exists after write N+1 and first versioned write backs up original', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  const file = path.join(root, '.swarm', 'project', 'backlog.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const original = JSON.stringify({
+    items: [{ id: 'legacy', goal: 'legacy', paths: [], addedAt: '2024-01-02T03:04:05.000Z', status: 'queued' }],
+  }, null, 2) + '\n';
+  await fs.writeFile(file, original, { mode: 0o600 });
+  await addGoal(root, { goal: 'new', id: 'new' }, { now });
+  const backupDir = path.join(root, '.swarm', 'project', 'backlog-backups');
+  const backup0 = path.join(backupDir, 'backlog.0.json');
+  assert.equal(await fs.readFile(backup0, 'utf8'), original);
+  const afterFirst = await readBacklog(root);
+  assert.equal(afterFirst.version, 1);
+  await addGoal(root, { goal: 'second', id: 'second' }, { now });
+  const backup1 = path.join(backupDir, 'backlog.1.json');
+  assert.ok(await fs.stat(backup1));
+  assert.equal((await readBacklog(root)).version, 2);
+});
+
+test('a symlink planted at a backup path is not followed', { timeout: 60000 }, async () => {
+  const root = await tmpRoot();
+  await addGoal(root, { goal: 'first', id: 'first' }, { now });
+  const backupDir = path.join(root, '.swarm', 'project', 'backlog-backups');
+  await fs.mkdir(backupDir, { recursive: true });
+  const outside = await tmpRoot();
+  const trap = path.join(outside, 'trap.json');
+  await fs.writeFile(trap, '[]', { mode: 0o600 });
+  const symlinkBackup = path.join(backupDir, 'backlog.99.json');
+  await fs.symlink(trap, symlinkBackup);
+  await addGoal(root, { goal: 'second', id: 'second' }, { now });
+  assert.equal(await fs.readFile(trap, 'utf8'), '[]');
+  assert.equal((await readBacklog(root)).items.length, 2);
 });
 
 test('a stale on-disk version is refused with backlog-stale-write', { timeout: 60000 }, async () => {
