@@ -179,7 +179,9 @@ export async function collectProtectedWorkspacePaths(root) {
       if (event.workspace) addPath(protectedPaths, root, event.workspace);
       if (event.worktreePath) addPath(protectedPaths, root, event.worktreePath);
     }
-  } catch { /* no journal */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] protectedPathsFromJournal:', error?.message ?? error);
+  }
   for (const runId of runIds) {
     for (const p of await workspacePathsForRun(root, runId)) protectedPaths.add(p);
   }
@@ -205,20 +207,25 @@ async function pathBytes(target, { duImpl, now = Date.now, deadline } = {}) {
         const { stdout } = await duImpl(['-sk', target]);
         const kb = Number(String(stdout).trim().split(/\s+/)[0]);
         if (Number.isFinite(kb)) return kb * 1024;
-      } catch { /* fall through */ }
+      } catch (error) { console.error('[tools/gc.mjs] pathBytes duImpl:', error?.message ?? error); }
     }
   } catch { return 0; }
   let total = 0;
   async function walk(dir) {
     if (deadline && now() >= deadline) return;
     let entries;
-    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/gc.mjs] pathBytes readdir:', error?.message ?? error);
+      return;
+    }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) await walk(full);
       else if (entry.isFile()) {
-        try { total += (await fs.stat(full)).size; } catch { /* skip */ }
+        try { total += (await fs.stat(full)).size; } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] pathBytes stat:', error?.message ?? error);
+        }
       }
     }
   }
@@ -238,7 +245,10 @@ async function appendRunCleanupJournal(root, runId, entry) {
 }
 
 async function assertUnderBases(absPath, bases) {
-  const resolved = await fs.realpath(absPath).catch(() => null);
+  const resolved = await fs.realpath(absPath).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] assertUnderBases realpath:', error?.message ?? error);
+    return null;
+  });
   if (!resolved) return false;
   for (const base of bases) {
     let realBase;
@@ -280,10 +290,15 @@ async function removeGitWorktree(root, worktreePath, { gitImpl = git, caller = '
   if (guardCtx) await logCheckoutDeletionAttempt(worktreePath, caller, 'allowed', guardCtx);
   try {
     await gitImpl(root, ['worktree', 'remove', '--force', worktreePath]);
-  } catch {
-    try { await fs.rm(worktreePath, { recursive: true, force: true }); } catch { /* best effort */ }
+  } catch (gitError) {
+    console.error('[tools/gc.mjs] removeGitWorktree git-remove:', gitError?.message ?? gitError);
+    try { await fs.rm(worktreePath, { recursive: true, force: true }); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] removeGitWorktree rm:', error?.message ?? error);
+    }
   }
-  try { await gitImpl(root, ['worktree', 'prune']); } catch { /* ignore */ }
+  try { await gitImpl(root, ['worktree', 'prune']); } catch (error) {
+    console.error('[tools/gc.mjs] removeGitWorktree prune:', error?.message ?? error);
+  }
   return { removed: true, path: worktreePath };
 }
 
@@ -356,7 +371,11 @@ export async function cleanupRunWorkspaces(root, id, state, options = {}) {
     try {
       const entries = await fs.readdir(runWtDir);
       if (entries.length === 0) await fs.rmdir(runWtDir);
-    } catch { /* gone or not empty */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTEMPTY' && error?.code !== 'EEXIST') {
+        console.error('[tools/gc.mjs] cleanupRunWorkspaces rmdir:', error?.message ?? error);
+      }
+    }
   }
   return { removed, bytesFreed };
 }
@@ -420,7 +439,9 @@ async function writeRunSummary(root, runId) {
   try {
     const text = await fs.readFile(journalPath, 'utf8');
     journalLines = text.split('\n').filter(Boolean).length;
-  } catch { /* no journal */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] writeRunSummary journal:', error?.message ?? error);
+  }
   const summary = {
     id: runId,
     status: state.status,
@@ -467,10 +488,18 @@ async function worktreeUnsafeToRemove(worktreePath, { gitImpl = git, forceUnsafe
   try {
     const branch = (await gitImpl(worktreePath, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
     if (branch && branch !== 'HEAD') {
-      const unpushed = await gitImpl(worktreePath, ['log', `@{u}..`, '--oneline']).catch(() => '');
+      const unpushed = await gitImpl(worktreePath, ['log', `@{u}..`, '--oneline']).catch((error) => {
+        const message = error?.message ?? String(error);
+        if (!/no upstream/i.test(message)) {
+          console.error('[tools/gc.mjs] worktreeUnsafeToRemove unpushed-check:', message);
+        }
+        return '';
+      });
       if (unpushed.trim()) return { unsafe: true, reason: 'unpushed-commits' };
     }
-  } catch { /* detached */ }
+  } catch (error) {
+    console.error('[tools/gc.mjs] worktreeUnsafeToRemove branch-check (likely detached HEAD):', error?.message ?? error);
+  }
   return { unsafe: false };
 }
 
@@ -479,7 +508,11 @@ export async function loadDiskUsageCache(root) {
   try {
     const data = JSON.parse(await fs.readFile(file, 'utf8'));
     if (data?.at && Date.now() - Date.parse(data.at) < DISK_USAGE_CACHE_MS) return data;
-  } catch { /* refresh */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') {
+      console.error('[tools/gc.mjs] loadDiskUsageCache:', error?.message ?? error);
+    }
+  }
   return null;
 }
 
@@ -499,7 +532,9 @@ export async function computeDiskUsage(root, deps = {}) {
     for (const id of runs) {
       runFolders += await pathBytes(path.join(realRoot, '.swarm', 'runs', id), { duImpl, deadline: () => Date.now() >= deadline }) ?? 0;
     }
-  } catch { /* no runs */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] computeDiskUsage runs:', error?.message ?? error);
+  }
   const diskUsage = {
     projects: [{ root: realRoot, worktrees, workspaces, runFolders, bytes: worktrees + workspaces + runFolders }],
     totalBytes: worktrees + workspaces + runFolders,
@@ -586,7 +621,9 @@ export async function collectProjectGcPlan(root, opts = {}) {
         totalBytes += bytes;
       }
     }
-  } catch { /* no base */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] collectProjectGcPlan worktrees:', error?.message ?? error);
+  }
 
   const sortedRuns = runIds.slice().sort((a, b) => b.localeCompare(a));
   const dropRuns = sortedRuns.slice(keepRuns);
@@ -644,7 +681,9 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
     if (!result.skipped) { bytesFreed += result.bytesFreed ?? 0; removed.push(result); }
   }
   for (const wt of plan.categories.orphans.filter(o => o.kind === 'git-metadata')) {
-    try { await gitImpl(root, ['worktree', 'prune']); } catch { /* ignore */ }
+    try { await gitImpl(root, ['worktree', 'prune']); } catch (error) {
+      console.error('[tools/gc.mjs] applyProjectGcPlan prune:', error?.message ?? error);
+    }
   }
   for (const row of [...plan.categories.oldRunFolders, ...plan.categories.untrackedArchives]) {
     await writeRunSummary(root, row.runId);
@@ -671,7 +710,9 @@ export async function applyProjectGcPlan(root, plan, opts = {}) {
         const bytes = await pathBytes(target, { duImpl }) ?? 0;
         await fs.rm(target, { recursive: true, force: true });
         bytesFreed += bytes;
-      } catch { /* missing */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/gc.mjs] applyProjectGcPlan rm:', error?.message ?? error);
+      }
     }
     removed.push({ path: row.path, bytesFreed: row.bytes });
   }

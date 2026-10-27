@@ -565,7 +565,9 @@ function readJsonFileNoSymlink(filePath) {
     return null;
   } finally {
     if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* ignore */ }
+      try { closeSync(fd); } catch (error) {
+        if (error?.code !== 'EBADF') console.error('[tools/autopilot.mjs] readJsonFileNoSymlink close:', error?.message ?? error);
+      }
     }
   }
 }
@@ -683,7 +685,9 @@ async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
     try {
       const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
       if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
-    } catch { /* fall through */ }
+    } catch (error) {
+      console.error('[tools/autopilot.mjs] resolveIntegrateCheckoutView override:', error?.message ?? error);
+    }
   }
   try {
     const exec = typeof deps.gitExecForIntegrate === 'function'
@@ -697,7 +701,9 @@ async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
       outputPaths,
     });
     if (gitState) return { ...checkout, ...gitState, dirty: false };
-  } catch { /* use raw checkout */ }
+  } catch (error) {
+    console.error('[tools/autopilot.mjs] resolveIntegrateCheckoutView fallback:', error?.message ?? error);
+  }
   return checkout;
 }
 
@@ -771,7 +777,9 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         pollUnchanged: true,
       };
     }
-  } catch { /* digest must never block autopilot */ }
+  } catch (error) {
+    console.error('[tools/autopilot.mjs] autopilot poll digest:', error?.message ?? error);
+  }
   let loadedEvents;
   try { loadedEvents = await deps.readJournal(root); }
   catch (error) { return { actions: [], blocked: [], idle: true, error: `journal-unreadable: ${String(error?.message ?? error).slice(0, 200)}` }; }
@@ -1212,14 +1220,22 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
   }
 
   if (deps.policyPass) {
-    try { await executePolicyPass(root, deps, { now: nowMs }); } catch { /* policy pass never stops autopilot */ }
+    try { await executePolicyPass(root, deps, { now: nowMs }); } catch (error) {
+      console.error('[tools/autopilot.mjs] policy pass:', error?.message ?? error);
+    }
   }
 
   if (!journalBroken) {
-    try { await runNeedsYouTriagePass(root, deps, { now: nowFn }); } catch { /* needs-you triage never stops autopilot */ }
+    try { await runNeedsYouTriagePass(root, deps, { now: nowFn }); } catch (error) {
+      console.error('[tools/autopilot.mjs] needs-you triage:', error?.message ?? error);
+    }
   }
 
-  if (typeof deps.notify === 'function') { try { await deps.notify(root); } catch { /* a notifier never stops the loop */ } }
+  if (typeof deps.notify === 'function') {
+    try { await deps.notify(root); } catch (error) {
+      console.error('[tools/autopilot.mjs] notify:', error?.message ?? error);
+    }
+  }
 
   if (!journalBroken) {
     try {
@@ -1227,7 +1243,9 @@ export async function autopilotStep(root, deps, { now = Date.now, memory = new S
         now: nowFn, legacyPlan, memory: mem, observeContext: pollObserveContext,
       });
       if (pollSnapshot?.digest) await writeAutopilotPollDigest(root, pollSnapshot.digest);
-    } catch { /* digest file is best effort */ }
+    } catch (error) {
+      console.error('[tools/autopilot.mjs] write poll digest:', error?.message ?? error);
+    }
   }
 
   return {
@@ -1459,13 +1477,20 @@ export async function runAutopilot(root, deps, { intervalMs = 30000, once = fals
   const wait = Math.max(MIN_INTERVAL_MS, Number(intervalMs) || MIN_INTERVAL_MS);
   while (!signal?.aborted && results.length < maxSteps) {
     // The panic button (swarm stop --all): a loop that is still alive stops at the next step instead of starting more work.
-    if (await stopGuard(root).catch(() => null)) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
+    if (await stopGuard(root).catch((error) => {
+      console.error('[tools/autopilot.mjs] stopGuard check:', error?.message ?? error);
+      return null;
+    })) { results.push({ action: 'stopped', note: 'stopped: swarm stop --all marker present' }); break; }
     let step;
     try {
-      try { await deps.busy?.begin?.(); } catch { /* marker must never stop the loop */ }
+      try { await deps.busy?.begin?.(); } catch (error) {
+        console.error('[tools/autopilot.mjs] busy begin:', error?.message ?? error);
+      }
       step = await autopilotStep(root, deps, { now, memory, legacyPlan });
     } finally {
-      try { await deps.busy?.end?.(); } catch { /* marker must never stop the loop */ }
+      try { await deps.busy?.end?.(); } catch (error) {
+        console.error('[tools/autopilot.mjs] busy end:', error?.message ?? error);
+      }
     }
     if (once && step && !step.stepWroteJournal) step.stepWroteJournal = false;
     noteAutopilotStep(root, step, { once });
