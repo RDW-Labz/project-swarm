@@ -1,0 +1,38 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "bump16715",
+   "agent": "auto",
+   "tier": "cheap",
+   "prompt": "Bump the version from 1.167.14 to 1.167.15. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.14 to 1.167.15. In README.md change every 1.167.14 pin (kickoff text, tag name) to 1.167.15. In these tests replace the 1.167.14 pin with 1.167.15 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.167.15 above the 1.167.14 entry (keep it unchanged) with the lead-in line: Notes reach workers, longer check timeouts, waves start again. And these bullets, each starting with a bold lead word: Notes: a note from the owner or the orchestrator (swarm tickets ID --set ready --note TEXT, or --note alone) is saved on the ticket and shown to the next worker as guidance; the system retry note stays separate, --retry-note TEXT replaces it and --clear-note clears both. Timeouts: a ticket can set a longer check timeout (swarm tickets ID --check-timeout MS, 60 s to 30 min) and the project profile verify block can set timeoutMs for every ticket; the default stays 5 minutes. Waves: human tickets no longer use the job cap and the wave builder picks fairly across stages, so later stages are not starved. Autopilot: the service can start waves again (the child go --scope runs under its parent's lock) and reports early start failures through a log file. Gate and lanes: standalone failing-test rerun and environment fingerprint modules, the lane health core (adapter registry, free GET-only probes, probation) and the lane monitor, reroute, recovery and events modules are in, not wired yet. Do not touch any other file. Note the version has two digits in the last part: pins like 1.167.15 must not be confused with 1.167.1 in assertions (use exact matches).",
+   "context": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "outputs": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": []
+  }
+ ]
+}
