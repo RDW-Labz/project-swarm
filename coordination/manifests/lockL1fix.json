@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockL1fix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "sensitive": true,
+   "prompt": "Fix a flaky test in tests/file-lock.test.mjs: 'empty lock file is busy within graceMs then cleared' fails about 1 run in 6 with 'Missing expected rejection.' because it depends on wall-clock timing: under load the empty lock file's modification time is already older than the small graceMs when the first acquire attempt runs, so the acquire succeeds instead of being refused. Make it deterministic without changing tools/file-lock.mjs behaviour: set the empty lock file's modification time explicitly with fs.utimes to 'now' right before the first attempt and use a graceMs large enough (for example 5000 ms) for the first, refused attempt (with a short waitMs so the refusal is quick), then set the modification time to well in the past (fs.utimes, 60 seconds ago) to prove it is treated as stale and cleared. Check the other timing-based tests in the same file for the same pattern (short graceMs, short waitMs, sleeps) and make them deterministic the same way. Run the file 15 times in a loop and report that all pass. STANDING TEST RULE: tests that spawn processes need a 60000 ms timeout and child cleanup. IMPORTANT: secret scanner: no literal token values.",
+   "context": [
+    "tools/file-lock.mjs",
+    "tests/file-lock.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/file-lock.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ]
+}
