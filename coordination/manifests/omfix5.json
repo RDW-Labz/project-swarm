@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omfix5",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus round-2 review of the orchestrator-mode guard hotfix found remaining problems in tools/orchestrator-allow.mjs and its call sites in tools/shell-writes.mjs. Fix them and extend tests/orchestrator-allow.test.mjs (tests must go through the FULL guard entry used by the hook, with the hand-build guard on and off). (1) HIGH vitestRunnerOk (about lines 443-456): when vitest is called without run or test, the verb is treated as run but NO flags are checked ('npx vitest --config=.swarm/evil.mjs' and 'npx vitest -u' are allowed); and only the flags after the verb are checked ('npx vitest --config=x run'). Fix: check every argument except the verb word itself against the narrow flag set, flags before and after the verb, for vitest and playwright alike. (2) MED packageRunnerTool: 'pnpm dlx vitest' and 'yarn dlx vitest' download and run a registry package: drop dlx; accept only exec or the bare tool name. (3) MED shell-writes.mjs calls orchestratorTestRunAllowed (vitest and playwright only) at about lines 2013 and 2112, so the new npm, pytest and node --test rules in localTestRunAllowed are never reached; 'npm test', 'npm run test', 'node --test', 'node --test tests', 'pytest', 'python3 -m pytest' are still denied. Call localTestRunAllowed with the same inProject and packageScripts context from the shell-writes path so these are allowed, and add full-guard tests for them plus denials: 'node --test --import ./x.mjs', 'npm test -- --config x', 'pytest -c x.ini', 'pytest -p plugin', 'python -m pytest --rootdir /tmp'. (4) MED test files in folders the orchestrator can write run as code: deny test paths under .swarm/, docs/plans/ and any other orchestrator-owned folder ('npx vitest run .swarm/x.test.mjs', 'npx vitest run docs/plans/x.test.mjs', 'npx playwright test .swarm/x.spec.js', 'node --test .swarm/x.test.mjs'); the path check must use the resolved real path inside the project. (5) LOW swarm tickets: limit the allowed flags to --retry-note, --note, --files, --context, --acceptance, --add-acceptance, --status, --kind, --stage, --type, --risk, --json, --release, --question, --reopen with --reason, --help, and --set with values other than done and delivered; deny --delivered, --take-from, --deletes, --mark-deps, --accept and any unknown flag. Hmm: --delivered PR is an orchestrator tool used for merged PRs: keep it denied only when no --yes is given? No: deny --delivered entirely; the owner can run it. (6) LOW deny swarm budget set (and budgets set) at the guard. Keep every attack form denied that is already denied and every allowed form from the bug report allowed (swarm go --scope wave --max-jobs 2, swarm tickets T-0001 --retry-note x, swarm tickets --help, gh pr view 12, gh run view 5, grep -rn foo src, cat README.md, git status, git log --oneline -5, npx playwright test, npx vitest run, npm test, node --test, pytest). Keep tests/orchestrator-mode*.test.mjs, tests/shell-writes*.test.mjs and tests/auto-approve.test.mjs passing without editing their assertions. IMPORTANT: secret scanner: no credential-looking literals in tests; do not write glob patterns with * in the prompt-like comments.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/shell-writes.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  }
+ ]
+}
