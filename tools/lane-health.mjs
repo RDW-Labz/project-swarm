@@ -190,15 +190,33 @@ export function createLaneHealthMonitor({
   const eventsFile = laneHealthEventsPath(home, env);
   const stateFile = laneHealthStatePath(home, env);
 
-  async function persist() {
-    state.updatedAt = new Date(now()).toISOString();
-    await writeAtomicJson(stateFile, state, fsImpl);
+  let persistChain = Promise.resolve();
+  const pendingEvents = new Set();
+  const pendingTicks = new Set();
+  let stopped = false;
+
+  function persist() {
+    const write = persistChain.then(async () => {
+      state.updatedAt = new Date(now()).toISOString();
+      await writeAtomicJson(stateFile, state, fsImpl);
+    });
+    // A failed write must not prevent later writes from running.
+    persistChain = write.catch(() => {});
+    return write;
   }
 
-  async function recordStateEvent(lane, from, to, reason) {
+  async function flush() {
+    await Promise.all([persistChain, ...pendingEvents]);
+  }
+
+  function recordStateEvent(lane, from, to, reason) {
     const at = new Date(now()).toISOString();
     const line = `${JSON.stringify({ lane, from, to, reason, at })}\n`;
-    await appendEventLine(eventsFile, line, fsImpl);
+    const write = appendEventLine(eventsFile, line, fsImpl);
+    const settled = write.catch(() => {});
+    pendingEvents.add(settled);
+    settled.then(() => pendingEvents.delete(settled));
+    return write;
   }
 
   function emitChange(type, detail) {
@@ -305,7 +323,7 @@ export function createLaneHealthMonitor({
   async function probeLane(lane) {
     const entry = ensureLane(lane, now());
     const lastResult = entry.lastJobOk === null ? null : { ok: entry.lastJobOk, consecutiveBad: entry.consecutiveBad };
-    const started = now();
+    let timer;
     try {
       const result = await Promise.race([
         runLaneHealthCheck({
@@ -319,35 +337,51 @@ export function createLaneHealthMonitor({
           adapters,
         }),
         new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('probe timeout')), PROBE_CAP_MS);
+          timer = setTimeout(() => reject(new Error('probe timeout')), PROBE_CAP_MS);
         }),
       ]);
       applyProbeResult(lane, result, now());
     } catch {
       applyProbeResult(lane, { state: 'down', reason: 'probe failed' }, now());
+    } finally {
+      clearTimeout(timer);
     }
   }
 
   return {
-    async tick() {
-      try {
-        const time = now();
-        const discovered = discoverLanes({ config, adapters });
-        const discoveredSet = new Set(discovered);
-        for (const lane of Object.keys(state.lanes)) {
-          if (!discoveredSet.has(lane)) {
-            const prev = state.lanes[lane]?.state ?? 'unknown';
-            delete state.lanes[lane];
-            await recordStateEvent(lane, prev, 'pruned', 'lane removed from discovery');
-            emitChange('pruned', { lane, from: prev });
+    tick() {
+      if (stopped) return Promise.resolve();
+      const tick = (async () => {
+        try {
+          const time = now();
+          const discovered = discoverLanes({ config, adapters });
+          const discoveredSet = new Set(discovered);
+          for (const lane of Object.keys(state.lanes)) {
+            if (!discoveredSet.has(lane)) {
+              const prev = state.lanes[lane]?.state ?? 'unknown';
+              delete state.lanes[lane];
+              await recordStateEvent(lane, prev, 'pruned', 'lane removed from discovery');
+              emitChange('pruned', { lane, from: prev });
+            }
           }
+          await Promise.all(discovered.map(lane => probeLane(lane)));
+          checkTierNeedsYou(time);
+          await persist();
+        } catch {
+          /* never throws */
         }
-        await Promise.all(discovered.map(lane => probeLane(lane)));
-        checkTierNeedsYou(time);
-        await persist();
-      } catch {
-        /* never throws */
-      }
+      })();
+      pendingTicks.add(tick);
+      tick.then(() => pendingTicks.delete(tick));
+      return tick;
+    },
+
+    flush,
+
+    async stop() {
+      stopped = true;
+      await Promise.all([...pendingTicks]);
+      await flush();
     },
 
     snapshot() {
@@ -355,6 +389,7 @@ export function createLaneHealthMonitor({
     },
 
     recordJobResult(lane, ok, { jobId } = {}) {
+      if (stopped) return;
       const entry = ensureLane(lane, now());
       entry.lastJobOk = ok === true;
       if (jobId) entry.lastJobId = jobId;
