@@ -286,7 +286,7 @@ async function pendingForWorktreeRoot(wtRoot, { nowMs, exec }) {
       });
     } catch (error) {
       if (error?.code !== 'ENOENT') {
-        console.error('[tools/project-commands.mjs] pending cap-raise read/parse:', error?.message ?? error, wtRoot);
+        console.error('[tools/project-commands.mjs] pending cap-raise read/parse:', error instanceof SyntaxError ? 'corrupt file (SyntaxError)' : (error?.message ?? error), wtRoot);
       }
       /* no pending cap raise */
     }
