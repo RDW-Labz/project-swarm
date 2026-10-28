@@ -1731,7 +1731,7 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
     if (tokenized.unclosedQuote) return false;
     const baseCwd = ctx.cwd ?? ctx.root;
     let cwd = baseCwd;
-    const local = { ...ctx, cwd };
+    const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
     let subshellDepth = 0;
     const cwdStack = [baseCwd];
     for (const words of tokenized) {
@@ -1747,8 +1747,10 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
         k += 1;
       }
       if (k < plain.length && path.basename(plain[k]) === 'cd') {
+        if (omCdHasRedirect(words)) return true;
         if (subshellDepth > 0) continue;
         const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
+        if (omResolveCd(target, local) === null) return true;
         if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) continue;
         cwd = omResolveCd(target, { ...local, cwd });
         local.cwd = cwd;
@@ -1808,7 +1810,16 @@ const omRelUnderOmManifestWriteArea = rel => {
 
 const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
 
+// Keep the starting cwd's logical/physical mismatch across subsequent cd steps.
+const omStartingCwdSymlink = ctx => {
+  if (ctx.omStartingCwdSymlink !== undefined) return ctx.omStartingCwdSymlink;
+  const cwd = ctx.cwd ?? ctx.root;
+  if (!cwd) return false;
+  try { return path.resolve(cwd) !== fs.realpathSync.native(cwd); } catch { return false; }
+};
+
 const omResolvePath = (p, ctx, redirect = false) => {
+  if (redirect && !path.isAbsolute(p) && p.split(path.sep)[0] === '..' && omStartingCwdSymlink(ctx)) return null;
   let cwdBase = ctx.cwd ?? ctx.root;
   try {
     cwdBase = fs.realpathSync.native(cwdBase);
@@ -1839,7 +1850,7 @@ const omResolvePath = (p, ctx, redirect = false) => {
       resolved = next;
     }
   }
-  return resolved;
+  return { resolved, sawSymlink };
 };
 
 const omWriteTargetRel = (raw, ctx, expands) => {
@@ -1852,10 +1863,10 @@ const omWriteTargetRel = (raw, ctx, expands) => {
     return null;
   }
   let p = String(raw ?? '');
-  if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
+  if (p.startsWith('~/')) p = `${os.homedir()}${path.sep}${p.slice(2)}`;
   const resolved = omResolvePath(p, ctx, true);
   if (resolved === null) return null;
-  const rel = path.relative(rootReal, resolved);
+  const rel = path.relative(rootReal, resolved.resolved);
   if (omWriteTargetEscapesProject(rel)) return null;
   return rel.split(path.sep).join('/');
 };
@@ -2362,6 +2373,7 @@ const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_D
 
 // Refuse all cd options, including `-`: the hook cannot model their semantics.
 const omCdHasDash = cdArgs => cdArgs.some(a => a.startsWith('-'));
+const omCdHasRedirect = words => words.some(w => /[<>]/.test(w));
 
 /** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
 const omCdRootTarget = (target, ctx) => {
@@ -2371,7 +2383,7 @@ const omCdRootTarget = (target, ctx) => {
   const t = String(target);
   if (OM_CD_ROOT_ENV_FORMS.has(t)) {
     const envDir = process.env.CLAUDE_PROJECT_DIR;
-    return !!envDir && omRealOrNull(envDir) === rootReal;
+    return !!envDir && omRealOrNull(envDir) === rootReal && omResolveCd(t, ctx) === rootReal;
   }
   if (omOperandUnsafe(t) || t === '~' || t.startsWith('~')) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(t)) return false;
@@ -2382,6 +2394,7 @@ const omCdAllowed = (target, ctx) => omCdRootTarget(target, ctx) || omCdTargetOk
 
 // A cd that is not the first half of `cd DIR && ...` only passes when it returns to the project root (a standalone `cd`, or before `;`).
 const omCdStepAllowed = (words, target, ctx) => {
+  if (omCdHasRedirect(words)) return false;
   if (words.sepAfter === '&&') return omCdAllowed(target, ctx);
   if (words.sepAfter !== ';' || words.piped) return false;
   return omCdRootTarget(target, ctx);
@@ -2390,10 +2403,13 @@ const omCdStepAllowed = (words, target, ctx) => {
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
-  if (OM_CD_ROOT_ENV_FORMS.has(p)) p = ctx.root;
-  if (p.startsWith('~/')) p = path.join(home, p.slice(2));
-  const resolved = omResolvePath(p, ctx);
-  return resolved === null ? null : omRealOrNull(resolved);
+  if (OM_CD_ROOT_ENV_FORMS.has(p)) p = process.env.CLAUDE_PROJECT_DIR ?? ctx.root;
+  // Do not normalize away links followed by .. before walking the target.
+  if (p.startsWith('~/')) p = `${home}${path.sep}${p.slice(2)}`;
+  if (p.split(path.sep).includes('..') && omStartingCwdSymlink(ctx)) return null;
+  const result = omResolvePath(p, ctx);
+  // Shell cd is logical: any link can make a later cd .. diverge from realpath.
+  return result === null || result.sawSymlink ? null : omRealOrNull(result.resolved);
 };
 
 const omNaturallySmall = (cmd, args) => {
@@ -2459,6 +2475,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'node' && !omTrustedCommandWordOk(rawCmd, 'node')) return false;
   if (cmd === 'swarm' && !omSwarmCommandWordOk(rawCmd)) return false;
   if (cmd === 'cd') {
+    if (omCdHasRedirect(words)) return false;
     if (omCdHasDash(args)) return false;
     const target = args.filter(a => a !== '' && !a.startsWith('-'))[0];
     return target !== undefined && omCdTargetOk(target, ctx);
@@ -2591,7 +2608,7 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
   const baseCwd = ctx.cwd ?? ctx.root;
   const cwdStack = [baseCwd];
   let cwd = baseCwd;
-  const local = { ...ctx, cwd };
+  const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
   let subshellDepth = 0;
   for (let wi = 0; wi < tokenized.length; wi += 1) {
     const words = tokenized[wi];

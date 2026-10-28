@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
+import { orchestratorModeCommandAllowed, orchestratorSwarmSubfolderBlocked } from '../tools/shell-writes.mjs';
 
 async function project(t) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-t2-redirect-')));
@@ -49,12 +49,95 @@ test('cd refuses options and parent traversal after directory symlinks', async t
   }
 });
 
-test('cd tracks the physical path through directory symlinks', async t => {
+test('cd refuses directory symlinks even without parent traversal', async t => {
   const ctx = await project(t);
   await fs.symlink('../coordination', path.join(ctx.root, 'docs/C'));
   assert.equal(orchestratorModeCommandAllowed('cd docs/C && echo x > manifests/a.json', ctx), false);
+  assert.equal(orchestratorModeCommandAllowed('cd docs/C/manifests && git status', ctx), false);
   await fs.symlink('docs', path.join(ctx.root, 'D'));
-  assert.equal(orchestratorModeCommandAllowed('cd D && echo x > plans/a.md', ctx), true);
+  assert.equal(orchestratorModeCommandAllowed('cd D && echo x > plans/a.md', ctx), false);
+});
+
+test('cd refuses symlinks at every target position before logical parent traversal', async t => {
+  const ctx = await project(t);
+  await fs.mkdir(path.join(ctx.root, '.swarm/project'), { recursive: true });
+  await fs.mkdir(path.join(ctx.root, 'docs/plans/sub'));
+  for (const dir of ['.swarm/project', 'coordination/manifests', 'docs/plans']) {
+    await fs.symlink('../../docs/plans/sub', path.join(ctx.root, dir, 'L'));
+  }
+  for (const command of [
+    'cd .swarm/project/L && cd .. && echo x > y.json',
+    'cd coordination/manifests/L && cd .. && echo x > a.md',
+    'cd docs/plans/L',
+    'cd docs/plans/L && git status',
+    'cd docs/plans/L/. && git status',
+    `cd ${ctx.root}/docs/plans/L && git status`,
+  ]) {
+    assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+  }
+  assert.equal(orchestratorSwarmSubfolderBlocked('cd docs/plans/L && swarm status', ctx), true);
+});
+
+test('cd refuses redirects attached to the cd segment', async t => {
+  const ctx = await project(t);
+  for (const op of ['>', '>>', '>|', '&>', '2>', '3>', '3>>', '3>|', '3>&']) {
+    for (const target of ['.swarm/project/daily-limit.json', 'coordination/manifests/x.json', 'docs/plans/a.md']) {
+      for (const suffix of ['', ' && git status']) {
+        const command = `cd docs ${op} ${target}${suffix}`;
+        assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+      }
+    }
+  }
+  assert.equal(orchestratorSwarmSubfolderBlocked('cd docs > coordination/manifests/x.json && swarm status', ctx), true);
+});
+
+test('a symlinked starting cwd refuses parent cd and leading parent redirects', async t => {
+  const ctx = await project(t);
+  await fs.symlink('docs/plans', path.join(ctx.root, 'L'));
+  const linked = { root: ctx.root, cwd: path.join(ctx.root, 'L') };
+  for (const command of [
+    'cd .. && echo x > a.md',
+    'cd ../plans && echo x > a.md',
+    'echo x > ../plans/a.md',
+    'cd . && echo x > ../plans/a.md',
+    'cd . && cd .. && echo x > plans/a.md',
+  ]) {
+    assert.equal(orchestratorModeCommandAllowed(command, linked), false, command);
+  }
+  assert.equal(orchestratorModeCommandAllowed('echo x > a.md', linked), true);
+  assert.equal(orchestratorModeCommandAllowed('cd . && echo x > a.md', linked), true);
+  assert.equal(orchestratorSwarmSubfolderBlocked('cd .. && swarm status', linked), true);
+});
+
+test('cd checks symlinks before normalizing tilde and project-root environment targets', async t => {
+  const ctx = await project(t);
+  await fs.symlink('docs/plans', path.join(ctx.root, 'L'));
+  await fs.symlink('.', path.join(ctx.root, 'root-link'));
+  assert.equal(orchestratorModeCommandAllowed('cd ~/L/.. && git status', { ...ctx, home: ctx.root }), false);
+  const previous = process.env.CLAUDE_PROJECT_DIR;
+  try {
+    process.env.CLAUDE_PROJECT_DIR = path.join(ctx.root, 'root-link');
+    for (const target of ['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']) {
+      assert.equal(orchestratorModeCommandAllowed(`cd ${target} && git status`, ctx), false, target);
+    }
+    process.env.CLAUDE_PROJECT_DIR = ctx.root;
+    assert.equal(orchestratorModeCommandAllowed('cd $CLAUDE_PROJECT_DIR && git status', ctx), true);
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previous;
+  }
+});
+
+test('real directory cd preserves pipeline, null redirect, and plan write verdicts', async t => {
+  const ctx = await project(t);
+  for (const command of ['node tools/x.mjs 2>&1 | tail -5', 'true > /dev/null']) {
+    assert.equal(
+      orchestratorModeCommandAllowed(`cd docs && ${command}`, ctx),
+      orchestratorModeCommandAllowed(command, ctx),
+      command,
+    );
+  }
+  assert.equal(orchestratorModeCommandAllowed('cd docs && echo x > plans/a.md', ctx), true);
 });
 
 test('redirects refuse existing hard-linked regular-file leaves', async t => {
