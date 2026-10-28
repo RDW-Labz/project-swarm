@@ -50,7 +50,10 @@ async function profileOf(root) {
 
 async function loadScope(root) {
   const ledger = await readLedger(root).catch((error) => {
-    if (error?.code !== 'ENOENT') console.error('[tools/handoff-commands.mjs] readLedger:', error?.message ?? error, root);
+    if (error?.code !== 'ENOENT') {
+      const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/handoff-commands.mjs] readLedger:', detail, root);
+    }
     return null;
   });
   const file = ledger?.scope?.file ?? DEFAULT_SCOPE_FILE;
@@ -150,7 +153,10 @@ async function check(root, args, deps) {
   let filed = [];
   if (f.propose && failed.length) {
     const ledger = await readLedger(root).catch((error) => {
-      if (error?.code !== 'ENOENT') console.error('[tools/handoff-commands.mjs] readLedger:', error?.message ?? error, root);
+      if (error?.code !== 'ENOENT') {
+        const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+        console.error('[tools/handoff-commands.mjs] readLedger:', detail, root);
+      }
       return null;
     });
     const have = new Set((ledger?.tickets ?? []).filter(t => t.origin === 'handoff').map(t => t.source?.route));

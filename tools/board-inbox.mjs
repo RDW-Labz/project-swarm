@@ -172,7 +172,10 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
         });
       }
       const ledger = await ledgerOf(project.root).catch((error) => {
-        if (error?.code !== 'ENOENT') console.error('[tools/board-inbox.mjs] ledgerOf:', error?.message ?? error, project.root);
+        if (error?.code !== 'ENOENT') {
+          const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+          console.error('[tools/board-inbox.mjs] ledgerOf:', detail, project.root);
+        }
         return null;
       });
       for (const t of ledger?.tickets ?? []) {
