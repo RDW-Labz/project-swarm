@@ -18,6 +18,7 @@ export const SWARM_FIX_INTEGRATE_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 const STATE_REL = path.join('.swarm', 'needs-you-triage', 'state.json');
 const LOCK_REL = path.join('.swarm', 'needs-you-triage', 'state.lock');
 const LOCK_STALE_MS = 30 * 60 * 1000;
+const loggedRefreshCodes = new Set();
 
 export const TRIAGE_HANDLER_KINDS = Object.freeze([
   'split-park',
@@ -261,7 +262,12 @@ async function readLockPayload(file) {
     return JSON.parse(await fs.readFile(file, 'utf8'));
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
-    try { await fs.unlink(file); } catch { /* replace unreadable lock */ }
+    try { await fs.unlink(file); } catch (unlinkError) {
+      if (unlinkError?.code !== 'ENOENT') {
+        console.error('[tools/needs-you-triage.mjs] readLockPayload unlink unreadable lock:', unlinkError?.message ?? unlinkError);
+      }
+      /* replace unreadable lock */
+    }
     return null;
   }
 }
@@ -282,7 +288,15 @@ export async function refreshTriageLock(root, { now = Date.now } = {}) {
     const existing = JSON.parse(await fs.readFile(file, 'utf8'));
     if (Number(existing?.pid) !== process.pid) return;
     await fs.writeFile(file, `${JSON.stringify({ pid: process.pid, at: nowMs })}\n`, { encoding: 'utf8', mode: 0o600 });
-  } catch { /* no lock */ }
+  } catch (error) { /* no lock */
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      const code = error?.code ?? error?.name ?? 'unknown';
+      if (!loggedRefreshCodes.has(code)) {
+        loggedRefreshCodes.add(code);
+        console.error('[tools/needs-you-triage.mjs] refreshTriageLock:', error?.message ?? error);
+      }
+    }
+  }
 }
 
 export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidCheck } = {}) {
@@ -298,7 +312,12 @@ export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidC
     const stale = await lockIsStale(existing, nowMs, alive);
     if (!stale && owner !== process.pid) return { ok: false, reason: 'locked' };
     if (stale) {
-      try { await fs.unlink(file); } catch { /* raced */ }
+      try { await fs.unlink(file); } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          console.error('[tools/needs-you-triage.mjs] acquire stale lock unlink:', error?.message ?? error);
+        }
+        /* raced */
+      }
     } else if (owner === process.pid) {
       await refreshTriageLock(root, { now: nowMs });
       return { ok: true };
@@ -322,7 +341,12 @@ export async function acquireTriageLock(root, { now = Date.now, isPidAlive: pidC
     if (other && !(await lockIsStale(other, nowMs, alive)) && owner !== process.pid) {
       return { ok: false, reason: 'locked' };
     }
-    try { await fs.unlink(file); } catch { /* ignore */ }
+    try { await fs.unlink(file); } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/needs-you-triage.mjs] acquire EEXIST recovery unlink:', error?.message ?? error);
+      }
+      /* ignore */
+    }
     try {
       await writeLockExclusive(file, payload);
       const owned = await readLockPayload(file);
@@ -339,7 +363,11 @@ export async function releaseTriageLock(root) {
   try {
     const existing = JSON.parse(await fs.readFile(file, 'utf8'));
     if (Number(existing?.pid) === process.pid) await fs.unlink(file);
-  } catch { /* no lock */ }
+  } catch (error) { /* no lock */
+    if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      console.error('[tools/needs-you-triage.mjs] releaseTriageLock:', error?.message ?? error);
+    }
+  }
 }
 
 async function collectTriageItems(roots, triageDeps) {
