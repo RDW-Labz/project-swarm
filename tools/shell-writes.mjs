@@ -22,6 +22,7 @@ import {
   orchestratorSwarmSessionCwdOk,
   orchestratorWriteAllowedRel,
 } from './orchestrator-allow.mjs';
+import { omRunManifestVetted, omSwarmRunGoPositionals } from './om-manifest-guard.mjs';
 
 export { localTestRunAllowed };
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
@@ -1680,7 +1681,17 @@ const omSwarmSubcommandAllowed = (args, ctx) => {
   if (!parsed.ok) return false;
   const { sub, rest } = parsed;
   if (!sub) return true;
-  return swarmSubcommandAlwaysAllowed(sub, rest);
+  if (!swarmSubcommandAlwaysAllowed(sub, rest)) return false;
+  if (sub === 'run' || sub === 'go') {
+    const positionals = omSwarmRunGoPositionals(sub, rest);
+    if (positionals === null) return false;
+    for (const word of positionals) {
+      if (!ctx?.root && String(word).toLowerCase().endsWith('.json')) return false;
+      const vetted = omRunManifestVetted(ctx?.root, word);
+      if (!vetted.ok) return false;
+    }
+  }
+  return true;
 };
 
 const omSwarmInvocation = (cmd, args, ctx) => {
