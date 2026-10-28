@@ -337,7 +337,7 @@ export async function applyQueuePlans(root, id, state, manifest, plans, options)
   await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
   const status = complete ? 'integrated' : 'partial';
   if (!options.keepWorkspaces) {
-    try { await cleanupRunWorkspaces(root, id, state, { env: options.env, keepWorkspaces: options.keepWorkspaces }); } catch { /* best-effort */ }
+    try { await cleanupRunWorkspaces(root, id, state, { env: options.env, keepWorkspaces: options.keepWorkspaces }); } catch (error) { console.error('[tools/swarm/core-71.mjs] applyQueuePlans cleanupRunWorkspaces:', error?.message ?? error); }
   }
   return { ...result, status, integrationStatus: state.integrationStatus, files: state.integratedFiles, filesChanged: state.integratedFiles };
 }
