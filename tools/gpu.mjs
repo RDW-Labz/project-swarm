@@ -249,7 +249,12 @@ function createSession(env, session) {
     throw error;
   }
 }
-export function removeSession(env) { try { fs.rmSync(gpuSessionPath(env)); } catch { /* none */ } }
+export function removeSession(env) {
+  try { fs.rmSync(gpuSessionPath(env)); }
+  catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/gpu.mjs] removeSession:', error?.message ?? error);
+  }
+}
 export function readSessionFile(env) {
   try { return JSON.parse(fs.readFileSync(gpuSessionPath(env), 'utf8')); } catch { return null; }
 }
@@ -270,7 +275,12 @@ async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs,
           const body = await response.json();
           if (Array.isArray(body?.data) && body.data.some(item => item?.id === model)) pending.delete(endpoint);
         }
-      } catch { /* still starting, or not JSON yet */ }
+      } catch (error) {
+        const code = error?.code ?? error?.cause?.code;
+        if (code != null && !['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+          console.error('[tools/gpu.mjs] waitHealthy poll:', error?.message ?? error);
+        }
+      }
     }
     if (!pending.size) return;
     if (alive) {
@@ -354,8 +364,8 @@ export async function gpuUp(options, deps) {
   // remove the session file, then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
   const afterStartFailure = async error => {
     let stopped = false;
-    try { await ssh([...sshArgs, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
-    if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1 && stopTunnel) { try { await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ } }
+    try { await ssh([...sshArgs, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() }); stopped = true; } catch (error) { console.error('[tools/gpu.mjs] afterStartFailure ssh stop (relying on dead-man timer):', error?.message ?? error); }
+    if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1 && stopTunnel) { try { await stopTunnel(session.tunnelPid, session); } catch (error) { console.error('[tools/gpu.mjs] afterStartFailure stopTunnel (relying on dead-man timer):', error?.message ?? error); } }
     removeSession(env);
     const verb = container ? 'destroy' : 'terminate';
     if (error?.exposure) {
@@ -402,7 +412,7 @@ export async function gpuDown(deps) {
   try {
     await ssh([...sessionSshOptions(session), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() });
   } catch (error) { sshOk = false; notes.push(`could not reach the node to stop the servers (${String(error.message).slice(0, 120)}); its dead-man timer still removes them at ${session.expiresAt}`); }
-  try { if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1) await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ }
+  try { if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1) await stopTunnel(session.tunnelPid, session); } catch (error) { console.error('[tools/gpu.mjs] gpuDown stopTunnel (relying on dead-man timer):', error?.message ?? error); }
   removeSession(env);
   const hours = Math.max(0, (now() - Date.parse(session.startedAt)) / 3600000);
   const reminder = container
@@ -423,7 +433,12 @@ export async function gpuStatus(deps) {
   const replicas = [];
   for (const endpoint of session.endpoints) {
     let healthy = false;
-    try { healthy = (await fetchImpl(`${endpoint}/v1/models`)).ok; } catch { /* down */ }
+    try { healthy = (await fetchImpl(`${endpoint}/v1/models`)).ok; } catch (error) {
+      const code = error?.code ?? error?.cause?.code;
+      if (code != null && !['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+        console.error('[tools/gpu.mjs] gpuStatus replica health:', error?.message ?? error);
+      }
+    }
     replicas.push({ endpoint, healthy, cache: healthy ? await fetchCacheStats(endpoint, fetchImpl) : null });
   }
   const cache = combineCacheStats(replicas.map(item => item.cache).filter(Boolean));
