@@ -1,0 +1,38 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "bump16722",
+   "agent": "cursor",
+   "tier": "cheap",
+   "prompt": "Bump the version from 1.167.21 to 1.167.22. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.21 to 1.167.22. In README.md change every 1.167.21 pin (kickoff text, tag name) to 1.167.22. In these tests replace the current-version pin 1.167.21 with 1.167.22 everywhere it appears, in BOTH spellings: plain (1.167.21) and escaped inside regular expressions (the same digits with backslash-dot): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. In CHANGELOG.md add a NEW top entry ## 1.167.22 above the 1.167.21 entry (keep it unchanged) with the lead-in line: Three queue and worker fixes found building the parts project. And these bullets, each starting with a bold lead word: Owners: a test file that a done ticket already owns is no longer taken away from the next ticket's outputs, so a ticket is not left with empty outputs; Paths: an acceptance line that names a dot folder such as .github/workflows/ci.yml keeps its leading dot, so valid CI tickets are no longer parked as owned by nobody; Blocked: a Codex or Cursor job whose reply says it is blocked and whose outputs did not change is now blocked with the worker's own note as the reason and is never marked complete, and a job that completes with no changed output gets a completed-without-changes warning. Do not touch any other file. The version has two digits in the last part: use exact matches so 1.167.22 is never confused with 1.167.2.",
+   "context": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "outputs": [
+    "package.json",
+    "package-lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "model": "composer-2.5"
+  }
+ ]
+}
