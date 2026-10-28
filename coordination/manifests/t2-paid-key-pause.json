@@ -7,7 +7,7 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "mid",
-   "prompt": "Train 2, bug B3 (money, highest priority): some paid lanes read their API key with no paused-lane check. Today the 1.167.21 hard block lives only in tools/anthropic.mjs readAnthropicKey (assertAnthropicLaneNotPaused, ~line 54-75), tools/openrouter.mjs readOpenRouterKey (~112-136) and tools/claude-shell.mjs resolveWorkerKey (~118-146). These bypass it: tools/rented.mjs readRentedKey (~174, called at tools/api-adapters.mjs ~54); OpenAI and Gemini keys read straight from env in tools/api-adapters.mjs (~36-37: env.OPENAI_API_KEY, env.GEMINI_API_KEY || env.GOOGLE_API_KEY). All are paid lanes (PAID_LANES in tools/spend.mjs ~23).\nFix:\n1. NEW tools/paid-lane-pause.mjs exporting PAID_KEY_LANES (anthropic, openrouter, openai, gemini, rented, lambda when it points at the hosted Lambda Inference API) and assertPaidLaneNotPaused(lane, config) that throws Error code '<lane>-lane-paused' with message '<lane>-lane-paused: the paid <lane> lane is paused and no key was read' when config.lanes[lane].paused === true. Pure, no I/O.\n2. tools/api-adapters.mjs: before reading ANY key for openai, gemini, rented (and hosted lambda), load the machine config the same way readAnthropicKey does (loadLocalConfig with env/home) and call assertPaidLaneNotPaused; the env/keychain must not be read when paused. Keep anthropic/openrouter on their existing checks (do not change their messages).\n3. tools/rented.mjs readRentedKey: same check at the top (config passed in or loaded), before env or keychain.\n4. Validation: find where validation refuses an explicit paid agent when its lane is paused today (tools/swarm/core-51.mjs ~362-375, read-only context) and make sure the same refusal covers openai, gemini, rented, lambda; if that code is outside your outputs, add an exported helper pausedPaidLaneProblems(manifest, config) in tools/paid-lane-pause.mjs and say in your summary where it must be called.\n5. Tests in NEW tests/paid-lane-pause.test.mjs (first import: import './_isolate-config.mjs';): for each of openai, gemini (both GEMINI_API_KEY and GOOGLE_API_KEY), rented: with lanes.<lane>.paused true in a temp SWARM_CONFIG and a fake key in env, the key reader / adapter config refuses with '<lane>-lane-paused' and the key value never appears in the result or error; with paused false it reads the key; a fake keychain exec must not be called when paused (pass exec spy, assert zero calls). Also a table test that every lane in PAID_LANES (tools/spend.mjs) that has a key reader refuses when paused, so a future paid lane cannot be added without the check.\nDo not touch spend caps or prices in this job.",
+   "prompt": "Train 2, bug B3 (money, highest priority): some paid lanes read their API key with no paused-lane check. Today the 1.167.21 hard block lives only in tools/anthropic.mjs readAnthropicKey (assertAnthropicLaneNotPaused, ~line 54-75), tools/openrouter.mjs readOpenRouterKey (~112-136) and tools/claude-shell.mjs resolveWorkerKey (~118-146). These bypass it: tools/rented.mjs readRentedKey (~174, called at tools/api-adapters.mjs ~54); OpenAI and Gemini keys read straight from env in tools/api-adapters.mjs (~36-37: env.OPENAI_API_KEY, env.GEMINI_API_KEY || env.GOOGLE_API_KEY). All are paid lanes (PAID_LANES in tools/spend.mjs ~23).\nFix:\n1. NEW tools/paid-lane-pause.mjs exporting PAID_KEY_LANES (anthropic, openrouter, openai, gemini, rented, lambda when it points at the hosted Lambda Inference API) and assertPaidLaneNotPaused(lane, config) that throws Error code '<lane>-lane-paused' with message '<lane>-lane-paused: the paid <lane> lane is paused and no key was read' when config.lanes[lane].paused === true. Pure, no I/O.\n2. tools/api-adapters.mjs: before reading ANY key for openai, gemini, rented (and hosted lambda), load the machine config the same way readAnthropicKey does (loadLocalConfig with env/home) and call assertPaidLaneNotPaused; the env/keychain must not be read when paused. Keep anthropic/openrouter on their existing checks (do not change their messages).\n3. tools/rented.mjs readRentedKey: same check at the top (config passed in or loaded), before env or keychain.\n4. Validation: find where validation refuses an explicit paid agent when its lane is paused today (tools/swarm/core-51.mjs ~362-375, read-only context) and make sure the same refusal covers openai, gemini, rented, lambda; if that code is outside your outputs, add an exported helper pausedPaidLaneProblems(manifest, config) in tools/paid-lane-pause.mjs and say in your summary where it must be called.\n5. Tests in NEW tests/paid-lane-pause.test.mjs (first import: import './_isolate-config.mjs';): for each of openai, gemini (both GEMINI_API_KEY and GOOGLE_API_KEY), rented: with lanes.<lane>.paused true in a temp SWARM_CONFIG and a fake key in env, the key reader / adapter config refuses with '<lane>-lane-paused' and the key value never appears in the result or error; with paused false it reads the key; a fake keychain exec must not be called when paused (pass exec spy, assert zero calls). Also a table test that every lane in PAID_LANES (tools/spend.mjs) that has a key reader refuses when paused, so a future paid lane cannot be added without the check.\nDo not touch spend caps or prices in this job. The ignored tests cover adapter behavior when lanes are NOT paused, which must not change; the coordinator runs the main ones as checks.",
    "context": [
     "tools/anthropic.mjs",
     "tools/openrouter.mjs",
@@ -15,7 +15,10 @@
     "tools/spend.mjs",
     "tools/local-config.mjs",
     "tools/swarm/core-51.mjs",
-    "tests/_isolate-config.mjs"
+    "tests/_isolate-config.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/rented-config.test.mjs",
+    "tests/adapters.test.mjs"
    ],
    "outputs": [
     "tools/paid-lane-pause.mjs",
@@ -23,10 +26,55 @@
     "tools/rented.mjs",
     "tests/paid-lane-pause.test.mjs"
    ],
-   "timeoutMs": 2400000
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/anthropic-lane.test.mjs",
+    "tests/best-of-adapter.test.mjs",
+    "tests/field-lessons-batch-aa-core.test.mjs",
+    "tests/field-lessons-batch-n.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/field-lessons-batch-y-adapters.test.mjs",
+    "tests/gpu-hardening.test.mjs",
+    "tests/gpu-lineup.test.mjs",
+    "tests/gpu-safety.test.mjs",
+    "tests/gpu.test.mjs",
+    "tests/kickoff.test.mjs",
+    "tests/lanes-run.test.mjs",
+    "tests/local-lane-cache-context.test.mjs",
+    "tests/local-lane-review.test.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/multi-edit.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/rented-meter.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/reports-run.test.mjs",
+    "tests/review-structured-verdict.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/worker-skills.test.mjs"
+   ]
   }
  ],
  "checks": [
-  { "name": "paid-pause", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/paid-lane-pause.test.mjs", "tests/paid-lane-paused.test.mjs", "tests/api-workers.test.mjs", "tests/rented-config.test.mjs", "tests/rented-run.test.mjs", "tests/anthropic-lane.test.mjs", "tests/openrouter.test.mjs"] }
+  {
+   "name": "paid-pause",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/paid-lane-pause.test.mjs",
+    "tests/paid-lane-paused.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/rented-config.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/adapters.test.mjs",
+    "tests/rented-meter.test.mjs",
+    "tests/local-lane.test.mjs",
+    "tests/gpu-safety.test.mjs"
+   ]
+  }
  ]
 }
