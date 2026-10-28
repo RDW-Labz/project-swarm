@@ -7,8 +7,11 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { omRunManifestVetted } from '../tools/om-manifest-guard.mjs';
-import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
+import { omRunManifestVetted, orchestratorManifestGate } from '../tools/om-manifest-guard.mjs';
+import { orchestratorModeCommandAllowed, ORCHESTRATOR_MODE_OFF_FILE } from '../tools/shell-writes.mjs';
+import { applyManifestJobTypes } from '../tools/swarm/core-1.mjs';
+
+const HOOK = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta.url));
 
 const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 
@@ -56,6 +59,14 @@ async function projectFixture(t, { checksArgv = EVIL_CHECK, includeProfileVerify
     );
   }
   return root;
+}
+
+async function installOrchestratorHook(root) {
+  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
+  const command = `test -f ${JSON.stringify(HOOK)} && node ${JSON.stringify(HOOK)} pre || true`;
+  await fs.writeFile(path.join(root, '.claude', 'settings.local.json'), `${JSON.stringify({
+    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command }] }] },
+  }, null, 2)}\n`);
 }
 
 async function writeManifest(root, rel, body) {
@@ -271,4 +282,79 @@ test('orchestratorModeCommandAllowed allows swarm ticket plain manifest', async 
   });
   const ctx = { root, cwd: root };
   assert.equal(orchestratorModeCommandAllowed(`swarm ticket ${rel} --pr p.json`, ctx), true);
+});
+
+test('orchestratorManifestGate throws unvetted checks in Claude Code with hook installed', async t => {
+  const root = await projectFixture(t, { checksArgv: ['npm', 'test'] });
+  await installOrchestratorHook(root);
+  const manifest = {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: 'evil', argv: EVIL_CHECK }],
+  };
+  await assert.rejects(
+    () => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }),
+    err => err.code === 'orchestrator-manifest-unvetted' && /checks/.test(err.message),
+  );
+  await assert.rejects(
+    () => applyManifestJobTypes(root, manifest, { env: { ...process.env, CLAUDECODE: '1' } }),
+    err => err.code === 'orchestrator-manifest-unvetted',
+  );
+});
+
+test('orchestratorManifestGate no-op without CLAUDECODE, mode off, or hook', async t => {
+  const root = await projectFixture(t, { checksArgv: ['npm', 'test'] });
+  await installOrchestratorHook(root);
+  const manifest = {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: 'evil', argv: EVIL_CHECK }],
+  };
+  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: undefined }));
+
+  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
+  await fs.writeFile(path.join(root, ORCHESTRATOR_MODE_OFF_FILE), '');
+  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }));
+
+  const rootNoHook = await projectFixture(t, { checksArgv: ['npm', 'test'] });
+  await assert.doesNotReject(() => orchestratorManifestGate(rootNoHook, manifest, { ...process.env, CLAUDECODE: '1' }));
+});
+
+test('orchestratorManifestGate passes vetted manifest argv', async t => {
+  const root = await projectFixture(t, { checksArgv: EVIL_CHECK });
+  await installOrchestratorHook(root);
+  const manifest = {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: VETTED_NAME, argv: EVIL_CHECK }],
+  };
+  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }));
+});
+
+test('hook refuses printf-then-swarm-run compound', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: EVIL_CHECK });
+  const rel = 'coordination/manifests/x.json';
+  const body = JSON.stringify({
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: VETTED_NAME, argv: EVIL_CHECK }],
+  });
+  const cmd = `printf ${JSON.stringify(body)} > ${rel} && swarm run ${rel}`;
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed(cmd, ctx), false);
+});
+
+test('hook refuses swarm run when manifest path missing on disk', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: null });
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed('swarm run coordination/manifests/new.json', ctx), false);
+});
+
+test('hook allows swarm run with bare run id when manifest file missing', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: null });
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed('swarm run run-abc-123', ctx), true);
 });

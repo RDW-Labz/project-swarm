@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { parseLane } from './tickets.mjs';
+import { parseLane, ticketSetHash } from './tickets.mjs';
 
 const MIGRATION_DIR_PREFIXES = [
   'supabase/migrations/',
@@ -147,16 +147,30 @@ function newChangeOrderIds(ledger, snapshot) {
  * @param {{ ledger: object, snapshot: object|null, profile: object|null }} input
  * @returns {{ ok: boolean, conditions: Array<{ name: string, ok: boolean, detail: string }> }}
  */
-export function evaluateAutoApprove({ ledger, snapshot, profile } = {}) {
+export function evaluateAutoApprove({ ledger, snapshot, profile, approveLogTicketsHash } = {}) {
   const conditions = [];
 
   const hasSnapshotTickets = Boolean(snapshot && Array.isArray(snapshot.tickets));
+  const snapshotContentHash = hasSnapshotTickets ? ticketSetHash(snapshot.tickets) : null;
+  const snapshotBound = hasSnapshotTickets
+    && typeof approveLogTicketsHash === 'string'
+    && typeof snapshot.ticketsHash === 'string'
+    && snapshot.ticketsHash === approveLogTicketsHash
+    && snapshot.ticketsHash === snapshotContentHash;
+  let snapshotDetail = 'no approved-ticket snapshot: the owner approves once with swarm scope approve --yes';
+  if (hasSnapshotTickets) {
+    if (typeof approveLogTicketsHash !== 'string') {
+      snapshotDetail = 'no approve entry in tickets log to bind the snapshot';
+    } else if (!snapshotBound) {
+      snapshotDetail = `snapshot ticketsHash does not match the last approve log (${approveLogTicketsHash}) or the ticket set`;
+    } else {
+      snapshotDetail = `snapshot from ${snapshot.at ?? 'unknown'} (${snapshot.tickets.length} ticket(s))`;
+    }
+  }
   conditions.push({
     name: 'snapshot',
-    ok: hasSnapshotTickets,
-    detail: hasSnapshotTickets
-      ? `snapshot from ${snapshot.at ?? 'unknown'} (${snapshot.tickets.length} ticket(s))`
-      : 'no approved-ticket snapshot: the owner approves once with swarm scope approve --yes',
+    ok: snapshotBound,
+    detail: snapshotDetail,
   });
 
   const newCoIds = newChangeOrderIds(ledger, snapshot ?? {});
@@ -168,19 +182,25 @@ export function evaluateAutoApprove({ ledger, snapshot, profile } = {}) {
 
   const doneProblems = [];
   if (hasSnapshotTickets) {
-    for (const st of snapshot.tickets.filter(t => t.status === 'done')) {
+    for (const st of snapshot.tickets) {
       const cur = (ledger?.tickets ?? []).find(t => t.id === st.id);
-      if (!cur) doneProblems.push(`${st.id}: missing from ledger`);
-      else if (cur.status === 'cancelled') doneProblems.push(`${st.id}: cancelled`);
-      else if (cur.status !== 'done') doneProblems.push(`${st.id}: status is ${cur.status}`);
+      if (st.status !== 'cancelled') {
+        if (!cur) doneProblems.push(`${st.id}: missing from ledger`);
+        else if (cur.status === 'cancelled') doneProblems.push(`${st.id}: cancelled`);
+      }
+      if (st.status === 'done') {
+        if (!cur) {
+          if (!doneProblems.some(p => p.startsWith(`${st.id}:`))) doneProblems.push(`${st.id}: missing from ledger`);
+        } else if (cur.status !== 'done') doneProblems.push(`${st.id}: status is ${cur.status}`);
+      }
     }
   } else {
     doneProblems.push('no snapshot to compare');
   }
   conditions.push({
     name: 'no-done-cancelled',
-    ok: hasSnapshotTickets && doneProblems.length === 0,
-    detail: doneProblems.length ? doneProblems.join('; ') : 'all done tickets from the snapshot remain done',
+    ok: snapshotBound && doneProblems.length === 0,
+    detail: doneProblems.length ? doneProblems.join('; ') : 'snapshot tickets unchanged (not cancelled, missing, or regressed from done)',
   });
 
   const { added, changed } = addedAndChangedTickets(ledger, snapshot);

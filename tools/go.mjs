@@ -92,12 +92,31 @@ function validCommitBranchPatterns(value) {
   return patterns;
 }
 
-export function branchAllowedForIntegrateCommit(branch, patterns) {
-  for (const pattern of patterns) {
-    if (pattern.endsWith('*')) {
-      const prefix = pattern.slice(0, -1);
-      if (branch.startsWith(prefix)) return true;
-    } else if (branch === pattern) return true;
+function patternMatchesBranch(branch, pattern) {
+  if (pattern.endsWith('*')) {
+    const prefix = pattern.slice(0, -1);
+    return branch.startsWith(prefix);
+  }
+  return branch === pattern;
+}
+
+function patternMatchesAnyProtected(pattern, protectedLower) {
+  for (const name of protectedLower) {
+    if (patternMatchesBranch(name, pattern)) return true;
+  }
+  return false;
+}
+
+function filterCommitBranchPatterns(patterns, protectedLower) {
+  return patterns.filter(pattern => pattern !== '*' && !patternMatchesAnyProtected(pattern, protectedLower));
+}
+
+export function branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable = true, protectedLower = null } = {}) {
+  const effective = remoteHeadReadable || !protectedLower
+    ? patterns
+    : filterCommitBranchPatterns(patterns, protectedLower);
+  for (const pattern of effective) {
+    if (patternMatchesBranch(branch, pattern)) return true;
   }
   return false;
 }
@@ -134,18 +153,36 @@ export async function readIntegrateCommitBranches(root) {
   return { patterns, error: null };
 }
 
-async function repositoryDefaultBranch(exec, root, gitEnv) {
-  const res = await gitInRoot(exec, root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env: gitEnv });
-  if (res.code !== 0 || !res.stdout?.trim()) return null;
-  const ref = res.stdout.trim();
-  return ref.startsWith('origin/') ? ref.slice('origin/'.length) : ref;
+async function readIntegrateCommitBranchContext(exec, root, gitEnv) {
+  const protectedLower = new Set(['main', 'master']);
+
+  const initRes = await gitInRoot(exec, root, ['config', '--get', 'init.defaultBranch'], { env: gitEnv });
+  if (initRes.code === 0 && initRes.stdout?.trim()) {
+    protectedLower.add(initRes.stdout.trim().toLowerCase());
+  }
+
+  let remoteHeadReadable = false;
+  const refRes = await gitInRoot(exec, root, ['for-each-ref', '--format=%(symref)', 'refs/remotes/*/HEAD'], { env: gitEnv });
+  if (refRes.code === 0 && refRes.stdout) {
+    for (const line of refRes.stdout.split('\n')) {
+      const symref = line.trim();
+      if (!symref) continue;
+      const match = /^refs\/remotes\/[^/]+\/(.+)$/.exec(symref);
+      if (!match) continue;
+      remoteHeadReadable = true;
+      protectedLower.add(match[1].toLowerCase());
+    }
+  }
+
+  return { protectedLower, remoteHeadReadable };
 }
 
-function isProtectedMainBranch(branch, defaultBranch) {
-  if (branch === 'main' || branch === 'master') return true;
-  if (defaultBranch && branch === defaultBranch) return true;
-  return false;
+function isProtectedBranch(branch, protectedLower) {
+  return protectedLower.has(branch.toLowerCase());
 }
+
+const DEFAULT_BRANCH_UNDETERMINED_SKIP =
+  'integrate.commitBranches would match via * or a default-branch pattern, but the default branch could not be determined (no remote HEAD); only swarm/* and explicitly named branches commit';
 
 export async function commitIntegratedRun(root, { runId, state, manifest, autoCommit = true, exec = commitExec, env, appendEvent, sleepMs = sleep } = {}) {
   const skipped = reason => ({ commit: { status: 'skipped', reason }, humanLine: `committed nothing: ${reason}` });
@@ -156,17 +193,26 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
   if (branchRes.code !== 0 || !branchRes.stdout?.trim()) return skipped('not on a branch');
   const branch = branchRes.stdout.trim();
 
-  const defaultBranch = await repositoryDefaultBranch(exec, root, gitEnv);
-  if (isProtectedMainBranch(branch, defaultBranch)) {
+  const { protectedLower, remoteHeadReadable } = await readIntegrateCommitBranchContext(exec, root, gitEnv);
+  if (isProtectedBranch(branch, protectedLower)) {
     return skipped(`checkout is on ${branch}, the main branch; integrate never commits there (not a swarm/* branch)`);
   }
 
   const { patterns, error: commitBranchesError } = await readIntegrateCommitBranches(root);
-  if (commitBranchesError) return skipped(commitBranchesError);
-
   const onSwarmBranch = branch.startsWith('swarm/');
-  const onNamedBranch = branchAllowedForIntegrateCommit(branch, patterns);
+  const warnings = [];
+  if (commitBranchesError) {
+    if (!onSwarmBranch) return skipped(commitBranchesError);
+    warnings.push(commitBranchesError);
+  }
+
+  const branchContext = { remoteHeadReadable, protectedLower };
+  const onNamedBranch = branchAllowedForIntegrateCommit(branch, patterns, branchContext);
   if (!onSwarmBranch && !onNamedBranch) {
+    const wouldMatchIgnored = !remoteHeadReadable
+      && branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable: true })
+      && !branchAllowedForIntegrateCommit(branch, patterns, branchContext);
+    if (wouldMatchIgnored) return skipped(DEFAULT_BRANCH_UNDETERMINED_SKIP);
     return skipped(`checkout is on ${branch}, not a swarm/* branch or a branch named in .project-swarm.json integrate.commitBranches`);
   }
 
@@ -235,6 +281,7 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
       text: humanLine,
     }).catch(() => {});
   }
+  if (warnings.length) return { commit, humanLine, warnings };
   return { commit, humanLine };
 }
 

@@ -2457,7 +2457,77 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   return false;
 };
 
-const omValidateTokenized = (tokenized, ctx) => {
+const OM_COMPOUND_SEPS = new Set(['&&', ';', '||', '|']);
+
+const omRelUnderOmManifestWriteArea = rel => {
+  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
+  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
+};
+
+const omCommandIsCompound = (tokenized, commandText) => {
+  if (tokenized.length > 1) return true;
+  if (tokenized.some(w => OM_COMPOUND_SEPS.has(w.sepAfter))) return true;
+  if (/[^&]&[^&>]/.test(String(commandText ?? ''))) return true;
+  return false;
+};
+
+const omWriteTargetRel = (raw, ctx, expands) => {
+  if (expands || /^\$/.test(String(raw ?? ''))) return null;
+  if (!ctx?.root) return null;
+  try {
+    const rootReal = fs.realpathSync.native(ctx.root);
+    let p = String(raw ?? '');
+    if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
+    const cwd = ctx.cwd ?? ctx.root;
+    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
+    const rel = path.relative(rootReal, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return rel.split(path.sep).join('/');
+  } catch {
+    return null;
+  }
+};
+
+const omWordsRedirectManifestArea = (words, ctx) => {
+  const wordExp = words.expands ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+      if (rel && omRelUnderOmManifestWriteArea(rel)) return true;
+    }
+  }
+  return false;
+};
+
+const omSegmentInvokesSwarmRunGoTicket = (words, ctx) => {
+  const { plain } = omPlainWords(words);
+  let k = 0;
+  while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+    k += 1;
+  }
+  if (k >= plain.length) return false;
+  const cmd = path.basename(plain[k]);
+  const args = plain.slice(k + 1);
+  return omSwarmInvocation(cmd, args, ctx);
+};
+
+const omCompoundManifestWriteWithSwarmBlocked = (commandText, tokenized, ctx) => {
+  if (!ctx?.root || !omCommandIsCompound(tokenized, commandText)) return false;
+  let hasSwarm = false;
+  for (const words of tokenized) {
+    if (omSegmentInvokesSwarmRunGoTicket(words, ctx)) hasSwarm = true;
+  }
+  if (!hasSwarm) return false;
+  const analysis = analyzeShell(String(commandText ?? ''), { root: ctx.root, cwd: ctx.cwd ?? ctx.root });
+  if ([...analysis.writes].some(omRelUnderOmManifestWriteArea)) return true;
+  for (const words of tokenized) {
+    if (omWordsRedirectManifestArea(words, ctx)) return true;
+  }
+  return false;
+};
+
+const omValidateTokenized = (tokenized, ctx, commandText = '') => {
+  if (omCompoundManifestWriteWithSwarmBlocked(commandText, tokenized, ctx)) return false;
   const baseCwd = ctx.cwd ?? ctx.root;
   const cwdStack = [baseCwd];
   let cwd = baseCwd;
@@ -2537,7 +2607,7 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
     }
     const tokenized = tokenize(text);
     if (tokenized.unclosedQuote) return false;
-    if (omValidateTokenized(tokenized, ctx)) return true;
+    if (omValidateTokenized(tokenized, ctx, text)) return true;
     if (tokenized.length !== 1) return false;
     const words = tokenized[0];
     const { plain } = omPlainWords(words);

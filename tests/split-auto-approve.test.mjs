@@ -6,9 +6,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { evaluateAutoApprove } from '../tools/split-auto-approve.mjs';
-import { swarmSubcommandAlwaysAllowed } from '../tools/orchestrator-allow.mjs';
+import { orchestratorWriteAllowedRel, swarmSubcommandAlwaysAllowed } from '../tools/orchestrator-allow.mjs';
 import { runScopeCommand } from '../tools/scope-commands.mjs';
-import { readLedger } from '../tools/tickets.mjs';
+import { readLedger, ticketSetHash } from '../tools/tickets.mjs';
 
 const baseTicket = (id, extra = {}) => ({
   id,
@@ -24,26 +24,41 @@ const baseTicket = (id, extra = {}) => ({
   ...extra,
 });
 
-const baseSnapshot = (tickets, changeOrderIds = []) => ({
+const baseSnapshot = (tickets, changeOrderIds = [], ticketsHash = undefined) => ({
   at: '2024-01-01T00:00:00.000Z',
   by: 'owner',
-  ticketsHash: 'abc',
+  ticketsHash: ticketsHash ?? ticketSetHash(tickets),
   changeOrderIds,
   tickets,
 });
+
+const boundEval = (input) => {
+  const snapshot = input.snapshot;
+  const approveLogTicketsHash = input.approveLogTicketsHash
+    ?? (snapshot?.tickets ? ticketSetHash(snapshot.tickets) : null);
+  return evaluateAutoApprove({ ...input, approveLogTicketsHash });
+};
 
 const passingLedger = (snapshot, { extraTickets = [], changeOrders = [{ id: 'CO-001' }] } = {}) => ({
   tickets: [...snapshot.tickets, ...extraTickets],
   changeOrders,
 });
 
-test('evaluateAutoApprove: all conditions pass', () => {
+test('orchestratorWriteAllowedRel denies ledger forgery paths', () => {
+  assert.equal(orchestratorWriteAllowedRel('.swarm/project/approved-tickets.json'), false);
+  assert.equal(orchestratorWriteAllowedRel('.swarm/project/tickets.json'), false);
+  assert.equal(orchestratorWriteAllowedRel('.swarm/project/tickets.log'), false);
+  assert.equal(orchestratorWriteAllowedRel('./.swarm/project/Tickets.json'), false);
+  assert.equal(orchestratorWriteAllowedRel('.swarm/notes/orchestrator-note.md'), true);
+});
+
+test('evaluateAutoApprove: all conditions pass when snapshot and log agree', () => {
   const snap = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
   const ledger = passingLedger(snap, {
     extraTickets: [baseTicket('T-0002')],
     changeOrders: [{ id: 'CO-001' }],
   });
-  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {} });
+  const result = boundEval({ ledger, snapshot: snap, profile: {} });
   assert.equal(result.ok, true);
   assert.equal(result.conditions.every(c => c.ok), true);
 });
@@ -54,36 +69,85 @@ test('evaluateAutoApprove: each condition fails alone', () => {
     extraTickets: [baseTicket('T-0002')],
     changeOrders: [{ id: 'CO-001' }],
   });
-  assert.equal(evaluateAutoApprove({ ledger, snapshot: null, profile: {} }).conditions.find(c => c.name === 'snapshot').ok, false);
-  assert.equal(evaluateAutoApprove({ ledger, snapshot: snap, profile: {} }).conditions.find(c => c.name === 'change-order').ok, false);
+  assert.equal(boundEval({ ledger, snapshot: null, profile: {} }).conditions.find(c => c.name === 'snapshot').ok, false);
+  assert.equal(boundEval({ ledger, snapshot: snap, profile: {} }).conditions.find(c => c.name === 'change-order').ok, false);
 
   const snap2 = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
   const ledgerCancelled = {
     tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
     changeOrders: [{ id: 'CO-001' }],
   };
-  assert.equal(evaluateAutoApprove({ ledger: ledgerCancelled, snapshot: snap2, profile: {} }).conditions.find(c => c.name === 'no-done-cancelled').ok, false);
+  assert.equal(boundEval({ ledger: ledgerCancelled, snapshot: snap2, profile: {} }).conditions.find(c => c.name === 'no-done-cancelled').ok, false);
 
   const snap3 = baseSnapshot([baseTicket('T-0001')], []);
   const ledgerPaid = {
     tickets: [baseTicket('T-0001'), baseTicket('T-0002', { lane: 'anthropic:haiku' })],
     changeOrders: [{ id: 'CO-001' }],
   };
-  assert.equal(evaluateAutoApprove({ ledger: ledgerPaid, snapshot: snap3, profile: {} }).conditions.find(c => c.name === 'no-paid-lanes').ok, false);
+  assert.equal(boundEval({ ledger: ledgerPaid, snapshot: snap3, profile: {} }).conditions.find(c => c.name === 'no-paid-lanes').ok, false);
 
   const snap4 = baseSnapshot([baseTicket('T-0001')], []);
   const ledgerMigration = {
     tickets: [baseTicket('T-0001'), baseTicket('T-0002', { type: 'migration', files: ['db/migrations/001.sql'] })],
     changeOrders: [{ id: 'CO-001' }],
   };
-  assert.equal(evaluateAutoApprove({ ledger: ledgerMigration, snapshot: snap4, profile: {} }).conditions.find(c => c.name === 'no-migrations').ok, false);
+  assert.equal(boundEval({ ledger: ledgerMigration, snapshot: snap4, profile: {} }).conditions.find(c => c.name === 'no-migrations').ok, false);
 
   const snap5 = baseSnapshot([baseTicket('T-0001')], []);
   const ledgerDeploy = {
     tickets: [baseTicket('T-0001'), baseTicket('T-0002', { files: ['vercel.json'] })],
     changeOrders: [{ id: 'CO-001' }],
   };
-  assert.equal(evaluateAutoApprove({ ledger: ledgerDeploy, snapshot: snap5, profile: {} }).conditions.find(c => c.name === 'no-deploy-or-main-merge').ok, false);
+  assert.equal(boundEval({ ledger: ledgerDeploy, snapshot: snap5, profile: {} }).conditions.find(c => c.name === 'no-deploy-or-main-merge').ok, false);
+});
+
+test('evaluateAutoApprove: forged snapshot hash refused', () => {
+  const tickets = [baseTicket('T-0001', { status: 'done' })];
+  const snap = baseSnapshot(tickets, [], 'deadbeef');
+  const ledger = {
+    tickets: [...tickets, baseTicket('T-0002')],
+    changeOrders: [{ id: 'CO-001' }],
+  };
+  const logHash = ticketSetHash(tickets);
+  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {}, approveLogTicketsHash: logHash });
+  assert.equal(result.ok, false);
+  const cond = result.conditions.find(c => c.name === 'snapshot');
+  assert.equal(cond.ok, false);
+  assert.match(cond.detail, /does not match/);
+});
+
+test('evaluateAutoApprove: snapshot with no approve log entry refused', () => {
+  const snap = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
+  const ledger = passingLedger(snap, { changeOrders: [{ id: 'CO-001' }] });
+  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {}, approveLogTicketsHash: null });
+  assert.equal(result.conditions.find(c => c.name === 'snapshot').ok, false);
+  assert.match(result.conditions.find(c => c.name === 'snapshot').detail, /no approve entry/);
+});
+
+test('evaluateAutoApprove: todo in snapshot done then cancelled on change order refused', () => {
+  const snap = baseSnapshot([baseTicket('T-0001', { status: 'todo' })], []);
+  const ledger = {
+    tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
+    changeOrders: [{ id: 'CO-001' }],
+  };
+  const result = boundEval({ ledger, snapshot: snap, profile: {} });
+  assert.equal(result.ok, false);
+  const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
+  assert.equal(cond.ok, false);
+  assert.match(cond.detail, /T-0001.*cancelled/);
+});
+
+test('evaluateAutoApprove: ticket missing from ledger refused', () => {
+  const snap = baseSnapshot([baseTicket('T-0001'), baseTicket('T-0002', { status: 'done' })], []);
+  const ledger = {
+    tickets: [baseTicket('T-0001')],
+    changeOrders: [{ id: 'CO-001' }],
+  };
+  const result = boundEval({ ledger, snapshot: snap, profile: {} });
+  assert.equal(result.ok, false);
+  const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
+  assert.equal(cond.ok, false);
+  assert.match(cond.detail, /T-0002.*missing/);
 });
 
 test('evaluateAutoApprove: cancelling a done ticket fails no-done-cancelled', () => {
@@ -92,7 +156,7 @@ test('evaluateAutoApprove: cancelling a done ticket fails no-done-cancelled', ()
     tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
     changeOrders: [{ id: 'CO-001' }],
   };
-  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {} });
+  const result = boundEval({ ledger, snapshot: snap, profile: {} });
   assert.equal(result.ok, false);
   const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
   assert.equal(cond.ok, false);
@@ -110,7 +174,7 @@ test('orchestrator allow: scope approve --auto-ok only', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--yes', 'approve', '--auto-ok']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--json', 'approve', '--auto-ok']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--auto-ok', '']), false);
-  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['APPROVE', '--AUTO-OK']), true);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['APPROVE', '--AUTO-OK']), false);
 });
 
 const SCOPE = [

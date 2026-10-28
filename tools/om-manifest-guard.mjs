@@ -122,6 +122,14 @@ const isVettedArgv = (argv, vetted) => vetted.some(v => argvEqual(argv, v));
 
 const NOT_VETTED_MSG = 'is not a vetted command from coordination/checks.json or the profile verify command';
 
+/** True when a swarm run/go/ticket positional names a manifest file path (not a bare run id). */
+export function omSwarmManifestArgLooksLikeFile(raw) {
+  const s = String(raw ?? '');
+  if (s.includes('/') || s.includes('\\')) return true;
+  if (s.includes('.')) return true;
+  return false;
+}
+
 const resolveManifestRel = (root, manifestArg) => {
   const s = String(manifestArg ?? '');
   if (!s || path.isAbsolute(s) || s.startsWith('-')) {
@@ -346,7 +354,12 @@ export function omRunManifestVetted(root, manifestArg) {
   }
   const resolved = resolveManifestRel(root, manifestArg);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
-  if (resolved.missing) return { ok: true, reason: '' };
+  if (resolved.missing) {
+    if (omSwarmManifestArgLooksLikeFile(manifestArg)) {
+      return { ok: false, reason: 'manifest file does not exist' };
+    }
+    return { ok: true, reason: '' };
+  }
   let text;
   try {
     text = fs.readFileSync(resolved.filePath, 'utf8');
@@ -361,4 +374,25 @@ export function omRunManifestVetted(root, manifestArg) {
   }
   const vetted = loadVettedArgvs(root);
   return vetManifestBody(manifest, vetted);
+}
+
+/**
+ * Runner-side orchestrator manifest vetting (parsed object). No-op outside Claude Code with orchestrator hook.
+ * @param {string} root
+ * @param {object} manifest parsed manifest
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export async function orchestratorManifestGate(root, manifest, env = process.env) {
+  if (env?.CLAUDECODE !== '1') return;
+  const { orchestratorModeEnabled } = await import('./shell-writes.mjs');
+  if (!orchestratorModeEnabled(root)) return;
+  const { orchestratorHookInstalledFor } = await import('./orchestrator-hook.mjs');
+  if (!orchestratorHookInstalledFor(root)) return;
+  const vetted = loadVettedArgvs(root);
+  const result = vetManifestBody(manifest, vetted);
+  if (!result.ok) {
+    const err = new Error(result.reason);
+    err.code = 'orchestrator-manifest-unvetted';
+    throw err;
+  }
 }

@@ -140,20 +140,84 @@ test('swarm/* commits with no project config', async t => {
   assert.equal(out.commit?.status, 'committed');
 });
 
-test('invalid JSON and bad commitBranches skip naming integrate.commitBranches', async t => {
+test('invalid JSON and bad commitBranches on swarm/* commit with warnings', async t => {
   const root = await fixture(t, { branch: 'swarm/bad-config' });
   await fs.writeFile(path.join(root, '.project-swarm.json'), '{ not json\n');
   let out = await runCommit(root);
-  assert.equal(out.commit?.status, 'skipped');
-  assert.match(out.commit?.reason, /\.project-swarm\.json integrate\.commitBranches/);
+  assert.equal(out.commit?.status, 'committed');
+  assert.ok(out.warnings?.some(w => w.includes('.project-swarm.json integrate.commitBranches')));
 
   await fs.writeFile(
     path.join(root, '.project-swarm.json'),
     `${JSON.stringify({ integrate: { commitBranches: 'not-array' } })}\n`,
   );
-  out = await runCommit(root);
+  await fs.writeFile(path.join(root, 'out/change.txt'), 'integrated-again\n');
+  out = await runCommit(root, { state: integrationState(root, 'out/change.txt', 'integrated-again\n') });
+  assert.equal(out.commit?.status, 'committed');
+  assert.match(out.warnings?.join('\n') ?? '', /integrate\.commitBranches must be an array of non-empty strings/);
+});
+
+test('default develop via upstream/HEAD is never committed with commitBranches [*]', async t => {
+  const root = await fixture(t, { branch: 'develop', projectSwarm: { integrate: { commitBranches: ['*'] } } });
+  await git(root, 'remote', 'add', 'upstream', root);
+  await git(root, 'fetch', 'upstream');
+  await git(root, 'symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/develop');
+  const before = await headSha(root);
+  const out = await runCommit(root);
   assert.equal(out.commit?.status, 'skipped');
-  assert.match(out.commit?.reason, /integrate\.commitBranches must be an array of non-empty strings/);
+  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
+  assert.equal(await headSha(root), before);
+});
+
+test('init.defaultBranch trunk with no remote is never committed', async t => {
+  const root = await fixture(t, { branch: 'trunk', projectSwarm: { integrate: { commitBranches: ['*'] } } });
+  await git(root, 'config', 'init.defaultBranch', 'trunk');
+  const before = await headSha(root);
+  const out = await runCommit(root);
+  assert.equal(out.commit?.status, 'skipped');
+  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
+  assert.equal(await headSha(root), before);
+});
+
+test('no remote HEAD: [*] skips feature/x but explicit name commits', async t => {
+  const rootStar = await fixture(t, {
+    branch: 'feature/x',
+    projectSwarm: { integrate: { commitBranches: ['*'] } },
+  });
+  const beforeStar = await headSha(rootStar);
+  const skipOut = await runCommit(rootStar);
+  assert.equal(skipOut.commit?.status, 'skipped');
+  assert.match(skipOut.commit?.reason, /default branch could not be determined/);
+  assert.equal(await headSha(rootStar), beforeStar);
+
+  const rootNamed = await fixture(t, {
+    branch: 'feature/x',
+    projectSwarm: { integrate: { commitBranches: ['feature/x'] } },
+  });
+  const commitOut = await runCommit(rootNamed);
+  assert.equal(commitOut.commit?.status, 'committed');
+});
+
+test('Main branch name is protected like main', async t => {
+  const root = await fixture(t, {
+    branch: 'main',
+    projectSwarm: { integrate: { commitBranches: ['Main'] } },
+  });
+  const before = await headSha(root);
+  const out = await runCommit(root);
+  assert.equal(out.commit?.status, 'skipped');
+  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
+  assert.equal(await headSha(root), before);
+});
+
+test('invalid .project-swarm.json still commits on swarm/test with a warning', async t => {
+  const root = await fixture(t, { branch: 'swarm/test' });
+  await fs.writeFile(path.join(root, '.project-swarm.json'), '{ not json\n');
+  const before = await headSha(root);
+  const out = await runCommit(root);
+  assert.equal(out.commit?.status, 'committed');
+  assert.notEqual(await headSha(root), before);
+  assert.ok(out.warnings?.some(w => w.includes('is not valid JSON')));
 });
 
 test('readIntegrateCommitBranches returns patterns from valid file', async t => {

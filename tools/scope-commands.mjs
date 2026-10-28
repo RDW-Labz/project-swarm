@@ -1072,6 +1072,26 @@ async function readApprovedTicketsSnapshot(root) {
   }
 }
 
+async function lastApproveLogTicketsHash(root) {
+  const file = path.join(root, '.swarm', 'project', 'tickets.log');
+  let text;
+  try {
+    text = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  let last = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.event === 'approve' && typeof entry.ticketsHash === 'string') last = entry.ticketsHash;
+    } catch { /* skip malformed lines */ }
+  }
+  return last;
+}
+
 async function writeApprovedTicketsSnapshot(root, payload) {
   const dir = await safeWritableDir(root, ['.swarm', 'project']);
   const file = path.join(dir, 'approved-tickets.json');
@@ -2490,8 +2510,9 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   let autoApproveLines = [];
   if (autoOk) {
     const priorSnapshot = await readApprovedTicketsSnapshot(root);
+    const approveLogTicketsHash = await lastApproveLogTicketsHash(root);
     const evalProfile = await readProfile(root);
-    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile });
+    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile, approveLogTicketsHash });
     autoApproveLines = evalResult.conditions.map(c => `${c.name}: ${c.ok ? 'ok' : 'FAIL'} — ${c.detail}`);
     if (!evalResult.ok) {
       const newIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
@@ -2508,6 +2529,14 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   const by = autoOk ? 'orchestrator-auto' : flags.yes === true ? 'owner' : 'policy';
   const next = approveLedger(ledger, { by, now: now() });
   next.scope = { ...next.scope, hash, file };
+  const approvedTicketsSnapshot = {
+    at: next.approved.at,
+    by: next.approved.by,
+    ticketsHash: next.approved.ticketsHash,
+    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
+    tickets: next.tickets,
+  };
+  await writeApprovedTicketsSnapshot(root, approvedTicketsSnapshot);
   await writeLedger(root, next);
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
   await writeFileSafe(root, 'docs/scope/build-plan.md', renderBuildPlan(next, scope));
@@ -2522,13 +2551,6 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
-  await writeApprovedTicketsSnapshot(root, {
-    at: next.approved.at,
-    by: next.approved.by,
-    ticketsHash: next.approved.ticketsHash,
-    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
-    tickets: next.tickets,
-  });
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
