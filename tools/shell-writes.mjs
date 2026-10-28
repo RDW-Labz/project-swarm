@@ -1825,22 +1825,27 @@ const omWriteTargetRel = (raw, ctx, expands) => {
   } catch {
     cwdBase = ctx.cwd ?? ctx.root;
   }
-  const candidate = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwdBase, p);
-  const tail = [];
-  let cur = candidate;
-  let resolved = candidate;
-  for (let i = 0; i < 64; i += 1) {
+  const components = p.split(path.sep).filter(Boolean);
+  let resolved = path.isAbsolute(p) ? path.parse(p).root : cwdBase;
+  let sawSymlink = false;
+  for (let i = 0; i < components.length; i += 1) {
+    if (i >= 64) return null;
+    const component = components[i];
+    if (component === '..' && sawSymlink) return null;
+    const next = path.join(resolved, component);
     try {
-      resolved = path.join(fs.realpathSync.native(cur), ...tail);
-      break;
-    } catch {
-      tail.unshift(path.basename(cur));
-      const up = path.dirname(cur);
-      if (up === cur) {
-        resolved = path.resolve(candidate);
-        break;
+      const stat = fs.lstatSync(next);
+      if (stat.isSymbolicLink()) {
+        // Redirects follow even dangling leaf symlinks. Refuse all leaf links.
+        if (i === components.length - 1) return null;
+        sawSymlink = true;
+        try { resolved = fs.realpathSync.native(next); } catch { return null; }
+      } else {
+        resolved = next;
       }
-      cur = up;
+    } catch (error) {
+      if (error.code !== 'ENOENT') return null;
+      resolved = next;
     }
   }
   const rel = path.relative(rootReal, resolved);
@@ -2587,6 +2592,7 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
   let cwd = baseCwd;
   const local = { ...ctx, cwd };
   let subshellDepth = 0;
+  let sawCwdChange = false;
   for (let wi = 0; wi < tokenized.length; wi += 1) {
     const words = tokenized[wi];
     if (words.sepAfter === ')') {
@@ -2601,6 +2607,8 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) return false;
       k += 1;
     }
+    if (sawCwdChange && words.some(w => ['>', '>>', '>|', '>&', '&>', '2>', '2>&1'].includes(w))) return false;
+    if (k < plain.length && ['cd', 'pushd'].includes(path.basename(plain[k]))) sawCwdChange = true;
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
       if (subshellDepth > 0) return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
