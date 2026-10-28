@@ -1,0 +1,24 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "blockedfix2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Finish the blocked-reason fix in tools/swarm.mjs (helper blockedNoteFromReply is already exported from tools/codex-adapter.mjs and already used in tools/swarm/core-71.mjs; read both). In tools/swarm.mjs the job result code has two places that build the reason text 'no summary given' for a blocked worker: (1) in the branch for finalMessage?.status === 'blocked' the summary falls back to 'needs FILE' and then 'no summary given'; (2) in the branch for a prose Status: BLOCKED reply (field lesson 223) the reason is 'needs FILE' when a Required file line exists and 'no summary given' otherwise. Change ONLY those fallbacks: before falling back to 'no summary given', use blockedNoteFromReply of the parsed reply (for branch 1 use finalMessage; for branch 2 use parseCodexReply of result.response, which may be null: then keep 'no summary given'), keep every other condition and message exactly as is; import blockedNoteFromReply and parseCodexReply from the same codex-adapter import line swarm.mjs already uses if they are not imported yet. Test in tests/codex-blocked-note.test.mjs (add to the existing file): the prose blocked reply that carries a JSON envelope with notes saying 'T-0620 status: blocked.' and 'Vitest could not create its API token' ends with the error 'blocked: ' followed by the first blocked note, not 'no summary given'; a prose blocked reply with no notes still says 'no summary given'; use the existing fakes in the file or in tests that already call the job runner with a fake worker (search tests for the Status: BLOCKED case of lesson 223 and copy its setup). No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tools/swarm.mjs",
+    "tools/codex-adapter.mjs",
+    "tests/codex-blocked-note.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/swarm.mjs",
+    "tests/codex-blocked-note.test.mjs"
+   ],
+   "timeoutMs": 1500000
+  }
+ ]
+}
