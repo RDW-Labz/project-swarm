@@ -39,7 +39,7 @@ export function realDeps() {
         try {
           const inbox = await collectInbox([project.root], inboxDeps());
           const ledger = await readLedger(project.root).catch((error) => {
-            if (error?.code !== 'ENOENT') console.error('[tools/phone-commands.mjs] items readLedger:', error?.message ?? error);
+            if (error?.code !== 'ENOENT') console.error('[tools/phone-commands.mjs] items readLedger:', (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error));
             return null;
           });
           items.push(...phoneItems({ projectName: project.name, root: project.root, inbox, proposed: (ledger?.tickets ?? []).filter(t => t.status === 'proposed') }));
