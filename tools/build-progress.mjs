@@ -46,7 +46,9 @@ export async function cardEtaFromFamily({ roots, ledger, now = Date.now() } = {}
         if (!Number.isFinite(at) || at < since || at > now) continue;
         if (event.event === 'transition' || event.event === 'delivered' || event.event === undefined) doneLast7Days += 1;
       }
-    } catch { /* no tickets.log */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/build-progress.mjs] tickets.log:', error?.message ?? error);
+    }
   }
   const perDay = doneLast7Days > 0 ? Math.round((doneLast7Days / 7) * 100) / 100 : 0;
   let days = null;
@@ -322,7 +324,9 @@ async function readRunStates(root) {
       const state = JSON.parse(await fs.readFile(path.join(folder, 'state.json'), 'utf8'));
       if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
       out.push({ root, runId: name, state });
-    } catch { /* an incomplete or damaged run is not progress evidence */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/build-progress.mjs] run state.json:', error?.message ?? error);
+    }
   }
   return out;
 }

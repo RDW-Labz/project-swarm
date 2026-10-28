@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/build-progress.mjs, tools/context-check.mjs, tools/dep-install.mjs, tools/history.mjs, tools/lessons-publish.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/build-progress.mjs\nLogger prefix: console.error('[tools/build-progress.mjs] <short context>:', error?.message ?? error)\n- Line 49 `} catch { /* no tickets.log */ }`: SILENT-ENOENT (tickets.log not created yet), log the rest (e.g. a parse error partway through reading the log); no fallback value, `doneLast7Days` keeps its running count.\n- Line 325 `} catch { /* an incomplete or damaged run is not progress evidence */ }`: SILENT-ENOENT/SyntaxError (run folder removed mid-read, or torn state.json), log the rest; no fallback value, the run is simply omitted from `out`.\n\n### tools/context-check.mjs\nLogger prefix: console.error('[tools/context-check.mjs] <short context>:', error?.message ?? error)\n- Line 339 `} catch { /* a concurrently removed file is absent for this advisory check */ }`: SILENT-ENOENT (test file deleted mid-scan), log the rest; no fallback value, loop continues to the next candidate file.\n- Line 373 `} catch { /* does not exist yet */ }`: SILENT-ENOENT (fs.statSync probing whether an output file already exists), log the rest; no fallback value, falls through to treat the output as new.\n\n### tools/dep-install.mjs\nLogger prefix: console.error('[tools/dep-install.mjs] <short context>:', error?.message ?? error)\n- Line 43 `const bytes = await fs.readFile(path.join(tmp, file)).catch(() => null);`: SILENT-ENOENT (expected file missing from the scratch install), log the rest; keep null fallback (handled via `if (!bytes ...) continue`).\n- Line 49 `} finally { await fs.rm(tmp, { recursive: true, force: true }).catch(() => {}); }`: cleanup with `{ recursive: true, force: true }` on fs.rm (can't ENOENT) \u2014 LOG-ALWAYS, include the tmp path; no fallback value, best-effort cleanup.\n\n### tools/history.mjs\nLogger prefix: console.error('[tools/history.mjs] <short context>:', error?.message ?? error)\n- Line 15 `const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };`: LEAVE \u2014 promise-queue serializer; the real rejection still reaches the caller through the returned `run` promise.\n- Line 67 `try { const handle = await fs.open(file, 'r'); ... } catch { /* a new file */ }`: SILENT-ENOENT (history.ndjson not created yet), log the rest; no fallback value, `lead` stays `''`.\n\n### tools/lessons-publish.mjs\nLogger prefix: console.error('[tools/lessons-publish.mjs] <short context>:', error?.message ?? error)\n- Line 204 `if (created) await fs.unlink(target).catch(() => {});`: cleanup catch in an error path that rethrows the original error (`throw io('file')` on the next line) \u2014 LOG-ALWAYS with a different binding, include the target path; no fallback value, best-effort unlink.\n- Line 206 `} finally { if (handle) await handle.close().catch(() => {}); }`: close/cleanup catch reached on every exit of a function whose catch path rethrows \u2014 LOG-ALWAYS with a different binding; no fallback value, best-effort close.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/build-progress.mjs",
+        "tools/context-check.mjs",
+        "tools/dep-install.mjs",
+        "tools/history.mjs",
+        "tools/lessons-publish.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/bare-status.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/build-progress-atlas.test.mjs",
+        "tests/build-progress-ledgers.test.mjs",
+        "tests/build-progress-roadmap.test.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/context-check.test.mjs",
+        "tests/field-lesson-t80-ship.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons120-context.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/watch-token-urls.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

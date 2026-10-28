@@ -40,13 +40,16 @@ export async function dependencyWrites({ root, specs, exec }) {
     for (const field of ['dependencies', 'devDependencies']) for (const [name, range] of Object.entries(pkgAfter[field] ?? {})) if (pkgBefore[field]?.[name] !== range && !names.has(name)) throw Object.assign(new Error(`npm changed ${name} in package.json, which no ticket named`), { code: 'dependency-extra-change' });
     const changes = [];
     for (const [file, previous] of Object.entries(before)) {
-      const bytes = await fs.readFile(path.join(tmp, file)).catch(() => null);
+      const bytes = await fs.readFile(path.join(tmp, file)).catch((error) => {
+        if (error?.code !== 'ENOENT') console.error('[tools/dep-install.mjs] read scratch file:', error?.message ?? error);
+        return null;
+      });
       if (!bytes || (previous && previous.equals(bytes))) continue;
       const mode = previous ? (await fs.stat(path.join(root, file))).mode & 0o777 : 0o644;
       changes.push({ file, bytes, previous, mode, fromDependencies: true });
     }
     return changes;
-  } finally { await fs.rm(tmp, { recursive: true, force: true }).catch(() => {}); }
+  } finally { await fs.rm(tmp, { recursive: true, force: true }).catch((cleanupError) => { console.error('[tools/dep-install.mjs] rm tmp:', tmp, cleanupError?.message ?? cleanupError); }); }
 }
 
 // After the gate passed and the files are written: add the new packages to node_modules from the approved lockfile (npm install only adds what is missing, so
