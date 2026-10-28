@@ -120,13 +120,15 @@ export async function liveOverview(project, liveRuns, { now = Date.now(), summar
   const finishedToday = all.filter(r => !liveKeys.has(`${r.root}|${r.id}`) && FINISHED.has(r.state.status) && (Date.parse(r.state.finishedAt ?? '') || 0) >= startOfDay.getTime());
   const ledger = await readLedger(project.root).catch((error) => {
     if (error?.code !== 'ENOENT') {
-      console.error('[tools/board-live.mjs] readLedger project root:', error?.message ?? error);
+      const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/board-live.mjs] readLedger project root:', detail);
     }
     return null;
   });
   const ledgers = await Promise.all(roots.map(root => readLedger(root).catch((error) => {
     if (error?.code !== 'ENOENT') {
-      console.error('[tools/board-live.mjs] readLedger family root:', root, error?.message ?? error);
+      const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/board-live.mjs] readLedger family root:', root, detail);
     }
     return null;
   })));
