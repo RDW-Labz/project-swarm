@@ -26,7 +26,9 @@ async function latestRun(root) {
       const state = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'state.json'), 'utf8'));
       if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
       runs.push({ name: entry.name, state, time: timestamp(state.startedAt) ?? timestamp(entry.name) });
-    } catch { /* Unreadable or corrupt runs do not hide usable history. */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/status.mjs] read run state.json:', error?.message ?? error);
+    }
   }
   runs.sort((a, b) => {
     if (a.time !== null && b.time !== null && a.time !== b.time) return b.time - a.time;
@@ -62,7 +64,9 @@ export async function projectStatus(root, { env = process.env, now = Date.now, d
   } catch (error) { lanes = { up: [], down: [], error: error?.message ?? String(error) }; }
   let spend = { usd: null, byLane: {} };
   try { if (spendToday) spend = await spendToday(); }
-  catch { /* A missing ledger should not prevent status. */ }
+  catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/status.mjs] spendToday:', error?.message ?? error);
+  }
   let first = 'swarm "describe your goal in one sentence"';
   if (!initialized) first = 'swarm init';
   else if (lastRun) {
