@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain1",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner speed plan: one Opus review of the combined release diff",
+   "prompt": "Review release train 1 of Project Swarm: coordination/review/train1.diff (the combined code diff against main). Four changes: (1) tools/go.mjs integrate.commitBranches: integrate may commit on branches named in .project-swarm.json, never main/master/the default branch; (2) tools/split-park-supersede.mjs + tools/inbox-commands.mjs: swarm resolve --superseded-splits resolves parked split blockers replaced by a newer ingest; (3) tools/om-manifest-guard.mjs + tools/shell-writes.mjs: in orchestrator mode the shell guard reads the manifest named by swarm run/go/ticket and refuses unvetted checks/setup/preChecks/mutantCheck argv and shell jobs (a security fix: before, the orchestrator could run any command as the owner through a manifest's checks); (4) tools/split-auto-approve.mjs + tools/scope-commands.mjs + tools/orchestrator-allow.mjs: scope approve --auto-ok, which the orchestrator may run, approves a change-order split only when code shows no paid lanes, no migrations, no deploy or merge-to-main, no cancelled done work, and writes an approved-ticket snapshot at every approval. The full files are in your context for reference.\nPass bar (owner): find BLOCKERS now (a way to bypass a guard or approval, money spent, wrong commits on protected branches, data loss, a crash on a normal path, a regression to existing behavior); everything else is a follow-up. Look hard at: ways to get an unvetted command run despite (3) (other manifest fields that run commands, --root pointing elsewhere, symlinks, TOCTOU, run ids that resolve to files, integrate/resume/redcheck of a run started before the guard); ways for the orchestrator to get an approval through (4) that the conditions should have stopped (snapshot forgery: can the orchestrator write .swarm/project/approved-tickets.json or the ledger directly? ticket fields that add paid lanes or migrations without matching the checks; flag/argv tricks); whether (2) can ever resolve a blocker that is still current; whether (1) can commit to a protected branch.\nWrite ONLY coordination/review/train1-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+   "context": [
+    "coordination/review/train1.diff",
+    "tools/go.mjs",
+    "tools/split-park-supersede.mjs",
+    "tools/inbox-commands.mjs",
+    "tools/om-manifest-guard.mjs",
+    "tools/shell-writes.mjs",
+    "tools/split-auto-approve.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tools/journal.mjs"
+   ],
+   "outputs": ["coordination/review/train1-review.json"],
+   "resultFile": "coordination/review/train1-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}
