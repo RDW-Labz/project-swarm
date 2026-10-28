@@ -52,7 +52,7 @@ export async function editInPlaceOnlyJobs(root, manifest, { env = process.env, h
     const cap = job.outputCapBytes ?? configured;
     const sizes = [];
     for (const file of job.outputs) {
-      try { const info = await fs.stat(await safePath(root, file)); if (info.isFile()) sizes.push(info.size); } catch { /* a file that does not exist yet has no size */ }
+      try { const info = await fs.stat(await safePath(root, file)); if (info.isFile()) sizes.push(info.size); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-32.mjs] output file stat:', error?.message ?? error); /* a file that does not exist yet has no size */ }
     }
     const total = sizes.reduce((sum, bytes) => sum + bytes, 0);
     if (sizes.some(bytes => bytes > cap.perFile || (total > cap.total && bytes > 0))) ids.add(job.id);

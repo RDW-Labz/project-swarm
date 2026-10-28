@@ -215,7 +215,8 @@ export async function findLandedArtifact(root, lesson, proposal) {
     try {
       const text = await readCappedRepoFile(root, rel);
       if (lessonArtifactLooksLanded(rel, text, artifact)) return rel;
-    } catch {
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/managers/lessons/close.mjs] landed path candidate read:', error?.message ?? error);
       /* try next candidate */
     }
   }

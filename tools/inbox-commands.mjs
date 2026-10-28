@@ -61,7 +61,7 @@ async function inboxRoots(root, installRoot, all) {
   try { const value = JSON.parse(await fs.readFile(path.join(installRoot, '.swarm-projects.json'), 'utf8')); registry = Array.isArray(value) ? value : []; } catch { registry = []; }
   for (const entry of registry) {
     if (typeof entry !== 'string' || !path.isAbsolute(entry) || roots.includes(entry)) continue;
-    try { await fs.access(path.join(entry, '.swarm')); roots.push(entry); } catch { /* not a swarm project */ }
+    try { await fs.access(path.join(entry, '.swarm')); roots.push(entry); } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/inbox-commands.mjs] probe .swarm on registry entry:', error?.message ?? error); /* not a swarm project */ }
   }
   return roots;
 }

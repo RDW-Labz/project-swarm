@@ -37,7 +37,15 @@ export async function runBudgetsCommand(root, args, { run, now, onFailure } = {}
     if (!ids.length) return out('No budget runs yet. swarm budgets check --url PREVIEW_URL');
     const { config: profileConfig } = await profileBudgets(root);
     const open = openFailures(state, profileConfig ?? null);
-    const ledger = await readLedger(root).catch(() => null);
+    const ledger = await readLedger(root).catch((error) => {
+      if (error?.code === 'ENOENT') return null;
+      if (error?.name === 'SyntaxError') {
+        console.error('[tools/budgets-commands.mjs] readLedger status:', 'corrupt ledger (SyntaxError)');
+        return null;
+      }
+      console.error('[tools/budgets-commands.mjs] readLedger status:', error?.message ?? error);
+      return null;
+    });
     return out([...ids.sort().map(id => line({ id, ...state.screens[id] })), open.length ? `${open.length} screen(s) failing${finishesLastStage(ledger) ? ': the last stage is finished, so shipping is blocked until they pass' : ' (they block only the PR that finishes the last stage)'}` : 'all screens within budget'].join('\n'), open.length ? 1 : 0);
   }
   if (verb !== 'check') return out(`${verb ? `Unknown budgets command: ${verb}\n` : ''}${BUDGETS_USAGE}`, 2);
