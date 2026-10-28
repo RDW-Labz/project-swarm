@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakell",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Flake g-24a1587a part 3: tests/local-lane-review.test.mjs:154 sees 1 slot left after a fixed 50 ms sleep. Await the LaneScheduler's release (tools/lanes.mjs class LaneScheduler ~line 425) instead of sleeping. Also check whether LaneScheduler.acquire's abort path releases the slot before rejecting: if a caller can see a held slot after AbortError, that is a product bug (lane slots are a lock) - report it with file/line, do not fix it here. Owner rule for flaky tests: fix at the root so flakes cannot hide real failures. Each test passes alone and fails under full-suite load (--test-concurrency=3 or more). Replace wall-clock races (fixed sleeps then assert) with deterministic ordering: await a ready signal, an event, a promise the code under test already exposes, or poll a condition with a bounded deadline that fails with a clear message. In your notes, list any other fixed-sleep-then-assert tests you saw in your file. PRODUCT-CODE RULE: you may edit ONLY your declared outputs. If you find the root cause is a product bug in a guard, process-kill/signal, lock or money path, do NOT work around it in the test: fix the test's own ordering only, and report the product bug in your notes (file, function, line, the exact misordering) so the coordinator can queue it for an Opus review. Never add retries, quarantine, skips or longer timeouts as the fix.",
+      "context": [
+        "tools/lanes.mjs"
+      ],
+      "outputs": [
+        "tests/local-lane-review.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakell",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/local-lane-review.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "p2locks",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "REFACTOR PHASE 2, TESTS ONLY (owner order): write tests, change NO product code (the move into tools/state-store.mjs waits until train 2 ships and gets its own Opus review). Two kinds of tests: (1) CHARACTERIZATION: pin today's behaviour exactly (file paths, JSON shape, file mode such as 0o600/0o644 where set, lock file names, refusal codes and messages, recovery rules) so the later switch is byte-compatible; these must pass today. (2) KNOWN BUGS: a test that reproduces a real race or bug today must be declared with node:test's todo option, e.g. test('...', { todo: 'Phase 2: <bug id/summary>' }, async t => {...}), so the suite stays green while the failure is recorded; say in the todo text what the fixed behaviour must be. Real concurrency means child processes (spawn process.execPath with a small inline module or a fixture script under tests/fixtures/phase2/, which you may create ONLY if listed in your outputs), never Promise.all inside one process. Crash tests: kill the holder child with SIGKILL mid-write or while holding the lock (only the child you spawned, by its own pid), then show what the next writer does. Every test uses its own temp dir (fs.mkdtemp under os.tmpdir()) and removes it; no fixed sleeps as ordering: have children signal readiness over stdout or a file. Keep each test under 10 s. First line of every new test file: import './_isolate-config.mjs';\n\nScope for this job (from the refactor plan, Phase 2, 'untested today'): tools/base-check-lock.mjs (acquireBaseCheckLock, withBaseCheckLock; lock file .swarm/project/base-check.lock): characterize owner record shape, wait/poll, stale-by-dead-owner, release in finally, callback error not swallowed; crash test (holder SIGKILLed, next acquirer recovers); KNOWN BUG as todo: tryTakeLock opens with O_EXCL (~line 110) and writes the owner afterwards (~112), so a contender reading in that gap sees an empty owner, treats it as stale and removes the LIVE lock (two holders) - reproduce with an fs/timing seam if the module exposes one, else with two child processes and a holder paused between open and write via an injectable option if present; if no seam exists, write the todo test with a clear comment of the scenario. tools/state-pointer.mjs (writePointer/readPointerId/resolvePointer) and tools/state-migrate.mjs (migrateState, dualWriteRun): characterize file format and modes; crash mid-write (truncate-in-place writers are a known Phase 2 target: if a killed writer can leave a truncated/empty file today, record it as a todo).",
+      "context": [
+        "tools/base-check-lock.mjs",
+        "tools/state-pointer.mjs",
+        "tools/state-migrate.mjs",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/phase2-base-check-lock.test.mjs",
+        "tests/phase2-state-pointer-migrate.test.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ],
+  "checks": [
+    {
+      "name": "p2locks",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/phase2-base-check-lock.test.mjs",
+        "tests/phase2-state-pointer-migrate.test.mjs"
+      ]
+    }
+  ]
+}
