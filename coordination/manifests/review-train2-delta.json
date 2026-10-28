@@ -1,0 +1,32 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain2delta",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner rule: Opus delta review of train 2 blocker fixes",
+   "prompt": "Delta review of release train 2 of Project Swarm (security, money). Round 1 (your earlier review, coordination/review/train2-review-r1.json in context) failed with 3 blockers. coordination/review/train2-delta.diff is the diff from round 1's head 5e77692b to the new head. Fixes: (1) tools/paid-lane-pause.mjs isHostedLambdaInference: self-hosted only when SWARM_LAMBDA_URL parses with a loopback hostname; anything else is hosted, so the pause check runs before LAMBDA_API_KEY is read. (2) tools/spend.mjs assertDailyLimitBeforeSend + tools/api-adapters.mjs: before every paid send (first request, Anthropic length retry, OpenRouter retry) the resolved daily limit is re-checked on the Chicago day across all paid lanes, with other jobs' in-flight reserves and this request's worst case, and the job's reservation grows to cover it. tools/swarm.mjs: a refusal before any fetch holds the job (heldReason lane-cap, no attempt recorded, unused reservation released, run paused), and after a billed first call it holds while keeping that attempt. Resume (resumeRun -> recheckResumeSpend) re-checks lane pause, paid-lane blocks and the Chicago daily limit and ceiling for every held job before anything is dispatched; admission (tryAdmit) also re-checks the pause. (3) tools/shell-writes.mjs omWriteTargetRel resolves redirect targets component by component (lstat, follow symlinks, refuse '..' after a symlinked component, refuse any leaf symlink, dangling or not); cd is tracked through local.cwd, so redirects after cd resolve against the new directory (a blanket cd+redirect refusal added in between was removed as unnecessary). Context holds the full current files.\nPass bar (owner): confirm each round-1 blocker is CLOSED (say how, with a line) or still open; find NEW blockers introduced by these fixes (a guard or cap bypass, money spent past a cap or on a paused lane, a key reaching a paused lane, a held job that can resume without fresh checks, a crash or hang on a normal path such as a held job never settling, data loss, or a regression). Everything else is a follow-up; don't repeat round-1 follow-ups unless a fix made one worse.\nWrite ONLY coordination/review/train2-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round1\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if any round-1 blocker is open or blockers is non-empty.",
+   "context": [
+    "coordination/review/train2-delta.diff",
+    "coordination/review/train2-review-r1.json",
+    "tools/paid-lane-pause.mjs",
+    "tools/spend.mjs",
+    "tools/api-adapters.mjs",
+    "tools/swarm.mjs",
+    "tools/shell-writes.mjs",
+    "tools/daily-limit.mjs",
+    "tools/anthropic.mjs",
+    "tools/openrouter.mjs",
+    "tools/swarm/core-51.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train2-delta-review.json"
+   ],
+   "resultFile": "coordination/review/train2-delta-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

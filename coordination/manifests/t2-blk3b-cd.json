@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk3b",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them.\nFollow-up to the integrated train 2 blocker-3 fix in tools/shell-writes.mjs. omValidateTokenized now has a blanket rule: once a segment is cd/pushd (sawCwdChange), ANY later segment containing '>', '>>', '>|', '>&', '&>', '2>' or '2>&1' is refused. That rule is unnecessary and harmful: the same loop already tracks cd (cwd = omResolveCd(...); local.cwd = cwd), so redirect targets are already resolved against the new directory by omWriteTargetRel. And it refuses ordinary orchestrator commands such as `cd ~/scratch/wt && node tools/x.mjs 2>&1 | tail -5` or `cd wt && cmd > /dev/null`. Remove the sawCwdChange variable and both lines that use it. Keep pushd handled as it was before that change. Keep everything else from the blocker-3 fix (component-wise resolution, leaf symlink refusal, '..' after a symlink refused). Update tests/t2-redirect-symlink.test.mjs: drop or replace the `cd docs && echo x > plans/a.md refused` case with these: (1) `cd coordination && echo x > manifests/a.json` refused (resolved against the tracked cwd into a forbidden area); (2) `cd docs && echo x > plans/a.md` allowed if `echo x > docs/plans/a.md` is allowed from the root; (3) `cd <subdir> && node -e 1 2>&1` and `cd <subdir> && true > /dev/null` keep today's verdict (whatever the guard returned for them before the blocker-3 change; show it by asserting they equal the verdict without the cd prefix where that is the same). Do not touch any other file.",
+      "context": [
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk3",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}
