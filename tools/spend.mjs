@@ -374,6 +374,44 @@ async function loadMachineDailyLimitSettings(env, homedir, fsImpl) {
   };
 }
 
+// Recheck shared Chicago-day exposure at every paid request, including retries.
+export async function assertDailyLimitBeforeSend({
+  root, lane, worstUsd, now = Date.now, env = process.env,
+  jobId, runId, excludeKey, billedUsd = 0,
+} = {}) {
+  if (!isPaidLane(lane)) return;
+  if ((worstUsd !== undefined && (!Number.isFinite(worstUsd) || worstUsd < 0)) || !Number.isFinite(billedUsd) || billedUsd < 0) {
+    throw storeError('daily-limit-stop', 'invalid request spend estimate; request refused');
+  }
+  const clock = () => Number(typeof now === 'function' ? now() : now);
+  return withSpendStore(async store => {
+    const ownKey = excludeKey ?? Object.keys(store.entries).find(key => {
+      const entry = store.entries[key];
+      return jobId !== undefined && entry.kind === 'reservation' && entry.jobId === jobId
+        && entry.lane === lane && entry.pid === process.pid && entry.host === os.hostname()
+        && entryMatchesRoot(entry, root) && (runId === undefined || entry.runId === runId);
+    });
+    const projectRoot = root ?? store.entries[ownKey]?.root ?? process.cwd();
+    // Unpriced lanes retain the same conservative amount reserved at admission.
+    worstUsd ??= store.entries[ownKey]?.usd ?? LANE_RESERVE_DEFAULTS[lane];
+    const loaded = await loadDailyLimitSettings(projectRoot, { env });
+    if (!loaded.ok) throw storeError(loaded.code, loaded.message);
+    const { dailyLimitUsd, dailyLimitMode, hardCeilingUsd } = loaded.resolved;
+    const billed = billedMeteredTodayUsd(store, { now: clock }) + billedUsd;
+    const inFlight = inFlightReserveUsd(store, { now: clock, excludeKey: ownKey });
+    const exposure = billed + inFlight + worstUsd;
+    const ceilingHit = exposure > hardCeilingUsd;
+    if (ceilingHit || (dailyLimitMode === 'stop' && exposure > dailyLimitUsd)) {
+      const limit = ceilingHit ? hardCeilingUsd : dailyLimitUsd;
+      throw storeError('daily-limit-stop', `billed $${billed.toFixed(4)} today + in-flight reserves $${inFlight.toFixed(4)} + worstUsd $${worstUsd.toFixed(4)} > ${ceilingHit ? 'hard ceiling' : 'daily limit'} $${limit.toFixed(2)}; request refused`);
+    }
+    // Other jobs must see the request even when its original reservation was smaller.
+    if (ownKey && store.entries[ownKey]?.kind === 'reservation') {
+      store.entries[ownKey].usd = Math.max(store.entries[ownKey].usd, billedUsd + worstUsd);
+    }
+  }, { dir: spendDir(env), now: clock });
+}
+
 function levelNotified(list, level) {
   return list.some(entry => entry === level || entry === String(level));
 }

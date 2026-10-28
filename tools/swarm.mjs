@@ -1004,7 +1004,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, bestOfCheck: apiJob.agent === 'rented' && apiJob.bestOf !== 1 ? createTestChecker({ root }) : null, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
+            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, root, spendKey: spendEntry?.key, now: () => new Date(now()), env, signal, cancelled, skillsBlock: skillsBlockText, bestOfCheck: apiJob.agent === 'rented' && apiJob.bestOf !== 1 ? createTestChecker({ root }) : null, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             attemptResult = result;
             await applyEnvelope();
           }
@@ -1173,6 +1173,11 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
+        // A daily-limit refusal holds the job like admission, retaining only billed attempts.
+        if (result.code === 'daily-limit-stop') {
+          result.status = 'held';
+          record.heldReason = 'lane-cap';
+        }
         Object.assign(record, { ...(result.code ? { code: result.code, ...(result.path ? { path: result.path } : {}), ...(result.stream ? { stream: result.stream } : {}) } : {}), ...(API_AGENTS.includes(job.agent) ? { finishReason: result.finishReason ?? null } : {}), permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date(now()).toISOString(), durationMs:now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
         if (!result.refusedBeforeStart && !result.setupFailed && ['complete', 'blocked', 'failed'].includes(result.status)) {
           delete record.report;
@@ -1204,6 +1209,11 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0) + (record.usage.cache_creation_input_tokens ?? 0) + (record.usage.cache_read_input_tokens ?? 0);
         }
         await finishSpend();
+        if (result.code === 'daily-limit-stop') {
+          if (adapterStarted) record.attempts.push({ agent: job.agent, model: job.model, status: result.status, error: result.error ?? null, startedAt: record.startedAt, finishedAt: record.finishedAt });
+          await queueSave();
+          return;
+        }
         const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);
         await scheduler.report(job.agent, outcome);
         abortLongPauses();

@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
 import { batchCostUsd } from './batch.mjs';
+import { assertDailyLimitBeforeSend, estimateReservation, PAID_LANES } from './spend.mjs';
 import { bestOfCount, selectBest } from './best-of.mjs';
 import { loadRentedConfig, readRentedKey, balancedFetch } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
@@ -567,7 +568,7 @@ export function anthropicUserContent(job, cappedContext, { skillsBlock = '' } = 
   ];
 }
 
-export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null } = {}) {
+export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null, root = job.root, spendKey } = {}) {
   const controller = new AbortController(); let reason = null, finishReason = null, anthropicBilled = () => null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
   const onAbort = () => abort('cancelled');
@@ -677,9 +678,19 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       finishReason = next;
       await onFinishReason(finishReason);
     };
+    let requestWorstUsd = spend?.worstUsd;
+    let requestBilledUsd = 0;
+    if (requestWorstUsd === undefined && PAID_LANES.includes(job.agent)) {
+      const machine = loadLocalConfig({ env });
+      const rates = machine?.spend?.rates?.[job.model];
+      if (rates) requestWorstUsd = estimateReservation({ job, lane: job.agent, model: job.model,
+        inputChars: instructions.length + input.length, rates }).usd;
+    }
     const sendRequest = async () => {
       finishReason = null;
       await onFinishReason(finishReason);
+      await assertDailyLimitBeforeSend({ root, lane: job.agent, worstUsd: requestWorstUsd,
+        billedUsd: requestBilledUsd, now, env, jobId: job.id, runId: job.runId, excludeKey: spendKey });
       try {
         const init = {
           method: 'POST',
@@ -703,9 +714,12 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // automatic retry at double the limit, itself re-checked against the job's own $ cap first —
       // never a second spend the cap would have refused outright the first time.
       if (job.agent === 'openrouter' && isEmptyLengthTruncation(bodyJson)) {
+        const reported = Number(bodyJson?.usage?.cost);
+        requestBilledUsd = Number.isFinite(reported) && reported >= 0 ? reported : spend.worstUsd;
         const doubledLimit = limit * 2;
         const worstUsd = worstCaseUsd(pricing, { inputChars: instructions.length + input.length, maxTokens: doubledLimit });
         assertWithinCaps({ worstUsd, spent: spentSoFar(readLedger(spend.ledger), { jobId: job.id, day: spend.stamp.toISOString().slice(0, 10) }), dayCap: dayCapUsd(env) });
+        requestWorstUsd = worstUsd;
         body.max_tokens = doubledLimit;
         response = await sendRequest();
         bodyJson = await readJson(response);
@@ -727,6 +741,8 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
         // The first call is billed already: write it now, so a crash during the retry cannot lose it and other jobs see it.
         if (firstUsage) { appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: firstCost, estimated: false, kind: 'length-retry-first' }); firstCallUsage = firstUsage; }
         anthropicUsage = null;
+        requestBilledUsd = firstUsage && Number.isFinite(firstCost) ? firstCost : spend.worstUsd;
+        requestWorstUsd = worstUsd;
         body.max_tokens = doubledLimit;
         response = await sendRequest();
         bodyJson = await readJson(response);
@@ -788,8 +804,9 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
   } catch (error) {
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.
-    const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError || error instanceof AnthropicError ? error.message : 'Provider processing failed; details omitted to protect credentials');
+    const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError || error instanceof AnthropicError || error.code?.startsWith('daily-limit-') ? error.message : 'Provider processing failed; details omitted to protect credentials');
     const result = { finishReason, status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message, files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: anthropicBilled(), exitCode: null };
+    if (error.code?.startsWith('daily-limit-')) result.code = error.code;
     if (error.httpStatus !== undefined) Object.assign(result, { httpStatus: error.httpStatus, retryAfterMs: error.retryAfterMs, quotaExhausted: error.quotaExhausted });
     // Lesson 296: Include invalidResponseText for validation errors so swarm can write response-invalid.txt
     if (error instanceof AdapterError && error.invalidResponseText) {
