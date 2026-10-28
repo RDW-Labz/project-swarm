@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-22b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 22b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/board-inbox.mjs, tools/handoff-commands.mjs, tools/bench-baseline.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/board-inbox.mjs\nLogger prefix: console.error('[tools/board-inbox.mjs] <short context>:', error?.message ?? error)\n- Line 129 `await readPhoneConfig(phoneDirectory).catch(() => null)`: SILENT-ENOENT (phone not set up); log others with phoneDirectory; keep null.\n- Line 135 `syncPhone({...}).catch(() => {})`: LOG-ALWAYS (a phone sync failed while it is enabled).\n- Line 171 `await ledgerOf(project.root).catch(() => null)`: SILENT-ENOENT; log others (e.g. corrupt ledger) with project.root; keep null.\n\n### tools/handoff-commands.mjs\nLogger prefix: console.error('[tools/handoff-commands.mjs] <short context>:', error?.message ?? error)\n- Line 43 `try { ... pointer = await readRunnerPointer(root); } catch { /* no profile */ }`: SILENT-ENOENT; log others with root; pointer stays null.\n- Line 50 `await readLedger(root).catch(() => null)`: SILENT-ENOENT; log others with root; keep null.\n- Line 147 `await readLedger(root).catch(() => null)`: SILENT-ENOENT; log others with root; keep null (a failed read here empties the dedupe set, so it must be visible).\n\n### tools/bench-baseline.mjs\nLogger prefix: console.error('[tools/bench-baseline.mjs] <short context>:', error?.message ?? error)\n- Line 77 `} catch { /* skip */ }` around JSON.parse of one log line: SILENT-SyntaxError (a torn line is normal); log others.\n- Line 215 `try { out.push(JSON.parse(line)); } catch { /* skip */ }`: SILENT-SyntaxError; log others.\n- Line 495 `await handle.close().catch(() => {})` in the error path before rm + `throw error`: log the close error with tmp under a different binding; rethrow unchanged.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/board-inbox.mjs",
+        "tools/handoff-commands.mjs",
+        "tools/bench-baseline.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/bench-baseline.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}
