@@ -1,30 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
-/** Mount Command Center project Cockpit from buildProjectCockpit snapshot data. */
+/**
+ * Mount Command Center project Cockpit from buildProjectCockpit snapshot data.
+ * Layout, drawing and motion follow the owner-approved artifact (docs/design/reference/command-center-artifact);
+ * every number and name is read from the live project payload.
+ */
 
-import { ticketToQueueJob, listQueueJobsForProject, readyTickets } from './cc-ledger-browser.js';
-import { renderCockpit, headlineTicketText, appendMascotStage } from './cockpit-view.js';
-import { cockpitOrchestratorState, cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
+import { readyTickets } from './cc-ledger-browser.js';
+import { renderCockpit, orchestratorHeadState, orchestratorCaption } from './cockpit-view.js';
 import {
-  renderCockpitTicketList,
-  renderStackSummaryTiles,
+  cockpitColumns,
+  renderTicketColumn,
   renderReadyEmptyState,
-  queueVisibleJobs,
-  renderWorkerStream,
-  workerStreamFromLedger,
-  renderOrchestratorRunStream,
+  renderStackSummaryTiles,
+  renderWorkerCards,
+  renderRunCards,
+  workerCards,
+  shortTitle,
 } from './cockpit-lists.js';
-import { ticketPillKey } from './cockpit-lists.js';
+import { mountOrbit } from './cc-cockpit-orbit.js';
+import { glitch as defaultGlitch } from './cc-glitch.js';
 import { completionKey } from './cc-tour.js';
 
-const queueDeps = { ticketToQueueJob, listQueueJobsForProject };
-
 const TOUR_USER = 'anonymous';
+const ORCHESTRATOR_COLOUR = '#c084fc';
+const HIDDEN_STATUSES = ['cancelled', 'proposed'];
+const TILE_COLOURS = { ready: '#2fe0a0', running: '#2fe0a0', review: '#ff4d7e', blocked: '#ffb62e', todo: '#a98bff', done: '#4d7cff' };
+const LOOP_STEPS = ['you approve the scope', 'the split makes tickets', 'workers build in waves', 'checks gate every merge', 'the PR merges'];
+const SOURCES_NOTE = 'Read from this project\'s ledger (tickets and stages), its orchestrator sessions and its run stream, as served by the Command Center. Real robot head from tools/watch-assets. The orbit ring is our own design. Glitch limits in code: each burst under 400 ms, at most 3 at once, never on text being read, off with reduced motion.';
 
 function el(doc, tag, cls, text) {
   const n = doc.createElement(tag);
   if (cls) n.className = cls;
   if (text != null) n.textContent = text;
   return n;
+}
+
+function clear(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
 }
 
 function nowMs(deps) {
@@ -40,699 +52,424 @@ function suppressCockpitAutoTour() {
   }
 }
 
-function cockpitViewModel(project) {
-  return {
-    ledger: project?.ledger ?? { tickets: [] },
-    sessions: project?.sessions ?? [],
-    meta: project?.meta ?? {},
-    done: project?.done,
-    total: project?.total,
-  };
-}
-
-function primarySession(sessions) {
-  const list = Array.isArray(sessions) ? sessions.filter(s => s && s.shown !== false) : [];
-  return list[0] ?? null;
-}
-
 function liveTickets(ledger) {
-  return (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
+  return (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
 }
 
-function ticketStatusCounts(project) {
+/** Header counters, each with the ledger field it is read from. */
+function headerCounters(project, counts) {
   const live = liveTickets(project?.ledger);
-  const counts = { ready: 0, running: 0, done: 0, blocked: 0 };
-  for (const t of live) {
-    if (t.status === 'done') counts.done += 1;
-    else if (t.status === 'running') counts.running += 1;
-    else if (t.status === 'blocked') counts.blocked += 1;
-    else counts.ready += 1;
-  }
-  return counts;
-}
-
-/** @param {object} project buildProjectCockpit row */
-function stackSummaryTiles(project) {
-  const counts = ticketStatusCounts(project);
+  const total = project?.total ?? live.length;
   const done = project?.done ?? counts.done;
-  const total = project?.total ?? liveTickets(project?.ledger).length;
+  const needsYou = live.filter(t => t.status === 'review' || (t.type === 'human' && t.status !== 'done')).length;
   return [
-    {
-      label: 'done',
-      value: done,
-      footnote: `${done} of ${total} done`,
-      variant: 'taste',
-    },
-    {
-      label: 'active',
-      value: counts.running,
-      footnote: `${counts.running} in flight`,
-      variant: 'engines',
-    },
-    {
-      label: 'ready',
-      value: counts.ready,
-      footnote: `${counts.ready} runnable now`,
-      variant: 'web',
-    },
+    { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
+    { label: 'agents', value: counts.running, color: counts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+    { label: 'done', value: done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
+    { label: 'need you', value: needsYou, color: 'var(--red)', tip: 'Human tickets still open plus tickets waiting in review.' },
   ];
 }
 
-function stackFootnote(project) {
-  const name = project?.name ?? project?.meta?.project;
-  if (!name) return '';
-  return String(name);
+function utcClock(ms) {
+  return `${new Date(ms).toISOString().slice(11, 16)} UTC`;
 }
 
-function wrapHeaderHeroPack(headerHost, doc) {
-  if (headerHost.querySelector?.('.header-hero-pack')) return;
-  const nav = headerHost.querySelector?.('.cockpit-nav');
-  const hero = headerHost.querySelector?.('.cockpit-hero');
-  const scan = headerHost.querySelector?.('.scan-live--header');
-  if (!nav || !hero || !scan) return;
-  const pack = el(doc, 'div', 'header-hero-pack');
-  const row = el(doc, 'div', 'header-hero-row');
-  const main = el(doc, 'div', 'header-hero-main');
-  nav.parentNode?.removeChild(nav);
-  hero.parentNode?.removeChild(hero);
-  scan.parentNode?.removeChild(scan);
-  main.appendChild(hero);
-  row.appendChild(main);
-  row.appendChild(scan);
-  pack.appendChild(nav);
-  pack.appendChild(row);
-  headerHost.insertBefore(pack, headerHost.firstChild);
-}
-
-function syncOrchestratorLabel(headerHost, project, at) {
-  const session = primarySession(project?.sessions);
-  const orch = session
-    ? cockpitOrchestratorState(session, at)
-    : cockpitOrchestratorFromSessions([], at);
-  const blocks = [];
-  const walk = (node) => {
-    if (!node) return;
-    if (node.classList?.contains('nav-block')) blocks.push(node);
-    for (const c of node.children || []) walk(c);
-  };
-  walk(headerHost);
-  const orchBlock = blocks.find(b => {
-    const text = (b.textContent || '').toLowerCase();
-    return text.includes('orchestrator');
-  });
-  if (!orchBlock) return orch;
-  orchBlock.replaceChildren?.();
-  if (!orchBlock.replaceChildren) {
-    while (orchBlock.firstChild) orchBlock.removeChild(orchBlock.firstChild);
-  }
-  const doc = headerHost.ownerDocument || globalThis.document;
-  const label = doc.createElement('span');
-  label.className = 'num-label';
-  label.textContent = 'orchestrator';
-  orchBlock.appendChild(label);
-  orchBlock.appendChild(doc.createTextNode(` ${orch.label}`));
-  return orch;
-}
-
-function paintCockpitHeader(headerHost, project, _deps, at) {
-  while (headerHost.firstChild) headerHost.removeChild(headerHost.firstChild);
-  renderCockpit(headerHost, cockpitViewModel(project), { now: at });
-  syncOrchestratorLabel(headerHost, project, at);
-  wrapHeaderHeroPack(headerHost, headerHost.ownerDocument || globalThis.document);
-}
-
-function activeTicket(project) {
-  const ledger = project?.ledger ?? { tickets: [] };
-  const jobs = queueVisibleJobs(ledger, { id: project?.id }, queueDeps);
-  const byId = new Map((ledger.tickets ?? []).map(t => [t.id, t]));
-  for (const job of jobs) {
-    const t = byId.get(job.id);
-    if (t?.status === 'running') return t;
-  }
-  for (const job of jobs) {
-    const t = byId.get(job.id);
-    if (t && t.status !== 'done') return t;
-  }
-  return jobs.length ? byId.get(jobs[0].id) : null;
-}
-
-function paintNowPanel(nowHost, project) {
-  while (nowHost.firstChild) nowHost.removeChild(nowHost.firstChild);
-  const doc = nowHost.ownerDocument;
-  if (!doc?.createElement) return;
-  const ledger = project?.ledger ?? { tickets: [] };
-  const live = liveTickets(ledger);
-  const done = project?.done ?? live.filter(t => t.status === 'done').length;
-  const total = project?.total ?? live.length;
-  const ticket = activeTicket(project);
-  const panel = el(doc, 'aside', 'now-panel');
-  panel.setAttribute('aria-label', 'Now loading panel');
-  const head = el(doc, 'div', 'now-head');
-  head.appendChild(el(doc, 'span', null, 'Now loading'));
-  const prog = el(doc, 'span', 'now-progress');
-  const progVal = el(doc, 'span', 'val num');
-  const idx = ticket ? jobsIndex(project, ticket.id) + 1 : done;
-  progVal.textContent = String(idx);
-  prog.appendChild(progVal);
-  prog.appendChild(el(doc, 'span', 'scan-of', '/'));
-  const progTotal = el(doc, 'span', 'val num');
-  progTotal.textContent = String(total);
-  prog.appendChild(progTotal);
-  head.appendChild(prog);
-  panel.appendChild(head);
-  if (ticket) {
-    panel.appendChild(el(doc, 'div', 'now-repo', ticket.id));
-    panel.appendChild(el(doc, 'div', 'now-title', ticket.title || ticket.id));
-  } else {
-    panel.appendChild(el(doc, 'p', 'cc-empty', 'No active ticket'));
-  }
-  nowHost.appendChild(panel);
-}
-
-function jobsIndex(project, ticketId) {
-  const jobs = queueVisibleJobs(project?.ledger ?? {}, { id: project?.id }, queueDeps);
-  return jobs.findIndex(j => j.id === ticketId);
-}
-
-function paintTicketLists(leftHost, rightHost, readyHost, project) {
-  const ledger = project?.ledger ?? { tickets: [] };
-  const projectConfig = { id: project?.id };
-  const jobs = queueVisibleJobs(ledger, projectConfig, queueDeps);
-  const split = Math.ceil(jobs.length / 2);
-  renderCockpitTicketList(leftHost, ledger, {
-    projectConfig,
-    queueDeps,
-    sliceStart: 0,
-    sliceEnd: split,
-    showSearch: false,
-  });
-  renderCockpitTicketList(rightHost, ledger, {
-    projectConfig,
-    queueDeps,
-    sliceStart: split,
-    showSearch: false,
-  });
-  if (readyHost) {
-    while (readyHost.firstChild) readyHost.removeChild(readyHost.firstChild);
-    const ready = readyTickets(ledger.tickets ?? []);
-    if (!ready.length) {
-      renderReadyEmptyState(readyHost, ledger, readyTickets);
-    }
-  }
-}
-
-function paintStack(stackTilesHost, stackFootHost, project, viewport) {
-  const tiles = stackSummaryTiles(project);
-  const forRender = tiles.map(({ label, value, footnote, variant }) => ({
-    label,
-    value,
-    footnote,
-    variant,
-  }));
-  renderStackSummaryTiles(stackTilesHost, forRender);
-  while (stackFootHost.firstChild) stackFootHost.removeChild(stackFootHost.firstChild);
-  const foot = stackFootnote(project);
-  if (foot) stackFootHost.appendChild(el(stackFootHost.ownerDocument, 'span', 'stack-foot-note', foot));
-}
-
-function runStreamItems(project, at) {
-  const session = primarySession(project?.sessions);
-  const orch = session ? cockpitOrchestratorState(session, at) : null;
-  const ended = orch && (orch.label === 'waiting on you' || session?.state === 'waiting' || session?.state === 'ended');
+function runStreamItems(project, orch) {
+  const ended = orch && (orch.label === 'waiting on you');
   const raw = Array.isArray(project?.runStream) ? project.runStream : [];
   return raw.map(item => {
     const status = ended ? 'ended' : (item.status || item.title || 'running');
     const fullId = item.id ? String(item.id) : '';
-    const shortId = fullId.slice(0, 8);
-    const title = shortId || (item.title && item.title !== status ? item.title : 'run');
     // "2/6 jobs" -> "jobs 2/6"
     const body = typeof item.body === 'string'
       ? item.body.replace(/^\s*(\d+\s*\/\s*\d+)\s+jobs?\s*$/i, 'jobs $1')
       : item.body;
-    return { ...item, id: shortId || item.id, fullId, title, status, body };
+    return { ...item, id: fullId.slice(0, 8), fullId, title: status, status, body };
   });
-}
-
-function paintRunStream(host, project, at) {
-  renderOrchestratorRunStream(host, runStreamItems(project, at));
-}
-
-function syncStreamCount(headEl, shown, total, text) {
-  if (!headEl) return;
-  let count = headEl.querySelector?.('.stream-count');
-  if (!count && headEl.appendChild) {
-    count = headEl.ownerDocument?.createElement('span');
-    if (!count) return;
-    count.className = 'stream-count';
-    headEl.appendChild(count);
-  }
-  if (count) count.textContent = text || `${shown} of ${total}`;
-}
-
-function paintWorkerStream(host, project, workerHead) {
-  const items = workerStreamFromLedger(project?.ledger, 4);
-  const total = project?.total ?? (project?.ledger?.tickets ?? []).filter(
-    t => !['cancelled', 'proposed'].includes(t.status),
-  ).length;
-  syncStreamCount(workerHead, items.length, total, `latest ${items.length} of ${total} tickets`);
-  renderWorkerStream(host, items);
-}
-
-/** One collapsed explainer line (closed by default) instead of two always-open panels. */
-function buildBottomLoops(doc) {
-  const wrap = el(doc, 'details', 'loop bottom-loops');
-  wrap.setAttribute('aria-label', 'How the loop works');
-  wrap.appendChild(el(doc, 'summary', 'loop-summary', 'How the swarm loop works'));
-  wrap.appendChild(el(doc, 'p', 'loop-steps', 'The swarm loop: you approve the scope > the split makes tickets > workers build in waves > checks gate every merge > the PR merges > the ledger marks it done.'));
-  wrap.appendChild(el(doc, 'p', 'loop-steps', 'The delivery loop: you set scope > orchestrator plans > workers execute > checks run > tickets close.'));
-  return wrap;
-}
-
-function safeClone(node, deep) {
-  if (node && typeof node.cloneNode === 'function') {
-    return node.cloneNode(Boolean(deep));
-  }
-  return null;
-}
-
-function phoneLayoutOn(matchMedia) {
-  const mq = matchMedia || globalThis.matchMedia?.bind(globalThis);
-  if (!mq) return false;
-  try {
-    return mq('(max-width: 720px)').matches;
-  } catch {
-    return false;
-  }
-}
-
-function phoneRowIsPriority(ticket) {
-  const key = ticketPillKey(ticket?.status);
-  return key === 'running' || key === 'needs' || key === 'failed';
-}
-
-/**
- * Phone NOW rows. Priority = running / needs-you / failed (right under the Now card);
- * otherwise the first few remaining tickets (below the search field).
- */
-function paintPhoneNowRows(phoneNow, project, doc, priority) {
-  const ledger = project?.ledger ?? { tickets: [] };
-  const jobs = queueVisibleJobs(ledger, { id: project?.id }, queueDeps);
-  const active = activeTicket(project);
-  const byId = new Map((ledger.tickets ?? []).map(t => [t.id, t]));
-  const rows = el(doc, 'div', priority ? 'phone-now-rows phone-now-rows--priority' : 'phone-now-rows');
-  rows.setAttribute('aria-label', priority ? 'Running and needs you' : 'Highlighted tickets');
-  let added = 0;
-  for (let i = 0; i < jobs.length; i += 1) {
-    const job = jobs[i];
-    if (active && job.id === active.id) continue;
-    if (phoneRowIsPriority(byId.get(job.id)) !== Boolean(priority)) continue;
-    if (added >= 6) break;
-    const col = el(doc, 'div', 'ticket-col ticket-col--phone');
-    renderCockpitTicketList(col, ledger, {
-      projectConfig: { id: project?.id },
-      queueDeps,
-      sliceStart: i,
-      sliceEnd: i + 1,
-      showSearch: false,
-    });
-    const row = col.children?.find?.(c => c.classList?.contains('ticket-row') || c.classList?.contains('cockpit-ticket-row'))
-      || (col.querySelector && col.querySelector('.ticket-row'));
-    if (row) rows.appendChild(row);
-    added += 1;
-  }
-  if (priority && !added) {
-    rows.appendChild(el(doc, 'p', 'cc-empty', 'Nothing else running or waiting on you'));
-  }
-  phoneNow.appendChild(rows);
-}
-
-function paintPhonePanels(deps, refs, project, at) {
-  const {
-    doc,
-    phoneNow,
-    phoneTickets,
-    phoneStream,
-    phoneStack,
-    stageCenter,
-    nowPanelHost,
-    workerSection,
-    streamSection,
-    stackBlock,
-    viewport,
-  } = refs;
-
-  for (const panel of [phoneNow, phoneTickets, phoneStream, phoneStack]) {
-    if (panel) while (panel.firstChild) panel.removeChild(panel.firstChild);
-  }
-
-  if (!phoneLayoutOn(deps.matchMedia)) return;
-
-  if (phoneNow) {
-    const wrap = el(doc, 'div', 'stage-center stage-center--phone');
-    const entity = stageCenter?.querySelector?.('.entity-label');
-    if (entity) wrap.appendChild(safeClone(entity, true));
-    appendMascotStage(wrap, doc, { phone: true });
-    if (nowPanelHost) {
-      paintNowPanel(nowPanelHost, project);
-      wrap.appendChild(safeClone(nowPanelHost, true));
-    }
-    phoneNow.appendChild(wrap);
-    paintPhoneNowRows(phoneNow, project, doc, true);
-    const search = el(doc, 'div', 'ticket-search cockpit-ticket-search');
-    const searchLabel = el(doc, 'label', null, 'Search tickets');
-    searchLabel.setAttribute('for', 'ticket-filter-phone-now');
-    const filterInput = el(doc, 'input');
-    filterInput.type = 'search';
-    filterInput.id = 'ticket-filter-phone-now';
-    filterInput.placeholder = 'Filter by id or title';
-    filterInput.setAttribute('autocomplete', 'off');
-    search.appendChild(searchLabel);
-    search.appendChild(filterInput);
-    phoneNow.appendChild(search);
-    paintPhoneNowRows(phoneNow, project, doc, false);
-    filterInput.addEventListener('input', () => {
-      const q = String(filterInput.value || '').trim().toLowerCase();
-      const rowNodes = phoneNow.querySelectorAll
-        ? Array.from(phoneNow.querySelectorAll('.phone-now-rows .ticket-row'))
-        : [];
-      for (const row of rowNodes) {
-        const repo = row.getAttribute?.('data-repo') || '';
-        const id = row.getAttribute?.('data-ticket-id') || '';
-        const show = !q || repo.includes(q) || id.toLowerCase().includes(q);
-        row.setAttribute('data-hidden', show ? 'false' : 'true');
-      }
-    });
-  }
-
-  if (phoneTickets) {
-    const wrap = el(doc, 'div', 'stage-wrap stage-wrap--phone');
-    wrap.setAttribute('aria-label', 'Ticket list');
-    renderCockpitTicketList(wrap, project?.ledger ?? { tickets: [] }, {
-      projectConfig: { id: project?.id },
-      queueDeps,
-      showSearch: true,
-    });
-    phoneTickets.appendChild(wrap);
-  }
-
-  if (phoneStream) {
-    const streamWrap = el(doc, 'div', 'stream-section--phone');
-    if (workerSection) {
-      const w = safeClone(workerSection, true);
-      if (w) streamWrap.appendChild(w);
-    }
-    if (streamSection) {
-      const c = safeClone(streamSection, true);
-      if (c) {
-        c.classList.add('stream-section--phone');
-        streamWrap.appendChild(c);
-      }
-    }
-    phoneStream.appendChild(streamWrap);
-  }
-
-  if (phoneStack && stackBlock) {
-    const clone = safeClone(stackBlock, true);
-    if (clone) {
-      clone.classList.add('stack-block--phone');
-      const tilesHost = clone.querySelector?.('.cc-cockpit-stack-tiles');
-      if (tilesHost) {
-        paintStack(tilesHost, clone.querySelector?.('.stack-foot') || el(doc, 'div', 'stack-foot'), project, viewport);
-      }
-      phoneStack.appendChild(clone);
-    }
-  }
-}
-
-function bindPhoneTabs(panel, tabs, phonePanels, tabIds, matchMedia) {
-  const mq = matchMedia || globalThis.matchMedia?.bind(globalThis);
-  const query = mq ? mq('(max-width: 720px)') : null;
-
-  function selectPhoneTab(which) {
-    tabIds.forEach((id, i) => {
-      const selected = id === which;
-      if (tabs[i]) tabs[i].setAttribute('aria-selected', selected ? 'true' : 'false');
-      if (phonePanels[i]) phonePanels[i].dataset.active = selected ? 'true' : 'false';
-    });
-  }
-
-  function syncTabMode() {
-    const on = query ? query.matches : false;
-    if (panel) panel.dataset.tabMode = on ? 'true' : 'false';
-    if (!on) {
-      for (const p of phonePanels) {
-        if (p) p.dataset.active = 'false';
-      }
-      return;
-    }
-    let active = tabs.findIndex(t => t && t.getAttribute('aria-selected') === 'true');
-    if (active < 0) active = 0;
-    selectPhoneTab(tabIds[active]);
-  }
-
-  const clickHandlers = [];
-  tabIds.forEach((id, i) => {
-    const tab = tabs[i];
-    if (!tab) return;
-    const onClick = () => selectPhoneTab(id);
-    tab.addEventListener('click', onClick);
-    clickHandlers.push({ tab, onClick });
-  });
-
-  syncTabMode();
-  if (query && typeof query.addEventListener === 'function') {
-    query.addEventListener('change', syncTabMode);
-  } else if (query && typeof query.addListener === 'function') {
-    query.addListener(syncTabMode);
-  }
-
-  return {
-    syncTabMode,
-    destroyTabs: () => {
-      for (const { tab, onClick } of clickHandlers) {
-        tab.removeEventListener('click', onClick);
-      }
-      if (query && typeof query.removeEventListener === 'function') {
-        query.removeEventListener('change', syncTabMode);
-      } else if (query && typeof query.removeListener === 'function') {
-        query.removeListener(syncTabMode);
-      }
-    },
-  };
 }
 
 /**
  * @param {HTMLElement} host
  * @param {object} project buildProjectCockpit shape
- * @param {{ document: Document, now?: number|(() => number), onBack?: () => void, matchMedia?: typeof matchMedia }} deps
+ * @param {{
+ *   document: Document, now?: number|(() => number), onBack?: () => void, window?: Window,
+ *   glitch?: (el: Element) => unknown, mountRobotHead?: Function, setAnimationPaused?: (v: boolean) => void,
+ *   requestAnimationFrame?: Function, cancelAnimationFrame?: Function, matchMedia?: typeof matchMedia,
+ *   setTimeout?: typeof setTimeout, clearTimeout?: typeof clearTimeout,
+ * }} deps
  */
 export function renderProjectCockpit(host, project, deps) {
   suppressCockpitAutoTour();
   const doc = deps.document;
+  const win = deps.window || globalThis;
+  const glitch = typeof deps.glitch === 'function' ? deps.glitch : defaultGlitch;
+  const setTimer = deps.setTimeout || globalThis.setTimeout.bind(globalThis);
+  const clearTimer = deps.clearTimeout || globalThis.clearTimeout.bind(globalThis);
+  const timers = new Set();
+  const later = (fn, ms) => {
+    const id = setTimer(() => { timers.delete(id); fn(); }, ms);
+    timers.add(id);
+  };
 
   while (host.firstChild) host.removeChild(host.firstChild);
 
-  const shell = el(doc, 'div', 'shell cc-cockpit-shell');
+  const shell = el(doc, 'div', 'cc-cockpit-shell');
+  if (project?.id != null) shell.setAttribute('data-project-id', String(project.id));
+  const wrap = el(doc, 'div', 'ck-wrap');
 
-  const bandHeader = el(doc, 'header', 'band-header');
-  const appNav = el(doc, 'div', 'app-nav');
-  appNav.setAttribute('aria-label', 'Command Center chrome');
-  const brand = el(doc, 'div', 'brand');
-  brand.appendChild(el(doc, 'span', 'brand-dot'));
-  brand.appendChild(el(doc, 'span', 'brand-name', 'jev + opus'));
-  appNav.appendChild(brand);
-  const navActions = el(doc, 'div', 'nav-actions');
-  const backBtn = el(doc, 'button', 'btn-pill cc-cockpit-back-btn', 'Back');
+  // Top bar: logo, counters, live dot, breadcrumb, page links.
+  const gbar = el(doc, 'div', 'gbar');
+  const top = el(doc, 'header', 'ck-top');
+  top.appendChild(el(doc, 'span', 'logo', 'SWARM WATCH'));
+  const cnt = el(doc, 'div', 'cnt');
+  top.appendChild(cnt);
+  const live = el(doc, 'span', 'ck-live');
+  live.appendChild(el(doc, 'i'));
+  live.appendChild(doc.createTextNode('LIVE'));
+  top.appendChild(live);
+  const nav = el(doc, 'div', 'ck-nav');
+  const crumbs = el(doc, 'nav', 'crumbs');
+  crumbs.setAttribute('aria-label', 'Breadcrumb');
+  const backBtn = el(doc, 'button', 'cc-cockpit-back-btn', 'The Hive');
   backBtn.type = 'button';
-  const hiveTab = el(doc, 'a', 'btn-pill', 'Hive');
-  hiveTab.href = '/command-center';
-  const cockpitTab = el(doc, 'a', 'btn-pill btn-pill--accent', 'Cockpit');
-  cockpitTab.href = globalThis.location?.pathname || '/command-center/project';
-  cockpitTab.setAttribute('aria-current', 'page');
-  navActions.appendChild(backBtn);
-  navActions.appendChild(hiveTab);
-  navActions.appendChild(cockpitTab);
-  appNav.appendChild(navActions);
-  bandHeader.appendChild(appNav);
-
-  const headerHost = el(doc, 'div', 'cc-cockpit-header-host');
-  bandHeader.appendChild(headerHost);
+  const crumbProject = el(doc, 'span');
+  crumbProject.setAttribute('aria-current', 'page');
+  crumbs.appendChild(backBtn);
+  crumbs.appendChild(el(doc, 'span', null, '›'));
+  crumbs.appendChild(crumbProject);
+  nav.appendChild(crumbs);
+  const tabs = el(doc, 'div', 'tabs');
+  const ccTab = el(doc, 'a', null, 'Command Center');
+  ccTab.href = '/command-center';
+  ccTab.setAttribute('aria-current', 'page');
+  const classicTab = el(doc, 'a', null, 'Classic');
+  classicTab.href = '/';
+  tabs.appendChild(ccTab);
+  tabs.appendChild(classicTab);
+  nav.appendChild(tabs);
+  gbar.appendChild(top);
+  gbar.appendChild(nav);
 
   const panel = el(doc, 'main', 'panel-cockpit');
   panel.id = 'cc-cockpit-main';
 
-  const bandMain = el(doc, 'div', 'band-main desktop-only-stage');
-  const stageWrap = el(doc, 'section', 'stage-wrap');
-  stageWrap.setAttribute('aria-label', 'Ticket flow stage');
-  const ticketsLeft = el(doc, 'div', 'ticket-col ticket-col--left');
-  ticketsLeft.id = 'tickets-left';
-  ticketsLeft.setAttribute('aria-label', 'Queue tickets');
-  const stageGrid = el(doc, 'div', 'stage-grid');
-  const stageCenter = el(doc, 'div', 'stage-center');
-  const entity = el(doc, 'div', 'entity-label');
-  const orchTitle = el(doc, 'h2', null, '');
-  entity.appendChild(orchTitle);
-  stageCenter.appendChild(entity);
-  appendMascotStage(stageCenter, doc);
-  const nowPanelHost = el(doc, 'div', 'cc-cockpit-now-host');
-  stageCenter.appendChild(nowPanelHost);
-  const readyHost = el(doc, 'div', 'cc-cockpit-ready-host');
-  stageCenter.appendChild(readyHost);
-  const ticketsRight = el(doc, 'div', 'ticket-col ticket-col--right');
-  ticketsRight.id = 'tickets-right';
-  ticketsRight.setAttribute('aria-label', 'Queue tickets continued');
-  const stageRun = el(doc, 'div', 'stage-run');
-  stageGrid.appendChild(ticketsLeft);
-  stageGrid.appendChild(stageCenter);
-  stageGrid.appendChild(stageRun);
-  stageGrid.appendChild(ticketsRight);
-  stageWrap.appendChild(stageGrid);
-  bandMain.appendChild(stageWrap);
+  const titleHost = el(doc, 'div', 'ct');
+  const cols = el(doc, 'div', 'cols');
+  const colL = el(doc, 'div', 'col l');
+  colL.id = 'tickets-left';
+  colL.setAttribute('aria-label', 'Ready and running tickets');
+  const colR = el(doc, 'div', 'col r');
+  colR.id = 'tickets-right';
+  colR.setAttribute('aria-label', 'Review, blocked and finished tickets');
+  const mid = el(doc, 'div', 'mid');
+  const orbwrap = el(doc, 'div', 'orbwrap');
+  const orbBack = el(doc, 'canvas');
+  orbBack.setAttribute('aria-hidden', 'true');
+  const lab = el(doc, 'div', 'lab');
+  const labTitle = el(doc, 'span', null, 'ORCHESTRATOR');
+  const labSub = el(doc, 'small');
+  lab.appendChild(labTitle);
+  lab.appendChild(labSub);
+  const hd2 = el(doc, 'div', 'hd2');
+  const orbFront = el(doc, 'canvas');
+  orbFront.setAttribute('aria-hidden', 'true');
+  orbwrap.appendChild(orbBack);
+  orbwrap.appendChild(lab);
+  orbwrap.appendChild(hd2);
+  orbwrap.appendChild(orbFront);
+  const nowHost = el(doc, 'div', 'now');
+  nowHost.setAttribute('aria-label', 'Now panel');
+  mid.appendChild(orbwrap);
+  mid.appendChild(nowHost);
+  cols.appendChild(colL);
+  cols.appendChild(mid);
+  cols.appendChild(colR);
 
-  const bandBottom = el(doc, 'div', 'band-bottom');
-  const bottomLoops = buildBottomLoops(doc);
-  bandBottom.appendChild(bottomLoops);
+  const loopbar = el(doc, 'div', 'loopbar');
+  const loopK = el(doc, 'div', 'k');
+  loopK.appendChild(el(doc, 'span', null, 'THE SWARM LOOP'));
+  loopK.appendChild(el(doc, 'span', null, 'LEDGER IN, MERGED PR OUT'));
+  loopbar.appendChild(loopK);
+  LOOP_STEPS.forEach((step) => {
+    loopbar.appendChild(doc.createTextNode(`${step} `));
+    loopbar.appendChild(el(doc, 'b', null, '>'));
+    loopbar.appendChild(doc.createTextNode(' '));
+  });
+  loopbar.appendChild(el(doc, 'span', 'done', 'the ledger marks it done'));
 
-  const workerSection = el(doc, 'section', 'stream-section');
-  workerSection.setAttribute('aria-label', 'Worker stream');
-  const workerHead = el(doc, 'div', 'stream-head stream-head--worker');
-  const workerTitle = el(doc, 'span', null, '// Worker stream / latest finished tickets');
-  workerHead.appendChild(workerTitle);
-  const workerCount = el(doc, 'span', 'stream-count');
-  workerHead.appendChild(workerCount);
-  const workerHost = el(doc, 'div', 'cc-cockpit-worker-stream-host');
-  workerSection.appendChild(workerHead);
-  workerSection.appendChild(workerHost);
+  const wstream = el(doc, 'section', 'wstream');
+  wstream.setAttribute('aria-label', 'Worker stream');
+  const wHead = el(doc, 'h2');
+  wHead.appendChild(el(doc, 'span', null, '// WORKER STREAM / LATEST FINISHED TICKETS'));
+  const wCount = el(doc, 'span');
+  wHead.appendChild(wCount);
+  const wgrid = el(doc, 'div', 'wgrid');
+  wstream.appendChild(wHead);
+  wstream.appendChild(wgrid);
 
-  const streamSection = el(doc, 'section', 'stream-section');
-  streamSection.setAttribute('aria-label', 'Run stream');
-  const streamHead = el(doc, 'div', 'stream-head stream-head--render');
-  const streamTitle = el(doc, 'span', null, '// Run stream / orchestrator activity');
-  streamHead.appendChild(streamTitle);
-  const streamCount = el(doc, 'span', 'stream-count');
-  streamHead.appendChild(streamCount);
-  const streamHost = el(doc, 'div', 'cc-cockpit-run-stream-host stream-grid');
-  streamSection.appendChild(streamHead);
-  streamSection.appendChild(streamHost);
+  const rstream = el(doc, 'section', 'wstream');
+  rstream.setAttribute('aria-label', 'Run stream');
+  const rHead = el(doc, 'h2');
+  rHead.appendChild(el(doc, 'span', null, '// RUN STREAM / ORCHESTRATOR RUNS'));
+  const rCount = el(doc, 'span');
+  rHead.appendChild(rCount);
+  const rgrid = el(doc, 'div', 'wgrid');
+  rstream.appendChild(rHead);
+  rstream.appendChild(rgrid);
 
-  const stackBlock = el(doc, 'footer', 'stack-block');
-  stackBlock.setAttribute('aria-label', 'Stage stack summary');
-  const stackHead = el(doc, 'div', 'stack-head');
-  stackHead.appendChild(el(doc, 'div', 'stack-label', 'Stage stack'));
-  const stackTitle = el(doc, 'h2', 'stack-title');
-  const total = project?.total;
-  if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
-    const num = el(doc, 'span', 'num', String(total));
-    num.title = 'source field: ledger.tickets live total';
-    stackTitle.appendChild(num);
-    stackTitle.appendChild(doc.createTextNode(' tickets'));
-  } else {
-    stackTitle.textContent = 'Tickets';
-  }
-  stackHead.appendChild(stackTitle);
-  const stackTilesHost = el(doc, 'div', 'stack-metrics cc-cockpit-stack-tiles');
-  const stackFootHost = el(doc, 'div', 'stack-foot');
-  stackBlock.appendChild(stackHead);
-  stackBlock.appendChild(stackTilesHost);
-  stackBlock.appendChild(stackFootHost);
+  const stack = el(doc, 'footer', 'stack');
+  stack.setAttribute('aria-label', 'Ticket stack');
+  const stackLeft = el(doc, 'div');
+  stackLeft.appendChild(el(doc, 'div', 'k', 'TICKET STACK'));
+  const stackN = el(doc, 'div', 'n');
+  const stackSub = el(doc, 'div', 'ck-hint');
+  stackLeft.appendChild(stackN);
+  stackLeft.appendChild(stackSub);
+  const tilesHost = el(doc, 'div', 'cc-cockpit-stack-tiles');
+  const foot = el(doc, 'div', 'ck-foot');
+  const footNote = el(doc, 'span');
+  const sources = el(doc, 'details');
+  sources.appendChild(el(doc, 'summary', null, 'sources'));
+  sources.appendChild(el(doc, 'p', null, SOURCES_NOTE));
+  foot.appendChild(footNote);
+  foot.appendChild(sources);
+  stack.appendChild(stackLeft);
+  stack.appendChild(tilesHost);
+  stack.appendChild(foot);
 
-  bandBottom.appendChild(workerSection);
-  stageRun.appendChild(streamSection);
-  stageRun.appendChild(stackBlock);
-
-  const footnote = el(doc, 'footer', 'cockpit-footnote cockpit-footer');
-  footnote.setAttribute('aria-label', 'Data notes');
-  footnote.textContent = 'Live board data — ticket counts match the project ledger.';
-
-  const tabIds = ['now', 'tickets', 'stream', 'stack'];
-  const viewTabs = el(doc, 'div', 'view-tabs');
-  viewTabs.setAttribute('role', 'tablist');
-  viewTabs.setAttribute('aria-label', 'Cockpit panels');
-  const tabs = [];
-  const phonePanels = [];
-  for (let i = 0; i < tabIds.length; i += 1) {
-    const id = tabIds[i];
-    const tab = el(doc, 'button', null, id.charAt(0).toUpperCase() + id.slice(1));
-    tab.type = 'button';
-    tab.setAttribute('role', 'tab');
-    tab.id = `tab-${id}`;
-    tab.setAttribute('aria-controls', `phone-${id}`);
-    tab.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
-    viewTabs.appendChild(tab);
-    tabs.push(tab);
-    const phonePanel = el(doc, 'div', 'phone-panel');
-    phonePanel.id = `phone-${id}`;
-    phonePanel.setAttribute('role', 'tabpanel');
-    phonePanel.setAttribute('aria-labelledby', `tab-${id}`);
-    phonePanel.dataset.active = i === 0 ? 'true' : 'false';
-    phonePanels.push(phonePanel);
-  }
-
-  panel.appendChild(viewTabs);
-  for (const p of phonePanels) panel.appendChild(p);
-  panel.appendChild(bandMain);
-  panel.appendChild(bandBottom);
-  panel.appendChild(footnote);
-
-  shell.appendChild(bandHeader);
-  shell.appendChild(panel);
+  panel.appendChild(titleHost);
+  panel.appendChild(cols);
+  panel.appendChild(loopbar);
+  panel.appendChild(wstream);
+  panel.appendChild(rstream);
+  panel.appendChild(stack);
+  wrap.appendChild(gbar);
+  wrap.appendChild(panel);
+  shell.appendChild(wrap);
   host.appendChild(shell);
 
-  let projectRef = project;
-  const viewport = { width: 1440, height: 900 };
-  const phoneRefs = {
+  const probe = doc.createElement('canvas');
+  const canvasCapable = typeof probe.getContext === 'function';
+  const orbit = mountOrbit({
+    back: orbBack,
+    front: orbFront,
+    target: () => {
+      const first = colR.firstChild;
+      return first && first.classList && first.classList.contains('hot') ? first : null;
+    },
+    win,
     doc,
-    phoneNow: phonePanels[0],
-    phoneTickets: phonePanels[1],
-    phoneStream: phonePanels[2],
-    phoneStack: phonePanels[3],
-    stageCenter,
-    nowPanelHost,
-    readyHost,
-    bottomLoops,
-    workerSection,
-    streamSection,
-    stackBlock,
-    viewport,
-  };
-  const tabCtl = bindPhoneTabs(panel, tabs, phonePanels, tabIds, deps.matchMedia);
+    requestAnimationFrame: deps.requestAnimationFrame,
+    cancelAnimationFrame: deps.cancelAnimationFrame,
+    reducedMotion: typeof deps.matchMedia === 'function'
+      ? Boolean(deps.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      : undefined,
+  });
+
+  // Robot head: mounted once per project, then only its state follows the orchestrator.
+  let destroyed = false;
+  let robotApi = null;
+  let headHandle = null;
+  let headKey = null;
+  let headWanted = null;
+  let headMounted = null;
+
+  function loadRobot() {
+    if (typeof deps.mountRobotHead === 'function') {
+      return Promise.resolve({ mountRobotHead: deps.mountRobotHead, setAnimationPaused: deps.setAnimationPaused });
+    }
+    if (!canvasCapable) return Promise.resolve(null);
+    return import('./robot-head.js').catch(() => null);
+  }
+
+  function syncHead(state, name, key) {
+    headWanted = { state, label: `${name} orchestrator` };
+    if (key !== headKey) {
+      if (headHandle) headHandle.destroy();
+      headHandle = null;
+      headKey = key;
+      headMounted = null;
+      loadRobot().then((api) => {
+        if (!api || destroyed || headKey !== key || headHandle) return;
+        robotApi = api;
+        try {
+          clear(hd2);
+          headHandle = api.mountRobotHead(hd2, {
+            state: headWanted.state,
+            size: 290,
+            color: ORCHESTRATOR_COLOUR,
+            screenColor: '#e8f2ff',
+            id: `orch-${key}`,
+            label: headWanted.label,
+          });
+          headMounted = headWanted.state;
+          if (typeof api.setAnimationPaused === 'function') api.setAnimationPaused(Boolean(doc.hidden));
+        } catch {
+          headHandle = null;
+        }
+      });
+      return;
+    }
+    if (headHandle && headMounted !== state) {
+      headHandle.setState(state);
+      headMounted = state;
+    }
+  }
+
+  // Counters: a change in agents or need-you gets one short glitch, 400 ms after the repaint.
+  let lastCounters = '';
+  function paintCounters(items) {
+    clear(cnt);
+    for (const c of items) {
+      const cell = el(doc, 'div');
+      cell.appendChild(el(doc, 'div', 'l', c.label));
+      const v = el(doc, 'div', 'v has-tip', String(c.value));
+      v.setAttribute('tabindex', '0');
+      v.setAttribute('data-k', c.label);
+      v.setAttribute('data-tip', c.tip);
+      if (c.color) v.style.color = c.color;
+      cell.appendChild(v);
+      cnt.appendChild(cell);
+    }
+    const sig = JSON.stringify(items.filter(c => c.label === 'agents' || c.label === 'need you').map(c => c.value));
+    if (lastCounters && lastCounters !== sig) {
+      for (const cell of Array.from(cnt.children)) {
+        const v = cell.children[1];
+        if (v && (v.getAttribute('data-k') === 'agents' || v.getAttribute('data-k') === 'need you')) later(() => glitch(v), 400);
+      }
+    }
+    lastCounters = sig;
+  }
+
+  function paintNow(columns, model) {
+    clear(nowHost);
+    const name = model.name;
+    const lead = columns.left[0];
+    if (lead) {
+      const t = lead.ticket;
+      const running = lead.state === 'running';
+      const k = el(doc, 'div', 'k');
+      k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
+      k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
+      nowHost.appendChild(k);
+      const full = String(t.title || t.id).replace(/"/g, '');
+      nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
+      nowHost.appendChild(el(doc, 'div', 't', t.id));
+      const d = el(doc, 'div', 'd', full);
+      d.setAttribute('title', full);
+      d.setAttribute('data-title', full);
+      nowHost.appendChild(d);
+    } else {
+      const k = el(doc, 'div', 'k');
+      k.appendChild(el(doc, 'span', null, 'STATUS'));
+      k.appendChild(el(doc, 'span'));
+      nowHost.appendChild(k);
+      nowHost.appendChild(el(doc, 'div', 'p', name));
+      nowHost.appendChild(el(doc, 'div', 't', model.total > 0 && model.done >= model.total ? 'All done' : 'Idle'));
+      nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
+    }
+    const running = columns.counts.running;
+    const w = el(doc, 'div', 'd');
+    w.appendChild(el(doc, 'em', null, 'WORKER >'));
+    w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
+    nowHost.appendChild(w);
+  }
+
+  function attachChipGlitch(column) {
+    for (const card of Array.from(column.children)) {
+      const chip = card.children && card.children[0];
+      if (chip && typeof chip.addEventListener === 'function') chip.addEventListener('mouseenter', () => glitch(chip));
+    }
+  }
+
+  let projectRef = project;
+  let firstPaint = true;
+  let headTitleGlitched = false;
+
+  function paint(at) {
+    const p = projectRef;
+    const ledger = p?.ledger ?? { tickets: [] };
+    const model = renderCockpit(titleHost, {
+      ledger,
+      sessions: p?.sessions ?? [],
+      meta: p?.meta ?? {},
+      name: p?.name,
+      id: p?.id,
+      done: p?.done,
+      total: p?.total,
+    }, { now: at });
+    const columns = cockpitColumns(ledger, readyTickets);
+    const { counts } = columns;
+    const orch = model.orchestrator;
+    const allDone = model.total > 0 && model.done >= model.total;
+
+    crumbProject.textContent = model.name;
+    paintCounters(headerCounters(p, counts));
+
+    if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L' });
+    else renderReadyEmptyState(colL, ledger, readyTickets);
+    renderTicketColumn(colR, columns.right, { side: 'R', emptyText: 'No review, blocked or finished tickets yet.' });
+    attachChipGlitch(colL);
+    attachChipGlitch(colR);
+
+    lab.setAttribute('data-orchestrator', orch.label);
+    labSub.textContent = orchestratorCaption(orch.label, allDone);
+    syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
+    paintNow(columns, model);
+
+    const cards = workerCards(ledger, at, 4);
+    renderWorkerCards(wgrid, cards);
+    wCount.textContent = `${cards.length} LATEST`;
+    const runs = runStreamItems(p, orch);
+    rstream.hidden = runs.length === 0;
+    if (runs.length) {
+      renderRunCards(rgrid, runs);
+      rCount.textContent = `${runs.length} ${runs.length === 1 ? 'RUN' : 'RUNS'}`;
+    }
+
+    stackN.textContent = model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS';
+    stackSub.textContent = `${counts.cancelled} cancelled and left out of the percent${counts.proposed ? `, ${counts.proposed} proposed not counted` : ''}`;
+    const tiles = [
+      ['ready', counts.ready],
+      ...(counts.running ? [['running', counts.running]] : []),
+      ['review', counts.review],
+      ['waiting', counts.blocked, 'blocked'],
+      ['to do', counts.todo, 'todo'],
+      ['done', counts.done],
+    ].map(([label, value, key]) => ({ label, value, color: TILE_COLOURS[key || label], footnote: `${value} ${label}` }));
+    const big = Math.max(...tiles.map(t => t.value));
+    for (const t of tiles) t.hi = big > 0 && t.value === big;
+    renderStackSummaryTiles(tilesHost, tiles);
+    footNote.textContent = `data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
+
+    orbit.resize();
+    if (firstPaint) {
+      firstPaint = false;
+      if (doc.fonts && doc.fonts.ready && typeof doc.fonts.ready.then === 'function') {
+        doc.fonts.ready.then(() => { if (!destroyed) orbit.resize(); }, () => {});
+      }
+    }
+    if (!headTitleGlitched) {
+      headTitleGlitched = true;
+      const h1 = titleHost.firstChild;
+      if (h1) glitch(h1);
+    }
+  }
+
   const onBackClick = () => {
     if (typeof deps.onBack === 'function') deps.onBack();
   };
   backBtn.addEventListener('click', onBackClick);
+  const onHeadHover = () => glitch(hd2);
+  hd2.addEventListener('mouseenter', onHeadHover);
+  const onResize = () => orbit.resize();
+  if (typeof win.addEventListener === 'function') win.addEventListener('resize', onResize);
+  const onVisibility = () => {
+    if (robotApi && typeof robotApi.setAnimationPaused === 'function') robotApi.setAnimationPaused(Boolean(doc.hidden));
+  };
+  if (typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', onVisibility);
 
-  function paint(at) {
-    paintCockpitHeader(headerHost, projectRef, deps, at);
-    const orch = syncOrchestratorLabel(headerHost, projectRef, at);
-    orchTitle.textContent = orch.label;
-    paintTicketLists(ticketsLeft, ticketsRight, readyHost, projectRef);
-    paintNowPanel(nowPanelHost, projectRef);
-    paintWorkerStream(workerHost, projectRef, workerHead);
-    paintRunStream(streamHost, projectRef, at);
-    const runCount = runStreamItems(projectRef, at).length;
-    syncStreamCount(streamHead, runCount, projectRef?.total ?? 0, `${runCount} ${runCount === 1 ? 'run' : 'runs'}`);
-    paintStack(stackTilesHost, stackFootHost, projectRef, viewport);
-    paintPhonePanels(deps, phoneRefs, projectRef, at);
-    tabCtl.syncTabMode();
-    const nums = headerHost.querySelector?.('.headline-num');
-    if (nums && projectRef) {
-      const done = projectRef.done ?? 0;
-      const total = projectRef.total ?? 0;
-      nums.title = 'source field: ledger.tickets done / live total';
-      const parts = nums.querySelectorAll
-        ? Array.from(nums.querySelectorAll('.headline-num-part'))
-        : [];
-      if (parts.length >= 2) {
-        parts[0].textContent = String(done);
-        parts[1].textContent = String(total);
-      } else {
-        nums.textContent = headlineTicketText(done, total);
-      }
-    }
-  }
-
-  const initialAt = nowMs(deps);
-  paint(initialAt);
+  paint(nowMs(deps));
 
   return {
     update(nextProject) {
@@ -740,8 +477,16 @@ export function renderProjectCockpit(host, project, deps) {
       paint(nowMs(deps));
     },
     destroy() {
+      destroyed = true;
+      for (const id of timers) clearTimer(id);
+      timers.clear();
       backBtn.removeEventListener('click', onBackClick);
-      tabCtl.destroyTabs();
+      hd2.removeEventListener('mouseenter', onHeadHover);
+      if (typeof win.removeEventListener === 'function') win.removeEventListener('resize', onResize);
+      if (typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', onVisibility);
+      orbit.destroy();
+      if (headHandle) headHandle.destroy();
+      headHandle = null;
       while (host.firstChild) host.removeChild(host.firstChild);
     },
   };

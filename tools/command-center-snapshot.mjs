@@ -71,7 +71,112 @@ function buildProjectCard(p, index) {
   if (typeof fails === 'number' && Number.isFinite(fails)) {
     card.fails = textField('Fails', String(fails), `${prefix}.tickets.byStatus.failed`, 'Ledger tickets in failed status.');
   }
+  const counts = ticketCounts(p);
+  if (counts) card.ticketCounts = { ...counts, source: `${prefix}.tickets.byStatus` };
   return card;
+}
+
+const HOUR_MS = 3600000;
+const DONE_AT_KEYS = ['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'];
+
+/** Ticket counts by status for the Hive card and panels: the board's byStatus map, else the ledger rows. Null when neither exists. */
+function ticketCounts(p) {
+  let by = p?.tickets?.byStatus;
+  if (!by || typeof by !== 'object' || !Object.keys(by).length) {
+    const rows = Array.isArray(p?.ledger?.tickets) ? p.ledger.tickets : [];
+    if (!rows.length) return null;
+    by = {};
+    for (const t of rows) if (t?.status) by[t.status] = (by[t.status] ?? 0) + 1;
+  }
+  const get = (k) => (num(by[k]) ?? 0);
+  const total = Object.entries(by).reduce((a, [k, v]) => a + (k === 'proposed' ? 0 : (num(v) ?? 0)), 0);
+  const cancelled = get('cancelled');
+  const done = get('done');
+  return { total, done, ready: get('ready'), blocked: get('blocked'), review: get('review'), cancelled, remaining: Math.max(0, total - done - cancelled) };
+}
+
+function doneAtMs(t) {
+  for (const k of DONE_AT_KEYS) {
+    const ms = typeof t?.[k] === 'string' ? Date.parse(t[k]) : NaN;
+    if (Number.isFinite(ms)) return ms;
+  }
+  return NaN;
+}
+
+/** Last 24 hours of ticket completions, oldest bucket first. Null when no ledger row carries a completion time. */
+function throughput24h(projects, nowMs) {
+  const buckets = new Array(24).fill(0);
+  let seen = false;
+  for (const p of projects) {
+    for (const t of p?.ledger?.tickets ?? []) {
+      if (t?.status !== 'done') continue;
+      const ms = doneAtMs(t);
+      if (!Number.isFinite(ms)) continue;
+      seen = true;
+      const ago = Math.floor((nowMs - ms) / HOUR_MS);
+      if (ago >= 0 && ago < 24) buckets[23 - ago] += 1;
+    }
+  }
+  return seen ? buckets : null;
+}
+
+/** Jobs per lane in the last 24 hours, read from whichever lane map the board payload carries. */
+function laneStats(board) {
+  const src = board?.machine?.lanes ?? board?.lanes;
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return null;
+  const out = {};
+  for (const [name, v] of Object.entries(src)) {
+    const jobs = num(typeof v === 'number' ? v : v?.jobs24h ?? v?.jobs);
+    if (jobs === null) continue;
+    out[name] = { jobs24h: jobs, running: num(v?.running) ?? 0 };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+const EVENT_LIMIT = 40;
+
+/** Session log rows: review, blocked and recently finished tickets plus open PRs, newest first where a time exists. */
+function hiveEvents(projects, prs, nowMs) {
+  const events = [];
+  for (const p of projects) {
+    const name = p?.name ?? p?.id ?? '';
+    for (const t of p?.ledger?.tickets ?? []) {
+      if (!t?.id) continue;
+      if (t.status === 'review') events.push({ kind: 'review', id: t.id, title: t.title ?? t.id, project: name });
+      else if (t.status === 'blocked') events.push({ kind: 'blocked', id: t.id, title: t.title ?? t.id, project: name });
+      else if (t.status === 'done') {
+        const ms = doneAtMs(t);
+        if (Number.isFinite(ms) && nowMs - ms < 24 * HOUR_MS) events.push({ kind: 'done', id: t.id, title: t.title ?? t.id, project: name, at: new Date(ms).toISOString() });
+      }
+    }
+  }
+  const rank = { review: 0, blocked: 1, done: 2 };
+  events.sort((a, b) => (rank[a.kind] - rank[b.kind]) || (Date.parse(b.at ?? '') || 0) - (Date.parse(a.at ?? '') || 0));
+  const out = events.slice(0, EVENT_LIMIT);
+  for (const r of prs) out.push({ kind: 'pr', id: `#${r.number}`, title: r.title });
+  return out;
+}
+
+function openPrs(board) {
+  const list = Array.isArray(board?.prs) ? board.prs : Array.isArray(board?.machine?.prs) ? board.machine.prs : [];
+  return list.filter(r => r && num(r.number) !== null && typeof r.title === 'string').map(r => ({ number: r.number, title: r.title }));
+}
+
+/** Server-side extras for the Hive panels; every key is left out when the board payload cannot back it. */
+function buildHiveExtras(board, projects, nowMs) {
+  const hive = {};
+  const hours = throughput24h(projects, nowMs);
+  if (hours) {
+    hive.throughput24h = hours;
+    hive.doneLast24h = hours.reduce((a, v) => a + v, 0);
+  }
+  const lanes = laneStats(board);
+  if (lanes) hive.lanes = lanes;
+  const prs = openPrs(board);
+  hive.prs = prs;
+  const events = hiveEvents(projects, prs, nowMs);
+  if (events.length) hive.events = events;
+  return hive;
 }
 
 /**
@@ -97,7 +202,8 @@ export function buildCommandCenterSnapshot(board, options = {}) {
     if (!p || p.parentId) continue;
     cards.push(buildProjectCard(p, i));
   }
-  return { at, stats, projects: cards };
+  const nowMs = Number.isFinite(Date.parse(at)) ? Date.parse(at) : (options.now ?? Date.now());
+  return { at, stats, projects: cards, hive: buildHiveExtras(board, projects, nowMs) };
 }
 
 function ledgerFromProject(project) {

@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Command Center shared theme: vendored fonts (CSP allows only 'self') and the design tokens from the owner-approved artifact.
+   Linked first on /command-center so the Hive and the Cockpit read the same :root. */
+@font-face{font-family:"Oxanium";font-style:normal;font-weight:200 800;font-display:swap;src:url("/assets/vendor/fonts/oxanium-latin-wght-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist Mono";font-style:normal;font-weight:100 900;font-display:swap;src:url("/assets/vendor/fonts/geist-mono-latin-wght-normal.woff2") format("woff2")}
+@font-face{font-family:"Instrument Serif";font-style:italic;font-weight:400;font-display:swap;src:url("/assets/vendor/fonts/instrument-serif-latin-400-italic.woff2") format("woff2")}
+@font-face{font-family:"Playfair Display";font-style:italic;font-weight:400 900;font-display:swap;src:url("/assets/vendor/fonts/playfair-display-latin-wght-italic.woff2") format("woff2")}
+:root{
+  --bg:#05060b;--panel:#0a0c14;--panel2:#0e111b;--line:#1c2233;--fg:#e9eef8;--muted:#7d8aa3;--dim:#4b566d;
+  --blue:#4d7cff;--green:#2fe0a0;--red:#ff4d7e;--amber:#ffb62e;--violet:#a98bff;--cyan:#4ccce6;--gray:#58627a;
+  --font-head:"Oxanium","Trebuchet MS",system-ui,sans-serif;--font-mono:"Geist Mono",ui-monospace,Menlo,monospace;--font-serif:"Instrument Serif",Georgia,serif;--font-display:"Playfair Display","Instrument Serif",Georgia,serif;--font-body:system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark}

@@ -6,29 +6,32 @@ import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { buildCommandCenterSnapshot } from '../tools/command-center-snapshot.mjs';
-import { HIVE_LANES, HIVE_LANE_CSS_VAR } from '../tools/watch-assets/hive-layout.js';
+
+const dataModulePath = fileURLToPath(new URL('../tools/watch-assets/command-center-data.js', import.meta.url));
+
+/** The shared parser is a classic script; load it the way the page does. */
+async function parseCommandCenterSnapshot(body) {
+  const box = { self: {} };
+  vm.runInNewContext(await fs.readFile(dataModulePath, 'utf8'), box);
+  return box.self.CommandCenterData.parseCommandCenterSnapshot(body);
+}
 
 const hivePanelsPath = fileURLToPath(new URL('../tools/watch-assets/hive-panels.js', import.meta.url));
+const htmlPath = fileURLToPath(new URL('../tools/watch-assets/command-center.html', import.meta.url));
+const hiveCssPath = fileURLToPath(new URL('../tools/watch-assets/cc-hive.css', import.meta.url));
 
 async function ensureHivePanels(document) {
-  if (globalThis.HivePanels?.renderHivePanels) return globalThis.HivePanels;
+  if (globalThis.HivePanels?.renderHiveDashboard) return globalThis.HivePanels;
   const src = await fs.readFile(hivePanelsPath, 'utf8');
-  const box = {
-    module: { exports: {} },
-    exports: {},
-    document,
-    self: globalThis,
-    globalThis,
-  };
+  const box = { module: { exports: {} }, exports: {}, document, self: globalThis, globalThis };
   vm.runInNewContext(src, box, { filename: hivePanelsPath });
-  const api = box.module.exports?.renderHivePanels
-    ? box.module.exports
-    : box.HivePanels;
+  const api = box.module.exports?.renderHiveDashboard ? box.module.exports : box.HivePanels;
   globalThis.HivePanels = api;
   return api;
 }
 
 const NOW = Date.UTC(2026, 9, 26, 21, 0, 0);
+const iso = (ms) => new Date(ms).toISOString();
 
 function makeClassList() {
   const set = new Set();
@@ -52,34 +55,42 @@ function walkTree(node, fn) {
   for (const c of node.children || []) walkTree(c, fn);
 }
 
+/** Compound selectors only: tag, .class, [attr], [attr="v"] in any mix. */
+function matches(n, sel) {
+  if (!n || !n.classList) return false;
+  const re = /(^[a-z][a-z0-9]*)|\.([\w-]+)|\[([\w-]+)(?:="?([^"\]]*)"?)?\]/gi;
+  let m;
+  let any = false;
+  while ((m = re.exec(sel))) {
+    any = true;
+    if (m[1] && n.tagName !== m[1].toUpperCase()) return false;
+    if (m[2] && !n.classList.contains(m[2])) return false;
+    if (m[3]) {
+      const v = n.getAttribute(m[3]);
+      if (v === null) return false;
+      if (m[4] !== undefined && v !== m[4]) return false;
+    }
+  }
+  return any;
+}
+
 function makeElement(tag, rect = { width: 120, height: 44, left: 0, top: 0 }) {
   const classList = makeClassList();
   const listeners = new Map();
   const node = {
     tagName: String(tag).toUpperCase(),
-    className: '',
     classList,
     children: [],
     childNodes: [],
-    style: {
-      setProperty(name, value) {
-        this[name] = value;
-      },
-    },
+    style: { setProperty(name, value) { this[name] = value; } },
     dataset: {},
     attributes: {},
     textContent: '',
     parentNode: null,
     firstChild: null,
-    width: 0,
-    height: 0,
     _rect: { ...rect },
-    setAttribute(k, v) {
-      this.attributes[k] = v;
-    },
-    getAttribute(k) {
-      return this.attributes[k] ?? null;
-    },
+    setAttribute(k, v) { this.attributes[k] = String(v); },
+    getAttribute(k) { return this.attributes[k] ?? null; },
     appendChild(child) {
       this.children.push(child);
       this.childNodes.push(child);
@@ -108,76 +119,41 @@ function makeElement(tag, rect = { width: 120, height: 44, left: 0, top: 0 }) {
       if (i >= 0) list.splice(i, 1);
     },
     dispatchEvent(evt) {
-      const list = listeners.get(evt.type) || [];
-      for (const h of list) h(evt);
+      for (const h of listeners.get(evt.type) || []) h(evt);
       return true;
     },
     getBoundingClientRect() {
-      return {
-        left: this._rect.left,
-        top: this._rect.top,
-        right: this._rect.left + this._rect.width,
-        bottom: this._rect.top + this._rect.height,
-        width: this._rect.width,
-        height: this._rect.height,
-      };
+      const r = this._rect;
+      return { left: r.left, top: r.top, right: r.left + r.width, bottom: r.top + r.height, width: r.width, height: r.height };
     },
     querySelector(sel) {
       let found = null;
-      walkTree(this, (n) => {
-        if (found) return;
-        if (sel === '.name' && n.classList?.contains('name')) found = n;
-        if (sel === '.lbl' && n.classList?.contains('lbl')) found = n;
-        if (sel === '.val' && n.classList?.contains('val')) found = n;
-        if (sel === '.val.num' && n.classList?.contains('val') && n.classList?.contains('num')) found = n;
-      });
+      walkTree(this, (n) => { if (!found && n !== this && matches(n, sel)) found = n; });
       return found;
     },
     querySelectorAll(sel) {
       const out = [];
-      walkTree(this, (n) => {
-        if (sel === '.cc-stat' && n.classList?.contains('cc-stat')) out.push(n);
-        if (sel === '.hive-node' && n.classList?.contains('hive-node')) out.push(n);
-        if (sel === '.hive-legend span' && n.tagName === 'SPAN' && n.parentNode?.classList?.contains('hive-legend')) {
-          out.push(n);
-        }
-      });
+      walkTree(this, (n) => { if (n !== this && matches(n, sel)) out.push(n); });
       return out;
     },
     getContext() {
       if (!this._ctx) {
-        const calls = { clearRect: 0, staticDrawn: 0, animatedDrawn: 0 };
+        const calls = { clearRect: 0 };
         this._ctx = {
           calls,
-          setTransform() {},
-          clearRect() {
-            calls.clearRect += 1;
-          },
-          save() {},
-          restore() {},
-          beginPath() {},
-          moveTo() {},
-          lineTo() {},
-          quadraticCurveTo() {},
-          stroke() {
-            calls.animatedDrawn += 1;
-          },
-          fill() {
-            calls.staticDrawn += 1;
-          },
-          arc() {},
+          clearRect() { calls.clearRect += 1; },
+          save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, quadraticCurveTo() {}, stroke() {}, fill() {}, arc() {},
+          fillRect() {}, fillText() {}, translate() {}, rotate() {}, drawImage() {}, setLineDash() {},
+          createLinearGradient() { return { addColorStop() {} }; },
+          createRadialGradient() { return { addColorStop() {} }; },
         };
       }
       return this._ctx;
     },
   };
   Object.defineProperty(node, 'className', {
-    get() {
-      return classList.toString();
-    },
-    set(v) {
-      classList.add(...String(v).split(/\s+/).filter(Boolean));
-    },
+    get() { return classList.toString(); },
+    set(v) { classList.add(...String(v).split(/\s+/).filter(Boolean)); },
   });
   return node;
 }
@@ -188,85 +164,45 @@ function createFakeDom() {
   const rafCallbacks = [];
   let rafIdSeq = 1;
   const cancelled = new Set();
-
   const stageRect = { width: 900, height: 700, left: 10, top: 10 };
 
   const document = {
-    hidden,
     createElement(tag) {
-      if (tag === 'canvas') {
-        const c = makeElement('canvas');
-        c._rect = { ...stageRect };
-        return c;
-      }
-      return makeElement(tag);
+      const el = makeElement(tag);
+      if (tag === 'canvas') el._rect = { ...stageRect };
+      return el;
     },
-    createTextNode(text) {
-      return { nodeType: 3, textContent: text };
-    },
-    addEventListener(type, handler) {
-      if (type === 'visibilitychange') this._visHandler = handler;
-    },
-    removeEventListener(type, handler) {
-      if (type === 'visibilitychange' && this._visHandler === handler) this._visHandler = null;
-    },
-    get hidden() {
-      return hidden;
-    },
-    set hidden(v) {
-      hidden = Boolean(v);
-    },
+    createTextNode(text) { return { nodeType: 3, textContent: text }; },
+    addEventListener(type, handler) { if (type === 'visibilitychange') this._visHandler = handler; },
+    removeEventListener(type, handler) { if (type === 'visibilitychange' && this._visHandler === handler) this._visHandler = null; },
+    get hidden() { return hidden; },
+    set hidden(v) { hidden = Boolean(v); },
     defaultView: null,
   };
-
-  const matchMedia = () => ({
-    matches: reducedMotion,
-    addEventListener(type, handler) {
-      this._handler = handler;
-    },
-    removeEventListener(type, handler) {
-      if (this._handler === handler) this._handler = null;
-    },
-    _fireChange() {
-      if (this._handler) this._handler();
-    },
-  });
-
-  const win = {
-    innerWidth: 1200,
-    devicePixelRatio: 1,
-    addEventListener() {},
-    removeEventListener() {},
-  };
+  const win = { innerWidth: 1200, devicePixelRatio: 1, addEventListener() {}, removeEventListener() {} };
   document.defaultView = win;
 
+  const matchMedia = () => ({ matches: reducedMotion, addEventListener() {}, removeEventListener() {} });
   const requestAnimationFrame = (cb) => {
     const id = rafIdSeq++;
     rafCallbacks.push({ id, cb });
     return id;
   };
-
-  const cancelAnimationFrame = (id) => {
-    cancelled.add(id);
-  };
-
+  const cancelAnimationFrame = (id) => { cancelled.add(id); };
   const flushOneFrame = (t = NOW) => {
     const pending = rafCallbacks.filter((x) => !cancelled.has(x.id));
     rafCallbacks.length = 0;
-    for (const { id, cb } of pending) {
-      if (!cancelled.has(id)) cb(t);
-    }
+    for (const { id, cb } of pending) if (!cancelled.has(id)) cb(t);
   };
 
   return {
     document,
+    win,
     matchMedia,
     requestAnimationFrame,
     cancelAnimationFrame,
     flushOneFrame,
-    setReducedMotion(v) {
-      reducedMotion = v;
-    },
+    setReducedMotion(v) { reducedMotion = v; },
     setHidden(v) {
       document.hidden = v;
       if (document._visHandler) document._visHandler();
@@ -277,168 +213,249 @@ function createFakeDom() {
 
 function boardFixture() {
   return {
-    at: new Date(NOW).toISOString(),
-    machine: {
-      agents: { total: 4 },
-      cost: { allUsd: 12.5 },
-    },
+    at: iso(NOW),
+    machine: { agents: { total: 4 }, cost: { allUsd: 12.5 } },
     projects: [
       {
         id: 'proj-a',
         name: 'Alpha',
+        machine: 'host-a',
         agents: { total: 2, jobs: { running: 1 } },
         progress: { overall: 40 },
         card: { blocked: { needYou: 0 }, now: { buildingTickets: 1 }, next: { ready: 3 } },
-        tickets: { byStatus: { failed: 0 } },
-        machine: 'host-a',
+        tickets: { byStatus: { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, failed: 1 } },
+        ledger: {
+          tickets: [
+            { id: 'T-1', title: 'One', status: 'done', doneAt: iso(NOW - 30 * 60000) },
+            { id: 'T-2', title: 'Two', status: 'done', doneAt: iso(NOW - 5 * 3600000) },
+            { id: 'T-3', title: 'Three', status: 'review' },
+            { id: 'T-4', title: 'Four', status: 'blocked' },
+          ],
+        },
       },
       {
         id: 'proj-b',
         name: 'Beta',
+        machine: 'host-b',
         agents: { total: 0 },
         progress: { overall: 80 },
         card: { blocked: { needYou: 2 }, now: { buildingTickets: 0 }, next: { ready: 0 } },
-        tickets: { byStatus: { failed: 1 } },
-        machine: 'host-b',
+        tickets: { byStatus: { done: 4, cancelled: 1 } },
       },
     ],
   };
 }
 
-function statFigure(statEl) {
-  const lbl = (statEl.children || []).find((c) => c.classList?.contains('lbl'));
-  const val = (statEl.children || []).find((c) => c.classList?.contains('val'));
-  return {
-    label: lbl ? lbl.textContent : '',
-    value: val ? val.textContent : '',
-    title: val ? val.getAttribute('title') : null,
-  };
+function collectText(node) {
+  if (!node) return '';
+  if (node.nodeType === 3) return node.textContent || '';
+  let s = node.textContent || '';
+  for (const c of node.children || []) s += collectText(c);
+  return s;
 }
 
-test('renderHive shows four labelled stats, project cards, legend colours, and interactions', async () => {
+function mount(dom, snapshot, extra = {}) {
+  const host = makeElement('div');
+  const opened = [];
+  return import('../tools/watch-assets/cc-hive-mount.js').then(({ renderHive }) => {
+    const handle = renderHive(host, snapshot, {
+      document: dom.document,
+      now: () => NOW,
+      requestAnimationFrame: extra.requestAnimationFrame || dom.requestAnimationFrame,
+      cancelAnimationFrame: dom.cancelAnimationFrame,
+      matchMedia: dom.matchMedia,
+      onOpenProject: (id) => opened.push(id),
+    });
+    return { host, handle, opened };
+  });
+}
+
+function counter(host, label) {
+  const v = host.querySelector(`.v[data-k="${label}"]`);
+  return v ? { text: v.textContent, source: v.getAttribute('data-source'), tip: v.getAttribute('data-tip') } : null;
+}
+
+test('Hive shows four labelled counters, one card per project with its ledger numbers, and opens a project on click', async () => {
   const dom = createFakeDom();
   globalThis.document = dom.document;
-  const { renderHive } = await import('../tools/watch-assets/cc-hive-mount.js');
   await ensureHivePanels(dom.document);
-
   const snapshot = buildCommandCenterSnapshot(boardFixture(), { now: NOW });
-  const opened = [];
-  const host = makeElement('div');
-  host._rect = dom.stageRect;
+  const { host, handle, opened } = await mount(dom, snapshot);
 
-  const mount = renderHive(host, snapshot, {
-    document: dom.document,
-    now: () => NOW,
-    requestAnimationFrame: dom.requestAnimationFrame,
-    cancelAnimationFrame: dom.cancelAnimationFrame,
-    matchMedia: dom.matchMedia,
-    onOpenProject: (id) => opened.push(id),
-  });
+  assert.ok(host.querySelector('.hive-shell'));
+  assert.deepEqual(counter(host, 'projects').text, '2');
+  assert.equal(counter(host, 'projects').source, 'stats.projectsTotal');
+  assert.equal(counter(host, 'agents').text, '4', 'agents from stats.agentsLive');
+  assert.equal(counter(host, 'need you').text, '2', 'need you from stats.needsYouCount');
+  assert.equal(counter(host, 'done 24h').text, '2', 'done 24h from hive.doneLast24h (ledger completions)');
+  for (const label of ['projects', 'agents', 'done 24h', 'need you']) assert.ok(counter(host, label).tip.length, `${label} tooltip`);
 
-  const strip = host.children[0]?.children?.[1];
-  assert.ok(strip?.classList?.contains('hive-stat-strip'));
-  const stats = strip.querySelectorAll('.cc-stat');
-  assert.equal(stats.length, 4);
-  for (const s of stats) {
-    const fig = statFigure(s);
-    assert.ok(fig.label.length);
-    assert.ok(fig.value.length);
-    assert.ok(fig.title && fig.title.length);
-  }
-
-  const stage = host.children[0]?.children?.[2];
-  const nodes = stage?.children?.find((c) => c.id === 'hive-nodes');
-  const cards = nodes.querySelectorAll('.hive-node');
+  const cards = host.querySelectorAll('.hive-node');
   assert.equal(cards.length, snapshot.projects.length);
+  assert.equal(cards[0].getAttribute('data-project-id'), 'proj-a');
+  assert.equal(cards[1].getAttribute('data-project-id'), 'proj-b');
+  const alpha = collectText(cards[0]);
+  assert.match(alpha, /01Alpha/);
+  assert.match(alpha, /tickets7/, 'tickets total counts every status but proposed');
+  assert.match(alpha, /done2 of 6/, 'done of tickets that still count (cancelled left out)');
+  assert.match(alpha, /blocked1/);
+  assert.match(alpha, /in review1/);
+  assert.match(alpha, /33%/);
+  assert.equal(cards[0].getAttribute('data-status'), 'building');
+  const beta = collectText(cards[1]);
+  assert.match(beta, /DONE/);
+  assert.match(beta, /cancelled1/, 'a finished project shows cancelled instead of blocked');
+  assert.match(beta, /100%/);
+  assert.match(beta, /1\.00/);
+  assert.equal(cards[1].getAttribute('data-status'), 'done');
 
-  const legend = host.children[0]?.children?.[0]?.children?.[0];
-  assert.ok(legend?.classList?.contains('hive-legend'));
-  const rows = legend.children;
-  assert.equal(rows.length, HIVE_LANES.length);
-  for (let i = 0; i < HIVE_LANES.length; i += 1) {
-    const lane = HIVE_LANES[i];
-    const swatch = rows[i].children[0];
-    assert.equal(swatch.style.background, `var(${HIVE_LANE_CSS_VAR[lane]})`);
-  }
+  const legend = host.querySelector('.hive-legend');
+  assert.ok(legend);
+  assert.equal(legend.querySelectorAll('i').length, 5);
 
   cards[0].dispatchEvent({ type: 'click' });
-  assert.deepEqual(opened, ['proj-a']);
+  cards[1].dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  assert.deepEqual(opened, ['proj-a', 'proj-b']);
 
-  const canvas = stage.children.find((c) => c.tagName === 'CANVAS');
+  handle.destroy();
+  assert.equal(host.children.length, 0);
+});
+
+test('Hive panels read the ledger: session log, hourly bars, per-project percent, totals', async () => {
+  const dom = createFakeDom();
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  const snapshot = buildCommandCenterSnapshot(boardFixture(), { now: NOW });
+  const { host, handle } = await mount(dom, snapshot);
+
+  const log = collectText(host.querySelector('.hive-slog'));
+  assert.match(log, /review.*T-3/);
+  assert.match(log, /waits.*T-4/);
+  assert.match(log, /done.*T-1.*30 min ago/);
+  const bars = host.querySelector('.hive-bars').querySelectorAll('i');
+  assert.equal(bars.length, 24);
+  assert.equal(bars[23].getAttribute('data-tip'), '1 done, 1 h ago');
+  assert.equal(bars[18].getAttribute('data-tip'), '1 done, 6 h ago');
+  const panels = collectText(host.querySelector('.hive-panels'));
+  assert.match(panels, /2projects on the board/);
+  assert.match(panels, /read from host-a, host-b/);
+  assert.match(panels, /Alpha.*33%/s);
+  assert.match(panels, /Beta.*100%/s);
+  assert.match(panels, /no per-lane job counts in the board data/, 'lanes missing from the payload say so');
+  assert.match(panels, /tickets in the ledger.*12/s);
+  assert.match(panels, /tickets left to do.*4/s);
+  assert.match(panels, /held for you.*2/s);
+  assert.match(panels, /saved by the swarm.*not measured yet/s);
+  assert.ok(host.querySelector('svg'), 'completions-per-hour step chart');
+  handle.destroy();
+});
+
+test('Hive says so when the snapshot has no ledger numbers (parsed snapshot, no extras)', async () => {
+  const dom = createFakeDom();
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  const parsed = await parseCommandCenterSnapshot(buildCommandCenterSnapshot(boardFixture(), { now: NOW }));
+  const { host, handle } = await mount(dom, parsed);
+  const cards = host.querySelectorAll('.hive-node');
+  assert.equal(cards.length, 2);
+  assert.match(collectText(cards[0]), /no ledger numbers yet/);
+  assert.equal(counter(host, 'done 24h').text, '—');
+  const panels = collectText(host.querySelector('.hive-panels'));
+  assert.match(panels, /no completion times in the ledger/);
+  assert.match(panels, /no ledger counts yet/);
+  assert.match(panels, /no ledger percentages yet/);
+  handle.destroy();
+});
+
+test('update with the same data keeps the card elements; a new agent count shows a toast', async () => {
+  const dom = createFakeDom();
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  const board = boardFixture();
+  const { host, handle } = await mount(dom, buildCommandCenterSnapshot(board, { now: NOW }));
+  const before = host.querySelectorAll('.hive-node');
+  handle.update(buildCommandCenterSnapshot(board, { now: NOW }));
+  const after = host.querySelectorAll('.hive-node');
+  assert.equal(after[0], before[0], 'unchanged data does not rebuild the cards (robot heads keep running)');
+
+  board.machine.agents.total = 6;
+  handle.update(buildCommandCenterSnapshot(board, { now: NOW }));
+  assert.equal(counter(host, 'agents').text, '6');
+  assert.match(collectText(host.querySelector('.hive-toast')), /2 agents started/);
+  handle.destroy();
+});
+
+test('Hive animates the canvas, stops while the tab is hidden, and destroy cancels the loop', async () => {
+  const dom = createFakeDom();
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  let scheduled = 0;
+  const raf = (cb) => { scheduled += 1; return dom.requestAnimationFrame(cb); };
+  const snapshot = buildCommandCenterSnapshot(boardFixture(), { now: NOW });
+  const { host, handle } = await mount(dom, snapshot, { requestAnimationFrame: raf });
+  const canvas = host.querySelector('canvas');
+  assert.ok(scheduled >= 1);
   const before = canvas._ctx.calls.clearRect;
   dom.flushOneFrame(NOW + 50);
   assert.ok(canvas._ctx.calls.clearRect > before);
 
   dom.setHidden(true);
-  const rafBefore = dom.flushOneFrame;
   dom.flushOneFrame(NOW + 100);
   const afterHidden = canvas._ctx.calls.clearRect;
   dom.flushOneFrame(NOW + 150);
-  assert.equal(canvas._ctx.calls.clearRect, afterHidden, 'hidden document pauses animation loop');
+  assert.equal(canvas._ctx.calls.clearRect, afterHidden, 'hidden document pauses the animation loop');
 
-  mount.destroy();
-  assert.equal(host.children.length, 0);
-});
-
-test('renderHive draws one static frame when reduced motion is preferred', async () => {
-  const dom = createFakeDom();
-  dom.setReducedMotion(true);
-  globalThis.document = dom.document;
-  const { renderHive } = await import('../tools/watch-assets/cc-hive-mount.js');
-  await ensureHivePanels(dom.document);
-
-  const snapshot = buildCommandCenterSnapshot(boardFixture(), { now: NOW });
-  const host = makeElement('div');
-  host._rect = dom.stageRect;
-
-  const mount = renderHive(host, snapshot, {
-    document: dom.document,
-    now: () => NOW,
-    requestAnimationFrame: dom.requestAnimationFrame,
-    cancelAnimationFrame: dom.cancelAnimationFrame,
-    matchMedia: dom.matchMedia,
-    onOpenProject: () => {},
-  });
-
-  const stage = host.children[0]?.children?.[2];
-  const canvas = stage.children.find((c) => c.tagName === 'CANVAS');
-  const drawsAfterMount = canvas._ctx.calls.clearRect;
-  assert.ok(drawsAfterMount >= 1);
-
-  dom.flushOneFrame(NOW + 40);
-  dom.flushOneFrame(NOW + 80);
-  assert.equal(canvas._ctx.calls.clearRect, drawsAfterMount, 'reduced motion: no ongoing redraw loop');
-
-  mount.destroy();
-});
-
-test('destroy cancels scheduled animation frame', async () => {
-  const dom = createFakeDom();
-  globalThis.document = dom.document;
-  const { renderHive } = await import('../tools/watch-assets/cc-hive-mount.js');
-  await ensureHivePanels(dom.document);
-  const snapshot = buildCommandCenterSnapshot(boardFixture(), { now: NOW });
-  const host = makeElement('div');
-  host._rect = dom.stageRect;
-
-  let scheduled = 0;
-  const raf = (cb) => {
-    scheduled += 1;
-    return dom.requestAnimationFrame(cb);
-  };
-
-  const mount = renderHive(host, snapshot, {
-    document: dom.document,
-    now: () => NOW,
-    requestAnimationFrame: raf,
-    cancelAnimationFrame: dom.cancelAnimationFrame,
-    matchMedia: dom.matchMedia,
-    onOpenProject: () => {},
-  });
-
-  assert.ok(scheduled >= 1);
-  mount.destroy();
+  handle.destroy();
   const beforeFlush = scheduled;
   dom.flushOneFrame(NOW + 500);
   assert.equal(scheduled, beforeFlush);
+});
+
+test('Hive draws one still frame when reduced motion is preferred', async () => {
+  const dom = createFakeDom();
+  dom.setReducedMotion(true);
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  let scheduled = 0;
+  const raf = (cb) => { scheduled += 1; return dom.requestAnimationFrame(cb); };
+  const { host, handle } = await mount(dom, buildCommandCenterSnapshot(boardFixture(), { now: NOW }), { requestAnimationFrame: raf });
+  const canvas = host.querySelector('canvas');
+  const drawsAfterMount = canvas._ctx.calls.clearRect;
+  assert.ok(drawsAfterMount >= 1);
+  assert.equal(scheduled, 0, 'reduced motion: no animation loop');
+  dom.flushOneFrame(NOW + 40);
+  dom.flushOneFrame(NOW + 80);
+  assert.equal(canvas._ctx.calls.clearRect, drawsAfterMount);
+  handle.destroy();
+});
+
+test('command-center.html links the stylesheets in the contract order and keeps one module script', async () => {
+  const html = await fs.readFile(htmlPath, 'utf8');
+  const hrefs = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(hrefs, [
+    '/assets/cc-theme.css',
+    '/assets/swarm-ui.css',
+    '/assets/cc-phone.css',
+    '/assets/command-center.css',
+    '/assets/cc-hive.css',
+    '/assets/cc-cockpit.css',
+  ]);
+  assert.equal([...html.matchAll(/<script\b/g)].length, 1);
+  assert.match(html, /<script type="module" src="\/assets\/command-center-boot\.js"><\/script>/);
+  assert.match(html, /id="command-center-root"/);
+});
+
+test('cc-hive.css scopes every selector under .hive-body or .hive-shell and loads no remote font', async () => {
+  const css = (await fs.readFile(hiveCssPath, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.doesNotMatch(css, /https?:\/\/|googleapis|gstatic/);
+  const bad = [];
+  for (const line of css.split('\n')) {
+    const t = line.trim();
+    if (!t.includes('{') || t.startsWith('@')) continue;
+    const selector = t.slice(0, t.indexOf('{'));
+    for (const part of selector.split(',')) {
+      if (!/^\.hive-(body|shell)\b/.test(part.trim())) bad.push(part.trim());
+    }
+  }
+  assert.deepEqual(bad, []);
 });

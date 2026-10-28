@@ -903,7 +903,389 @@
     }
   }
 
+  /* ---- Hive dashboard (owner-approved design): view model + the three panels under the ring ---- */
+
+  var CAT_COLOR = { building: '#2fe0a0', blocked: '#ffb62e', need: '#ff4d7e', done: '#4d7cff', idle: '#a98bff', off: '#58627a' };
+  var CAT_TAG = { building: 'BUILDING', blocked: 'BLOCKED', need: 'NEEDS YOU', done: 'DONE', idle: 'IDLE', off: 'OFFLINE' };
+  var LANE_COLOR = { orchestrator: '#c084fc', haiku: '#34d399', sonnet: '#60a5fa', opus: '#fbbf24', codex: '#f472b6', cursor: '#a3e635', claude: '#94a3b8' };
+  var EVENT_KIND = {
+    review: { label: 'review', color: 'var(--red)' },
+    blocked: { label: 'waits', color: 'var(--amber)' },
+    done: { label: 'done', color: 'var(--blue)' },
+    pr: { label: 'pr', color: 'var(--green)' },
+    failed: { label: 'failed', color: 'var(--red)' },
+    needs: { label: 'needs', color: 'var(--red)' },
+    run: { label: 'run', color: 'var(--green)' },
+  };
+  var BAR_COLORS = ['#4d7cff', '#2fe0a0', '#ff4d7e', '#ffb62e'];
+  var BUBBLE_GLYPH = { excl: '!', sleep: 'z', cross: '×', dots: '…', stars: '★' };
+
+  function laneColor(name) { return LANE_COLOR[String(name).toLowerCase()] || '#94a3b8'; }
+
+  /** "just now", "12 min ago", "3 h ago", "2 d ago" from an age in milliseconds. */
+  function agoText(ms) {
+    var m = Math.round(ms / 60000);
+    if (m < 1) { return 'just now'; }
+    if (m < 90) { return m + ' min ago'; }
+    if (m < 2880) { return Math.round(m / 60) + ' h ago'; }
+    return Math.round(m / 1440) + ' d ago';
+  }
+
+  function nonNeg(v) { return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null; }
+
+  /** Ticket counts of a project card (server field ticketCounts); null when the card carries none. */
+  function cardCounts(project) {
+    var c = project && project.ticketCounts;
+    if (!c || typeof c !== 'object' || nonNeg(c.total) === null) { return null; }
+    return {
+      total: c.total,
+      done: nonNeg(c.done) || 0,
+      ready: nonNeg(c.ready) || 0,
+      blocked: nonNeg(c.blocked) || 0,
+      review: nonNeg(c.review) || 0,
+      cancelled: nonNeg(c.cancelled) || 0,
+      remaining: nonNeg(c.remaining) !== null ? c.remaining : Math.max(0, c.total - (nonNeg(c.done) || 0) - (nonNeg(c.cancelled) || 0)),
+    };
+  }
+
+  /** One project for the Hive: ledger counts, percent, and the colour category the ring and card share. */
+  function projectView(project) {
+    var s = projectSignals(project);
+    var counts = cardCounts(project);
+    var counted = counts ? counts.total - counts.cancelled : null;
+    var pct = null;
+    if (counts && counted > 0) { pct = Math.round((counts.done / counted) * 100); }
+    else if (project.meter && typeof project.meter.value === 'number' && Number.isFinite(project.meter.value)) { pct = Math.round(project.meter.value); }
+    else if (project.percentDone && typeof project.percentDone.value === 'string' && Number.isFinite(parseInt(project.percentDone.value, 10))) { pct = parseInt(project.percentDone.value, 10); }
+    var cat = 'idle';
+    if (pct === 100) { cat = 'done'; }
+    else if (s.needs > 0) { cat = 'need'; }
+    else if (counts && counts.blocked > 0 && s.live === 0) { cat = 'blocked'; }
+    else if (s.live > 0) { cat = 'building'; }
+    return {
+      id: project.id,
+      name: projectTitle(project),
+      machine: project.machine && typeof project.machine.value === 'string' ? project.machine.value : '',
+      counts: counts,
+      counted: counted,
+      pct: pct,
+      needs: s.needs,
+      agents: s.live,
+      cat: cat,
+      color: CAT_COLOR[cat],
+      tag: CAT_TAG[cat],
+      source: project.ticketCounts ? project.ticketCounts.source : '',
+    };
+  }
+
+  function sumField(list, key) {
+    var t = 0;
+    var any = false;
+    for (var i = 0; i < list.length; i += 1) {
+      if (list[i].counts) { t += list[i].counts[key]; any = true; }
+    }
+    return any ? t : null;
+  }
+
+  /** Session log rows from the snapshot's ledger events; without them, the same project signals the ring uses. */
+  function sessionEvents(projects, hive) {
+    if (hive && Array.isArray(hive.events) && hive.events.length) { return hive.events; }
+    var out = [];
+    for (var i = 0; i < projects.length; i += 1) {
+      var p = projects[i];
+      var fails = fieldNumber(p.raw && p.raw.fails) || 0;
+      if (fails > 0) { out.push({ kind: 'failed', id: '', title: p.name + ': ' + plural(fails, 'failed ticket') }); }
+      if (p.needs > 0) { out.push({ kind: 'needs', id: '', title: p.name + ': ' + plural(p.needs, 'item') + ' waiting on you' }); }
+      if (p.agents > 0) { out.push({ kind: 'run', id: '', title: p.name + ': ' + plural(p.agents, 'agent') + ' running' }); }
+    }
+    return out;
+  }
+
+  /**
+   * Everything the Hive draws, from one snapshot (parsed fields plus the server's hive extras).
+   * Anything the snapshot does not carry stays null so the view can say so in one muted line.
+   */
+  function deriveHiveView(snapshot) {
+    var snap = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    var stats = snap.stats && typeof snap.stats === 'object' ? snap.stats : {};
+    var hive = snap.hive && typeof snap.hive === 'object' ? snap.hive : {};
+    var raw = Array.isArray(snap.projects) ? snap.projects.slice(0, 10) : [];
+    var projects = raw.map(function (p) { var v = projectView(p); v.raw = p; return v; });
+    var agents = fieldNumber(stats.agentsLive);
+    if (agents === null) { agents = projects.reduce(function (a, p) { return a + p.agents; }, 0); }
+    var needs = fieldNumber(stats.needsYouCount);
+    if (needs === null) { needs = projects.reduce(function (a, p) { return a + p.needs; }, 0); }
+    var lanes = null;
+    if (hive.lanes && typeof hive.lanes === 'object') {
+      lanes = [];
+      for (var k in hive.lanes) {
+        if (!Object.prototype.hasOwnProperty.call(hive.lanes, k)) { continue; }
+        var jobs = nonNeg(hive.lanes[k] && hive.lanes[k].jobs24h);
+        if (jobs !== null) { lanes.push({ name: k, jobs24h: jobs, running: nonNeg(hive.lanes[k].running) || 0 }); }
+      }
+      lanes.sort(function (a, b) { return b.jobs24h - a.jobs24h; });
+      if (!lanes.length) { lanes = null; }
+    }
+    var machines = [];
+    for (var m = 0; m < projects.length; m += 1) {
+      if (projects[m].machine && machines.indexOf(projects[m].machine) < 0) { machines.push(projects[m].machine); }
+    }
+    var counted = projects.reduce(function (a, p) { return p.counted !== null ? a + p.counted : a; }, 0);
+    return {
+      at: snap.at,
+      projects: projects,
+      agents: agents,
+      needs: needs,
+      projectsTotal: fieldNumber(stats.projectsTotal) !== null ? fieldNumber(stats.projectsTotal) : projects.length,
+      spend: fieldNumber(stats.spendUsd),
+      doneLast24h: nonNeg(hive.doneLast24h),
+      throughput: Array.isArray(hive.throughput24h) && hive.throughput24h.length ? hive.throughput24h : null,
+      lanes: lanes,
+      prs: Array.isArray(hive.prs) ? hive.prs : null,
+      events: sessionEvents(projects, hive),
+      machines: machines,
+      totals: {
+        tickets: sumField(projects, 'total'),
+        done: sumField(projects, 'done'),
+        ready: sumField(projects, 'ready'),
+        blocked: sumField(projects, 'blocked'),
+        review: sumField(projects, 'review'),
+        remaining: sumField(projects, 'remaining'),
+        counted: projects.some(function (p) { return p.counted !== null; }) ? counted : null,
+      },
+    };
+  }
+
+  function muted(text) { return el('p', 'hive-muted', text); }
+
+  function svgEl(tag) {
+    return typeof document.createElementNS === 'function' ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag);
+  }
+
+  /** Small speech-bubble badge over a robot head (CSS only): excl, sleep, cross, dots, stars. */
+  function createBubble(kind) {
+    var b = el('span', 'hive-bub hive-bub--' + kind, BUBBLE_GLYPH[kind] || '');
+    b.setAttribute('aria-hidden', 'true');
+    return b;
+  }
+
+  /** Step-chart path for completions per hour (x spans 0..300, y 8..64 like the artifact). */
+  function stepPath(points) {
+    var max = 1;
+    for (var i = 0; i < points.length; i += 1) { if (points[i] > max) { max = points[i]; } }
+    var d = '';
+    var prev = 0;
+    for (var j = 0; j < points.length; j += 1) {
+      var x = (j / points.length) * 300;
+      var y = 64 - (points[j] / max) * 56;
+      d += (j ? 'L' + x + ',' + prev + ' L' + x + ',' + y : 'M' + x + ',' + y) + ' ';
+      prev = y;
+    }
+    return d + 'L300,' + prev;
+  }
+
+  function sectionHeading(text, extraClass) { return el('h2', extraClass || null, text); }
+
+  function renderSessionLog(host, events, nowMs) {
+    clearChildren(host);
+    var list = Array.isArray(events) ? events.slice(0, 13) : [];
+    if (!list.length) { host.appendChild(muted('no ledger events yet')); return; }
+    for (var i = 0; i < list.length; i += 1) {
+      var ev = list[i];
+      var meta = EVENT_KIND[ev.kind] || { label: String(ev.kind), color: 'var(--muted)' };
+      var row = el('div', 'hive-slog-row');
+      row.setAttribute('data-kind', String(ev.kind));
+      var tag = el('b', null, meta.label);
+      tag.style.color = meta.color;
+      row.appendChild(tag);
+      var body = el('span');
+      if (ev.id) {
+        body.appendChild(el('span', 'hive-mono hive-fg', ev.id));
+        body.appendChild(document.createTextNode(' '));
+      }
+      body.appendChild(document.createTextNode(String(ev.title || '')));
+      var at = parseEventTime(ev.at);
+      if (Number.isFinite(at) && Number.isFinite(nowMs)) {
+        body.appendChild(document.createTextNode(' '));
+        body.appendChild(el('span', 'hive-dim', agoText(nowMs - at)));
+      }
+      row.appendChild(body);
+      host.appendChild(row);
+    }
+  }
+
+  function renderHourBars(host, samples) {
+    clearChildren(host);
+    if (!samples) { host.appendChild(muted('no completion times in the ledger')); return; }
+    var max = 1;
+    for (var i = 0; i < samples.length; i += 1) { if (samples[i] > max) { max = samples[i]; } }
+    for (var j = 0; j < samples.length; j += 1) {
+      var bar = el('i', 'has-tip');
+      var col = BAR_COLORS[j % 4];
+      bar.setAttribute('tabindex', '0');
+      bar.setAttribute('data-tip', samples[j] + ' done, ' + (samples.length - j) + ' h ago');
+      bar.style.height = Math.max(3, (samples[j] / max) * 70) + 'px';
+      bar.style.background = col;
+      bar.style.boxShadow = '0 0 6px ' + col + '55';
+      host.appendChild(bar);
+    }
+  }
+
+  function hbar(cols, labelNode, frac, color, valueText, valueColor) {
+    var row = el('div', 'hive-hbar');
+    row.style.gridTemplateColumns = cols;
+    var kids = Array.isArray(labelNode) ? labelNode : [labelNode];
+    for (var i = 0; i < kids.length; i += 1) { row.appendChild(kids[i]); }
+    var track = el('i');
+    track.style.color = color;
+    var fill = el('u');
+    fill.style.background = color;
+    fill.style.transform = 'scaleX(' + Math.max(0, Math.min(1, frac)) + ')';
+    track.appendChild(fill);
+    row.appendChild(track);
+    var val = el('span', null, valueText);
+    if (valueColor) { val.style.color = valueColor; }
+    row.appendChild(val);
+    return row;
+  }
+
+  function kvRow(label, value, color, title) {
+    var row = el('div', 'hive-kv');
+    row.appendChild(el('span', null, label));
+    var b = el('b', null, value === null || value === undefined ? '—' : String(value));
+    if (color && value !== null && value !== undefined) { b.style.color = color; }
+    if (title) { b.setAttribute('data-source', title); }
+    row.appendChild(b);
+    return row;
+  }
+
+  function numOrNull(v) { return v === null || v === undefined ? null : v; }
+
+  /** Three panels: session log + hourly bars, all projects + who built, what the ledger shows. Returns the robot-head handles it mounted. */
+  function renderHiveDashboard(root, view, options) {
+    var opts = options || {};
+    var nowMs = typeof opts.nowMs === 'number' ? opts.nowMs : Date.now();
+    var heads = [];
+    var pendingHeads = [];
+    clearChildren(root);
+
+    var log = el('section', 'hive-panel');
+    log.setAttribute('aria-labelledby', 'hive-h-log');
+    var h1 = sectionHeading('Session log');
+    h1.id = 'hive-h-log';
+    log.appendChild(h1);
+    var slog = el('div', 'hive-slog');
+    renderSessionLog(slog, view.events, nowMs);
+    log.appendChild(slog);
+    log.appendChild(el('div', 'hive-cap hive-cap--cmd', '~/swarm $ swarm tickets --status done --since 24h'));
+    var bars = el('div', 'hive-bars');
+    renderHourBars(bars, view.throughput);
+    log.appendChild(bars);
+    if (view.throughput) { log.appendChild(el('div', 'hive-cap', 'done per hour, last 24 h, oldest on the left')); }
+
+    var all = el('section', 'hive-panel');
+    all.setAttribute('aria-labelledby', 'hive-h-all');
+    var h2 = sectionHeading('All projects');
+    h2.id = 'hive-h-all';
+    all.appendChild(h2);
+    var big = el('div', 'hive-big', String(view.projectsTotal));
+    big.appendChild(el('small', null, view.projectsTotal === 1 ? 'project on the board' : 'projects on the board'));
+    all.appendChild(big);
+    all.appendChild(el('div', 'hive-hint hive-hint--machines', view.machines.length ? 'read from ' + view.machines.join(', ') : 'machine names not reported'));
+    all.appendChild(sectionHeading('Done per project'));
+    var byproj = el('div');
+    var withPct = view.projects.filter(function (p) { return p.pct !== null; });
+    if (!withPct.length) { byproj.appendChild(muted('no ledger percentages yet')); }
+    for (var i = 0; i < withPct.length; i += 1) {
+      byproj.appendChild(hbar('130px 1fr 44px', el('span', null, withPct[i].name), withPct[i].pct / 100, '#4d7cff', withPct[i].pct + '%'));
+    }
+    all.appendChild(byproj);
+    var who = sectionHeading('Who built (24 h)', 'hive-h-gap');
+    all.appendChild(who);
+    var whoBox = el('div', 'hive-who');
+    if (!view.lanes) { whoBox.appendChild(muted('no per-lane job counts in the board data')); }
+    else {
+      var tot = view.lanes.reduce(function (a, l) { return a + l.jobs24h; }, 0) || 1;
+      for (var li = 0; li < view.lanes.length; li += 1) {
+        var lane = view.lanes[li];
+        var col = laneColor(lane.name);
+        var host = el('span', 'hive-lh');
+        host.setAttribute('data-lane', lane.name);
+        var state = lane.running > 0 ? 'working' : 'sleeping';
+        if (typeof opts.mountHead === 'function') {
+          pendingHeads.push({ host: host, spec: { state: state, size: 30, color: col, id: 'lane-' + lane.name, label: lane.name + ' lane, ' + (state === 'working' ? 'working' : 'resting') } });
+        }
+        host.appendChild(createBubble(state === 'working' ? 'dots' : 'sleep'));
+        if (typeof opts.onHeadHover === 'function' && host.addEventListener) { host.addEventListener('mouseenter', function (e) { opts.onHeadHover(e && e.currentTarget); }); }
+        whoBox.appendChild(hbar('40px 64px 1fr 44px', [host, el('span', null, lane.name.toLowerCase())], lane.jobs24h / tot, col, String(lane.jobs24h), col));
+      }
+    }
+    all.appendChild(whoBox);
+    var t = view.totals;
+    var jobs = view.lanes ? view.lanes.reduce(function (a, l) { return a + l.jobs24h; }, 0) : null;
+    all.appendChild(kvRow('tickets in the ledger', numOrNull(t.tickets)));
+    all.appendChild(kvRow('tickets left to do', numOrNull(t.remaining)));
+    all.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));
+    all.appendChild(kvRow('worker jobs in 24 h', jobs));
+    all.appendChild(kvRow('spend recorded', view.spend === null ? null : formatUsd(view.spend), null, 'stats.spendUsd'));
+    all.appendChild(kvRow('held for you', view.needs, 'var(--amber)', 'stats.needsYouCount'));
+
+    var led = el('section', 'hive-panel');
+    led.setAttribute('aria-labelledby', 'hive-h-led');
+    var h3 = sectionHeading('What the ledger shows');
+    h3.id = 'hive-h-led';
+    led.appendChild(h3);
+    var ledBox = el('div', 'hive-led');
+    if (t.counted === null || t.counted <= 0) { ledBox.appendChild(muted('no ledger counts yet')); }
+    else {
+      ledBox.appendChild(hbar('130px 1fr 52px', el('span', null, 'done'), t.done / t.counted, '#2fe0a0', String(t.done), null));
+      ledBox.appendChild(hbar('130px 1fr 52px', el('span', null, 'ready to start'), t.ready / t.counted, '#4d7cff', String(t.ready), null));
+      ledBox.appendChild(hbar('130px 1fr 52px', el('span', null, 'waiting on others'), t.blocked / t.counted, '#ffb62e', String(t.blocked), null));
+      ledBox.appendChild(hbar('130px 1fr 52px', el('span', null, 'in review'), t.review / t.counted, '#ff4d7e', String(t.review), null));
+    }
+    led.appendChild(ledBox);
+    if (view.throughput) {
+      var svg = svgEl('svg');
+      svg.setAttribute('class', 'hive-step');
+      svg.setAttribute('viewBox', '0 0 300 70');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('aria-label', 'Completions per hour');
+      var path = svgEl('path');
+      path.setAttribute('d', stepPath(view.throughput));
+      svg.appendChild(path);
+      led.appendChild(svg);
+      led.appendChild(el('div', 'hive-cap', 'completions per hour, last 24 h'));
+    }
+    var kv0 = kvRow('done in 24 h', numOrNull(view.doneLast24h));
+    kv0.className += ' hive-kv--gap';
+    led.appendChild(kv0);
+    led.appendChild(kvRow('ready to start', numOrNull(t.ready)));
+    led.appendChild(kvRow('waiting on others', numOrNull(t.blocked)));
+    led.appendChild(kvRow('saved by the swarm', 'not measured yet'));
+
+    root.appendChild(log);
+    root.appendChild(all);
+    root.appendChild(led);
+    // Heads mount after everything is in the page so their off-screen tracking sees real layout.
+    for (var pi = 0; pi < pendingHeads.length; pi += 1) {
+      var handle = opts.mountHead(pendingHeads[pi].host, pendingHeads[pi].spec);
+      if (handle) { heads.push(handle); }
+    }
+    return { heads: heads };
+  }
+
   return {
+    CAT_COLOR: CAT_COLOR,
+    CAT_TAG: CAT_TAG,
+    agoText: agoText,
+    deriveHiveView: deriveHiveView,
+    projectView: projectView,
+    renderHiveDashboard: renderHiveDashboard,
+    renderSessionLog: renderSessionLog,
+    renderHourBars: renderHourBars,
+    stepPath: stepPath,
+    createBubble: createBubble,
+    laneColor: laneColor,
     tagClassForKind: tagClassForKind,
     journalEntrySentence: journalEntrySentence,
     formatEventAge: formatEventAge,

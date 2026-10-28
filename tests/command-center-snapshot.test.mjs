@@ -71,6 +71,50 @@ test('buildCommandCenterSnapshot maps labelled stats and project cards', () => {
   assert.equal(alpha.meter.value, 40);
 });
 
+test('project cards carry ledger counts by status for the Hive', () => {
+  const board = fakeBoardPayload();
+  board.projects[0].tickets.byStatus = { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, proposed: 9 };
+  const snap = buildCommandCenterSnapshot(board);
+  const alpha = snap.projects.find(p => p.id === 'alpha');
+  assert.deepEqual(alpha.ticketCounts, {
+    total: 6, done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, remaining: 3,
+    source: 'projects[0].tickets.byStatus',
+  });
+  const beta = snap.projects.find(p => p.id === 'beta');
+  assert.equal(beta.ticketCounts, undefined, 'no counts: no field, not zeros');
+});
+
+test('hive extras: completions per hour, session events, lanes and pull requests', () => {
+  const now = Date.parse('2026-10-26T12:00:00.000Z');
+  const board = fakeBoardPayload();
+  board.machine.lanes = { cursor: { jobs24h: 7, running: 1 }, claude: 3, junk: { jobs24h: 'x' } };
+  board.prs = [{ number: 5, title: 'Fix it' }, { number: 'x', title: 'bad' }];
+  board.projects[0].ledger.tickets = [
+    { id: 'T-1', title: 'One', status: 'done', doneAt: new Date(now - 10 * 60000).toISOString() },
+    { id: 'T-2', title: 'Two', status: 'done', doneAt: new Date(now - 3 * 3600000 - 1000).toISOString() },
+    { id: 'T-3', title: 'Old', status: 'done', doneAt: new Date(now - 30 * 3600000).toISOString() },
+    { id: 'T-4', title: 'Look', status: 'review' },
+    { id: 'T-5', title: 'Stuck', status: 'blocked' },
+  ];
+  const { hive } = buildCommandCenterSnapshot(board);
+  assert.equal(hive.throughput24h.length, 24);
+  assert.equal(hive.throughput24h[23], 1, 'newest hour is last');
+  assert.equal(hive.throughput24h[20], 1, 'three full hours ago');
+  assert.equal(hive.throughput24h.reduce((a, v) => a + v, 0), 2, 'completions older than 24 h are left out');
+  assert.equal(hive.doneLast24h, 2);
+  assert.deepEqual(hive.events.map(e => [e.kind, e.id]), [['review', 'T-4'], ['blocked', 'T-5'], ['done', 'T-1'], ['done', 'T-2'], ['pr', '#5']]);
+  assert.deepEqual(hive.lanes, { cursor: { jobs24h: 7, running: 1 }, claude: { jobs24h: 3, running: 0 } });
+  assert.deepEqual(hive.prs, [{ number: 5, title: 'Fix it' }]);
+});
+
+test('hive extras are left out when the board cannot back them', () => {
+  const { hive } = buildCommandCenterSnapshot(fakeBoardPayload());
+  assert.equal(hive.throughput24h, undefined, 'no completion times in the ledger: no chart data');
+  assert.equal(hive.doneLast24h, undefined);
+  assert.equal(hive.lanes, undefined);
+  assert.deepEqual(hive.prs, []);
+});
+
 test('untrusted agent totals are omitted not zero-filled', () => {
   const board = fakeBoardPayload();
   board.machine.agents.total = undefined;

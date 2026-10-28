@@ -1,20 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Command Center cockpit header: ticket headline + stage rings from ledger progress.
+// Command Center cockpit title block: project name, ticket counts and the stage strip from ledger progress.
 import { ledgerStats } from './cc-ledger-browser.js';
 import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
-import { cockpitCategoryCounts } from './cockpit-lists.js';
+import { STAGE_COLOURS } from './cockpit-lists.js';
 
-/** Desktop shell headline — matches docs/design/command-center-mockup/cockpit.html @media (min-width: 721px) */
-export const COCKPIT_HEADLINE_CLAMP = 'clamp(3.5rem, 4.8vw, 4.25rem)';
-export const COCKPIT_SHELL_MAX_PX = 1440;
+/** Artifact title sizes: the project name is 54px on desktop and 34px at 900px and below; the page wrap is 1320px. */
+export const COCKPIT_TITLE_PX = { desktop: 54, phone: 34 };
+export const COCKPIT_SHELL_MAX_PX = 1320;
 export const COCKPIT_HEADLINE_ROOT_PX = 16;
 
-function el(tag, cls, text) {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text !== undefined && text !== null) n.textContent = text;
-  return n;
-}
+const HIDDEN_STATUSES = ['cancelled', 'proposed'];
+const STAGE_DONE_COLOUR = '#4d7cff';
+const STAGE_EMPTY_COLOUR = '#1c2233';
 
 /** Parse clamp(min, preferred, max) and resolve pixel font-size at a viewport width. */
 export function resolveClampPx(clampCss, viewportPx, rootPx = COCKPIT_HEADLINE_ROOT_PX) {
@@ -34,101 +31,41 @@ export function resolveClampPx(clampCss, viewportPx, rootPx = COCKPIT_HEADLINE_R
   return Math.max(minPx, Math.min(midPx, maxPx));
 }
 
-/** Condensed headline glyphs — conservative width for one-line fit checks at 1440px. */
+/** Heavy-sans glyphs: conservative width for one-line fit checks. */
 export function estimateHeadlineWidthPx(text, fontSizePx) {
   const avg = fontSizePx * 0.52;
   return String(text).length * avg;
 }
 
-export function headlineTicketText(done, total) {
-  return `${done} of ${total}`;
+/** "437 TICKETS · 39% DONE · 259 LEFT" from the live ticket total and the done count. */
+export function cockpitSubline(done, total) {
+  if (!(total > 0)) return 'NO TICKETS IN THE LEDGER';
+  const pct = Math.round((100 * done) / total);
+  return `${total} TICKETS · ${pct}% DONE · ${Math.max(0, total - done)} LEFT`;
 }
 
-function headlineNumberParts(done, total) {
-  return { done: String(done), total: String(total) };
+/** Orchestrator label to robot-head state: working, thinking, sleeping (all done, no session) or idle. */
+export function orchestratorHeadState(label, allDone) {
+  const l = String(label || '').toLowerCase();
+  if (l.includes('think')) return 'thinking';
+  if (l.includes('dispatch') || l.includes('review') || l.includes('work')) return 'working';
+  if (l.includes('wait')) return 'idle';
+  return allDone ? 'sleeping' : 'idle';
 }
 
-const MASCOT_PIXEL_SVG = [
-  '<svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot" shape-rendering="crispEdges">',
-  '<rect x="6" y="0" width="10" height="2" fill="#c9784a"/>',
-  '<rect x="4" y="2" width="14" height="2" fill="#c9784a"/>',
-  '<rect x="3" y="4" width="3" height="2" fill="#f5e6dc"/>',
-  '<rect x="16" y="4" width="3" height="2" fill="#f5e6dc"/>',
-  '<rect x="5" y="4" width="12" height="4" fill="#c9784a"/>',
-  '<rect x="7" y="6" width="2" height="2" fill="#1a120e"/>',
-  '<rect x="13" y="6" width="2" height="2" fill="#1a120e"/>',
-  '<rect x="4" y="8" width="14" height="3" fill="#c9784a"/>',
-  '<rect x="2" y="9" width="2" height="4" fill="#c9784a"/>',
-  '<rect x="18" y="9" width="2" height="4" fill="#c9784a"/>',
-  '<rect x="6" y="11" width="3" height="2" fill="#8a5238"/>',
-  '<rect x="13" y="11" width="3" height="2" fill="#8a5238"/>',
-  '<rect x="5" y="13" width="12" height="2" fill="#c9784a"/>',
-  '<rect x="7" y="15" width="3" height="2" fill="#8a5238"/>',
-  '<rect x="12" y="15" width="3" height="2" fill="#8a5238"/>',
-  '</svg>',
-].join('');
-
-/**
- * @param {ParentNode} parent
- * @param {Document} doc
- * @param {{ phone?: boolean }} [opts]
- */
-export function appendMascotStage(parent, doc, opts) {
-  if (!parent || !doc?.createElement) return null;
-  const mascot = doc.createElement('div');
-  mascot.className = 'mascot-stage';
-  if (opts?.phone) mascot.classList.add('mascot-stage--phone');
-  mascot.setAttribute('aria-hidden', 'true');
-  const orbit = doc.createElement('div');
-  orbit.className = 'mascot-orbit';
-  const dot = doc.createElement('span');
-  dot.className = 'mascot-orbit-dot';
-  orbit.appendChild(dot);
-  mascot.appendChild(orbit);
-  const pixelWrap = doc.createElement('div');
-  pixelWrap.innerHTML = MASCOT_PIXEL_SVG;
-  const svg = pixelWrap.firstElementChild || pixelWrap.firstChild;
-  if (svg) mascot.appendChild(svg);
-  const shadow = doc.createElement('div');
-  shadow.className = 'mascot-shadow';
-  mascot.appendChild(shadow);
-  parent.appendChild(mascot);
-  return mascot;
-}
-
-function appendCategoryBar(parent, categories, extraClass) {
-  if (!categories.length) return null;
-  const bar = el('div', `category-bar ${extraClass || ''}`.trim());
-  const links = el('div', 'category-links');
-  links.setAttribute('aria-label', 'Category mix');
-  const lanesLabel = el('span', 'num-label lanes-label', 'lanes');
-  lanesLabel.title = 'ticket mix by lane';
-  links.appendChild(lanesLabel);
-  categories.forEach((row, i) => {
-    if (i > 0) links.appendChild(el('span', 'sep', '/'));
-    links.appendChild(el('span', null, row.label));
-  });
-  const meter = el('div', 'category-meter');
-  meter.setAttribute('aria-hidden', 'true');
-  meter.title = 'source field: ledger.tickets per category';
-  categories.forEach(row => {
-    const seg = el('span', row.meter);
-    const w = String(Math.max(row.total, 0));
-    if (seg.style && typeof seg.style.setProperty === 'function') {
-      seg.style.setProperty('--w', w);
-    } else if (seg.style) {
-      seg.style.flex = w;
-    }
-    meter.appendChild(seg);
-  });
-  bar.appendChild(links);
-  bar.appendChild(meter);
-  parent.appendChild(bar);
-  return bar;
+/** The small caption under ORCHESTRATOR. */
+export function orchestratorCaption(label, allDone) {
+  const l = String(label || '').toLowerCase();
+  if (l.includes('think')) return 'THINKING';
+  if (l.includes('dispatch')) return 'DISPATCHING WORKERS';
+  if (l.includes('review')) return 'REVIEWING WORK';
+  if (l.includes('wait')) return 'WAITING ON YOU';
+  if (allDone) return 'FINISHED · RESTING';
+  return l ? `${l.toUpperCase()} · NO SESSION ACTIVE` : 'NO SESSION ACTIVE';
 }
 
 export function stageRingProgress(ledger) {
-  const tickets = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
+  const tickets = (ledger?.tickets ?? []).filter(t => !HIDDEN_STATUSES.includes(t.status));
   const byStage = {};
   for (const t of tickets) {
     const key = t.stage ?? 'none';
@@ -141,7 +78,7 @@ export function stageRingProgress(ledger) {
     : Array.isArray(ledger?.stages)
       ? ledger.stages
       : [];
-  const ids = stages.length ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean) : Object.keys(byStage).filter(k => k !== 'none');
+  const ids = stages.length ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean) : Object.keys(byStage).filter(k => k !== 'none').sort();
   return ids.map(id => {
     const row = byStage[id] ?? { total: 0, done: 0 };
     const total = row.total || 0;
@@ -153,115 +90,76 @@ export function stageRingProgress(ledger) {
   });
 }
 
+function clearHost(host) {
+  if (typeof host.replaceChildren === 'function') {
+    host.replaceChildren();
+    return;
+  }
+  while (host.firstChild) host.removeChild(host.firstChild);
+}
+
+function utcClock(ms) {
+  return `${new Date(ms).toISOString().slice(11, 16)} UTC`;
+}
+
 /**
+ * Renders the title block (project name, counts line, stage line, stage strip) into `host`.
  * @param {HTMLElement} host
- * @param {{ ledger: object, sessions?: object[], meta?: { owner?: string, lane?: string, project?: string }, done?: number, total?: number }} data
+ * @param {{ ledger: object, sessions?: object[], meta?: { owner?: string, lane?: string, project?: string }, name?: string|null, id?: string, done?: number, total?: number }} data
  * @param {{ now?: number }} [opts]
  */
 export function renderCockpit(host, data, opts) {
   const now = (opts && opts.now) || Date.now();
+  const doc = host.ownerDocument || globalThis.document;
+  const mk = (tag, cls, text) => {
+    const n = doc.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  };
   const ledger = data?.ledger ?? { tickets: [] };
   const stats = ledgerStats(ledger);
-  const live = (ledger.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
+  const live = (ledger.tickets ?? []).filter(t => !HIDDEN_STATUSES.includes(t.status));
   const done = data?.done ?? live.filter(t => t.status === 'done').length;
   const total = data?.total ?? live.length;
   const orch = cockpitOrchestratorFromSessions(data?.sessions, now);
-  const meta = data?.meta ?? {};
+  const name = String(data?.name ?? data?.meta?.project ?? data?.id ?? '').trim() || 'unnamed project';
+  const rings = stageRingProgress(ledger);
+  const stagesDone = rings.filter(r => r.total > 0 && r.done >= r.total).length;
 
-  host.replaceChildren();
+  clearHost(host);
 
-  const ringRows = stageRingProgress(ledger);
-  const categoryRows = cockpitCategoryCounts(ledger);
+  const h1 = mk('h1', null, name.toUpperCase());
+  h1.setAttribute('title', name);
+  host.appendChild(h1);
+  host.appendChild(mk('div', 'sub2', cockpitSubline(done, total)));
 
-  const nav = el('nav', 'cockpit-nav');
-  nav.setAttribute('aria-label', 'Cockpit breadcrumb');
-  const block = el('span', 'nav-block nav-block--meta');
-  if (meta.owner) block.appendChild(el('span', 'num-label', 'owner'));
-  if (meta.owner) block.appendChild(document.createTextNode(' ' + meta.owner));
-  if (meta.lane) {
-    block.appendChild(el('span', 'sep', '/'));
-    block.appendChild(el('span', 'num-label', 'lane'));
-    block.appendChild(document.createTextNode(' ' + meta.lane));
-  }
-  nav.appendChild(block);
+  const stripl = mk('div', 'stripl');
+  const stl = mk('span', null, rings.map(r => `${r.id} ${r.done}/${r.total}`).join('  ·  ') || 'no stage ledger for this project');
+  const str = mk('span', null, `${rings.length ? `${stagesDone} OF ${rings.length} STAGES DONE · ` : ''}LIVE LEDGER · ${utcClock(now)}`);
+  stripl.appendChild(stl);
+  stripl.appendChild(str);
+  host.appendChild(stripl);
 
-  const orchBlock = el('span', 'nav-block nav-block--orch');
-  orchBlock.appendChild(el('span', 'num-label', 'orchestrator'));
-  orchBlock.appendChild(document.createTextNode(' ' + orch.label));
-  nav.appendChild(orchBlock);
-
-  const hero = el('header', 'cockpit-hero');
-  const h1 = el('h1');
-  const line = el('span', 'headline-line');
-  const parts = headlineNumberParts(done, total);
-  const nums = el('span', 'headline-num num');
-  nums.title = 'source field: ledger.tickets done / live total';
-  const doneNum = el('span', 'num headline-num-part');
-  doneNum.textContent = parts.done;
-  const ofWord = el('span', 'headline-of', ' of ');
-  const totalNum = el('span', 'num headline-num-part');
-  totalNum.textContent = parts.total;
-  nums.appendChild(doneNum);
-  nums.appendChild(ofWord);
-  nums.appendChild(totalNum);
-  line.appendChild(nums);
-  line.appendChild(document.createTextNode(' tickets done'));
-  h1.appendChild(line);
-  h1.style.fontSize = COCKPIT_HEADLINE_CLAMP;
-  h1.dataset.headlineClamp = COCKPIT_HEADLINE_CLAMP;
-  hero.appendChild(h1);
-
-  if (orch.detail) {
-    const tag = el('p', 'tagline');
-    tag.textContent = String(orch.detail);
-    hero.appendChild(tag);
-  }
-
-  appendCategoryBar(hero, categoryRows, 'category-bar--hero-mobile');
-
-  host.appendChild(nav);
-  host.appendChild(hero);
-
-  const runningCount = live.filter(t => t.status === 'running').length;
-  const scanLive = el('div', 'scan-live scan-live--header');
-  scanLive.setAttribute('aria-label', 'Live ticket state');
-  const chip = el('span', runningCount ? 'live-chip live-chip--on' : 'live-chip');
-  chip.title = 'source field: ledger.tickets with status running';
-  chip.appendChild(el('span', 'live-dot'));
-  chip.appendChild(el('span', 'live-chip-text', runningCount ? `live · ${runningCount} running` : 'idle · none running'));
-  scanLive.appendChild(chip);
-  host.appendChild(scanLive);
-
-  appendCategoryBar(host, categoryRows, 'category-bar--header');
-
-  const rings = el('div', 'cockpit-stage-rings');
-  rings.setAttribute('aria-label', 'Stage progress');
-  for (const ring of ringRows) {
-    const item = el('div', 'cockpit-stage-ring');
-    item.dataset.stage = ring.id;
-    const label = el('span', 'cockpit-stage-label', ring.label);
-    const count = el('span', 'cockpit-stage-count num');
-    count.title = `source field: ledgerStats.byStage.${ring.id}`;
-    count.textContent = `${ring.done}/${ring.total}`;
-    const track = el('div', 'cockpit-stage-track');
-    const fill = el('span', 'cockpit-stage-fill');
-    fill.style.width = `${ring.pct}%`;
-    fill.dataset.pct = String(ring.pct);
-    track.appendChild(fill);
-    item.appendChild(label);
-    item.appendChild(count);
-    item.appendChild(track);
-    rings.appendChild(item);
-  }
-
-  host.appendChild(rings);
+  const strip = mk('div', 'strip');
+  strip.setAttribute('aria-hidden', 'true');
+  const segs = rings.length ? rings : [null];
+  segs.forEach((r, i) => {
+    const seg = mk('i');
+    if (!r) seg.style.background = STAGE_EMPTY_COLOUR;
+    else seg.style.background = r.total > 0 && r.done >= r.total ? STAGE_DONE_COLOUR : STAGE_COLOURS[i % STAGE_COLOURS.length];
+    strip.appendChild(seg);
+  });
+  host.appendChild(strip);
 
   return {
+    name,
     done,
     total,
+    subline: cockpitSubline(done, total),
     orchestrator: orch,
-    rings: stageRingProgress(ledger),
-    headlineFontPxAt1440: resolveClampPx(COCKPIT_HEADLINE_CLAMP, COCKPIT_SHELL_MAX_PX),
+    rings,
+    stagesDone,
     stats,
   };
 }

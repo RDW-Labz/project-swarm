@@ -1,12 +1,154 @@
 // SPDX-License-Identifier: Apache-2.0
-// Command Center cockpit: ticket list + stack summary tiles from ledger-shaped data.
+// Command Center cockpit lists: ticket cards, worker stream and stack tiles from ledger-shaped data.
+// Markup follows the owner-approved artifact (docs/design/reference/command-center-artifact); styles live in /assets/cc-cockpit.css.
 
 /** @typedef {{ ticketToQueueJob: (t: object) => object|null, listQueueJobsForProject: (jobs: object[], project: object) => object[] }} QueueDeps */
 
-/** Styles live in /assets/cc-cockpit.css — kept for tests that reference layout constants. */
+/** Styles live in /assets/cc-cockpit.css; kept as an empty export for callers that still import it. */
 export const COCKPIT_LISTS_CSS = '';
 
+/** Stage colours: stage "S<n>" takes colour n mod 7 (the artifact's SC palette). */
+export const STAGE_COLOURS = ['#2fe0a0', '#4d7cff', '#ffb62e', '#a98bff', '#ff4d7e', '#4ccce6', '#58627a'];
+const WORKER_COLOURS = ['#ff4d7e', '#2fe0a0', '#4d7cff', '#ffb62e'];
+const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', done: '✓' };
+const HIDDEN_STATUSES = ['cancelled', 'proposed'];
+const STAMP_FIELDS = ['doneAt', 'completedAt', 'finishedAt', 'updatedAt', 'at'];
+
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const byIdDesc = (a, b) => byId(b, a);
+
+export function setCssVar(node, name, value) {
+  const style = node?.style;
+  if (!style) return;
+  if (typeof style.setProperty === 'function') style.setProperty(name, value);
+  else style[name] = value;
+}
+
+function clearHost(host) {
+  while (host.firstChild) host.removeChild(host.firstChild);
+}
+
+function mk(doc, tag, cls, text) {
+  const n = doc.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = text;
+  return n;
+}
+
+/**
+ * Pure: a short display name from a long ledger title (leading verb dropped, cut at the first clause break,
+ * at most `max` characters on a word edge). The full title stays in data-title and the tooltip.
+ */
+export function shortTitle(s, max = 29) {
+  let t = String(s || '').trim().replace(/^(regression tests for|tests for|tests|add|wire|make|mount|capture|apply|run|keep|measure|register|feed|persist|each|the|a|an)\s+/i, '');
+  t = t.split(/\s*[,:;(]\s*|\s+(?:during|so|with|for|after|before|against|into|on|can|from|when|in|to|via|that|without|between|and resumes)\s+/i)[0] || t;
+  if (t.length > max) {
+    const words = t.split(' ');
+    t = '';
+    for (const w of words) {
+      if ((t ? t.length + 1 : 0) + w.length > max) break;
+      t += (t ? ' ' : '') + w;
+    }
+    t = t || words[0].slice(0, max);
+  }
+  t = t.replace(/\s+(and|or|the|their|its|of|a)$/i, '');
+  return /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+}
+
+/** "just now", "12 min ago", "5 h ago", "3 d ago". */
+export function agoText(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 90) return `${m} min ago`;
+  if (m < 2880) return `${Math.round(m / 60)} h ago`;
+  return `${Math.round(m / 1440)} d ago`;
+}
+
+export function stageColour(stage) {
+  return STAGE_COLOURS[(parseInt(String(stage ?? '').slice(1), 10) || 0) % STAGE_COLOURS.length];
+}
+
+/** ready | running | review | blocked | done: the cockpit's five card states. */
+export function ticketState(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'running') return 'running';
+  if (s === 'done') return 'done';
+  if (s === 'blocked') return 'blocked';
+  if (s === 'review') return 'review';
+  return 'ready';
+}
+
+/** Finish time of a ledger ticket in ms, or null when the ledger does not record one. */
+export function ticketStamp(ticket) {
+  for (const f of STAMP_FIELDS) {
+    const v = ticket?.[f];
+    if (v == null || v === '') continue;
+    const ms = typeof v === 'number' ? v : Date.parse(String(v));
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+/** Done tickets, newest first: by recorded finish time when there is one, else by id descending. */
+export function recentDone(ledger, limit = 4) {
+  const done = (ledger?.tickets ?? []).filter(t => t && t.status === 'done');
+  done.sort((a, b) => {
+    const sa = ticketStamp(a);
+    const sb = ticketStamp(b);
+    if (sa != null && sb != null && sa !== sb) return sb - sa;
+    if (sa != null && sb == null) return -1;
+    if (sa == null && sb != null) return 1;
+    return byIdDesc(a, b);
+  });
+  return done.slice(0, Math.max(0, limit));
+}
+
+/**
+ * Left column: running tickets then ready ones. Right column: review, blocked, then the latest done.
+ * @param {object|null|undefined} ledger
+ * @param {(tickets: object[]) => object[]} readyFn
+ */
+export function cockpitColumns(ledger, readyFn, limits = {}) {
+  const { leftMax = 8, rightMax = 8, reviewMax = 3, blockedMax = 3, doneMax = 3 } = limits;
+  const tickets = ledger?.tickets ?? [];
+  const live = tickets.filter(t => t && !HIDDEN_STATUSES.includes(t.status));
+  const known = new Map(tickets.filter(Boolean).map(t => [t.id, t]));
+  const ready = (typeof readyFn === 'function' ? readyFn(tickets) : [])
+    .map(t => (typeof t === 'string' ? known.get(t) : t))
+    .filter(t => t && t.status !== 'running')
+    .sort(byId);
+  const running = live.filter(t => t.status === 'running').sort(byId);
+  const review = live.filter(t => t.status === 'review').sort(byId);
+  const blocked = live.filter(t => t.status === 'blocked').sort(byId);
+  const left = [
+    ...running.map(ticket => ({ ticket, state: 'running' })),
+    ...ready.map(ticket => ({ ticket, state: 'ready' })),
+  ].slice(0, leftMax);
+  const reviewShown = review.slice(0, reviewMax);
+  const blockedShown = blocked.slice(0, blockedMax);
+  const doneN = Math.max(0, Math.min(doneMax, rightMax - reviewShown.length - blockedShown.length));
+  const right = [
+    ...reviewShown.map(ticket => ({ ticket, state: 'review' })),
+    ...blockedShown.map(ticket => ({ ticket, state: 'blocked' })),
+    ...recentDone(ledger, doneN).map(ticket => ({ ticket, state: 'done' })),
+  ];
+  const doneCount = live.filter(t => t.status === 'done').length;
+  const open = live.filter(t => !['done', 'running', 'review', 'blocked'].includes(t.status)).length;
+  return {
+    left,
+    right,
+    counts: {
+      ready: ready.length,
+      running: running.length,
+      review: review.length,
+      blocked: blocked.length,
+      todo: Math.max(0, open - ready.length),
+      done: doneCount,
+      cancelled: tickets.filter(t => t && t.status === 'cancelled').length,
+      proposed: tickets.filter(t => t && t.status === 'proposed').length,
+    },
+  };
+}
 
 /**
  * Same job rows `swarm queue list` would show for this ledger snapshot.
@@ -49,449 +191,209 @@ export function emptyReadyExplanation(ledger, readyTicketsFn) {
   return 'No ready tickets — none are runnable yet';
 }
 
-function ensureStyle(host, id, css) {
-  if (!css) return;
-  const doc = host.ownerDocument || (typeof document !== 'undefined' ? document : null);
-  if (!doc) return;
-  const head = doc.head || doc.documentElement;
-  if (!head) return;
-  let el = doc.getElementById?.(id);
-  if (!el && doc.createElement) {
-    el = doc.createElement('style');
-    el.id = id;
-    el.textContent = css;
-    head.appendChild(el);
-  }
-}
-
 function ledgerTicketById(ledger, id) {
   return (ledger?.tickets ?? []).find(t => t.id === id);
 }
 
-function ticketMetaHaystack(ticket) {
-  return [
-    ticket?.category,
-    ticket?.lane,
-    ticket?.agent,
-    ticket?.stage,
-    ticket?.epic,
-    ticket?.title,
-  ]
-    .filter(v => v != null && String(v).length)
-    .join(' ')
-    .toLowerCase();
+function emptyLine(doc, text, key) {
+  const p = mk(doc, 'p', 'cockpit-ticket-empty ck-hint', text);
+  if (key) p.setAttribute('data-cockpit-empty', key);
+  return p;
 }
 
-function ticketCategorySlug(ticket) {
-  const hay = ticketMetaHaystack(ticket);
-  if (!hay) return null;
-  if (hay.includes('opus') || hay.includes('s1')) return 'opus';
-  if (hay.includes('skill')) return 'skills';
-  if (hay.includes('engine') || hay.includes('burst')) return 'engines';
-  if (hay.includes('taste')) return 'taste';
-  if (hay.includes('broll') || hay.includes('b-roll')) return 'broll';
-  if (hay.includes('web')) return 'web';
-  return null;
-}
-
-function ticketIsUnclaimed(ticket) {
-  if (!ticket) return true;
-  if (ticket.status === 'proposed' || ticket.status === 'cancelled') return true;
-  if (ticket.agent || ticket.lane) return false;
-  if (ticket.status === 'running' || ticket.status === 'done') return false;
-  return true;
-}
-
-function ticketIdxModifier(ticket) {
-  const slug = ticketCategorySlug(ticket);
-  if (slug) return `ticket-idx--${slug}`;
-  if (ticketIsUnclaimed(ticket)) return 'ticket-idx--pending';
-  if (ticket?.status === 'running') return 'ticket-idx--engines';
-  if (ticket?.status === 'done') return 'ticket-idx--taste';
-  if (ticket?.status === 'blocked') return 'ticket-idx--broll';
-  return 'ticket-idx--pending';
-}
-
-/** @param {object|null|undefined} ticket */
-export function ticketIdxCategoryClass(ticket) {
-  return ticketIdxModifier(ticket);
-}
-
-const COCKPIT_CATEGORY_DEFS = [
-  { slug: 'opus', label: 'Opus 5.5', meter: 'meter-opus' },
-  { slug: 'skills', label: 'Skills', meter: 'meter-skills' },
-  { slug: 'engines', label: 'Engines', meter: 'meter-engines' },
-  { slug: 'taste', label: 'Taste', meter: 'meter-taste' },
-  { slug: 'broll', label: 'B-roll', meter: 'meter-broll' },
-  { slug: 'web', label: 'Web', meter: 'meter-web' },
-];
-
-/**
- * Live ticket counts per cockpit category for header meters.
- * @param {object|null|undefined} ledger
- */
-export function cockpitCategoryCounts(ledger) {
-  const tickets = (ledger?.tickets ?? []).filter(
-    t => !['cancelled', 'proposed'].includes(t.status),
-  );
-  const counts = Object.fromEntries(COCKPIT_CATEGORY_DEFS.map(d => [d.slug, 0]));
-  for (const t of tickets) {
-    const slug = ticketCategorySlug(t);
-    if (slug && Object.prototype.hasOwnProperty.call(counts, slug)) {
-      counts[slug] += 1;
-    } else if (!ticketIsUnclaimed(t)) {
-      counts.engines += 1;
-    }
-  }
-  return COCKPIT_CATEGORY_DEFS.map(def => ({
-    ...def,
-    total: counts[def.slug] || 0,
-  }));
-}
-
-function formatQueueIndex(index) {
-  const n = index + 1;
-  return (n < 10 ? '0' : '') + String(n);
-}
-
-function ticketRowMark(doc, status) {
-  const mark = doc.createElement('span');
-  mark.className = 'ticket-mark';
-  if (status === 'done') {
-    mark.innerHTML = '<svg class="ticket-check" viewBox="0 0 12 12" focusable="false" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>';
-  } else if (status === 'running') {
-    const live = doc.createElement('span');
-    live.className = 'ticket-mark--live';
-    mark.appendChild(live);
+/** One ticket card (`.tk`): index chip, short name, id and stage line, state glyph and word. */
+function buildTicketCard(doc, ticket, state, i, n, side, hot) {
+  const full = String(ticket.title || ticket.id).replace(/"/g, '');
+  const off = Math.min(30, 10 * Math.min(i, n - 1 - i));
+  const card = mk(doc, 'div', hot ? 'tk hot' : 'tk');
+  card.setAttribute('data-ticket-id', ticket.id);
+  card.setAttribute('data-status', state);
+  card.setAttribute('data-title', full);
+  setCssVar(card, '--c', stageColour(ticket.stage));
+  if (side === 'R') {
+    card.style.marginRight = `${off}px`;
+    card.style.marginLeft = `${36 - off}px`;
   } else {
-    mark.setAttribute('aria-hidden', 'true');
+    card.style.marginLeft = `${off}px`;
+    card.style.marginRight = `${36 - off}px`;
   }
-  return mark;
-}
-
-function ticketRowStateClass(status) {
-  if (status === 'running') return 'active';
-  if (status === 'done') return 'done';
-  if (status === 'blocked') return 'pending';
-  return 'pending';
-}
-
-/** Status colour key: ready (blue), running (green), done, failed (red), needs (amber). */
-export function ticketPillKey(status) {
-  const s = String(status || '').toLowerCase();
-  if (s === 'running') return 'running';
-  if (s === 'done') return 'done';
-  if (s === 'failed' || s === 'error') return 'failed';
-  if (s === 'blocked' || s === 'needs' || s === 'waiting' || s === 'review') return 'needs';
-  return 'ready';
-}
-
-function buildTicketRow(doc, job, full, queueIndex) {
-  const status = full?.status || job.status || 'todo';
-  const stateClass = ticketRowStateClass(status);
-  const pillKey = ticketPillKey(status);
-  const row = doc.createElement('button');
-  row.type = 'button';
-  row.className = `ticket-row cockpit-ticket-row ticket-row--${stateClass}`;
-  row.setAttribute('data-status', pillKey);
-  row.setAttribute('data-ticket-id', job.id);
-  const repoKey = String(full?.title || job.id).toLowerCase();
-  row.setAttribute('data-repo', repoKey);
-  row.setAttribute('aria-label', `${full?.title || job.id}, ${status}`);
-  const idx = doc.createElement('span');
-  idx.className = `ticket-idx num ${ticketIdxModifier(full)}`;
-  idx.textContent = formatQueueIndex(queueIndex);
-  const main = doc.createElement('span');
-  main.className = 'ticket-main';
-  const title = doc.createElement('span');
-  title.className = 'ticket-name cockpit-ticket-title';
-  title.textContent = full?.title || job.id;
-  main.appendChild(title);
-  if (full?.stage) {
-    const sub = doc.createElement('span');
-    sub.className = 'ticket-sub';
-    sub.textContent = String(full.stage);
-    main.appendChild(sub);
-  }
-  const badge = doc.createElement('span');
-  badge.className = `ticket-badge cockpit-ticket-status pill pill--${pillKey}`;
-  badge.textContent = status;
-  row.appendChild(idx);
-  row.appendChild(main);
-  row.appendChild(badge);
-  row.appendChild(ticketRowMark(doc, status));
-  return row;
+  card.appendChild(mk(doc, 'span', 'no', String(i + 1).padStart(2, '0')));
+  const tx = mk(doc, 'div', 'tx has-tip');
+  tx.setAttribute('tabindex', '0');
+  tx.setAttribute('data-tip', `${ticket.id}: ${full}`);
+  const nm = mk(doc, 'div', 'nm', shortTitle(full));
+  nm.setAttribute('data-id', ticket.id);
+  nm.setAttribute('data-title', full);
+  tx.appendChild(nm);
+  tx.appendChild(mk(doc, 'div', 'sb', `${ticket.id}${ticket.stage ? ` · ${ticket.stage}` : ''}${ticket.sensitive ? ' · sensitive' : ''}`));
+  card.appendChild(tx);
+  const rt = mk(doc, 'div', 'rt');
+  rt.appendChild(mk(doc, 'b', null, GLYPH[state] || GLYPH.ready));
+  rt.appendChild(mk(doc, 'span', null, state.toUpperCase()));
+  card.appendChild(rt);
+  return card;
 }
 
 /**
- * @param {HTMLElement|{ appendChild: Function, ownerDocument?: object }} host
+ * @param {HTMLElement} host a column element
+ * @param {Array<{ ticket: object, state: string }>} entries
+ * @param {{ side?: 'L'|'R', emptyText?: string }} [options]
+ */
+export function renderTicketColumn(host, entries, options = {}) {
+  const { side = 'L', emptyText } = options;
+  clearHost(host);
+  const doc = host.ownerDocument;
+  if (!doc?.createElement) return;
+  const list = Array.isArray(entries) ? entries : [];
+  list.forEach((e, i) => {
+    host.appendChild(buildTicketCard(doc, e.ticket, e.state, i, list.length, side, side === 'R' && i === 0));
+  });
+  if (!list.length && emptyText) host.appendChild(emptyLine(doc, emptyText, 'column'));
+}
+
+/**
+ * Every queue job of the ledger as ticket cards, in `swarm queue list` order.
+ * @param {HTMLElement} host
  * @param {object|null|undefined} ledger
- * @param {{ projectConfig?: object, queueDeps: QueueDeps, filterQuery?: string, sliceStart?: number, sliceEnd?: number, showSearch?: boolean }} options
+ * @param {{ projectConfig?: object, queueDeps: QueueDeps, side?: 'L'|'R' }} options
  */
 export function renderCockpitTicketList(host, ledger, options = {}) {
-  const {
-    projectConfig = {},
-    queueDeps,
-    filterQuery = '',
-    sliceStart = 0,
-    sliceEnd,
-    showSearch = true,
-  } = options;
-  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
-  while (host.firstChild) host.removeChild(host.firstChild);
-
+  const { projectConfig = {}, queueDeps, side = 'L' } = options;
+  clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
-
-  if (showSearch) {
-    const search = doc.createElement('div');
-    search.className = 'ticket-search cockpit-ticket-search';
-    const label = doc.createElement('label');
-    label.textContent = 'Search tickets';
-    const input = doc.createElement('input');
-    input.type = 'search';
-    input.placeholder = 'Filter by id or title';
-    input.value = filterQuery;
-    search.appendChild(label);
-    search.appendChild(input);
-    host.appendChild(search);
-  }
-
-  const col = doc.createElement('div');
-  col.className = 'ticket-col cockpit-ticket-col';
-  col.setAttribute('data-cockpit-ticket-list', 'true');
-
-  const allJobs = queueVisibleJobs(ledger, projectConfig, queueDeps);
-  const end = sliceEnd == null ? allJobs.length : Math.min(allJobs.length, sliceEnd);
-  const jobs = allJobs.slice(sliceStart, end);
-  const q = String(filterQuery || '').trim().toLowerCase();
-
+  const jobs = queueVisibleJobs(ledger, projectConfig, queueDeps);
   if (!jobs.length) {
-    const empty = doc.createElement('p');
-    empty.className = 'cockpit-ticket-empty cc-empty';
-    empty.setAttribute('data-cockpit-empty', 'queue');
-    empty.textContent = 'No tickets in this column';
-    col.appendChild(empty);
-  } else {
-    for (let i = 0; i < jobs.length; i += 1) {
-      const job = jobs[i];
-      const full = ledgerTicketById(ledger, job.id);
-      const title = full?.title || job.id;
-      const hay = `${job.id} ${title}`.toLowerCase();
-      if (q && !hay.includes(q)) continue;
-      const row = buildTicketRow(doc, job, full, sliceStart + i);
-      if (q) row.setAttribute('data-hidden', 'false');
-      col.appendChild(row);
-    }
+    host.appendChild(emptyLine(doc, 'No tickets in this column', 'queue'));
+    return;
   }
-
-  host.appendChild(col);
-
-  if (showSearch) {
-    const input = host.querySelector?.('input[type="search"]')
-      || (host.children?.[0]?.querySelector && host.children[0].querySelector('input[type="search"]'));
-    const searchRoot = host;
-    if (input && typeof input.addEventListener === 'function') {
-      const applyFilter = () => {
-        const query = String(input.value || '').trim().toLowerCase();
-        const rows = searchRoot.querySelectorAll
-          ? Array.from(searchRoot.querySelectorAll('.ticket-row'))
-          : [];
-        for (const row of rows) {
-          const repo = row.getAttribute?.('data-repo') || '';
-          const id = row.getAttribute?.('data-ticket-id') || '';
-          const show = !query || repo.includes(query) || id.toLowerCase().includes(query);
-          row.setAttribute('data-hidden', show ? 'false' : 'true');
-        }
-      };
-      input.addEventListener('input', applyFilter);
-      applyFilter();
-    }
-  }
+  jobs.forEach((job, i) => {
+    const full = ledgerTicketById(ledger, job.id) ?? { id: job.id, title: job.id };
+    host.appendChild(buildTicketCard(doc, full, ticketState(full.status || job.status), i, jobs.length, side, false));
+  });
 }
 
 /**
- * @param {HTMLElement|{ appendChild: Function }} host
- * @param {Array<{ id?: string, title: string, status?: string, body?: string, pct?: number, accent?: string }>} items
+ * Latest finished tickets as worker-stream cards.
+ * @param {object|null|undefined} ledger
+ * @param {number} nowMs
  */
-export function renderWorkerStream(host, items) {
-  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
-  while (host.firstChild) host.removeChild(host.firstChild);
+export function workerCards(ledger, nowMs, limit = 4) {
+  return recentDone(ledger, limit).map((t, i) => {
+    const at = ticketStamp(t);
+    return {
+      id: t.id,
+      title: String(t.title || t.id),
+      stage: t.stage || '',
+      ago: at == null ? '' : agoText(nowMs - at),
+      pct: at == null ? 100 : Math.round(100 * Math.max(0.08, 1 - (nowMs - at) / 864e5)),
+      tag: i === 0 ? 'NEWEST' : 'DONE',
+      color: WORKER_COLOURS[i % WORKER_COLOURS.length],
+    };
+  });
+}
+
+/**
+ * @param {HTMLElement} host `.wgrid`
+ * @param {ReturnType<typeof workerCards>} cards
+ */
+export function renderWorkerCards(host, cards) {
+  clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
-  const grid = doc.createElement('div');
-  grid.className = 'stream-grid';
-  grid.setAttribute('data-cockpit-worker-stream', 'true');
-  const list = Array.isArray(items) ? items : [];
-  if (!list.length) {
-    const card = doc.createElement('article');
-    card.className = 'stream-card stream-card--accent-white stream-card--empty';
-    const meta = doc.createElement('span');
-    meta.className = 'stream-meta';
-    meta.textContent = 'No finished tickets yet';
-    card.appendChild(meta);
-    grid.appendChild(card);
-  } else {
-    for (const item of list) {
-      const accent = item.accent || 'stream-card--accent-teal';
-      const card = doc.createElement('article');
-      card.className = `stream-card ${accent}`;
-      const top = doc.createElement('div');
-      top.className = item.id ? 'stream-top' : 'stream-top stream-top--noid';
-      if (item.id) {
-        const idEl = doc.createElement('span');
-        idEl.className = 'stream-id num';
-        idEl.textContent = item.id;
-        top.appendChild(idEl);
-      }
-      const titleEl = doc.createElement('span');
-      titleEl.className = 'stream-title';
-      titleEl.textContent = item.title || '';
-      top.appendChild(titleEl);
-      if (item.status) {
-        const st = doc.createElement('span');
-        st.className = `stream-status pill pill--${ticketPillKey(item.status)}`;
-        st.textContent = item.status;
-        top.appendChild(st);
-      }
-      card.appendChild(top);
-      if (item.body) {
-        const meta = doc.createElement('span');
-        meta.className = 'stream-meta';
-        meta.textContent = item.body;
-        card.appendChild(meta);
-      }
-      const bar = doc.createElement('div');
-      bar.className = 'stream-bar';
-      const fill = doc.createElement('span');
-      const pct = typeof item.pct === 'number' ? item.pct : 100;
-      if (fill.style && typeof fill.style.setProperty === 'function') {
-        fill.style.setProperty('--pct', `${pct}%`);
-      }
-      bar.appendChild(fill);
-      card.appendChild(bar);
-      grid.appendChild(card);
-    }
+  host.setAttribute('data-cockpit-worker-stream', 'true');
+  if (!cards.length) {
+    host.appendChild(mk(doc, 'p', 'ck-hint', 'No finished tickets yet.'));
+    return;
   }
-  host.appendChild(grid);
+  cards.forEach((c, i) => {
+    const full = c.title.replace(/"/g, '');
+    const wc = mk(doc, 'div', i === 0 ? 'wc new' : 'wc');
+    setCssVar(wc, '--c', c.color);
+    wc.setAttribute('data-title', full);
+    wc.setAttribute('title', `${c.id}: ${full}`);
+    const a = mk(doc, 'div', 'a');
+    a.appendChild(mk(doc, 'span', 'id', c.id));
+    a.appendChild(mk(doc, 'span', 'ti', shortTitle(full)));
+    a.appendChild(mk(doc, 'span', 'tg', c.tag));
+    wc.appendChild(a);
+    const b = mk(doc, 'div', 'b');
+    const when = mk(doc, 'span');
+    when.appendChild(mk(doc, 'em', null, 'FINISHED >'));
+    when.appendChild(mk(doc, 'span', null, c.ago || (c.stage ? `stage ${c.stage}` : 'time not recorded')));
+    b.appendChild(when);
+    const bar = mk(doc, 'i');
+    const fill = mk(doc, 'u');
+    fill.style.width = `${c.pct}%`;
+    bar.appendChild(fill);
+    b.appendChild(bar);
+    wc.appendChild(b);
+    host.appendChild(wc);
+  });
 }
 
 /**
- * Orchestrator run stream cards (mockup .stream-top layout).
- * @param {HTMLElement|{ appendChild: Function }} host
- * @param {Array<{ id?: string, title?: string, status?: string, body?: string, pct?: number, accent?: string }>} items
+ * Run-stream cards (same card look as the worker stream), one per orchestrator run.
+ * @param {HTMLElement} host `.wgrid`
+ * @param {Array<{ id?: string, fullId?: string, title?: string, status?: string, body?: string }>} items
  */
-export function renderOrchestratorRunStream(host, items) {
-  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
-  while (host.firstChild) host.removeChild(host.firstChild);
+export function renderRunCards(host, items) {
+  clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
-  const grid = doc.createElement('div');
-  grid.className = 'stream-grid';
-  grid.setAttribute('data-cockpit-run-stream', 'true');
+  host.setAttribute('data-cockpit-run-stream', 'true');
   const list = Array.isArray(items) ? items : [];
   if (!list.length) {
-    const card = doc.createElement('article');
-    card.className = 'stream-card stream-card--accent-white stream-card--empty cockpit-run-stream-item';
-    const meta = doc.createElement('span');
-    meta.className = 'stream-meta cockpit-run-stream-body';
-    meta.textContent = 'No runs yet';
-    card.appendChild(meta);
-    grid.appendChild(card);
-  } else {
-    for (const item of list) {
-      const accent = item.accent || 'stream-card--accent-teal';
-      const card = doc.createElement('article');
-      card.className = `stream-card cockpit-run-stream-item ${accent}`;
-      const top = doc.createElement('div');
-      top.className = item.id ? 'stream-top' : 'stream-top stream-top--noid';
-      if (item.id) {
-        const idEl = doc.createElement('span');
-        idEl.className = 'stream-id num';
-        idEl.textContent = item.id;
-        if (item.fullId) idEl.title = item.fullId;
-        top.appendChild(idEl);
-      }
-      const titleEl = doc.createElement('span');
-      titleEl.className = 'stream-title';
-      if (item.fullId) titleEl.title = item.fullId;
-      const statusText = item.status || item.title || '';
-      let displayTitle = item.title || '';
-      if (statusText && displayTitle.toLowerCase() === String(statusText).toLowerCase()) {
-        displayTitle = item.id || displayTitle;
-      }
-      titleEl.textContent = displayTitle;
-      top.appendChild(titleEl);
-      if (statusText) {
-        const st = doc.createElement('span');
-        st.className = `stream-status pill pill--${ticketPillKey(statusText)}`;
-        st.textContent = statusText;
-        top.appendChild(st);
-      }
-      card.appendChild(top);
-      if (item.body) {
-        const meta = doc.createElement('span');
-        meta.className = 'stream-meta cockpit-run-stream-body';
-        meta.textContent = item.body;
-        card.appendChild(meta);
-      }
-      const bar = doc.createElement('div');
-      bar.className = 'stream-bar';
-      const fill = doc.createElement('span');
-      const pct = typeof item.pct === 'number' ? item.pct : 70;
-      if (fill.style && typeof fill.style.setProperty === 'function') {
-        fill.style.setProperty('--pct', `${pct}%`);
-      }
-      bar.appendChild(fill);
-      card.appendChild(bar);
-      grid.appendChild(card);
-    }
+    host.appendChild(mk(doc, 'p', 'ck-hint', 'No runs yet.'));
+    return;
   }
-  host.appendChild(grid);
-}
-
-export function workerStreamFromLedger(ledger, limit = 4) {
-  const tickets = (ledger?.tickets ?? []).filter(t => t.status === 'done');
-  tickets.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const slice = tickets.slice(-limit).reverse();
-  return slice.map(t => ({
-    id: t.id,
-    title: t.title || t.id,
-    status: 'Done',
-    body: t.stage ? `Stage ${t.stage}` : 'Finished',
-    pct: 100,
-    accent: 'stream-card--accent-teal',
-  }));
+  list.forEach((item, i) => {
+    const status = String(item.status || item.title || 'run');
+    const key = status.toLowerCase();
+    const color = /fail|error/.test(key) ? '#ff4d7e' : /run|live|work/.test(key) ? '#2fe0a0' : '#4d7cff';
+    const wc = mk(doc, 'div', i === 0 ? 'wc new cockpit-run-stream-item' : 'wc cockpit-run-stream-item');
+    setCssVar(wc, '--c', color);
+    if (item.fullId) wc.setAttribute('title', String(item.fullId));
+    const a = mk(doc, 'div', 'a');
+    a.appendChild(mk(doc, 'span', 'id', item.id ? String(item.id) : 'run'));
+    a.appendChild(mk(doc, 'span', 'ti', status));
+    a.appendChild(mk(doc, 'span', 'tg', 'RUN'));
+    wc.appendChild(a);
+    const b = mk(doc, 'div', 'b');
+    const body = mk(doc, 'span');
+    body.appendChild(mk(doc, 'em', null, 'JOBS >'));
+    body.appendChild(mk(doc, 'span', 'cockpit-run-stream-body', item.body ? String(item.body) : 'no job count'));
+    b.appendChild(body);
+    const m = typeof item.body === 'string' ? item.body.match(/(\d+)\s*\/\s*(\d+)/) : null;
+    if (m && Number(m[2]) > 0) {
+      const bar = mk(doc, 'i');
+      const fill = mk(doc, 'u');
+      fill.style.width = `${Math.min(100, Math.round((100 * Number(m[1])) / Number(m[2])))}%`;
+      bar.appendChild(fill);
+      b.appendChild(bar);
+    }
+    wc.appendChild(b);
+    host.appendChild(wc);
+  });
 }
 
 /**
- * @param {HTMLElement|{ appendChild: Function }} host
- * @param {Array<{ label: string, value: string|number, footnote: string, variant?: string }>} tiles
+ * Stack tiles. `color` is the tile accent, `hi` marks the biggest tile; `footnote` is spoken, not drawn.
+ * @param {HTMLElement} host
+ * @param {Array<{ label: string, value: string|number, footnote?: string, color?: string, hi?: boolean }>} tiles
  */
 export function renderStackSummaryTiles(host, tiles) {
-  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
-  while (host.firstChild) host.removeChild(host.firstChild);
+  clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
-  const grid = doc.createElement('div');
-  grid.className = 'stack-metrics cockpit-stack-metrics';
+  const grid = mk(doc, 'div', 'tiles cockpit-stack-metrics');
   grid.setAttribute('data-cockpit-summary-tiles', 'true');
   for (const tile of tiles) {
-    const variant = tile.variant ? ` metric-tile--${tile.variant} cockpit-metric-tile--${tile.variant}` : '';
-    const el = doc.createElement('div');
-    el.className = `metric-tile cockpit-metric-tile${variant}`;
-    const label = doc.createElement('span');
-    label.className = 'm-label';
-    label.textContent = tile.label;
-    const val = doc.createElement('span');
-    val.className = 'm-val num';
-    val.textContent = String(tile.value);
-    const foot = doc.createElement('span');
-    foot.className = 'm-foot';
-    foot.textContent = tile.footnote;
-    el.appendChild(label);
-    el.appendChild(val);
-    el.appendChild(foot);
+    const el = mk(doc, 'div', `tile cockpit-metric-tile${tile.hi ? ' hi' : ''}`);
+    setCssVar(el, '--c', tile.color || '#4d7cff');
+    el.appendChild(mk(doc, 'small', 'm-label', String(tile.label).toUpperCase()));
+    el.appendChild(mk(doc, 'b', 'm-val', String(tile.value)));
+    if (tile.footnote) el.appendChild(mk(doc, 'span', 'm-foot', tile.footnote));
     grid.appendChild(el);
   }
   host.appendChild(grid);
@@ -503,7 +405,7 @@ function clampCss(minPx, preferredVh, maxPx, viewportHeight) {
 }
 
 /**
- * Deterministic layout boxes for summary tiles (matches COCKPIT_LISTS_CSS spacing).
+ * Deterministic layout boxes for summary tiles (label above numeral above footnote).
  * @param {{ width: number, height: number }} viewport
  * @param {{ label: string, value: string|number, footnote: string }} tile
  */
@@ -558,15 +460,10 @@ export function layoutSummaryTileElement(tileRoot, viewport) {
 }
 
 export function renderReadyEmptyState(host, ledger, readyTicketsFn) {
-  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
-  while (host.firstChild) host.removeChild(host.firstChild);
+  clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return null;
   const msg = emptyReadyExplanation(ledger, readyTicketsFn);
-  const p = doc.createElement('p');
-  p.className = 'cockpit-ticket-empty';
-  p.setAttribute('data-cockpit-empty', 'ready');
-  p.textContent = msg || '';
-  host.appendChild(p);
+  host.appendChild(emptyLine(doc, msg || '', 'ready'));
   return msg;
 }
