@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Command Center cockpit header: ticket headline + stage rings from ledger progress.
-import { ledgerStats } from '../tickets.mjs';
+import { ledgerStats } from './cc-ledger-browser.js';
 import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
 
 /** Desktop shell headline — matches docs/design/command-center-mockup/cockpit.html @media (min-width: 721px) */
