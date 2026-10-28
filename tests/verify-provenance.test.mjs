@@ -10,11 +10,13 @@ import { parseScope, scopeHash, SCOPE_TEMPLATE } from '../tools/scope.mjs';
 import { readProfile, qualityFor, packageManagerOf, contextEnvFor } from '../tools/scope-commands.mjs';
 import { loadLocalConfig } from '../tools/local-config.mjs';
 import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
-import { verifyJobProvenance } from '../tools/verify-provenance.mjs';
+import { verifyJobProvenance, verifyManifestProvenance } from '../tools/verify-provenance.mjs';
+import { loadLessonsForNotes, runLessonsCommand } from '../tools/lessons-commands.mjs';
 import { orchestratorManifestGate, omRunManifestVetted } from '../tools/om-manifest-guard.mjs';
 
 const env = { CLAUDECODE: '1' };
 const hook = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta.url));
+const installRoot = fileURLToPath(new URL('..', import.meta.url));
 
 async function fixture(t, { ledger: includeLedger = true } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-verify-provenance-')));
@@ -47,7 +49,7 @@ async function fixture(t, { ledger: includeLedger = true } = {}) {
   let laneModels;
   try { laneModels = loadLocalConfig().lanes; } catch { /* runner fallback */ }
   const { manifest } = ticketsToManifest(ledger.tickets, {
-    ledger, scope, ready: true, lessons: [], verify: profile.verify,
+    ledger, scope, ready: true, lessons: await loadLessonsForNotes(root, installRoot), verify: profile.verify,
     quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile),
     contextEnv: contextEnvFor(root, profile), laneModels,
   });
@@ -159,4 +161,70 @@ test('sync hook still refuses shell jobs without a ledger', async t => {
   const { root, manifest } = await fixture(t, { ledger: false });
   await fs.writeFile(path.join(root, 'wave.json'), JSON.stringify(manifest));
   assert.deepEqual(omRunManifestVetted(root, 'wave.json'), { ok: false, reason: 'job T-0001 has shell: true' });
+});
+
+async function rebuildWave(root, ledger, lessons) {
+  const profile = await readProfile(root);
+  const snapshot = await fs.readFile(path.join(root, '.swarm', 'project', 'scope.snapshot.md'), 'utf8');
+  let laneModels;
+  try { laneModels = loadLocalConfig().lanes; } catch { /* runner fallback */ }
+  return ticketsToManifest(ledger.tickets, {
+    ledger, scope: parseScope(snapshot), ready: false,
+    lessons: lessons ?? await loadLessonsForNotes(root, installRoot), verify: profile.verify,
+    quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile),
+    contextEnv: contextEnvFor(root, profile), laneModels,
+  }).manifest;
+}
+
+test('generated shell job with matching lesson notes passes provenance', async t => {
+  const { root, ledger } = await fixture(t);
+  const rule = 'Parser tests must cover malformed parser input.';
+  const added = await runLessonsCommand(root, 'lessons', ['add',
+    '--stage', 'test', '--what', 'Parser input escaped validation', '--rule', rule,
+    '--tag', 'parser', '--file', 'tests/parser.test.mjs',
+  ], { installRoot: root });
+  assert.equal(added.exitCode, 0, added.stdout);
+  // Use the temporary project as install root so checkout lessons cannot affect this test.
+  const lessons = await loadLessonsForNotes(root, root);
+  assert.equal(lessons.length, 1);
+  const manifest = await rebuildWave(root, ledger, lessons);
+  const job = manifest.jobs[0];
+  assert.ok(job.prompt.includes(rule), job.prompt);
+  assert.deepEqual((await verifyManifestProvenance(root, manifest.jobs, root)).get(job), { ok: true });
+  assert.deepEqual(await verifyJobProvenance(root, job, root), { ok: true });
+  const withoutNotes = await rebuildWave(root, ledger, []);
+  assert.deepEqual((await verifyManifestProvenance(root, withoutNotes.jobs, root)).get(withoutNotes.jobs[0]),
+    { ok: false, reason: 'job differs from approved ticket at prompt' });
+});
+
+test('dependent shell verify job passes with its non-shell dependency in the manifest', async t => {
+  const { root, ledger } = await fixture(t);
+  // Without setup, only the in-wave dependency routes the verify ticket to shell.
+  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ profile: {
+    verify: { agent: 'claude', command: ['node', '--test', '{tests}'] },
+  } }));
+  ledger.tickets[0].dependsOn = ['T-0002'];
+  ledger.tickets.push({
+    id: 'T-0002', title: 'Document parser behavior', type: 'docs', status: 'ready',
+    scopeRefs: ['R-001'], acceptance: ['Parser behavior is documented'], size: 'S', risk: 'low',
+    files: ['docs/parser.md'], context: [], dependsOn: [],
+  });
+  const approved = approveLedger(ledger);
+  await writeLedger(root, approved);
+  const manifest = await rebuildWave(root, approved);
+  const job = manifest.jobs.find(job => job.id === 'T-0001');
+  const dependency = manifest.jobs.find(job => job.id === 'T-0002');
+  assert.equal(job.shell, true);
+  assert.notEqual(dependency.shell, true);
+  assert.deepEqual(job.after, ['T-0002']);
+  const alone = ticketsToManifest([approved.tickets[0]], {
+    ledger: approved, scope: parseScope(SCOPE_TEMPLATE), ready: false,
+    verify: (await readProfile(root)).verify,
+  }).manifest.jobs[0];
+  assert.notEqual(job.prompt, alone.prompt);
+  assert.deepEqual((await verifyManifestProvenance(root, manifest.jobs)).get(job), { ok: true });
+  await orchestratorManifestGate(root, manifest, env);
+  const isolated = await verifyManifestProvenance(root, [job]);
+  assert.deepEqual(isolated.get(job), { ok: false, reason: 'rebuilt ticket job is not a shell job' });
+  await refused(root, { ...manifest, jobs: [job] }, 'rebuilt ticket job is not a shell job');
 });

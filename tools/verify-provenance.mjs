@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readLedger, isApproved, DELIVERABLE_STATUSES } from './tickets.mjs';
 import { ticketsToManifest } from './ticket-manifest.mjs';
 import { readProfile, qualityFor, packageManagerOf, contextEnvFor } from './scope-commands.mjs';
@@ -30,18 +31,34 @@ const firstDifference = (actual, expected, prefix = '') => {
   return prefix || 'job';
 };
 
-/** Only the exact shell job rebuilt from the approved ticket may pass the runner gate. */
-export async function verifyJobProvenance(root, job) {
-  const refuse = reason => ({ ok: false, reason });
+const ownRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+/** Rebuild the whole wave, including dependency routing and lesson prompts.
+ * The installRoot override is only for tests that isolate installed lessons.
+ */
+export async function verifyManifestProvenance(root, jobs, installRoot = ownRoot) {
+  const results = new Map();
+  const refuse = reason => {
+    for (const job of jobs) if (!results.has(job)) results.set(job, { ok: false, reason });
+    return results;
+  };
   let ledger;
   try { ledger = await readLedger(root); }
   catch { return refuse('ticket ledger could not be read'); }
   if (!ledger) return refuse('ticket ledger is missing');
   try {
     if (!isApproved(ledger)) return refuse('ticket ledger is not approved');
-    const ticket = ledger.tickets.find(ticket => ticket.id === job?.id);
-    if (!ticket) return refuse('job id is not a ticket in the ledger');
-    if (!DELIVERABLE_STATUSES.includes(ticket.status)) return refuse(`ticket status ${ticket.status} is not deliverable`);
+    const ids = new Set(jobs.map(job => job?.id));
+    const tickets = ledger.tickets.filter(ticket => ids.has(ticket.id)
+      && DELIVERABLE_STATUSES.includes(ticket.status));
+    for (const job of jobs) {
+      const ticket = ledger.tickets.find(ticket => ticket.id === job?.id);
+      if (!ticket) results.set(job, { ok: false, reason: 'job id is not a ticket in the ledger' });
+      else if (!DELIVERABLE_STATUSES.includes(ticket.status)) {
+        results.set(job, { ok: false, reason: `ticket status ${ticket.status} is not deliverable` });
+      }
+    }
+    if (jobs.every(job => results.has(job))) return results;
     // Snapshot reading mirrors prepareScopeRun in scope-commands.mjs (its readText is private).
     let snapshot;
     try { snapshot = await fs.readFile(path.join(root, '.swarm', 'project', 'scope.snapshot.md'), 'utf8'); }
@@ -51,18 +68,33 @@ export async function verifyJobProvenance(root, job) {
     const profile = await readProfile(root);
     let laneModels;
     try { laneModels = loadLocalConfig().lanes; } catch { /* same fallback as prepareScopeRun */ }
-    const { manifest } = ticketsToManifest([ticket], {
-      ledger, scope, ready: false, lessons: [], verify: profile?.verify,
+    const { loadLessonsForNotes } = await import('./lessons-commands.mjs');
+    const lessons = await loadLessonsForNotes(root, installRoot);
+    const { manifest } = ticketsToManifest(tickets, {
+      ledger, scope, ready: false, lessons, verify: profile?.verify,
       quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile),
       contextEnv: contextEnvFor(root, profile), laneModels,
     });
-    const rebuilt = manifest.jobs.find(candidate => candidate.id === job.id);
-    if (!rebuilt) return refuse('ticket did not produce a job');
-    if (rebuilt.shell !== true && !String(rebuilt.model ?? '').endsWith('-shell')) return refuse('rebuilt ticket job is not a shell job');
-    const difference = firstDifference(canonical(job), canonical(rebuilt));
-    if (difference) return refuse(`job differs from approved ticket at ${difference}`);
-    return { ok: true };
+    const rebuiltById = new Map(manifest.jobs.map(job => [job.id, job]));
+    for (const job of jobs) {
+      if (results.has(job)) continue;
+      const rebuilt = rebuiltById.get(job.id);
+      let reason;
+      if (!rebuilt) reason = 'ticket did not produce a job';
+      else if (rebuilt.shell !== true && !String(rebuilt.model ?? '').endsWith('-shell')) reason = 'rebuilt ticket job is not a shell job';
+      else {
+        const difference = firstDifference(canonical(job), canonical(rebuilt));
+        if (difference) reason = `job differs from approved ticket at ${difference}`;
+      }
+      results.set(job, reason ? { ok: false, reason } : { ok: true });
+    }
+    return results;
   } catch {
     return refuse('approved ticket job could not be rebuilt');
   }
+}
+
+/** Only the exact shell job rebuilt from the approved ticket may pass the runner gate. */
+export async function verifyJobProvenance(root, job, installRoot = ownRoot) {
+  return (await verifyManifestProvenance(root, [job], installRoot)).get(job);
 }

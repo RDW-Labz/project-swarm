@@ -504,9 +504,10 @@ export async function orchestratorManifestGate(root, manifest, env = process.env
       if (ids.has(job?.id)) refuse(`job ${job?.id}: duplicate job id`);
       ids.add(job?.id);
     }
-    const { verifyJobProvenance } = await import('./verify-provenance.mjs');
+    const { verifyManifestProvenance } = await import('./verify-provenance.mjs');
+    const provenance = await verifyManifestProvenance(root, jobs);
     for (const job of jobs.filter(isShellJob)) {
-      const result = await verifyJobProvenance(root, job);
+      const result = provenance.get(job);
       if (!result.ok) refuse(`job ${job.id}: ${result.reason}`);
       allowedJobs.add(job);
     }
