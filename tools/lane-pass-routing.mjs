@@ -91,7 +91,7 @@ export async function readRunStates(root, { readdir, readFile }) {
       const raw = await readFile(path.join(runsDir, name, 'state.json'), 'utf8');
       runStates[name] = JSON.parse(raw);
     } catch (error) {
-      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR' && !(error instanceof SyntaxError)) {
         console.error('[tools/lane-pass-routing.mjs] readRunStates state.json:', error?.message ?? error);
       }
       // A run may be incomplete or concurrently unavailable; keep the readable runs.
@@ -124,7 +124,7 @@ export function readRunStatesSync(root, { readdirSync, readFileSync } = fs) {
       if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
       runStates[name] = state;
     } catch (error) {
-      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR' && !(error instanceof SyntaxError)) {
         console.error('[tools/lane-pass-routing.mjs] readRunStatesSync state.json:', error?.message ?? error);
       }
       // A run may be incomplete or concurrently unavailable; keep the readable runs.

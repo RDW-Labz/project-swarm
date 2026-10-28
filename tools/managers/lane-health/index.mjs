@@ -55,7 +55,7 @@ async function resolveRunManifest(root) {
     for (const id of ids) {
       const manifestFile = path.join(runsDir, id, 'manifest.json');
       const st = await fs.stat(manifestFile).catch((error) => {
-        if (error?.code !== 'ENOENT') {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
           console.error('[tools/managers/lane-health/index.mjs] resolveRunManifest stat:', manifestFile, error?.message ?? error);
         }
         return null;
@@ -96,7 +96,7 @@ async function latestRunId(root) {
     for (const id of ids) {
       const manifestFile = path.join(runsDir, id, 'manifest.json');
       const st = await fs.stat(manifestFile).catch((error) => {
-        if (error?.code !== 'ENOENT') {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
           console.error('[tools/managers/lane-health/index.mjs] latestRunId stat:', manifestFile, error?.message ?? error);
         }
         return null;
