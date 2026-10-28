@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.22
+
+Three queue and worker fixes found building the parts project.
+- **Owners:** a test file that a done ticket already owns is no longer taken away from the next ticket's outputs, so a ticket is not left with empty outputs;
+- **Paths:** an acceptance line that names a dot folder such as .github/workflows/ci.yml keeps its leading dot, so valid CI tickets are no longer parked as owned by nobody;
+- **Blocked:** a Codex or Cursor job whose reply says it is blocked and whose outputs did not change is now blocked with the worker's own note as the reason and is never marked complete, and a job that completes with no changed output gets a completed-without-changes warning.
+
 ## 1.167.21
 
 The paid lanes are off for real.

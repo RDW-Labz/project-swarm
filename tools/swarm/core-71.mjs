@@ -1,5 +1,5 @@
 import { assertScratchOutsideRepo, resolveVenvInterpreterDirs } from '../claude-shell.mjs';
-import { codexEnvironment, codexMessage, codexProfile, git, parseCodexReply, prepareViteCaches, resolveReadPaths, runCodexWithRetry, validateReadPaths } from '../codex-adapter.mjs';
+import { blockedNoteFromReply, codexEnvironment, codexMessage, codexProfile, git, parseCodexReply, prepareViteCaches, resolveReadPaths, runCodexWithRetry, validateReadPaths } from '../codex-adapter.mjs';
 import { CURSOR_BLIP_RE, cursorConfig, cursorEnvironment, cursorMessage, cursorProfile, redactCursorKey, requireCursorApiKey, resolveCursorBinary } from '../cursor-adapter.mjs';
 import { isBuildArtifact } from '../ignored-artifacts.mjs';
 import { acquireIntegrationLock } from '../integration-lock.mjs';
@@ -24,6 +24,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+function blockedSummaryFromReply(reply) {
+  if (typeof reply?.summary === 'string' && reply.summary.trim()) return reply.summary.trim();
+  if (typeof reply?.file === 'string' && reply.file.trim()) return `needs ${reply.file.trim()}`;
+  return blockedNoteFromReply(reply) ?? 'no summary given';
+}
 
 /** Remove a job worktree checkout unless it holds swarm state (ledger, runs, registry root, pointer ledger). */
 export async function removeWorktreeCheckout(root, worktree, { gitImpl = git, caller = 'removeWorktreeCheckout', env = process.env, home = env?.HOME ?? os.homedir(), registryFile, fs: fsImpl = fs } = {}) {
@@ -146,11 +152,15 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
           // job status blocked with its summary — never masked by a generic missing-output error.
           const reply = parseCodexReply(result.response);
           if (reply?.status === 'blocked' && (job.report !== 'short' || validateReport(reply, { outputs: job.outputs }).report)) {
-            const summary = typeof reply.summary === 'string' && reply.summary.trim() ? reply.summary.trim()
-              : typeof reply.file === 'string' && reply.file.trim() ? `needs ${reply.file.trim()}` : 'no summary given';
-            result = { ...result, status: 'blocked', error: `blocked: ${summary}`.slice(0, 300) };
+            result = { ...result, status: 'blocked', error: `blocked: ${blockedSummaryFromReply(reply)}`.slice(0, 300) };
           } else result = { ...result, status: 'failed', error: `Missing output (deletions are never propagated): ${missing.join(', ')}` };
         } else {
+          const reply = parseCodexReply(result.response);
+          const outputsUnchanged = !(await outputsChanged(worktree, launchBaseline));
+          const blockedNote = blockedNoteFromReply(reply);
+          if (blockedNote && outputsUnchanged) {
+            result = { ...result, status: 'blocked', error: `blocked: ${blockedNote}`.slice(0, 300) };
+          } else {
           result = await reaskWorkerReport(job, result, worktree, options, async reaskMessage => {
             const reaskRelative = `.swarm-codex-result-${crypto.randomBytes(12).toString('hex')}.json`;
             resultFiles.add(reaskRelative);
@@ -162,7 +172,11 @@ export async function executeCodexJob(root, directory, job, proposalRoot, option
             }
             return execute(job, worktree, reaskMessage, { ...launchOptions, codex: { worktree, profile, lastMessage: path.join(worktree, reaskRelative), resultRelative: reaskRelative, env: { ...await codexEnvironment(options.env), ...workerEnv } } });
           });
+          if (result.status === 'complete' && outputsUnchanged && !blockedNoteFromReply(parseCodexReply(result.response))) {
+            result.warnings = [...(result.warnings ?? []), 'completed-without-changes: no declared output changed'];
+          }
           for (const output of outputs) await write(proposalRoot, output.file, output.bytes, false, output.mode);
+          }
         }
       }
       return result;
