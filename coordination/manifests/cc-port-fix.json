@@ -17,7 +17,9 @@
     "tools/watch-assets/command-center-boot.js",
     "tools/watch-assets/hive-panels.js",
     "docs/design/reference/command-center-artifact/cockpit-desktop.png",
-    "tests/watch-assets-dom-collections.test.mjs"
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/cc-hive-mount.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/cc-cockpit-mount.js",

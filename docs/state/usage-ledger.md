@@ -195,6 +195,8 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | ccgrade6: complete | claude | opus | pass | 81,303 | $0.37 |
 | 2026-10-28 | - | ccfixhive6: S10 Command Center, Hive page, round 6 (Hive scored 2.4/5 against the target; goal 4.5+) | claude | sonnet | cancelled: cancelled | - | $1.00 |
 | 2026-10-28 | - | ccfixcockpit6: complete | claude | sonnet | pass | 2,746,987 | $1.93 |
+| 2026-10-28 | - | ccporthive: complete | claude | sonnet | pass | 6,705,254 | $2.61 |
+| 2026-10-28 | - | ccportcockpit: complete | claude | sonnet | pass | 4,733,287 | $2.20 |
 
 ## Daily summary
 
@@ -214,6 +216,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
-| 2026-10-28 | claude | 13 | 10 | 3 | 7,962,485 | $9.50 |
+| 2026-10-28 | claude | 15 | 12 | 3 | 19,401,026 | $14.31 |
 | 2026-10-28 | cursor | 11 | 11 | 0 | 0 | subscription |
-| **total** | all | 191 | 173 | 18 | 22,756,546 | $36.54 (incl. estimates) |
+| **total** | all | 193 | 175 | 18 | 34,195,087 | $41.35 (incl. estimates) |
