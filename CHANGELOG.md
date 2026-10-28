@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.23
+
+Release train 1: four fixes for the parts build and the orchestrator guard.
+- **Branches:** integrate can commit to branches the project names in .project-swarm.json integrate.commitBranches (exact names or a trailing star), never to main, master or the default branch, and says why when it commits nothing;
+- **Splits:** swarm resolve --superseded-splits [--stage S] [--dry-run] clears parked split blockers that a newer ingest of the same stage replaced, and keeps the current ones;
+- **Guard:** in orchestrator mode, swarm run, go and ticket read the manifest and refuse checks, setup, preChecks or mutantCheck commands that are not vetted in coordination/checks.json or the profile verify command, and refuse shell jobs;
+- **Approve:** swarm scope approve --auto-ok lets the orchestrator approve a change-order split only when code shows no paid lanes, no migrations, no deploy or merge to main and no cancelled done work, logs every decision and otherwise leaves a Needs-you item; plain approve stays owner-only.
+
 ## 1.167.22
 
 Three queue and worker fixes found building the parts project.
