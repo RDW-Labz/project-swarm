@@ -188,7 +188,9 @@ export async function findRealGit(pathValue, { exclude = null, access = file => 
   for (const dir of String(pathValue ?? '').split(':').filter(dir => path.isAbsolute(dir))) {
     if (exclude && path.resolve(dir) === path.resolve(exclude)) continue;
     const candidate = path.join(dir, 'git');
-    try { await access(candidate); return candidate; } catch { /* keep looking */ }
+    try { await access(candidate); return candidate; } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') console.error('[tools/swarm-env.mjs] findRealGit path probe:', error?.message ?? error);
+    }
   }
   return '/usr/bin/git';
 }

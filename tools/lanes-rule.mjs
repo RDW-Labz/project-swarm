@@ -115,7 +115,9 @@ async function atomicWriteUtf8(filePath, content) {
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink()) {
-      await fs.unlink(tmpPath).catch(() => {});
+      await fs.unlink(tmpPath).catch((cleanupError) => {
+        if (cleanupError?.code !== 'ENOENT') console.error('[tools/lanes-rule.mjs] symlink refusal tmp unlink:', cleanupError?.message ?? cleanupError);
+      });
       throw new Error(`refused symlink target: ${path.basename(filePath)}`);
     }
   } catch (err) {

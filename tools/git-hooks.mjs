@@ -154,7 +154,7 @@ export function installGitHooks(root, { fs: fsMod = fs, exec, checkScript, nodeP
     if (hookIsSymlink(fsMod, hookPath)) backupUserHook(fsMod, hookPath);
     const existing = readHook(fsMod, hookPath);
     if (existing !== null && isOurHook(existing)) {
-      try { fsMod.chmodSync(hookPath, 0o755); } catch { /* best effort */ }
+      try { fsMod.chmodSync(hookPath, 0o755); } catch (error) { console.error('[tools/git-hooks.mjs] chmod existing hook:', hookPath, error?.message ?? error); }
     } else {
       backupUserHook(fsMod, hookPath);
     }
