@@ -7,13 +7,25 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "cheap",
-   "prompt": "Owner order: make tests/swarm.test.mjs line ~348, 'cancellation cleanup denial preserves its reason, fails the run, and does not start queued jobs', fail fast instead of hanging for days. On a parked branch the runner regressed so runManifest never returned when the kill is denied; the test's t.after(() => process.kill(-child.pid, 'SIGKILL')) never ran because the test never finished, and the fake worker child (spawned by fake('setInterval(()=>{},1000)')) kept the test file's process alive past --test-timeout for 1 day 15 hours.\nFix only in the test file:\n1. Add a small helper near the existing fake() helper, e.g. async function withHangGuard(promise, ms, onHang) that races the promise against a timer; on timeout it calls onHang() and throws an Error whose message says the run did not finish within ms and names the test's purpose; always clears the timer (unref it too).\n2. In this test, wrap the runManifest(...) call: const state = await withHangGuard(runManifest(...), 15000, () => { kill the fake worker's process group with SIGKILL (process.kill(-child.pid, 'SIGKILL') on non-Windows, child.pid on Windows, inside try/catch) }). Keep the existing t.after kill as a second line of defence, and keep every assertion unchanged.\n3. Change nothing else in the file and no product code. Add a short comment above the helper saying why (a denied kill once made this test hang for days).\nAlso add one self-test of the helper in the same file: withHangGuard on a never-resolving promise with a 50 ms limit rejects within about a second and calls onHang exactly once; on a promise that resolves first it returns the value and never calls onHang.",
+   "prompt": "Owner order: make tests/swarm.test.mjs line ~348, 'cancellation cleanup denial preserves its reason, fails the run, and does not start queued jobs', fail fast instead of hanging for days. On a parked branch the runner regressed so runManifest never returned when the kill is denied; the test's t.after(() => process.kill(-child.pid, 'SIGKILL')) never ran because the test never finished, and the fake worker child (spawned by fake('setInterval(()=>{},1000)')) kept the test file's process alive past --test-timeout for 1 day 15 hours.\nFix only in the test file:\n1. Add a small helper near the existing fake() helper, e.g. async function withHangGuard(promise, ms, onHang) that races the promise against a timer; on timeout it calls onHang() and throws an Error whose message says the run did not finish within ms and names the test's purpose; always clears the timer (unref it too).\n2. In this test, wrap the runManifest(...) call: const state = await withHangGuard(runManifest(...), 15000, () => { kill the fake worker's process group with SIGKILL (process.kill(-child.pid, 'SIGKILL') on non-Windows, child.pid on Windows, inside try/catch) }). Keep the existing t.after kill as a second line of defence, and keep every assertion unchanged.\n3. Change nothing else in the file and no product code. Add a short comment above the helper saying why (a denied kill once made this test hang for days).\nAlso add one self-test of the helper in the same file: withHangGuard on a never-resolving promise with a 50 ms limit rejects within about a second and calls onHang exactly once; on a promise that resolves first it returns the value and never calls onHang. PREVIOUS ATTEMPT FAILED: the withHangGuard function was left without its closing brace, so the file did not parse (node --check failed) and zero tests ran. Make sure every function and test block is closed; the file must parse.",
    "context": [],
-   "outputs": ["tests/swarm.test.mjs"],
+   "outputs": [
+    "tests/swarm.test.mjs"
+   ],
    "timeoutMs": 1200000
   }
  ],
  "checks": [
-  { "name": "swarm-test", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "--test-timeout=120000", "tests/swarm.test.mjs"] }
+  {
+   "name": "swarm-test",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "--test-timeout=120000",
+    "tests/swarm.test.mjs"
+   ]
+  }
  ]
 }
