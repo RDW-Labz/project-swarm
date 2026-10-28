@@ -71,16 +71,6 @@ function stackFootnote(project) {
   return String(name);
 }
 
-function withGlobalDocument(doc, fn) {
-  const prev = globalThis.document;
-  globalThis.document = doc;
-  try {
-    return fn();
-  } finally {
-    globalThis.document = prev;
-  }
-}
-
 function syncOrchestratorLabel(headerHost, project, at) {
   const session = primarySession(project?.sessions);
   const orch = session
@@ -111,11 +101,9 @@ function syncOrchestratorLabel(headerHost, project, at) {
   return orch;
 }
 
-function paintCockpitHeader(headerHost, project, deps, at) {
+function paintCockpitHeader(headerHost, project, _deps, at) {
   while (headerHost.firstChild) headerHost.removeChild(headerHost.firstChild);
-  withGlobalDocument(deps.document, () => {
-    renderCockpit(headerHost, cockpitViewModel(project), { now: at });
-  });
+  renderCockpit(headerHost, cockpitViewModel(project), { now: at });
   syncOrchestratorLabel(headerHost, project, at);
 }
 

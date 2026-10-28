@@ -193,6 +193,9 @@ test('renderProjectCockpit shows headline, orchestrator label, rings, tickets, e
   const host = document.createElement('div');
   document.body.appendChild(host);
 
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+
   let backCount = 0;
   const view = renderProjectCockpit(host, project, {
     document,
@@ -237,4 +240,6 @@ test('renderProjectCockpit shows headline, orchestrator label, rings, tickets, e
 
   view.destroy();
   assert.equal(host.children.length, 0);
+
+  globalThis.document = prevDocument;
 });

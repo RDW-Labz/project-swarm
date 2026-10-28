@@ -188,6 +188,15 @@ function attachPageMonitors(page, pageLabel, bag) {
   });
   page.on('response', (res) => {
     const status = res.status();
+    const req = res.request();
+    if (req.resourceType() === 'stylesheet') {
+      const ct = (res.headers()['content-type'] || '').toLowerCase();
+      if (!ct.includes('text/css')) {
+        bag.badResponses.push(
+          `${pageLabel}: stylesheet wrong content-type ${ct || '(missing)'} ${res.url()}`,
+        );
+      }
+    }
     if (status < 400) return;
     const url = res.url();
     if (status === 404 && /favicon\.ico(?:\?|$)/.test(url)) return;
@@ -302,21 +311,6 @@ function ensurePlaywrightBrowserPath() {
   }
 }
 
-async function installCockpitMountPatch(page) {
-  await page.route('**/assets/cc-cockpit-mount.js', async (route) => {
-    const response = await route.fetch();
-    const body = (await response.text()).replace(
-      /function withGlobalDocument\(doc, fn\) \{[^]*?\n\}/,
-      'function withGlobalDocument(doc, fn) {\n  return fn();\n}',
-    );
-    await route.fulfill({
-      status: response.status(),
-      headers: { ...response.headers(), 'content-type': 'text/javascript; charset=utf-8' },
-      body,
-    });
-  });
-}
-
 async function launchChromium() {
   ensurePlaywrightBrowserPath();
   const { chromium } = await import('playwright');
@@ -376,16 +370,19 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
   try {
     smokeContext = await smokeBrowser.newContext({ viewport: { width: 1440, height: 900 } });
     const context = smokeContext;
-    await context.addInitScript(() => {
-      if (!HTMLCollection.prototype.find) {
-        HTMLCollection.prototype.find = function find(fn, thisArg) {
-          return Array.prototype.find.call(this, fn, thisArg);
-        };
-      }
-    });
+
+    const cockpitDirectPage = await context.newPage();
+    smokePages.push(cockpitDirectPage);
+    attachPageMonitors(cockpitDirectPage, 'Cockpit-direct', bag);
+    const cockpitDirectUrl = `http://127.0.0.1:${smokeOn.port}/command-center/project/alpha?${smokeOn.pageAuthQuery}`;
+    await cockpitDirectPage.goto(cockpitDirectUrl, { waitUntil: 'networkidle', timeout: 60_000 });
+    await cockpitDirectPage.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
+    await cockpitDirectPage.waitForSelector('.cc-cockpit-shell, #cc-cockpit-main', { timeout: 30_000 });
+    assertMonitorBag(bag, 'Cockpit-direct');
+    await assertMainArea(cockpitDirectPage, '#cc-cockpit-main', 'Cockpit-direct');
+
     const page = await context.newPage();
     smokePages.push(page);
-    await installCockpitMountPatch(page);
     attachPageMonitors(page, 'Hive', bag);
     attachPageMonitors(page, 'Cockpit', bag);
 
