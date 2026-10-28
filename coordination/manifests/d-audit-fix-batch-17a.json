@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-readydeps-batch-17a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 17a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/autopilot-ready-deps.mjs' section. Edit ONLY tools/autopilot-ready-deps.mjs. Visibility only: do NOT change control flow, return values, or resolve/reject behavior.\n\nNo logger exists in this file. Use: console.error('[tools/autopilot-ready-deps.mjs] <short context>:', error?.message ?? error)\n\nFlagged lines:\n1. Line 43 `} catch { /* fall through */ }` around deps.integrateCheckoutGitState: bind and log, then fall through exactly as today. Keep the comment.\n2. Line 57 `} catch { /* use raw checkout */ }`: bind and log, still return the raw checkout. Keep the comment.\n3. Line 385 `try { fs.closeSync(stderrFd); } catch { /* ignore */ }` inside finish(): EBADF (already closed) is the expected double-close case: stay silent for error?.code === 'EBADF'; log anything else. resolve(out) must still run.\n4. Line 422 same closeSync in the outer catch: same treatment (EBADF silent, log else). The surrounding catch's existing behavior is unchanged.\n\nDo NOT touch any other catch. Do not refactor, reformat, rename, or change exports. Keep existing comments.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run covering tests (grep tests/ for autopilot-ready-deps) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/autopilot-ready-deps.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/autopilot-ready-deps.test.mjs",
+        "tests/autopilot-wide-waves.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/memory-fixes.test.mjs",
+        "tests/memory-wiring.test.mjs",
+        "tests/needs-you-triage.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

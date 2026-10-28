@@ -40,7 +40,10 @@ async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
     try {
       const gitState = await deps.integrateCheckoutGitState(root, { outputPaths });
       if (gitState && typeof gitState === 'object') return { ...checkout, ...gitState, dirty: false };
-    } catch { /* fall through */ }
+    } catch (error) {
+      console.error('[tools/autopilot-ready-deps.mjs] integrateCheckoutGitState (deps):', error?.message ?? error);
+      /* fall through */
+    }
   }
   try {
     const exec = typeof deps.gitExecForIntegrate === 'function'
@@ -54,7 +57,10 @@ async function resolveIntegrateCheckoutView(root, checkout, outputPaths, deps) {
       outputPaths,
     });
     if (gitState) return { ...checkout, ...gitState, dirty: false };
-  } catch { /* use raw checkout */ }
+  } catch (error) {
+    console.error('[tools/autopilot-ready-deps.mjs] integrateCheckoutGitState (default):', error?.message ?? error);
+    /* use raw checkout */
+  }
   return checkout;
 }
 
@@ -382,7 +388,12 @@ export function readyAutopilotDeps(projectRoot, {
           const finish = (out) => {
             if (settled) return;
             settled = true;
-            try { fs.closeSync(stderrFd); } catch { /* ignore */ }
+            try { fs.closeSync(stderrFd); } catch (error) {
+              if (error?.code !== 'EBADF') {
+                console.error('[tools/autopilot-ready-deps.mjs] closeSync stderr in finish:', error?.message ?? error);
+              }
+              /* ignore */
+            }
             resolve(out);
           };
           const readLogTail = () => {
@@ -419,7 +430,12 @@ export function readyAutopilotDeps(projectRoot, {
         });
       } catch (error) {
         if (stderrFd !== undefined) {
-          try { fs.closeSync(stderrFd); } catch { /* ignore */ }
+          try { fs.closeSync(stderrFd); } catch (closeError) {
+            if (closeError?.code !== 'EBADF') {
+              console.error('[tools/autopilot-ready-deps.mjs] closeSync stderr in spawn catch:', closeError?.message ?? closeError);
+            }
+            /* ignore */
+          }
         }
         return { ok: false, result: String(error?.message ?? error) };
       }
