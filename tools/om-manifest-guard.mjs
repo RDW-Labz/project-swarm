@@ -2,6 +2,7 @@
 // Synchronous vetting of swarm run/go manifest files for orchestrator-mode shell guard.
 import fs from 'node:fs';
 import path from 'node:path';
+import { orchestratorHookInstalledFor } from './orchestrator-hook-installed.mjs';
 import { OM_SWARM_RUN_FLAGS } from './orchestrator-allow.mjs';
 import { managedChecks } from './verify-config.mjs';
 import { qualityCheckArgvsForProject } from './quality-checks.mjs';
@@ -477,7 +478,6 @@ export async function orchestratorManifestGate(root, manifest, env = process.env
   if (env?.CLAUDECODE !== '1') return;
   const { orchestratorModeEnabled } = await import('./shell-writes.mjs');
   if (!orchestratorModeEnabled(root)) return;
-  const { orchestratorHookInstalledFor } = await import('./orchestrator-hook.mjs');
   if (!orchestratorHookInstalledFor(root)) return;
   const vetted = loadVettedArgvs(root);
   const result = vetManifestBody(manifest, vetted);

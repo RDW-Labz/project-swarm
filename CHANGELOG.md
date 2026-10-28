@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.167.24
+
+Hotfix: swarm commands no longer exit silently inside Claude Code sessions.
+- **Fix:** in 1.167.23, swarm validate, run, go and ticket exited 0 and did nothing when run from a Claude Code session in a project with orchestrator mode on, because the runner gate loaded the orchestrator hook script, which exits when its input ends; the gate now reads the hook check from a module with no side effects;
+- **Tests:** an end-to-end test runs the real CLI with CLAUDECODE=1, orchestrator mode on, the hook installed and input closed, and a static test keeps every tool module from importing the hook script.
+
 ## 1.167.23
 
 Release train 1: four fixes for the parts build and the orchestrator guard.
