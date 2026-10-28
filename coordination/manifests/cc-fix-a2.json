@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccfixa2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 follow-up, two measured failures (real Chromium, Playwright 1.64):\n1. Loading /command-center/project/<id> directly shows 'Could not start the Command Center. Required scripts failed to load.' because tools/watch-assets/command-center-boot.js loads 'assets/command-center-data.js' and 'assets/hive-panels.js' with relative URLs (404 under /command-center/project/). Make both root-absolute ('/assets/...'). Change nothing else in that file.\n2. 'npm run test:browser' fails at once with \"browser.process is not a function\": in Playwright, Browser has no process(); only a BrowserServer from chromium.launchServer() has process(). In tests/browser/browser-cleanup.mjs make trackBrowser accept either a BrowserServer (use server.process().pid) or an object {server, browser}; keep descendantPids, closeBrowserFully and every safety rule (never kill pid 0/1/negatives or pids outside the tracked tree, SIGTERM then SIGKILL on the group, safe twice) unchanged. In tests/browser/command-center.smoke.mjs launch with const server = await chromium.launchServer({ headless: true }); const browser = await chromium.connect(server.wsEndpoint()); track the server's pid, and on cleanup close the browser connection, then server.close(), then closeBrowserFully for leftover processes. Keep the Chromium-missing hint. Update tests/browser-cleanup.test.mjs for the new trackBrowser input shapes (a fake server with process() returning {pid}, and the {server, browser} form; a plain object without process() still throws a clear error). Do not add page patches or polyfills to the smoke test.",
+   "context": [
+    "tools/watch-assets/cc-hive-mount.js"
+   ],
+   "outputs": [
+    "tools/watch-assets/command-center-boot.js",
+    "tests/browser/browser-cleanup.mjs",
+    "tests/browser/command-center.smoke.mjs",
+    "tests/browser-cleanup.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ],
+ "checks": [
+  { "name": "cc-units", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/browser-cleanup.test.mjs", "tests/command-center-boot.test.mjs", "tests/cc-hive-mount.test.mjs", "tests/cc-cockpit-mount.test.mjs"] }
+ ]
+}
