@@ -37,7 +37,11 @@ const within = (file, parent) => { const rel = path.relative(parent, file); retu
 export function defaultTmpRoots() {
   const raw = os.tmpdir();
   let real = raw;
-  try { real = realpathSync(raw); } catch { /* raw kept as the sole spelling */ }
+  try { real = realpathSync(raw); } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'EACCES') {
+      console.error('[tools/codex-adapter.mjs] defaultTmpRoots realpath:', error?.message ?? error);
+    }
+  }
   return [...new Set(['/private/tmp', '/tmp', raw, real])];
 }
 export function validateReadPaths(paths = [], home = os.homedir(), config = {}) {
