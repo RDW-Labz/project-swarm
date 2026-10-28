@@ -64,7 +64,12 @@ async function readTicketEvents(root) {
 async function readProjectData(root, now, windowDays) {
   const [ledger, events, runs] = await Promise.all([
     readLedger(root).catch((error) => {
-      if (error?.code !== 'ENOENT') console.error('[tools/split-quality.mjs] readLedger:', error?.message ?? error);
+      if (error?.code !== 'ENOENT') {
+        const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError')
+          ? 'corrupt ledger (SyntaxError)'
+          : (error?.message ?? error);
+        console.error('[tools/split-quality.mjs] readLedger:', detail);
+      }
       return null;
     }),
     readTicketEvents(root),
