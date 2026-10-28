@@ -1,0 +1,102 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccporthive",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "PORT the owner-approved design into the real Command Center Hive page (/command-center).\nSource of truth: docs/design/reference/command-center-artifact/index.html (a slimmed copy of the owner's artifact: its inline CSS and its <script type=module> code; base64 images were removed and are described in the contract). LOOK at docs/design/reference/command-center-artifact/hive-desktop.png, hive-full.png and hive-phone.png (how the artifact renders) and at docs/design/reference/hive-target.png (the owner's bar). The result must look like the artifact screenshot: same layout, same CSS (port it rule by rule, scoped as the contract says), same canvas drawing and animations (port the drawing functions, keep their timing and look), same typography.\nBind everything to REAL data from the existing app: tools/watch-assets/command-center-data.js parses the snapshot from /api/command-center (built server-side by tools/command-center-snapshot.mjs from the board payload) and /api/command-center/project?id= (buildProjectCockpit). Where the artifact reads its static `D` object, read the equivalent live field. Never hard-code sample numbers; missing values render as a short muted line.\nRead coordination/review/cc-design-contract.md first and follow it exactly (file ownership, stylesheet order, fonts, icons, robot heads, CSP: no inline scripts, hooks to keep, the Array.from rule).\nMotion: keep the artifact's animations (canvas loops via requestAnimationFrame, CSS keyframes), pause when the tab is hidden, off under prefers-reduced-motion; keep its glitch limits (each burst under 400 ms, at most 3 at once, never on text being read).\nTests: the tests in your outputs assert the OLD markup; update them to the new markup but keep every data-behaviour assertion (which number comes from which field, empty states, navigation, data-project-id). Tests in context are read-only and must keep passing.\nYou cannot run a browser. Reason concretely about sizes at 1440x900 and 390x844. When done, summarize what you ported, what you could not bind to live data and why.\nYou also own: tools/watch-assets/command-center.html (link /assets/cc-theme.css first, keep the other links and the single module script), tools/watch-assets/cc-theme.css (new: @font-face for the four vendored fonts + shared :root tokens), tools/command-center-snapshot.mjs (add server-side fields the Hive or Cockpit need, e.g. per-hour completions for the step chart, per-lane job counts, session log events; keep existing fields and tests), tools/watch-assets/vendor/VENDOR.json (add one entry per new font: Instrument Serif italic 400, Fontsource @fontsource/instrument-serif 5.2.8, file fonts/instrument-serif-latin-400-italic.woff2, sha256 5a51946dfffa82972bc98745359c46761515641fda557c25116459a9f83da4a7, bytes 22128, gzip 22196, licence OFL-1.1, licenseFiles fonts/LICENSE-instrument-serif; Playfair Display italic variable, Fontsource @fontsource-variable/playfair-display 5.2.8, file fonts/playfair-display-latin-wght-italic.woff2, sha256 54af24bd0f911f0fd7399d5445ea2023ff501d6a69f2d728f1213072f977ab14, bytes 38804, gzip 38878, licence OFL-1.1, licenseFiles fonts/LICENSE-playfair-display; copy the shape of the existing font entries exactly) and docs/third-party.md (add both fonts to the existing fonts row or as rows in the same format). The first-visit tour (tools/watch-assets/cc-tour.js) never opens by itself; only a help button starts it. Put the ring/streams canvas code in the new module tools/watch-assets/cc-hive-stage.js.",
+   "context": [
+    "docs/design/reference/command-center-artifact/index.html",
+    "docs/design/reference/command-center-artifact/hive-desktop.png",
+    "docs/design/reference/command-center-artifact/hive-full.png",
+    "docs/design/reference/command-center-artifact/hive-phone.png",
+    "docs/design/reference/hive-target.png",
+    "coordination/review/cc-design-contract.md",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/robot-head.js",
+    "tools/watch-assets/cc-glitch.js",
+    "tests/watch-vendor.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/cc-hive-stage.js",
+    "tools/watch-assets/cc-tour.js",
+    "tools/watch-assets/command-center.html",
+    "tools/watch-assets/cc-theme.css",
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/vendor/VENDOR.json",
+    "docs/third-party.md",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-tour.test.mjs",
+    "tests/command-center-snapshot.test.mjs"
+   ],
+   "timeoutMs": 3600000
+  },
+  {
+   "id": "ccportcockpit",
+   "agent": "claude",
+   "model": "sonnet",
+   "tier": "mid",
+   "prompt": "PORT the owner-approved design into the real Command Center Cockpit page (/command-center/project/<id>).\nSource of truth: docs/design/reference/command-center-artifact/index.html (a slimmed copy of the owner's artifact: its inline CSS and its <script type=module> code; base64 images were removed and are described in the contract). LOOK at docs/design/reference/command-center-artifact/cockpit-desktop.png and cockpit-phone.png (how the artifact renders) and at docs/design/reference/cockpit-target.png (the owner's bar). The result must look like the artifact screenshot: same layout, same CSS (port it rule by rule, scoped as the contract says), same canvas drawing and animations (port the drawing functions, keep their timing and look), same typography.\nBind everything to REAL data from the existing app: tools/watch-assets/command-center-data.js parses the snapshot from /api/command-center (built server-side by tools/command-center-snapshot.mjs from the board payload) and /api/command-center/project?id= (buildProjectCockpit). Where the artifact reads its static `D` object, read the equivalent live field. Never hard-code sample numbers; missing values render as a short muted line.\nRead coordination/review/cc-design-contract.md first and follow it exactly (file ownership, stylesheet order, fonts, icons, robot heads, CSP: no inline scripts, hooks to keep, the Array.from rule).\nMotion: keep the artifact's animations (canvas loops via requestAnimationFrame, CSS keyframes), pause when the tab is hidden, off under prefers-reduced-motion; keep its glitch limits (each burst under 400 ms, at most 3 at once, never on text being read).\nTests: the tests in your outputs assert the OLD markup; update them to the new markup but keep every data-behaviour assertion (which number comes from which field, empty states, navigation, data-project-id). Tests in context are read-only and must keep passing.\nYou cannot run a browser. Reason concretely about sizes at 1440x900 and 390x844. When done, summarize what you ported, what you could not bind to live data and why.\nThe Hive job owns command-center.html, cc-theme.css (fonts + tokens), the server snapshot and the tour; do not edit them. Put the orbit/robot canvas code in the new module tools/watch-assets/cc-cockpit-orbit.js. The big centre robot is mountRobotHead (tools/watch-assets/robot-head.js, read-only), as in the artifact.",
+   "context": [
+    "docs/design/reference/command-center-artifact/index.html",
+    "docs/design/reference/command-center-artifact/cockpit-desktop.png",
+    "docs/design/reference/command-center-artifact/cockpit-phone.png",
+    "docs/design/reference/cockpit-target.png",
+    "coordination/review/cc-design-contract.md",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/robot-head.js",
+    "tools/watch-assets/cc-glitch.js",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit.css",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js",
+    "tools/watch-assets/cc-cockpit-orbit.js",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/command-center-cockpit.test.mjs"
+   ],
+   "timeoutMs": 3600000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs",
+    "tests/watch-vendor.test.mjs"
+   ]
+  }
+ ]
+}
