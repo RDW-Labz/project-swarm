@@ -91,7 +91,7 @@ test('validate refuses unvetted checks argv under CLAUDECODE with hook installed
     `${JSON.stringify({
       version: 1,
       jobs: [{ ...PLAIN_JOB, outputs: [] }],
-      checks: [{ name: 'evil', argv: ['sh', '-c', 'true'] }],
+      checks: [{ name: 'evil', argv: [process.execPath, '-e', '1'] }],
     }, null, 2)}\n`,
   );
   const r = swarmValidate(root, rel);
