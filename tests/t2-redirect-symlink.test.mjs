@@ -35,14 +35,32 @@ test('redirects refuse parent traversal after directory symlinks', async t => {
   assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
 });
 
-test('redirects refuse earlier cwd changes in compound commands', async t => {
+test('redirects resolve targets against the tracked cwd in compound commands', async t => {
   const ctx = await project(t);
   for (const command of [
-    'cd docs && echo x > plans/a.md',
+    'cd coordination && echo x > manifests/a.json',
     'cd docs && echo x > docs/plans/a.md',
     'pushd docs && echo x > plans/a.md',
   ]) {
     assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+  }
+});
+
+test('redirects preserve allowed plan writes after cd', async t => {
+  const ctx = await project(t);
+  const fromRoot = orchestratorModeCommandAllowed('echo x > docs/plans/a.md', ctx);
+  assert.equal(fromRoot, true);
+  assert.equal(orchestratorModeCommandAllowed('cd docs && echo x > plans/a.md', ctx), fromRoot);
+});
+
+test('cd preserves descriptor duplication and null redirect verdicts', async t => {
+  const ctx = await project(t);
+  for (const command of ['node -e 1 2>&1', 'true > /dev/null']) {
+    assert.equal(
+      orchestratorModeCommandAllowed(`cd docs && ${command}`, ctx),
+      orchestratorModeCommandAllowed(command, ctx),
+      command,
+    );
   }
 });
 

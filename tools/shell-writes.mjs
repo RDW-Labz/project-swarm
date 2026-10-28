@@ -2592,7 +2592,6 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
   let cwd = baseCwd;
   const local = { ...ctx, cwd };
   let subshellDepth = 0;
-  let sawCwdChange = false;
   for (let wi = 0; wi < tokenized.length; wi += 1) {
     const words = tokenized[wi];
     if (words.sepAfter === ')') {
@@ -2607,8 +2606,6 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) return false;
       k += 1;
     }
-    if (sawCwdChange && words.some(w => ['>', '>>', '>|', '>&', '&>', '2>', '2>&1'].includes(w))) return false;
-    if (k < plain.length && ['cd', 'pushd'].includes(path.basename(plain[k]))) sawCwdChange = true;
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
       if (subshellDepth > 0) return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
