@@ -58,6 +58,10 @@
 .cc-cockpit-shell .ck-nav { display: flex; align-items: center; gap: 4px; padding: 0; flex: 1; flex-wrap: nowrap; min-width: 0; }
 .cc-cockpit-shell .crumbs { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 6px; }
 .cc-cockpit-shell .crumbs { align-items: center; }
+.cc-router-bar { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid rgba(34, 211, 238, .18); background: rgba(8, 12, 24, .72); }
+.cc-router-bar .crumbs { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.cc-router-bar .crumbs button { background: rgba(34, 211, 238, .08); border: 1px solid rgba(34, 211, 238, .4); border-radius: 999px; padding: 3px 10px; color: var(--cyan); cursor: pointer; font-size: inherit; font-family: inherit; letter-spacing: inherit; text-transform: inherit; }
+.cc-router-bar .crumbs button:hover, .cc-router-bar .crumbs button:focus-visible { background: rgba(34, 211, 238, .18); outline: none; }
 .cc-cockpit-shell .crumbs button { background: rgba(34, 211, 238, .08); border: 1px solid rgba(34, 211, 238, .4); border-radius: 999px; padding: 3px 10px; color: var(--cyan); cursor: pointer; font-size: inherit; font-family: inherit; letter-spacing: inherit; text-transform: inherit; }
 .cc-cockpit-shell .crumbs button:hover, .cc-cockpit-shell .crumbs button:focus-visible { background: rgba(34, 211, 238, .18); outline: none; }
 .cc-cockpit-shell .tabs { margin-left: auto; display: flex; gap: 4px; flex-wrap: nowrap; }
