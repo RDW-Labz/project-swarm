@@ -8,7 +8,10 @@
    "model": "composer-2.5",
    "tier": "cheap",
    "prompt": "Real Chromium shows 'Could not load the Command Center. tileRoot.children.find is not a function' on the Cockpit page: tools/watch-assets/cockpit-lists.js lines ~272-274 call .find on element.children, an HTMLCollection, which has no array methods in browsers (the unit tests used fake DOMs with plain arrays). Replace those calls with Array.from(tileRoot.children).find(...) and fix any other place in cockpit-lists.js that calls an array method (find, filter, map, some, every, reduce, findIndex, includes, flatMap, forEach) directly on .children, .childNodes, a getElementsByTagName or getElementsByClassName result or a querySelectorAll result (NodeList has forEach, but use Array.from for the rest). Change nothing else. Add NEW tests/watch-assets-dom-collections.test.mjs (first import: import './_isolate-config.mjs';) that reads every .js file in tools/watch-assets/ as text and fails, naming file and line, when a line calls one of those array methods (except forEach on querySelectorAll) directly on .children, .childNodes, getElementsBy...(...) or querySelectorAll(...); plus a unit case that the cockpit-lists tile code works when children is a real-like HTMLCollection stand-in (an object with length and numeric indexes but no array methods).",
-   "context": [],
+   "context": [
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs"
+   ],
    "outputs": [
     "tools/watch-assets/cockpit-lists.js",
     "tests/watch-assets-dom-collections.test.mjs"
@@ -17,6 +20,18 @@
   }
  ],
  "checks": [
-  { "name": "dom-collections", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/watch-assets-dom-collections.test.mjs", "tests/cc-cockpit-mount.test.mjs", "tests/watch-assets-browser-safe.test.mjs"] }
+  {
+   "name": "dom-collections",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-lists.test.mjs"
+   ]
+  }
  ]
 }
