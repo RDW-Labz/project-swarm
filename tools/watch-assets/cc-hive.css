@@ -54,55 +54,71 @@
 .hive-shell .hive-hint{color:var(--muted);font-size:12px}
 .hive-shell .hive-muted{font-family:var(--font-mono);font-size:11px;color:var(--dim);margin:0}
 
-/* header */
-.hive-shell .hive-top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 14px;border-bottom:1px solid var(--line)}
+/* header (logo, tagline, counters, LIVE with its notification slot; the view links sit on the header rule) */
+.hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 14px;border-bottom:1px solid var(--line)}
 .hive-shell .hive-logo{font-family:var(--font-display);font-style:italic;font-weight:900;font-size:44px;letter-spacing:-.01em;filter:drop-shadow(0 0 14px rgba(255,77,126,.35));line-height:1;background:linear-gradient(90deg,#ff4d7e,#a98bff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .hive-shell .hive-tag{font-family:var(--font-mono);font-size:12.5px;color:#c9d1e3;line-height:1.75;white-space:nowrap}
 .hive-shell .hive-cnt{display:flex;gap:26px;margin-left:auto}
 .hive-shell .hive-cnt>div{text-align:center}
 .hive-shell .hive-cnt .l{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}
 .hive-shell .hive-cnt .v{font-family:var(--font-mono);font-size:24px;font-weight:500}
-.hive-shell .hive-live{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;letter-spacing:.2em}
+.hive-shell .hive-live{position:relative;display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;letter-spacing:.2em}
 .hive-shell .hive-live i{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:hive-beat 1.8s ease-in-out infinite}
 @keyframes hive-beat{0%,100%{opacity:1}50%{opacity:.35}}
-.hive-shell .hive-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:8px 0}
-.hive-shell .hive-crumbs{font-size:13px;color:var(--muted);display:flex;gap:6px}
-.hive-shell .hive-crumbs button{background:none;border:0;padding:0;color:var(--cyan);cursor:pointer}
-.hive-shell .hive-tabs{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
-.hive-shell .hive-tab,.hive-shell .hive-tabbtn{font:inherit;font-size:13px;background:none;border:1px solid transparent;border-radius:8px;padding:6px 10px;color:var(--muted);text-decoration:none;cursor:pointer}
-.hive-shell .hive-tab:hover,.hive-shell .hive-tabbtn:hover{border-color:var(--blue)}
-.hive-shell .hive-tab[aria-selected=true]{background:var(--panel2);border-color:var(--line);color:var(--fg)}
+.hive-shell .hive-cnt .v.is-bump{animation:hive-bump .9s ease-out 1}
+@keyframes hive-bump{0%{text-shadow:0 0 0 transparent}30%{text-shadow:0 0 14px currentColor}100%{text-shadow:0 0 0 transparent}}
+.hive-shell .hive-nav{position:absolute;right:0;bottom:-8px;display:flex;align-items:center;gap:2px;padding-left:12px;background:var(--bg);font-family:var(--font-mono);white-space:nowrap}
+.hive-shell .hive-tab,.hive-shell .hive-tabbtn{font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;line-height:16px;background:none;border:0;border-radius:4px;padding:0 7px;color:var(--dim);text-decoration:none;cursor:pointer}
+.hive-shell .hive-tab:hover,.hive-shell .hive-tabbtn:hover,.hive-shell .hive-tab:focus-visible,.hive-shell .hive-tabbtn:focus-visible{color:var(--fg)}
+.hive-shell .hive-tab[aria-current=page]{color:var(--red);text-shadow:0 0 10px rgba(255,77,126,.55)}
+.hive-shell .hive-tabbtn .hive-hint{font-size:10px;letter-spacing:.1em;color:#5d6780;margin-left:4px}
 
-/* HIVE stage */
-.hive-shell .hive-stage{position:relative;height:860px;max-width:1320px;margin:0 auto}
-.hive-shell .hive-stage canvas{position:absolute;inset:0;width:100%;height:100%}
-.hive-shell .hive-card{position:absolute;width:262px;transform:translate(-50%,-50%);background:#07080f;border:2px solid var(--c);border-radius:10px;box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 85%,transparent),0 0 8px 1px var(--c),0 0 18px 2px color-mix(in srgb,var(--c) 80%,transparent),0 0 44px 8px color-mix(in srgb,var(--c) 38%,transparent),0 0 70px 16px color-mix(in srgb,var(--c) 12%,transparent),inset 0 0 26px -10px color-mix(in srgb,var(--c) 45%,transparent);cursor:pointer;transition:transform .2s,box-shadow .2s}
-.hive-shell .hive-card:hover{transform:translate(-50%,-52%);box-shadow:0 0 30px 0 var(--c),inset 0 0 18px -8px var(--c)}
-.hive-shell .hive-card-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 9px;background:var(--c);color:#05060b;font-family:var(--font-mono);font-weight:600;font-size:13px;border-radius:7px 7px 0 0}
-.hive-shell .hive-card-hd .k{opacity:.7;margin-right:6px}
-.hive-shell .hive-card-hd .t{font-size:8px;letter-spacing:.12em;flex:none;white-space:nowrap}
-.hive-shell .hive-card-hd .hb{position:relative;display:flex;margin-left:auto;margin-right:8px;flex:none}
-.hive-shell .hive-card-hd .name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;display:block}
-.hive-shell .hive-card-bd{padding:6px 10px 7px;font-family:var(--font-mono);font-size:11px;line-height:1.3;display:grid;gap:3px}
-.hive-shell .hive-card .r{display:flex;justify-content:space-between;gap:10px}
-.hive-shell .hive-card .r span:first-child{color:var(--dim)}
-.hive-shell .hive-card .r span:last-child{color:#f1f4fa;text-align:right}
-.hive-shell .hive-card .pb{display:flex;align-items:center;gap:10px;margin-top:5px}
-.hive-shell .hive-card .pb b{color:var(--c);font-weight:500;min-width:38px}
-.hive-shell .hive-card .pb i{flex:1;height:5px;border-radius:3px;background:#161b29;overflow:hidden}
-.hive-shell .hive-card .pb i u{display:block;height:100%;background:var(--c);box-shadow:0 0 8px var(--c);transform-origin:left}
-.hive-shell .hive-card .pb em{font-style:normal;color:#cfd8ea}
-.hive-shell .hive-ringfx{position:absolute;left:50%;top:50%;width:min(520px,90vw);height:min(520px,90vw);transform:translate(-50%,-50%);border-radius:50%;border:2px solid rgba(255,77,126,0);pointer-events:none}
-.hive-shell .hive-core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:220px;text-align:center;pointer-events:none}
-.hive-shell .hive-core .a{font-family:var(--font-mono);font-size:9px;letter-spacing:.3em;color:#8d99b3;margin-bottom:4px}
-.hive-shell .hive-core .n{font-family:var(--font-display);font-style:italic;font-weight:800;font-size:50px;line-height:1;margin:2px 0 6px;color:#f4f6fb;text-shadow:0 0 22px rgba(176,107,255,.6)}
-.hive-shell .hive-core .s{font-family:var(--font-mono);font-size:12px;color:var(--violet)}
-.hive-shell .hive-core .x{font-family:var(--font-mono);font-size:10px;color:var(--dim);margin-top:4px}
-.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;padding:6px 4px;align-items:center}
-.hive-shell .hive-legend span i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;box-shadow:0 0 8px currentColor}
-.hive-shell .hive-legend .tl{margin-left:auto;font-family:var(--font-serif);font-style:italic;font-size:26px;text-transform:none;letter-spacing:0;color:var(--violet)}
-.hive-shell .hive-legend .tl b{font-weight:400;color:var(--red)}
+/* HIVE stage: sized from the viewport so the ring, every card and the legend row fit the first screen */
+.hive-shell .hive-stage{--hs:1;position:relative;height:min(78vh,720px);min-height:560px;max-width:1320px;margin:0 auto}
+.hive-shell .hive-stage canvas{position:absolute;z-index:2;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+.hive-shell .hive-card{position:absolute;z-index:3;width:270px;transform:translate(-50%,-50%) scale(var(--hs));background:#07080f;border:2px solid var(--c);border-radius:6px;box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 70%,transparent),0 0 10px 1px color-mix(in srgb,var(--c) 85%,transparent),0 0 30px 4px color-mix(in srgb,var(--c) 42%,transparent),0 0 64px 12px color-mix(in srgb,var(--c) 14%,transparent),inset 0 0 22px -12px color-mix(in srgb,var(--c) 55%,transparent);cursor:pointer;transition:transform .2s var(--ease),box-shadow .2s}
+.hive-shell .hive-card:hover,.hive-shell .hive-card:focus-visible{transform:translate(-50%,calc(-50% - 3px)) scale(var(--hs));box-shadow:0 0 0 1px var(--c),0 0 14px 2px var(--c),0 0 40px 8px color-mix(in srgb,var(--c) 50%,transparent),inset 0 0 22px -10px var(--c)}
+.hive-shell .hive-card-hd{display:flex;align-items:center;gap:8px;padding:5px 10px;background:var(--c);color:#05060b;font-family:var(--font-mono);font-weight:700;font-size:12px;line-height:15px;border-radius:3px 3px 0 0}
+.hive-shell .hive-card-hd .name{flex:1;min-width:0;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hive-shell .hive-card-hd .k{font-weight:500;opacity:.62;margin-right:7px}
+.hive-shell .hive-card-hd .t{flex:none;margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;opacity:.88}
+.hive-shell .hive-card-bd{padding:7px 11px 8px;font-family:var(--font-mono);font-size:11px;line-height:15px;display:grid;gap:2px}
+.hive-shell .hive-card .r{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.hive-shell .hive-card .r>span:first-child{color:var(--dim)}
+.hive-shell .hive-card .r>.val{order:2;color:#f1f4fa;text-align:right}
+.hive-shell .hive-card .r>.pills{order:1;display:flex;gap:4px;margin-right:auto}
+.hive-shell .hive-pill{display:inline-block;padding:0 6px;border-radius:999px;font-size:8.5px;line-height:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap;color:var(--pc);border:1px solid color-mix(in srgb,var(--pc) 70%,transparent);background:color-mix(in srgb,var(--pc) 14%,transparent);animation:hive-chip 2.4s ease-in-out infinite}
+.hive-shell .hive-pill--need{--pc:var(--red)}
+.hive-shell .hive-pill--live{--pc:var(--green);animation-delay:-1.2s}
+@keyframes hive-chip{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 9px 0 color-mix(in srgb,var(--pc) 55%,transparent)}}
+.hive-shell .hive-card .pb{display:flex;align-items:center;gap:10px;margin-top:4px}
+.hive-shell .hive-card .pb b{color:var(--c);font-weight:500;flex:none}
+.hive-shell .hive-card .pb i{position:relative;flex:1;height:5px;border-radius:3px;background:#161b29;overflow:hidden}
+.hive-shell .hive-card .pb i u{display:block;height:100%;border-radius:3px;background:var(--c);box-shadow:0 0 8px var(--c);transform-origin:left}
+.hive-shell .hive-card[data-status=building] .pb i::after{content:"";position:absolute;inset:0;width:30%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);animation:hive-scan 2.6s linear infinite}
+@keyframes hive-scan{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+.hive-shell .hive-card .pb em{font-style:normal;color:#f1f4fa;flex:none}
+.hive-shell .hive-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* the ring: conic pink-violet band with heavy bloom (canvas adds the hot line, sparkles and streams on top) */
+.hive-shell .hive-ringfx{position:absolute;z-index:1;left:50%;top:50%;width:360px;height:360px;transform:translate(-50%,-50%);pointer-events:none;filter:drop-shadow(0 0 18px #ff3d8bcc) drop-shadow(0 0 48px #b04dff66)}
+.hive-shell .hive-ringfx i{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 200deg,#ff3d8b,#c86bff,#ff3d8b,#ff6aa8,#c86bff,#ff3d8b);-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 11px),#000 calc(100% - 9px),#000 calc(100% - 2px),transparent 100%);mask:radial-gradient(closest-side,transparent calc(100% - 11px),#000 calc(100% - 9px),#000 calc(100% - 2px),transparent 100%)}
+.hive-shell .hive-arc{position:absolute;z-index:2;left:50%;top:50%;width:440px;height:440px;transform:translate(-50%,-50%);overflow:visible;pointer-events:none;animation:hive-orbit 60s linear infinite}
+.hive-shell .hive-arc text{font-family:var(--font-mono);font-size:11px;font-weight:500;letter-spacing:.45em;fill:rgba(255,255,255,.75)}
+@keyframes hive-orbit{from{transform:translate(-50%,-50%) rotate(0)}to{transform:translate(-50%,-50%) rotate(360deg)}}
+.hive-shell .hive-core{--cr:80;position:absolute;z-index:2;left:50%;top:50%;transform:translate(-50%,-50%);width:calc(var(--cr) * 1.8px);text-align:center;pointer-events:none}
+.hive-shell .hive-core .a{font-family:var(--font-mono);font-size:max(7px,calc(var(--cr) * .11px));letter-spacing:.3em;color:#8d99b3;margin-bottom:2px}
+.hive-shell .hive-core .n{font-family:var(--font-display);font-style:italic;font-weight:800;font-size:calc(var(--cr) * .5px);line-height:1;margin:2px 0 4px;color:#f4f6fb;text-shadow:0 0 22px rgba(176,107,255,.6)}
+.hive-shell .hive-core .s{font-family:var(--font-mono);font-size:max(9px,calc(var(--cr) * .15px));color:var(--violet)}
+.hive-shell .hive-core .x{font-family:var(--font-mono);font-size:max(8px,calc(var(--cr) * .12px));line-height:1.35;color:var(--dim);margin-top:2px;text-wrap:balance}
+
+/* lane legend + tagline row */
+.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center}
+.hive-shell .hive-legend span i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;box-shadow:0 0 8px currentColor}
+.hive-shell .hive-legend .tl{margin-left:auto;font-family:var(--font-display);font-style:italic;font-weight:700;font-size:23px;line-height:1.1;text-transform:none;letter-spacing:-.01em;color:var(--fg)}
 .hive-shell .hive-legend .tl u{text-decoration:none;color:var(--fg)}
+.hive-shell .hive-legend .tl u:first-child{color:var(--violet)}
+.hive-shell .hive-legend .tl b{font-weight:700;color:var(--red)}
 
 /* speech-bubble badges over robot heads (drawn in CSS) */
 .hive-shell .hive-bub{position:absolute;top:-8px;right:-10px;z-index:2;min-width:15px;height:17px;padding:0 3px;border-radius:5px 5px 5px 1px;background:#f4f6fb;color:#05060b;font:700 11px/17px var(--font-mono);text-align:center;pointer-events:none}
@@ -153,10 +169,11 @@
 .hive-shell .hive-foot details p{margin:6px 0 0;font-size:11px;line-height:1.5;color:#8d99b3;max-width:900px}
 .hive-shell .has-tip{border-bottom:1px dotted var(--dim);cursor:help;position:relative}
 .hive-shell .has-tip:hover::after,.hive-shell .has-tip:focus::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 6px);z-index:90;width:max-content;max-width:290px;white-space:normal;background:#e9eef8;color:#05060b;font-family:var(--font-body);font-size:12px;line-height:1.35;padding:6px 8px;border-radius:6px;letter-spacing:0;text-transform:none;font-weight:400}
-.hive-shell .hive-toast{position:fixed;right:max(16px,env(safe-area-inset-right,0px));top:calc(140px + env(safe-area-inset-top,0px));z-index:60;background:var(--panel2);border:1px solid var(--green);border-radius:10px;padding:8px 12px;display:flex;gap:8px;align-items:center;font-family:var(--font-mono);font-size:13px;opacity:0;pointer-events:none}
-.hive-shell .hive-toast img{width:24px;height:24px}
-.hive-shell .hive-toast.is-on{animation:hive-toast 3s ease both}
-@keyframes hive-toast{0%{opacity:0;transform:translateY(12px)}12%,80%{opacity:1;transform:none}100%{opacity:0;transform:translateY(-6px)}}
+/* notifications: shown in the header line next to the view links, never over the stage */
+.hive-shell .hive-toast{display:none;flex:none;gap:6px;align-items:center;margin-right:10px;padding:0 8px;border:1px solid color-mix(in srgb,var(--green) 60%,transparent);border-radius:999px;white-space:nowrap;font-family:var(--font-mono);font-size:10px;line-height:16px;letter-spacing:.08em;color:#e6ecf7;pointer-events:none}
+.hive-shell .hive-toast img{width:12px;height:12px}
+.hive-shell .hive-toast.is-on{display:inline-flex;animation:hive-toast 3s ease both}
+@keyframes hive-toast{0%{opacity:0;transform:translateX(6px)}12%,80%{opacity:1;transform:none}100%{opacity:0}}
 
 /* glitch bursts (cc-glitch.js: under 400 ms, at most 3 at once, never on text being read) */
 @keyframes hive-glitch{0%{transform:translate(0);filter:none}15%{transform:translate(-2px,1px);filter:hue-rotate(40deg) saturate(1.6)}30%{transform:translate(2px,-1px);filter:none}45%{transform:translate(-1px,0);filter:hue-rotate(-30deg)}60%{transform:translate(1px,1px);filter:none}100%{transform:none;filter:none}}
@@ -172,16 +189,28 @@
 .hive-body .cc-tour-card button:hover{border-color:var(--blue)}
 .hive-body .cc-tour-highlight{outline:2px solid var(--cyan);outline-offset:3px}
 
+/* narrow screens: the ring on top (square canvas, sprays come in from its edges), then the cards in a column */
 @media (max-width:900px){
   .hive-shell .hive-tag{white-space:normal}
   .hive-shell .hive-cnt{margin-left:0}
-  .hive-shell .hive-toast{top:auto;bottom:calc(16px + env(safe-area-inset-bottom,0px))}
-  .hive-shell .hive-stage{height:auto;display:flex;flex-direction:column;gap:12px;padding:10px 0}
-  .hive-shell .hive-stage canvas{position:relative;height:auto;aspect-ratio:1/1;max-width:360px;margin:0 auto;order:-1}
-  .hive-shell .hive-card{position:relative!important;left:auto!important;top:auto!important;transform:none!important;width:100%}
-  .hive-shell .hive-core{top:calc(10px + min(100vw - 32px,360px) / 2);transform:translate(-50%,-50%) scale(.5)}
+  .hive-shell .hive-nav{position:static;flex-basis:100%;overflow-x:auto;padding:2px 0 4px;margin:0 -2px;scrollbar-width:none;background:none}
+  .hive-shell .hive-nav::-webkit-scrollbar{display:none}
+  .hive-shell .hive-tab,.hive-shell .hive-tabbtn{flex:none;line-height:28px}
+  .hive-shell .hive-stage{height:auto;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr));gap:12px;padding:6px 0 10px}
+  .hive-shell .hive-stage canvas{position:relative;inset:auto;grid-column:1/-1;justify-self:center;width:min(100%,420px);height:auto;aspect-ratio:1/1}
+  .hive-shell .hive-card{position:relative!important;left:auto!important;top:auto!important;transform:none!important;width:auto}
+  .hive-shell .hive-card:hover{transform:none!important}
+  .hive-shell .hive-arc text{font-size:9px;letter-spacing:.38em}
   .hive-shell .hive-panels{grid-template-columns:1fr}
   .hive-shell .hive-panel{border-right:0;border-bottom:1px solid var(--line)}
+}
+@media (max-width:480px){
+  .hive-shell .hive-top{gap:8px 16px;padding-top:14px}
+  .hive-shell .hive-logo{font-size:34px}
+  .hive-shell .hive-tag{font-size:11.5px;line-height:1.6}
+  .hive-shell .hive-cnt{gap:18px;width:100%;justify-content:space-between}
+  .hive-shell .hive-legend{gap:8px 14px;font-size:10px}
+  .hive-shell .hive-legend .tl{margin-left:0;flex-basis:100%;font-size:20px}
 }
 
 /* motion: off when the tab is hidden (the loop stops), paused by the user, or reduced motion is requested */

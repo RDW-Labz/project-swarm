@@ -6,9 +6,390 @@
  */
 
 import { mountRobotHead, setAnimationPaused } from './robot-head.js';
-import { cardPositions, createHiveStage } from './cc-hive-stage.js';
 import { glitch, glitchFailure } from './cc-glitch.js';
 import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
+
+const TAU = Math.PI * 2;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ARC_TEXT = 'EVERY MERGE CHECKED · ONE LEDGER · MANY WORKERS · NOTHING GUESSED ·';
+// Particles per stream by colour category: busier projects spray denser streams.
+const STREAM_DENSITY = { building: 60, need: 50, blocked: 40, done: 34, idle: 30, off: 10 };
+const RING_COLORS = ['#ff4d8d', '#c86bff', '#ffd6ec', '#ff3d8b'];
+
+function hexRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  const n = m ? parseInt(m[1], 16) : 0xa98bff;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgba(hex, a) {
+  const [r, g, b] = hexRgb(hex);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/**
+ * Where everything sits. Desktop: cards on an ellipse that fills the stage, the ring as large as the cards allow.
+ * Narrow screens: the canvas is a square above the cards, and each stream starts at the canvas edge.
+ */
+export function hiveGeometry(cw, ch, n, phone, cardW, cardH) {
+  const w = Math.max(40, cw);
+  const h = Math.max(40, ch);
+  const cx = w / 2;
+  const cy = h / 2;
+  const nodes = [];
+  let R;
+  if (phone) {
+    const edge = Math.min(w, h) / 2;
+    R = Math.max(24, edge * 0.6);
+    for (let i = 0; i < n; i += 1) {
+      const a = -Math.PI / 2 + (i * TAU) / Math.max(1, n);
+      nodes.push({ x: cx + Math.cos(a) * edge, y: cy + Math.sin(a) * edge, sx: cx + Math.cos(a) * edge * 0.98, sy: cy + Math.sin(a) * edge * 0.98, a, fan: 20 });
+    }
+  } else {
+    const hw = cardW / 2;
+    const hh = cardH / 2;
+    const ry = Math.max(30, cy - hh - 4);
+    const rx = Math.max(40, cx - hw - 6);
+    let lim = ry * 0.62;
+    for (let i = 0; i < n; i += 1) {
+      const a = -Math.PI / 2 + (i * TAU) / Math.max(1, n);
+      const x = cx + Math.cos(a) * rx;
+      const y = cy + Math.sin(a) * ry;
+      const dx = Math.max(0, Math.abs(x - cx) - hw);
+      const dy = Math.max(0, Math.abs(y - cy) - hh);
+      lim = Math.min(lim, Math.hypot(dx, dy) - 30);
+      // Stream source: where the line from the card centre to the ring centre leaves the card.
+      const len = Math.hypot(cx - x, cy - y) || 1;
+      const ux = (cx - x) / len;
+      const uy = (cy - y) / len;
+      const t = Math.min(ux ? hw / Math.abs(ux) : Infinity, uy ? hh / Math.abs(uy) : Infinity);
+      nodes.push({ x, y, sx: x + ux * t, sy: y + uy * t, a, fan: Math.min(46, hw * 0.34) });
+    }
+    R = Math.max(24, lim);
+  }
+  for (const k of nodes) {
+    const b = Math.atan2(k.sy - cy, k.sx - cx);
+    k.tx = cx + Math.cos(b) * R;
+    k.ty = cy + Math.sin(b) * R;
+    const len = Math.hypot(k.tx - k.sx, k.ty - k.sy) || 1;
+    k.nx = -(k.ty - k.sy) / len;
+    k.ny = (k.tx - k.sx) / len;
+    // A slight swirl: every stream bends the same way round the ring.
+    k.qx = (k.sx + k.tx) / 2 + k.nx * len * 0.16;
+    k.qy = (k.sy + k.ty) / 2 + k.ny * len * 0.16;
+  }
+  return { w, h, cx, cy, R, coreR: R * 0.46, nodes };
+}
+
+/** Canvas layer of the Hive: dust, lane-coloured particle sprays into the ring, ring sparkles, comets and the core. */
+function createHiveRenderer(canvas, makeCanvas) {
+  const ctx = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+  let geom = hiveGeometry(800, 600, 0, false, 270, 132);
+  let streams = [];
+  let streamSig = '';
+  let seedKey = '';
+  let sparkles = [];
+  let dust = [];
+  let comets = [];
+  let time = 0;
+  let speed = 1;
+  let flash = 0;
+  let flick = 0;
+  let dpr = 1;
+  let grads = null;
+  const sprites = new Map();
+
+  function sprite(col) {
+    if (sprites.has(col)) return sprites.get(col);
+    let out = null;
+    try {
+      const c = makeCanvas();
+      c.width = 32;
+      c.height = 32;
+      const x = c.getContext('2d');
+      const g = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(0.18, rgba(col, 1));
+      g.addColorStop(0.45, rgba(col, 0.32));
+      g.addColorStop(1, rgba(col, 0));
+      x.fillStyle = g;
+      x.fillRect(0, 0, 32, 32);
+      out = c;
+    } catch {
+      out = null;
+    }
+    sprites.set(col, out);
+    return out;
+  }
+
+  function glow(col, x, y, size, alpha) {
+    if (alpha <= 0.01) return;
+    ctx.globalAlpha = Math.min(1, alpha);
+    const s = sprite(col);
+    if (s && typeof ctx.drawImage === 'function') {
+      ctx.drawImage(s, x - size * 2, y - size * 2, size * 4, size * 4);
+    } else {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function seedStatic() {
+    const area = geom.w * geom.h;
+    dust = [];
+    for (let i = 0, n = Math.min(160, Math.round(area / 7000)); i < n; i += 1) {
+      dust.push({ x: Math.random() * geom.w, y: Math.random() * geom.h, a: 0.12 + Math.random() * 0.35, f: 0.4 + Math.random() * 1.6, p: Math.random() * TAU });
+    }
+    sparkles = [];
+    for (let i = 0, n = Math.round(Math.max(60, geom.R * 0.9)); i < n; i += 1) {
+      sparkles.push({ a: Math.random() * TAU, w: (0.05 + Math.random() * 0.3) * (Math.random() < 0.5 ? -1 : 1), dr: (Math.random() + Math.random() - 1) * 7, tw: 1 + Math.random() * 4, s: 0.8 + Math.random() * 1.8, col: RING_COLORS[i % RING_COLORS.length] });
+    }
+    comets = [];
+    for (let i = 0; i < 3; i += 1) comets.push({ p: Math.random() * 1.6 - 0.6, v: 0.55 + Math.random() * 0.4, a: Math.random() * TAU });
+  }
+
+  function newParticle(p, fresh) {
+    p.t = fresh ? Math.random() : -Math.random() * 0.25;
+    p.v = 0.32 + Math.random() * 0.5;
+    p.s0 = Math.random() * 2 - 1;
+    p.ph = Math.random() * TAU;
+    p.k = 3 + Math.random() * 5;
+    p.size = 0.6 + Math.random() * 1.1;
+    p.hot = Math.random() < 0.18;
+    return p;
+  }
+
+  function setNodes(g, list) {
+    geom = g;
+    const sig = list.map((k) => `${k.col}|${k.cat}`).join(',');
+    if (sig !== streamSig) {
+      streamSig = sig;
+      streams = list.map((k) => {
+        const n = STREAM_DENSITY[k.cat] || 30;
+        const parts = [];
+        for (let i = 0; i < n; i += 1) parts.push(newParticle({}, true));
+        return { col: k.col, cat: k.cat, parts, boost: 0, spark: 0 };
+      });
+    }
+    try {
+      grads = {
+        haze: ctx.createRadialGradient(g.cx, g.cy, g.coreR, g.cx, g.cy, g.R * 1.05),
+        core: ctx.createRadialGradient(g.cx, g.cy - g.coreR * 0.3, 0, g.cx, g.cy, g.coreR),
+      };
+      grads.haze.addColorStop(0, 'rgba(120,50,190,0.16)');
+      grads.haze.addColorStop(0.7, 'rgba(160,40,140,0.10)');
+      grads.haze.addColorStop(1, 'rgba(255,61,139,0)');
+      grads.core.addColorStop(0, '#191127');
+      grads.core.addColorStop(1, '#07060d');
+    } catch {
+      grads = null;
+    }
+    // Re-seed dust and sparkles only when the size changes, so a poll never makes them jump.
+    const key = `${Math.round(g.w)}|${Math.round(g.h)}|${Math.round(g.R)}`;
+    if (key !== seedKey) {
+      seedKey = key;
+      seedStatic();
+    }
+  }
+
+  function streamPos(k, p) {
+    const t = Math.max(0, Math.min(1, p.t));
+    const u = 1 - t;
+    const bx = u * u * k.sx + 2 * u * t * k.qx + t * t * k.tx;
+    const by = u * u * k.sy + 2 * u * t * k.qy + t * t * k.ty;
+    const off = p.s0 * k.fan * Math.pow(u, 1.4) + Math.sin(p.ph + t * p.k + time * 1.7) * 12 * (1 - t * 0.7);
+    return [bx + k.nx * off, by + k.ny * off];
+  }
+
+  function update(dt) {
+    time += dt;
+    flash = Math.max(0, flash - dt * 0.8);
+    flick = Math.max(0, flick - dt * 1.6);
+    for (const s of streams) {
+      s.boost = Math.max(0, s.boost - dt * 0.6);
+      s.spark = Math.max(0, s.spark - dt * 0.9);
+      const f = speed * (1 + s.boost * 1.8) * (s.cat === 'off' ? 0.4 : 1);
+      for (const p of s.parts) {
+        p.t += p.v * f * dt;
+        if (p.t > 1) newParticle(p, false);
+      }
+    }
+    for (const sp of sparkles) sp.a += sp.w * dt;
+    for (const c of comets) {
+      c.p += c.v * dt;
+      if (c.p > 1.15) {
+        c.p = -Math.random() * 1.2;
+        c.a = Math.random() * TAU;
+      }
+    }
+  }
+
+  function draw() {
+    if (!ctx) return;
+    if (typeof ctx.setTransform === 'function') ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, geom.w, geom.h);
+    try {
+      paint();
+    } catch {
+      // A canvas without a full 2D API (tests, very old browsers) keeps the CSS ring and the cards.
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function paint() {
+    const g = geom;
+    const { cx, cy, R, coreR } = g;
+    ctx.globalCompositeOperation = 'source-over';
+    // dust
+    ctx.fillStyle = '#ffffff';
+    for (const d of dust) {
+      ctx.globalAlpha = d.a * (0.55 + 0.45 * Math.sin(time * d.f + d.p));
+      ctx.fillRect(d.x, d.y, 1.2, 1.2);
+    }
+    // violet haze between core and ring
+    if (grads) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = grads.haze;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R * 1.05, 0, TAU);
+      ctx.fill();
+    }
+    // spokes and the inner tick ring, kept quiet (30%)
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(200,140,255,1)';
+    ctx.globalAlpha = 0.06;
+    ctx.beginPath();
+    const rot = time * 0.03;
+    for (let i = 0; i < 36; i += 1) {
+      const a = rot + (i * TAU) / 36;
+      ctx.moveTo(cx + Math.cos(a) * coreR * 1.1, cy + Math.sin(a) * coreR * 1.1);
+      ctx.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    if (typeof ctx.setLineDash === 'function') ctx.setLineDash([1.5, 5]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 0.86, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = 'rgba(255,77,141,1)';
+    ctx.setLineDash?.([10, 9]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, R + 13, rot * -2, rot * -2 + TAU);
+    ctx.stroke();
+    ctx.setLineDash?.([]);
+
+    ctx.globalCompositeOperation = 'lighter';
+    // streams: faint filaments, then the particle spray, then a bloom where each stream meets the ring
+    streams.forEach((s, i) => {
+      const k = g.nodes[i];
+      if (!k) return;
+      ctx.strokeStyle = s.col;
+      ctx.lineWidth = 0.8;
+      for (let j = 0; j < 6; j += 1) {
+        const f = -1 + j * 0.4;
+        const wob = Math.sin(time * 0.9 + j + i) * 5;
+        ctx.globalAlpha = 0.13 + s.boost * 0.15;
+        ctx.beginPath();
+        ctx.moveTo(k.sx + k.nx * f * k.fan, k.sy + k.ny * f * k.fan);
+        ctx.quadraticCurveTo(k.qx + k.nx * (f * k.fan * 0.55 + wob), k.qy + k.ny * (f * k.fan * 0.55 + wob), k.tx, k.ty);
+        ctx.stroke();
+      }
+      for (const p of s.parts) {
+        if (p.t <= 0) continue;
+        const [x, y] = streamPos(k, p);
+        const fade = Math.min(1, p.t * 5) * (p.t > 0.86 ? (1 - p.t) / 0.14 : 1);
+        glow(p.hot ? '#ffffff' : s.col, x, y, p.size * (p.hot ? 0.8 : 1), fade * (0.85 + s.boost * 0.3));
+      }
+      const pulse = 0.45 + 0.15 * Math.sin(time * 2.2 + i) + s.spark * 0.6;
+      glow(s.col, k.tx, k.ty, 11, pulse);
+      if (s.spark > 0) glow('#ffb62e', k.sx, k.sy, 14, s.spark);
+    });
+
+    // the ring: hot line, a sweeping highlight, sparkles riding the band
+    const hot = flick > 0 && Math.sin(time * 60) > 0 ? '#ff5a5a' : '#ffd6ec';
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = hot;
+    ctx.lineWidth = 1.8 + flash * 3;
+    ctx.shadowColor = '#ff3d8b';
+    ctx.shadowBlur = 12 + flash * 20;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, TAU);
+    ctx.stroke();
+    const sweep = time * 0.7;
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, sweep, sweep + 0.5);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    for (const sp of sparkles) {
+      const r = R + sp.dr;
+      glow(sp.col, cx + Math.cos(sp.a) * r, cy + Math.sin(sp.a) * r, sp.s, 0.25 + 0.6 * Math.abs(Math.sin(time * sp.tw + sp.a * 3)));
+    }
+    // comets falling from the ring towards the core
+    for (const c of comets) {
+      if (c.p <= 0 || c.p >= 1) continue;
+      const r = R * 0.94 - c.p * (R * 0.94 - coreR * 1.08);
+      const x = cx + Math.cos(c.a) * r;
+      const y = cy + Math.sin(c.a) * r;
+      const tail = 30 * (1 - c.p * 0.4);
+      const ex = x + Math.cos(c.a) * tail;
+      const ey = y + Math.sin(c.a) * tail;
+      const lg = ctx.createLinearGradient(x, y, ex, ey);
+      lg.addColorStop(0, 'rgba(255,255,255,0.95)');
+      lg.addColorStop(1, 'rgba(255,120,200,0)');
+      ctx.globalAlpha = Math.sin(c.p * Math.PI);
+      ctx.strokeStyle = lg;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      glow('#ffffff', x, y, 2.4, Math.sin(c.p * Math.PI));
+    }
+
+    // core disc with its violet rim
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = grads ? grads.core : '#0b0814';
+    ctx.strokeStyle = '#a98bff';
+    ctx.lineWidth = 1.6;
+    ctx.shadowColor = '#8b5cf6';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(cx, cy, coreR, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  return {
+    get geom() { return geom; },
+    resize(w, h, ratio) {
+      dpr = Math.max(1, Math.min(2, ratio || 1));
+      const bw = Math.round(Math.max(1, w) * dpr);
+      const bh = Math.round(Math.max(1, h) * dpr);
+      // Setting the backing size clears the canvas, so only do it when it really changed.
+      if (canvas.width !== bw) canvas.width = bw;
+      if (canvas.height !== bh) canvas.height = bh;
+    },
+    setNodes,
+    setActivity({ agents }) { speed = 1 + Math.min(20, Math.max(0, agents || 0)) * 0.025; },
+    frameMs: () => 15,
+    frame(dt) { update(dt); draw(); },
+    drawStill() { draw(); },
+    spawn(i) { if (streams[i]) streams[i].boost = 1.5; },
+    sparkAt(i) { if (streams[i]) streams[i].spark = 1; },
+    pulse() { flash = 1; },
+    flick() { flick = 1; },
+  };
+}
 
 let hivePanelsApi = null;
 
@@ -114,12 +495,10 @@ export function renderHive(host, snapshot, deps) {
   let cardSig = '';
   let panelSig = '';
   let cardEls = [];
-  let cardHeads = [];
   let panelHeads = [];
   let cardCleanups = [];
   let counterEls = null;
   let stageGeom = [];
-  let headJobs = [];
 
   const reducedMq = deps.matchMedia('(prefers-reduced-motion: reduce)');
   const reduced = () => Boolean(reducedMq && reducedMq.matches);
@@ -138,10 +517,23 @@ export function renderHive(host, snapshot, deps) {
     timers.push(id);
   }
 
-  function burst(el, hard) {
-    if (!el || reduced() || userPaused || hidden()) return;
-    if (hard) glitchFailure(el);
-    else glitch(el);
+  // The app's one glitch effect is the brand wordmark; live changes elsewhere get a soft glow pulse instead.
+  function burst(hard) {
+    if (reduced() || userPaused || hidden()) return;
+    if (hard) glitchFailure(logo);
+    else glitch(logo);
+  }
+
+  function bump(el) {
+    if (!el || !el.classList) return;
+    el.classList.remove('is-bump');
+    void el.offsetWidth;
+    el.classList.add('is-bump');
+    later(() => el.classList.remove('is-bump'), 1000);
+  }
+
+  function svgNode(tag) {
+    return typeof doc.createElementNS === 'function' ? doc.createElementNS(SVG_NS, tag) : doc.createElement(tag);
   }
 
   /* ---- robot heads (real heads in a browser, a monogram where there is no animation loop, e.g. tests) ---- */
@@ -195,59 +587,70 @@ export function renderHive(host, snapshot, deps) {
   cnt.setAttribute('aria-label', 'Hive summary');
   top.appendChild(cnt);
   const live = h(doc, 'span', 'hive-live');
-  live.setAttribute('role', 'status');
   live.appendChild(h(doc, 'i'));
   live.appendChild(doc.createTextNode('LIVE'));
   top.appendChild(live);
 
-  const nav = h(doc, 'div', 'hive-nav');
-  const crumbs = h(doc, 'nav', 'hive-crumbs');
-  crumbs.setAttribute('aria-label', 'Breadcrumb');
-  const crumbHive = h(doc, 'button', null, 'The Hive');
-  crumbHive.type = 'button';
-  crumbs.appendChild(crumbHive);
-  nav.appendChild(crumbs);
-  const tabs = h(doc, 'div', 'hive-tabs');
-  tabs.setAttribute('role', 'tablist');
-  tabs.setAttribute('aria-label', 'Command Center views');
+  // Compact view links on the header rule under LIVE (no extra row above the stage).
+  const nav = h(doc, 'nav', 'hive-nav');
+  nav.setAttribute('aria-label', 'Command Center views');
+  const tabs = nav;
+  // Notifications appear in the same header line, never over the stage.
+  const toast = h(doc, 'span', 'hive-toast');
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+  const toastText = h(doc, 'span');
+  toast.appendChild(toastText);
+  nav.appendChild(toast);
   const tabHive = h(doc, 'a', 'hive-tab', 'Command Center');
-  tabHive.setAttribute('role', 'tab');
-  tabHive.setAttribute('aria-selected', 'true');
   tabHive.setAttribute('aria-current', 'page');
   tabHive.href = '/command-center';
   tabs.appendChild(tabHive);
   const tabCockpit = h(doc, 'a', 'hive-tab', 'Cockpit');
-  tabCockpit.setAttribute('role', 'tab');
-  tabCockpit.setAttribute('aria-selected', 'false');
   tabCockpit.setAttribute('data-tour', 'cockpit');
   tabs.appendChild(tabCockpit);
   const tabClassic = h(doc, 'a', 'hive-tab', 'Classic');
-  tabClassic.setAttribute('role', 'tab');
-  tabClassic.setAttribute('aria-selected', 'false');
   tabClassic.href = `/${win.location?.search || ''}`;
   tabs.appendChild(tabClassic);
   const searchBtn = h(doc, 'button', 'hive-tabbtn');
   searchBtn.type = 'button';
-  searchBtn.appendChild(doc.createTextNode('Search '));
+  searchBtn.appendChild(doc.createTextNode('Search'));
   searchBtn.appendChild(h(doc, 'span', 'hive-mono hive-hint', 'Ctrl K'));
   tabs.appendChild(searchBtn);
   const tourBtn = h(doc, 'button', 'hive-tabbtn cc-tour-help', 'Tour');
   tourBtn.type = 'button';
   tourBtn.setAttribute('aria-label', 'Command Center tour');
   tabs.appendChild(tourBtn);
-  nav.appendChild(tabs);
+  top.appendChild(nav);
 
   const stage = h(doc, 'section', 'hive-stage');
   stage.id = 'hive-stage';
   stage.setAttribute('data-tour', 'hive');
   stage.setAttribute('aria-label', 'Hive diagram');
+  const ringfx = h(doc, 'div', 'hive-ringfx');
+  ringfx.setAttribute('aria-hidden', 'true');
+  ringfx.appendChild(h(doc, 'i'));
   const canvas = h(doc, 'canvas');
   canvas.id = 'hive-canvas';
   canvas.setAttribute('aria-hidden', 'true');
   stage.appendChild(canvas);
-  const ringfx = h(doc, 'div', 'hive-ringfx');
-  ringfx.setAttribute('aria-hidden', 'true');
   stage.appendChild(ringfx);
+  // Arc label: an SVG textPath on a circle just outside the ring, turning slowly (CSS, paused with motion).
+  const arc = svgNode('svg');
+  arc.setAttribute('class', 'hive-arc');
+  arc.setAttribute('aria-hidden', 'true');
+  const arcDefs = svgNode('defs');
+  const arcPath = svgNode('path');
+  arcPath.setAttribute('id', 'hive-arc-path');
+  arcDefs.appendChild(arcPath);
+  arc.appendChild(arcDefs);
+  const arcText = svgNode('text');
+  const arcTp = svgNode('textPath');
+  arcTp.setAttribute('href', '#hive-arc-path');
+  arcTp.textContent = ARC_TEXT;
+  arcText.appendChild(arcTp);
+  arc.appendChild(arcText);
+  stage.appendChild(arc);
   const core = h(doc, 'div', 'hive-core');
   core.appendChild(h(doc, 'div', 'a', 'THE SWARM'));
   core.appendChild(h(doc, 'div', 'n', 'Swarm'));
@@ -292,25 +695,17 @@ export function renderHive(host, snapshot, deps) {
   foot.appendChild(pauseBtn);
   const sources = h(doc, 'details');
   sources.appendChild(h(doc, 'summary', null, 'sources'));
-  sources.appendChild(h(doc, 'p', null, 'Read from the board payload behind /api/command-center: each project’s ledger counts, the run folders and the agents the board reports as running. A number the board does not report is left out and the panel says so. Robot heads come from tools/watch-assets with the project colours. Glitch limits in code: each burst under 400 ms, at most 3 at once, never on text being read, off with reduced motion.'));
+  sources.appendChild(h(doc, 'p', null, 'Read from the board payload behind /api/command-center: each project’s ledger counts, the run folders and the agents the board reports as running. A number the board does not report is left out and the panel says so. Each stream into the ring is one project in its colour; busier projects spray denser streams. The only glitch is the wordmark: under 400 ms, off with reduced motion.'));
   foot.appendChild(sources);
 
-  const toast = h(doc, 'div', 'hive-toast');
-  toast.setAttribute('role', 'status');
-  toast.setAttribute('aria-live', 'polite');
-  const toastText = h(doc, 'span');
-  toast.appendChild(toastText);
-
   shell.appendChild(top);
-  shell.appendChild(nav);
   shell.appendChild(stage);
   shell.appendChild(legend);
   shell.appendChild(panelsRoot);
   shell.appendChild(foot);
-  shell.appendChild(toast);
   host.appendChild(shell);
 
-  const stageApi = createHiveStage({ canvas, createCanvas: () => doc.createElement('canvas') });
+  const stageApi = createHiveRenderer(canvas, () => doc.createElement('canvas'));
 
   /* ---- toast (real events only: more agents, a finished ticket, something new for you) ---- */
   function showToast(message, icon) {
@@ -368,7 +763,7 @@ export function renderHive(host, snapshot, deps) {
       const changed = el.textContent !== '' && el.textContent !== next[k][0];
       el.textContent = next[k][0];
       el.style.color = next[k][1];
-      if (changed && (k === 'agents' || k === 'need you')) later(() => burst(el, false), 400);
+      if (changed) bump(el);
     }
   }
 
@@ -402,20 +797,12 @@ export function renderHive(host, snapshot, deps) {
 
   function clearCards() {
     while (cardCleanups.length) cardCleanups.pop()();
-    destroyHeads(cardHeads);
     for (const el of cardEls) if (el.parentNode) el.parentNode.removeChild(el);
     cardEls = [];
   }
 
   function failsOf(p) {
     return Number(p.raw && p.raw.fails && p.raw.fails.value) || 0;
-  }
-
-  function headStateFor(p) {
-    if (failsOf(p) > 0) return 'error';
-    if (p.cat === 'building') return 'working';
-    if (p.cat === 'done') return 'sleeping';
-    return 'idle';
   }
 
   function buildCard(p, index) {
@@ -429,44 +816,47 @@ export function renderHive(host, snapshot, deps) {
     card.setAttribute('data-attn', p.cat === 'need' ? '1' : '0');
     if (card.dataset) card.dataset.projectId = p.id;
 
+    // Header: index + name, and the colour category as a small tag on the right.
     const hd = h(doc, 'div', 'hive-card-hd');
     const name = h(doc, 'span', 'name');
     name.appendChild(h(doc, 'span', 'k', String(index + 1).padStart(2, '0')));
     name.appendChild(doc.createTextNode(p.name));
     name.setAttribute('title', p.name);
     hd.appendChild(name);
-    const hb = h(doc, 'span', 'hb');
-    const state = headStateFor(p);
-    const lane = p.cat === 'need' || p.cat === 'building' || p.cat === 'blocked';
-    // Heads mount once the card is in the page (see paintCards), so their off-screen tracking sees real layout.
-    headJobs.push(() => cardHeads.push(mountHead(hb, { state, size: 22, color: lane ? '#c084fc' : '#94a3b8', id: `c-${p.id}`, label: `${p.name}, ${state}` })));
-    const bubble = p.cat === 'done' ? 'stars' : p.cat === 'need' ? 'excl' : p.cat === 'building' ? 'dots' : '';
-    if (bubble) hb.appendChild(panels.createBubble(bubble));
-    hd.appendChild(hb);
     hd.appendChild(h(doc, 'span', 't', p.tag));
     card.appendChild(hd);
 
     const bd = h(doc, 'div', 'hive-card-bd');
     const c = p.counts;
+    const pills = h(doc, 'span', 'pills');
+    if (p.needs > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--need', `${p.needs} need you`));
+    if (p.agents > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--live', `${p.agents} live`));
     if (c) {
       const rows = [
         ['tickets', c.total],
         ['done', `${c.done} of ${p.counted}`],
         p.pct === 100 ? ['cancelled', c.cancelled] : ['blocked', c.blocked],
-        p.needs > 0 ? ['need you', p.needs] : ['in review', c.review],
+        ['in review', c.review],
       ];
-      for (const [label, value] of rows) {
+      rows.forEach(([label, value], i) => {
         const row = h(doc, 'div', 'r');
         row.appendChild(h(doc, 'span', null, label));
         row.appendChild(h(doc, 'span', 'val', String(value)));
+        if (i === 0 && pills.firstChild) row.appendChild(pills);
         bd.appendChild(row);
-      }
+      });
     } else {
       bd.appendChild(h(doc, 'p', 'hive-muted', 'no ledger numbers yet'));
+      if (pills.firstChild) {
+        const row = h(doc, 'div', 'r');
+        row.appendChild(pills);
+        bd.appendChild(row);
+      }
     }
     if (p.pct !== null) {
+      // p(done) / bar / value, like the target's p(label) rows; the percent stays readable for screen readers.
       const pb = h(doc, 'div', 'pb');
-      pb.appendChild(h(doc, 'b', null, `${p.pct}%`));
+      pb.appendChild(h(doc, 'b', null, 'p(done)'));
       const track = h(doc, 'i');
       const fill = h(doc, 'u');
       fill.style.transform = `scaleX(${Math.max(0, Math.min(1, p.pct / 100))})`;
@@ -474,8 +864,9 @@ export function renderHive(host, snapshot, deps) {
       pb.appendChild(track);
       const em = h(doc, 'em', 'has-tip', padPct(p.pct));
       em.setAttribute('tabindex', '0');
-      em.setAttribute('data-tip', 'Done divided by tickets that still count (cancelled left out).');
+      em.setAttribute('data-tip', `${p.pct}% done: done divided by tickets that still count (cancelled left out).`);
       pb.appendChild(em);
+      pb.appendChild(h(doc, 'span', 'hive-sr', `${p.pct}% done`));
       bd.appendChild(pb);
     }
     card.appendChild(bd);
@@ -487,14 +878,11 @@ export function renderHive(host, snapshot, deps) {
         open();
       }
     };
-    const onEnter = () => burst(hb, false);
     card.addEventListener('click', open);
     card.addEventListener('keydown', onKey);
-    card.addEventListener('mouseenter', onEnter);
     cardCleanups.push(() => {
       card.removeEventListener('click', open);
       card.removeEventListener('keydown', onKey);
-      card.removeEventListener('mouseenter', onEnter);
     });
     return card;
   }
@@ -506,35 +894,60 @@ export function renderHive(host, snapshot, deps) {
     if (sig === cardSig) return false;
     cardSig = sig;
     clearCards();
-    headJobs = [];
     v.projects.forEach((p, i) => {
       const card = buildCard(p, i);
       stage.appendChild(card);
       cardEls.push(card);
     });
-    for (const job of headJobs) job();
-    headJobs = [];
     return true;
   }
 
   /* ---- layout and canvas ---- */
+  function place(el, x, y, size) {
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    if (size != null) {
+      el.style.width = `${size}px`;
+      el.style.height = `${size}px`;
+    }
+  }
+
   function layout() {
     const phone = isPhone();
-    const rect = (phone ? canvas : stage).getBoundingClientRect?.() || { width: 800, height: 600 };
-    stageApi.resize(rect.width || 800, rect.height || 600, phone);
-    const size = stageApi.size;
-    const pos = cardPositions(size.w, size.h, cardEls.length);
+    const cr = canvas.getBoundingClientRect?.() || { width: 800, height: 600, left: 0, top: 0 };
+    const sr = stage.getBoundingClientRect?.() || cr;
+    const cw = cr.width || 800;
+    const ch = cr.height || 600;
+    // Cards shrink a little on mid-width screens so the ellipse still has room.
+    const scale = phone ? 1 : Math.max(0.72, Math.min(1, (cw - 40) / 1280));
+    stage.style.setProperty('--hs', String(scale));
+    const first = cardEls[0];
+    const cardW = ((first && first.offsetWidth) || 270) * scale;
+    const cardH = ((first && first.offsetHeight) || 132) * scale;
+    const g = hiveGeometry(cw, ch, cardEls.length, phone, cardW, cardH);
+    stageApi.resize(g.w, g.h, win.devicePixelRatio || 1);
     stageGeom = [];
     cardEls.forEach((el, i) => {
       const p = view.projects[i];
-      if (!phone) {
-        el.style.left = `${pos[i].x}px`;
-        el.style.top = `${pos[i].y}px`;
-      }
-      stageGeom.push({ x: pos[i].x, y: pos[i].y, a: pos[i].a, col: p.color, cat: p.cat });
+      const k = g.nodes[i];
+      if (!phone) place(el, k.x, k.y);
+      stageGeom.push({ col: p.color, cat: p.cat });
     });
-    stageApi.setCards(stageGeom);
-    stageApi.setActivity({ agents: view.agents, done24: view.doneLast24h || 0 });
+    stageApi.setNodes(g, stageGeom);
+    stageApi.setActivity({ agents: view.agents });
+
+    // Ring band, arc label and core text follow the canvas geometry (stage coordinates).
+    const ox = (cr.left || 0) - (sr.left || 0) + g.cx;
+    const oy = (cr.top || 0) - (sr.top || 0) + g.cy;
+    place(ringfx, ox, oy, Math.round(g.R * 2 + 10));
+    const arcR = g.R + 20;
+    const box = Math.round((arcR + 24) * 2);
+    place(arc, ox, oy, box);
+    arc.setAttribute('viewBox', `0 0 ${box} ${box}`);
+    const m = box / 2;
+    arcPath.setAttribute('d', `M ${m - arcR},${m} a ${arcR},${arcR} 0 1,1 ${arcR * 2},0 a ${arcR},${arcR} 0 1,1 ${-arcR * 2},0`);
+    place(core, ox, oy);
+    core.style.setProperty('--cr', String(Math.round(g.coreR)));
   }
 
   function drawStillFrame() {
@@ -582,8 +995,8 @@ export function renderHive(host, snapshot, deps) {
   function reactToChange(prev, next) {
     if (!prev) return;
     if (next.agents > prev.agents) {
-      for (const k of stageGeom) if (k.cat !== 'off') stageApi.spawn(k, 30);
-      burst(ringfx, false);
+      stageGeom.forEach((k, i) => { if (k.cat !== 'off') stageApi.spawn(i); });
+      stageApi.pulse();
       showToast(`${plural(next.agents - prev.agents, 'agent', 'agents')} started`, 'volt');
     }
     if (next.doneLast24h !== null && prev.doneLast24h !== null && next.doneLast24h > prev.doneLast24h) {
@@ -591,13 +1004,13 @@ export function renderHive(host, snapshot, deps) {
       showToast(next.doneLast24h - prev.doneLast24h === 1 ? 'A ticket finished' : `${next.doneLast24h - prev.doneLast24h} tickets finished`, 'done');
     }
     if (next.needs > prev.needs) {
-      burst(counterEls['need you'], false);
       showToast('New item needs you', 'think');
     }
+    const prevFails = new Map(prev.projects.map((p) => [p.id, failsOf(p)]));
     if (failTotal(next) > failTotal(prev)) {
       stageApi.flick();
-      if (stageGeom[0]) stageApi.sparkAt(stageGeom[0], '#ffb62e');
-      burst(ringfx, true);
+      next.projects.forEach((p, i) => { if (failsOf(p) > (prevFails.get(p.id) || 0)) stageApi.sparkAt(i); });
+      burst(true);
       showToast('A run failed', 'think');
     }
   }
@@ -618,7 +1031,6 @@ export function renderHive(host, snapshot, deps) {
       const out = panels.renderHiveDashboard(panelsRoot, view, {
         nowMs: deps.now(),
         mountHead,
-        onHeadHover: (el) => burst(el, false),
       });
       panelHeads = out.heads || [];
     }
@@ -644,7 +1056,7 @@ export function renderHive(host, snapshot, deps) {
   }
 
   /* ---- wiring ---- */
-  addListener(crumbHive, 'click', () => { if (typeof win.scrollTo === 'function') win.scrollTo({ top: 0, behavior: 'smooth' }); });
+  addListener(logo, 'mouseenter', () => burst(false));
   addListener(tabCockpit, 'click', (e) => {
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.button)) return;
     const first = view && view.projects[0];

@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * Mount Command Center project Cockpit from buildProjectCockpit snapshot data.
- * Layout, drawing and motion follow the owner-approved artifact (docs/design/reference/command-center-artifact);
+ * Layout, drawing and motion follow the owner's target (docs/design/reference/cockpit-target.png);
  * every number and name is read from the live project payload.
  */
 
 import { readyTickets } from './cc-ledger-browser.js';
-import { renderCockpit, orchestratorHeadState, orchestratorCaption } from './cockpit-view.js';
+import { renderCockpit, orchestratorHeadState, orchestratorCaption, mountPixelCreature } from './cockpit-view.js';
 import {
   cockpitColumns,
+  cockpitCategories,
   renderTicketColumn,
   renderReadyEmptyState,
   renderStackSummaryTiles,
@@ -17,21 +18,31 @@ import {
   workerCards,
   shortTitle,
 } from './cockpit-lists.js';
-import { mountOrbit } from './cc-cockpit-orbit.js';
 import { glitch as defaultGlitch } from './cc-glitch.js';
 import { completionKey } from './cc-tour.js';
 
 const TOUR_USER = 'anonymous';
-const ORCHESTRATOR_COLOUR = '#c084fc';
+const SVG_NS = 'http://www.w3.org/2000/svg';
 const HIDDEN_STATUSES = ['cancelled', 'proposed'];
 const TILE_COLOURS = { ready: '#2fe0a0', running: '#2fe0a0', review: '#ff4d7e', blocked: '#ffb62e', todo: '#a98bff', done: '#4d7cff' };
 const LOOP_STEPS = ['you approve the scope', 'the split makes tickets', 'workers build in waves', 'checks gate every merge', 'the PR merges'];
-const SOURCES_NOTE = 'Read from this project\'s ledger (tickets and stages), its orchestrator sessions and its run stream, as served by the Command Center. Real robot head from tools/watch-assets. The orbit ring is our own design. Glitch limits in code: each burst under 400 ms, at most 3 at once, never on text being read, off with reduced motion.';
+const SOURCES_NOTE = 'Read from this project\'s ledger (tickets, stages and their lane or type), its orchestrator sessions and its run stream, as served by the Command Center. The pixel orchestrator, its orbit and the path to the running ticket are drawn here. One glitch in the app, on the SW wordmark: under 400 ms, off with reduced motion.';
+/** Orbit ellipse relative to the creature box (fractions of its width / height). */
+const ORBIT = { cy: 0.56, rx: 0.82, ry: 0.19 };
+const NODE_TS = [0.2, 0.4, 0.6, 0.8];
+const SPARK_MS = 1800;
+const ORBIT_MS = 7000;
 
 function el(doc, tag, cls, text) {
   const n = doc.createElement(tag);
   if (cls) n.className = cls;
   if (text != null) n.textContent = text;
+  return n;
+}
+
+function svg(doc, tag, cls) {
+  const n = doc.createElementNS(SVG_NS, tag);
+  if (cls) n.setAttribute('class', cls);
   return n;
 }
 
@@ -66,12 +77,16 @@ function headerCounters(project, counts) {
     { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
     { label: 'agents', value: counts.running, color: counts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
     { label: 'done', value: done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
-    { label: 'need you', value: needsYou, color: 'var(--red)', tip: 'Human tickets still open plus tickets waiting in review.' },
+    { label: 'need you', value: needsYou, color: needsYou ? 'var(--red)' : '', tip: 'Human tickets still open plus tickets waiting in review.' },
   ];
 }
 
 function utcClock(ms) {
   return `${new Date(ms).toISOString().slice(11, 16)} UTC`;
+}
+
+function utcDate(ms) {
+  return new Date(ms).toISOString().slice(0, 10).replace(/-/g, '.');
 }
 
 function runStreamItems(project, orch) {
@@ -88,12 +103,25 @@ function runStreamItems(project, orch) {
   });
 }
 
+/** Point at t on a cubic Bezier. */
+function cubicAt(p, t) {
+  const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
+  return {
+    x: a * p[0].x + b * p[1].x + c * p[2].x + d * p[3].x,
+    y: a * p[0].y + b * p[1].y + c * p[2].y + d * p[3].y,
+  };
+}
+
 /**
  * @param {HTMLElement} host
  * @param {object} project buildProjectCockpit shape
  * @param {{
  *   document: Document, now?: number|(() => number), onBack?: () => void, window?: Window,
- *   glitch?: (el: Element) => unknown, mountRobotHead?: Function, setAnimationPaused?: (v: boolean) => void,
+ *   glitch?: (el: Element) => unknown, mountRobotHead?: Function,
  *   requestAnimationFrame?: Function, cancelAnimationFrame?: Function, matchMedia?: typeof matchMedia,
  *   setTimeout?: typeof setTimeout, clearTimeout?: typeof clearTimeout,
  * }} deps
@@ -117,6 +145,15 @@ export function renderProjectCockpit(host, project, deps) {
     const id = setTimer(() => { timers.delete(id); fn(); }, ms);
     timers.add(id);
   };
+  const raf = deps.requestAnimationFrame || (typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame.bind(win) : null);
+  const caf = deps.cancelAnimationFrame || (typeof win.cancelAnimationFrame === 'function' ? win.cancelAnimationFrame.bind(win) : null);
+  let reducedMotion = false;
+  try {
+    const mm = typeof deps.matchMedia === 'function' ? deps.matchMedia : (typeof win.matchMedia === 'function' ? win.matchMedia.bind(win) : null);
+    reducedMotion = Boolean(mm && mm('(prefers-reduced-motion: reduce)').matches);
+  } catch {
+    reducedMotion = false;
+  }
 
   while (host.firstChild) host.removeChild(host.firstChild);
 
@@ -124,27 +161,35 @@ export function renderProjectCockpit(host, project, deps) {
   if (project?.id != null) shell.setAttribute('data-project-id', String(project.id));
   const wrap = el(doc, 'div', 'ck-wrap');
 
-  // Top bar: logo, counters, live dot, breadcrumb, page links.
+  // Top line: mono breadcrumb on the left (SW / THE HIVE / PROJECT), meta line on the right, view switch in an overflow.
   const gbar = el(doc, 'div', 'gbar');
-  const top = el(doc, 'header', 'ck-top');
-  top.appendChild(el(doc, 'span', 'logo', 'SWARM WATCH'));
+  const crumbs = el(doc, 'nav', 'crumbs cockpit-nav');
+  crumbs.setAttribute('aria-label', 'Breadcrumb');
+  const logo = el(doc, 'span', 'logo', 'SW');
+  logo.setAttribute('title', 'Swarm Watch');
+  const backBtn = el(doc, 'button', 'cc-cockpit-back-btn nav-block', 'The Hive');
+  backBtn.type = 'button';
+  const crumbProject = el(doc, 'span', 'cur');
+  crumbProject.setAttribute('aria-current', 'page');
+  crumbs.appendChild(logo);
+  crumbs.appendChild(el(doc, 'span', 'sep', '/'));
+  crumbs.appendChild(backBtn);
+  crumbs.appendChild(el(doc, 'span', 'sep', '/'));
+  crumbs.appendChild(crumbProject);
+  const meta = el(doc, 'div', 'ck-meta');
   const cnt = el(doc, 'div', 'cnt');
-  top.appendChild(cnt);
+  const metaDate = el(doc, 'span', 'dt');
   const live = el(doc, 'span', 'ck-live');
   live.appendChild(el(doc, 'i'));
   live.appendChild(doc.createTextNode('LIVE'));
-  top.appendChild(live);
-  const nav = el(doc, 'div', 'ck-nav');
-  const crumbs = el(doc, 'nav', 'crumbs cockpit-nav');
-  crumbs.setAttribute('aria-label', 'Breadcrumb');
-  const backBtn = el(doc, 'button', 'cc-cockpit-back-btn nav-block', 'The Hive');
-  backBtn.type = 'button';
-  const crumbProject = el(doc, 'span');
-  crumbProject.setAttribute('aria-current', 'page');
-  crumbs.appendChild(backBtn);
-  crumbs.appendChild(el(doc, 'span', null, '›'));
-  crumbs.appendChild(crumbProject);
-  nav.appendChild(crumbs);
+  meta.appendChild(cnt);
+  meta.appendChild(el(doc, 'span', 'sep', '/'));
+  meta.appendChild(metaDate);
+  meta.appendChild(live);
+  const more = el(doc, 'details', 'ck-more');
+  const moreSum = el(doc, 'summary', null, '···');
+  moreSum.setAttribute('aria-label', 'Switch view');
+  moreSum.setAttribute('title', 'Switch view');
   const tabs = el(doc, 'div', 'tabs');
   const ccTab = el(doc, 'a', null, 'Command Center');
   ccTab.href = '/command-center';
@@ -153,9 +198,11 @@ export function renderProjectCockpit(host, project, deps) {
   classicTab.href = '/';
   tabs.appendChild(ccTab);
   tabs.appendChild(classicTab);
-  nav.appendChild(tabs);
-  gbar.appendChild(top);
-  gbar.appendChild(nav);
+  more.appendChild(moreSum);
+  more.appendChild(tabs);
+  gbar.appendChild(crumbs);
+  gbar.appendChild(meta);
+  gbar.appendChild(more);
 
   const panel = el(doc, 'main', 'panel-cockpit');
   panel.id = 'cc-cockpit-main';
@@ -170,20 +217,14 @@ export function renderProjectCockpit(host, project, deps) {
   colR.setAttribute('aria-label', 'Review, blocked and finished tickets');
   const mid = el(doc, 'div', 'mid');
   const orbwrap = el(doc, 'div', 'orbwrap');
-  const orbBack = el(doc, 'canvas');
-  orbBack.setAttribute('aria-hidden', 'true');
   const lab = el(doc, 'div', 'lab');
   const labTitle = el(doc, 'span', null, 'ORCHESTRATOR');
   const labSub = el(doc, 'small');
   lab.appendChild(labTitle);
   lab.appendChild(labSub);
   const hd2 = el(doc, 'div', 'hd2');
-  const orbFront = el(doc, 'canvas');
-  orbFront.setAttribute('aria-hidden', 'true');
-  orbwrap.appendChild(orbBack);
   orbwrap.appendChild(lab);
   orbwrap.appendChild(hd2);
-  orbwrap.appendChild(orbFront);
   const nowHost = el(doc, 'div', 'now');
   nowHost.setAttribute('aria-label', 'Now panel');
   mid.appendChild(orbwrap);
@@ -191,6 +232,45 @@ export function renderProjectCockpit(host, project, deps) {
   cols.appendChild(colL);
   cols.appendChild(mid);
   cols.appendChild(colR);
+
+  // Orbit ellipse, orbit dots and the dotted path to the active row: one SVG under the columns.
+  let wire = null;
+  if (typeof doc.createElementNS === 'function') {
+    try {
+      const root = svg(doc, 'svg', 'ck-wire');
+      root.setAttribute('aria-hidden', 'true');
+      const ring = svg(doc, 'ellipse', 'ring');
+      const ring2 = svg(doc, 'ellipse', 'ring2');
+      const odot = svg(doc, 'circle', 'odot');
+      odot.setAttribute('r', '3.5');
+      const odot2 = svg(doc, 'circle', 'odot2');
+      odot2.setAttribute('r', '2.5');
+      const path = svg(doc, 'path', 'wire');
+      const nodes = NODE_TS.map(() => {
+        const c = svg(doc, 'circle', 'node');
+        c.setAttribute('r', '3.5');
+        return c;
+      });
+      const end = svg(doc, 'circle', 'node end');
+      end.setAttribute('r', '4');
+      const spark = svg(doc, 'circle', 'spark');
+      spark.setAttribute('r', '3');
+      const wireG = svg(doc, 'g', 'wire-g');
+      wireG.appendChild(path);
+      nodes.forEach(n => wireG.appendChild(n));
+      wireG.appendChild(end);
+      wireG.appendChild(spark);
+      root.appendChild(ring2);
+      root.appendChild(ring);
+      root.appendChild(odot2);
+      root.appendChild(odot);
+      root.appendChild(wireG);
+      cols.appendChild(root);
+      wire = { root, ring, ring2, odot, odot2, path, nodes, end, spark, wireG, geo: null, curve: null };
+    } catch {
+      wire = null;
+    }
+  }
 
   const loopbar = el(doc, 'div', 'loopbar');
   const loopK = el(doc, 'div', 'k');
@@ -255,50 +335,114 @@ export function renderProjectCockpit(host, project, deps) {
   shell.appendChild(wrap);
   host.appendChild(shell);
 
-  const probe = doc.createElement('canvas');
-  let canvasCapable = false;
-  try {
-    canvasCapable = typeof probe.getContext === 'function' && Boolean(probe.getContext('2d'));
-  } catch {
-    canvasCapable = false;
-  }
-  const noopOrbit = { resize() {}, destroy() {} };
-  let orbit = noopOrbit;
-  try {
-    orbit = mountOrbit({
-      back: orbBack,
-      front: orbFront,
-      target: () => {
-        const first = colR.firstChild;
-        return first && first.classList && first.classList.contains('hot') ? first : null;
-      },
-      win,
-      doc,
-      requestAnimationFrame: deps.requestAnimationFrame,
-      cancelAnimationFrame: deps.cancelAnimationFrame,
-      reducedMotion: typeof deps.matchMedia === 'function'
-        ? Boolean(deps.matchMedia('(prefers-reduced-motion: reduce)').matches)
-        : undefined,
-    }) || noopOrbit;
-  } catch {
-    // no usable canvas: the shell still renders without the orbit ring
-    orbit = noopOrbit;
+  let destroyed = false;
+  let activeId = null;
+
+  /** The card of the NOW RUNNING ticket, in whichever column it sits. */
+  function activeRow() {
+    if (activeId == null) return null;
+    for (const column of [colL, colR]) {
+      for (const card of Array.from(column.children)) {
+        if (card.getAttribute && card.getAttribute('data-ticket-id') === activeId) return { card, side: column === colR ? 1 : -1 };
+      }
+    }
+    return null;
   }
 
-  // Robot head: mounted once per project, then only its state follows the orchestrator.
-  let destroyed = false;
-  let robotApi = null;
+  /** Place the orbit around the creature and the dotted path from the orbit to the active row. */
+  function layoutWire() {
+    if (!wire || destroyed) return;
+    try {
+      const base = cols.getBoundingClientRect();
+      const hr = hd2.getBoundingClientRect();
+      if (!base.width || !hr.width) return;
+      const w = Math.round(base.width);
+      const h = Math.round(base.height);
+      wire.root.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      wire.root.setAttribute('width', String(w));
+      wire.root.setAttribute('height', String(h));
+      const cx = hr.left + hr.width / 2 - base.left;
+      const cy = hr.top + hr.height * ORBIT.cy - base.top;
+      const rx = hr.width * ORBIT.rx;
+      const ry = hr.width * ORBIT.ry;
+      wire.geo = { cx, cy, rx, ry };
+      const setE = (e, k) => {
+        e.setAttribute('cx', cx.toFixed(1));
+        e.setAttribute('cy', cy.toFixed(1));
+        e.setAttribute('rx', (rx * k).toFixed(1));
+        e.setAttribute('ry', (ry * k).toFixed(1));
+      };
+      setE(wire.ring, 1);
+      setE(wire.ring2, 0.78);
+      const hit = activeRow();
+      const rr = hit ? hit.card.getBoundingClientRect() : null;
+      if (!hit || !rr || !rr.width) {
+        wire.curve = null;
+        wire.wireG.setAttribute('visibility', 'hidden');
+        placeDots(0);
+        return;
+      }
+      const s = hit.side;
+      const p0 = { x: cx + s * rx * 0.94, y: cy - ry * 0.34 };
+      const p3 = { x: (s > 0 ? rr.left : rr.right) - base.left, y: rr.top + rr.height / 2 - base.top };
+      const dx = Math.abs(p3.x - p0.x);
+      const p1 = { x: p0.x + s * Math.max(48, dx * 0.9), y: p0.y };
+      const p2 = { x: p3.x - s * Math.max(36, dx * 0.5), y: p3.y };
+      const curve = [p0, p1, p2, p3];
+      wire.curve = curve;
+      wire.wireG.setAttribute('visibility', 'visible');
+      wire.path.setAttribute('d', `M${p0.x.toFixed(1)} ${p0.y.toFixed(1)} C${p1.x.toFixed(1)} ${p1.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} ${p3.x.toFixed(1)} ${p3.y.toFixed(1)}`);
+      NODE_TS.forEach((t, i) => {
+        const q = cubicAt(curve, t);
+        wire.nodes[i].setAttribute('cx', q.x.toFixed(1));
+        wire.nodes[i].setAttribute('cy', q.y.toFixed(1));
+      });
+      wire.end.setAttribute('cx', p3.x.toFixed(1));
+      wire.end.setAttribute('cy', p3.y.toFixed(1));
+      placeDots(0);
+    } catch {
+      // layout is decoration only
+    }
+  }
+
+  /** Orbit dots and the spark on the path at time `ms` (0 = the still frame used under reduced motion). */
+  function placeDots(ms) {
+    if (!wire || !wire.geo) return;
+    const { cx, cy, rx, ry } = wire.geo;
+    const a = (ms / ORBIT_MS) * Math.PI * 2 + 0.9;
+    wire.odot.setAttribute('cx', (cx + rx * Math.cos(a)).toFixed(1));
+    wire.odot.setAttribute('cy', (cy + ry * Math.sin(a)).toFixed(1));
+    const b = a * -1.35 + 2.4;
+    wire.odot2.setAttribute('cx', (cx + rx * 0.78 * Math.cos(b)).toFixed(1));
+    wire.odot2.setAttribute('cy', (cy + ry * 0.78 * Math.sin(b)).toFixed(1));
+    if (wire.curve) {
+      const q = cubicAt(wire.curve, (ms % SPARK_MS) / SPARK_MS);
+      wire.spark.setAttribute('cx', q.x.toFixed(1));
+      wire.spark.setAttribute('cy', q.y.toFixed(1));
+    }
+  }
+
+  let frame = null;
+  function tick(ts) {
+    frame = null;
+    if (destroyed) return;
+    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
+    frame = raf(tick);
+  }
+  function startMotion() {
+    if (!wire || reducedMotion || !raf || frame != null || destroyed) return;
+    frame = raf(tick);
+  }
+
+  // Orchestrator creature: mounted once per project, then only its state follows the orchestrator.
   let headHandle = null;
   let headKey = null;
   let headWanted = null;
   let headMounted = null;
 
-  function loadRobot() {
-    if (typeof deps.mountRobotHead === 'function') {
-      return Promise.resolve({ mountRobotHead: deps.mountRobotHead, setAnimationPaused: deps.setAnimationPaused });
-    }
-    if (!canvasCapable) return Promise.resolve(null);
-    return import('./robot-head.js').catch(() => null);
+  function loadCreature() {
+    if (typeof deps.mountRobotHead === 'function') return Promise.resolve({ mount: deps.mountRobotHead });
+    return Promise.resolve({ mount: mountPixelCreature });
   }
 
   function syncHead(state, name, key) {
@@ -308,21 +452,18 @@ export function renderProjectCockpit(host, project, deps) {
       headHandle = null;
       headKey = key;
       headMounted = null;
-      loadRobot().then((api) => {
+      loadCreature().then((api) => {
         if (!api || destroyed || headKey !== key || headHandle) return;
-        robotApi = api;
         try {
           clear(hd2);
-          headHandle = api.mountRobotHead(hd2, {
+          headHandle = api.mount(hd2, {
             state: headWanted.state,
             size: 290,
-            color: ORCHESTRATOR_COLOUR,
-            screenColor: '#e8f2ff',
             id: `orch-${key}`,
             label: headWanted.label,
           });
           headMounted = headWanted.state;
-          if (typeof api.setAnimationPaused === 'function') api.setAnimationPaused(Boolean(doc.hidden));
+          layoutWire();
         } catch {
           headHandle = null;
         }
@@ -335,8 +476,6 @@ export function renderProjectCockpit(host, project, deps) {
     }
   }
 
-  // Counters: a change in agents or need-you gets one short glitch, 400 ms after the repaint.
-  let lastCounters = '';
   function paintCounters(items) {
     clear(cnt);
     for (const c of items) {
@@ -350,14 +489,6 @@ export function renderProjectCockpit(host, project, deps) {
       cell.appendChild(v);
       cnt.appendChild(cell);
     }
-    const sig = JSON.stringify(items.filter(c => c.label === 'agents' || c.label === 'need you').map(c => c.value));
-    if (lastCounters && lastCounters !== sig) {
-      for (const cell of Array.from(cnt.children)) {
-        const v = cell.children[1];
-        if (v && (v.getAttribute('data-k') === 'agents' || v.getAttribute('data-k') === 'need you')) later(() => glitch(v), 400);
-      }
-    }
-    lastCounters = sig;
   }
 
   function paintNow(columns, model) {
@@ -388,22 +519,14 @@ export function renderProjectCockpit(host, project, deps) {
       nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
     }
     const running = columns.counts.running;
-    const w = el(doc, 'div', 'd');
+    const w = el(doc, 'div', 'd w');
     w.appendChild(el(doc, 'em', null, 'WORKER >'));
     w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
     nowHost.appendChild(w);
   }
 
-  function attachChipGlitch(column) {
-    for (const card of Array.from(column.children)) {
-      const chip = card.children && card.children[0];
-      if (chip && typeof chip.addEventListener === 'function') chip.addEventListener('mouseenter', () => glitch(chip));
-    }
-  }
-
   let projectRef = project;
   let firstPaint = true;
-  let headTitleGlitched = false;
 
   function paint(at) {
     const p = projectRef;
@@ -421,15 +544,17 @@ export function renderProjectCockpit(host, project, deps) {
     const { counts } = columns;
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
+    const cats = cockpitCategories(ledger);
+    // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
+    activeId = columns.left[0] ? columns.left[0].ticket.id : null;
 
     crumbProject.textContent = model.name;
     paintCounters(headerCounters(p, counts));
+    metaDate.textContent = utcDate(at);
 
-    if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L' });
+    if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L', activeId, categoryOf: cats.of });
     else renderReadyEmptyState(colL, ledger, readyTickets);
-    renderTicketColumn(colR, columns.right, { side: 'R', emptyText: 'No review, blocked or finished tickets yet.' });
-    attachChipGlitch(colL);
-    attachChipGlitch(colR);
+    renderTicketColumn(colR, columns.right, { side: 'R', activeId, categoryOf: cats.of, emptyText: 'No review, blocked or finished tickets yet.' });
 
     lab.setAttribute('data-orchestrator', orch.label);
     labSub.textContent = orchestratorCaption(orch.label, allDone);
@@ -461,32 +586,26 @@ export function renderProjectCockpit(host, project, deps) {
     renderStackSummaryTiles(tilesHost, tiles);
     footNote.textContent = `data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
 
-    orbit.resize();
+    layoutWire();
     if (firstPaint) {
       firstPaint = false;
       if (doc.fonts && doc.fonts.ready && typeof doc.fonts.ready.then === 'function') {
-        doc.fonts.ready.then(() => { if (!destroyed) orbit.resize(); }, () => {});
+        doc.fonts.ready.then(() => { if (!destroyed) layoutWire(); }, () => {});
       }
+      // the app's one glitch: the SW wordmark, once on arrival
+      later(() => glitch(logo), 600);
     }
-    if (!headTitleGlitched) {
-      headTitleGlitched = true;
-      const h1 = titleHost.firstChild;
-      if (h1) glitch(h1);
-    }
+    startMotion();
   }
 
   const onBackClick = () => {
     if (typeof deps.onBack === 'function') deps.onBack();
   };
   backBtn.addEventListener('click', onBackClick);
-  const onHeadHover = () => glitch(hd2);
-  hd2.addEventListener('mouseenter', onHeadHover);
-  const onResize = () => orbit.resize();
+  const onLogoHover = () => glitch(logo);
+  logo.addEventListener('mouseenter', onLogoHover);
+  const onResize = () => layoutWire();
   if (typeof win.addEventListener === 'function') win.addEventListener('resize', onResize);
-  const onVisibility = () => {
-    if (robotApi && typeof robotApi.setAnimationPaused === 'function') robotApi.setAnimationPaused(Boolean(doc.hidden));
-  };
-  if (typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', onVisibility);
 
   try {
     paint(nowMs(deps));
@@ -503,11 +622,11 @@ export function renderProjectCockpit(host, project, deps) {
       destroyed = true;
       for (const id of timers) clearTimer(id);
       timers.clear();
+      if (frame != null && caf) caf(frame);
+      frame = null;
       backBtn.removeEventListener('click', onBackClick);
-      hd2.removeEventListener('mouseenter', onHeadHover);
+      logo.removeEventListener('mouseenter', onLogoHover);
       if (typeof win.removeEventListener === 'function') win.removeEventListener('resize', onResize);
-      if (typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', onVisibility);
-      orbit.destroy();
       if (headHandle) headHandle.destroy();
       headHandle = null;
       while (host.firstChild) host.removeChild(host.firstChild);

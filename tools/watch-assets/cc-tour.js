@@ -3,9 +3,9 @@ const TOUR_SEEN_KEY = 'cc-tour-seen';
 export const TOUR_DISMISSED_KEY = 'cc-tour-dismissed';
 
 export const TOUR_STEPS = [
-  { id: 'hive', selector: '[data-tour=\'hive\']', title: 'The Hive', text: 'Every worker bee in the swarm appears here as a cell.' },
+  { id: 'hive', selector: '[data-tour=\'hive\']', title: 'The Hive', text: 'Each project is a card around the ring. Its stream of light flows into the swarm; busier projects stream denser. Click a card to open it.' },
   { id: 'cockpit', selector: '[data-tour=\'cockpit\']', title: 'Project Cockpit', text: 'Follow each project, its tickets and its progress in one place.' },
-  { id: 'legend', selector: '[data-tour=\'legend\']', title: 'Colour legend', text: 'Colours show what each worker is doing. Green is done, amber is waiting and red needs attention.' },
+  { id: 'legend', selector: '[data-tour=\'legend\']', title: 'Colour legend', text: 'Card colours show each project\'s state: green is building, amber is blocked, red needs you, blue is done and violet is idle.' },
   { id: 'palette', selector: '[data-tour=\'palette\']', title: 'Command palette', text: 'Press Ctrl+K or Cmd+K to find and run any command by name.' }
 ];
 

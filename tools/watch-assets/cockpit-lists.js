@@ -9,13 +9,73 @@ export const COCKPIT_LISTS_CSS = '';
 
 /** Stage colours: stage "S<n>" takes colour n mod 7 (the artifact's SC palette). */
 export const STAGE_COLOURS = ['#2fe0a0', '#4d7cff', '#ffb62e', '#a98bff', '#ff4d7e', '#4ccce6', '#58627a'];
-const WORKER_COLOURS = ['#ff4d7e', '#2fe0a0', '#4d7cff', '#ffb62e'];
 const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', done: '✓' };
 const HIDDEN_STATUSES = ['cancelled', 'proposed'];
 const STAMP_FIELDS = ['doneAt', 'completedAt', 'finishedAt', 'updatedAt', 'at'];
 
+/** Ledger fields a ticket category is read from, in order: lane, area, type, then stage as the last resort. */
+export const CATEGORY_FIELDS = ['lane', 'area', 'type', 'stage'];
+/** Fixed colours for common categories; any other name takes a stable colour from CATEGORY_PALETTE by its hash. */
+const CATEGORY_COLOURS = {
+  build: '#e8795a', feature: '#e8795a', code: '#e8795a',
+  test: '#8fc46a', tests: '#8fc46a', qa: '#8fc46a',
+  ui: '#5b8ee6', web: '#9aa3b5', frontend: '#5b8ee6', design: '#c58bff',
+  fix: '#e0607e', bug: '#e0607e',
+  docs: '#d9a26a', doc: '#d9a26a',
+  human: '#ffb62e', infra: '#4ccce6', ops: '#4ccce6',
+  other: '#7d8aa3',
+};
+export const CATEGORY_PALETTE = ['#e8795a', '#d9a26a', '#5b8ee6', '#8fc46a', '#e0607e', '#9aa3b5', '#a98bff', '#4ccce6'];
+
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const byIdDesc = (a, b) => byId(b, a);
+
+/** Stable colour for a category name. */
+export function categoryColour(name) {
+  const key = String(name || 'other').toLowerCase();
+  if (CATEGORY_COLOURS[key]) return CATEGORY_COLOURS[key];
+  let h = 0;
+  for (let i = 0; i < key.length; i += 1) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
+}
+
+/** The first category field that splits these tickets into more than one group, else the first one present. */
+export function categoryField(tickets) {
+  const list = (Array.isArray(tickets) ? tickets : []).filter(Boolean);
+  let fallback = null;
+  for (const f of CATEGORY_FIELDS) {
+    const vals = new Set(list.map(t => t[f]).filter(v => v != null && String(v).trim() !== '').map(v => String(v).trim().toLowerCase()));
+    if (vals.size > 1) return f;
+    if (vals.size === 1 && !fallback) fallback = f;
+  }
+  return fallback;
+}
+
+/** Category of one ticket by the given field (or its own first present field). */
+export function ticketCategory(ticket, field) {
+  const fields = field ? [field] : CATEGORY_FIELDS;
+  for (const f of fields) {
+    const v = ticket?.[f];
+    if (v != null && String(v).trim() !== '') return String(v).trim().toLowerCase();
+  }
+  return 'other';
+}
+
+/**
+ * Categories of a ledger: the field they come from, names in ticket id order, and a resolver per ticket.
+ * @param {object|null|undefined} ledger
+ */
+export function cockpitCategories(ledger) {
+  const live = (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
+  const field = categoryField(live);
+  const of = t => ticketCategory(t, field);
+  const names = [];
+  for (const t of [...live].sort(byId)) {
+    const n = of(t);
+    if (!names.includes(n)) names.push(n);
+  }
+  return { field, names, of, colour: categoryColour };
+}
 
 export function setCssVar(node, name, value) {
   const style = node?.style;
@@ -201,15 +261,19 @@ function emptyLine(doc, text, key) {
   return p;
 }
 
-/** One ticket card (`.tk`): index chip, short name, id and stage line, state glyph and word. */
-function buildTicketCard(doc, ticket, state, i, n, side, hot) {
+/**
+ * One ticket card (`.tk`): index chip, short name, id and stage line, state glyph and category tag.
+ * The category colour (--cat-color) paints the chip, the left border and the tag; the active row gets `.active` and an ON chip.
+ */
+function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active) {
   const full = String(ticket.title || ticket.id).replace(/"/g, '');
   const off = Math.min(30, 10 * Math.min(i, n - 1 - i));
-  const card = mk(doc, 'div', hot ? 'tk hot' : 'tk');
+  const card = mk(doc, 'div', `tk${hot ? ' hot' : ''}${active ? ' active' : ''}`);
   card.setAttribute('data-ticket-id', ticket.id);
   card.setAttribute('data-status', state);
   card.setAttribute('data-title', full);
-  setCssVar(card, '--c', stageColour(ticket.stage));
+  card.setAttribute('data-category', category);
+  setCssVar(card, '--cat-color', categoryColour(category));
   if (side === 'R') {
     card.style.marginRight = `${off}px`;
     card.style.marginLeft = `${36 - off}px`;
@@ -228,8 +292,11 @@ function buildTicketCard(doc, ticket, state, i, n, side, hot) {
   tx.appendChild(mk(doc, 'div', 'sb', `${ticket.id}${ticket.stage ? ` · ${ticket.stage}` : ''}${ticket.sensitive ? ' · sensitive' : ''}`));
   card.appendChild(tx);
   const rt = mk(doc, 'div', 'rt');
-  rt.appendChild(mk(doc, 'b', null, GLYPH[state] || GLYPH.ready));
-  rt.appendChild(mk(doc, 'span', null, state.toUpperCase()));
+  const glyph = mk(doc, 'b', active ? 'on' : `g-${state}`, active ? 'ON' : (GLYPH[state] || GLYPH.ready));
+  glyph.setAttribute('title', state);
+  glyph.setAttribute('aria-label', state);
+  rt.appendChild(glyph);
+  rt.appendChild(mk(doc, 'span', 'tag', category === 'other' ? '—' : category.toUpperCase()));
   card.appendChild(rt);
   return card;
 }
@@ -237,16 +304,18 @@ function buildTicketCard(doc, ticket, state, i, n, side, hot) {
 /**
  * @param {HTMLElement} host a column element
  * @param {Array<{ ticket: object, state: string }>} entries
- * @param {{ side?: 'L'|'R', emptyText?: string }} [options]
+ * @param {{ side?: 'L'|'R', emptyText?: string, activeId?: string|null, categoryOf?: (t: object) => string }} [options]
  */
 export function renderTicketColumn(host, entries, options = {}) {
-  const { side = 'L', emptyText } = options;
+  const { side = 'L', emptyText, activeId = null } = options;
+  const categoryOf = typeof options.categoryOf === 'function' ? options.categoryOf : t => ticketCategory(t);
   clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
   const list = Array.isArray(entries) ? entries : [];
   list.forEach((e, i) => {
-    host.appendChild(buildTicketCard(doc, e.ticket, e.state, i, list.length, side, side === 'R' && i === 0));
+    const active = activeId != null && e.ticket.id === activeId;
+    host.appendChild(buildTicketCard(doc, e.ticket, e.state, i, list.length, side, side === 'R' && i === 0, categoryOf(e.ticket), active));
   });
   if (!list.length && emptyText) host.appendChild(emptyLine(doc, emptyText, 'column'));
 }
@@ -267,9 +336,10 @@ export function renderCockpitTicketList(host, ledger, options = {}) {
     host.appendChild(emptyLine(doc, 'No tickets in this column', 'queue'));
     return;
   }
+  const cats = cockpitCategories(ledger);
   jobs.forEach((job, i) => {
     const full = ledgerTicketById(ledger, job.id) ?? { id: job.id, title: job.id };
-    host.appendChild(buildTicketCard(doc, full, ticketState(full.status || job.status), i, jobs.length, side, false));
+    host.appendChild(buildTicketCard(doc, full, ticketState(full.status || job.status), i, jobs.length, side, false, cats.of(full), false));
   });
 }
 
@@ -279,8 +349,10 @@ export function renderCockpitTicketList(host, ledger, options = {}) {
  * @param {number} nowMs
  */
 export function workerCards(ledger, nowMs, limit = 4) {
+  const cats = cockpitCategories(ledger);
   return recentDone(ledger, limit).map((t, i) => {
     const at = ticketStamp(t);
+    const category = cats.of(t);
     return {
       id: t.id,
       title: String(t.title || t.id),
@@ -288,7 +360,8 @@ export function workerCards(ledger, nowMs, limit = 4) {
       ago: at == null ? '' : agoText(nowMs - at),
       pct: at == null ? 100 : Math.round(100 * Math.max(0.08, 1 - (nowMs - at) / 864e5)),
       tag: i === 0 ? 'NEWEST' : 'DONE',
-      color: WORKER_COLOURS[i % WORKER_COLOURS.length],
+      category,
+      color: categoryColour(category),
     };
   });
 }

@@ -2,7 +2,7 @@
 // Command Center cockpit title block: project name, ticket counts and the stage strip from ledger progress.
 import { ledgerStats } from './cc-ledger-browser.js';
 import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
-import { STAGE_COLOURS } from './cockpit-lists.js';
+import { STAGE_COLOURS, cockpitCategories, setCssVar } from './cockpit-lists.js';
 
 /** Artifact title sizes: the project name is 54px on desktop and 34px at 900px and below; the page wrap is 1320px. */
 export const COCKPIT_TITLE_PX = { desktop: 54, phone: 34 };
@@ -12,6 +12,69 @@ export const COCKPIT_HEADLINE_ROOT_PX = 16;
 const HIDDEN_STATUSES = ['cancelled', 'proposed'];
 const STAGE_DONE_COLOUR = '#4d7cff';
 const STAGE_EMPTY_COLOUR = '#1c2233';
+/** Up to this many live tickets the rule under the headline draws one segment per ticket. */
+const STRIP_TICKET_MAX = 48;
+
+/**
+ * The orchestrator creature: 12 x 8 flat pixels in one warm colour (arms on rows 2-3, four legs on rows 6-7),
+ * two square eyes on row 1 and a flat shadow ellipse. `#` body, `.` empty.
+ */
+export const CREATURE_ROWS = [
+  '..########..',
+  '..########..',
+  '############',
+  '############',
+  '..########..',
+  '..########..',
+  '..#.#..#.#..',
+  '..#.#..#.#..',
+];
+export const CREATURE_EYES = [[1, 3], [1, 8]];
+export const CREATURE_COLOUR = '#e8795a';
+const CREATURE_STATES = ['idle', 'thinking', 'working', 'sleeping'];
+
+/**
+ * Mount the flat pixel creature into `host`. Same handle shape as mountRobotHead: { setState, destroy }.
+ * Cell size comes from CSS (--cell); `size` is the intended width in px and is kept as a data attribute.
+ * @param {HTMLElement} host
+ * @param {{ state?: string, size?: number, color?: string, label?: string }} [opts]
+ */
+export function mountPixelCreature(host, opts = {}) {
+  const doc = host.ownerDocument || globalThis.document;
+  const mkc = (tag, cls) => {
+    const n = doc.createElement(tag);
+    if (cls) n.className = cls;
+    return n;
+  };
+  const root = mkc('div', 'pxc');
+  root.setAttribute('role', 'img');
+  root.setAttribute('aria-label', opts.label || 'orchestrator');
+  if (opts.size) root.setAttribute('data-size', String(opts.size));
+  setCssVar(root, '--px-color', opts.color || CREATURE_COLOUR);
+  const body = mkc('div', 'px-body');
+  CREATURE_ROWS.forEach((row) => {
+    for (const ch of row) body.appendChild(mkc('i', ch === '#' ? 'on' : null));
+  });
+  CREATURE_EYES.forEach(([r, c], k) => {
+    const eye = mkc('b', `px-eye px-eye-${k}`);
+    setCssVar(eye, '--r', String(r));
+    setCssVar(eye, '--col', String(c));
+    body.appendChild(eye);
+  });
+  root.appendChild(body);
+  root.appendChild(mkc('div', 'px-shadow'));
+  const setState = (s) => {
+    root.setAttribute('data-state', CREATURE_STATES.includes(s) ? s : 'idle');
+  };
+  setState(opts.state);
+  host.appendChild(root);
+  return {
+    setState,
+    destroy() {
+      if (root.parentNode) root.parentNode.removeChild(root);
+    },
+  };
+}
 
 /** Parse clamp(min, preferred, max) and resolve pixel font-size at a viewport width. */
 export function resolveClampPx(clampCss, viewportPx, rootPx = COCKPIT_HEADLINE_ROOT_PX) {
@@ -134,20 +197,55 @@ export function renderCockpit(host, data, opts) {
   host.appendChild(h1);
   host.appendChild(mk('div', 'sub2', cockpitSubline(done, total)));
 
+  const cats = cockpitCategories(ledger);
+
+  // children[0] stage counts, children[1] live ledger clock, children[2] category legend (shown between them)
   const stripl = mk('div', 'stripl');
-  const stl = mk('span', null, rings.map(r => `${r.id} ${r.done}/${r.total}`).join('  ·  ') || 'no stage ledger for this project');
-  const str = mk('span', null, `${rings.length ? `${stagesDone} OF ${rings.length} STAGES DONE · ` : ''}LIVE LEDGER · ${utcClock(now)}`);
+  const stl = mk('span', 'st', rings.map(r => `${r.id} ${r.done}/${r.total}`).join('  ·  ') || 'no stage ledger for this project');
+  const str = mk('span', 'lv', `${rings.length ? `${stagesDone} OF ${rings.length} STAGES DONE · ` : ''}LIVE LEDGER · ${utcClock(now)}`);
   stripl.appendChild(stl);
   stripl.appendChild(str);
+  const legend = mk('span', 'lg');
+  if (cats.field && cats.names.length) {
+    cats.names.slice(0, 8).forEach((n) => {
+      legend.appendChild(mk('i', null, '/'));
+      const c = mk('b', null, n === 'other' ? 'OTHER' : n.toUpperCase());
+      setCssVar(c, '--cat-color', cats.colour(n));
+      legend.appendChild(c);
+    });
+  }
+  stripl.appendChild(legend);
   host.appendChild(stripl);
 
+  // segmented rule: one group per stage, one segment per ticket (or per category share on big ledgers)
   const strip = mk('div', 'strip');
   strip.setAttribute('aria-hidden', 'true');
   const segs = rings.length ? rings : [null];
+  const perTicket = live.length <= STRIP_TICKET_MAX;
   segs.forEach((r, i) => {
     const seg = mk('i');
     if (!r) seg.style.background = STAGE_EMPTY_COLOUR;
     else seg.style.background = r.total > 0 && r.done >= r.total ? STAGE_DONE_COLOUR : STAGE_COLOURS[i % STAGE_COLOURS.length];
+    const own = live
+      .filter(t => (r ? t.stage === r.id : true))
+      .sort((a, b) => cats.names.indexOf(cats.of(a)) - cats.names.indexOf(cats.of(b)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    seg.style.flexGrow = String(Math.max(1, own.length));
+    const piece = (cat, done, grow) => {
+      const b = mk('b', done ? 'done' : null);
+      setCssVar(b, '--cat-color', cats.colour(cat));
+      if (grow) b.style.flexGrow = String(grow);
+      seg.appendChild(b);
+    };
+    if (perTicket) {
+      own.forEach(t => piece(cats.of(t), t.status === 'done', 0));
+    } else {
+      cats.names.forEach((n) => {
+        const mine = own.filter(t => cats.of(t) === n);
+        const d = mine.filter(t => t.status === 'done').length;
+        if (d) piece(n, true, d);
+        if (mine.length - d) piece(n, false, mine.length - d);
+      });
+    }
     strip.appendChild(seg);
   });
   host.appendChild(strip);
