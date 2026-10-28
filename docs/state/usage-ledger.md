@@ -173,6 +173,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | - | ask-1793118702987-78f7de07: complete | claude | opus | pass | 57,297 | $0.19 |
 | 2026-10-28 | - | bump16723: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | reviewtrain1: complete | claude | opus | pass | 1,097,737 | $1.50 |
+| 2026-10-28 | - | fixapprove: B1: orchestratorWriteAllowedRel denies .swarm/project/{approved-tickets.json,tickets.jso | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | fixguardrace: Added orchestratorManifestGate (async, dynamic imports) vetting parsed manifests via s | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | fixdefaultbranch: Protected branches: main, master, init.defaultBranch, and every branch from refs/r | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -193,5 +196,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
-| 2026-10-28 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 169 | 154 | 15 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-10-28 | cursor | 4 | 4 | 0 | 0 | subscription |
+| **total** | all | 172 | 157 | 15 | 15,891,798 | $28.54 (incl. estimates) |
