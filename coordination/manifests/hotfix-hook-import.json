@@ -7,7 +7,7 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "mid",
-   "prompt": "URGENT hotfix for a 1.167.23 regression. tools/om-manifest-guard.mjs orchestratorManifestGate (called first in applyManifestJobTypes, tools/swarm/core-1.mjs) does `await import('./orchestrator-hook.mjs')` to get orchestratorHookInstalledFor. But tools/orchestrator-hook.mjs is the hook SCRIPT: at top level it reads stdin and calls process.exit(0) (lines ~174-205). So inside a Claude Code session (CLAUDECODE=1) in a project with orchestrator mode on, every `swarm validate/run/go/ticket` exits 0 silently and does nothing (confirmed with node --trace-exit: exit at orchestrator-hook.mjs:199).\nFix:\n1. NEW tools/orchestrator-hook-installed.mjs with NO top-level side effects (no stdin, no process.exit, no spawning): move orchestratorHookInstalledFor there unchanged in behavior. It must compute the hook script path as the realpath of the sibling tools/orchestrator-hook.mjs (exactly what hookScriptPath is today inside orchestrator-hook.mjs: realpath of that file, falling back to the plain path), and compare installed hook commands exactly as today.\n2. tools/orchestrator-hook.mjs imports orchestratorHookInstalledFor from the new module (keep `export { orchestratorHookInstalledFor }` re-exported from it for any existing importer) and keeps all its script behavior unchanged.\n3. tools/om-manifest-guard.mjs imports orchestratorHookInstalledFor statically from ./orchestrator-hook-installed.mjs (no dynamic import of orchestrator-hook.mjs anywhere in tools/ outside the hook itself).\n4. Tests in NEW tests/orchestrator-hook-import.test.mjs (first import: import './_isolate-config.mjs';): (a) end-to-end: build a temp project with .swarm/ present (orchestrator mode on), install the orchestrator hook in its .claude/settings.local.json the way the existing orchestrator-mode tests do (read tests/om-manifest-guard.test.mjs and tests/orchestrator-mode-default.test.mjs for the pattern), write a plain job manifest with no commands, then spawn `node tools/swarm.mjs --root <tmp> validate <manifest>` with env CLAUDECODE=1 and stdin closed ('ignore'); assert stdout parses as JSON with status 'valid'. (b) same with a manifest whose checks argv is ['sh','-c','true'] (unvetted): assert stdout JSON has status 'error' and mentions orchestrator-manifest-unvetted (or the refusal reason) and exit code non-zero. (c) a static guard: read every .mjs under tools/ (not tests) and assert none of them imports './orchestrator-hook.mjs' or '../orchestrator-hook.mjs' (static or dynamic), except tools/orchestrator-hook.mjs itself; the hook is only ever run as a script.\nDo not edit tools/swarm.mjs or any file not in outputs.",
+   "prompt": "URGENT hotfix for a 1.167.23 regression. tools/om-manifest-guard.mjs orchestratorManifestGate (called first in applyManifestJobTypes, tools/swarm/core-1.mjs) does `await import('./orchestrator-hook.mjs')` to get orchestratorHookInstalledFor. But tools/orchestrator-hook.mjs is the hook SCRIPT: at top level it reads stdin and calls process.exit(0) (lines ~174-205). So inside a Claude Code session (CLAUDECODE=1) in a project with orchestrator mode on, every `swarm validate/run/go/ticket` exits 0 silently and does nothing (confirmed with node --trace-exit: exit at orchestrator-hook.mjs:199).\nFix:\n1. NEW tools/orchestrator-hook-installed.mjs with NO top-level side effects (no stdin, no process.exit, no spawning): move orchestratorHookInstalledFor there unchanged in behavior. It must compute the hook script path as the realpath of the sibling tools/orchestrator-hook.mjs (exactly what hookScriptPath is today inside orchestrator-hook.mjs: realpath of that file, falling back to the plain path), and compare installed hook commands exactly as today.\n2. tools/orchestrator-hook.mjs imports orchestratorHookInstalledFor from the new module (keep `export { orchestratorHookInstalledFor }` re-exported from it for any existing importer) and keeps all its script behavior unchanged.\n3. tools/om-manifest-guard.mjs imports orchestratorHookInstalledFor statically from ./orchestrator-hook-installed.mjs (no dynamic import of orchestrator-hook.mjs anywhere in tools/ outside the hook itself).\n4. Tests in NEW tests/orchestrator-hook-import.test.mjs (first import: import './_isolate-config.mjs';): (a) end-to-end: build a temp project with .swarm/ present (orchestrator mode on), install the orchestrator hook in its .claude/settings.local.json the way the existing orchestrator-mode tests do (read tests/om-manifest-guard.test.mjs and tests/orchestrator-mode-default.test.mjs for the pattern), write a plain job manifest with no commands, then spawn `node tools/swarm.mjs --root <tmp> validate <manifest>` with env CLAUDECODE=1 and stdin closed ('ignore'); assert stdout parses as JSON with status 'valid'. (b) same with a manifest whose checks argv is ['sh','-c','true'] (unvetted): assert stdout JSON has status 'error' and mentions orchestrator-manifest-unvetted (or the refusal reason) and exit code non-zero. (c) a static guard: read every .mjs under tools/ (not tests) and assert none of them imports './orchestrator-hook.mjs' or '../orchestrator-hook.mjs' (static or dynamic), except tools/orchestrator-hook.mjs itself; the hook is only ever run as a script.\nDo not edit tools/swarm.mjs or any file not in outputs. The ignored tests exercise the hook script behavior, which must not change; the coordinator runs the main ones as checks.",
    "context": [
     "tests/om-manifest-guard.test.mjs",
     "tests/orchestrator-mode-default.test.mjs",
@@ -19,10 +19,42 @@
     "tools/om-manifest-guard.mjs",
     "tests/orchestrator-hook-import.test.mjs"
    ],
-   "timeoutMs": 1800000
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/orchestrator-lane.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/phase10b-init.test.mjs",
+    "tests/self-approval-hardening.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ],
  "checks": [
-  { "name": "hook-import", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/orchestrator-hook-import.test.mjs", "tests/om-manifest-guard.test.mjs", "tests/orchestrator-mode-default.test.mjs", "tests/orchestrator-mode.test.mjs", "tests/hook-path-stable.test.mjs", "tests/hooks-repoint-all.test.mjs", "tests/handbuild-hook-hardening.test.mjs", "tests/orchestrator-mode-timeout.test.mjs", "tests/orchestrator-mode-review4.test.mjs"] }
+  {
+   "name": "hook-import",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/orchestrator-hook-import.test.mjs",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/hook-path-stable.test.mjs",
+    "tests/hooks-repoint-all.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs"
+   ]
+  }
  ]
 }
