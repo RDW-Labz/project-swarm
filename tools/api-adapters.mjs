@@ -7,6 +7,7 @@ import { bestOfCount, selectBest } from './best-of.mjs';
 import { loadRentedConfig, readRentedKey, balancedFetch } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
+import { assertPaidLaneNotPaused, isHostedLambdaInference } from './paid-lane-pause.mjs';
 import {
   loadLocalLaneConfig, resolveLocalEndpoint, readLocalCredential, mapLocalUsage, doctorLocal, isLoopbackLocalBaseUrl,
 } from './local-lane.mjs';
@@ -27,14 +28,21 @@ const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 
-export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, model = null } = {}) {
+export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, model = null, config, loadConfig = loadLocalConfig, home } = {}) {
   if (!API_AGENTS.includes(agent)) fail('Unsupported API adapter');
+  const resolvedConfig = () => config ?? loadConfig({ env, home: home ?? env?.HOME });
   let endpoint, key, keyName, selfHosted = false;
   // OpenRouter (decisions #226-#228): key from env, else the keychain, read by this parent only.
-  if (agent === 'openrouter') { endpoint = OPENROUTER_ENDPOINT; keyName = OPENROUTER_KEY_ENV; key = readKey(env) ?? undefined; }
-  if (agent === 'anthropic') { endpoint = ANTHROPIC_ENDPOINT; keyName = ANTHROPIC_KEY_ENV; key = readAnthropic(env) ?? undefined; }
-  if (agent === 'openai') { endpoint = 'https://api.openai.com/v1/responses'; keyName = 'OPENAI_API_KEY'; key = env[keyName]; }
-  if (agent === 'gemini') { endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/'; keyName = 'GEMINI_API_KEY'; key = env[keyName] || env.GOOGLE_API_KEY; }
+  if (agent === 'openrouter') { endpoint = OPENROUTER_ENDPOINT; keyName = OPENROUTER_KEY_ENV; key = readKey(env, { config, loadConfig, home }) ?? undefined; }
+  if (agent === 'anthropic') { endpoint = ANTHROPIC_ENDPOINT; keyName = ANTHROPIC_KEY_ENV; key = readAnthropic(env, { config, loadConfig, home }) ?? undefined; }
+  if (agent === 'openai') {
+    assertPaidLaneNotPaused('openai', resolvedConfig());
+    endpoint = 'https://api.openai.com/v1/responses'; keyName = 'OPENAI_API_KEY'; key = env[keyName];
+  }
+  if (agent === 'gemini') {
+    assertPaidLaneNotPaused('gemini', resolvedConfig());
+    endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/'; keyName = 'GEMINI_API_KEY'; key = env[keyName] || env.GOOGLE_API_KEY;
+  }
   if (agent === 'ollama') {
     let url;
     try { url = new URL(env.SWARM_OLLAMA_URL || 'http://127.0.0.1:11434'); } catch { fail('Invalid SWARM_OLLAMA_URL'); }
@@ -45,13 +53,14 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
   }
   if (agent === 'rented') {
+    assertPaidLaneNotPaused('rented', resolvedConfig());
     // The rented server named in the machine config (rentedGpu): its URL and model come from there, its key from the Keychain.
     const { config: rented } = loadRentedConfig(env);
     if (!rented) return { endpoint: 'https://rented.invalid/v1/chat/completions', key: null, keyName: 'rentedGpu config (machine config) and Keychain project-swarm/rented.api_key', selfHosted: true, configured: false };
     // A running GPU session (or auth: none) has no key: the servers listen only on the node's loopback and are reached through the ssh tunnel.
     if (rented.auth === 'session') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: rented.sessionKey, keyName: 'the running GPU session key', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
     if (rented.auth === 'none') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: null, keyName: 'none (ssh tunnel to a loopback server)', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
-    key = readRentedKey(env, rented.keyItem);
+    key = readRentedKey(env, rented.keyItem, { config: resolvedConfig(), loadConfig, home });
     return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model, bestOf: rented.bestOf };
   }
   if (agent === 'local') {
@@ -87,7 +96,10 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/' || (!loopback && url.protocol !== 'https:') || !['http:', 'https:'].includes(url.protocol)) fail('SWARM_LAMBDA_URL must be a loopback HTTP(S) origin or explicit HTTPS origin without credentials, path, query, or fragment');
     endpoint = `${url.origin}/v1/chat/completions`;
-    keyName = 'LAMBDA_API_KEY'; key = env[keyName]; selfHosted = Boolean(env.SWARM_LAMBDA_URL);
+    keyName = 'LAMBDA_API_KEY';
+    selfHosted = Boolean(env.SWARM_LAMBDA_URL);
+    if (isHostedLambdaInference(env)) assertPaidLaneNotPaused('lambda', resolvedConfig());
+    key = env[keyName];
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
   }
   if (key !== undefined && (typeof key !== 'string' || /[\r\n]/.test(key))) fail('Invalid credential format');
