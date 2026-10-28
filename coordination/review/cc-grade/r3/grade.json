@@ -1,0 +1,102 @@
+{
+  "round": 3,
+  "hive": {
+    "scores": {
+      "layout": 2.6,
+      "hierarchy": 3.2,
+      "data": 2.7,
+      "fidelity": 3.0,
+      "phone": 2.2,
+      "polish": 2.5
+    },
+    "overall": 2.7,
+    "fixes": [
+      {
+        "problem": "Phone: the stage has a fixed height, so the node cards overflow it and get hidden under the panels below. Only project-swarm shows in full. parts-request-app is cut off at its 'out' row and the other three projects never appear, with 'lanes and savings' drawn over the clipped card.",
+        "where": "Phone, stage area from y~550 to 770, where it meets the panels",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Inside @media (max-width:720px) set .hive-stage.hive-phone{height:auto;min-height:0;overflow:visible} and .hive-stage.hive-phone #hive-nodes{position:relative;inset:auto;display:grid;grid-template-columns:1fr;gap:8px}. Also set .hive-shell{grid-template-rows:auto auto auto auto} so the stage row grows to fit every node card instead of clipping."
+      },
+      {
+        "problem": "In every node card the 'fails' row is clipped at the bottom edge. Each card also has a large empty band between the yellow header and the 'asks' row, so the three key/value rows get pushed down and cut off.",
+        "where": "Desktop: all five node cards (project-swarm, agent-data-business, swarm-practice, parts-request-app, blackbook-app). Phone: the same cards.",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Set .hive-node-bd{justify-content:flex-start;padding:8px 10px;gap:4px} and .hive-kv{row-gap:4px} with dt/dd line-height:1.3, and remove whatever pushes the dl down (likely a flex:1 spacer or margin-top:auto on .hive-kv). Give .hive-node{min-height:calc(28px + 3*1.3em + 20px)} so 3 rows always fit, and keep margin-top:auto only on .hive-meter."
+      },
+      {
+        "problem": "The 'lanes and savings' panel overflows its box. The 'needs you 52' and 'agents live 0' stat lines spill below the panel border into the footer row. The four lane bars are all 0, so the panel shows four empty tracks.",
+        "where": "Desktop, bottom-centre panel, y~860 to 895",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Render the stat lines inside the .cc-panel section as .stat-lines.hive-stat-lines (not as a sibling after it), and set .hive-panels .cc-panel{overflow:hidden;min-height:0}. When every lane count is 0, swap the 4 bars for one muted line, e.g. <p class=\"term-prompt\">no lane traffic yet</p>."
+      },
+      {
+        "problem": "The orbit label 'ANSWER BEFORE YOU SPEND' is drawn as straight text above the ring, about 100px left of the ring's centre. The mockup curves it along the ring arc.",
+        "where": "Desktop around (617,295), phone around (135,308), above the opus core",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Render the mockup's <svg class=\"hive-ring-text\" viewBox=\"0 0 200 200\"> with the <path id=\"hive-orbit-arc\" d=\"M 34 118 A 66 66 0 1 1 166 118\"> and <textPath href=\"#hive-orbit-arc\">, placed inside .hive-core-ui (position:absolute; inset:-8%). Do not position a plain text node absolutely."
+      },
+      {
+        "problem": "All node cards use the same yellow 'control' header, so the lane legend (safety/route/context/control) means nothing. The headers also drop the mockup's idx and lane tag, and the cards have no meter row.",
+        "where": "Desktop and phone: every node card header",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Map each project's real state to a lane class: failing/blocked→safety, needs-you>0→control, active agents→route, idle→context. Render <span class=\"idx\"> plus the project name and a <span class=\"tag\"> with the lane label. Add the .hive-meter row using a real ratio (e.g. done/total tickets). If no ratio exists, leave the meter out instead of filling it."
+      },
+      {
+        "problem": "The bottom panels are sparse and contain stray copy. The session log shows a bare 'throughput samples' label with no chart, and the throughput panel is almost empty. Together they leave a large dead area.",
+        "where": "Desktop, bottom-left and bottom-right panels",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Drop the orphan 'throughput samples' caption unless the canvas.mini-chart renders. Give empty states a single .term-prompt line plus a flat placeholder <canvas class=\"mini-chart\"> baseline so panel heights match. Fill the throughput panel with the real saving-rows the board has (needs-you count, tickets done/total) using the .saving-row track markup."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "layout": 3.3,
+      "hierarchy": 3.8,
+      "data": 3.2,
+      "fidelity": 3.4,
+      "phone": 3.8,
+      "polish": 3.0
+    },
+    "overall": 3.4,
+    "fixes": [
+      {
+        "problem": "The stage-stack tiles are squeezed into the left of a wide block. Labels are truncated ('ACT…', 'REA…'), the value '15' is clipped by its tile edge, and about 70% of the block is empty on the right.",
+        "where": "Desktop, bottom-right 'STAGE STACK 15 TICKETS' block, x~1040 to 1420",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Set .band-bottom .stack-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px} and .metric-tile{flex:none;min-width:0;overflow:visible}, with .metric-tile .m-label{white-space:nowrap;overflow:hidden;text-overflow:clip;font-size:.48rem}. Use full words (done/active/ready) and size .m-val with clamp(1.5rem,2.8vh,2rem)."
+      },
+      {
+        "problem": "Ticket rows bunch up in the middle of the stage, leaving about 100px empty above and below. The right column also starts about 17px lower than the left, so the rows don't line up.",
+        "where": "Desktop stage: left column rows 01-08 and right column rows 09-15",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Set .ticket-col{justify-content:space-evenly;align-self:stretch;padding-block:8px} and give .stage-grid{align-items:stretch}. Remove any per-column margin-top. If the rows should stay compact, use justify-content:flex-start on both columns so their tops align."
+      },
+      {
+        "problem": "In the left column, long titles are truncated right against the READY badge ('on bot… READY', 'wave h… READY'), so the two read as one string. All index chips are the grey pending style, with no category colour.",
+        "where": "Desktop, left ticket column rows 05 and 08. Ticket idx chips in both columns.",
+        "file": "tools/watch-assets/cockpit-lists.js",
+        "change": "Keep the mockup grid 36px minmax(0,1fr) auto 20px with gap:8px. Make sure the badge sits in its own grid cell (not inline inside .ticket-main) and add padding-left:6px to the badge. Add a ticket-idx--{category} class from the ticket's real lane/category, falling back to --pending only for unclaimed tickets."
+      },
+      {
+        "problem": "The header puts 'ORCHESTRATOR waiting on you' in the middle of the right side, not flush right like LIVE SCAN. The hero renders as '0  OF  15' with wide gaps from the mono numerals. The category bar/meter under the header is missing.",
+        "where": "Desktop header, y~80 to 175",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Render the breadcrumb as .cockpit-nav{display:flex;justify-content:space-between}, with the orchestrator block as the last child so it lands at the right edge. Use word-spacing:-0.1em or narrow gaps on .headline-num. Add the .category-bar--header with .category-meter spans sized by real per-category ticket counts (--w)."
+      },
+      {
+        "problem": "The worker stream and run stream empty states are bare text ('No finished tickets yet', 'No runs yet') floating in a large void, with no card frame.",
+        "where": "Desktop, bottom band left and centre columns, y~735 to 880",
+        "file": "tools/watch-assets/cockpit-lists.js",
+        "change": "Render the empty state as one .stream-card.stream-card--accent-white with opacity:.6 and min-height:52px, holding a .stream-meta line. Add a .stream-count in .stream-head (e.g. '0 of 15'), so each column keeps the mockup's card rhythm when empty."
+      },
+      {
+        "problem": "Phone: the mascot takes about 230px of the first screen, pushing the ticket list and search below the fold. The mockup caps the phone mascot at 108 to 120px.",
+        "where": "Phone, NOW tab, mascot y~260 to 490",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Inside @media (max-width:720px) add .mascot-stage--phone{height:120px;overflow:hidden} and .mascot-stage--phone .mascot-pixel{transform:translateX(-50%) scale(1.35)}. At max-width 390px use height:108px and scale(1.28), as in the mockup."
+      }
+    ]
+  },
+  "notes": "Cockpit is close to mockup parity, with a strong hero, mascot and phone tabs; it is let down by the cramped stack tiles and uneven ticket-column spacing. Hive's ring and stat strip look right, but clipped node rows, an overflowing lanes panel and phone node cards hidden behind the panels keep it rough."
+}
