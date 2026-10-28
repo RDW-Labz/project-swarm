@@ -17,7 +17,9 @@
     "tests/cc-cockpit-mount.test.mjs",
     "tools/watch-assets/command-center-boot.js",
     "tools/watch-assets/cc-cockpit-orbit.js",
-    "docs/design/reference/command-center-artifact/cockpit-desktop.png"
+    "docs/design/reference/command-center-artifact/cockpit-desktop.png",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-palette.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/cc-router.js",
@@ -48,7 +50,8 @@
     "tests/command-center-nav.test.mjs",
     "tests/command-center-snapshot.test.mjs",
     "tests/command-center-tour.test.mjs",
-    "tests/watch-vendor.test.mjs"
+    "tests/watch-vendor.test.mjs",
+    "tests/command-palette.test.mjs"
    ]
   }
  ]
