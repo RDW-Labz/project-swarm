@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { sanitizeWorkerText } from './worker-text.mjs';
+
+const loggedOnce = new Set();
+function logOnce(context, error) {
+  try {
+    const key = `${context}:${error?.code ?? error?.message ?? String(error)}`;
+    if (loggedOnce.has(key)) return;
+    loggedOnce.add(key);
+    console.error(`[tools/status.mjs] ${context}:`, sanitizeWorkerText(String(error?.message ?? error), 300));
+  } catch { /* logging must never break status */ }
+}
 
 const NEXT_COMMANDS = ['swarm doctor all', 'swarm watch --all --text', 'swarm board', 'swarm version --check', 'swarm scale', 'swarm help'];
 
@@ -26,7 +37,9 @@ async function latestRun(root) {
       const state = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'state.json'), 'utf8'));
       if (!state || typeof state !== 'object' || Array.isArray(state)) continue;
       runs.push({ name: entry.name, state, time: timestamp(state.startedAt) ?? timestamp(entry.name) });
-    } catch { /* Unreadable or corrupt runs do not hide usable history. */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') logOnce('read run state.json', error);
+    }
   }
   runs.sort((a, b) => {
     if (a.time !== null && b.time !== null && a.time !== b.time) return b.time - a.time;
@@ -62,7 +75,9 @@ export async function projectStatus(root, { env = process.env, now = Date.now, d
   } catch (error) { lanes = { up: [], down: [], error: error?.message ?? String(error) }; }
   let spend = { usd: null, byLane: {} };
   try { if (spendToday) spend = await spendToday(); }
-  catch { /* A missing ledger should not prevent status. */ }
+  catch (error) {
+    if (error?.code !== 'ENOENT') logOnce('spendToday', error);
+  }
   let first = 'swarm "describe your goal in one sentence"';
   if (!initialized) first = 'swarm init';
   else if (lastRun) {
