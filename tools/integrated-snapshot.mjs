@@ -128,9 +128,13 @@ export async function snapshotIntegrated({ root, paths, git }) {
     if (cleaned) return;
     cleaned = true;
     if (refWritten) {
-      await runGit(['update-ref', '-d', ref]).catch(() => {});
+      await runGit(['update-ref', '-d', ref]).catch((error) => {
+        console.error('[tools/integrated-snapshot.mjs] cleanup update-ref -d ' + ref + ':', error?.message ?? error);
+      });
     }
-    await fs.rm(path.dirname(indexPath), { recursive: true, force: true }).catch(() => {});
+    await fs.rm(path.dirname(indexPath), { recursive: true, force: true }).catch((error) => {
+      console.error('[tools/integrated-snapshot.mjs] cleanup rm temp index dir ' + path.dirname(indexPath) + ':', error?.message ?? error);
+    });
   };
 
   await runGit(['read-tree', head], { env: indexEnv });
@@ -183,7 +187,9 @@ export async function worktreeFromSnapshot({ root, snapshot, dir, git }) {
     await runGit(['worktree', 'remove', '--force', dir]).catch(err => {
       if (err?.exitCode !== 128 && err?.code !== 1) throw err;
     });
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true }).catch((error) => {
+      console.error('[tools/integrated-snapshot.mjs] worktree remove rm dir ' + dir + ':', error?.message ?? error);
+    });
   };
   return { dir, remove };
 }
@@ -215,7 +221,9 @@ export async function sweepOldSnapshots({ root, olderThanMs, now = Date.now(), g
       continue;
     }
     if (mtimeMs < cutoff) {
-      await runGit(['update-ref', '-d', ref]).catch(() => {});
+      await runGit(['update-ref', '-d', ref]).catch((error) => {
+        console.error('[tools/integrated-snapshot.mjs] sweepOldSnapshots update-ref -d ' + ref + ':', error?.message ?? error);
+      });
       removed.push(ref);
     }
   }
