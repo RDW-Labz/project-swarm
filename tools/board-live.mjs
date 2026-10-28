@@ -118,8 +118,18 @@ export async function liveOverview(project, liveRuns, { now = Date.now(), summar
   for (const r of all.filter(x => liveKeys.has(`${x.root}|${x.id}`))) live.push({ id: r.id, state: r.state, manifest: await manifestOf(r.id, r.root) });
   const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
   const finishedToday = all.filter(r => !liveKeys.has(`${r.root}|${r.id}`) && FINISHED.has(r.state.status) && (Date.parse(r.state.finishedAt ?? '') || 0) >= startOfDay.getTime());
-  const ledger = await readLedger(project.root).catch(() => null);
-  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));
+  const ledger = await readLedger(project.root).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/board-live.mjs] readLedger project root:', error?.message ?? error);
+    }
+    return null;
+  });
+  const ledgers = await Promise.all(roots.map(root => readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/board-live.mjs] readLedger family root:', root, error?.message ?? error);
+    }
+    return null;
+  })));
   const spend = await summary(project.root).catch(error => ({ capUsd: null, capError: String(error.message).slice(0, 120) }));
   const lastMs = Math.max(0, ...all.map(r => Math.max(r.mtimeMs ?? 0, Date.parse(r.state?.startedAt ?? '') || 0, Date.parse(r.state?.finishedAt ?? '') || 0, ...(r.state?.jobs ?? []).map(job => Date.parse(job?.finishedAt ?? '') || 0))), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0));
   const orchestrator = (() => { try { return projectOrchestrator(project, { runs: all, now }); } catch { return null; } })();
