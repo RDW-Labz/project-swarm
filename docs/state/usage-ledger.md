@@ -187,6 +187,14 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | ccfixcockpit3: Stack metrics: 3-column grid, full done/active/ready labels, visible numerals (clamp | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | ccgrade3b: complete | claude | opus | pass | 43,855 | $0.23 |
 | 2026-10-28 | - | ccgrade4: complete | claude | opus | pass | 45,031 | $0.25 |
+| 2026-10-28 | - | ccfixhive4: complete | claude | sonnet | pass | 3,474,064 | $1.98 |
+| 2026-10-28 | - | ccfixcockpit4: complete | claude | sonnet | pass | 961,591 | $0.66 |
+| 2026-10-28 | - | ccgrade5: complete | claude | opus | pass | 44,969 | $0.25 |
+| 2026-10-28 | - | ccfixhive5: S10 Command Center, Hive page, grader round 5 (Hive scored 4.1/5; target 4.5). | claude | sonnet | cancelled: exit 143: no stderr output; cancelled | - | $0.39 |
+| 2026-10-28 | - | ccfixcockpit5: S10 Command Center, Cockpit page, grader round 5 (Cockpit scored 3/5; target 4.5). | claude | sonnet | cancelled: cancelled | - | $0.27 |
+| 2026-10-28 | - | ccgrade6: complete | claude | opus | pass | 81,303 | $0.37 |
+| 2026-10-28 | - | ccfixhive6: S10 Command Center, Hive page, round 6 (Hive scored 2.4/5 against the target; goal 4.5+) | claude | sonnet | cancelled: cancelled | - | $1.00 |
+| 2026-10-28 | - | ccfixcockpit6: complete | claude | sonnet | pass | 2,746,987 | $1.93 |
 
 ## Daily summary
 
@@ -206,6 +214,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
-| 2026-10-28 | claude | 5 | 5 | 0 | 653,571 | $2.65 |
+| 2026-10-28 | claude | 13 | 10 | 3 | 7,962,485 | $9.50 |
 | 2026-10-28 | cursor | 11 | 11 | 0 | 0 | subscription |
-| **total** | all | 183 | 168 | 15 | 15,447,632 | $29.69 (incl. estimates) |
+| **total** | all | 191 | 173 | 18 | 22,756,546 | $36.54 (incl. estimates) |
