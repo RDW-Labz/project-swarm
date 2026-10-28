@@ -24,11 +24,11 @@ Rules:
 ```
 
 Pending approvals:
-- blocker security-1793201346040-ae8b95bc-ccporthive_ccportcockpit 3h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
+- blocker security-1793201346040-ae8b95bc-ccporthive_ccportcockpit 4h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
 - blocker security-1793154137726-32b25faa-ccfixa 17h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
 - blocker security-1793121100760-1a835d60-shellpauseJ 26h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
 - blocker security-1793111389005-ec83d391-cism2 29h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
-- blocker integrate-checkout-1793071225012-e80056e1 39h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1793071225012-e80056e1 40h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker security-1793070907123-c780a4c2-lockL2 40h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
 - blocker integrate-checkout-1793066768605-ff4722d3 40h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker integrate-checkout-1793049988921-3c2c1e96 41h branch swarm/ledger-root /Users/bean/project-swarm
@@ -46,4 +46,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T19:43:55.720Z
+Generated at: 2026-10-28T19:45:14.865Z

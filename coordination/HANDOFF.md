@@ -9,12 +9,13 @@ Done:
   - run 1793201854677-3461a6aa integrated, 2 files
   - run 1793201696807-51777f20 integrated, 2 files
   - run 1793169144561-b9eab23d integrated, 4 files
-Running: none
+Running:
+  - 1793216677737-f5e8a3ff running (queued 0, running 1, complete 0, failed 0, timeout 0, cancelled 0, skipped 0)
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1793215459974-b36c8f33 --queue
-  2. swarm inspect 1793201590285-2c5d8984 --results
-  3. swarm "describe the goal in one sentence"
+  1. swarm monitor 1793216677737-f5e8a3ff --watch
+  2. swarm integrate 1793215459974-b36c8f33 --queue
+  3. swarm inspect 1793201590285-2c5d8984 --results
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -46,4 +47,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T19:45:14.865Z
+Generated at: 2026-10-28T19:45:21.935Z

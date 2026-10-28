@@ -17,11 +17,29 @@
     "tools/scope-commands.mjs",
     "tests/train2-review-gaps.test.mjs"
    ],
-   "ignoreTestsReason": "tools/scope-commands.mjs is referenced by about 50 test files; this change is limited to the delete-only sync branch and sensitiveDeliveredRefusals, and the coordinator runs the scope, sync, delivered and acceptance suites as checks.",
+   "ignoreTestsReason": "scope-commands.mjs has ~50 test files; change is limited to the delete-only sync branch and sensitiveDeliveredRefusals; the scope/sync/delivered suites run as checks",
    "timeoutMs": 2400000
   }
  ],
  "checks": [
-  { "name": "review-gaps", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/train2-review-gaps.test.mjs", "tests/tickets-delivered.test.mjs", "tests/scope-sync-delete.test.mjs", "tests/scope-commands.test.mjs", "tests/acceptance-sync.test.mjs", "tests/security-gate.test.mjs", "tests/scope-approve-managers.test.mjs", "tests/split-auto-approve.test.mjs", "tests/ticket-sync-checks.test.mjs", "tests/scope-loop.test.mjs"] }
+  {
+   "name": "review-gaps",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/train2-review-gaps.test.mjs",
+    "tests/tickets-delivered.test.mjs",
+    "tests/scope-sync-delete.test.mjs",
+    "tests/scope-commands.test.mjs",
+    "tests/acceptance-sync.test.mjs",
+    "tests/security-gate.test.mjs",
+    "tests/scope-approve-managers.test.mjs",
+    "tests/split-auto-approve.test.mjs",
+    "tests/ticket-sync-checks.test.mjs",
+    "tests/scope-loop.test.mjs"
+   ]
+  }
  ]
 }
