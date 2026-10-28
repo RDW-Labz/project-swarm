@@ -74,7 +74,9 @@ function parseTicketLog(text) {
     try {
       const e = JSON.parse(line);
       if (e && typeof e === 'object') out.push(e);
-    } catch { /* skip */ }
+    } catch (error) {
+      if (error?.name !== 'SyntaxError') console.error('[tools/bench-baseline.mjs] parseTicketLog JSON.parse:', error?.message ?? error);
+    }
   }
   return out;
 }
@@ -212,7 +214,9 @@ function parseHandbuildLines(text) {
   const out = [];
   for (const line of String(text ?? '').split('\n')) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* skip */ }
+    try { out.push(JSON.parse(line)); } catch (error) {
+      if (error?.name !== 'SyntaxError') console.error('[tools/bench-baseline.mjs] parseHandbuildLines JSON.parse:', error?.message ?? error);
+    }
   }
   return out;
 }
@@ -492,7 +496,7 @@ export async function writeBaseline({ baseline, file }) {
     await fs.rename(tmp, file);
     await fs.chmod(file, 0o600);
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => { console.error('[tools/bench-baseline.mjs] writeBaseline handle.close:', closeError?.message ?? closeError, tmp); });
     await fs.rm(tmp, { force: true });
     throw error;
   }
