@@ -605,10 +605,7 @@ const scopeSplitInvocation = rest => {
 
 const omSwarmScopeApproveAutoOkOnly = rest => {
   const lower = rest.map(w => String(w).toLowerCase());
-  const verbIdx = lower.findIndex(a => a !== '' && !a.startsWith('-'));
-  if (verbIdx === -1 || lower[verbIdx] !== 'approve') return false;
-  const tail = rest.slice(verbIdx + 1);
-  return tail.length === 1 && String(tail[0]).toLowerCase() === '--auto-ok';
+  return lower.length === 2 && lower[0] === 'approve' && lower[1] === '--auto-ok';
 };
 
 const omSwarmScopeAllowed = rest => {

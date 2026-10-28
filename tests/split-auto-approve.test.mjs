@@ -107,6 +107,10 @@ test('orchestrator allow: scope approve --auto-ok only', () => {
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--auto-ok', '--accept-waves']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', 'scope.md', '--auto-ok']), false);
   assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--auto-ok=1']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--yes', 'approve', '--auto-ok']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--json', 'approve', '--auto-ok']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--auto-ok', '']), false);
+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['APPROVE', '--AUTO-OK']), true);
 });
 
 const SCOPE = [
