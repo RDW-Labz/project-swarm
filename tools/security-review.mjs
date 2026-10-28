@@ -35,7 +35,11 @@ export async function filesHash(root, files) {
   const h = createHash('sha256');
   for (const f of [...files].sort()) {
     let bytes = null;
-    try { bytes = await fs.readFile(path.join(root, f)); } catch { /* a missing file hashes as absent */ }
+    try { bytes = await fs.readFile(path.join(root, f)); } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error(`[tools/security-review.mjs] filesHash read ${f}:`, error?.message ?? error);
+      }
+    }
     h.update(`${f}\0${bytes ? createHash('sha256').update(bytes).digest('hex') : 'absent'}\n`);
   }
   return h.digest('hex');
@@ -115,7 +119,11 @@ export function reviewNotes(text) {
       if (typeof parsed.summary === 'string' && parsed.summary.trim()) return parsed.summary.trim();
       if (parsed.result && typeof parsed.result.notes === 'string' && parsed.result.notes.trim()) return parsed.result.notes.trim();
     }
-  } catch { /* prose or summary plus verdict line */ }
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      console.error('[tools/security-review.mjs] reviewNotes JSON.parse:', error?.message ?? error);
+    }
+  }
   const verdict = verdictLine(raw);
   if (verdict) {
     const at = raw.lastIndexOf(verdict);
@@ -140,12 +148,20 @@ export function parseReviewVerdicts(text, allowedTickets) {
     try {
       const whole = reviewsFromJson(JSON.parse(trimmed), allowedTickets);
       if (whole) return whole;
-    } catch { /* not a whole-json envelope */ }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        console.error('[tools/security-review.mjs] parseReviewVerdicts whole envelope:', error?.message ?? error);
+      }
+    }
   }
   const last = verdictLine(text);
   try {
     const parsed = JSON.parse(last);
     return reviewsFromJson(parsed, allowedTickets);
-  } catch { /* no verdict line */ }
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      console.error('[tools/security-review.mjs] parseReviewVerdicts verdict line:', error?.message ?? error);
+    }
+  }
   return null;
 }
