@@ -342,13 +342,13 @@ export async function runPolicyPass({
         const errEntry = applyFailedRecord(item);
         try {
           await journal(errEntry);
-        } catch {
-          /* ignore secondary log failure */
+        } catch (journalError) {
+          console.error('[tools/policy-run.mjs] journal after apply failure:', item.id, journalError?.message ?? journalError);
         }
         try {
           await events(errEntry);
-        } catch {
-          /* ignore secondary log failure */
+        } catch (eventsError) {
+          console.error('[tools/policy-run.mjs] events after apply failure:', item.id, eventsError?.message ?? eventsError);
         }
         errors.push({ id: item.id, kind: item.kind });
         left.push(item);
