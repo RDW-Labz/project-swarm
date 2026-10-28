@@ -73,6 +73,18 @@ export const ORCHESTRATOR_WRITE_RULES = Object.freeze([
 
 const normPosixRel = normRel => String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
 
+/** Ledger paths swarm CLI writes; orchestrator sessions must never forge or rewrite them. */
+const ORCHESTRATOR_DENIED_LEDGER_PATHS = new Set([
+  '.swarm/project/approved-tickets.json',
+  '.swarm/project/tickets.json',
+  '.swarm/project/tickets.log',
+]);
+
+const orchestratorDeniedLedgerRel = normRel => {
+  const norm = normPosixRel(normRel).replace(/^\.\/+/, '');
+  return ORCHESTRATOR_DENIED_LEDGER_PATHS.has(norm);
+};
+
 const extSet = exts => new Set(exts.map(e => String(e).toLowerCase()));
 
 const ruleMatchesRel = (rule, norm) => {
@@ -132,6 +144,7 @@ export function orchestratorSwarmSessionCwdOk(projectRoot, cwd) {
 export function orchestratorWriteAllowedRel(normRel) {
   const norm = normPosixRel(normRel);
   if (!norm) return false;
+  if (orchestratorDeniedLedgerRel(norm)) return false;
   if (orchestratorWriteMarkerDeniedRel(norm)) return false;
   if (/^package\.json$/i.test(norm.split('/').pop() ?? '') || norm.endsWith('/package.json')) return false;
   return ORCHESTRATOR_WRITE_RULES.some(rule => ruleMatchesRel(rule, norm));
@@ -603,11 +616,15 @@ const scopeSplitInvocation = rest => {
   return verb === 'split';
 };
 
+const omSwarmScopeApproveAutoOkOnly = rest =>
+  rest.length === 2 && rest[0] === 'approve' && rest[1] === '--auto-ok';
+
 const omSwarmScopeAllowed = rest => {
   const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === 'approve' || a === '--approve' || a.startsWith('--approve='))) return false;
+  if (lower.some(a => a === '--approve' || a.startsWith('--approve='))) return false;
   const verb = lower.find(a => a !== '' && !a.startsWith('-'));
   if (!verb) return true;
+  if (verb === 'approve') return omSwarmScopeApproveAutoOkOnly(rest);
   if (SCOPE_OWNER_VERBS.has(verb)) return false;
   if (verb === 'gate') return true;
   if (verb === 'split') return !lower.includes('approve');
@@ -672,7 +689,7 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
   if (s !== 'integrate' && swarmArgsHaveApproveManifest(rest)) return false;
   if (s === 'restore') return false;
-  if (swarmArgsHaveApprove(rest)) return false;
+  if (swarmArgsHaveApprove(rest) && !(s === 'scope' && omSwarmScopeApproveAutoOkOnly(rest))) return false;
   if (swarmArgsHaveForceBypass(rest)) return false;
   const allowAcceptWaves = s === 'scope' && scopeSplitInvocation(rest);
   if (swarmArgsHaveOwnerOverrideFlags(rest, { allowAcceptWaves })) return false;

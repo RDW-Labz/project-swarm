@@ -1,0 +1,37 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "spfix",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix a bug in tools/split-park-supersede.mjs (supersededSplitParks). When it finds the newest ingest run per stage, it counts EVERY split-park blocker event, including resolution events ({kind:'blocker', id, resolved:true, text}). A resolution copies the original blocker text, so it carries the OLD '--ingest <RUN>' with a NEWER ts. After 'swarm resolve --superseded-splits' appends those resolutions, a second run sees the old run as newest and wrongly resolves the blockers raised by the real newest ingest. Fix: only raise events (events where resolved is not true) decide the newest run per stage; resolution events must never change it. Keep everything else the same. Add tests to tests/split-park-supersede.test.mjs: (1) pure: after appending resolution events for the superseded ids (newer ts, old run text), supersededSplitParks returns no superseded items and keeps the newest-run blockers; (2) command: run 'resolve --superseded-splits' twice on the same temp journal; the second run resolves 0 and the newest-run blockers are still open in swarm inbox; (3) pure: a manual 'resolve ID' style resolution event of a newest-run blocker does not make older-run blockers count as current. tests/split-module.test.mjs only matches the file name prefix split-; it does not test this module.",
+   "context": [
+    "tools/inbox-commands.mjs",
+    "tools/journal.mjs"
+   ],
+   "outputs": [
+    "tools/split-park-supersede.mjs",
+    "tests/split-park-supersede.test.mjs"
+   ],
+   "timeoutMs": 1800000,
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "split-park",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/split-park-supersede.test.mjs"
+   ]
+  }
+ ]
+}

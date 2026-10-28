@@ -6,6 +6,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { defaultConfigPath } from '../tools/local-config.mjs';
 
+// Inherited CLAUDECODE=1 from a Claude Code session would enable the runner manifest gate in temp fixtures.
+delete process.env.CLAUDECODE;
+
 const nativeHome = os.homedir.bind(os);
 const systemHome = typeof os.userInfo === 'function' ? os.userInfo().homedir : nativeHome();
 // os.userInfo().homedir comes from the account database, not an inherited HOME override. This

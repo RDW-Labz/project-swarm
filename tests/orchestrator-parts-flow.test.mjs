@@ -45,9 +45,23 @@ function guardBash(command, root) {
   });
 }
 
+const BENIGN_MANIFEST = {
+  version: 1,
+  jobs: [{ id: 'j1', agent: 'cursor', model: 'composer-2.5', prompt: 'x', context: [], outputs: [] }],
+};
+
 test('orchestrator parts flow commands stay allowed', { timeout: 60_000 }, async t => {
   await installLocalSwarmShim();
   const root = await partsProject(t);
+  await fs.mkdir(path.join(root, '.swarm', 'manifests'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'coordination', 'manifests', 'wave.json'),
+    `${JSON.stringify(BENIGN_MANIFEST)}\n`,
+  );
+  await fs.writeFile(
+    path.join(root, '.swarm', 'manifests', 'job.json'),
+    `${JSON.stringify(BENIGN_MANIFEST)}\n`,
+  );
   const nodeSwarm = args => `${process.execPath} ${JSON.stringify(SWARM_MJS)} --root ${JSON.stringify(root)} ${args}`;
   const flows = [
     'change "x" --yes',
@@ -71,6 +85,13 @@ test('orchestrator parts flow commands stay allowed', { timeout: 60_000 }, async
       const d = guardBash(c, root);
       assert.equal(d.allow, true, c);
     }
+  }
+  for (const c of [
+    'swarm run coordination/manifests/missing.json',
+    nodeSwarm('run coordination/manifests/missing.json'),
+  ]) {
+    const d = guardBash(c, root);
+    assert.equal(d.allow, false, c);
   }
 });
 

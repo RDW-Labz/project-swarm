@@ -1,0 +1,58 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "spdismiss",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Owner order 2026-10-27: the Needs-you list fills with superseded 'Split parked' blockers left by repeated scope split ingests. Add a bulk way to dismiss only the superseded ones, decided in code.\n\nFacts: a parked split is a journal event {kind:'blocker', id:'split-park-<STAGE>-<TICKET>', text, ticket, ts} (see parkedBlockers in tools/split-repair.mjs). Its text ends with 'Retry with: swarm scope split --ingest <RUN> --merge ...'; <RUN> is the ingest run that raised it. A re-ingest of the same stage writes a fresh blocker event (same id when re-raised, newer ts and newer <RUN>). Ticket ids are renumbered between ingests, so a ticket id existing in the ledger does NOT prove anything. openItems(events) in tools/journal.mjs returns the open items (latest event per id, not resolved). Resolving appends {kind:'blocker', id, resolved:true, text} (see the resolve branch in tools/inbox-commands.mjs).\n\n1. NEW tools/split-park-supersede.mjs exporting pure supersededSplitParks(events, {stage} = {}) -> {superseded: [{id, stage, ticket, run, newerRun}], kept: [{id, stage, ticket, run, reason}]}. For each stage, the newest ingest run is the <RUN> of the split-park blocker event (open or resolved) with the latest ts for that stage. An OPEN split-park blocker is superseded when its own <RUN> differs from its stage's newest run (a later ingest of that stage ran and did not re-raise it). Keep (never supersede) any open split-park blocker whose RUN cannot be parsed, whose stage cannot be parsed from the id, or whose run equals the newest run (reason says which). Only blockers whose id starts with split-park- are considered; every other item is untouched. With {stage}, only that stage.\n2. tools/inbox-commands.mjs, resolve branch: add 'swarm resolve --superseded-splits [--stage S19] [--dry-run] [--json]'. It reads the journal, computes supersededSplitParks, and for each superseded id appends {kind:'blocker', id, resolved:true, text:<original text>, resolvedBy:'superseded-splits', supersededBy:<newerRun>}. It prints one line per resolved id ('resolved: <id> (superseded by ingest <newerRun>)'), then a count line 'resolved N superseded split blockers; kept M' and one line per kept item with its reason. --dry-run prints the same with 'would resolve' and writes nothing. --json prints {resolved, kept, dryRun}. Unknown flags or a --stage value not matching ^S\\d+$ -> the existing bad(command) usage error. Keep the existing 'resolve ID' and 'resolve RUN --handled' forms unchanged.\n3. NEW tests/split-park-supersede.test.mjs (first import: import './_isolate-config.mjs';): pure function cases (older-run blocker superseded; blocker re-raised by the newest run kept; unparseable run kept with reason; stage filter; resolved blockers ignored as candidates but still count when finding the newest run; non-split blockers untouched; two stages with different newest runs) and a command test that writes a temp project journal, runs the resolve --superseded-splits handler the way other tests drive inbox-commands (read tests/board-inbox.test.mjs or tests/autopilot-blocker-resolved.test.mjs for the pattern), checks the dry run writes nothing, the real run resolves only superseded ids, and swarm inbox afterwards no longer lists them. Do not edit tools/swarm.mjs or any file not in outputs. The ignored tests exercise the other inbox commands (inbox, done, decide, decision, backlog, resolve ID); they are left out because the existing behavior must not change at all, so change only the resolve branch and add code, never alter existing exports or output text.",
+   "context": [
+    "tools/journal.mjs",
+    "tools/split-repair.mjs",
+    "tools/inbox.mjs",
+    "tests/board-inbox.test.mjs",
+    "tests/autopilot-blocker-resolved.test.mjs"
+   ],
+   "outputs": [
+    "tools/split-park-supersede.mjs",
+    "tools/inbox-commands.mjs",
+    "tests/split-park-supersede.test.mjs"
+   ],
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/board-accuracy-card.test.mjs",
+    "tests/board-accuracy-page.test.mjs",
+    "tests/board-owner-routes.test.mjs",
+    "tests/decision-board-safe.test.mjs",
+    "tests/handbuild-channel.test.mjs",
+    "tests/handbuild-channels-hardening.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-hook-hardening.test.mjs",
+    "tests/lesson-34-eval.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/registry-round2.test.mjs",
+    "tests/review-high-regressions.test.mjs",
+    "tests/scratch-inbox.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "split-park",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/split-park-supersede.test.mjs",
+    "tests/board-inbox.test.mjs",
+    "tests/autopilot-blocker-resolved.test.mjs"
+   ]
+  }
+ ]
+}

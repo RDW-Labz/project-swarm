@@ -24,7 +24,7 @@ const CLAUDE_PROJECTS_ROOT = (() => {
 })();
 
 /** True when orchestrator hooks for this script are installed in the project's personal Claude settings. */
-function orchestratorHookInstalledFor(projectRoot) {
+export function orchestratorHookInstalledFor(projectRoot) {
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, '.claude', 'settings.local.json'), 'utf8'));
     const cmds = [];
