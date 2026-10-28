@@ -135,7 +135,7 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
       results.push({ ...base, error: String(error?.message ?? error).slice(0, 200) });
     } finally {
       try { await replica?.stop(); } catch (error) {
-        console.error('[tools/gpu-bakeoff.mjs] stop gpu replica:', error?.message ?? error);
+        console.error('[tools/gpu-bakeoff.mjs] stop gpu replica failed for', candidate.label, candidate.model, '- the GPU may still be billing until the dead-man timer removes it:', error?.message ?? error);
       }
     }
   }
