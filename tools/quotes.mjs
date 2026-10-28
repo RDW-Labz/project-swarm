@@ -158,7 +158,10 @@ export function traitsOf(scope) {
 
 export async function buildRecord(root, { name, source = 'recorded', charged, changeOrders, gpuHours, now = Date.now, activity } = {}) {
   const ledger = await readLedger(root).catch((error) => {
-    if (error?.code !== 'ENOENT') console.error('[tools/quotes.mjs] readLedger:', error?.message ?? error, root);
+    if (error?.code !== 'ENOENT') {
+      const msg = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/quotes.mjs] readLedger:', msg, root);
+    }
     return null;
   });
   const text = await scopeText(root, ledger);
