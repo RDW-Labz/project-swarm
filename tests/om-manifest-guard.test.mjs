@@ -358,3 +358,125 @@ test('hook allows swarm run with bare run id when manifest file missing', async 
   const ctx = { root, cwd: root };
   assert.equal(orchestratorModeCommandAllowed('swarm run run-abc-123', ctx), true);
 });
+
+const SUPABASE_START = ['supabase', 'start'];
+
+async function waveProjectFixture(t) {
+  const root = await tmp(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
+  await fs.mkdir(path.join(root, 'coordination', 'manifests'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, 'package.json'),
+    `${JSON.stringify({
+      scripts: {
+        typecheck: 'tsc --noEmit',
+        lint: 'eslint .',
+        build: 'next build',
+      },
+    }, null, 2)}\n`,
+  );
+  await fs.writeFile(path.join(root, 'tsconfig.json'), '{}\n');
+  await fs.writeFile(
+    path.join(root, 'coordination', 'checks.json'),
+    `${JSON.stringify({ checks: [] }, null, 2)}\n`,
+  );
+  await fs.writeFile(
+    path.join(root, '.project-swarm.json'),
+    `${JSON.stringify({
+      profile: {
+        verify: {
+          command: ['npx', 'vitest', 'run', '{tests}'],
+          setup: [SUPABASE_START],
+        },
+      },
+    }, null, 2)}\n`,
+  );
+  return root;
+}
+
+function generatedWaveManifest() {
+  return {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: ['src/a.ts'] }],
+    preChecks: [SUPABASE_START],
+    checks: [
+      {
+        name: 'tests',
+        argv: ['npx', 'vitest', 'run'],
+        affectedArgv: ['npx', 'vitest', 'run', '{affected}'],
+        timeoutMs: 900000,
+      },
+      {
+        name: 'typecheck',
+        argv: ['npm', 'run', 'typecheck'],
+        timeoutMs: 600000,
+        cleanDirs: ['.next/types'],
+      },
+      { name: 'lint', argv: ['npm', 'run', 'lint'], timeoutMs: 600000 },
+      { name: 'build', argv: ['npm', 'run', 'build'], timeoutMs: 600000 },
+    ],
+  };
+}
+
+test('generated wave manifest shape passes vetting', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/wave.json';
+  await writeManifest(root, rel, generatedWaveManifest());
+  assert.equal(omRunManifestVetted(root, rel).ok, true);
+});
+
+test('generated wave manifest rejects tampered argv', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/bad-argv.json';
+  const body = generatedWaveManifest();
+  body.checks[1].argv = ['npm', 'run', 'evil'];
+  await writeManifest(root, rel, body);
+  const r = omRunManifestVetted(root, rel);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /vetted/);
+});
+
+test('generated wave manifest rejects unknown check key', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/bad-key.json';
+  const body = generatedWaveManifest();
+  body.checks[0].env = { FOO: 'bar' };
+  await writeManifest(root, rel, body);
+  const r = omRunManifestVetted(root, rel);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /unknown key env/);
+});
+
+test('generated wave manifest rejects bad cleanDirs', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/bad-clean.json';
+  const body = generatedWaveManifest();
+  body.checks[1].cleanDirs = ['dist'];
+  await writeManifest(root, rel, body);
+  const r = omRunManifestVetted(root, rel);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /cleanDirs/);
+});
+
+test('generated wave manifest rejects unvetted preChecks argv', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/bad-pre.json';
+  const body = generatedWaveManifest();
+  body.preChecks = [['docker', 'compose', 'up']];
+  await writeManifest(root, rel, body);
+  const r = omRunManifestVetted(root, rel);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /preChecks/);
+});
+
+test('generated wave manifest rejects unvetted affectedArgv', async t => {
+  const root = await waveProjectFixture(t);
+  const rel = 'coordination/manifests/bad-affected.json';
+  const body = generatedWaveManifest();
+  body.checks[0].affectedArgv = ['npx', 'vitest', 'run', '--grep', 'evil'];
+  await writeManifest(root, rel, body);
+  const r = omRunManifestVetted(root, rel);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /affectedArgv/);
+});

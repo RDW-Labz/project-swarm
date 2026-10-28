@@ -3,12 +3,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OM_SWARM_RUN_FLAGS } from './orchestrator-allow.mjs';
+import { managedChecks } from './verify-config.mjs';
+import { qualityCheckArgvsForProject } from './quality-checks.mjs';
 
 const OM_SWARM_RUN_FLAGS_WITH_VALUE = new Set([
   '--lane', '--ticket', '--job', '--run', '--worktree', '--jobs', '--max-jobs', '--max-waves',
 ]);
 
 const OM_SWARM_INTEGRATE_APPROVE_MANIFEST = '--approve-manifest';
+
+const CHECK_ENTRY_KEYS = new Set(['name', 'argv', 'affectedArgv', 'timeoutMs', 'repeat', 'base', 'cleanDirs']);
+const PRE_CHECK_ENTRY_KEYS = new Set(['argv', 'name', 'timeoutMs']);
 
 const omSwarmJobsValueOk = val => {
   const parts = String(val ?? '').split(',');
@@ -162,7 +167,21 @@ const resolveManifestRel = (root, manifestArg) => {
   return { ok: true, missing: false, filePath: resolved, rel: norm };
 };
 
-const loadVettedArgvs = root => {
+const pushVettedArgv = (vetted, raw) => {
+  const argv = argvStrings(raw);
+  if (argv) vetted.push(argv);
+};
+
+const loadProfile = root => {
+  try {
+    const pointer = JSON.parse(fs.readFileSync(path.join(root, '.project-swarm.json'), 'utf8'));
+    return pointer?.profile ?? {};
+  } catch {
+    return {};
+  }
+};
+
+export const loadVettedArgvs = root => {
   const vetted = [];
   try {
     const text = fs.readFileSync(path.join(root, 'coordination/checks.json'), 'utf8');
@@ -170,34 +189,131 @@ const loadVettedArgvs = root => {
     const checks = data?.checks;
     if (Array.isArray(checks)) {
       for (const entry of checks) {
-        const argv = argvStrings(entry?.argv);
-        if (argv) vetted.push(argv);
+        pushVettedArgv(vetted, entry?.argv);
       }
     }
   } catch { /* empty vetted list */ }
-  try {
-    const text = fs.readFileSync(path.join(root, '.project-swarm.json'), 'utf8');
-    const pointer = JSON.parse(text);
-    const verify = pointer?.profile?.verify;
-    if (verify && typeof verify === 'object' && !Array.isArray(verify)) {
-      const cmd = argvStrings(verify.command);
-      if (cmd) vetted.push(cmd);
-      const setup = verify.setup;
-      if (setup !== undefined) {
-        if (!Array.isArray(setup)) return vetted;
-        for (const entry of setup) {
-          if (Array.isArray(entry)) {
-            const argv = argvStrings(entry);
-            if (argv) vetted.push(argv);
-          } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-            const argv = argvStrings(entry.argv);
-            if (argv) vetted.push(argv);
-          }
-        }
+
+  const profile = loadProfile(root);
+  const verify = profile?.verify;
+  if (verify && typeof verify === 'object' && !Array.isArray(verify)) {
+    pushVettedArgv(vetted, verify.command);
+    const setup = verify.setup ?? [];
+    if (Array.isArray(setup)) {
+      for (const entry of setup) {
+        if (Array.isArray(entry)) pushVettedArgv(vetted, entry);
+        else if (entry && typeof entry === 'object' && !Array.isArray(entry)) pushVettedArgv(vetted, entry.argv);
       }
     }
-  } catch { /* empty */ }
+    const managed = managedChecks(verify);
+    for (const check of managed.checks) {
+      pushVettedArgv(vetted, check.argv);
+      if (check.affectedArgv) pushVettedArgv(vetted, check.affectedArgv);
+    }
+    for (const argv of managed.preChecks) pushVettedArgv(vetted, argv);
+  }
+
+  for (const argv of qualityCheckArgvsForProject(root, profile)) {
+    pushVettedArgv(vetted, argv);
+  }
+
   return vetted;
+};
+
+const validateCleanDirs = (entry, fieldLabel, checkName, errors) => {
+  if (entry.cleanDirs === undefined) return true;
+  if (checkName !== 'typecheck') {
+    errors.push(`${fieldLabel} cleanDirs is only allowed on typecheck`);
+    return false;
+  }
+  if (
+    !Array.isArray(entry.cleanDirs)
+    || entry.cleanDirs.length !== 1
+    || entry.cleanDirs[0] !== '.next/types'
+  ) {
+    errors.push(`${fieldLabel} cleanDirs must be exactly [".next/types"]`);
+    return false;
+  }
+  return true;
+};
+
+const collectChecksEntries = (checks, fieldLabel, out, errors) => {
+  if (checks === undefined) return;
+  if (!Array.isArray(checks)) {
+    errors.push(`unrecognized shape for ${fieldLabel}`);
+    return;
+  }
+  for (const entry of checks) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!CHECK_ENTRY_KEYS.has(key)) {
+        errors.push(`${fieldLabel} entry has unknown key ${key}`);
+        return;
+      }
+    }
+    if (!('argv' in entry)) {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    const argv = argvStrings(entry.argv);
+    if (!argv) {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    const checkName = entry.name !== undefined ? String(entry.name) : '';
+    if (!validateCleanDirs(entry, fieldLabel, checkName, errors)) return;
+    out.push({ field: fieldLabel, argv });
+    if (entry.affectedArgv !== undefined) {
+      const affectedArgv = argvStrings(entry.affectedArgv);
+      if (!affectedArgv) {
+        errors.push(`unrecognized shape for ${fieldLabel}`);
+        return;
+      }
+      out.push({ field: `${fieldLabel} affectedArgv`, argv: affectedArgv });
+    }
+  }
+};
+
+const collectPreChecksArgvs = (preChecks, fieldLabel, out, errors) => {
+  if (preChecks === undefined) return;
+  if (!Array.isArray(preChecks)) {
+    errors.push(`unrecognized shape for ${fieldLabel}`);
+    return;
+  }
+  for (const entry of preChecks) {
+    if (Array.isArray(entry)) {
+      const argv = argvStrings(entry);
+      if (!argv) {
+        errors.push(`unrecognized shape for ${fieldLabel}`);
+        return;
+      }
+      out.push({ field: fieldLabel, argv });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!PRE_CHECK_ENTRY_KEYS.has(key)) {
+        errors.push(`${fieldLabel} entry has unknown key ${key}`);
+        return;
+      }
+    }
+    if (!('argv' in entry)) {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    const argv = argvStrings(entry.argv);
+    if (!argv) {
+      errors.push(`unrecognized shape for ${fieldLabel}`);
+      return;
+    }
+    out.push({ field: fieldLabel, argv });
+  }
 };
 
 const collectSetupArgvs = (setup, fieldLabel, out, errors) => {
@@ -229,31 +345,6 @@ const collectSetupArgvs = (setup, fieldLabel, out, errors) => {
       errors.push(`unrecognized shape for ${fieldLabel}`);
       return;
     }
-  }
-};
-
-const collectChecksArgvs = (checks, fieldLabel, out, errors) => {
-  if (checks === undefined) return;
-  if (!Array.isArray(checks)) {
-    errors.push(`unrecognized shape for ${fieldLabel}`);
-    return;
-  }
-  for (const entry of checks) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      errors.push(`unrecognized shape for ${fieldLabel}`);
-      return;
-    }
-    const keys = Object.keys(entry);
-    if (!keys.includes('argv')) {
-      errors.push(`unrecognized shape for ${fieldLabel}`);
-      return;
-    }
-    const argv = argvStrings(entry.argv);
-    if (!argv) {
-      errors.push(`unrecognized shape for ${fieldLabel}`);
-      return;
-    }
-    out.push({ field: fieldLabel, argv });
   }
 };
 
@@ -305,9 +396,9 @@ const vetJobs = (jobs, out, errors) => {
       errors.push(`job ${jobId} uses model ${model}`);
       continue;
     }
-    collectChecksArgvs(job.checks, `jobs[].${jobId}.checks`, out, errors);
+    collectChecksEntries(job.checks, `jobs[].${jobId}.checks`, out, errors);
     collectSetupArgvs(job.setup, `jobs[].${jobId}.setup`, out, errors);
-    collectChecksArgvs(job.preChecks, `jobs[].${jobId}.preChecks`, out, errors);
+    collectPreChecksArgvs(job.preChecks, `jobs[].${jobId}.preChecks`, out, errors);
     collectMutantCheck(job.mutantCheck, `jobs[].${jobId}.mutantCheck`, out, errors);
   }
 };
@@ -318,9 +409,9 @@ const vetManifestBody = (manifest, vetted) => {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, reason: 'manifest is not a JSON object' };
   }
-  collectChecksArgvs(manifest.checks, 'checks', collected, errors);
+  collectChecksEntries(manifest.checks, 'checks', collected, errors);
   collectSetupArgvs(manifest.setup, 'setup', collected, errors);
-  collectChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
+  collectPreChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
   collectMutantCheck(manifest.mutantCheck, 'mutantCheck', collected, errors);
   vetJobs(manifest.jobs, collected, errors);
   if (errors.length) {
