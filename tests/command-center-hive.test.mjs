@@ -156,7 +156,8 @@ test('deriveHiveView reads counters and totals from labelled stats and the ledge
     { tickets: view.totals.tickets, done: view.totals.done, ready: view.totals.ready, blocked: view.totals.blocked, review: view.totals.review, remaining: view.totals.remaining, counted: view.totals.counted },
     { tickets: 24, done: 9, ready: 5, blocked: 4, review: 3, remaining: 12, counted: 21 },
   );
-  assert.deepEqual(view.lanes.map((l) => l.name), ['cursor', 'claude'], 'lanes sorted by jobs');
+  // view comes from a vm sandbox, so its arrays have another realm's prototype
+  assert.deepEqual([...view.lanes.map((l) => l.name)], ['cursor', 'claude'], 'lanes sorted by jobs');
 });
 
 test('deriveHiveView leaves missing data null so panels can say so', async () => {
@@ -171,7 +172,7 @@ test('deriveHiveView leaves missing data null so panels can say so', async () =>
   assert.equal(view.totals.tickets, null);
   assert.equal(view.agents, 2, 'falls back to the project live-agent fields');
   assert.equal(view.needs, 1);
-  assert.deepEqual(view.events.map((e) => e.kind), ['needs', 'run'], 'session log falls back to project signals');
+  assert.deepEqual([...view.events.map((e) => e.kind)], ['needs', 'run'], 'session log falls back to project signals');
 });
 
 test('renderHiveDashboard draws the session log, bars, project and lane rows, kv figures and the step chart', async () => {

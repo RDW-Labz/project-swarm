@@ -57,7 +57,9 @@
 @keyframes cc-ck-beat { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .cc-cockpit-shell .ck-nav { display: flex; align-items: center; gap: 4px; padding: 0; flex: 1; flex-wrap: nowrap; min-width: 0; }
 .cc-cockpit-shell .crumbs { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; gap: 6px; }
-.cc-cockpit-shell .crumbs button { background: none; border: 0; padding: 0; color: var(--cyan); cursor: pointer; font-size: inherit; font-family: inherit; letter-spacing: inherit; text-transform: inherit; }
+.cc-cockpit-shell .crumbs { align-items: center; }
+.cc-cockpit-shell .crumbs button { background: rgba(34, 211, 238, .08); border: 1px solid rgba(34, 211, 238, .4); border-radius: 999px; padding: 3px 10px; color: var(--cyan); cursor: pointer; font-size: inherit; font-family: inherit; letter-spacing: inherit; text-transform: inherit; }
+.cc-cockpit-shell .crumbs button:hover, .cc-cockpit-shell .crumbs button:focus-visible { background: rgba(34, 211, 238, .18); outline: none; }
 .cc-cockpit-shell .tabs { margin-left: auto; display: flex; gap: 4px; flex-wrap: nowrap; }
 .cc-cockpit-shell .tabs a, .cc-cockpit-shell .tabs button { font-family: var(--font-mono); font-size: 11px; padding: 3px 8px; border-radius: 5px; background: none; border: 1px solid transparent; color: var(--muted); text-decoration: none; }
 .cc-cockpit-shell .tabs [aria-current="page"] { background: var(--panel2); border-color: var(--line); color: var(--fg); }

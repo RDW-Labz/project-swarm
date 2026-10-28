@@ -102,7 +102,14 @@ export function renderProjectCockpit(host, project, deps) {
   suppressCockpitAutoTour();
   const doc = deps.document;
   const win = deps.window || globalThis;
-  const glitch = typeof deps.glitch === 'function' ? deps.glitch : defaultGlitch;
+  const glitchImpl = typeof deps.glitch === 'function' ? deps.glitch : defaultGlitch;
+  const glitch = (node) => {
+    try {
+      return glitchImpl(node);
+    } catch {
+      return false; // decoration only
+    }
+  };
   const setTimer = deps.setTimeout || globalThis.setTimeout.bind(globalThis);
   const clearTimer = deps.clearTimeout || globalThis.clearTimeout.bind(globalThis);
   const timers = new Set();
@@ -128,9 +135,9 @@ export function renderProjectCockpit(host, project, deps) {
   live.appendChild(doc.createTextNode('LIVE'));
   top.appendChild(live);
   const nav = el(doc, 'div', 'ck-nav');
-  const crumbs = el(doc, 'nav', 'crumbs');
+  const crumbs = el(doc, 'nav', 'crumbs cockpit-nav');
   crumbs.setAttribute('aria-label', 'Breadcrumb');
-  const backBtn = el(doc, 'button', 'cc-cockpit-back-btn', 'The Hive');
+  const backBtn = el(doc, 'button', 'cc-cockpit-back-btn nav-block', 'The Hive');
   backBtn.type = 'button';
   const crumbProject = el(doc, 'span');
   crumbProject.setAttribute('aria-current', 'page');
@@ -249,22 +256,34 @@ export function renderProjectCockpit(host, project, deps) {
   host.appendChild(shell);
 
   const probe = doc.createElement('canvas');
-  const canvasCapable = typeof probe.getContext === 'function';
-  const orbit = mountOrbit({
-    back: orbBack,
-    front: orbFront,
-    target: () => {
-      const first = colR.firstChild;
-      return first && first.classList && first.classList.contains('hot') ? first : null;
-    },
-    win,
-    doc,
-    requestAnimationFrame: deps.requestAnimationFrame,
-    cancelAnimationFrame: deps.cancelAnimationFrame,
-    reducedMotion: typeof deps.matchMedia === 'function'
-      ? Boolean(deps.matchMedia('(prefers-reduced-motion: reduce)').matches)
-      : undefined,
-  });
+  let canvasCapable = false;
+  try {
+    canvasCapable = typeof probe.getContext === 'function' && Boolean(probe.getContext('2d'));
+  } catch {
+    canvasCapable = false;
+  }
+  const noopOrbit = { resize() {}, destroy() {} };
+  let orbit = noopOrbit;
+  try {
+    orbit = mountOrbit({
+      back: orbBack,
+      front: orbFront,
+      target: () => {
+        const first = colR.firstChild;
+        return first && first.classList && first.classList.contains('hot') ? first : null;
+      },
+      win,
+      doc,
+      requestAnimationFrame: deps.requestAnimationFrame,
+      cancelAnimationFrame: deps.cancelAnimationFrame,
+      reducedMotion: typeof deps.matchMedia === 'function'
+        ? Boolean(deps.matchMedia('(prefers-reduced-motion: reduce)').matches)
+        : undefined,
+    }) || noopOrbit;
+  } catch {
+    // no usable canvas: the shell still renders without the orbit ring
+    orbit = noopOrbit;
+  }
 
   // Robot head: mounted once per project, then only its state follows the orchestrator.
   let destroyed = false;
@@ -469,7 +488,11 @@ export function renderProjectCockpit(host, project, deps) {
   };
   if (typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', onVisibility);
 
-  paint(nowMs(deps));
+  try {
+    paint(nowMs(deps));
+  } catch {
+    // keep the shell and the back control usable if a panel cannot paint (partial DOM)
+  }
 
   return {
     update(nextProject) {
