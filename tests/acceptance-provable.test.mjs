@@ -19,6 +19,35 @@ test('pathsInAcceptanceText: backticks and bare paths, not URLs', () => {
   assert.deepEqual(found, ['src/a.ts', 'tools/foo.mjs']);
 });
 
+test('pathsInAcceptanceText: dot-prefixed paths in plain text and backticks', () => {
+  const plain = pathsInAcceptanceText('CI runs from .github/workflows/ci.yml on push');
+  const ticked = pathsInAcceptanceText('CI runs from `.github/workflows/ci.yml` on push');
+  assert.deepEqual(plain, ['.github/workflows/ci.yml']);
+  assert.deepEqual(ticked, ['.github/workflows/ci.yml']);
+  assert.deepEqual(plain, ticked);
+});
+
+test('pathsInAcceptanceText: other dot-dir paths keep leading dot', () => {
+  const found = pathsInAcceptanceText('Use .eslintrc/base.json and .husky/pre-commit.sh hooks');
+  assert.deepEqual(found, ['.eslintrc/base.json', '.husky/pre-commit.sh']);
+});
+
+test('pathsInAcceptanceText: ./ prefix normalizes like backtick paths', () => {
+  const found = pathsInAcceptanceText('See ./docs/x.md for details');
+  assert.deepEqual(found, ['docs/x.md']);
+});
+
+test('pathsInAcceptanceText: does not match path embedded in a word', () => {
+  const found = pathsInAcceptanceText('pretools/foo.mjs');
+  assert.deepEqual(found, ['pretools/foo.mjs']);
+  assert.equal(found.includes('tools/foo.mjs'), false);
+});
+
+test('pathsInAcceptanceText: ../ is not treated as a dot-prefixed repo path', () => {
+  const found = pathsInAcceptanceText('copy from ../secret/leak.txt never');
+  assert.deepEqual(found, []);
+});
+
 test('AC1: keeps a line with no file references', () => {
   const ticket = {
     id: 'T-0001',
