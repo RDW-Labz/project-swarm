@@ -3,9 +3,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OM_SWARM_RUN_FLAGS } from './orchestrator-allow.mjs';
-import { managedChecks, verifyJobFields } from './verify-config.mjs';
+import { managedChecks } from './verify-config.mjs';
 import { qualityCheckArgvsForProject } from './quality-checks.mjs';
-import { isApproved, ledgerPath } from './tickets.mjs';
 
 const OM_SWARM_RUN_FLAGS_WITH_VALUE = new Set([
   '--lane', '--ticket', '--job', '--run', '--worktree', '--jobs', '--max-jobs', '--max-waves',
@@ -180,65 +179,6 @@ const loadProfile = root => {
   } catch {
     return {};
   }
-};
-
-const readLedgerSync = root => {
-  try {
-    return JSON.parse(fs.readFileSync(ledgerPath(root), 'utf8'));
-  } catch {
-    return null;
-  }
-};
-
-const setupArgvEqual = (a, b) => {
-  if (a === undefined && b === undefined) return true;
-  if (a === undefined || b === undefined) return false;
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    const rowA = a[i];
-    const rowB = b[i];
-    if (!Array.isArray(rowA) || !Array.isArray(rowB)) return false;
-    if (!argvEqual(rowA.map(String), rowB.map(String))) return false;
-  }
-  return true;
-};
-
-const testEnvEqual = (a, b) => {
-  if (a === undefined && b === undefined) return true;
-  if (a === undefined || b === undefined) return false;
-  if (typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) || Array.isArray(b)) return false;
-  const keysA = Object.keys(a).sort();
-  const keysB = Object.keys(b).sort();
-  if (keysA.length !== keysB.length) return false;
-  for (let i = 0; i < keysA.length; i += 1) {
-    if (keysA[i] !== keysB[i]) return false;
-    if (String(a[keysA[i]]) !== String(b[keysB[i]])) return false;
-  }
-  return true;
-};
-
-const jobMatchesVerifyJobFields = (job, expected) => {
-  if (String(job.agent ?? '') !== String(expected.agent ?? '')) return false;
-  if (String(job.model ?? '') !== String(expected.model ?? '')) return false;
-  if ((job.shell === true) !== (expected.shell === true)) return false;
-  if (Number(job.timeoutMs) !== Number(expected.timeoutMs)) return false;
-  if (!setupArgvEqual(job.setup, expected.setup)) return false;
-  if (!testEnvEqual(job.testEnv, expected.testEnv)) return false;
-  return true;
-};
-
-/** Shell / -shell jobs allowed only when they exactly match verifyJobFields for an approved ledger ticket. */
-const isApprovedVerifyShellJob = (root, job) => {
-  const jobId = String(job?.id ?? '');
-  if (!jobId || !root) return false;
-  const ledger = readLedgerSync(root);
-  if (!ledger || !isApproved(ledger)) return false;
-  const ticket = (ledger.tickets ?? []).find(t => t.id === jobId);
-  if (!ticket) return false;
-  const profile = loadProfile(root);
-  const expected = verifyJobFields(ticket, profile.verify);
-  if (!expected) return false;
-  return jobMatchesVerifyJobFields(job, expected);
 };
 
 export const loadVettedArgvs = root => {
@@ -435,7 +375,7 @@ const collectMutantCheck = (mutantCheck, fieldLabel, out, errors) => {
   errors.push(`unrecognized shape for ${fieldLabel}`);
 };
 
-const vetJobs = (jobs, out, errors, root) => {
+const vetJobs = (jobs, out, errors) => {
   if (jobs === undefined) return;
   if (!Array.isArray(jobs)) {
     errors.push('unrecognized shape for jobs');
@@ -447,28 +387,23 @@ const vetJobs = (jobs, out, errors, root) => {
       return;
     }
     const jobId = String(job.id ?? 'unknown');
-    const shellish = job.shell === true
-      || (job.model !== undefined && job.model !== null && String(job.model).endsWith('-shell'));
-    const approvedVerifyShell = shellish && isApprovedVerifyShellJob(root, job);
-    if (shellish && !approvedVerifyShell) {
-      if (job.shell === true) {
-        errors.push(`job ${jobId} has shell: true`);
-        continue;
-      }
-      const model = String(job.model);
+    if (job.shell === true) {
+      errors.push(`job ${jobId} has shell: true`);
+      continue;
+    }
+    const model = job.model !== undefined && job.model !== null ? String(job.model) : '';
+    if (model.endsWith('-shell')) {
       errors.push(`job ${jobId} uses model ${model}`);
       continue;
     }
     collectChecksEntries(job.checks, `jobs[].${jobId}.checks`, out, errors);
-    if (!approvedVerifyShell) {
-      collectSetupArgvs(job.setup, `jobs[].${jobId}.setup`, out, errors);
-    }
+    collectSetupArgvs(job.setup, `jobs[].${jobId}.setup`, out, errors);
     collectPreChecksArgvs(job.preChecks, `jobs[].${jobId}.preChecks`, out, errors);
     collectMutantCheck(job.mutantCheck, `jobs[].${jobId}.mutantCheck`, out, errors);
   }
 };
 
-const vetManifestBody = (manifest, vetted, root) => {
+const vetManifestBody = (manifest, vetted) => {
   const errors = [];
   const collected = [];
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
@@ -478,7 +413,7 @@ const vetManifestBody = (manifest, vetted, root) => {
   collectSetupArgvs(manifest.setup, 'setup', collected, errors);
   collectPreChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
   collectMutantCheck(manifest.mutantCheck, 'mutantCheck', collected, errors);
-  vetJobs(manifest.jobs, collected, errors, root);
+  vetJobs(manifest.jobs, collected, errors);
   if (errors.length) {
     const reason = errors[0];
     if (reason.includes('shell: true') || reason.includes('-shell')) return { ok: false, reason };
@@ -529,7 +464,7 @@ export function omRunManifestVetted(root, manifestArg) {
     return { ok: false, reason: 'manifest is not valid JSON' };
   }
   const vetted = loadVettedArgvs(root);
-  return vetManifestBody(manifest, vetted, root);
+  return vetManifestBody(manifest, vetted);
 }
 
 /**
@@ -545,7 +480,7 @@ export async function orchestratorManifestGate(root, manifest, env = process.env
   const { orchestratorHookInstalledFor } = await import('./orchestrator-hook.mjs');
   if (!orchestratorHookInstalledFor(root)) return;
   const vetted = loadVettedArgvs(root);
-  const result = vetManifestBody(manifest, vetted, root);
+  const result = vetManifestBody(manifest, vetted);
   if (!result.ok) {
     const err = new Error(result.reason);
     err.code = 'orchestrator-manifest-unvetted';
