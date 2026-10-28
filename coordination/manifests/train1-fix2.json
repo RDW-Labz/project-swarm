@@ -7,21 +7,39 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "mid",
-   "prompt": "The orchestrator manifest guard in tools/om-manifest-guard.mjs (omRunManifestVetted and orchestratorManifestGate, sharing vetManifestBody and loadVettedArgvs) would refuse the swarm's OWN generated manifests. Measured on a real project (parts-request-app, 252 manifests in docs/scope/waves, docs/scope/split, coordination/manifests): 200 refused with 'unrecognized shape for preChecks' and 20 with 'checks argv ... is not a vetted command'. A real generated wave manifest has: \"preChecks\": [[\"/opt/homebrew/bin/supabase\",\"start\"]] (an array of argv arrays) and \"checks\": [{\"name\":\"tests\",\"argv\":[\"npx\",\"vitest\",\"run\"],\"affectedArgv\":[\"npx\",\"vitest\",\"run\",\"{affected}\"],\"timeoutMs\":900000},{\"name\":\"typecheck\",\"argv\":[\"npm\",\"run\",\"typecheck\"],\"timeoutMs\":600000,\"cleanDirs\":[\".next/types\"]},{\"name\":\"lint\",\"argv\":[\"npm\",\"run\",\"lint\"],...},{\"name\":\"build\",\"argv\":[\"npm\",\"run\",\"build\"],...}], with profile.verify {\"command\":[\"npx\",\"vitest\",\"run\",\"{tests}\"], setup: [...]}.\nFix the vetted set and shapes, still failing closed:\n1. Vetted argvs = union of: every checks[].argv in coordination/checks.json; managedChecks(profile.verify) from tools/verify-config.mjs (its checks[].argv AND checks[].affectedArgv, and its preChecks argv arrays); profile.verify.command and each verify.setup entry; deriveQualityChecks from tools/quality-checks.mjs for this project (read package.json at root for pkg, hasTsconfig = tsconfig.json exists, config = profile.quality; detect the manager the same way the swarm does: find where tools/scope-commands.mjs calls deriveQualityChecks and reuse that exact logic, extracting a small exported helper into tools/quality-checks.mjs if needed). profile = .project-swarm.json's profile.\n2. preChecks accepts an array whose entries are either an argv array or an object {argv, name?, timeoutMs?}; each argv must be vetted.\n3. A check entry may only have the keys name, argv, affectedArgv, timeoutMs, repeat, base, cleanDirs. argv and affectedArgv (when present) must each be vetted. cleanDirs, when present, must equal exactly ['.next/types'] and only on a check named typecheck (that is the only one the generator writes). Any other key or shape is refused (fail closed) with a reason naming the key.\n4. Job-level checks/setup/preChecks/mutantCheck: same rules as top level; shell jobs and models ending in -shell stay refused.\nTests in tests/om-manifest-guard.test.mjs: a temp project with package.json scripts {typecheck, lint, build}, tsconfig.json, and profile.verify {command:[npx,vitest,run,{tests}], setup:[[supabase,start]]}; the exact wave manifest shape above passes; changing any argv item, adding an unknown check key (e.g. env or cwd), cleanDirs other than ['.next/types'], or a preChecks argv not from verify.setup each fails; an affectedArgv not derived from verify fails.",
+   "prompt": "The orchestrator manifest guard in tools/om-manifest-guard.mjs (omRunManifestVetted and orchestratorManifestGate, sharing vetManifestBody and loadVettedArgvs) would refuse the swarm's OWN generated manifests. Measured on a real project (parts-request-app, 252 manifests in docs/scope/waves, docs/scope/split, coordination/manifests): 200 refused with 'unrecognized shape for preChecks' and 20 with 'checks argv ... is not a vetted command'. A real generated wave manifest has: \"preChecks\": [[\"/opt/homebrew/bin/supabase\",\"start\"]] (an array of argv arrays) and \"checks\": [{\"name\":\"tests\",\"argv\":[\"npx\",\"vitest\",\"run\"],\"affectedArgv\":[\"npx\",\"vitest\",\"run\",\"{affected}\"],\"timeoutMs\":900000},{\"name\":\"typecheck\",\"argv\":[\"npm\",\"run\",\"typecheck\"],\"timeoutMs\":600000,\"cleanDirs\":[\".next/types\"]},{\"name\":\"lint\",\"argv\":[\"npm\",\"run\",\"lint\"],...},{\"name\":\"build\",\"argv\":[\"npm\",\"run\",\"build\"],...}], with profile.verify {\"command\":[\"npx\",\"vitest\",\"run\",\"{tests}\"], setup: [...]}.\nFix the vetted set and shapes, still failing closed:\n1. Vetted argvs = union of: every checks[].argv in coordination/checks.json; managedChecks(profile.verify) from tools/verify-config.mjs (its checks[].argv AND checks[].affectedArgv, and its preChecks argv arrays); profile.verify.command and each verify.setup entry; deriveQualityChecks from tools/quality-checks.mjs for this project (read package.json at root for pkg, hasTsconfig = tsconfig.json exists, config = profile.quality; detect the manager the same way the swarm does: find where tools/scope-commands.mjs calls deriveQualityChecks and reuse that exact logic, extracting a small exported helper into tools/quality-checks.mjs if needed). profile = .project-swarm.json's profile.\n2. preChecks accepts an array whose entries are either an argv array or an object {argv, name?, timeoutMs?}; each argv must be vetted.\n3. A check entry may only have the keys name, argv, affectedArgv, timeoutMs, repeat, base, cleanDirs. argv and affectedArgv (when present) must each be vetted. cleanDirs, when present, must equal exactly ['.next/types'] and only on a check named typecheck (that is the only one the generator writes). Any other key or shape is refused (fail closed) with a reason naming the key.\n4. Job-level checks/setup/preChecks/mutantCheck: same rules as top level; shell jobs and models ending in -shell stay refused.\nTests in tests/om-manifest-guard.test.mjs: a temp project with package.json scripts {typecheck, lint, build}, tsconfig.json, and profile.verify {command:[npx,vitest,run,{tests}], setup:[[supabase,start]]}; the exact wave manifest shape above passes; changing any argv item, adding an unknown check key (e.g. env or cwd), cleanDirs other than ['.next/types'], or a preChecks argv not from verify.setup each fails; an affectedArgv not derived from verify fails. If you extract a helper into quality-checks.mjs, keep every existing export and behavior unchanged (tests/quality-checks.test.mjs must still pass; lesson-40-eval and split-module only check names and existence).",
    "context": [
     "tools/verify-config.mjs",
     "tools/quality-checks.mjs",
-    "tools/scope-commands.mjs"
+    "tools/scope-commands.mjs",
+    "tests/quality-checks.test.mjs"
    ],
    "outputs": [
     "tools/om-manifest-guard.mjs",
     "tools/quality-checks.mjs",
     "tests/om-manifest-guard.test.mjs"
    ],
-   "timeoutMs": 2400000
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/lesson-40-eval.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ],
  "checks": [
-  { "name": "vetset", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/om-manifest-guard.test.mjs", "tests/orchestrator-mode.test.mjs", "tests/orchestrator-allow.test.mjs"] }
+  {
+   "name": "vetset",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/quality-checks.test.mjs",
+    "tests/lesson-40-eval.test.mjs"
+   ]
+  }
  ]
 }
