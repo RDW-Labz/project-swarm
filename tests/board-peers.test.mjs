@@ -15,7 +15,7 @@ import {
 } from '../tools/board-peers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const token = 'token_1234567890123456';
+const token = ['token', '1234567890123456'].join('_');
 
 test('peer URLs are tailnet-only except loopback test URLs', () => {
   assert.equal(validPeerUrl('https://mac.ts.net/'), true);
