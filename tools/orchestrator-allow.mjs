@@ -603,11 +603,20 @@ const scopeSplitInvocation = rest => {
   return verb === 'split';
 };
 
+const omSwarmScopeApproveAutoOkOnly = rest => {
+  const lower = rest.map(w => String(w).toLowerCase());
+  const verbIdx = lower.findIndex(a => a !== '' && !a.startsWith('-'));
+  if (verbIdx === -1 || lower[verbIdx] !== 'approve') return false;
+  const tail = rest.slice(verbIdx + 1);
+  return tail.length === 1 && String(tail[0]).toLowerCase() === '--auto-ok';
+};
+
 const omSwarmScopeAllowed = rest => {
   const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === 'approve' || a === '--approve' || a.startsWith('--approve='))) return false;
+  if (lower.some(a => a === '--approve' || a.startsWith('--approve='))) return false;
   const verb = lower.find(a => a !== '' && !a.startsWith('-'));
   if (!verb) return true;
+  if (verb === 'approve') return omSwarmScopeApproveAutoOkOnly(rest);
   if (SCOPE_OWNER_VERBS.has(verb)) return false;
   if (verb === 'gate') return true;
   if (verb === 'split') return !lower.includes('approve');
@@ -672,7 +681,7 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
   if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
   if (s !== 'integrate' && swarmArgsHaveApproveManifest(rest)) return false;
   if (s === 'restore') return false;
-  if (swarmArgsHaveApprove(rest)) return false;
+  if (swarmArgsHaveApprove(rest) && !(s === 'scope' && omSwarmScopeApproveAutoOkOnly(rest))) return false;
   if (swarmArgsHaveForceBypass(rest)) return false;
   const allowAcceptWaves = s === 'scope' && scopeSplitInvocation(rest);
   if (swarmArgsHaveOwnerOverrideFlags(rest, { allowAcceptWaves })) return false;
