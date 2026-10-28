@@ -20,7 +20,10 @@ async function profileConfig(root) {
 const ticketDeps = root => ({
   addTicket: async partial => (await import('./scope-commands.mjs')).addProposedTicket(root, partial),
   ticketStatus: async id => (await readLedger(root).catch((error) => {
-    if (error?.code !== 'ENOENT') console.error('[tools/errors-commands.mjs] readLedger:', error?.message ?? error, root);
+    if (error?.code !== 'ENOENT') {
+      const msg = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/errors-commands.mjs] readLedger:', msg, root);
+    }
     return null;
   }))?.tickets.find(t => t.id === id)?.status ?? null,
   notify: async (group, reason, ticketId) => {
