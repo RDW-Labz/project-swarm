@@ -35,6 +35,43 @@ test('redirects refuse parent traversal after directory symlinks', async t => {
   assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
 });
 
+test('cd refuses options and parent traversal after directory symlinks', async t => {
+  const ctx = await project(t);
+  await fs.symlink('../../.swarm/runs', path.join(ctx.root, 'docs/plans/L'));
+  for (const command of [
+    'cd -P docs/plans/L/.. && echo x > project/y.json',
+    'cd docs/plans/L/.. && echo x > project/y.json',
+    'cd docs/plans/L/../../.. && echo x > docs/plans/a.md',
+    ...['-P', '-L', '-e', '-@', '--', '-'].map(option => `cd ${option} docs`),
+    'cd docs -L && echo x > plans/a.md',
+  ]) {
+    assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+  }
+});
+
+test('cd tracks the physical path through directory symlinks', async t => {
+  const ctx = await project(t);
+  await fs.symlink('../coordination', path.join(ctx.root, 'docs/C'));
+  assert.equal(orchestratorModeCommandAllowed('cd docs/C && echo x > manifests/a.json', ctx), false);
+  await fs.symlink('docs', path.join(ctx.root, 'D'));
+  assert.equal(orchestratorModeCommandAllowed('cd D && echo x > plans/a.md', ctx), true);
+});
+
+test('redirects refuse existing hard-linked regular-file leaves', async t => {
+  const ctx = await project(t);
+  await fs.writeFile(path.join(ctx.root, 'coordination/manifests/a.json'), 'existing');
+  await fs.link(path.join(ctx.root, 'coordination/manifests/a.json'), path.join(ctx.root, 'docs/plans/linked.md'));
+  for (const command of [
+    'echo x > docs/plans/linked.md',
+    'printf x >> docs/plans/linked.md',
+    'cd docs && echo x > plans/linked.md',
+  ]) {
+    assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+  }
+  await fs.writeFile(path.join(ctx.root, 'docs/plans/plain.md'), 'existing');
+  assert.equal(orchestratorModeCommandAllowed('echo x > docs/plans/plain.md', ctx), true);
+});
+
 test('redirects resolve targets against the tracked cwd in compound commands', async t => {
   const ctx = await project(t);
   for (const command of [

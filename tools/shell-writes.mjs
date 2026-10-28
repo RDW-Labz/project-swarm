@@ -1808,17 +1808,7 @@ const omRelUnderOmManifestWriteArea = rel => {
 
 const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
 
-const omWriteTargetRel = (raw, ctx, expands) => {
-  if (expands || /^\$/.test(String(raw ?? ''))) return null;
-  if (!ctx?.root) return null;
-  let rootReal;
-  try {
-    rootReal = fs.realpathSync.native(ctx.root);
-  } catch {
-    return null;
-  }
-  let p = String(raw ?? '');
-  if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
+const omResolvePath = (p, ctx, redirect = false) => {
   let cwdBase = ctx.cwd ?? ctx.root;
   try {
     cwdBase = fs.realpathSync.native(cwdBase);
@@ -1836,11 +1826,12 @@ const omWriteTargetRel = (raw, ctx, expands) => {
     try {
       const stat = fs.lstatSync(next);
       if (stat.isSymbolicLink()) {
-        // Redirects follow even dangling leaf symlinks. Refuse all leaf links.
-        if (i === components.length - 1) return null;
+        // Redirects follow even dangling leaf symlinks. Refuse all redirect leaf links.
+        if (redirect && i === components.length - 1) return null;
         sawSymlink = true;
         try { resolved = fs.realpathSync.native(next); } catch { return null; }
       } else {
+        if (redirect && i === components.length - 1 && stat.isFile() && stat.nlink > 1) return null;
         resolved = next;
       }
     } catch (error) {
@@ -1848,6 +1839,22 @@ const omWriteTargetRel = (raw, ctx, expands) => {
       resolved = next;
     }
   }
+  return resolved;
+};
+
+const omWriteTargetRel = (raw, ctx, expands) => {
+  if (expands || /^\$/.test(String(raw ?? ''))) return null;
+  if (!ctx?.root) return null;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(ctx.root);
+  } catch {
+    return null;
+  }
+  let p = String(raw ?? '');
+  if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
+  const resolved = omResolvePath(p, ctx, true);
+  if (resolved === null) return null;
   const rel = path.relative(rootReal, resolved);
   if (omWriteTargetEscapesProject(rel)) return null;
   return rel.split(path.sep).join('/');
@@ -2337,15 +2344,9 @@ const omJqOk = (args, ctx) => {
 const omCdTargetOk = (target, ctx) => {
   if (!ctx.root || !target || omOperandUnsafe(target)) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(String(target)) && !String(target).startsWith('~/')) return false;
-  const home = ctx.home ?? os.homedir();
-  let p = String(target);
-  if (p === '~' || p.startsWith('~/')) {
-    if (p === '~') return false;
-    p = path.join(home, p.slice(2));
-  }
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
-  let real;
-  try { real = fs.realpathSync.native(abs); } catch { return false; }
+  if (target === '~') return false;
+  const real = omResolveCd(target, ctx);
+  if (real === null) return false;
   const rel = insideProject(ctx.root, real);
   if (rel === null) return false;
   const norm = rel.replace(/\\/g, '/').toLowerCase();
@@ -2359,8 +2360,8 @@ const omRealOrNull = p => {
 
 const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']);
 
-// `cd -` is always denied: the hook session cannot know the previous folder.
-const omCdHasDash = cdArgs => cdArgs.some(a => a === '-');
+// Refuse all cd options, including `-`: the hook cannot model their semantics.
+const omCdHasDash = cdArgs => cdArgs.some(a => a.startsWith('-'));
 
 /** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
 const omCdRootTarget = (target, ctx) => {
@@ -2374,8 +2375,7 @@ const omCdRootTarget = (target, ctx) => {
   }
   if (omOperandUnsafe(t) || t === '~' || t.startsWith('~')) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(t)) return false;
-  const abs = path.isAbsolute(t) ? path.resolve(t) : path.resolve(ctx.cwd ?? ctx.root, t);
-  return omRealOrNull(abs) === rootReal;
+  return omResolveCd(t, ctx) === rootReal;
 };
 
 const omCdAllowed = (target, ctx) => omCdRootTarget(target, ctx) || omCdTargetOk(target, ctx);
@@ -2390,9 +2390,10 @@ const omCdStepAllowed = (words, target, ctx) => {
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
-  if (OM_CD_ROOT_ENV_FORMS.has(p)) return path.resolve(ctx.root);
+  if (OM_CD_ROOT_ENV_FORMS.has(p)) p = ctx.root;
   if (p.startsWith('~/')) p = path.join(home, p.slice(2));
-  return path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
+  const resolved = omResolvePath(p, ctx);
+  return resolved === null ? null : omRealOrNull(resolved);
 };
 
 const omNaturallySmall = (cmd, args) => {
