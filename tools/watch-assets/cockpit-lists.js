@@ -269,9 +269,9 @@ export function boxesOverlap(a, b) {
  */
 export function layoutSummaryTileElement(tileRoot, viewport) {
   if (!tileRoot?.children?.length) return;
-  const label = tileRoot.children.find(c => c.classList?.contains('m-label'));
-  const val = tileRoot.children.find(c => c.classList?.contains('m-val'));
-  const foot = tileRoot.children.find(c => c.classList?.contains('m-foot'));
+  const label = Array.from(tileRoot.children).find(c => c.classList?.contains('m-label'));
+  const val = Array.from(tileRoot.children).find(c => c.classList?.contains('m-val'));
+  const foot = Array.from(tileRoot.children).find(c => c.classList?.contains('m-foot'));
   const boxes = summaryTileLayoutBoxes(viewport, {
     label: label?.textContent || '',
     value: val?.textContent || '',
