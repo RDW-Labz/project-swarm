@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "paidpausevalidate",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Wire the shared paid-lane pause check into validation. In tools/swarm/core-51.mjs validateProject, right after the existing openrouter pause check (the block `if (manifest.jobs.some(job => job.agent === 'openrouter')) { ... fail(problem, OPENROUTER_LANE_PAUSED); }`), call pausedPaidLaneProblems(manifest, machineConfig) from tools/paid-lane-pause.mjs and, if it returns any problem, fail(first.message, first.code) exactly like the other checks (one refusal, the first problem). Import it at the top with the other imports. For lambda, only refuse when the hosted Lambda Inference API is used (isHostedLambdaInference(env) from the same module, env being validateProject's env); a self-hosted SWARM_LAMBDA_URL is not paid. Change nothing else. Add tests in tests/paid-lane-pause.test.mjs: swarm validate (call validateProject the way tests/paid-lane-paused.test.mjs does) refuses a manifest with an explicit openai job when lanes.openai.paused is true (code openai-lane-paused), same for gemini and rented; a manifest without those agents still validates; lambda with SWARM_LAMBDA_URL set validates while paused.",
+   "context": [
+    "tools/paid-lane-pause.mjs",
+    "tests/paid-lane-paused.test.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-51.mjs",
+    "tests/paid-lane-pause.test.mjs"
+   ],
+   "timeoutMs": 1500000
+  }
+ ],
+ "checks": [
+  { "name": "paid-pause", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/paid-lane-pause.test.mjs", "tests/paid-lane-paused.test.mjs", "tests/claude-shell-paused-validate.test.mjs"] }
+ ]
+}
