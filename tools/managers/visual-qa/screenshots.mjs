@@ -68,7 +68,7 @@ try {
       try {
         await page.goto(capture.pageUrl, { waitUntil: 'load', timeout: spec.timeoutMs });
         if (capture.waitFor) {
-          try { await page.waitForSelector(capture.waitFor, { timeout: 15000 }); } catch { /* metrics in the screenshot */ }
+          try { await page.waitForSelector(capture.waitFor, { timeout: 15000 }); } catch (error) { if (error?.name !== 'TimeoutError') console.error('[tools/managers/visual-qa/screenshots.mjs] waitForSelector:', error?.message ?? error); }
         }
         await page.waitForTimeout(600);
         const file = path.join(spec.out, capture.id, capture.key, viewport.name + '.png');
@@ -88,7 +88,7 @@ console.log('VISUAL_QA_RESULT ' + JSON.stringify({ captures: results }));
 const live = new Set();
 function killLive() {
   for (const pid of live) {
-    try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ }
+    try { process.kill(-pid, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/managers/visual-qa/screenshots.mjs] killLive process.kill:', error?.message ?? error); }
   }
   live.clear();
 }
@@ -120,8 +120,11 @@ function runProcess(command, args, { cwd, env, timeoutMs }) {
     let settled = false;
     let timedOut = false;
     const kill = (signal) => {
-      try { process.kill(-child.pid, signal); } catch {
-        try { child.kill(signal); } catch { /* gone */ }
+      try { process.kill(-child.pid, signal); } catch (error) {
+        if (error?.code !== 'ESRCH') console.error('[tools/managers/visual-qa/screenshots.mjs] runProcess process.kill:', error?.message ?? error);
+        try { child.kill(signal); } catch (fallbackError) {
+          if (fallbackError?.code !== 'ESRCH') console.error('[tools/managers/visual-qa/screenshots.mjs] runProcess child.kill:', fallbackError?.message ?? fallbackError);
+        }
       }
     };
     const done = (code) => {
@@ -172,9 +175,9 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
   child.on('error', () => { exited = true; });
   child.on('exit', () => { exited = true; });
   const stop = async () => {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/managers/visual-qa/screenshots.mjs] ensureServer stop process.kill:', error?.message ?? error); }
     live.delete(child.pid);
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => { console.error('[tools/managers/visual-qa/screenshots.mjs] ensureServer stop handle.close:', closeError?.message ?? closeError); });
     await fs.rm(logDir, { recursive: true, force: true });
   };
   const deadline = Date.now() + config.timeoutSec * 1000;
@@ -185,7 +188,10 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const tail = (await fs.readFile(logFile, 'utf8').catch(() => '')).slice(-400);
+  const tail = (await fs.readFile(logFile, 'utf8').catch((readError) => {
+    if (readError?.code !== 'ENOENT') console.error('[tools/managers/visual-qa/screenshots.mjs] ensureServer log tail read:', readError?.message ?? readError);
+    return '';
+  })).slice(-400);
   await stop();
   throw fail('visual-qa-server', `${exited ? 'the dev server command exited' : `the dev server did not answer within ${config.timeoutSec} seconds`} (${ready})${tail ? `: ${tail.replace(/\s+/g, ' ')}` : ''}`);
 }
@@ -202,7 +208,7 @@ async function atomicWrite(root, segments, bytes) {
     await handle.close();
     await fs.rename(tmp, file);
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => { console.error('[tools/managers/visual-qa/screenshots.mjs] atomicWrite handle.close:', closeError?.message ?? closeError); });
     await fs.rm(tmp, { force: true });
     throw error;
   }
@@ -277,7 +283,10 @@ export async function listChangedPageScreens(root, { screenIds = [], ticketIds =
   const ids = new Set(screenIds);
   if (!ids.size) {
     const changed = new Set(await gitChangedPaths(root, { mergeBase, execFileImpl: deps.execFile }));
-    const ledger = await (deps.readLedger ?? readLedger)(root).catch(() => null);
+    const ledger = await (deps.readLedger ?? readLedger)(root).catch((readError) => {
+      if (readError?.code !== 'ENOENT') console.error('[tools/managers/visual-qa/screenshots.mjs] listChangedPageScreens readLedger:', readError?.message ?? readError);
+      return null;
+    });
     for (const ticket of ledger?.tickets ?? []) {
       if (ticketIds.length && !ticketIds.includes(ticket.id)) continue;
       const ticketScreens = ticket.screens ?? [];
