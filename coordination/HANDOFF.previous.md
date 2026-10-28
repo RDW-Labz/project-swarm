@@ -12,9 +12,9 @@ Done:
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm inspect 1793201590285-2c5d8984 --results
-  2. swarm "describe the goal in one sentence"
-  3. swarm status
+  1. swarm integrate 1793215459974-b36c8f33 --queue
+  2. swarm inspect 1793201590285-2c5d8984 --results
+  3. swarm "describe the goal in one sentence"
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -29,7 +29,7 @@ Pending approvals:
 - blocker security-1793121100760-1a835d60-shellpauseJ 26h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
 - blocker security-1793111389005-ec83d391-cism2 28h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
 - blocker integrate-checkout-1793071225012-e80056e1 39h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker security-1793070907123-c780a4c2-lockL2 39h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
+- blocker security-1793070907123-c780a4c2-lockL2 40h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
 - blocker integrate-checkout-1793066768605-ff4722d3 40h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker integrate-checkout-1793049988921-3c2c1e96 41h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker security-1793052518876-aa2ab8be-lwfixC 45h branch swarm/lane-self-manage-wave /Users/bean/.project-swarm-scratch/lanewave
@@ -46,4 +46,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T19:18:48.507Z
+Generated at: 2026-10-28T19:26:22.153Z

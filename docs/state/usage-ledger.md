@@ -181,6 +181,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | paidpausevalidate: Imported pausedPaidLaneProblems and isHostedLambdaInference; after the openrouter | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | b13redirect: omWriteTargetRel resolves root, cwd, and target with realpath before path.relative; seg | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | hangguard: Added withHangGuard helper with comment, self-test, and wrapped cancellation cleanup deni | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
 
 ## Daily summary
 
@@ -201,5 +202,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
-| 2026-10-28 | cursor | 9 | 8 | 1 | 0 | subscription |
-| **total** | all | 177 | 161 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-10-28 | cursor | 10 | 9 | 1 | 0 | subscription |
+| **total** | all | 178 | 162 | 16 | 15,891,798 | $28.54 (incl. estimates) |

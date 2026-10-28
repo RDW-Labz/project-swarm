@@ -7,12 +7,13 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "mid",
-   "prompt": "Release train 2, money fixes (owner orders 2026-10-28). Three parts, all in the files listed as outputs.\n\nB1 - one Anthropic day cap. Today tools/spend.mjs LANE_DAILY_DEFAULTS has anthropic dailyUsd 20 while tools/anthropic.mjs has DAY_CAP_USD = 25. Make spend.mjs the single source: export the default lane caps from spend.mjs (anthropic 20, openrouter 5, unchanged) and make anthropic.mjs import its day cap from there (keep the DAY_CAP_USD export name as an alias so callers do not break; its value becomes 20). Keep TOTAL_CAP_USD 500 and JOB_CAP_USD 5 as they are.\n\nB2 - one price table. Today tools/rates.mjs MODEL_RATES has haiku in 1 / out 5 per MTok (that is Haiku 4.5), while tools/anthropic.mjs PRICES has Haiku 5.5 at 0.10 / 0.50 per MTok (0.50 / 2.50 past 100K-token prompts), which is correct. Published first-party rates (USD per million tokens, cached 2026-10-06): Claude Haiku 5.5 in 0.10 out 0.50 (prompts over 100K: in 0.50 out 2.50); Claude Sonnet 5.5 in 2 out 10, cache read 0.20; Claude Opus 5.5 in 4 out 20, cache read 0.20; Claude Fable 5.1 in 10 out 50, cache read 0.25. Cache writes (5-minute) are 1.25x the input rate. Make ONE table the source of truth (put it in tools/rates.mjs, keyed by family: haiku, sonnet, opus, fable; per-MTok in/out/cacheWrite/cacheRead plus longIn/longOut for haiku) and have tools/anthropic.mjs derive its per-token PRICES from it (divide by 1e6; keep the PRICES export shape and the long-prompt behaviour exactly, so anthropic-lane tests keep passing). rates.mjs modelFamily must also recognise fable. Keep the Haiku cache read at 0.1x input (0.01) since no separate rate is published here.\n\nCAP - one spend cap: $5/day total across both Macs, enforced as $2.50 per Mac, Chicago day. In tools/daily-limit.mjs change DEFAULT_DAILY_LIMIT_USD from 5 to 2.5 (it already counts every paid lane together on the Chicago day; keep that) and make sure the default mode is 'stop' (if a default exists elsewhere, it must resolve to stop). The default ceiling (3x usd) must not let spend pass 2.5 when mode is stop; if the ceiling is only used for notify mode, leave it. In tools/budget-set-commands.mjs set DAILY_AGENT_RAISE_ALLOWANCE_USD to 0: an agent may no longer raise the daily limit at all; only the owner can (keep the owner path unchanged), and the refusal message for an agent raise must say the owner decides spend caps.\n\nTests in NEW tests/train2-money.test.mjs (first import: import './_isolate-config.mjs';): anthropic DAY_CAP_USD equals spend.mjs's anthropic lane default (20); MODEL_RATES haiku in/out are 0.10/0.50 per MTok and anthropic PRICES for haiku equal those divided by 1e6 (and the long-prompt rates); opus/sonnet/fable rows match the numbers above; modelFamily('claude-fable-5-1') is fable; with no config the effective daily limit is 2.5 and mode stop; an agent raise of any amount is refused with the owner message; an owner raise still works. Do not touch any other file. Existing tests in context must keep passing; if one asserts the old $5 default or the old agent allowance, update only that assertion (it is in your outputs) and say so.",
+   "prompt": "Release train 2, money fixes (owner orders 2026-10-28). Three parts, all in the files listed as outputs.\n\nB1 - one Anthropic day cap. Today tools/spend.mjs LANE_DAILY_DEFAULTS has anthropic dailyUsd 20 while tools/anthropic.mjs has DAY_CAP_USD = 25. Make spend.mjs the single source: export the default lane caps from spend.mjs (anthropic 20, openrouter 5, unchanged) and make anthropic.mjs import its day cap from there (keep the DAY_CAP_USD export name as an alias so callers do not break; its value becomes 20). Keep TOTAL_CAP_USD 500 and JOB_CAP_USD 5 as they are.\n\nB2 - one price table. Today tools/rates.mjs MODEL_RATES has haiku in 1 / out 5 per MTok (that is Haiku 4.5), while tools/anthropic.mjs PRICES has Haiku 5.5 at 0.10 / 0.50 per MTok (0.50 / 2.50 past 100K-token prompts), which is correct. Published first-party rates (USD per million tokens, cached 2026-10-06): Claude Haiku 5.5 in 0.10 out 0.50 (prompts over 100K: in 0.50 out 2.50); Claude Sonnet 5.5 in 2 out 10, cache read 0.20; Claude Opus 5.5 in 4 out 20, cache read 0.20; Claude Fable 5.1 in 10 out 50, cache read 0.25. Cache writes (5-minute) are 1.25x the input rate. Make ONE table the source of truth (put it in tools/rates.mjs, keyed by family: haiku, sonnet, opus, fable; per-MTok in/out/cacheWrite/cacheRead plus longIn/longOut for haiku) and have tools/anthropic.mjs derive its per-token PRICES from it (divide by 1e6; keep the PRICES export shape and the long-prompt behaviour exactly, so anthropic-lane tests keep passing). rates.mjs modelFamily must also recognise fable. Keep the Haiku cache read at 0.1x input (0.01) since no separate rate is published here.\n\nCAP - one spend cap: $5/day total across both Macs, enforced as $2.50 per Mac, Chicago day. In tools/daily-limit.mjs change DEFAULT_DAILY_LIMIT_USD from 5 to 2.5 (it already counts every paid lane together on the Chicago day; keep that) and make sure the default mode is 'stop' (if a default exists elsewhere, it must resolve to stop). The default ceiling (3x usd) must not let spend pass 2.5 when mode is stop; if the ceiling is only used for notify mode, leave it. In tools/budget-set-commands.mjs set DAILY_AGENT_RAISE_ALLOWANCE_USD to 0: an agent may no longer raise the daily limit at all; only the owner can (keep the owner path unchanged), and the refusal message for an agent raise must say the owner decides spend caps.\n\nTests in NEW tests/train2-money.test.mjs (first import: import './_isolate-config.mjs';): anthropic DAY_CAP_USD equals spend.mjs's anthropic lane default (20); MODEL_RATES haiku in/out are 0.10/0.50 per MTok and anthropic PRICES for haiku equal those divided by 1e6 (and the long-prompt rates); opus/sonnet/fable rows match the numbers above; modelFamily('claude-fable-5-1') is fable; with no config the effective daily limit is 2.5 and mode stop; an agent raise of any amount is refused with the owner message; an owner raise still works. Do not touch any other file. Existing tests in context must keep passing; if one asserts the old $5 default or the old agent allowance, update only that assertion (it is in your outputs) and say so. The daily-limit and budget test files are in your outputs ONLY so you can update assertions that pin the old $5 default or the old $5 agent raise allowance; change nothing else in them. The ignored tests cover spend paths whose behaviour must not change; the coordinator runs the main ones as checks.",
    "context": [
-    "tests/daily-limit.test.mjs",
-    "tests/budget-set.test.mjs",
     "tests/anthropic-lane.test.mjs",
-    "tests/spend.test.mjs"
+    "tests/spend.test.mjs",
+    "tests/hard-cap.test.mjs",
+    "tests/paid-lane-paused.test.mjs",
+    "tests/flat-rate-reserve.test.mjs"
    ],
    "outputs": [
     "tools/spend.mjs",
@@ -20,12 +21,74 @@
     "tools/rates.mjs",
     "tools/daily-limit.mjs",
     "tools/budget-set-commands.mjs",
-    "tests/train2-money.test.mjs"
+    "tests/train2-money.test.mjs",
+    "tests/daily-limit.test.mjs",
+    "tests/daily-limit-admission.test.mjs",
+    "tests/daily-limit-hardening.test.mjs",
+    "tests/daily-limit-hardening-round3.test.mjs",
+    "tests/daily-limit-hardening-round4.test.mjs",
+    "tests/daily-limit-notify.test.mjs",
+    "tests/budget-set.test.mjs",
+    "tests/budget-machine-pending.test.mjs"
    ],
-   "timeoutMs": 2400000
+   "timeoutMs": 2400000,
+   "ignoreTests": [
+    "tests/api-short-report.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/batch-run.test.mjs",
+    "tests/crash-guards.test.mjs",
+    "tests/dead-run.test.mjs",
+    "tests/field-lessons-batch-t1.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/lanes-run.test.mjs",
+    "tests/managers/r037-budget-lane.test.mjs",
+    "tests/paid-lane-pause.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/phase12-cli.test.mjs",
+    "tests/phase14.test.mjs",
+    "tests/policy-cli-wiring.test.mjs",
+    "tests/policy-hardening-round4.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/project-cap-billed.test.mjs",
+    "tests/project-spend.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/spend-run.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
   }
  ],
  "checks": [
-  { "name": "money", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/train2-money.test.mjs", "tests/daily-limit.test.mjs", "tests/budget-set.test.mjs", "tests/anthropic-lane.test.mjs", "tests/spend.test.mjs", "tests/spend-run.test.mjs", "tests/hard-cap.test.mjs", "tests/paid-lane-paused.test.mjs", "tests/paid-lane-pause.test.mjs", "tests/project-cap-billed.test.mjs", "tests/project-spend.test.mjs"] }
+  {
+   "name": "money",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/train2-money.test.mjs",
+    "tests/daily-limit.test.mjs",
+    "tests/budget-set.test.mjs",
+    "tests/anthropic-lane.test.mjs",
+    "tests/spend.test.mjs",
+    "tests/spend-run.test.mjs",
+    "tests/hard-cap.test.mjs",
+    "tests/paid-lane-paused.test.mjs",
+    "tests/paid-lane-pause.test.mjs",
+    "tests/project-cap-billed.test.mjs",
+    "tests/project-spend.test.mjs",
+    "tests/daily-limit-admission.test.mjs",
+    "tests/daily-limit-hardening.test.mjs",
+    "tests/daily-limit-hardening-round3.test.mjs",
+    "tests/daily-limit-hardening-round4.test.mjs",
+    "tests/daily-limit-notify.test.mjs",
+    "tests/budget-machine-pending.test.mjs",
+    "tests/flat-rate-reserve.test.mjs",
+    "tests/api-workers.test.mjs",
+    "tests/batch-run.test.mjs",
+    "tests/dead-run.test.mjs",
+    "tests/rented-run.test.mjs",
+    "tests/policy-hardening-round4.test.mjs"
+   ]
+  }
  ]
 }
