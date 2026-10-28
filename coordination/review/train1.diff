@@ -1,9 +1,152 @@
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index cbd87f8a..19942e0d 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.22', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.23', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.22');
++  assert.equal(pkg.version, '1.167.23');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.22/);
+-  assert.match(readme, /Install from tag v1\.167\.22/);
++  assert.match(readme, /Use Project Swarm 1\.167\.23/);
++  assert.match(readme, /Install from tag v1\.167\.23/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.22\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.23\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index 1c8b864a..3f0b600a 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.22', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.22 while 1.46.1 history remains', async () => {
++describe('release: 1.167.23', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.23 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.22');
+-    assert.equal(lock.version, '1.167.22');
+-    assert.equal(lock.packages[''].version, '1.167.22');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.22\n/);
++    assert.equal(pkg.version, '1.167.23');
++    assert.equal(lock.version, '1.167.23');
++    assert.equal(lock.packages[''].version, '1.167.23');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.23\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index a424f0c0..b749dde8 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.22');
+-  assert.equal(lock.version, '1.167.22');
+-  assert.equal(lock.packages[''].version, '1.167.22');
++  assert.equal(pkg.version, '1.167.23');
++  assert.equal(lock.version, '1.167.23');
++  assert.equal(lock.packages[''].version, '1.167.23');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.22\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.23\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index b3dc8c4f..2174df47 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.22 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.23 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.22');
+-  assert.equal(lock.version, '1.167.22');
+-  assert.equal(lock.packages[''].version, '1.167.22');
++  assert.equal(pkg.version, '1.167.23');
++  assert.equal(lock.version, '1.167.23');
++  assert.equal(lock.packages[''].version, '1.167.23');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.22\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.23\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.22',
++    'README.md': '1.167.23',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.22',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.22',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.22',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.22',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.23',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.23',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.23',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.23',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index f214fa1b..f0bdf859 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.22', () => {
+-  test('package.json and package-lock.json are both at 1.167.22', async () => {
++describe('release: 1.167.23', () => {
++  test('package.json and package-lock.json are both at 1.167.23', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.22');
+-    assert.equal(lock.version, '1.167.22');
+-    assert.equal(lock.packages[''].version, '1.167.22');
++    assert.equal(pkg.version, '1.167.23');
++    assert.equal(lock.version, '1.167.23');
++    assert.equal(lock.packages[''].version, '1.167.23');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
 diff --git a/tests/integrate-commit-branches.test.mjs b/tests/integrate-commit-branches.test.mjs
 new file mode 100644
-index 00000000..fb73e0f1
+index 00000000..0a5b0ea7
 --- /dev/null
 +++ b/tests/integrate-commit-branches.test.mjs
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,230 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -146,20 +289,84 @@ index 00000000..fb73e0f1
 +  assert.equal(out.commit?.status, 'committed');
 +});
 +
-+test('invalid JSON and bad commitBranches skip naming integrate.commitBranches', async t => {
++test('invalid JSON and bad commitBranches on swarm/* commit with warnings', async t => {
 +  const root = await fixture(t, { branch: 'swarm/bad-config' });
 +  await fs.writeFile(path.join(root, '.project-swarm.json'), '{ not json\n');
 +  let out = await runCommit(root);
-+  assert.equal(out.commit?.status, 'skipped');
-+  assert.match(out.commit?.reason, /\.project-swarm\.json integrate\.commitBranches/);
++  assert.equal(out.commit?.status, 'committed');
++  assert.ok(out.warnings?.some(w => w.includes('.project-swarm.json integrate.commitBranches')));
 +
 +  await fs.writeFile(
 +    path.join(root, '.project-swarm.json'),
 +    `${JSON.stringify({ integrate: { commitBranches: 'not-array' } })}\n`,
 +  );
-+  out = await runCommit(root);
++  await fs.writeFile(path.join(root, 'out/change.txt'), 'integrated-again\n');
++  out = await runCommit(root, { state: integrationState(root, 'out/change.txt', 'integrated-again\n') });
++  assert.equal(out.commit?.status, 'committed');
++  assert.match(out.warnings?.join('\n') ?? '', /integrate\.commitBranches must be an array of non-empty strings/);
++});
++
++test('default develop via upstream/HEAD is never committed with commitBranches [*]', async t => {
++  const root = await fixture(t, { branch: 'develop', projectSwarm: { integrate: { commitBranches: ['*'] } } });
++  await git(root, 'remote', 'add', 'upstream', root);
++  await git(root, 'fetch', 'upstream');
++  await git(root, 'symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/develop');
++  const before = await headSha(root);
++  const out = await runCommit(root);
 +  assert.equal(out.commit?.status, 'skipped');
-+  assert.match(out.commit?.reason, /integrate\.commitBranches must be an array of non-empty strings/);
++  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
++  assert.equal(await headSha(root), before);
++});
++
++test('init.defaultBranch trunk with no remote is never committed', async t => {
++  const root = await fixture(t, { branch: 'trunk', projectSwarm: { integrate: { commitBranches: ['*'] } } });
++  await git(root, 'config', 'init.defaultBranch', 'trunk');
++  const before = await headSha(root);
++  const out = await runCommit(root);
++  assert.equal(out.commit?.status, 'skipped');
++  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
++  assert.equal(await headSha(root), before);
++});
++
++test('no remote HEAD: [*] skips feature/x but explicit name commits', async t => {
++  const rootStar = await fixture(t, {
++    branch: 'feature/x',
++    projectSwarm: { integrate: { commitBranches: ['*'] } },
++  });
++  const beforeStar = await headSha(rootStar);
++  const skipOut = await runCommit(rootStar);
++  assert.equal(skipOut.commit?.status, 'skipped');
++  assert.match(skipOut.commit?.reason, /default branch could not be determined/);
++  assert.equal(await headSha(rootStar), beforeStar);
++
++  const rootNamed = await fixture(t, {
++    branch: 'feature/x',
++    projectSwarm: { integrate: { commitBranches: ['feature/x'] } },
++  });
++  const commitOut = await runCommit(rootNamed);
++  assert.equal(commitOut.commit?.status, 'committed');
++});
++
++test('Main branch name is protected like main', async t => {
++  const root = await fixture(t, {
++    branch: 'main',
++    projectSwarm: { integrate: { commitBranches: ['Main'] } },
++  });
++  const before = await headSha(root);
++  const out = await runCommit(root);
++  assert.equal(out.commit?.status, 'skipped');
++  assert.match(out.commit?.reason, /the main branch; integrate never commits there/);
++  assert.equal(await headSha(root), before);
++});
++
++test('invalid .project-swarm.json still commits on swarm/test with a warning', async t => {
++  const root = await fixture(t, { branch: 'swarm/test' });
++  await fs.writeFile(path.join(root, '.project-swarm.json'), '{ not json\n');
++  const before = await headSha(root);
++  const out = await runCommit(root);
++  assert.equal(out.commit?.status, 'committed');
++  assert.notEqual(await headSha(root), before);
++  assert.ok(out.warnings?.some(w => w.includes('is not valid JSON')));
 +});
 +
 +test('readIntegrateCommitBranches returns patterns from valid file', async t => {
@@ -172,10 +379,10 @@ index 00000000..fb73e0f1
 +});
 diff --git a/tests/om-manifest-guard.test.mjs b/tests/om-manifest-guard.test.mjs
 new file mode 100644
-index 00000000..266dc4a2
+index 00000000..842b8edb
 --- /dev/null
 +++ b/tests/om-manifest-guard.test.mjs
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,482 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -185,8 +392,11 @@ index 00000000..266dc4a2
 +import os from 'node:os';
 +import path from 'node:path';
 +import { fileURLToPath } from 'node:url';
-+import { omRunManifestVetted } from '../tools/om-manifest-guard.mjs';
-+import { orchestratorModeCommandAllowed } from '../tools/shell-writes.mjs';
++import { omRunManifestVetted, orchestratorManifestGate } from '../tools/om-manifest-guard.mjs';
++import { orchestratorModeCommandAllowed, ORCHESTRATOR_MODE_OFF_FILE } from '../tools/shell-writes.mjs';
++import { applyManifestJobTypes } from '../tools/swarm/core-1.mjs';
++
++const HOOK = fileURLToPath(new URL('../tools/orchestrator-hook.mjs', import.meta.url));
 +
 +const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 +
@@ -234,6 +444,14 @@ index 00000000..266dc4a2
 +    );
 +  }
 +  return root;
++}
++
++async function installOrchestratorHook(root) {
++  await fs.mkdir(path.join(root, '.claude'), { recursive: true });
++  const command = `test -f ${JSON.stringify(HOOK)} && node ${JSON.stringify(HOOK)} pre || true`;
++  await fs.writeFile(path.join(root, '.claude', 'settings.local.json'), `${JSON.stringify({
++    hooks: { PreToolUse: [{ hooks: [{ type: 'command', command }] }] },
++  }, null, 2)}\n`);
 +}
 +
 +async function writeManifest(root, rel, body) {
@@ -450,12 +668,209 @@ index 00000000..266dc4a2
 +  const ctx = { root, cwd: root };
 +  assert.equal(orchestratorModeCommandAllowed(`swarm ticket ${rel} --pr p.json`, ctx), true);
 +});
++
++test('orchestratorManifestGate throws unvetted checks in Claude Code with hook installed', async t => {
++  const root = await projectFixture(t, { checksArgv: ['npm', 'test'] });
++  await installOrchestratorHook(root);
++  const manifest = {
++    version: 1,
++    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
++    checks: [{ name: 'evil', argv: EVIL_CHECK }],
++  };
++  await assert.rejects(
++    () => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }),
++    err => err.code === 'orchestrator-manifest-unvetted' && /checks/.test(err.message),
++  );
++  await assert.rejects(
++    () => applyManifestJobTypes(root, manifest, { env: { ...process.env, CLAUDECODE: '1' } }),
++    err => err.code === 'orchestrator-manifest-unvetted',
++  );
++});
++
++test('orchestratorManifestGate no-op without CLAUDECODE, mode off, or hook', async t => {
++  const root = await projectFixture(t, { checksArgv: ['npm', 'test'] });
++  await installOrchestratorHook(root);
++  const manifest = {
++    version: 1,
++    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
++    checks: [{ name: 'evil', argv: EVIL_CHECK }],
++  };
++  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: undefined }));
++
++  await fs.mkdir(path.join(root, '.swarm', 'orchestrator-mode'), { recursive: true });
++  await fs.writeFile(path.join(root, ORCHESTRATOR_MODE_OFF_FILE), '');
++  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }));
++
++  const rootNoHook = await projectFixture(t, { checksArgv: ['npm', 'test'] });
++  await assert.doesNotReject(() => orchestratorManifestGate(rootNoHook, manifest, { ...process.env, CLAUDECODE: '1' }));
++});
++
++test('orchestratorManifestGate passes vetted manifest argv', async t => {
++  const root = await projectFixture(t, { checksArgv: EVIL_CHECK });
++  await installOrchestratorHook(root);
++  const manifest = {
++    version: 1,
++    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
++    checks: [{ name: VETTED_NAME, argv: EVIL_CHECK }],
++  };
++  await assert.doesNotReject(() => orchestratorManifestGate(root, manifest, { ...process.env, CLAUDECODE: '1' }));
++});
++
++test('hook refuses printf-then-swarm-run compound', async t => {
++  await installLocalSwarmShim();
++  const root = await projectFixture(t, { checksArgv: EVIL_CHECK });
++  const rel = 'coordination/manifests/x.json';
++  const body = JSON.stringify({
++    version: 1,
++    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
++    checks: [{ name: VETTED_NAME, argv: EVIL_CHECK }],
++  });
++  const cmd = `printf ${JSON.stringify(body)} > ${rel} && swarm run ${rel}`;
++  const ctx = { root, cwd: root };
++  assert.equal(orchestratorModeCommandAllowed(cmd, ctx), false);
++});
++
++test('hook refuses swarm run when manifest path missing on disk', async t => {
++  await installLocalSwarmShim();
++  const root = await projectFixture(t, { checksArgv: null });
++  const ctx = { root, cwd: root };
++  assert.equal(orchestratorModeCommandAllowed('swarm run coordination/manifests/new.json', ctx), false);
++});
++
++test('hook allows swarm run with bare run id when manifest file missing', async t => {
++  await installLocalSwarmShim();
++  const root = await projectFixture(t, { checksArgv: null });
++  const ctx = { root, cwd: root };
++  assert.equal(orchestratorModeCommandAllowed('swarm run run-abc-123', ctx), true);
++});
++
++const SUPABASE_START = ['supabase', 'start'];
++
++async function waveProjectFixture(t) {
++  const root = await tmp(t);
++  await fs.mkdir(path.join(root, '.git'));
++  await fs.mkdir(path.join(root, '.swarm', 'runs'), { recursive: true });
++  await fs.mkdir(path.join(root, 'coordination', 'manifests'), { recursive: true });
++  await fs.writeFile(
++    path.join(root, 'package.json'),
++    `${JSON.stringify({
++      scripts: {
++        typecheck: 'tsc --noEmit',
++        lint: 'eslint .',
++        build: 'next build',
++      },
++    }, null, 2)}\n`,
++  );
++  await fs.writeFile(path.join(root, 'tsconfig.json'), '{}\n');
++  await fs.writeFile(
++    path.join(root, 'coordination', 'checks.json'),
++    `${JSON.stringify({ checks: [] }, null, 2)}\n`,
++  );
++  await fs.writeFile(
++    path.join(root, '.project-swarm.json'),
++    `${JSON.stringify({
++      profile: {
++        verify: {
++          command: ['npx', 'vitest', 'run', '{tests}'],
++          setup: [SUPABASE_START],
++        },
++      },
++    }, null, 2)}\n`,
++  );
++  return root;
++}
++
++function generatedWaveManifest() {
++  return {
++    version: 1,
++    jobs: [{ id: 'j1', prompt: 'work', outputs: ['src/a.ts'] }],
++    preChecks: [SUPABASE_START],
++    checks: [
++      {
++        name: 'tests',
++        argv: ['npx', 'vitest', 'run'],
++        affectedArgv: ['npx', 'vitest', 'run', '{affected}'],
++        timeoutMs: 900000,
++      },
++      {
++        name: 'typecheck',
++        argv: ['npm', 'run', 'typecheck'],
++        timeoutMs: 600000,
++        cleanDirs: ['.next/types'],
++      },
++      { name: 'lint', argv: ['npm', 'run', 'lint'], timeoutMs: 600000 },
++      { name: 'build', argv: ['npm', 'run', 'build'], timeoutMs: 600000 },
++    ],
++  };
++}
++
++test('generated wave manifest shape passes vetting', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/wave.json';
++  await writeManifest(root, rel, generatedWaveManifest());
++  assert.equal(omRunManifestVetted(root, rel).ok, true);
++});
++
++test('generated wave manifest rejects tampered argv', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/bad-argv.json';
++  const body = generatedWaveManifest();
++  body.checks[1].argv = ['npm', 'run', 'evil'];
++  await writeManifest(root, rel, body);
++  const r = omRunManifestVetted(root, rel);
++  assert.equal(r.ok, false);
++  assert.match(r.reason, /vetted/);
++});
++
++test('generated wave manifest rejects unknown check key', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/bad-key.json';
++  const body = generatedWaveManifest();
++  body.checks[0].env = { FOO: 'bar' };
++  await writeManifest(root, rel, body);
++  const r = omRunManifestVetted(root, rel);
++  assert.equal(r.ok, false);
++  assert.match(r.reason, /unknown key env/);
++});
++
++test('generated wave manifest rejects bad cleanDirs', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/bad-clean.json';
++  const body = generatedWaveManifest();
++  body.checks[1].cleanDirs = ['dist'];
++  await writeManifest(root, rel, body);
++  const r = omRunManifestVetted(root, rel);
++  assert.equal(r.ok, false);
++  assert.match(r.reason, /cleanDirs/);
++});
++
++test('generated wave manifest rejects unvetted preChecks argv', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/bad-pre.json';
++  const body = generatedWaveManifest();
++  body.preChecks = [['docker', 'compose', 'up']];
++  await writeManifest(root, rel, body);
++  const r = omRunManifestVetted(root, rel);
++  assert.equal(r.ok, false);
++  assert.match(r.reason, /preChecks/);
++});
++
++test('generated wave manifest rejects unvetted affectedArgv', async t => {
++  const root = await waveProjectFixture(t);
++  const rel = 'coordination/manifests/bad-affected.json';
++  const body = generatedWaveManifest();
++  body.checks[0].affectedArgv = ['npx', 'vitest', 'run', '--grep', 'evil'];
++  await writeManifest(root, rel, body);
++  const r = omRunManifestVetted(root, rel);
++  assert.equal(r.ok, false);
++  assert.match(r.reason, /affectedArgv/);
++});
 diff --git a/tests/split-auto-approve.test.mjs b/tests/split-auto-approve.test.mjs
 new file mode 100644
-index 00000000..7fb6810d
+index 00000000..5d8dde21
 --- /dev/null
 +++ b/tests/split-auto-approve.test.mjs
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,244 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -464,9 +879,9 @@ index 00000000..7fb6810d
 +import os from 'node:os';
 +import path from 'node:path';
 +import { evaluateAutoApprove } from '../tools/split-auto-approve.mjs';
-+import { swarmSubcommandAlwaysAllowed } from '../tools/orchestrator-allow.mjs';
++import { orchestratorWriteAllowedRel, swarmSubcommandAlwaysAllowed } from '../tools/orchestrator-allow.mjs';
 +import { runScopeCommand } from '../tools/scope-commands.mjs';
-+import { readLedger } from '../tools/tickets.mjs';
++import { readLedger, ticketSetHash } from '../tools/tickets.mjs';
 +
 +const baseTicket = (id, extra = {}) => ({
 +  id,
@@ -482,26 +897,41 @@ index 00000000..7fb6810d
 +  ...extra,
 +});
 +
-+const baseSnapshot = (tickets, changeOrderIds = []) => ({
++const baseSnapshot = (tickets, changeOrderIds = [], ticketsHash = undefined) => ({
 +  at: '2024-01-01T00:00:00.000Z',
 +  by: 'owner',
-+  ticketsHash: 'abc',
++  ticketsHash: ticketsHash ?? ticketSetHash(tickets),
 +  changeOrderIds,
 +  tickets,
 +});
++
++const boundEval = (input) => {
++  const snapshot = input.snapshot;
++  const approveLogTicketsHash = input.approveLogTicketsHash
++    ?? (snapshot?.tickets ? ticketSetHash(snapshot.tickets) : null);
++  return evaluateAutoApprove({ ...input, approveLogTicketsHash });
++};
 +
 +const passingLedger = (snapshot, { extraTickets = [], changeOrders = [{ id: 'CO-001' }] } = {}) => ({
 +  tickets: [...snapshot.tickets, ...extraTickets],
 +  changeOrders,
 +});
 +
-+test('evaluateAutoApprove: all conditions pass', () => {
++test('orchestratorWriteAllowedRel denies ledger forgery paths', () => {
++  assert.equal(orchestratorWriteAllowedRel('.swarm/project/approved-tickets.json'), false);
++  assert.equal(orchestratorWriteAllowedRel('.swarm/project/tickets.json'), false);
++  assert.equal(orchestratorWriteAllowedRel('.swarm/project/tickets.log'), false);
++  assert.equal(orchestratorWriteAllowedRel('./.swarm/project/Tickets.json'), false);
++  assert.equal(orchestratorWriteAllowedRel('.swarm/notes/orchestrator-note.md'), true);
++});
++
++test('evaluateAutoApprove: all conditions pass when snapshot and log agree', () => {
 +  const snap = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
 +  const ledger = passingLedger(snap, {
 +    extraTickets: [baseTicket('T-0002')],
 +    changeOrders: [{ id: 'CO-001' }],
 +  });
-+  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {} });
++  const result = boundEval({ ledger, snapshot: snap, profile: {} });
 +  assert.equal(result.ok, true);
 +  assert.equal(result.conditions.every(c => c.ok), true);
 +});
@@ -512,36 +942,85 @@ index 00000000..7fb6810d
 +    extraTickets: [baseTicket('T-0002')],
 +    changeOrders: [{ id: 'CO-001' }],
 +  });
-+  assert.equal(evaluateAutoApprove({ ledger, snapshot: null, profile: {} }).conditions.find(c => c.name === 'snapshot').ok, false);
-+  assert.equal(evaluateAutoApprove({ ledger, snapshot: snap, profile: {} }).conditions.find(c => c.name === 'change-order').ok, false);
++  assert.equal(boundEval({ ledger, snapshot: null, profile: {} }).conditions.find(c => c.name === 'snapshot').ok, false);
++  assert.equal(boundEval({ ledger, snapshot: snap, profile: {} }).conditions.find(c => c.name === 'change-order').ok, false);
 +
 +  const snap2 = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
 +  const ledgerCancelled = {
 +    tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
 +    changeOrders: [{ id: 'CO-001' }],
 +  };
-+  assert.equal(evaluateAutoApprove({ ledger: ledgerCancelled, snapshot: snap2, profile: {} }).conditions.find(c => c.name === 'no-done-cancelled').ok, false);
++  assert.equal(boundEval({ ledger: ledgerCancelled, snapshot: snap2, profile: {} }).conditions.find(c => c.name === 'no-done-cancelled').ok, false);
 +
 +  const snap3 = baseSnapshot([baseTicket('T-0001')], []);
 +  const ledgerPaid = {
 +    tickets: [baseTicket('T-0001'), baseTicket('T-0002', { lane: 'anthropic:haiku' })],
 +    changeOrders: [{ id: 'CO-001' }],
 +  };
-+  assert.equal(evaluateAutoApprove({ ledger: ledgerPaid, snapshot: snap3, profile: {} }).conditions.find(c => c.name === 'no-paid-lanes').ok, false);
++  assert.equal(boundEval({ ledger: ledgerPaid, snapshot: snap3, profile: {} }).conditions.find(c => c.name === 'no-paid-lanes').ok, false);
 +
 +  const snap4 = baseSnapshot([baseTicket('T-0001')], []);
 +  const ledgerMigration = {
 +    tickets: [baseTicket('T-0001'), baseTicket('T-0002', { type: 'migration', files: ['db/migrations/001.sql'] })],
 +    changeOrders: [{ id: 'CO-001' }],
 +  };
-+  assert.equal(evaluateAutoApprove({ ledger: ledgerMigration, snapshot: snap4, profile: {} }).conditions.find(c => c.name === 'no-migrations').ok, false);
++  assert.equal(boundEval({ ledger: ledgerMigration, snapshot: snap4, profile: {} }).conditions.find(c => c.name === 'no-migrations').ok, false);
 +
 +  const snap5 = baseSnapshot([baseTicket('T-0001')], []);
 +  const ledgerDeploy = {
 +    tickets: [baseTicket('T-0001'), baseTicket('T-0002', { files: ['vercel.json'] })],
 +    changeOrders: [{ id: 'CO-001' }],
 +  };
-+  assert.equal(evaluateAutoApprove({ ledger: ledgerDeploy, snapshot: snap5, profile: {} }).conditions.find(c => c.name === 'no-deploy-or-main-merge').ok, false);
++  assert.equal(boundEval({ ledger: ledgerDeploy, snapshot: snap5, profile: {} }).conditions.find(c => c.name === 'no-deploy-or-main-merge').ok, false);
++});
++
++test('evaluateAutoApprove: forged snapshot hash refused', () => {
++  const tickets = [baseTicket('T-0001', { status: 'done' })];
++  const snap = baseSnapshot(tickets, [], 'deadbeef');
++  const ledger = {
++    tickets: [...tickets, baseTicket('T-0002')],
++    changeOrders: [{ id: 'CO-001' }],
++  };
++  const logHash = ticketSetHash(tickets);
++  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {}, approveLogTicketsHash: logHash });
++  assert.equal(result.ok, false);
++  const cond = result.conditions.find(c => c.name === 'snapshot');
++  assert.equal(cond.ok, false);
++  assert.match(cond.detail, /does not match/);
++});
++
++test('evaluateAutoApprove: snapshot with no approve log entry refused', () => {
++  const snap = baseSnapshot([baseTicket('T-0001', { status: 'done' })], []);
++  const ledger = passingLedger(snap, { changeOrders: [{ id: 'CO-001' }] });
++  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {}, approveLogTicketsHash: null });
++  assert.equal(result.conditions.find(c => c.name === 'snapshot').ok, false);
++  assert.match(result.conditions.find(c => c.name === 'snapshot').detail, /no approve entry/);
++});
++
++test('evaluateAutoApprove: todo in snapshot done then cancelled on change order refused', () => {
++  const snap = baseSnapshot([baseTicket('T-0001', { status: 'todo' })], []);
++  const ledger = {
++    tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
++    changeOrders: [{ id: 'CO-001' }],
++  };
++  const result = boundEval({ ledger, snapshot: snap, profile: {} });
++  assert.equal(result.ok, false);
++  const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
++  assert.equal(cond.ok, false);
++  assert.match(cond.detail, /T-0001.*cancelled/);
++});
++
++test('evaluateAutoApprove: ticket missing from ledger refused', () => {
++  const snap = baseSnapshot([baseTicket('T-0001'), baseTicket('T-0002', { status: 'done' })], []);
++  const ledger = {
++    tickets: [baseTicket('T-0001')],
++    changeOrders: [{ id: 'CO-001' }],
++  };
++  const result = boundEval({ ledger, snapshot: snap, profile: {} });
++  assert.equal(result.ok, false);
++  const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
++  assert.equal(cond.ok, false);
++  assert.match(cond.detail, /T-0002.*missing/);
 +});
 +
 +test('evaluateAutoApprove: cancelling a done ticket fails no-done-cancelled', () => {
@@ -550,7 +1029,7 @@ index 00000000..7fb6810d
 +    tickets: [baseTicket('T-0001', { status: 'cancelled' }), baseTicket('T-0002')],
 +    changeOrders: [{ id: 'CO-001' }],
 +  };
-+  const result = evaluateAutoApprove({ ledger, snapshot: snap, profile: {} });
++  const result = boundEval({ ledger, snapshot: snap, profile: {} });
 +  assert.equal(result.ok, false);
 +  const cond = result.conditions.find(c => c.name === 'no-done-cancelled');
 +  assert.equal(cond.ok, false);
@@ -568,7 +1047,7 @@ index 00000000..7fb6810d
 +  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--yes', 'approve', '--auto-ok']), false);
 +  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['--json', 'approve', '--auto-ok']), false);
 +  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['approve', '--auto-ok', '']), false);
-+  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['APPROVE', '--AUTO-OK']), true);
++  assert.equal(swarmSubcommandAlwaysAllowed('scope', ['APPROVE', '--AUTO-OK']), false);
 +});
 +
 +const SCOPE = [
@@ -866,8 +1345,23 @@ index 00000000..f403cfcb
 +  const badFlag = await runInboxCommand(root, 'resolve', ['--superseded-splits', '--nope'], { now: () => NOW });
 +  assert.equal(badFlag.exitCode, 1);
 +});
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index 99cf8e11..56ee3feb 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.22');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.22\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.23');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.23\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
 diff --git a/tools/go.mjs b/tools/go.mjs
-index 6a76276f..b4beb778 100644
+index 6a76276f..d5be3d32 100644
 --- a/tools/go.mjs
 +++ b/tools/go.mjs
 @@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
@@ -878,7 +1372,7 @@ index 6a76276f..b4beb778 100644
  
  // A manifest path always carries a `.` (a `.json` extension); a run id never does, so this is
  // enough to tell the two positional shapes of `go`'s target apart without touching the filesystem.
-@@ -75,6 +76,77 @@ async function gitInRoot(exec, root, args, { env } = {}) {
+@@ -75,6 +76,114 @@ async function gitInRoot(exec, root, args, { env } = {}) {
    return exec('git', ['-C', root, ...args], { cwd: root, env });
  }
  
@@ -898,12 +1392,31 @@ index 6a76276f..b4beb778 100644
 +  return patterns;
 +}
 +
-+export function branchAllowedForIntegrateCommit(branch, patterns) {
-+  for (const pattern of patterns) {
-+    if (pattern.endsWith('*')) {
-+      const prefix = pattern.slice(0, -1);
-+      if (branch.startsWith(prefix)) return true;
-+    } else if (branch === pattern) return true;
++function patternMatchesBranch(branch, pattern) {
++  if (pattern.endsWith('*')) {
++    const prefix = pattern.slice(0, -1);
++    return branch.startsWith(prefix);
++  }
++  return branch === pattern;
++}
++
++function patternMatchesAnyProtected(pattern, protectedLower) {
++  for (const name of protectedLower) {
++    if (patternMatchesBranch(name, pattern)) return true;
++  }
++  return false;
++}
++
++function filterCommitBranchPatterns(patterns, protectedLower) {
++  return patterns.filter(pattern => pattern !== '*' && !patternMatchesAnyProtected(pattern, protectedLower));
++}
++
++export function branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable = true, protectedLower = null } = {}) {
++  const effective = remoteHeadReadable || !protectedLower
++    ? patterns
++    : filterCommitBranchPatterns(patterns, protectedLower);
++  for (const pattern of effective) {
++    if (patternMatchesBranch(branch, pattern)) return true;
 +  }
 +  return false;
 +}
@@ -940,44 +1453,79 @@ index 6a76276f..b4beb778 100644
 +  return { patterns, error: null };
 +}
 +
-+async function repositoryDefaultBranch(exec, root, gitEnv) {
-+  const res = await gitInRoot(exec, root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { env: gitEnv });
-+  if (res.code !== 0 || !res.stdout?.trim()) return null;
-+  const ref = res.stdout.trim();
-+  return ref.startsWith('origin/') ? ref.slice('origin/'.length) : ref;
++async function readIntegrateCommitBranchContext(exec, root, gitEnv) {
++  const protectedLower = new Set(['main', 'master']);
++
++  const initRes = await gitInRoot(exec, root, ['config', '--get', 'init.defaultBranch'], { env: gitEnv });
++  if (initRes.code === 0 && initRes.stdout?.trim()) {
++    protectedLower.add(initRes.stdout.trim().toLowerCase());
++  }
++
++  let remoteHeadReadable = false;
++  const refRes = await gitInRoot(exec, root, ['for-each-ref', '--format=%(symref)', 'refs/remotes/*/HEAD'], { env: gitEnv });
++  if (refRes.code === 0 && refRes.stdout) {
++    for (const line of refRes.stdout.split('\n')) {
++      const symref = line.trim();
++      if (!symref) continue;
++      const match = /^refs\/remotes\/[^/]+\/(.+)$/.exec(symref);
++      if (!match) continue;
++      remoteHeadReadable = true;
++      protectedLower.add(match[1].toLowerCase());
++    }
++  }
++
++  return { protectedLower, remoteHeadReadable };
 +}
 +
-+function isProtectedMainBranch(branch, defaultBranch) {
-+  if (branch === 'main' || branch === 'master') return true;
-+  if (defaultBranch && branch === defaultBranch) return true;
-+  return false;
++function isProtectedBranch(branch, protectedLower) {
++  return protectedLower.has(branch.toLowerCase());
 +}
++
++const DEFAULT_BRANCH_UNDETERMINED_SKIP =
++  'integrate.commitBranches would match via * or a default-branch pattern, but the default branch could not be determined (no remote HEAD); only swarm/* and explicitly named branches commit';
 +
  export async function commitIntegratedRun(root, { runId, state, manifest, autoCommit = true, exec = commitExec, env, appendEvent, sleepMs = sleep } = {}) {
    const skipped = reason => ({ commit: { status: 'skipped', reason }, humanLine: `committed nothing: ${reason}` });
    if (autoCommit === false) return skipped('autoCommit disabled');
-@@ -83,7 +155,20 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
+@@ -83,7 +192,29 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
    const branchRes = await gitInRoot(exec, root, ['symbolic-ref', '--short', 'HEAD'], { env: gitEnv });
    if (branchRes.code !== 0 || !branchRes.stdout?.trim()) return skipped('not on a branch');
    const branch = branchRes.stdout.trim();
 -  if (!branch.startsWith('swarm/')) return skipped(`checkout is on ${branch}, not a swarm/* branch`);
 +
-+  const defaultBranch = await repositoryDefaultBranch(exec, root, gitEnv);
-+  if (isProtectedMainBranch(branch, defaultBranch)) {
++  const { protectedLower, remoteHeadReadable } = await readIntegrateCommitBranchContext(exec, root, gitEnv);
++  if (isProtectedBranch(branch, protectedLower)) {
 +    return skipped(`checkout is on ${branch}, the main branch; integrate never commits there (not a swarm/* branch)`);
 +  }
 +
 +  const { patterns, error: commitBranchesError } = await readIntegrateCommitBranches(root);
-+  if (commitBranchesError) return skipped(commitBranchesError);
-+
 +  const onSwarmBranch = branch.startsWith('swarm/');
-+  const onNamedBranch = branchAllowedForIntegrateCommit(branch, patterns);
++  const warnings = [];
++  if (commitBranchesError) {
++    if (!onSwarmBranch) return skipped(commitBranchesError);
++    warnings.push(commitBranchesError);
++  }
++
++  const branchContext = { remoteHeadReadable, protectedLower };
++  const onNamedBranch = branchAllowedForIntegrateCommit(branch, patterns, branchContext);
 +  if (!onSwarmBranch && !onNamedBranch) {
++    const wouldMatchIgnored = !remoteHeadReadable
++      && branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable: true })
++      && !branchAllowedForIntegrateCommit(branch, patterns, branchContext);
++    if (wouldMatchIgnored) return skipped(DEFAULT_BRANCH_UNDETERMINED_SKIP);
 +    return skipped(`checkout is on ${branch}, not a swarm/* branch or a branch named in .project-swarm.json integrate.commitBranches`);
 +  }
  
    const stagedRes = await gitInRoot(exec, root, ['diff', '--cached', '--name-only'], { env: gitEnv });
    if (stagedRes.code !== 0) return skipped('git could not read the index');
+@@ -150,6 +281,7 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
+       text: humanLine,
+     }).catch(() => {});
+   }
++  if (warnings.length) return { commit, humanLine, warnings };
+   return { commit, humanLine };
+ }
+ 
 diff --git a/tools/inbox-commands.mjs b/tools/inbox-commands.mjs
 index 9b7fb14b..40940b69 100644
 --- a/tools/inbox-commands.mjs
@@ -1062,21 +1610,26 @@ index 9b7fb14b..40940b69 100644
          if (!runId || runId.startsWith('-') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) return bad(command);
 diff --git a/tools/om-manifest-guard.mjs b/tools/om-manifest-guard.mjs
 new file mode 100644
-index 00000000..824c68bd
+index 00000000..0b2a039d
 --- /dev/null
 +++ b/tools/om-manifest-guard.mjs
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,489 @@
 +// SPDX-License-Identifier: Apache-2.0
 +// Synchronous vetting of swarm run/go manifest files for orchestrator-mode shell guard.
 +import fs from 'node:fs';
 +import path from 'node:path';
 +import { OM_SWARM_RUN_FLAGS } from './orchestrator-allow.mjs';
++import { managedChecks } from './verify-config.mjs';
++import { qualityCheckArgvsForProject } from './quality-checks.mjs';
 +
 +const OM_SWARM_RUN_FLAGS_WITH_VALUE = new Set([
 +  '--lane', '--ticket', '--job', '--run', '--worktree', '--jobs', '--max-jobs', '--max-waves',
 +]);
 +
 +const OM_SWARM_INTEGRATE_APPROVE_MANIFEST = '--approve-manifest';
++
++const CHECK_ENTRY_KEYS = new Set(['name', 'argv', 'affectedArgv', 'timeoutMs', 'repeat', 'base', 'cleanDirs']);
++const PRE_CHECK_ENTRY_KEYS = new Set(['argv', 'name', 'timeoutMs']);
 +
 +const omSwarmJobsValueOk = val => {
 +  const parts = String(val ?? '').split(',');
@@ -1190,6 +1743,14 @@ index 00000000..824c68bd
 +
 +const NOT_VETTED_MSG = 'is not a vetted command from coordination/checks.json or the profile verify command';
 +
++/** True when a swarm run/go/ticket positional names a manifest file path (not a bare run id). */
++export function omSwarmManifestArgLooksLikeFile(raw) {
++  const s = String(raw ?? '');
++  if (s.includes('/') || s.includes('\\')) return true;
++  if (s.includes('.')) return true;
++  return false;
++}
++
 +const resolveManifestRel = (root, manifestArg) => {
 +  const s = String(manifestArg ?? '');
 +  if (!s || path.isAbsolute(s) || s.startsWith('-')) {
@@ -1222,7 +1783,21 @@ index 00000000..824c68bd
 +  return { ok: true, missing: false, filePath: resolved, rel: norm };
 +};
 +
-+const loadVettedArgvs = root => {
++const pushVettedArgv = (vetted, raw) => {
++  const argv = argvStrings(raw);
++  if (argv) vetted.push(argv);
++};
++
++const loadProfile = root => {
++  try {
++    const pointer = JSON.parse(fs.readFileSync(path.join(root, '.project-swarm.json'), 'utf8'));
++    return pointer?.profile ?? {};
++  } catch {
++    return {};
++  }
++};
++
++export const loadVettedArgvs = root => {
 +  const vetted = [];
 +  try {
 +    const text = fs.readFileSync(path.join(root, 'coordination/checks.json'), 'utf8');
@@ -1230,34 +1805,131 @@ index 00000000..824c68bd
 +    const checks = data?.checks;
 +    if (Array.isArray(checks)) {
 +      for (const entry of checks) {
-+        const argv = argvStrings(entry?.argv);
-+        if (argv) vetted.push(argv);
++        pushVettedArgv(vetted, entry?.argv);
 +      }
 +    }
 +  } catch { /* empty vetted list */ }
-+  try {
-+    const text = fs.readFileSync(path.join(root, '.project-swarm.json'), 'utf8');
-+    const pointer = JSON.parse(text);
-+    const verify = pointer?.profile?.verify;
-+    if (verify && typeof verify === 'object' && !Array.isArray(verify)) {
-+      const cmd = argvStrings(verify.command);
-+      if (cmd) vetted.push(cmd);
-+      const setup = verify.setup;
-+      if (setup !== undefined) {
-+        if (!Array.isArray(setup)) return vetted;
-+        for (const entry of setup) {
-+          if (Array.isArray(entry)) {
-+            const argv = argvStrings(entry);
-+            if (argv) vetted.push(argv);
-+          } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-+            const argv = argvStrings(entry.argv);
-+            if (argv) vetted.push(argv);
-+          }
-+        }
++
++  const profile = loadProfile(root);
++  const verify = profile?.verify;
++  if (verify && typeof verify === 'object' && !Array.isArray(verify)) {
++    pushVettedArgv(vetted, verify.command);
++    const setup = verify.setup ?? [];
++    if (Array.isArray(setup)) {
++      for (const entry of setup) {
++        if (Array.isArray(entry)) pushVettedArgv(vetted, entry);
++        else if (entry && typeof entry === 'object' && !Array.isArray(entry)) pushVettedArgv(vetted, entry.argv);
 +      }
 +    }
-+  } catch { /* empty */ }
++    const managed = managedChecks(verify);
++    for (const check of managed.checks) {
++      pushVettedArgv(vetted, check.argv);
++      if (check.affectedArgv) pushVettedArgv(vetted, check.affectedArgv);
++    }
++    for (const argv of managed.preChecks) pushVettedArgv(vetted, argv);
++  }
++
++  for (const argv of qualityCheckArgvsForProject(root, profile)) {
++    pushVettedArgv(vetted, argv);
++  }
++
 +  return vetted;
++};
++
++const validateCleanDirs = (entry, fieldLabel, checkName, errors) => {
++  if (entry.cleanDirs === undefined) return true;
++  if (checkName !== 'typecheck') {
++    errors.push(`${fieldLabel} cleanDirs is only allowed on typecheck`);
++    return false;
++  }
++  if (
++    !Array.isArray(entry.cleanDirs)
++    || entry.cleanDirs.length !== 1
++    || entry.cleanDirs[0] !== '.next/types'
++  ) {
++    errors.push(`${fieldLabel} cleanDirs must be exactly [".next/types"]`);
++    return false;
++  }
++  return true;
++};
++
++const collectChecksEntries = (checks, fieldLabel, out, errors) => {
++  if (checks === undefined) return;
++  if (!Array.isArray(checks)) {
++    errors.push(`unrecognized shape for ${fieldLabel}`);
++    return;
++  }
++  for (const entry of checks) {
++    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    for (const key of Object.keys(entry)) {
++      if (!CHECK_ENTRY_KEYS.has(key)) {
++        errors.push(`${fieldLabel} entry has unknown key ${key}`);
++        return;
++      }
++    }
++    if (!('argv' in entry)) {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    const argv = argvStrings(entry.argv);
++    if (!argv) {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    const checkName = entry.name !== undefined ? String(entry.name) : '';
++    if (!validateCleanDirs(entry, fieldLabel, checkName, errors)) return;
++    out.push({ field: fieldLabel, argv });
++    if (entry.affectedArgv !== undefined) {
++      const affectedArgv = argvStrings(entry.affectedArgv);
++      if (!affectedArgv) {
++        errors.push(`unrecognized shape for ${fieldLabel}`);
++        return;
++      }
++      out.push({ field: `${fieldLabel} affectedArgv`, argv: affectedArgv });
++    }
++  }
++};
++
++const collectPreChecksArgvs = (preChecks, fieldLabel, out, errors) => {
++  if (preChecks === undefined) return;
++  if (!Array.isArray(preChecks)) {
++    errors.push(`unrecognized shape for ${fieldLabel}`);
++    return;
++  }
++  for (const entry of preChecks) {
++    if (Array.isArray(entry)) {
++      const argv = argvStrings(entry);
++      if (!argv) {
++        errors.push(`unrecognized shape for ${fieldLabel}`);
++        return;
++      }
++      out.push({ field: fieldLabel, argv });
++      continue;
++    }
++    if (!entry || typeof entry !== 'object') {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    for (const key of Object.keys(entry)) {
++      if (!PRE_CHECK_ENTRY_KEYS.has(key)) {
++        errors.push(`${fieldLabel} entry has unknown key ${key}`);
++        return;
++      }
++    }
++    if (!('argv' in entry)) {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    const argv = argvStrings(entry.argv);
++    if (!argv) {
++      errors.push(`unrecognized shape for ${fieldLabel}`);
++      return;
++    }
++    out.push({ field: fieldLabel, argv });
++  }
 +};
 +
 +const collectSetupArgvs = (setup, fieldLabel, out, errors) => {
@@ -1289,31 +1961,6 @@ index 00000000..824c68bd
 +      errors.push(`unrecognized shape for ${fieldLabel}`);
 +      return;
 +    }
-+  }
-+};
-+
-+const collectChecksArgvs = (checks, fieldLabel, out, errors) => {
-+  if (checks === undefined) return;
-+  if (!Array.isArray(checks)) {
-+    errors.push(`unrecognized shape for ${fieldLabel}`);
-+    return;
-+  }
-+  for (const entry of checks) {
-+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-+      errors.push(`unrecognized shape for ${fieldLabel}`);
-+      return;
-+    }
-+    const keys = Object.keys(entry);
-+    if (!keys.includes('argv')) {
-+      errors.push(`unrecognized shape for ${fieldLabel}`);
-+      return;
-+    }
-+    const argv = argvStrings(entry.argv);
-+    if (!argv) {
-+      errors.push(`unrecognized shape for ${fieldLabel}`);
-+      return;
-+    }
-+    out.push({ field: fieldLabel, argv });
 +  }
 +};
 +
@@ -1365,9 +2012,9 @@ index 00000000..824c68bd
 +      errors.push(`job ${jobId} uses model ${model}`);
 +      continue;
 +    }
-+    collectChecksArgvs(job.checks, `jobs[].${jobId}.checks`, out, errors);
++    collectChecksEntries(job.checks, `jobs[].${jobId}.checks`, out, errors);
 +    collectSetupArgvs(job.setup, `jobs[].${jobId}.setup`, out, errors);
-+    collectChecksArgvs(job.preChecks, `jobs[].${jobId}.preChecks`, out, errors);
++    collectPreChecksArgvs(job.preChecks, `jobs[].${jobId}.preChecks`, out, errors);
 +    collectMutantCheck(job.mutantCheck, `jobs[].${jobId}.mutantCheck`, out, errors);
 +  }
 +};
@@ -1378,9 +2025,9 @@ index 00000000..824c68bd
 +  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
 +    return { ok: false, reason: 'manifest is not a JSON object' };
 +  }
-+  collectChecksArgvs(manifest.checks, 'checks', collected, errors);
++  collectChecksEntries(manifest.checks, 'checks', collected, errors);
 +  collectSetupArgvs(manifest.setup, 'setup', collected, errors);
-+  collectChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
++  collectPreChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
 +  collectMutantCheck(manifest.mutantCheck, 'mutantCheck', collected, errors);
 +  vetJobs(manifest.jobs, collected, errors);
 +  if (errors.length) {
@@ -1414,7 +2061,12 @@ index 00000000..824c68bd
 +  }
 +  const resolved = resolveManifestRel(root, manifestArg);
 +  if (!resolved.ok) return { ok: false, reason: resolved.reason };
-+  if (resolved.missing) return { ok: true, reason: '' };
++  if (resolved.missing) {
++    if (omSwarmManifestArgLooksLikeFile(manifestArg)) {
++      return { ok: false, reason: 'manifest file does not exist' };
++    }
++    return { ok: true, reason: '' };
++  }
 +  let text;
 +  try {
 +    text = fs.readFileSync(resolved.filePath, 'utf8');
@@ -1430,18 +2082,64 @@ index 00000000..824c68bd
 +  const vetted = loadVettedArgvs(root);
 +  return vetManifestBody(manifest, vetted);
 +}
++
++/**
++ * Runner-side orchestrator manifest vetting (parsed object). No-op outside Claude Code with orchestrator hook.
++ * @param {string} root
++ * @param {object} manifest parsed manifest
++ * @param {NodeJS.ProcessEnv} [env]
++ */
++export async function orchestratorManifestGate(root, manifest, env = process.env) {
++  if (env?.CLAUDECODE !== '1') return;
++  const { orchestratorModeEnabled } = await import('./shell-writes.mjs');
++  if (!orchestratorModeEnabled(root)) return;
++  const { orchestratorHookInstalledFor } = await import('./orchestrator-hook.mjs');
++  if (!orchestratorHookInstalledFor(root)) return;
++  const vetted = loadVettedArgvs(root);
++  const result = vetManifestBody(manifest, vetted);
++  if (!result.ok) {
++    const err = new Error(result.reason);
++    err.code = 'orchestrator-manifest-unvetted';
++    throw err;
++  }
++}
 diff --git a/tools/orchestrator-allow.mjs b/tools/orchestrator-allow.mjs
-index b9a1d5a5..d32c62f8 100644
+index b9a1d5a5..532f6504 100644
 --- a/tools/orchestrator-allow.mjs
 +++ b/tools/orchestrator-allow.mjs
-@@ -603,11 +603,17 @@ const scopeSplitInvocation = rest => {
+@@ -73,6 +73,18 @@ export const ORCHESTRATOR_WRITE_RULES = Object.freeze([
+ 
+ const normPosixRel = normRel => String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+ 
++/** Ledger paths swarm CLI writes; orchestrator sessions must never forge or rewrite them. */
++const ORCHESTRATOR_DENIED_LEDGER_PATHS = new Set([
++  '.swarm/project/approved-tickets.json',
++  '.swarm/project/tickets.json',
++  '.swarm/project/tickets.log',
++]);
++
++const orchestratorDeniedLedgerRel = normRel => {
++  const norm = normPosixRel(normRel).replace(/^\.\/+/, '');
++  return ORCHESTRATOR_DENIED_LEDGER_PATHS.has(norm);
++};
++
+ const extSet = exts => new Set(exts.map(e => String(e).toLowerCase()));
+ 
+ const ruleMatchesRel = (rule, norm) => {
+@@ -132,6 +144,7 @@ export function orchestratorSwarmSessionCwdOk(projectRoot, cwd) {
+ export function orchestratorWriteAllowedRel(normRel) {
+   const norm = normPosixRel(normRel);
+   if (!norm) return false;
++  if (orchestratorDeniedLedgerRel(norm)) return false;
+   if (orchestratorWriteMarkerDeniedRel(norm)) return false;
+   if (/^package\.json$/i.test(norm.split('/').pop() ?? '') || norm.endsWith('/package.json')) return false;
+   return ORCHESTRATOR_WRITE_RULES.some(rule => ruleMatchesRel(rule, norm));
+@@ -603,11 +616,15 @@ const scopeSplitInvocation = rest => {
    return verb === 'split';
  };
  
-+const omSwarmScopeApproveAutoOkOnly = rest => {
-+  const lower = rest.map(w => String(w).toLowerCase());
-+  return lower.length === 2 && lower[0] === 'approve' && lower[1] === '--auto-ok';
-+};
++const omSwarmScopeApproveAutoOkOnly = rest =>
++  rest.length === 2 && rest[0] === 'approve' && rest[1] === '--auto-ok';
 +
  const omSwarmScopeAllowed = rest => {
    const lower = rest.map(w => String(w).toLowerCase());
@@ -1453,7 +2151,7 @@ index b9a1d5a5..d32c62f8 100644
    if (SCOPE_OWNER_VERBS.has(verb)) return false;
    if (verb === 'gate') return true;
    if (verb === 'split') return !lower.includes('approve');
-@@ -672,7 +678,7 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
+@@ -672,7 +689,7 @@ export function swarmSubcommandAlwaysAllowed(sub, rest) {
    if (!OM_SWARM_ALLOWED_TOP.has(s)) return false;
    if (s !== 'integrate' && swarmArgsHaveApproveManifest(rest)) return false;
    if (s === 'restore') return false;
@@ -1462,8 +2160,57 @@ index b9a1d5a5..d32c62f8 100644
    if (swarmArgsHaveForceBypass(rest)) return false;
    const allowAcceptWaves = s === 'scope' && scopeSplitInvocation(rest);
    if (swarmArgsHaveOwnerOverrideFlags(rest, { allowAcceptWaves })) return false;
+diff --git a/tools/orchestrator-hook.mjs b/tools/orchestrator-hook.mjs
+index 9fbc2bb4..bbe5a33a 100644
+--- a/tools/orchestrator-hook.mjs
++++ b/tools/orchestrator-hook.mjs
+@@ -24,7 +24,7 @@ const CLAUDE_PROJECTS_ROOT = (() => {
+ })();
+ 
+ /** True when orchestrator hooks for this script are installed in the project's personal Claude settings. */
+-function orchestratorHookInstalledFor(projectRoot) {
++export function orchestratorHookInstalledFor(projectRoot) {
+   try {
+     const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, '.claude', 'settings.local.json'), 'utf8'));
+     const cmds = [];
+diff --git a/tools/quality-checks.mjs b/tools/quality-checks.mjs
+index ec0d7c62..e69efd10 100644
+--- a/tools/quality-checks.mjs
++++ b/tools/quality-checks.mjs
+@@ -1,5 +1,31 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
++import fs from 'node:fs';
++import path from 'node:path';
++
++/** Same package-manager detection as scope-commands `packageManagerOf` / `qualityFor`. */
++export function packageManagerOfProfile(profile) {
++  return (profile?.stack ?? []).find((entry) => entry?.name === 'node')?.packageManager ?? null;
++}
++
++/** Argvs from deriveQualityChecks for a project root and profile (sync counterpart of scope-commands qualityFor). */
++export function qualityCheckArgvsForProject(root, profile = {}) {
++  let pkg = null;
++  try {
++    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
++  } catch {
++    /* no package.json */
++  }
++  const hasTsconfig = fs.existsSync(path.join(root, 'tsconfig.json'));
++  const manager = packageManagerOfProfile(profile) ?? 'npm';
++  return deriveQualityChecks({
++    pkg,
++    hasTsconfig,
++    manager,
++    config: profile?.quality ?? {},
++  }).map((check) => [...check.argv]);
++}
++
+ export function deriveQualityChecks({ pkg, hasTsconfig, manager = 'npm', config = {} } = {}) {
+   const scripts = (pkg && pkg.scripts) || {};
+   const cfg = config || {};
 diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
-index 87432d9d..3821015e 100644
+index 87432d9d..a9797d65 100644
 --- a/tools/scope-commands.mjs
 +++ b/tools/scope-commands.mjs
 @@ -75,6 +75,7 @@ import {
@@ -1483,7 +2230,7 @@ index 87432d9d..3821015e 100644
    { name: 'gate', summary: 'Ticket-manager scope gate: list findings or fix duplicate file owners.', flags: ['--list', '--json', '--fix-owners', '--yes'] },
    { name: 'sync', summary: 'Sync ticket status from a run.', flags: ['--integrated', '--accept-unreviewed', '--accept-unmet', '--reason', '--yes'] },
    { name: 'security-review', summary: 'Record Opus security review verdicts for a run.', flags: [] },
-@@ -1062,6 +1063,33 @@ export function parseLooseJson(text) {
+@@ -1062,6 +1063,53 @@ export function parseLooseJson(text) {
    }
  }
  
@@ -1494,6 +2241,26 @@ index 87432d9d..3821015e 100644
 +    if (error.code === 'ENOENT') return null;
 +    throw error;
 +  }
++}
++
++async function lastApproveLogTicketsHash(root) {
++  const file = path.join(root, '.swarm', 'project', 'tickets.log');
++  let text;
++  try {
++    text = await fs.readFile(file, 'utf8');
++  } catch (error) {
++    if (error.code === 'ENOENT') return null;
++    throw error;
++  }
++  let last = null;
++  for (const line of text.split('\n')) {
++    if (!line.trim()) continue;
++    try {
++      const entry = JSON.parse(line);
++      if (entry.event === 'approve' && typeof entry.ticketsHash === 'string') last = entry.ticketsHash;
++    } catch { /* skip malformed lines */ }
++  }
++  return last;
 +}
 +
 +async function writeApprovedTicketsSnapshot(root, payload) {
@@ -1517,7 +2284,7 @@ index 87432d9d..3821015e 100644
  async function writeFileSafe(root, rel_, text, { exclusive = false } = {}) {
    const segments = rel_.split('/');
    const dir = await safeWritableDir(root, segments.slice(0, -1));
-@@ -2394,6 +2422,9 @@ async function cmdGate(root, { flags }) {
+@@ -2394,6 +2442,9 @@ async function cmdGate(root, { flags }) {
  }
  
  async function cmdApprove(root, { rest, flags }, deps = {}) {
@@ -1527,7 +2294,7 @@ index 87432d9d..3821015e 100644
    const ledger = await readLedger(root);
    if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
    const { scope, hash, text, file } = await loadScope(root, rest[0] ?? ledger.scope?.file);
-@@ -2429,7 +2460,8 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
+@@ -2429,7 +2480,8 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
    const waveLine = waveSummary(waveSimulation);
    if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
    const policy = await readApprovalPolicy(root);
@@ -1537,7 +2304,7 @@ index 87432d9d..3821015e 100644
    const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
    const managerWarnings = [];
    const managerFindingLines = [];
-@@ -2455,7 +2487,25 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
+@@ -2455,9 +2507,36 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
    for (const warning of managerWarnings) {
      await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
    }
@@ -1545,8 +2312,9 @@ index 87432d9d..3821015e 100644
 +  let autoApproveLines = [];
 +  if (autoOk) {
 +    const priorSnapshot = await readApprovedTicketsSnapshot(root);
++    const approveLogTicketsHash = await lastApproveLogTicketsHash(root);
 +    const evalProfile = await readProfile(root);
-+    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile });
++    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile, approveLogTicketsHash });
 +    autoApproveLines = evalResult.conditions.map(c => `${c.name}: ${c.ok ? 'ok' : 'FAIL'} — ${c.detail}`);
 +    if (!evalResult.ok) {
 +      const newIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
@@ -1563,18 +2331,18 @@ index 87432d9d..3821015e 100644
 +  const by = autoOk ? 'orchestrator-auto' : flags.yes === true ? 'owner' : 'policy';
    const next = approveLedger(ledger, { by, now: now() });
    next.scope = { ...next.scope, hash, file };
-   await writeLedger(root, next);
-@@ -2472,10 +2522,17 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
-   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
-   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
-   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
-+  await writeApprovedTicketsSnapshot(root, {
++  const approvedTicketsSnapshot = {
 +    at: next.approved.at,
 +    by: next.approved.by,
 +    ticketsHash: next.approved.ticketsHash,
 +    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
 +    tickets: next.tickets,
-+  });
++  };
++  await writeApprovedTicketsSnapshot(root, approvedTicketsSnapshot);
+   await writeLedger(root, next);
+   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
+   await writeFileSafe(root, 'docs/scope/build-plan.md', renderBuildPlan(next, scope));
+@@ -2475,7 +2554,7 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
    if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
    // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
    try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
@@ -1584,7 +2352,7 @@ index 87432d9d..3821015e 100644
  
  // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
 diff --git a/tools/shell-writes.mjs b/tools/shell-writes.mjs
-index 916b855b..0ec40516 100644
+index 916b855b..6ea1b5cc 100644
 --- a/tools/shell-writes.mjs
 +++ b/tools/shell-writes.mjs
 @@ -22,6 +22,7 @@ import {
@@ -1620,14 +2388,102 @@ index 916b855b..0ec40516 100644
  };
  
  const omSwarmInvocation = (cmd, args, ctx) => {
+@@ -2440,7 +2457,77 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
+   return false;
+ };
+ 
+-const omValidateTokenized = (tokenized, ctx) => {
++const OM_COMPOUND_SEPS = new Set(['&&', ';', '||', '|']);
++
++const omRelUnderOmManifestWriteArea = rel => {
++  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
++  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
++};
++
++const omCommandIsCompound = (tokenized, commandText) => {
++  if (tokenized.length > 1) return true;
++  if (tokenized.some(w => OM_COMPOUND_SEPS.has(w.sepAfter))) return true;
++  if (/[^&]&[^&>]/.test(String(commandText ?? ''))) return true;
++  return false;
++};
++
++const omWriteTargetRel = (raw, ctx, expands) => {
++  if (expands || /^\$/.test(String(raw ?? ''))) return null;
++  if (!ctx?.root) return null;
++  try {
++    const rootReal = fs.realpathSync.native(ctx.root);
++    let p = String(raw ?? '');
++    if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
++    const cwd = ctx.cwd ?? ctx.root;
++    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
++    const rel = path.relative(rootReal, abs);
++    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
++    return rel.split(path.sep).join('/');
++  } catch {
++    return null;
++  }
++};
++
++const omWordsRedirectManifestArea = (words, ctx) => {
++  const wordExp = words.expands ?? [];
++  for (let i = 0; i < words.length; i += 1) {
++    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
++      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
++      if (rel && omRelUnderOmManifestWriteArea(rel)) return true;
++    }
++  }
++  return false;
++};
++
++const omSegmentInvokesSwarmRunGoTicket = (words, ctx) => {
++  const { plain } = omPlainWords(words);
++  let k = 0;
++  while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
++    k += 1;
++  }
++  if (k >= plain.length) return false;
++  const cmd = path.basename(plain[k]);
++  const args = plain.slice(k + 1);
++  return omSwarmInvocation(cmd, args, ctx);
++};
++
++const omCompoundManifestWriteWithSwarmBlocked = (commandText, tokenized, ctx) => {
++  if (!ctx?.root || !omCommandIsCompound(tokenized, commandText)) return false;
++  let hasSwarm = false;
++  for (const words of tokenized) {
++    if (omSegmentInvokesSwarmRunGoTicket(words, ctx)) hasSwarm = true;
++  }
++  if (!hasSwarm) return false;
++  const analysis = analyzeShell(String(commandText ?? ''), { root: ctx.root, cwd: ctx.cwd ?? ctx.root });
++  if ([...analysis.writes].some(omRelUnderOmManifestWriteArea)) return true;
++  for (const words of tokenized) {
++    if (omWordsRedirectManifestArea(words, ctx)) return true;
++  }
++  return false;
++};
++
++const omValidateTokenized = (tokenized, ctx, commandText = '') => {
++  if (omCompoundManifestWriteWithSwarmBlocked(commandText, tokenized, ctx)) return false;
+   const baseCwd = ctx.cwd ?? ctx.root;
+   const cwdStack = [baseCwd];
+   let cwd = baseCwd;
+@@ -2520,7 +2607,7 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
+     }
+     const tokenized = tokenize(text);
+     if (tokenized.unclosedQuote) return false;
+-    if (omValidateTokenized(tokenized, ctx)) return true;
++    if (omValidateTokenized(tokenized, ctx, text)) return true;
+     if (tokenized.length !== 1) return false;
+     const words = tokenized[0];
+     const { plain } = omPlainWords(words);
 diff --git a/tools/split-auto-approve.mjs b/tools/split-auto-approve.mjs
 new file mode 100644
-index 00000000..01cfc51e
+index 00000000..8e5617ed
 --- /dev/null
 +++ b/tools/split-auto-approve.mjs
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,235 @@
 +// SPDX-License-Identifier: Apache-2.0
-+import { parseLane } from './tickets.mjs';
++import { parseLane, ticketSetHash } from './tickets.mjs';
 +
 +const MIGRATION_DIR_PREFIXES = [
 +  'supabase/migrations/',
@@ -1775,16 +2631,30 @@ index 00000000..01cfc51e
 + * @param {{ ledger: object, snapshot: object|null, profile: object|null }} input
 + * @returns {{ ok: boolean, conditions: Array<{ name: string, ok: boolean, detail: string }> }}
 + */
-+export function evaluateAutoApprove({ ledger, snapshot, profile } = {}) {
++export function evaluateAutoApprove({ ledger, snapshot, profile, approveLogTicketsHash } = {}) {
 +  const conditions = [];
 +
 +  const hasSnapshotTickets = Boolean(snapshot && Array.isArray(snapshot.tickets));
++  const snapshotContentHash = hasSnapshotTickets ? ticketSetHash(snapshot.tickets) : null;
++  const snapshotBound = hasSnapshotTickets
++    && typeof approveLogTicketsHash === 'string'
++    && typeof snapshot.ticketsHash === 'string'
++    && snapshot.ticketsHash === approveLogTicketsHash
++    && snapshot.ticketsHash === snapshotContentHash;
++  let snapshotDetail = 'no approved-ticket snapshot: the owner approves once with swarm scope approve --yes';
++  if (hasSnapshotTickets) {
++    if (typeof approveLogTicketsHash !== 'string') {
++      snapshotDetail = 'no approve entry in tickets log to bind the snapshot';
++    } else if (!snapshotBound) {
++      snapshotDetail = `snapshot ticketsHash does not match the last approve log (${approveLogTicketsHash}) or the ticket set`;
++    } else {
++      snapshotDetail = `snapshot from ${snapshot.at ?? 'unknown'} (${snapshot.tickets.length} ticket(s))`;
++    }
++  }
 +  conditions.push({
 +    name: 'snapshot',
-+    ok: hasSnapshotTickets,
-+    detail: hasSnapshotTickets
-+      ? `snapshot from ${snapshot.at ?? 'unknown'} (${snapshot.tickets.length} ticket(s))`
-+      : 'no approved-ticket snapshot: the owner approves once with swarm scope approve --yes',
++    ok: snapshotBound,
++    detail: snapshotDetail,
 +  });
 +
 +  const newCoIds = newChangeOrderIds(ledger, snapshot ?? {});
@@ -1796,19 +2666,25 @@ index 00000000..01cfc51e
 +
 +  const doneProblems = [];
 +  if (hasSnapshotTickets) {
-+    for (const st of snapshot.tickets.filter(t => t.status === 'done')) {
++    for (const st of snapshot.tickets) {
 +      const cur = (ledger?.tickets ?? []).find(t => t.id === st.id);
-+      if (!cur) doneProblems.push(`${st.id}: missing from ledger`);
-+      else if (cur.status === 'cancelled') doneProblems.push(`${st.id}: cancelled`);
-+      else if (cur.status !== 'done') doneProblems.push(`${st.id}: status is ${cur.status}`);
++      if (st.status !== 'cancelled') {
++        if (!cur) doneProblems.push(`${st.id}: missing from ledger`);
++        else if (cur.status === 'cancelled') doneProblems.push(`${st.id}: cancelled`);
++      }
++      if (st.status === 'done') {
++        if (!cur) {
++          if (!doneProblems.some(p => p.startsWith(`${st.id}:`))) doneProblems.push(`${st.id}: missing from ledger`);
++        } else if (cur.status !== 'done') doneProblems.push(`${st.id}: status is ${cur.status}`);
++      }
 +    }
 +  } else {
 +    doneProblems.push('no snapshot to compare');
 +  }
 +  conditions.push({
 +    name: 'no-done-cancelled',
-+    ok: hasSnapshotTickets && doneProblems.length === 0,
-+    detail: doneProblems.length ? doneProblems.join('; ') : 'all done tickets from the snapshot remain done',
++    ok: snapshotBound && doneProblems.length === 0,
++    detail: doneProblems.length ? doneProblems.join('; ') : 'snapshot tickets unchanged (not cancelled, missing, or regressed from done)',
 +  });
 +
 +  const { added, changed } = addedAndChangedTickets(ledger, snapshot);
@@ -1947,3 +2823,23 @@ index 00000000..311624a1
 +
 +  return { superseded, kept };
 +}
+diff --git a/tools/swarm/core-1.mjs b/tools/swarm/core-1.mjs
+index 5a015328..79d641a6 100644
+--- a/tools/swarm/core-1.mjs
++++ b/tools/swarm/core-1.mjs
+@@ -11,6 +11,7 @@ import { assertNoSkillSymlinks, attachSkillsForJob, listSkills, resolveSkillsDir
+ import { ABSENCE_CLAIM_PATTERN, AGENTS_MD_DOC_RE, CHANGED_STATUS_WORD_RE, CORE_MODULE_PATH, DATACLASS_FIELD_RE, EVIDENCE_HEADING, FAILURE_LINE_RE, FAILURE_LOCATION_RE, HEX_HASH_RE, JSON_DEMAND_RE, MAX_NOTE_LEN, MAX_NOTES, PROGRESS_INTERVAL, RUNTIME_CHECK_RE, SECRET_PATTERN } from './patterns.mjs';
+ import { progressReport } from './run-state.mjs';
+ import { isWorktreeWriter } from './workspace.mjs';
++import { orchestratorManifestGate } from '../om-manifest-guard.mjs';
+ import { execFile } from 'node:child_process';
+ import crypto from 'node:crypto';
+ import fs from 'node:fs/promises';
+@@ -450,6 +451,7 @@ function namedTestPaths(argv) {
+ }
+ 
+ async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() }) {
++  await orchestratorManifestGate(root, manifest, env);
+   const withReport = job => {
+     if (manifest.report !== 'short' && job.report !== 'short') return job;
+     if (API_AGENTS.includes(job.agent)) return { ...job, report: 'short' };
