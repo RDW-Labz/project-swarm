@@ -111,7 +111,9 @@ async function currentBrief(root, { now = Date.now } = {}) {
   const [events, runs] = await Promise.all([readJournal(root), loadRuns(root)]);
   const brief = buildBrief({ root, events, runs, now });
   const ledger = await readLedger(root).catch((error) => {
-    console.error('[tools/project-commands.mjs] readLedger currentBrief:', error?.message ?? error);
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/project-commands.mjs] readLedger currentBrief:', error instanceof SyntaxError ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error));
+    }
     return null;
   });
   if (ledger) {
@@ -261,7 +263,9 @@ async function pendingForWorktreeRoot(wtRoot, { nowMs, exec }) {
       });
     }
     const ledger = await readLedger(wtRoot).catch((error) => {
-      console.error('[tools/project-commands.mjs] readLedger pending worktree:', error?.message ?? error, wtRoot);
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/project-commands.mjs] readLedger pending worktree:', error instanceof SyntaxError ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error), wtRoot);
+      }
       return null;
     });
     for (const ticket of ledger?.tickets ?? []) {
