@@ -329,7 +329,9 @@ export async function tunnelAdd(name, options, depsIn = {}) {
   const domain = `gui/${deps.uid}`;
   const boot = deps.launchctl(['bootstrap', domain, plistPath]);
   if (boot.code !== 0) {
-    try { deps.unlinkSync(plistPath); } catch { /* partial install */ }
+    try { deps.unlinkSync(plistPath); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/tunnel.mjs] unlink plist cleanup:', plistPath, error?.message ?? error);
+    }
     fail((boot.stderr || boot.stdout || 'launchctl bootstrap failed').trim(), 'tunnel-launchctl-failed');
   }
 

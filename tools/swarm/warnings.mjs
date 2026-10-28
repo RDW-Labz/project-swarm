@@ -264,7 +264,9 @@ async function contextSiblingUntrackedWarnings(root, job, tracked) {
     const shown = [];
     for (const file of found.slice(0, 5)) {
       let binary = false;
-      try { binary = (await fs.readFile(path.join(root, file))).subarray(0, 8000).includes(0); } catch { /* unreadable: report as text */ }
+      try { binary = (await fs.readFile(path.join(root, file))).subarray(0, 8000).includes(0); } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/swarm/warnings.mjs] readFile sibling:', file, error?.message ?? error);
+      }
       shown.push(binary ? `${file} (binary)` : file);
     }
     const more = found.length - shown.length;

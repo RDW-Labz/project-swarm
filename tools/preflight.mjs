@@ -76,7 +76,9 @@ async function resolveProbeProgram(program, envAssignments) {
   for (const dir of String(envAssignments.PATH ?? '').split(':').filter(Boolean)) {
     const candidate = path.join(dir, program);
     tried.push(candidate);
-    try { const info = await fs.stat(candidate); if (info.isFile()) return { path: candidate, tried }; } catch { /* try the next candidate */ }
+    try { const info = await fs.stat(candidate); if (info.isFile()) return { path: candidate, tried }; } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') console.error('[tools/preflight.mjs] stat probe candidate:', candidate, error?.message ?? error);
+    }
   }
   const fallback = await resolveToolchainBin(program);
   return { path: fallback.path, tried: [...tried, ...fallback.tried] };

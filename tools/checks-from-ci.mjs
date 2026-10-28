@@ -233,7 +233,9 @@ export async function loadChecksFromCi(root, ciPath = DEFAULT_CI_PATH, { readFil
   catch { return { checks: [], skipped: [], missing: true, path: ciPath }; }
   const parsed = ciChecksFromWorkflowText(text);
   let hasSwarmDir = false;
-  try { hasSwarmDir = (await fs.stat(path.join(root, '.swarm'))).isDirectory(); } catch { /* no runtime scratch tree */ }
+  try { hasSwarmDir = (await fs.stat(path.join(root, '.swarm'))).isDirectory(); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/checks-from-ci.mjs] stat .swarm:', error?.message ?? error);
+  }
   const checks = [];
   for (const check of parsed.checks) checks.push({ ...check, argv: await expandShellGlobs(hasSwarmDir ? addSwarmIgnore(check.argv) : check.argv, root) });
   return { checks, skipped: parsed.skipped, missing: false, path: ciPath };
