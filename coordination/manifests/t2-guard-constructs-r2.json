@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2guardconstructs",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them.\nTrain 2 orchestrator shell guard (tools/shell-writes.mjs). Owner framing: this guard catches orchestrator MISTAKES, it is not a sandbox against attackers; required constructs must be right, exotic ones are recorded and queued, not blockers. Rule the guard must keep: the guard's idea of the current directory must match the shell's at every redirect/write it allows; when it cannot know, it refuses. KNOWN BUG to fix: `( cd docs && true ) && echo x > plans/a.md` is ALLOWED today (orchestratorModeCommandAllowed) although bash restores the directory when the subshell closes, so the write lands at <root>/plans/a.md, outside the allowed area. On origin/main it was refused. Fix omValidateTokenized (~2600+; it already has cwdStack and subshellDepth) so a cd inside ( ... ) is scoped: on the closing ')' restore cwd/local.cwd to the value saved at the matching '('. Do the same for orchestratorSwarmSubfolderBlocked (~1725) if it tracks cd. REQUIRED constructs (each must end with the guard's directory matching the shell's, or be refused): pushd DIR / popd (refuse them unless already refused); ( cd DIR ) subshells (scoped, as above); { cd DIR; } groups (bash keeps the cd, so the cd persists); sh -c / bash -c / zsh -c / eval wrapping a cd plus a redirect (refuse); exec (refuse); builtin cd and command cd (refuse unless handled exactly like cd). Make the product change in tools/shell-writes.mjs only where a required construct is currently allowed AND mismatched. Tests in NEW tests/t2-guard-cd-constructs.test.mjs (first line import './_isolate-config.mjs';) via orchestratorModeCommandAllowed(command, { root, cwd: root }) in a temp project with docs/plans, .swarm/project, coordination/manifests: one test per required construct, each followed by a redirect into docs/plans, asserting the verdict (allowed only when the shell would really write inside docs/plans). Also cover CDPATH set, cd $VAR / $PWD / $OLDPWD, cd $(...), env cd, time cd: assert today's verdict; if one is allowed AND mismatched, write it with node:test's todo option ('guard gap (queued): <construct>') instead of fixing it, and list it in notes. Keep unchanged: `echo x > docs/plans/a.md` allowed, `cd <root>/docs && cat plans/a.md` allowed, every case in tests/t2-redirect-symlink.test.mjs and tests/om-redirect-realpath.test.mjs. Do not touch any other file.",
+      "context": [
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-guard-cd-constructs.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2guardconstructs",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-guard-cd-constructs.test.mjs",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}
