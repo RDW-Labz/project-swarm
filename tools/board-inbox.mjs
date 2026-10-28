@@ -126,13 +126,16 @@ function phoneRecordScratch(rec, scratchOpts) {
 export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner, phoneSyncDeps = null } = {}) {
   const scratchOpts = { env, home: env.HOME ?? home };
   const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
-  const config = await readPhoneConfig(phoneDirectory).catch(() => null);
+  const config = await readPhoneConfig(phoneDirectory).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-inbox.mjs] readPhoneConfig:', error?.message ?? error, phoneDirectory);
+    return null;
+  });
   if (phoneSyncDeps && config?.enabled) {
     await syncPhone({
       dir: phoneDirectory,
       deps: { ...phoneSyncDeps, now: phoneSyncDeps.now ?? (() => now) },
       dryRun: Boolean(phoneSyncDeps.dryRun),
-    }).catch(() => {});
+    }).catch((error) => { console.error('[tools/board-inbox.mjs] syncPhone:', error?.message ?? error); });
   }
   const state = config ? await readPhoneState(phoneDirectory, config.repo).catch(() => ({ issues: {} })) : { issues: {} };
   const asked = new Map();
@@ -168,7 +171,13 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
           phone: phoneOf(phone, now),
         });
       }
-      const ledger = await ledgerOf(project.root).catch(() => null);
+      const ledger = await ledgerOf(project.root).catch((error) => {
+        if (error?.code !== 'ENOENT') {
+          const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+          console.error('[tools/board-inbox.mjs] ledgerOf:', detail, project.root);
+        }
+        return null;
+      });
       for (const t of ledger?.tickets ?? []) {
         if (t?.status !== 'proposed') continue;
         const phone = asked.get(`${project.root}|ticket|${t.id}`);
