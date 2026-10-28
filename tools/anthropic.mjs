@@ -12,6 +12,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadLocalConfig } from './local-config.mjs';
+import { LANE_DAILY_DEFAULTS } from './spend.mjs';
+import { MODEL_RATES } from './rates.mjs';
 
 export const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -19,14 +21,27 @@ export const ANTHROPIC_KEY_ENV = 'SWARM_ANTHROPIC_API_KEY';
 export const ANTHROPIC_KEY_ITEM = Object.freeze({ service: 'project-swarm', account: 'anthropic.api_key' });
 // Raising either cap is the operator's decision; nothing here reads a raise from a manifest.
 export const TOTAL_CAP_USD = 500;
-export const DAY_CAP_USD = 25;
+export const DAY_CAP_USD = LANE_DAILY_DEFAULTS.anthropic.dailyUsd;
 export const JOB_CAP_USD = 5;
+
+const perToken = usdPerMTok => usdPerMTok / 1e6;
+
+function anthropicPriceEntry(family, tier, { longAt } = {}) {
+  const rate = MODEL_RATES[family];
+  const entry = { tier, input: perToken(rate.in), output: perToken(rate.out) };
+  if (rate.longIn !== undefined) {
+    entry.longInput = perToken(rate.longIn);
+    entry.longOutput = perToken(rate.longOut);
+    entry.longAt = longAt ?? 100000;
+  }
+  return Object.freeze(entry);
+}
 
 // USD per token. Haiku 5.5 charges more once a prompt passes 100K tokens (`longIn`/`longOut`).
 export const PRICES = Object.freeze({
-  'claude-haiku-5-5': Object.freeze({ tier: 'cheap', input: 0.10e-6, output: 0.50e-6, longInput: 0.50e-6, longOutput: 2.50e-6, longAt: 100000 }),
-  'claude-sonnet-5-5': Object.freeze({ tier: 'mid', input: 2e-6, output: 10e-6 }),
-  'claude-opus-5-5': Object.freeze({ tier: 'expensive', input: 4e-6, output: 20e-6 }),
+  'claude-haiku-5-5': anthropicPriceEntry('haiku', 'cheap'),
+  'claude-sonnet-5-5': anthropicPriceEntry('sonnet', 'mid'),
+  'claude-opus-5-5': anthropicPriceEntry('opus', 'expensive'),
 });
 export const DEFAULT_MODELS = Object.freeze({ cheap: 'claude-haiku-5-5', mid: 'claude-sonnet-5-5', expensive: 'claude-opus-5-5' });
 const CACHE_WRITE = 1.25, CACHE_READ = 0.1;

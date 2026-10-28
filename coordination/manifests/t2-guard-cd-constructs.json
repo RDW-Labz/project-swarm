@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2guardtests",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them.\nDefensive test coverage for the orchestrator shell guard in tools/shell-writes.mjs (train 2). The guard's rule: in orchestrator mode, a Bash command may only write inside the allowed areas, and the guard's idea of the current directory must always match the shell's. After the latest changes, cd through any symlink at or below the project root is refused, cd options are refused, and cd segments carrying redirects are refused. Write tests that PIN the guard's verdict for each directory-changing or command-wrapping construct below. Use the same public entry points tests/t2-redirect-symlink.test.mjs and tests/om-redirect-realpath.test.mjs use, in a temp project with an allowed docs/plans folder and the protected .swarm/ and coordination/manifests/ folders. For each one, assert the guard's current verdict (allowed or refused): pushd DIR / popd; ( cd DIR ) subshells; { cd DIR; } groups; CDPATH set in the environment; cd $VAR, cd \"$PWD/..\", cd $OLDPWD; cd $(\u2026) command substitution; builtin cd and command cd; exec; sh -c / bash -c / zsh -c / eval wrapping a cd and a redirect; env cd; time cd; a cd followed by a redirect inside each of those, written into docs/plans. If a construct can make the guard's directory differ from the shell's AND the guard allows a following write, that is a product bug: write that test with node:test's todo option (todo: 'guard bypass: <construct>') stating the safe expected verdict, and list it in your notes. Change NO product code. If every such construct is refused, say so in your notes. Also add tests that these ordinary orchestrator commands stay allowed: `cd <project> && node tools/swarm.mjs status x < /dev/null 2>&1 | tail -5`, `cd <project>/docs && cat plans/a.md`, `git -C <project> status`. Do not touch any other file.",
+      "context": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tests/t2-guard-cd-constructs.test.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2guardtests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-guard-cd-constructs.test.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ]
+    }
+  ]
+}

@@ -6,14 +6,15 @@
 Project Swarm brief
 Goal: none
 Done:
-  - run 1793159596303-2ba4e81f integrated, 11 files
-  - run 1793159139512-8e58823e integrated, 0 files
+  - run 1793201854677-3461a6aa integrated, 2 files
+  - run 1793201696807-51777f20 integrated, 2 files
+  - run 1793169144561-b9eab23d integrated, 4 files
 Running: none
 Needs the owner: none
 Next 3 actions:
-  1. swarm integrate 1793159114049-100dec44 --queue
-  2. swarm "describe the goal in one sentence"
-  3. swarm status
+  1. swarm integrate 1793216784781-b8621a50 --queue
+  2. swarm inspect 1793201590285-2c5d8984 --results
+  3. swarm "describe the goal in one sentence"
 Rules:
   - Route cheapest first: Haiku (anthropic), Cursor, Codex; Claude only after two failures; Hermes only for research; OpenRouter only for non-sensitive bookkeeping.
   - Never merge to main, deploy, raise a spend cap or add a paid service without the owner's explicit OK.
@@ -23,25 +24,26 @@ Rules:
 ```
 
 Pending approvals:
-- blocker security-1793154137726-32b25faa-ccfixa 1h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
-- blocker security-1793121100760-1a835d60-shellpauseJ 10h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
-- blocker security-1793111389005-ec83d391-cism2 13h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
-- blocker integrate-checkout-1793071225012-e80056e1 24h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker security-1793070907123-c780a4c2-lockL2 24h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
-- blocker integrate-checkout-1793066768605-ff4722d3 24h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker integrate-checkout-1793049988921-3c2c1e96 26h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker security-1793052518876-aa2ab8be-lwfixC 29h branch swarm/lane-self-manage-wave /Users/bean/.project-swarm-scratch/lanewave
-- blocker security-1793047718817-a2333c83-gaterr_gatefp 31h branch swarm/gatecap /Users/bean/.project-swarm-scratch/gatecap
-- blocker integrate-checkout-1792618361836-41e05e85 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618530141-575f4d93 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618530141-0aa96f6b 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618723546-ed0c23b2 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792618943558-b1eacc9e 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker integrate-checkout-1792635375937-7fdc332b 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
-- blocker security-1792687365474-0f0a07d2-locallane 5d branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
+- blocker security-1793201346040-ae8b95bc-ccporthive_ccportcockpit 4h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
+- blocker security-1793154137726-32b25faa-ccfixa 17h branch swarm/cc-mount2 /Users/bean/.project-swarm-scratch/ccmount2
+- blocker security-1793121100760-1a835d60-shellpauseJ 26h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
+- blocker security-1793111389005-ec83d391-cism2 29h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
+- blocker integrate-checkout-1793071225012-e80056e1 40h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker security-1793070907123-c780a4c2-lockL2 40h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
+- blocker integrate-checkout-1793066768605-ff4722d3 40h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1793049988921-3c2c1e96 41h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker security-1793052518876-aa2ab8be-lwfixC 45h branch swarm/lane-self-manage-wave /Users/bean/.project-swarm-scratch/lanewave
+- blocker security-1793047718817-a2333c83-gaterr_gatefp 46h branch swarm/gatecap /Users/bean/.project-swarm-scratch/gatecap
+- blocker integrate-checkout-1792618361836-41e05e85 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-575f4d93 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618530141-0aa96f6b 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618723546-ed0c23b2 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792618943558-b1eacc9e 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker integrate-checkout-1792635375937-7fdc332b 6d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
+- blocker security-1792687365474-0f0a07d2-locallane 6d branch feat/local-lane /Users/bean/.project-swarm-scratch/locallane
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-m8G2uR/base
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-paz2xd/base
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T03:57:42.847Z
+Generated at: 2026-10-28T19:47:38.348Z

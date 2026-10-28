@@ -7,6 +7,7 @@ import { windowsCiGotchasWarnings } from '../gotchas.mjs';
 import { resolveLanes } from '../lanes.mjs';
 import { loadLocalConfig } from '../local-config.mjs';
 import { anthropicLanePausedProblem, ANTHROPIC_LANE_PAUSED } from '../anthropic.mjs';
+import { isHostedLambdaInference, pausedPaidLaneProblems } from '../paid-lane-pause.mjs';
 import { defaultMaxOutputTokens, openrouterLanePausedProblem, OPENROUTER_LANE_PAUSED } from '../openrouter.mjs';
 import { packagingWithoutBuildCheckWarning } from '../packaging-check.mjs';
 import { resolvePortBlock } from '../ports.mjs';
@@ -371,6 +372,12 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
   if (manifest.jobs.some(job => job.agent === 'openrouter')) {
     const problem = openrouterLanePausedProblem(machineConfig);
     if (problem) fail(problem, OPENROUTER_LANE_PAUSED);
+  }
+  {
+    const problems = pausedPaidLaneProblems(manifest, machineConfig).filter(
+      ({ lane }) => lane !== 'lambda' || isHostedLambdaInference(env),
+    );
+    if (problems.length) fail(problems[0].message, problems[0].code);
   }
   scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   if (!scopesExpanded) manifest = await expandOpenScopes(root, manifest);

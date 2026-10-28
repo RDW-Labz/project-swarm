@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
+import { assertPaidLaneNotPaused } from './paid-lane-pause.mjs';
 
 export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
 
@@ -171,7 +172,9 @@ export function formatRentalSummary(meter, config) {
 }
 
 // The rented server's API key: SWARM_RENTED_API_KEY, else the Keychain item named in the config (macOS), else null.
-export function readRentedKey(env = process.env, keyItem = RENTED_DEFAULTS.keyItem, { platform = process.platform, exec = execFileSync } = {}) {
+export function readRentedKey(env = process.env, keyItem = RENTED_DEFAULTS.keyItem, { platform = process.platform, exec = execFileSync, config, loadConfig = loadLocalConfig, home } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env, home: home ?? env?.HOME });
+  assertPaidLaneNotPaused('rented', resolvedConfig);
   const fromEnv = env.SWARM_RENTED_API_KEY;
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_RENTED_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;

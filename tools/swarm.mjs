@@ -37,6 +37,10 @@ import { protectedViolations, protectedPathHit, isExampleFile, isSecretPath as i
 import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
 import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
 import { centralDayKey } from './daily-limit.mjs';
+import { isHostedLambdaInference, pausedPaidLaneProblems } from './paid-lane-pause.mjs';
+import { anthropicLanePausedProblem, ANTHROPIC_LANE_PAUSED } from './anthropic.mjs';
+import { openrouterLanePausedProblem, OPENROUTER_LANE_PAUSED } from './openrouter.mjs';
+import { loadDailyLimitSettings, billedMeteredTodayUsd, inFlightReserveUsd } from './spend.mjs';
 import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
 import { runInboxCommand, inboxDeps } from './inbox-commands.mjs';
 import readline from 'node:readline';
@@ -783,6 +787,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         let lastReservation = null;
         // One attempt to admit: reserve the job's worst case (a subscription-lane job is reserved for this run only: its list cost is known at the end) or be refused by a cap.
         const tryAdmit = async () => {
+          assertResumePaidLane(job, loadLocalConfig({ env }), env);
           if (unreserved) {
             const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
             const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars: 0, rates: null, laneDefaults: state.budget.lanes, flatHistory: history });
@@ -806,7 +811,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
           const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes, flatHistory: history });
           const key = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/${job.id}#${record.attempts.length + 1}`;
-          const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now });
+          const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now, env });
           if (!decision) {
             const baseline = jobSpend(record);
             spendEntry = { key, reservation, rates, record, baseline: { usd: baseline.usd ?? 0, tokens: baseline.tokens ?? 0 } };
@@ -844,13 +849,15 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               ready.push(index); notify(); return;
             }
           }
-          record.status = 'held'; record.heldReason = decision.reason; record.error = decision.message;
+          record.status = 'held'; record.heldReason = decision.reason === 'daily-limit' ? 'lane-cap' : decision.reason; record.error = decision.message;
+          if (decision.reason === 'daily-limit') record.code = 'daily-limit-stop';
           await queueSave(); await settle(index); return;
         }
         const prepared = await prepare(job, record);
         resourcePayload = prepared.resources; snapshotFiles = prepared.snapshotFiles;
       } catch (error) {
-        record.status = await cancelled() ? 'cancelled' : error.name === 'AbortError' && refusedPauseUntil ? 'provider-limit' : 'failed';
+        record.status = await cancelled() ? 'cancelled' : error.code?.endsWith('-lane-paused') ? 'held' : error.name === 'AbortError' && refusedPauseUntil ? 'provider-limit' : 'failed';
+        if (record.status === 'held') { record.heldReason = 'lane-paused'; record.code = error.code; }
         record.error = record.status === 'provider-limit' ? `provider-limit: lane ${job.agent} paused until ${refusedPauseUntil}` : error.message;
         if (record.status === 'provider-limit') { record.heldReason = 'quota'; record.heldUntil = refusedPauseUntil; }
         record.finishedAt = new Date(now()).toISOString(); record.durationMs = 0;
@@ -1004,7 +1011,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
               const providerMessage=extraCliMessage(job,context);
               await write(root,`${directory}/${job.id}/message.txt`,providerMessage,true);
               result=await execute(job,workspaceRoot,providerMessage,{spawnImpl,signal,cancelled,killImpl,onOutput:tracker.onOutput});
-            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, env, signal, cancelled, skillsBlock: skillsBlockText, bestOfCheck: apiJob.agent === 'rented' && apiJob.bestOf !== 1 ? createTestChecker({ root }) : null, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
+            } else result=await executeApi(apiJob, context, { fetchImpl: async (...args) => { if (args[0] !== OPENROUTER_MODELS_URL) adapterStarted = true; if (batched && args[0] === ANTHROPIC_ENDPOINT) return batchCollector.submit(JSON.parse(args[1].body), { id: job.id, signal: args[1].signal, onSent: sent => { record.batchId = sent.batchId; record.batchCustomId = sent.customId; queueSave().catch(() => {}); } }); if (batched && args[0] !== OPENROUTER_MODELS_URL) fail('batch-endpoint-mismatch: a batch job would have been sent as an ordinary request', 'batch-endpoint-mismatch'); return (fetchImpl ?? fetch)(...args); }, root, spendKey: spendEntry?.key, now: () => new Date(now()), env, signal, cancelled, skillsBlock: skillsBlockText, bestOfCheck: apiJob.agent === 'rented' && apiJob.bestOf !== 1 ? createTestChecker({ root }) : null, onFinishReason: async finishReason => { record.finishReason = finishReason; await queueSave(); } });
             attemptResult = result;
             await applyEnvelope();
           }
@@ -1173,6 +1180,11 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         // Field lesson #201: a setup failure never spawns the worker; `setupFailed` rides along on
         // the job record so inspect can name the phase, instead of an empty error/result/cost that
         // reads identically to a worker that ran and produced nothing.
+        // A daily-limit refusal holds the job like admission, retaining only billed attempts.
+        if (result.code === 'daily-limit-stop') {
+          result.status = 'held';
+          record.heldReason = 'lane-cap';
+        }
         Object.assign(record, { ...(result.code ? { code: result.code, ...(result.path ? { path: result.path } : {}), ...(result.stream ? { stream: result.stream } : {}) } : {}), ...(API_AGENTS.includes(job.agent) ? { finishReason: result.finishReason ?? null } : {}), permissionDenials: result.permissionDenials ?? [], status: result.status, error: result.error, cleanupError:result.cleanupError??null, terminationReason:result.terminationReason??null, exitCode: result.exitCode, actualModel: result.actualModel, modelsSeen: result.modelsSeen ?? [], modelMismatch: result.modelMismatch ?? false, keptWorkspace: result.keptWorkspace ?? null, envelopeFallback: result.envelopeFallback ?? null, usage: result.usage, modelUsage: result.modelUsage, costUsd: result.costUsd, ...(result.costSource ? { costSource: result.costSource } : {}), ...(result.costWarning ? { costWarning: result.costWarning } : {}), finishedAt: new Date(now()).toISOString(), durationMs:now()-Date.parse(record.startedAt), ...(result.setupFailed ? { setupFailed: true } : {}), ...(result.status === 'timeout' ? { lastActivity: result.lastActivity ?? null } : {}), ...(result.contextInlined ? { contextInlined: result.contextInlined } : {}), ...(result.retriedForLength ? { retriedForLength: true } : {}) });
         if (!result.refusedBeforeStart && !result.setupFailed && ['complete', 'blocked', 'failed'].includes(result.status)) {
           delete record.report;
@@ -1204,6 +1216,11 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           if (typeof input_tokens === 'number' || typeof output_tokens === 'number') record.usage.total_tokens = (input_tokens ?? 0) + (output_tokens ?? 0) + (record.usage.cache_creation_input_tokens ?? 0) + (record.usage.cache_read_input_tokens ?? 0);
         }
         await finishSpend();
+        if (result.code === 'daily-limit-stop') {
+          if (adapterStarted) record.attempts.push({ agent: job.agent, model: job.model, status: result.status, error: result.error ?? null, startedAt: record.startedAt, finishedAt: record.finishedAt });
+          await queueSave();
+          return;
+        }
         const outcome = result.reportInvalid ? { kind: 'other' } : classifyProviderOutcome(result);
         await scheduler.report(job.agent, outcome);
         abortLongPauses();
@@ -1329,6 +1346,70 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
 
 
 
+// Keep resume and dispatch aligned with validateProject's machine pause rules.
+function assertResumePaidLane(job, config, env) {
+  if (job.agent === 'anthropic') {
+    const problem = anthropicLanePausedProblem(config);
+    if (problem) fail(problem, ANTHROPIC_LANE_PAUSED);
+  }
+  if (job.agent === 'openrouter') {
+    const problem = openrouterLanePausedProblem(config);
+    if (problem) fail(problem, OPENROUTER_LANE_PAUSED);
+  }
+  const problems = pausedPaidLaneProblems({ jobs: [job] }, config).filter(
+    ({ lane }) => lane !== 'lambda' || isHostedLambdaInference(env),
+  );
+  if (problems.length) fail(problems[0].message, problems[0].code);
+}
+
+async function recheckResumeSpend(root, manifest, state, budget, { env = process.env, now }) {
+  const config = loadLocalConfig({ env });
+  const lanes = resolveLanes({ config, manifest, env });
+  const totals = await withSpendStore(store => laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }), { dir: spendDir(env), now });
+  const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
+  for (const record of state.jobs.filter(record => ['lane-cap', 'run-cap', 'lane-paused'].includes(record.heldReason))) {
+    const original = manifest.jobs.find(job => job.id === record.id);
+    let job = original;
+    if (original.agent === 'auto') {
+      let route;
+      try { route = pickJobRoute(original, lanes, {
+        root, contract: manifest.contract, ready: readyAutoJobs(manifest),
+        editInPlaceOnly: oversize.has(original.id), failures: record.routeFailures ?? {},
+        health: agent => capDecision({ budget: { ...budget, maxUsd: null, maxTokens: null }, run: {}, laneToday: totals, agent }) ? { state: 'paused' } : { state: 'ready' },
+      }); } catch (error) {
+        fail(`resume-over-cap: no lane can take job ${original.id}; ${error.message}`, 'resume-over-cap');
+      }
+      job = withoutApiOnlyFields({ ...original, agent: route.agent, model: route.model });
+    }
+    assertResumePaidLane(job, config, env);
+    if (!PAID_LANES.includes(job.agent)) continue;
+    let inputChars = job.prompt.length;
+    for (const file of new Set([...job.context, ...job.outputs])) {
+      const length = (await bytesAt(root, file))?.length ?? 0;
+      inputChars += (job.cacheContext ?? []).includes(file) ? Math.ceil(length * 1.25) : length;
+    }
+    let rates = config.spend?.rates?.[job.model];
+    if (!rates && job.agent === 'anthropic') {
+      const price = anthropicPrice(job.model);
+      rates = { inUsdPerToken: price.longInput ?? price.input, outUsdPerToken: price.longOutput ?? price.output };
+    }
+    // Without local pricing use the conservative lane reserve; resume never fetches pricing.
+    const reservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: budget.lanes });
+    const loaded = await loadDailyLimitSettings(root, { env });
+    if (!loaded.ok) fail(loaded.message, loaded.code);
+    await withSpendStore(store => {
+      const billed = billedMeteredTodayUsd(store, { now });
+      const inFlight = inFlightReserveUsd(store, { now });
+      const exposure = billed + inFlight + reservation.usd;
+      const { dailyLimitUsd, dailyLimitMode, hardCeilingUsd } = loaded.resolved;
+      if (exposure > hardCeilingUsd || (dailyLimitMode === 'stop' && exposure > dailyLimitUsd)) {
+        const ceiling = exposure > hardCeilingUsd;
+        fail(`resume-over-cap: billed $${billed.toFixed(4)} today + in-flight reserves $${inFlight.toFixed(4)} + reservation $${reservation.usd.toFixed(4)} > ${ceiling ? 'hard ceiling' : 'daily limit'} $${(ceiling ? hardCeilingUsd : dailyLimitUsd).toFixed(2)}; resume refused`, 'resume-over-cap');
+      }
+    }, { dir: spendDir(env), now });
+  }
+}
+
 export async function resumeRun(root, id, { raises = [], reason, wait = false, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), ...runOptions } = {}) {
   root = await fs.realpath(root);
   const state = await readState(root, id);
@@ -1374,6 +1455,7 @@ export async function resumeRun(root, id, { raises = [], reason, wait = false, n
     await jsonWrite(root, `.swarm/runs/${id}/state.json`, state);
     return state;
   }
+  await recheckResumeSpend(root, manifest, state, budget, { env: runOptions.env, now });
   state.budgetRaises = budgetRaises;
   state.budget = budget;
   return runManifest(root, manifest, { ...runOptions, ...(state.batchFlag ? { batch: true } : {}), jobs: null, id, now, sleep, resumeState: state });

@@ -1,0 +1,35 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain2",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner speed plan: one Opus review of the combined release diff",
+   "prompt": "Review release train 2 of Project Swarm: coordination/review/train2.diff (the combined code diff against main at 1.167.24). Changes: (1) B3, tools/paid-lane-pause.mjs + tools/api-adapters.mjs + tools/rented.mjs + tools/swarm/core-51.mjs: rented, OpenAI and Gemini keys now pass the paused-paid-lane check, and validateProject refuses jobs on a paused paid lane; (2) B13, tools/shell-writes.mjs: the orchestrator guard against shell redirects into coordination/manifests/ or .swarm/ compares real paths of root and target; (3) B16/B17, tools/scope-commands.mjs: scope sync and tickets --delivered need a passing security review for any ticket touching auth/api/db paths, deletes included; (4) B1/B2/cap, tools/spend.mjs + tools/anthropic.mjs + tools/rates.mjs + tools/daily-limit.mjs + tools/budget-set-commands.mjs: one Anthropic day cap, one price table, default $2.50/day stop mode, agent raise allowance 0; (5) g-e19bbb50, tools/verify-provenance.mjs + tools/om-manifest-guard.mjs: in orchestrator mode the runner gate allows a shell job only when it is canonically identical to the job rebuilt from the approved ticket ledger for a deliverable ticket of the same id (the sync hook defers shell jobs whose id names a ledger ticket to that gate); (6) tests/swarm.test.mjs hang guard (test only). The full changed files are in your context for reference.\nPass bar (owner): find BLOCKERS now (a way to bypass a guard or approval, money spent past a cap or on a paused lane, a key reaching a paused lane, wrong commits on protected branches, data loss, a crash on a normal path, a regression to existing behavior); everything else is a follow-up. Look hard at: (5) can a hand-written or edited manifest get a shell job past the gate (make the rebuild match by editing inputs the orchestrator controls: profile verify command, scope snapshot, context files, the ledger itself or a ticket's status/tests; canonical-JSON tricks such as undefined/prototype keys; mutation between the gate and dispatch; resume of an old run; duplicate ids; the hook deferral letting something past that the runner gate never sees); (4) any path where spend passes $2.50/day in stop mode, any way an agent session still raises the limit or flips stop to notify, price math errors (per-MTok vs per-token, long-prompt Haiku); (1) any paid key read that still skips the pause check; (2) symlink/TOCTOU tricks left open; (3) a ticket touching auth/api/db that can still reach done without a review.\nWrite ONLY coordination/review/train2-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+   "context": [
+    "coordination/review/train2.diff",
+    "tools/paid-lane-pause.mjs",
+    "tools/api-adapters.mjs",
+    "tools/rented.mjs",
+    "tools/shell-writes.mjs",
+    "tools/spend.mjs",
+    "tools/anthropic.mjs",
+    "tools/rates.mjs",
+    "tools/daily-limit.mjs",
+    "tools/budget-set-commands.mjs",
+    "tools/verify-provenance.mjs",
+    "tools/om-manifest-guard.mjs",
+    "tools/tickets.mjs",
+    "tools/verify-config.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train2-review.json"
+   ],
+   "resultFile": "coordination/review/train2-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

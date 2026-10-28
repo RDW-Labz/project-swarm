@@ -3,10 +3,12 @@
 import { randomBytes } from 'node:crypto';
 import { OPENROUTER_ENDPOINT, OPENROUTER_KEY_ENV, openRouterKeyItem, readOpenRouterKey, providerPolicy, assertRequestBody, assertBookkeepingOnly, emptyOutputsContentRefusal, fetchPricing, worstCaseUsd, ledgerPath, readLedger, spentSoFar, assertWithinCaps, dayCapUsd, appendLedger, assertCompleteChatResponse, describeIncompleteChatResponse, isEmptyLengthTruncation, defaultMaxOutputTokens, responseFinishReason, OpenRouterError } from './openrouter.mjs';
 import { batchCostUsd } from './batch.mjs';
+import { assertDailyLimitBeforeSend, estimateReservation, PAID_LANES } from './spend.mjs';
 import { bestOfCount, selectBest } from './best-of.mjs';
 import { loadRentedConfig, readRentedKey, balancedFetch } from './rented.mjs';
 import { ANTHROPIC_ENDPOINT, ANTHROPIC_VERSION, ANTHROPIC_KEY_ENV, ANTHROPIC_KEY_ITEM, readAnthropicKey, assertModelAllowed as assertAnthropicModel, ledgerPath as anthropicLedgerPath, readLedger as readAnthropicLedger, spentSoFar as anthropicSpentSoFar, appendLedger as appendAnthropicLedger, assertWithinCaps as assertAnthropicCaps, worstCaseUsd as anthropicWorstUsd, usageCostUsd as anthropicCostUsd, caps as anthropicCaps, AnthropicError } from './anthropic.mjs';
 import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
+import { assertPaidLaneNotPaused, isHostedLambdaInference } from './paid-lane-pause.mjs';
 import {
   loadLocalLaneConfig, resolveLocalEndpoint, readLocalCredential, mapLocalUsage, doctorLocal, isLoopbackLocalBaseUrl,
 } from './local-lane.mjs';
@@ -27,14 +29,21 @@ const fail = message => { throw new AdapterError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 
-export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, model = null } = {}) {
+export function apiConfiguration(agent, env = process.env, { readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, model = null, config, loadConfig = loadLocalConfig, home } = {}) {
   if (!API_AGENTS.includes(agent)) fail('Unsupported API adapter');
+  const resolvedConfig = () => config ?? loadConfig({ env, home: home ?? env?.HOME });
   let endpoint, key, keyName, selfHosted = false;
   // OpenRouter (decisions #226-#228): key from env, else the keychain, read by this parent only.
-  if (agent === 'openrouter') { endpoint = OPENROUTER_ENDPOINT; keyName = OPENROUTER_KEY_ENV; key = readKey(env) ?? undefined; }
-  if (agent === 'anthropic') { endpoint = ANTHROPIC_ENDPOINT; keyName = ANTHROPIC_KEY_ENV; key = readAnthropic(env) ?? undefined; }
-  if (agent === 'openai') { endpoint = 'https://api.openai.com/v1/responses'; keyName = 'OPENAI_API_KEY'; key = env[keyName]; }
-  if (agent === 'gemini') { endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/'; keyName = 'GEMINI_API_KEY'; key = env[keyName] || env.GOOGLE_API_KEY; }
+  if (agent === 'openrouter') { endpoint = OPENROUTER_ENDPOINT; keyName = OPENROUTER_KEY_ENV; key = readKey(env, { config, loadConfig, home }) ?? undefined; }
+  if (agent === 'anthropic') { endpoint = ANTHROPIC_ENDPOINT; keyName = ANTHROPIC_KEY_ENV; key = readAnthropic(env, { config, loadConfig, home }) ?? undefined; }
+  if (agent === 'openai') {
+    assertPaidLaneNotPaused('openai', resolvedConfig());
+    endpoint = 'https://api.openai.com/v1/responses'; keyName = 'OPENAI_API_KEY'; key = env[keyName];
+  }
+  if (agent === 'gemini') {
+    assertPaidLaneNotPaused('gemini', resolvedConfig());
+    endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/'; keyName = 'GEMINI_API_KEY'; key = env[keyName] || env.GOOGLE_API_KEY;
+  }
   if (agent === 'ollama') {
     let url;
     try { url = new URL(env.SWARM_OLLAMA_URL || 'http://127.0.0.1:11434'); } catch { fail('Invalid SWARM_OLLAMA_URL'); }
@@ -45,13 +54,14 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
   }
   if (agent === 'rented') {
+    assertPaidLaneNotPaused('rented', resolvedConfig());
     // The rented server named in the machine config (rentedGpu): its URL and model come from there, its key from the Keychain.
     const { config: rented } = loadRentedConfig(env);
     if (!rented) return { endpoint: 'https://rented.invalid/v1/chat/completions', key: null, keyName: 'rentedGpu config (machine config) and Keychain project-swarm/rented.api_key', selfHosted: true, configured: false };
     // A running GPU session (or auth: none) has no key: the servers listen only on the node's loopback and are reached through the ssh tunnel.
     if (rented.auth === 'session') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: rented.sessionKey, keyName: 'the running GPU session key', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
     if (rented.auth === 'none') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: null, keyName: 'none (ssh tunnel to a loopback server)', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
-    key = readRentedKey(env, rented.keyItem);
+    key = readRentedKey(env, rented.keyItem, { config: resolvedConfig(), loadConfig, home });
     return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model, bestOf: rented.bestOf };
   }
   if (agent === 'local') {
@@ -81,13 +91,16 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     };
   }
   if (agent === 'lambda') {
-    // Hosted Lambda Inference by default; SWARM_LAMBDA_URL selects an operator-owned OpenAI-compatible origin.
+    // Only loopback Lambda origins are self-hosted.
     let url;
     try { url = new URL(env.SWARM_LAMBDA_URL || 'https://api.lambda.ai'); } catch { fail('Invalid SWARM_LAMBDA_URL'); }
     const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/' || (!loopback && url.protocol !== 'https:') || !['http:', 'https:'].includes(url.protocol)) fail('SWARM_LAMBDA_URL must be a loopback HTTP(S) origin or explicit HTTPS origin without credentials, path, query, or fragment');
     endpoint = `${url.origin}/v1/chat/completions`;
-    keyName = 'LAMBDA_API_KEY'; key = env[keyName]; selfHosted = Boolean(env.SWARM_LAMBDA_URL);
+    keyName = 'LAMBDA_API_KEY';
+    selfHosted = !isHostedLambdaInference(env);
+    if (isHostedLambdaInference(env)) assertPaidLaneNotPaused('lambda', resolvedConfig());
+    key = env[keyName];
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');
   }
   if (key !== undefined && (typeof key !== 'string' || /[\r\n]/.test(key))) fail('Invalid credential format');
@@ -555,7 +568,7 @@ export function anthropicUserContent(job, cappedContext, { skillsBlock = '' } = 
   ];
 }
 
-export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null } = {}) {
+export async function executeApi(job, context, { fetchImpl = fetch, env = process.env, signal, cancelled = async () => false, readKey = readOpenRouterKey, readAnthropic = readAnthropicKey, readLocal = null, now = () => new Date(), skillsBlock = '', attachedSkills = [], onFinishReason = async () => {}, bestOfCheck = null, root = job.root, spendKey } = {}) {
   const controller = new AbortController(); let reason = null, finishReason = null, anthropicBilled = () => null;
   const abort = why => { if (!reason) { reason = why; controller.abort(); } };
   const onAbort = () => abort('cancelled');
@@ -665,9 +678,22 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       finishReason = next;
       await onFinishReason(finishReason);
     };
+    let requestWorstUsd = spend?.worstUsd;
+    let requestBilledUsd = 0;
+    if (requestWorstUsd === undefined && PAID_LANES.includes(job.agent)) {
+      const machine = loadLocalConfig({ env });
+      const rates = machine?.spend?.rates?.[job.model];
+      if (rates) requestWorstUsd = estimateReservation({ job, lane: job.agent, model: job.model,
+        inputChars: instructions.length + input.length, rates }).usd;
+    }
     const sendRequest = async () => {
       finishReason = null;
       await onFinishReason(finishReason);
+      await assertDailyLimitBeforeSend({ root, lane: job.agent, worstUsd: requestWorstUsd,
+        billedUsd: requestBilledUsd, now, env, jobId: job.id, runId: job.runId, excludeKey: spendKey });
+      // The store lock/config read can outlast cancellation; never start HTTP afterwards.
+      if (!reason && (signal?.aborted || await cancelled())) abort('cancelled');
+      if (reason) fail('Request cancelled');
       try {
         const init = {
           method: 'POST',
@@ -691,9 +717,12 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       // automatic retry at double the limit, itself re-checked against the job's own $ cap first —
       // never a second spend the cap would have refused outright the first time.
       if (job.agent === 'openrouter' && isEmptyLengthTruncation(bodyJson)) {
+        const reported = Number(bodyJson?.usage?.cost);
+        requestBilledUsd = Number.isFinite(reported) && reported >= 0 ? reported : spend.worstUsd;
         const doubledLimit = limit * 2;
         const worstUsd = worstCaseUsd(pricing, { inputChars: instructions.length + input.length, maxTokens: doubledLimit });
         assertWithinCaps({ worstUsd, spent: spentSoFar(readLedger(spend.ledger), { jobId: job.id, day: spend.stamp.toISOString().slice(0, 10) }), dayCap: dayCapUsd(env) });
+        requestWorstUsd = worstUsd;
         body.max_tokens = doubledLimit;
         response = await sendRequest();
         bodyJson = await readJson(response);
@@ -715,6 +744,8 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
         // The first call is billed already: write it now, so a crash during the retry cannot lose it and other jobs see it.
         if (firstUsage) { appendAnthropicLedger(spend.ledger, { ts: spend.stamp.toISOString(), jobId: job.id, model: job.model, costUsd: firstCost, estimated: false, kind: 'length-retry-first' }); firstCallUsage = firstUsage; }
         anthropicUsage = null;
+        requestBilledUsd = firstUsage && Number.isFinite(firstCost) ? firstCost : spend.worstUsd;
+        requestWorstUsd = worstUsd;
         body.max_tokens = doubledLimit;
         response = await sendRequest();
         bodyJson = await readJson(response);
@@ -774,10 +805,12 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       : (envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary);
     return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'local' ? 0 : job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, firstCallUsage ? sumUsage(firstCallUsage, anthropicUsage) : result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
+    if (!reason && (signal?.aborted || await cancelled())) abort('cancelled');
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.
-    const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError || error instanceof AnthropicError ? error.message : 'Provider processing failed; details omitted to protect credentials');
+    const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError || error instanceof AnthropicError || error.code?.startsWith('daily-limit-') ? error.message : 'Provider processing failed; details omitted to protect credentials');
     const result = { finishReason, status: reason === 'timeout' ? 'timeout' : reason === 'cancelled' ? 'cancelled' : 'failed', error: TRUNCATION_RE.test(message) ? `${message} (prompt ${job.prompt.length} chars)` : message, files: [], edits: [], contextInlined, stdout: '', stderr: '', response: '', actualModel: null, usage: null, modelUsage: null, costUsd: anthropicBilled(), exitCode: null };
+    if (error.code?.startsWith('daily-limit-')) result.code = error.code;
     if (error.httpStatus !== undefined) Object.assign(result, { httpStatus: error.httpStatus, retryAfterMs: error.retryAfterMs, quotaExhausted: error.quotaExhausted });
     // Lesson 296: Include invalidResponseText for validation errors so swarm can write response-invalid.txt
     if (error instanceof AdapterError && error.invalidResponseText) {

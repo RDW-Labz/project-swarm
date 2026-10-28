@@ -3,20 +3,23 @@
 // timed out, or ended on a transient provider error) still spent real tokens — its own
 // provider.jsonl transcript is the only record of that spend, read here at a fixed per-model
 // USD/MTok rate instead of `inspect` reporting `costNotReported` for real, non-zero spend.
+// Published first-party Anthropic rates (USD per million tokens, cached 2026-10-06).
 export const MODEL_RATES = Object.freeze({
+  haiku: Object.freeze({ in: 0.10, out: 0.50, longIn: 0.50, longOut: 2.50, cacheWrite: 0.125, cacheRead: 0.01 }),
   sonnet: Object.freeze({ in: 2, out: 10, cacheWrite: 2.5, cacheRead: 0.2 }),
   opus: Object.freeze({ in: 4, out: 20, cacheWrite: 5, cacheRead: 0.2 }),
-  haiku: Object.freeze({ in: 1, out: 5, cacheWrite: 1.25, cacheRead: 0.1 }),
+  fable: Object.freeze({ in: 10, out: 50, cacheWrite: 12.5, cacheRead: 0.25 }),
 });
 
 // Output tokens, when a stream's own output count is partial (fewer than the content it is
 // actually reporting could hold), are estimated from that content's character count.
 const OUTPUT_CHARS_TO_TOKENS = 1.72;
 
-function modelFamily(model) {
+export function modelFamily(model) {
   const text = (model ?? '').toLowerCase();
   if (text.includes('opus')) return 'opus';
   if (text.includes('haiku')) return 'haiku';
+  if (text.includes('fable')) return 'fable';
   if (text.includes('sonnet')) return 'sonnet';
   return null;
 }

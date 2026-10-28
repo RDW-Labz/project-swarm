@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "hangguard",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Owner order: make tests/swarm.test.mjs line ~348, 'cancellation cleanup denial preserves its reason, fails the run, and does not start queued jobs', fail fast instead of hanging for days. On a parked branch the runner regressed so runManifest never returned when the kill is denied; the test's t.after(() => process.kill(-child.pid, 'SIGKILL')) never ran because the test never finished, and the fake worker child (spawned by fake('setInterval(()=>{},1000)')) kept the test file's process alive past --test-timeout for 1 day 15 hours.\nFix only in the test file:\n1. Add a small helper near the existing fake() helper, e.g. async function withHangGuard(promise, ms, onHang) that races the promise against a timer; on timeout it calls onHang() and throws an Error whose message says the run did not finish within ms and names the test's purpose; always clears the timer (unref it too).\n2. In this test, wrap the runManifest(...) call: const state = await withHangGuard(runManifest(...), 15000, () => { kill the fake worker's process group with SIGKILL (process.kill(-child.pid, 'SIGKILL') on non-Windows, child.pid on Windows, inside try/catch) }). Keep the existing t.after kill as a second line of defence, and keep every assertion unchanged.\n3. Change nothing else in the file and no product code. Add a short comment above the helper saying why (a denied kill once made this test hang for days).\nAlso add one self-test of the helper in the same file: withHangGuard on a never-resolving promise with a 50 ms limit rejects within about a second and calls onHang exactly once; on a promise that resolves first it returns the value and never calls onHang. PREVIOUS ATTEMPTS FAILED: (1) a missing closing brace made the file unparseable. (2) The helper unref()ed its timer, so in the self-test the never-resolving promise plus an unref'd timer left the event loop empty; node cancelled the whole file (\"Promise resolution is still pending but the event loop has already resolved\", 67 tests cancelled, 0 run). Do NOT unref the timer: keep it ref'd and clear it in a finally when the race settles. The file must parse and every test must actually run.",
+   "context": [],
+   "outputs": [
+    "tests/swarm.test.mjs"
+   ],
+   "timeoutMs": 1200000
+  }
+ ],
+ "checks": [
+  {
+   "name": "swarm-test",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "--test-timeout=120000",
+    "tests/swarm.test.mjs"
+   ]
+  }
+ ]
+}

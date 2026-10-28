@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk5",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nTrain 2 Opus ROUND-3 review (claude-opus-5-5, run 1793226998891-b19d1f42) found a NEW BLOCKER in tools/shell-writes.mjs cd tracking, the third cd hole in three rounds. Close the WHOLE CLASS with this design, exactly: Problem: bash/zsh cd is logical by default ($PWD keeps symlink names, and a later `cd ..` is lexical on $PWD), while the guard now tracks the physical path (omResolveCd -> omResolvePath -> realpath; local.cwd set at ~2614). Exploit: L = .swarm/project/L -> ../../docs/plans/sub; `cd .swarm/project/L && cd .. && echo '{..}' > daily-limit.json` is judged as docs/plans/daily-limit.json but the shell writes .swarm/project/daily-limit.json. Same with a git-committed coordination/manifests/L. FIX (class-closing): (1) REFUSE any cd (in omValidateTokenized's cd step ~2611-2618 AND in the standalone cd path ~2462 AND wherever orchestratorSwarmSubfolderBlocked ~1753 tracks cd) whose target walk passes through ANY symlinked component, at any position (have omResolvePath report whether it saw a symlink, e.g. return {resolved, sawSymlink} or take an option; refuse when true). With that, the logical and physical cwd are always identical, so all later checks agree with the shell. (2) If the session's starting cwd (ctx.cwd, before realpath ~1812) is not equal to its own realpath (it was reached through a symlink), refuse any cd whose target contains a '..' component, and refuse relative redirect targets that start with '..'. (3) Redirects attached to a cd segment itself are never checked today (the cd branch does `continue` before omRedirectsForbidden; omPlainWords drops '>' and its target): refuse any cd segment that carries a redirect (any of '>', '>>', '>|', '&>', '2>', numbered fd redirects to a file), in both the cd branch and ~1752. Keep all existing behaviour otherwise, especially: ordinary `cd <real dir> && node tools/x.mjs 2>&1 | tail -5`, `cd <real dir> && cmd > /dev/null`, and `cd docs && echo x > plans/a.md` (no symlinks) stay exactly as allowed or refused as today. Tests: add to tests/t2-redirect-symlink.test.mjs: `cd .swarm/project/L && cd .. && echo x > y.json` refused (L -> ../../docs/plans/sub); `cd coordination/manifests/L && cd .. && echo x > a.md` refused; `cd docs/plans/L` where L is any directory symlink refused; `cd docs > .swarm/project/daily-limit.json && git status` refused; `cd docs > coordination/manifests/x.json` refused; starting cwd reached via a symlink + `cd .. && echo x > a.md` refused; and the allowed cases above still allowed. Run all existing om-redirect-realpath and t2-redirect-symlink cases. Do not touch any other file.",
+      "context": [
+        "tests/om-redirect-realpath.test.mjs"
+      ],
+      "outputs": [
+        "tools/shell-writes.mjs",
+        "tests/t2-redirect-symlink.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/auto-approve.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/handbuild-reason-words.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-allow.test.mjs",
+        "tests/orchestrator-mode-default.test.mjs",
+        "tests/orchestrator-mode-review2.test.mjs",
+        "tests/orchestrator-mode-review3.test.mjs",
+        "tests/orchestrator-mode-review4.test.mjs",
+        "tests/orchestrator-mode-timeout.test.mjs",
+        "tests/orchestrator-mode.test.mjs",
+        "tests/shell-writes-accidents.test.mjs",
+        "tests/shell-writes-hardening.test.mjs",
+        "tests/shell-writes-quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk5",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-redirect-symlink.test.mjs",
+        "tests/om-redirect-realpath.test.mjs"
+      ]
+    }
+  ]
+}

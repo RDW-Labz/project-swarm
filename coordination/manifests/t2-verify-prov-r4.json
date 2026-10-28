@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "verifyprov4",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "Goal g-e19bbb50 (release train 2): under orchestrator mode, let a shell verify job through the gate ONLY when it is exactly the job the runner would build from the approved ticket ledger. A hand-written or edited shell job must still be refused.\n\nYour declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable). Earlier attempts stopped as blocked because a wider design needed more files; this design is deliberately confined to your outputs. Only return blocked for a real conflict inside these files.\n\nBackground: orchestratorManifestGate / vetManifestBody / vetJobs in tools/om-manifest-guard.mjs refuse every job with shell: true or a model ending in -shell when CLAUDECODE=1 and orchestrator mode + hook are on. Verify jobs with agent claude get shell: true from verifyJobFields (tools/verify-config.mjs) via ticketsToManifest (tools/ticket-manifest.mjs); prepareScopeRun (tools/scope-commands.mjs ~4055) builds the wave with these options: ticketsToManifest(ready, { ledger, scope, ready: true, maxJobs, lessons, verify: profile?.verify, quality: await qualityFor(root, profile), packageManager: packageManagerOf(profile), contextEnv: contextEnvFor(root, profile), laneModels }) where scope = parseScope(snapshot of the approved scope) - read prepareScopeRun for exactly how ledger, scope, profile and laneModels are obtained. Wave files and saved run manifests keep their current full shape: do NOT change them.\n\nBuild:\n1. NEW tools/verify-provenance.mjs exporting async verifyJobProvenance(root, job) -> { ok: true } | { ok: false, reason }. Steps: read the ledger with readLedger (tools/tickets.mjs); refuse if missing or !isApproved(ledger). Find the ticket whose id === job.id; refuse if none, or if its status is not in DELIVERABLE_STATUSES (tools/tickets.mjs: todo/ready/blocked/running) - so done, cancelled, proposed, review refuse. Rebuild that one ticket's job with ticketsToManifest([ticket], { same options as prepareScopeRun, ready: false }); import the option helpers (readProfile, qualityFor, packageManagerOf, contextEnvFor, parseScope/scope snapshot reading, loadLocalConfig lanes) from where they live; if a helper you need is not exported and lives in a file that is not your output, rebuild it locally in verify-provenance.mjs with a comment naming the original, rather than editing that file. Take the rebuilt job with that id; refuse if missing or not a shell job. Compare canonical JSON (keys sorted recursively, keys whose value is undefined dropped) of the manifest job and the rebuilt job; any difference refuses with a reason naming the first differing key. Never throw for a normal refusal; an unreadable ledger is a refusal.\n2. tools/om-manifest-guard.mjs: orchestratorManifestGate (async) first refuses duplicate job ids when any job is a shell job, then for each shell job (shell: true or -shell model) calls verifyJobProvenance; a passing job is skipped by the shell refusal in vetJobs but its setup/checks/preChecks/mutantCheck argvs are still vetted exactly as today; a failing one throws the existing orchestrator-manifest-unvetted error with a message naming the job id and the provenance reason. Implement by passing a set of allowed job ids (or objects) into vetManifestBody/vetJobs; keep the default (no set) behaviour identical so omRunManifestVetted and existing tests are unchanged. Import verify-provenance.mjs lazily (await import) inside the gate like the other lazy imports, so tools that only use the sync hook path do not load the ticket modules. omRunManifestVetted (the sync hook path) stays as it is EXCEPT: a shell job whose id names a ticket in the ledger file (.swarm/project/tickets.json, read synchronously, missing => unchanged refusal) is deferred to the runner gate instead of refused there; everything else about that manifest is still vetted.\n3. NEW tests/verify-provenance.test.mjs (first line: import './_isolate-config.mjs';). Temp project with an approved ledger built through the real tickets/scope helpers (look at tests/om-manifest-guard.test.mjs and tests/verify-config.test.mjs for fixtures; build the ledger + scope snapshot the way prepareScopeRun expects) and a profile whose verify agent is claude with a test command using the {tests} token (shape like the agent-data-business or parts-request-photos profiles). Stub orchestrator mode + hook the way tests/om-manifest-guard.test.mjs does. Cases:\n - allowed: the shell verify job produced by ticketsToManifest for a ready ticket passes orchestratorManifestGate with CLAUDECODE=1; also after a JSON round trip of the manifest;\n - refused (code orchestrator-manifest-unvetted): a changed prompt; an extra key; a changed setup argv; the same job for a ticket that is done, cancelled, or proposed; a duplicate id; an unapproved ledger (tickets edited after approval); a hand-written shell job whose id is not a ticket;\n - unchanged: a manifest with no shell jobs behaves exactly as before; the sync omRunManifestVetted still refuses a shell job when there is no ledger.\nDo not touch any other file. Existing tests named in your context must keep passing unchanged. Keep edits small and in the surrounding style. In your summary list each refusal reason string.",
+      "context": [
+        "tools/ticket-manifest.mjs",
+        "tools/verify-config.mjs",
+        "tools/tickets.mjs",
+        "tools/scope-commands.mjs",
+        "tools/shell-writes.mjs",
+        "tools/orchestrator-hook-installed.mjs",
+        "tools/local-config.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/verify-config.test.mjs"
+      ],
+      "outputs": [
+        "tools/verify-provenance.mjs",
+        "tools/om-manifest-guard.mjs",
+        "tests/verify-provenance.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "verify-prov",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/verify-provenance.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-hook-import.test.mjs",
+        "tests/verify-config.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs",
+        "tests/swarm.test.mjs"
+      ]
+    }
+  ]
+}

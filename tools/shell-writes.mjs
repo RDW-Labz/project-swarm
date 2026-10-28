@@ -126,7 +126,8 @@ export function tokenize(command, { countSteps } = {}) {
   let piped = false;
   let sepAfter = null;
   let findExec = false;
-  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
+  let subshellBefore = [];
+  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; if (subshellBefore.length) { words.subshellBefore = subshellBefore; subshellBefore = []; } commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
   const text = String(command ?? '');
   const heredocs = [];
   let heredocHead = 0;
@@ -176,7 +177,13 @@ export function tokenize(command, { countSteps } = {}) {
     if (c === '+' && findExec && !hasWord && (next === ' ' || next === '\t' || next === undefined || next === '\n')) {
       word = '+'; hasWord = true; endWord(); findExec = false; continue;
     }
-    if (c === '(' || c === ')') { endCommand(false, c); continue; }
+    if (c === '(' || c === ')') {
+      endCommand(false, c);
+      // Keep even leading/adjacent boundaries, which have no command words.
+      // A closing boundary applies after the preceding command's redirects.
+      subshellBefore.push(c);
+      continue;
+    }
     if (c === '{' && !hasWord && (next === ' ' || next === '\n')) { endCommand(); continue; }
     if (c === '}' && !hasWord && (next === undefined || next === ' ' || next === ';' || next === '\n')) { endCommand(); continue; }
     if (c === '&' && next === '&') { endCommand(false, '&&'); i += 1; continue; }
@@ -1731,14 +1738,15 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
     if (tokenized.unclosedQuote) return false;
     const baseCwd = ctx.cwd ?? ctx.root;
     let cwd = baseCwd;
-    const local = { ...ctx, cwd };
-    let subshellDepth = 0;
-    const cwdStack = [baseCwd];
+    const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
+    const cwdStack = [];
     for (const words of tokenized) {
-      if (words.sepAfter === ')') {
-        subshellDepth = Math.max(0, subshellDepth - 1);
-        if (cwdStack.length > 1) cwdStack.pop();
-        cwd = cwdStack[cwdStack.length - 1];
+      for (const boundary of words.subshellBefore ?? []) {
+        if (boundary === '(') cwdStack.push(cwd);
+        else {
+          if (!cwdStack.length) return true;
+          cwd = cwdStack.pop();
+        }
         local.cwd = cwd;
       }
       const { plain } = omPlainWords(words);
@@ -1747,20 +1755,16 @@ export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
         k += 1;
       }
       if (k < plain.length && path.basename(plain[k]) === 'cd') {
-        if (subshellDepth > 0) continue;
+        if (omCdHasRedirect(words)) return true;
         const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
+        if (omResolveCd(target, local) === null) return true;
         if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) continue;
         cwd = omResolveCd(target, { ...local, cwd });
         local.cwd = cwd;
-        cwdStack[cwdStack.length - 1] = cwd;
         continue;
       }
       if (k < plain.length && omSegmentIsSwarmInvocation(plain, k)) {
         if (!orchestratorSwarmSessionCwdOk(ctx.root, local.cwd ?? ctx.root)) return true;
-      }
-      if (words.sepAfter === '(') {
-        subshellDepth += 1;
-        cwdStack.push(cwd);
       }
     }
     return false;
@@ -1801,6 +1805,101 @@ const omSwarmFreeTextHeredoc = words => {
   return OM_SWARM_FREE_TEXT_SUBS.has(sub);
 };
 
+const omRelUnderOmManifestWriteArea = rel => {
+  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
+  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
+};
+
+const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
+
+// Keep the starting cwd's logical/physical mismatch across subsequent cd steps.
+const omStartingCwdSymlink = ctx => {
+  if (ctx.omStartingCwdSymlink !== undefined) return ctx.omStartingCwdSymlink;
+  const cwd = ctx.cwd ?? ctx.root;
+  if (!cwd || !ctx.root) return false;
+  try {
+    return path.relative(ctx.root, cwd) !== path.relative(fs.realpathSync.native(ctx.root), fs.realpathSync.native(cwd));
+  } catch { return false; }
+};
+
+const omResolvePath = (p, ctx, redirect = false) => {
+  if (redirect && !path.isAbsolute(p) && p.split(path.sep)[0] === '..' && omStartingCwdSymlink(ctx)) return null;
+  let cwdBase = ctx.cwd ?? ctx.root;
+  try {
+    cwdBase = fs.realpathSync.native(cwdBase);
+  } catch {
+    cwdBase = ctx.cwd ?? ctx.root;
+  }
+  let components = p.split(path.sep).filter(Boolean);
+  let resolved = path.isAbsolute(p) ? path.parse(p).root : cwdBase;
+  if (path.isAbsolute(p) && ctx.root) {
+    try {
+      const rootReal = fs.realpathSync.native(ctx.root);
+      for (const root of [path.resolve(ctx.root), rootReal]) {
+        const rootComponents = root.split(path.sep).filter(Boolean);
+        if (rootComponents.every((component, i) => components[i] === component)) {
+          // Ignore links above the project, preserving every component below it
+          // (including links followed by ..) for the walk.
+          components = components.slice(rootComponents.length);
+          resolved = rootReal;
+          break;
+        }
+      }
+    } catch { /* keep the absolute walk when the root cannot be resolved */ }
+  }
+  let sawSymlink = false;
+  for (let i = 0; i < components.length; i += 1) {
+    if (i >= 64) return null;
+    const component = components[i];
+    if (component === '..' && sawSymlink) return null;
+    const next = path.join(resolved, component);
+    try {
+      const stat = fs.lstatSync(next);
+      if (stat.isSymbolicLink()) {
+        // Redirects follow even dangling leaf symlinks. Refuse all redirect leaf links.
+        if (redirect && i === components.length - 1) return null;
+        sawSymlink = true;
+        try { resolved = fs.realpathSync.native(next); } catch { return null; }
+      } else {
+        if (redirect && i === components.length - 1 && stat.isFile() && stat.nlink > 1) return null;
+        resolved = next;
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') return null;
+      resolved = next;
+    }
+  }
+  return { resolved, sawSymlink };
+};
+
+const omWriteTargetRel = (raw, ctx, expands) => {
+  if (expands || /^\$/.test(String(raw ?? ''))) return null;
+  if (!ctx?.root) return null;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(ctx.root);
+  } catch {
+    return null;
+  }
+  let p = String(raw ?? '');
+  if (p.startsWith('~/')) p = `${os.homedir()}${path.sep}${p.slice(2)}`;
+  const resolved = omResolvePath(p, ctx, true);
+  if (resolved === null) return null;
+  const rel = path.relative(rootReal, resolved.resolved);
+  if (omWriteTargetEscapesProject(rel)) return null;
+  return rel.split(path.sep).join('/');
+};
+
+const omRedirectWriteTargetRel = (words, ctx) => {
+  const wordExp = words.expands ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      return omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+    }
+  }
+  return null;
+};
+
 const omRedirectTokenHarmless = (words, i) => {
   const w = words[i];
   if (w === '2>&1') return { skip: 0 };
@@ -1819,13 +1918,21 @@ const omTestRunnerRedirectForbidden = words => {
   return false;
 };
 
-const omRedirectsForbidden = words => {
+const omRedirectsForbidden = (words, ctx) => {
   let heredocOnly = false;
+  const wordExp = words.expands ?? [];
   for (let i = 0; i < words.length; i += 1) {
     const harmless = omRedirectTokenHarmless(words, i);
     if (harmless) { i += harmless.skip; continue; }
     const w = words[i];
     if (w === '<<') { heredocOnly = true; continue; }
+    if (['>', '>>', '>|', '>&', '&>'].includes(w) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+      if (rel === null) return true;
+      if (omRelUnderOmManifestWriteArea(rel)) return true;
+      if (orchestratorWriteAllowedRel(rel)) continue;
+      return true;
+    }
     if (/[<>]/.test(w) || w.includes('&')) return true;
   }
   if (heredocOnly) return !omSwarmFreeTextHeredoc(words);
@@ -2267,15 +2374,9 @@ const omJqOk = (args, ctx) => {
 const omCdTargetOk = (target, ctx) => {
   if (!ctx.root || !target || omOperandUnsafe(target)) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(String(target)) && !String(target).startsWith('~/')) return false;
-  const home = ctx.home ?? os.homedir();
-  let p = String(target);
-  if (p === '~' || p.startsWith('~/')) {
-    if (p === '~') return false;
-    p = path.join(home, p.slice(2));
-  }
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
-  let real;
-  try { real = fs.realpathSync.native(abs); } catch { return false; }
+  if (target === '~') return false;
+  const real = omResolveCd(target, ctx);
+  if (real === null) return false;
   const rel = insideProject(ctx.root, real);
   if (rel === null) return false;
   const norm = rel.replace(/\\/g, '/').toLowerCase();
@@ -2289,8 +2390,9 @@ const omRealOrNull = p => {
 
 const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']);
 
-// `cd -` is always denied: the hook session cannot know the previous folder.
-const omCdHasDash = cdArgs => cdArgs.some(a => a === '-');
+// Refuse all cd options, including `-`: the hook cannot model their semantics.
+const omCdHasDash = cdArgs => cdArgs.some(a => a.startsWith('-'));
+const omCdHasRedirect = words => words.some(w => /[<>]/.test(w));
 
 /** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
 const omCdRootTarget = (target, ctx) => {
@@ -2300,18 +2402,18 @@ const omCdRootTarget = (target, ctx) => {
   const t = String(target);
   if (OM_CD_ROOT_ENV_FORMS.has(t)) {
     const envDir = process.env.CLAUDE_PROJECT_DIR;
-    return !!envDir && omRealOrNull(envDir) === rootReal;
+    return !!envDir && omRealOrNull(envDir) === rootReal && omResolveCd(t, ctx) === rootReal;
   }
   if (omOperandUnsafe(t) || t === '~' || t.startsWith('~')) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(t)) return false;
-  const abs = path.isAbsolute(t) ? path.resolve(t) : path.resolve(ctx.cwd ?? ctx.root, t);
-  return omRealOrNull(abs) === rootReal;
+  return omResolveCd(t, ctx) === rootReal;
 };
 
 const omCdAllowed = (target, ctx) => omCdRootTarget(target, ctx) || omCdTargetOk(target, ctx);
 
 // A cd that is not the first half of `cd DIR && ...` only passes when it returns to the project root (a standalone `cd`, or before `;`).
 const omCdStepAllowed = (words, target, ctx) => {
+  if (omCdHasRedirect(words)) return false;
   if (words.sepAfter === '&&') return omCdAllowed(target, ctx);
   if (words.sepAfter !== ';' || words.piped) return false;
   return omCdRootTarget(target, ctx);
@@ -2320,9 +2422,13 @@ const omCdStepAllowed = (words, target, ctx) => {
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
-  if (OM_CD_ROOT_ENV_FORMS.has(p)) return path.resolve(ctx.root);
-  if (p.startsWith('~/')) p = path.join(home, p.slice(2));
-  return path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
+  if (OM_CD_ROOT_ENV_FORMS.has(p)) p = process.env.CLAUDE_PROJECT_DIR ?? ctx.root;
+  // Do not normalize away links followed by .. before walking the target.
+  if (p.startsWith('~/')) p = `${home}${path.sep}${p.slice(2)}`;
+  if (p.split(path.sep).includes('..') && omStartingCwdSymlink(ctx)) return null;
+  const result = omResolvePath(p, ctx);
+  // Shell cd is logical: any link can make a later cd .. diverge from realpath.
+  return result === null || result.sawSymlink ? null : omRealOrNull(result.resolved);
 };
 
 const omNaturallySmall = (cmd, args) => {
@@ -2338,7 +2444,7 @@ const omNaturallySmall = (cmd, args) => {
 };
 
 const omSimpleCommandAllowed = (words, commandText, ctx) => {
-  if (omRedirectsForbidden(words)) return false;
+  if (omRedirectsForbidden(words, ctx)) return false;
   const { plain, expands } = omPlainWords(words);
   let k = 0;
   for (;;) {
@@ -2388,6 +2494,7 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'node' && !omTrustedCommandWordOk(rawCmd, 'node')) return false;
   if (cmd === 'swarm' && !omSwarmCommandWordOk(rawCmd)) return false;
   if (cmd === 'cd') {
+    if (omCdHasRedirect(words)) return false;
     if (omCdHasDash(args)) return false;
     const target = args.filter(a => a !== '' && !a.startsWith('-'))[0];
     return target !== undefined && omCdTargetOk(target, ctx);
@@ -2454,38 +2561,27 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   if (omNaturallySmall(cmd, args)) return true;
   if (cmd === 'true' || cmd === 'false' || cmd === ':') return true;
+  const redirectRel = omRedirectWriteTargetRel(words, ctx);
+  if (
+    redirectRel !== null
+    && orchestratorWriteAllowedRel(redirectRel)
+    && !omRelUnderOmManifestWriteArea(redirectRel)
+    && !words.piped
+    && !feedsPipe
+    && (cmd === 'echo' || cmd === 'printf')
+  ) {
+    return true;
+  }
   return false;
 };
 
 const OM_COMPOUND_SEPS = new Set(['&&', ';', '||', '|']);
-
-const omRelUnderOmManifestWriteArea = rel => {
-  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
-  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
-};
 
 const omCommandIsCompound = (tokenized, commandText) => {
   if (tokenized.length > 1) return true;
   if (tokenized.some(w => OM_COMPOUND_SEPS.has(w.sepAfter))) return true;
   if (/[^&]&[^&>]/.test(String(commandText ?? ''))) return true;
   return false;
-};
-
-const omWriteTargetRel = (raw, ctx, expands) => {
-  if (expands || /^\$/.test(String(raw ?? ''))) return null;
-  if (!ctx?.root) return null;
-  try {
-    const rootReal = fs.realpathSync.native(ctx.root);
-    let p = String(raw ?? '');
-    if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
-    const cwd = ctx.cwd ?? ctx.root;
-    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
-    const rel = path.relative(rootReal, abs);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return rel.split(path.sep).join('/');
-  } catch {
-    return null;
-  }
 };
 
 const omWordsRedirectManifestArea = (words, ctx) => {
@@ -2529,16 +2625,17 @@ const omCompoundManifestWriteWithSwarmBlocked = (commandText, tokenized, ctx) =>
 const omValidateTokenized = (tokenized, ctx, commandText = '') => {
   if (omCompoundManifestWriteWithSwarmBlocked(commandText, tokenized, ctx)) return false;
   const baseCwd = ctx.cwd ?? ctx.root;
-  const cwdStack = [baseCwd];
+  const cwdStack = [];
   let cwd = baseCwd;
-  const local = { ...ctx, cwd };
-  let subshellDepth = 0;
+  const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
   for (let wi = 0; wi < tokenized.length; wi += 1) {
     const words = tokenized[wi];
-    if (words.sepAfter === ')') {
-      subshellDepth = Math.max(0, subshellDepth - 1);
-      if (cwdStack.length > 1) cwdStack.pop();
-      cwd = cwdStack[cwdStack.length - 1];
+    for (const boundary of words.subshellBefore ?? []) {
+      if (boundary === '(') cwdStack.push(cwd);
+      else {
+        if (!cwdStack.length) return false;
+        cwd = cwdStack.pop();
+      }
       local.cwd = cwd;
     }
     const { plain } = omPlainWords(words);
@@ -2548,12 +2645,10 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
       k += 1;
     }
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
-      if (subshellDepth > 0) return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
       if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) return false;
       cwd = omResolveCd(target, { ...local, cwd });
       local.cwd = cwd;
-      cwdStack[cwdStack.length - 1] = cwd;
       continue;
     }
     if (!omSimpleCommandAllowed(words, '', local)) return false;
@@ -2568,8 +2663,6 @@ const omValidateTokenized = (tokenized, ctx, commandText = '') => {
         }
       }
     }
-    if (words.sepAfter === '(') subshellDepth += 1;
-    if (words.sepAfter === '(') cwdStack.push(cwd);
     if (words.sepAfter === '|') {
       let j = wi + 1;
       while (j < tokenized.length && tokenized[j - 1].sepAfter === '|') j += 1;
