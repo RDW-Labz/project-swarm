@@ -79,7 +79,9 @@ export function createBrain({ getLink, fallback = null, concurrency = 1, timeout
 
   async function writeLedger(event) {
     if (!ledger) return;
-    try { await ledger(event); } catch { /* ignored by design */ }
+    try { await ledger(event); } catch (error) {
+      console.error('[tools/brain.mjs] writeLedger:', event?.kind, error?.message ?? error);
+    }
   }
 
   async function attempt(req, messages, signal) {
@@ -163,7 +165,9 @@ export function createBrain({ getLink, fallback = null, concurrency = 1, timeout
     for (const item of queue.splice(0)) item.reject(fail('brain-closed'));
     const link = lastLink;
     lastLink = null;
-    try { link?.close?.(); } catch { /* ignored by design */ }
+    try { link?.close?.(); } catch (closeError) {
+      console.error('[tools/brain.mjs] close link:', closeError?.message ?? closeError);
+    }
   }
 
   return { ask, status, close };
