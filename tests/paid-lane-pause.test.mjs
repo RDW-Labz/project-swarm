@@ -3,19 +3,61 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PAID_LANES } from '../tools/spend.mjs';
 import {
   PAID_KEY_LANES,
   assertPaidLaneNotPaused,
   paidLanePauseCode,
+  paidLanePausedProblem,
   isHostedLambdaInference,
 } from '../tools/paid-lane-pause.mjs';
+import { validateProject } from '../tools/swarm.mjs';
+import { git } from '../tools/codex-adapter.mjs';
 import { apiConfiguration } from '../tools/api-adapters.mjs';
 import { readRentedKey, RENTED_DEFAULTS } from '../tools/rented.mjs';
 import { readAnthropicKey, ANTHROPIC_KEY_ENV } from '../tools/anthropic.mjs';
 import { readOpenRouterKey, OPENROUTER_KEY_ENV } from '../tools/openrouter.mjs';
 
+const TIMEOUT = { timeout: 60000 };
 const fakeKey = 'zz'.repeat(16);
+const testEnv = extra => ({ SWARM_CONFIG: process.env.SWARM_CONFIG, HOME: process.env.HOME, ...extra });
+const manifest = jobs => ({ version: 1, jobs });
+
+const apiJob = (agent, overrides = {}) => ({
+  id: `${agent}-worker`,
+  agent,
+  model: agent === 'gemini' ? 'gemini-2.5-flash' : agent === 'rented' ? 'Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8' : agent === 'lambda' ? 'meta-llama/Llama-3.1-8B-Instruct' : 'gpt-5',
+  prompt: 'Update the output.',
+  context: ['input.txt'],
+  outputs: ['output.txt'],
+  sensitive: false,
+  ...overrides,
+});
+
+const plainClaudeJob = (overrides = {}) => ({
+  id: 'writer',
+  agent: 'claude',
+  model: 'sonnet',
+  prompt: 'Update the output.',
+  context: ['input.txt'],
+  outputs: ['output.txt'],
+  ...overrides,
+});
+
+async function repo(t) {
+  const root = await fsPromises.realpath(await fsPromises.mkdtemp(path.join(os.tmpdir(), 'swarm-paid-lane-pause-validate-')));
+  t.after(() => fsPromises.rm(root, { recursive: true, force: true }));
+  await git(root, ['init', '-q']);
+  await fsPromises.writeFile(path.join(root, 'input.txt'), 'committed context');
+  await fsPromises.writeFile(path.join(root, 'output.txt'), 'committed output');
+  await fsPromises.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
+  await git(root, ['add', '.']);
+  await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']);
+  return root;
+}
 
 function recorder(stdout = `${fakeKey}\n`) {
   const calls = [];
@@ -168,4 +210,36 @@ test('PAID_KEY_LANES lists every paid lane that reads a hosted credential', () =
 
 test('assertPaidLaneNotPaused is a no-op when lane is not paused', () => {
   assert.doesNotThrow(() => assertPaidLaneNotPaused('openai', { lanes: { openai: { paused: false } } }));
+});
+
+for (const lane of ['openai', 'gemini', 'rented']) {
+  test(`validateProject refuses an explicit ${lane} job while paused`, TIMEOUT, async t => {
+    mergeIsolatedConfig({ lanes: { [lane]: { paused: true } } });
+    const root = await repo(t);
+    const config = { lanes: { [lane]: { paused: true } } };
+    const problem = paidLanePausedProblem(lane, config);
+    const code = paidLanePauseCode(lane);
+    await assert.rejects(
+      validateProject(root, manifest([apiJob(lane)]), { env: testEnv() }),
+      error => error.message === problem && error.code === code,
+    );
+  });
+}
+
+test('validateProject passes when paid lanes are paused but no explicit paid jobs use them', TIMEOUT, async t => {
+  mergeIsolatedConfig({
+    lanes: { openai: { paused: true }, gemini: { paused: true }, rented: { paused: true }, lambda: { paused: true } },
+  });
+  const root = await repo(t);
+  const result = await validateProject(root, manifest([plainClaudeJob()]), { env: testEnv() });
+  assert.equal(result.status, 'valid');
+});
+
+test('validateProject passes a self-hosted lambda job while the lambda lane is paused', TIMEOUT, async t => {
+  mergeIsolatedConfig({ lanes: { lambda: { paused: true } } });
+  const root = await repo(t);
+  const result = await validateProject(root, manifest([apiJob('lambda')]), {
+    env: testEnv({ SWARM_LAMBDA_URL: 'http://127.0.0.1:8000' }),
+  });
+  assert.equal(result.status, 'valid');
 });
