@@ -7,6 +7,7 @@
   'use strict';
 
   var LANE_ORDER = ['cursor', 'codex', 'claude', 'hermes', 'openrouter', 'anthropic', 'rented', 'local', 'qwen', 'openai', 'gemini', 'ollama', 'lambda'];
+  var HIVE_PANEL_LANES = ['safety', 'route', 'context', 'control'];
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -183,6 +184,55 @@
     return String(field.value);
   }
 
+  function cardMetricField(project, key) {
+    if (!project || typeof project !== 'object') { return null; }
+    if (key === 'asks') {
+      if (project.needsYou && typeof project.needsYou === 'object') { return project.needsYou; }
+      if (project.asks && typeof project.asks === 'object') { return project.asks; }
+      return null;
+    }
+    if (key === 'out') { return project.out || null; }
+    if (key === 'fails') { return project.fails || null; }
+    return project[key] || null;
+  }
+
+  function shouldUseHiveLanePanel(laneCounts) {
+    if (!laneCounts || typeof laneCounts !== 'object') { return true; }
+    var hasAgent = false;
+    var hasHive = false;
+    for (var key in laneCounts) {
+      if (!Object.prototype.hasOwnProperty.call(laneCounts, key)) { continue; }
+      if (HIVE_PANEL_LANES.indexOf(key) >= 0) { hasHive = true; }
+      else { hasAgent = true; }
+    }
+    if (hasAgent && !hasHive) { return false; }
+    return true;
+  }
+
+  function hiveLanePanelRows(laneCounts) {
+    var counts = laneCounts && typeof laneCounts === 'object' ? laneCounts : {};
+    var total = 0;
+    for (var i = 0; i < HIVE_PANEL_LANES.length; i += 1) {
+      var lane = HIVE_PANEL_LANES[i];
+      var raw = counts[lane];
+      var c = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+      total += c;
+    }
+    var rows = [];
+    for (var j = 0; j < HIVE_PANEL_LANES.length; j += 1) {
+      var name = HIVE_PANEL_LANES[j];
+      var count = counts[name];
+      var n = typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+      rows.push({
+        name: name,
+        count: n,
+        fillPct: total > 0 ? (n / total) * 100 : 0,
+        laneClass: name,
+      });
+    }
+    return rows;
+  }
+
   function trustedTitle(field) {
     if (field && typeof field.source === 'string' && field.source.length) { return field.source; }
     return '';
@@ -204,7 +254,7 @@
     var dl = el('dl', 'hive-kv');
     for (var ki = 0; ki < CARD_ROW_KEYS.length; ki += 1) {
       var key = CARD_ROW_KEYS[ki];
-      var field = project[key];
+      var field = cardMetricField(project, key);
       dl.appendChild(el('dt', null, key));
       var dd = el('dd', 'num', readTrustedDisplay(field));
       var title = trustedTitle(field);
@@ -438,7 +488,9 @@
       clearChildren(barsRoot);
     }
 
-    var rows = laneRowsFromCounts(laneCounts);
+    var rows = shouldUseHiveLanePanel(laneCounts)
+      ? hiveLanePanelRows(laneCounts)
+      : laneRowsFromCounts(laneCounts);
     if (!rows.length) {
       appendEmpty(barsRoot, 'No lane activity yet');
     }
@@ -448,7 +500,7 @@
       rowEl.appendChild(el('span', 'name', row.name));
       var track = el('span', 'lane-track');
       var fill = document.createElement('i');
-      fill.className = 'lane-fill ' + row.name;
+      fill.className = 'lane-fill ' + (row.laneClass || row.name);
       fill.style.width = row.fillPct.toFixed(2) + '%';
       track.appendChild(fill);
       rowEl.appendChild(track);
@@ -521,6 +573,10 @@
     if (existingCanvas && existingCanvas.parentNode) {
       existingCanvas.parentNode.removeChild(existingCanvas);
     }
+    var existingCaption = host.querySelector ? host.querySelector('.hive-term-prompt') : null;
+    if (existingCaption && existingCaption.parentNode) {
+      existingCaption.parentNode.removeChild(existingCaption);
+    }
     var existingEmpty = host.querySelector ? host.querySelector('.cc-empty') : null;
     if (existingEmpty && existingEmpty.parentNode) {
       existingEmpty.parentNode.removeChild(existingEmpty);
@@ -538,15 +594,11 @@
         height: canvas.height,
         strokeStyle: opts.strokeStyle || '#3dd6a5',
       });
-    } else if (!samples.length) {
-      appendEmpty(host, 'No lane activity yet');
-    }
-
-    var caption = host.querySelector ? host.querySelector('.hive-term-prompt') : null;
-    if (!caption) {
-      caption = el('p', 'term-prompt hive-term-prompt term-prompt--chart-caption');
+      var caption = el('p', 'term-prompt hive-term-prompt term-prompt--chart-caption');
       caption.appendChild(el('span', 'lbl', opts.latencyCaption || 'decision latency'));
       host.appendChild(caption);
+    } else if (!samples.length) {
+      appendEmpty(host, 'no decisions timed yet');
     }
   }
 

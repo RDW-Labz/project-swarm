@@ -45,6 +45,54 @@ export function headlineTicketText(done, total) {
 
 const METER_CLASSES = ['meter-opus', 'meter-skills', 'meter-engines', 'meter-taste', 'meter-broll', 'meter-web'];
 
+const MASCOT_PIXEL_SVG = [
+  '<svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot" shape-rendering="crispEdges">',
+  '<rect x="6" y="0" width="10" height="2" fill="#c9784a"/>',
+  '<rect x="4" y="2" width="14" height="2" fill="#c9784a"/>',
+  '<rect x="3" y="4" width="3" height="2" fill="#f5e6dc"/>',
+  '<rect x="16" y="4" width="3" height="2" fill="#f5e6dc"/>',
+  '<rect x="5" y="4" width="12" height="4" fill="#c9784a"/>',
+  '<rect x="7" y="6" width="2" height="2" fill="#1a120e"/>',
+  '<rect x="13" y="6" width="2" height="2" fill="#1a120e"/>',
+  '<rect x="4" y="8" width="14" height="3" fill="#c9784a"/>',
+  '<rect x="2" y="9" width="2" height="4" fill="#c9784a"/>',
+  '<rect x="18" y="9" width="2" height="4" fill="#c9784a"/>',
+  '<rect x="6" y="11" width="3" height="2" fill="#8a5238"/>',
+  '<rect x="13" y="11" width="3" height="2" fill="#8a5238"/>',
+  '<rect x="5" y="13" width="12" height="2" fill="#c9784a"/>',
+  '<rect x="7" y="15" width="3" height="2" fill="#8a5238"/>',
+  '<rect x="12" y="15" width="3" height="2" fill="#8a5238"/>',
+  '</svg>',
+].join('');
+
+/**
+ * @param {ParentNode} parent
+ * @param {Document} doc
+ * @param {{ phone?: boolean }} [opts]
+ */
+export function appendMascotStage(parent, doc, opts) {
+  if (!parent || !doc?.createElement) return null;
+  const mascot = doc.createElement('div');
+  mascot.className = 'mascot-stage';
+  if (opts?.phone) mascot.classList.add('mascot-stage--phone');
+  mascot.setAttribute('aria-hidden', 'true');
+  const orbit = doc.createElement('div');
+  orbit.className = 'mascot-orbit';
+  const dot = doc.createElement('span');
+  dot.className = 'mascot-orbit-dot';
+  orbit.appendChild(dot);
+  mascot.appendChild(orbit);
+  const pixelWrap = doc.createElement('div');
+  pixelWrap.innerHTML = MASCOT_PIXEL_SVG;
+  const svg = pixelWrap.firstElementChild || pixelWrap.firstChild;
+  if (svg) mascot.appendChild(svg);
+  const shadow = doc.createElement('div');
+  shadow.className = 'mascot-shadow';
+  mascot.appendChild(shadow);
+  parent.appendChild(mascot);
+  return mascot;
+}
+
 function appendCategoryBar(parent, rings, extraClass) {
   if (!rings.length) return null;
   const bar = el('div', `category-bar ${extraClass || ''}`.trim());

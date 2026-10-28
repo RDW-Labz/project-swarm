@@ -199,6 +199,26 @@
   cursor: pointer;
 }
 
+.cc-cockpit-shell .btn-pill--accent {
+  border-color: var(--cockpit-orange-dim);
+  color: var(--cockpit-orange);
+}
+
+.cc-cockpit-shell .app-nav .nav-actions .btn-pill {
+  min-height: var(--tap);
+  padding: 0 14px;
+  font: 0.72rem var(--mono);
+  text-transform: uppercase;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cc-cockpit-shell .cockpit-hero .headline-num {
+  letter-spacing: -0.04em;
+}
+
 .cc-cockpit-shell .btn-pill:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px rgba(200, 160, 255, 0.55);
@@ -208,6 +228,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
+  width: 100%;
   gap: 6px 12px;
   font-family: var(--mono);
   font-size: clamp(0.62rem, 1.2vw, 0.72rem);
@@ -420,6 +441,7 @@
   gap: 2px 8px;
   flex: 1;
   min-height: 0;
+  align-items: stretch;
 }
 
 .cc-cockpit-shell .ticket-col {
@@ -428,6 +450,7 @@
   gap: 2px;
   min-width: 0;
   min-height: 0;
+  justify-content: space-evenly;
   overflow: hidden;
 }
 
@@ -483,8 +506,29 @@
   font-size: clamp(0.56rem, 1.1vh, 0.64rem);
   min-width: 0;
   width: 100%;
+  flex: 1 1 0;
+  max-height: 44px;
   text-align: left;
   cursor: default;
+}
+
+.cc-cockpit-shell .ticket-row[data-hidden="true"] {
+  display: none;
+}
+
+.cc-cockpit-shell .ticket-row--done {
+  opacity: 0.72;
+}
+
+.cc-cockpit-shell .ticket-row--active {
+  opacity: 1;
+  border-color: var(--fg);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.cc-cockpit-shell .ticket-row--pending {
+  opacity: 0.45;
+  border-style: dashed;
 }
 
 .cc-cockpit-shell .ticket-idx {
@@ -690,9 +734,24 @@
 .cc-cockpit-shell .mascot-stage {
   position: relative;
   width: min(100%, 280px);
-  height: min(22vh, 160px);
-  margin: 4px auto;
-  min-height: 96px;
+  height: min(26vh, 200px);
+  margin: 4px 0 0;
+  flex: 1 1 auto;
+  min-height: 108px;
+  max-height: 200px;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 2;
+}
+
+.cc-cockpit-shell .mascot-shadow {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 2px;
+  height: 14px;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), transparent 70%);
+  border-radius: 50%;
 }
 
 .cc-cockpit-shell .mascot-orbit {
@@ -710,16 +769,17 @@
   position: absolute;
   left: 50%;
   bottom: 12%;
-  transform: translateX(-50%) scale(2.2);
+  transform: translateX(-50%) scale(2.65);
   transform-origin: center bottom;
   width: 88px;
   height: 72px;
+  z-index: 2;
 }
 
 .cc-cockpit-shell .stream-top {
   display: flex;
   justify-content: space-between;
-  gap: 6px;
+  gap: 8px;
   align-items: flex-start;
   min-width: 0;
 }
@@ -727,12 +787,18 @@
 .cc-cockpit-shell .stream-id {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cc-cockpit-shell .stream-status {
   text-transform: uppercase;
-  font-size: 0.52rem;
+  font-size: 0.58rem;
   color: var(--cockpit-pink);
+  flex: none;
+  white-space: nowrap;
 }
 
 .cc-cockpit-shell .stream-meta {
@@ -793,6 +859,11 @@
   min-height: 0;
 }
 
+.cc-cockpit-shell .band-bottom .stream-grid,
+.cc-cockpit-shell .band-bottom .cc-cockpit-run-stream-host {
+  grid-auto-rows: minmax(0, 1fr);
+}
+
 .cc-cockpit-shell .stream-card,
 .cc-cockpit-shell .cockpit-run-stream-item {
   min-height: 52px;
@@ -850,11 +921,15 @@
 .cc-cockpit-shell .stack-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin-top: 4px;
   flex: 1;
   min-height: 0;
+}
+
+.cc-cockpit-shell .band-bottom .stack-metrics,
+.cc-cockpit-shell .band-bottom .cockpit-stack-metrics {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .cc-cockpit-shell .cockpit-metric-tile,
@@ -871,8 +946,13 @@
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-  overflow: visible;
+  overflow: hidden;
   box-sizing: border-box;
+}
+
+.cc-cockpit-shell .band-bottom .cockpit-metric-tile .m-foot,
+.cc-cockpit-shell .band-bottom .metric-tile .m-foot {
+  display: none;
 }
 
 .cc-cockpit-shell .cockpit-metric-tile .m-label,
@@ -1019,6 +1099,18 @@
     gap: 6px;
   }
 
+  .cc-cockpit-shell .phone-now-loops {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .cc-cockpit-shell .phone-now-loops .loop-steps {
+    font-size: 0.62rem;
+  }
+
   .cc-cockpit-shell .phone-now-rows .ticket-row {
     min-height: var(--tap);
   }
@@ -1038,6 +1130,11 @@
   }
 
   .cc-cockpit-shell .cockpit-ticket-search {
+    display: flex;
+  }
+
+  .cc-cockpit-shell .phone-panel[data-active="true"]#phone-now .ticket-search,
+  .cc-cockpit-shell .phone-panel[data-active="true"]#phone-now .cockpit-ticket-search {
     display: flex;
   }
 

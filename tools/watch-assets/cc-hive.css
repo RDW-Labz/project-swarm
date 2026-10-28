@@ -126,7 +126,8 @@ body.hive-body.cc-body {
 .hive-body .hive-illus{
   padding: 4px 10px;
   font-size: 10px;
-  max-width: none;
+  max-width: 72ch;
+  width: fit-content;
 }
 
 .hive-body .hive-legend{
@@ -164,6 +165,7 @@ body.hive-body.cc-body {
   font-size: 11px;
   border-radius: 999px;
   flex: 0 0 auto;
+  align-self: center;
 }
 
 .hive-body .hive-panels-wrap{
@@ -600,6 +602,7 @@ body.hive-body.cc-body {
   line-height: .95;
   margin: 2px 0;
   letter-spacing: .02em;
+  color: var(--fg);
 }
 
 .hive-body .hive-core-ver{
@@ -692,11 +695,16 @@ body.hive-body.cc-body {
   gap: 4px;
   padding: 4px 8px;
   border-radius: var(--r-sm) var(--r-sm) 0 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: #0a0a0c;
   min-height: 28px;
   flex: none;
+}
+
+.hive-body .hive-node-hd .name{
+  color: #0a0a0c;
+  opacity: 1;
 }
 
 .hive-body .hive-node-hd .idx{
@@ -727,7 +735,7 @@ body.hive-body.cc-body {
   margin: 0;
   color: var(--faint);
   font-size: 12.5px;
-  line-height: 12.5px;
+  line-height: 1.35;
   text-transform: lowercase;
 }
 
@@ -736,7 +744,7 @@ body.hive-body.cc-body {
   text-align: right;
   font-weight: 600;
   font-size: 12.5px;
-  line-height: 12.5px;
+  line-height: 1.35;
 }
 
 .hive-body .hive-meter{
@@ -828,6 +836,8 @@ body.hive-body.cc-body {
   padding: 6px 8px;
   gap: 4px;
   min-width: 0;
+  min-height: 0;
+  justify-content: flex-start;
   overflow: visible;
 }
 
@@ -1075,6 +1085,22 @@ body.hive-body.cc-body {
   background: linear-gradient(90deg, var(--info), #93c5fd);
 }
 
+.hive-body .lane-fill.safety{
+  background: linear-gradient(90deg, var(--hive-safety), #ff8fb8);
+}
+
+.hive-body .lane-fill.route{
+  background: linear-gradient(90deg, var(--hive-route), #93c5fd);
+}
+
+.hive-body .lane-fill.context{
+  background: linear-gradient(90deg, var(--hive-context), #6ee7b7);
+}
+
+.hive-body .lane-fill.control{
+  background: linear-gradient(90deg, var(--hive-control), #fde68a);
+}
+
 .hive-body .stat-lines{
   display: grid;
   gap: 4px;
@@ -1205,7 +1231,8 @@ body.hive-body{
   }
 
 .hive-body .hive-stat-strip .cc-live{
-    flex: 1 1 100%;
+    flex: 0 0 auto;
+    align-self: center;
   }
 
 .hive-body .hive-stage.hive-phone{
@@ -1221,7 +1248,7 @@ body.hive-body{
     left: auto;
     top: auto;
     transform: none;
-    margin: 6px auto 8px;
+    margin: 24px auto 8px;
     width: min(60vw, calc(100% - 16px));
     height: min(60vw, calc(100% - 16px));
     max-width: min(60vw, calc(100% - 16px));
@@ -1344,11 +1371,12 @@ body.hive-body{
 
 .hive-body .cc-tour-card{
   position: fixed;
-  right: max(10px, env(safe-area-inset-right));
-  bottom: max(10px, env(safe-area-inset-bottom));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
   left: auto;
   top: auto;
-  width: min(300px, calc(100vw - 20px));
+  width: min(280px, calc(100vw - 24px));
+  max-width: 280px;
   max-height: min(40vh, 280px);
   overflow: auto;
   pointer-events: auto;
@@ -1407,6 +1435,10 @@ body.hive-body{
   .hive-body .cc-tour-card{
     inset: auto 8px 8px;
     max-height: 40vh;
+  }
+
+  .hive-body .hive-shell.hive-tour-sheet-open{
+    padding-bottom: max(42vh, 280px);
   }
 }
 

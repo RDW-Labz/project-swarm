@@ -2,9 +2,10 @@
 /** Mount Command Center Hive view (stat strip, ring, streams, panels) from a snapshot. */
 
 import { renderHiveStatStrip } from './hive-stat-strip.js';
-import { layoutHiveProjectNodes, renderHiveLayout } from './hive-layout.js';
+import { layoutHiveProjectNodes, renderHiveLayout, CARD_GAP_PCT, CARD_HEIGHT_PCT } from './hive-layout.js';
 import { hiveBrainMotionDescriptor, hiveBrainReducedMotionStillFrame, hiveBrainStateFromEvents } from './hive-brain.js';
 import { HIVE_STREAM_FRAME_MS, HIVE_STREAM_RENDER_STATIC, advanceAndDrawHiveStreamComets, buildHiveStreams, drawHiveStreamStaticDots, hiveStreamDensityForProject, hiveStreamsPauseWhenDocumentHidden, hiveStreamsPrefersReducedMotion, hiveStreamsRenderPath } from './hive-streams.js';
+import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
 
 let hivePanelsApi = null;
 
@@ -60,7 +61,7 @@ function appendCoreRingSvg(doc, coreUi) {
   coreUi.appendChild(svg);
 }
 
-function buildHiveChrome(doc, legendEl, firstProjectId) {
+function buildHiveChrome(doc, legendEl, firstProjectId, onTourHelp) {
   const chromeTop = el(doc, 'div', 'hive-chrome-top');
   const brand = el(doc, 'h1', 'cc-brand brand-glitch hive-brand');
   brand.setAttribute('aria-label', 'Command Center Hive');
@@ -80,9 +81,18 @@ function buildHiveChrome(doc, legendEl, firstProjectId) {
   if (firstProjectId) {
     const cockpitTab = el(doc, 'a', 'cc-tab', 'Cockpit');
     cockpitTab.setAttribute('role', 'tab');
+    cockpitTab.setAttribute('data-tour', 'cockpit');
     cockpitTab.href = `/command-center/project/${encodeURIComponent(firstProjectId)}`;
     nav.appendChild(cockpitTab);
   }
+  const helpBtn = el(doc, 'button', 'cc-btn cc-tour-help');
+  helpBtn.type = 'button';
+  helpBtn.setAttribute('aria-label', 'Command Center tour');
+  helpBtn.textContent = '?';
+  if (typeof onTourHelp === 'function') {
+    helpBtn.addEventListener('click', onTourHelp);
+  }
+  nav.appendChild(helpBtn);
   const pauseBtn = el(doc, 'button', 'cc-btn');
   pauseBtn.type = 'button';
   pauseBtn.id = 'pause-motion';
@@ -94,7 +104,7 @@ function buildHiveChrome(doc, legendEl, firstProjectId) {
   const illus = el(doc, 'p', 'cc-illus-banner hive-illus');
   illus.setAttribute('role', 'note');
   illus.textContent = 'Live board data from your Swarm watch server.';
-  return { chromeTop, illus, pauseBtn };
+  return { chromeTop, illus, pauseBtn, brand, helpBtn };
 }
 
 function formatStatValue(field) {
@@ -128,15 +138,50 @@ function panelModelFromSnapshot(snapshot) {
 function applyAlternatingNodeLayout(nodesMount) {
   if (!nodesMount) return;
   const cards = Array.from(nodesMount.children || []);
+  const bySide = { left: [], right: [] };
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i];
     if (!card?.dataset) continue;
     const side = i % 2 ? 'right' : 'left';
-    const slot = Math.floor(i / 2);
     card.dataset.side = side;
-    card.dataset.slot = String(slot);
+    bySide[side].push(card);
+  }
+  for (const side of ['left', 'right']) {
+    const list = bySide[side];
+    const n = list.length;
+    for (let i = 0; i < n; i += 1) {
+      list[i].dataset.slot = String(i);
+    }
   }
   layoutHiveProjectNodes(nodesMount);
+  spreadVerticalNodeLayout(nodesMount);
+}
+
+function spreadVerticalNodeLayout(nodesMount) {
+  if (!nodesMount) return;
+  const cards = Array.from(nodesMount.children || []);
+  const bySide = { left: [], right: [] };
+  for (const card of cards) {
+    const side = card.dataset?.side === 'right' ? 'right' : 'left';
+    bySide[side].push(card);
+  }
+  for (const side of ['left', 'right']) {
+    const list = bySide[side];
+    const nodesOnSide = list.length;
+    if (!nodesOnSide) continue;
+    const gap = CARD_GAP_PCT;
+    const slotHeight = Math.min(CARD_HEIGHT_PCT, Math.max(0, 100 / nodesOnSide - gap));
+    const used = nodesOnSide * slotHeight + Math.max(0, nodesOnSide - 1) * gap;
+    const offset = (100 - used) / 2;
+    for (let i = 0; i < nodesOnSide; i += 1) {
+      const card = list[i];
+      const top = offset + i * (slotHeight + gap);
+      if (card.style) {
+        card.style.top = `${top}%`;
+        card.style.height = `${slotHeight}%`;
+      }
+    }
+  }
 }
 
 function adjustPhoneStreams(streams, geom) {
@@ -190,6 +235,7 @@ export function renderHive(host, snapshot, deps) {
   const chrome = el(doc, 'header', 'hive-chrome');
   const legendEl = el(doc, 'div', 'cc-legend hive-legend');
   legendEl.setAttribute('aria-label', 'Node lane colours');
+  legendEl.setAttribute('data-tour', 'legend');
   chrome.appendChild(legendEl);
 
   const statStrip = el(doc, 'div', 'hive-stat-strip');
@@ -198,6 +244,7 @@ export function renderHive(host, snapshot, deps) {
 
   const stage = el(doc, 'section', 'hive-stage');
   stage.id = 'hive-stage';
+  stage.setAttribute('data-tour', 'hive');
   stage.setAttribute('aria-label', 'Hive diagram');
 
   const canvas = el(doc, 'canvas', '');
@@ -211,6 +258,9 @@ export function renderHive(host, snapshot, deps) {
   const coreInner = el(doc, 'div', 'hive-core-inner');
   coreInner.appendChild(el(doc, 'div', 'hive-core-label', 'the model'));
   coreInner.appendChild(el(doc, 'div', 'hive-core-name', 'opus'));
+  const coreVer = el(doc, 'div', 'hive-core-ver num');
+  coreVer.style.display = 'none';
+  coreInner.appendChild(coreVer);
   const coreStatus = el(doc, 'div', 'hive-core-status', 'waiting');
   coreInner.appendChild(coreStatus);
   coreDisk.appendChild(coreInner);
@@ -274,6 +324,48 @@ export function renderHive(host, snapshot, deps) {
   let pauseBtn = null;
   let chromeTopEl = null;
   let chromeIllusEl = null;
+  let brandEl = null;
+  let brandVerEl = null;
+  let coreVerEl = coreVer;
+  let tourStorage = null;
+  let tourUserId = 'anonymous';
+
+  function tourStorageImpl() {
+    if (tourStorage) return tourStorage;
+    try {
+      tourStorage = {
+        getItem(k) {
+          try {
+            return globalThis.localStorage?.getItem(k) ?? null;
+          } catch {
+            return null;
+          }
+        },
+        setItem(k, v) {
+          try {
+            globalThis.localStorage?.setItem(k, v);
+          } catch {
+            // ignore
+          }
+        },
+      };
+    } catch {
+      tourStorage = { getItem: () => null, setItem: () => {} };
+    }
+    return tourStorage;
+  }
+
+  function openTourFromHelp() {
+    if (isTourDisabledByQuery(win.location)) return;
+    const storage = tourStorageImpl();
+    const completed = hasCompleted(storage, tourUserId);
+    startTour({
+      doc,
+      storage,
+      userId: tourUserId,
+      replay: completed,
+    });
+  }
 
   const reducedMotionMq = deps.matchMedia('(prefers-reduced-motion: reduce)');
   const bodyEl = doc.body;
@@ -286,13 +378,65 @@ export function renderHive(host, snapshot, deps) {
     return '';
   }
 
+  function modelVersionFromSnapshot(snapshotData) {
+    if (!snapshotData || typeof snapshotData !== 'object') return '';
+    const hive = snapshotData.hive;
+    if (hive && typeof hive.modelVersion === 'string' && hive.modelVersion.length) {
+      return hive.modelVersion;
+    }
+    if (hive && hive.modelVersion != null && typeof hive.modelVersion !== 'object') {
+      return String(hive.modelVersion);
+    }
+    if (typeof snapshotData.modelVersion === 'string' && snapshotData.modelVersion.length) {
+      return snapshotData.modelVersion;
+    }
+    if (snapshotData.modelVersion != null && typeof snapshotData.modelVersion !== 'object') {
+      return String(snapshotData.modelVersion);
+    }
+    return '';
+  }
+
+  function syncModelVersion(snapshotData) {
+    const ver = modelVersionFromSnapshot(snapshotData);
+    if (brandEl) {
+      if (!brandVerEl) {
+        brandVerEl = brandEl.querySelector?.('.ver-script');
+      }
+      if (ver) {
+        if (!brandVerEl) {
+          brandVerEl = el(doc, 'span', 'ver-script num', ver);
+          brandEl.appendChild(brandVerEl);
+        } else {
+          brandVerEl.textContent = ver;
+          brandVerEl.style.display = '';
+        }
+        brandVerEl.setAttribute('title', 'hive.modelVersion');
+      } else if (brandVerEl) {
+        brandVerEl.textContent = '';
+        if (brandVerEl.style) brandVerEl.style.display = 'none';
+      }
+    }
+    if (coreVerEl) {
+      if (ver) {
+        coreVerEl.textContent = ver;
+        coreVerEl.setAttribute('title', 'hive.modelVersion');
+        if (coreVerEl.style) coreVerEl.style.display = '';
+      } else {
+        coreVerEl.textContent = '';
+        if (coreVerEl.style) coreVerEl.style.display = 'none';
+      }
+    }
+  }
+
   function ensureChromeExtras(projects) {
     const pid = firstProjectId(projects);
     if (!chromeTopEl) {
-      const built = buildHiveChrome(doc, legendEl, pid);
+      const built = buildHiveChrome(doc, legendEl, pid, openTourFromHelp);
       chromeTopEl = built.chromeTop;
       chromeIllusEl = built.illus;
       pauseBtn = built.pauseBtn;
+      brandEl = built.brand;
+      brandVerEl = brandEl.querySelector?.('.ver-script');
       chrome.appendChild(chromeTopEl);
       chrome.appendChild(chromeIllusEl);
       const onPauseClick = () => {
@@ -425,6 +569,7 @@ export function renderHive(host, snapshot, deps) {
     }
     applyBrain();
     setPauseUi();
+    syncModelVersion(snapshotData);
     const { renderHivePanels } = resolveHivePanels();
     const panelModel = panelModelFromSnapshot(snapshotData);
     renderHivePanels(
@@ -528,7 +673,15 @@ export function renderHive(host, snapshot, deps) {
     const rect = stage.getBoundingClientRect?.() || { width: geom.w, height: geom.h };
     ctx.clearRect(0, 0, rect.width || geom.w, rect.height || geom.h);
 
-    const streams = adjustPhoneStreams(buildHiveStreams(geom.nodeEntries, geom), geom);
+    const streams = adjustPhoneStreams(
+      buildHiveStreams(
+        (geom.nodeEntries || []).filter(
+          (entry) => entry?.box && entry.box.width > 0 && entry.box.height > 0,
+        ),
+        geom,
+      ),
+      geom,
+    );
     drawGuidePaths(ctx, streams);
 
     const path = forceStatic ? HIVE_STREAM_RENDER_STATIC : renderPath();

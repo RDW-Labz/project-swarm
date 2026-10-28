@@ -2,18 +2,17 @@
 /** Mount Command Center project Cockpit from buildProjectCockpit snapshot data. */
 
 import { ticketToQueueJob, listQueueJobsForProject, readyTickets } from './cc-ledger-browser.js';
-import { renderCockpit, headlineTicketText } from './cockpit-view.js';
+import { renderCockpit, headlineTicketText, appendMascotStage } from './cockpit-view.js';
 import { cockpitOrchestratorState, cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
 import {
   renderCockpitTicketList,
   renderStackSummaryTiles,
   renderReadyEmptyState,
-  layoutSummaryTileElement,
   queueVisibleJobs,
   renderWorkerStream,
   workerStreamFromLedger,
+  renderOrchestratorRunStream,
 } from './cockpit-lists.js';
-import { renderRunStream } from './cockpit-run-stream.js';
 import { completionKey } from './cc-tour.js';
 
 const queueDeps = { ticketToQueueJob, listQueueJobsForProject };
@@ -78,28 +77,22 @@ function stackSummaryTiles(project) {
   const total = project?.total ?? liveTickets(project?.ledger).length;
   return [
     {
-      label: 'ready',
-      value: counts.ready,
-      footnote: `${counts.ready} runnable now`,
-      variant: 'web',
-    },
-    {
-      label: 'running',
-      value: counts.running,
-      footnote: `${counts.running} in flight`,
-      variant: 'engines',
-    },
-    {
       label: 'done',
       value: done,
       footnote: `${done} of ${total} done`,
       variant: 'taste',
     },
     {
-      label: 'blocked',
-      value: counts.blocked,
-      footnote: `${counts.blocked} blocked`,
-      variant: 'broll',
+      label: 'active',
+      value: counts.running,
+      footnote: `${counts.running} in flight`,
+      variant: 'engines',
+    },
+    {
+      label: 'ready',
+      value: counts.ready,
+      footnote: `${counts.ready} runnable now`,
+      variant: 'web',
     },
   ];
 }
@@ -218,17 +211,6 @@ function jobsIndex(project, ticketId) {
   return jobs.findIndex(j => j.id === ticketId);
 }
 
-function appendMascotStage(parent, doc) {
-  const mascot = el(doc, 'div', 'mascot-stage');
-  mascot.setAttribute('aria-hidden', 'true');
-  const orbit = el(doc, 'div', 'mascot-orbit');
-  orbit.appendChild(el(doc, 'span', 'mascot-orbit-dot'));
-  mascot.appendChild(orbit);
-  mascot.appendChild(el(doc, 'div', 'mascot-pixel'));
-  mascot.appendChild(el(doc, 'div', 'mascot-shadow'));
-  parent.appendChild(mascot);
-}
-
 function paintTicketLists(leftHost, rightHost, readyHost, project) {
   const ledger = project?.ledger ?? { tickets: [] };
   const projectConfig = { id: project?.id };
@@ -265,12 +247,6 @@ function paintStack(stackTilesHost, stackFootHost, project, viewport) {
     variant,
   }));
   renderStackSummaryTiles(stackTilesHost, forRender);
-  const rendered = stackTilesHost.querySelectorAll
-    ? Array.from(stackTilesHost.querySelectorAll('.cockpit-metric-tile'))
-    : [];
-  for (const tile of rendered) {
-    layoutSummaryTileElement(tile, viewport);
-  }
   while (stackFootHost.firstChild) stackFootHost.removeChild(stackFootHost.firstChild);
   const foot = stackFootnote(project);
   if (foot) stackFootHost.appendChild(el(stackFootHost.ownerDocument, 'span', 'stack-foot-note', foot));
@@ -282,8 +258,8 @@ function runStreamItems(project, at) {
   const ended = orch && (orch.label === 'waiting on you' || session?.state === 'waiting' || session?.state === 'ended');
   const raw = Array.isArray(project?.runStream) ? project.runStream : [];
   return raw.map(item => {
-    const title = ended && String(item.title || '').toLowerCase() === 'running' ? 'ended' : (item.title || '');
     const status = ended ? 'ended' : (item.status || item.title || 'running');
+    const title = item.id || (item.title && item.title !== status ? item.title : 'run');
     return { ...item, title, status };
   });
 }
@@ -298,7 +274,7 @@ function paintRunStream(host, project, at) {
     host.appendChild(empty);
     return;
   }
-  renderRunStream(host, items);
+  renderOrchestratorRunStream(host, items);
 }
 
 function paintWorkerStream(host, project) {
@@ -398,6 +374,7 @@ function paintPhonePanels(deps, refs, project, at) {
     const wrap = el(doc, 'div', 'stage-center stage-center--phone');
     const entity = stageCenter?.querySelector?.('.entity-label');
     if (entity) wrap.appendChild(safeClone(entity, true));
+    appendMascotStage(wrap, doc, { phone: true });
     if (nowPanelHost) {
       paintNowPanel(nowPanelHost, project);
       wrap.appendChild(safeClone(nowPanelHost, true));
@@ -410,7 +387,30 @@ function paintPhonePanels(deps, refs, project, at) {
         phoneNow.appendChild(loops);
       }
     }
+    const search = el(doc, 'div', 'ticket-search cockpit-ticket-search');
+    const searchLabel = el(doc, 'label', null, 'Search tickets');
+    searchLabel.setAttribute('for', 'ticket-filter-phone-now');
+    const filterInput = el(doc, 'input');
+    filterInput.type = 'search';
+    filterInput.id = 'ticket-filter-phone-now';
+    filterInput.placeholder = 'Filter by id or title';
+    filterInput.setAttribute('autocomplete', 'off');
+    search.appendChild(searchLabel);
+    search.appendChild(filterInput);
+    phoneNow.appendChild(search);
     paintPhoneNowRows(phoneNow, project, doc);
+    filterInput.addEventListener('input', () => {
+      const q = String(filterInput.value || '').trim().toLowerCase();
+      const rowNodes = phoneNow.querySelectorAll
+        ? Array.from(phoneNow.querySelectorAll('.phone-now-rows .ticket-row'))
+        : [];
+      for (const row of rowNodes) {
+        const repo = row.getAttribute?.('data-repo') || '';
+        const id = row.getAttribute?.('data-ticket-id') || '';
+        const show = !q || repo.includes(q) || id.toLowerCase().includes(q);
+        row.setAttribute('data-hidden', show ? 'false' : 'true');
+      }
+    });
   }
 
   if (phoneTickets) {
@@ -530,9 +530,9 @@ export function renderProjectCockpit(host, project, deps) {
   const navActions = el(doc, 'div', 'nav-actions');
   const backBtn = el(doc, 'button', 'btn-pill cc-cockpit-back-btn', 'Back');
   backBtn.type = 'button';
-  const hiveTab = el(doc, 'a', 'cc-tab', 'Hive');
+  const hiveTab = el(doc, 'a', 'btn-pill', 'Hive');
   hiveTab.href = '/command-center';
-  const cockpitTab = el(doc, 'a', 'cc-tab', 'Cockpit');
+  const cockpitTab = el(doc, 'a', 'btn-pill btn-pill--accent', 'Cockpit');
   cockpitTab.href = globalThis.location?.pathname || '/command-center/project';
   cockpitTab.setAttribute('aria-current', 'page');
   navActions.appendChild(backBtn);

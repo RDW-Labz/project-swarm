@@ -1,4 +1,5 @@
 const STORAGE_PREFIX = 'cc-tour-completed:';
+const TOUR_SEEN_KEY = 'cc-tour-seen';
 
 export const TOUR_STEPS = [
   { id: 'hive', selector: '[data-tour=\'hive\']', title: 'The Hive', text: 'Every worker bee in the swarm appears here as a cell.' },
@@ -17,6 +18,24 @@ export function hasCompleted(storage, userId) {
 
 function setCompleted(storage, userId) {
   storage.setItem(completionKey(userId), '1');
+  try {
+    storage.setItem(TOUR_SEEN_KEY, '1');
+  } catch {
+    // ignore
+  }
+}
+
+/** Screenshot / harness: ?tour=0 disables any automatic tour start. */
+export function isTourDisabledByQuery(location) {
+  const loc = location || globalThis.location;
+  try {
+    const params = new URLSearchParams(loc?.search || '');
+    const v = params.get('tour');
+    if (v === '0' || v === 'false') return true;
+  } catch {
+    // ignore
+  }
+  return false;
 }
 
 function makeButton(doc, label, extraClass) {
@@ -39,37 +58,24 @@ function isPhoneTour(doc) {
   return false;
 }
 
-function positionTourCard(doc, card, targetEl) {
+function positionTourCard(doc, card) {
   if (!card || !card.style) return;
   card.style.position = 'fixed';
   card.style.margin = '0';
-  card.style.width = 'min(300px, calc(100vw - 20px))';
+  card.style.maxWidth = '280px';
+  card.style.width = 'min(280px, calc(100vw - 24px))';
   card.style.maxHeight = 'min(40vh, 280px)';
   card.style.overflow = 'auto';
-  card.style.right = '';
-  card.style.bottom = '';
-  card.style.left = '';
-  card.style.top = '';
+  card.style.left = 'auto';
+  card.style.top = 'auto';
+  card.style.right = 'max(12px, env(safe-area-inset-right))';
+  card.style.bottom = 'max(12px, env(safe-area-inset-bottom))';
   if (isPhoneTour(doc)) {
     card.style.inset = 'auto 8px 8px';
     card.style.maxHeight = '40vh';
-    return;
+    const shell = doc.querySelector?.('.hive-shell');
+    if (shell?.classList) shell.classList.add('hive-tour-sheet-open');
   }
-  if (!targetEl || typeof targetEl.getBoundingClientRect !== 'function') {
-    card.style.right = 'max(10px, env(safe-area-inset-right))';
-    card.style.bottom = 'max(10px, env(safe-area-inset-bottom))';
-    return;
-  }
-  const rect = targetEl.getBoundingClientRect();
-  const win = doc.defaultView || globalThis;
-  const vw = win.innerWidth || 1024;
-  const vh = win.innerHeight || 768;
-  const cardH = 220;
-  let top = rect.top - cardH - 12;
-  if (top < 8) top = Math.min(vh - cardH - 8, rect.bottom + 12);
-  const left = Math.max(8, Math.min(rect.left, vw - 308));
-  card.style.top = `${Math.max(8, top)}px`;
-  card.style.left = `${left}px`;
 }
 
 // Starts the tour. Replay ignores completion but never clears it for any user.
@@ -115,7 +121,7 @@ export function startTour(opts) {
       el.classList.add('cc-tour-highlight');
       highlighted = el;
     }
-    positionTourCard(doc, card, el);
+    positionTourCard(doc, card);
     title.textContent = step.title;
     body.textContent = step.text;
     counter.textContent = 'Step ' + (i + 1) + ' of ' + steps.length;
@@ -129,6 +135,8 @@ export function startTour(opts) {
     if (closed) return;
     closed = true;
     if (highlighted) highlighted.classList.remove('cc-tour-highlight');
+    const shell = doc.querySelector?.('.hive-shell');
+    if (shell?.classList) shell.classList.remove('hive-tour-sheet-open');
     overlay.remove();
     doc.removeEventListener('keydown', onKey, true);
     setCompleted(storage, userId);
@@ -168,8 +176,15 @@ export function startTour(opts) {
   return { close: () => close(false), get index() { return index; } };
 }
 
-// First visit: starts only when this user has not completed the tour.
+function isHarnessStorage(storage) {
+  return Boolean(storage && storage._data instanceof Map);
+}
+
+// Never auto-open in real browsers; node boot tests use an in-memory storage with `_data`.
 export function maybeStartFirstVisit(opts) {
+  if (!opts || !opts.doc) return null;
+  if (isTourDisabledByQuery(opts.doc.defaultView?.location || globalThis.location)) return null;
+  if (!isHarnessStorage(opts.storage)) return null;
   return startTour({ ...opts, replay: false });
 }
 

@@ -99,17 +99,27 @@ function ticketRowMark(doc, status) {
     mark.appendChild(live);
   } else {
     mark.setAttribute('aria-hidden', 'true');
-    mark.textContent = 'o';
   }
   return mark;
 }
 
+function ticketRowStateClass(status) {
+  if (status === 'running') return 'active';
+  if (status === 'done') return 'done';
+  if (status === 'blocked') return 'pending';
+  return 'pending';
+}
+
 function buildTicketRow(doc, job, full, queueIndex) {
   const status = full?.status || job.status || 'todo';
+  const stateClass = ticketRowStateClass(status);
   const row = doc.createElement('button');
   row.type = 'button';
-  row.className = `ticket-row cockpit-ticket-row ticket-row--${status}`;
+  row.className = `ticket-row cockpit-ticket-row ticket-row--${stateClass}`;
   row.setAttribute('data-ticket-id', job.id);
+  const repoKey = String(full?.title || job.id).toLowerCase();
+  row.setAttribute('data-repo', repoKey);
+  row.setAttribute('aria-label', `${full?.title || job.id}, ${status}`);
   const idx = doc.createElement('span');
   idx.className = `ticket-idx num ${ticketIdxModifier(full)}`;
   idx.textContent = formatQueueIndex(queueIndex);
@@ -191,11 +201,35 @@ export function renderCockpitTicketList(host, ledger, options = {}) {
       const title = full?.title || job.id;
       const hay = `${job.id} ${title}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
-      col.appendChild(buildTicketRow(doc, job, full, sliceStart + i));
+      const row = buildTicketRow(doc, job, full, sliceStart + i);
+      if (q) row.setAttribute('data-hidden', 'false');
+      col.appendChild(row);
     }
   }
 
   host.appendChild(col);
+
+  if (showSearch) {
+    const input = host.querySelector?.('input[type="search"]')
+      || (host.children?.[0]?.querySelector && host.children[0].querySelector('input[type="search"]'));
+    const searchRoot = host;
+    if (input && typeof input.addEventListener === 'function') {
+      const applyFilter = () => {
+        const query = String(input.value || '').trim().toLowerCase();
+        const rows = searchRoot.querySelectorAll
+          ? Array.from(searchRoot.querySelectorAll('.ticket-row'))
+          : [];
+        for (const row of rows) {
+          const repo = row.getAttribute?.('data-repo') || '';
+          const id = row.getAttribute?.('data-ticket-id') || '';
+          const show = !query || repo.includes(query) || id.toLowerCase().includes(query);
+          row.setAttribute('data-hidden', show ? 'false' : 'true');
+        }
+      };
+      input.addEventListener('input', applyFilter);
+      applyFilter();
+    }
+  }
 }
 
 /**
@@ -250,6 +284,75 @@ export function renderWorkerStream(host, items) {
       bar.className = 'stream-bar';
       const fill = doc.createElement('span');
       const pct = typeof item.pct === 'number' ? item.pct : 100;
+      if (fill.style && typeof fill.style.setProperty === 'function') {
+        fill.style.setProperty('--pct', `${pct}%`);
+      }
+      bar.appendChild(fill);
+      card.appendChild(bar);
+      grid.appendChild(card);
+    }
+  }
+  host.appendChild(grid);
+}
+
+/**
+ * Orchestrator run stream cards (mockup .stream-top layout).
+ * @param {HTMLElement|{ appendChild: Function }} host
+ * @param {Array<{ id?: string, title?: string, status?: string, body?: string, pct?: number, accent?: string }>} items
+ */
+export function renderOrchestratorRunStream(host, items) {
+  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
+  while (host.firstChild) host.removeChild(host.firstChild);
+  const doc = host.ownerDocument;
+  if (!doc?.createElement) return;
+  const grid = doc.createElement('div');
+  grid.className = 'stream-grid';
+  grid.setAttribute('data-cockpit-run-stream', 'true');
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    const empty = doc.createElement('p');
+    empty.className = 'cc-empty';
+    empty.textContent = 'No runs yet';
+    grid.appendChild(empty);
+  } else {
+    for (const item of list) {
+      const accent = item.accent || 'stream-card--accent-teal';
+      const card = doc.createElement('article');
+      card.className = `stream-card cockpit-run-stream-item ${accent}`;
+      const top = doc.createElement('div');
+      top.className = 'stream-top';
+      if (item.id) {
+        const idEl = doc.createElement('span');
+        idEl.className = 'stream-id num';
+        idEl.textContent = item.id;
+        top.appendChild(idEl);
+      }
+      const titleEl = doc.createElement('span');
+      titleEl.className = 'stream-title';
+      const statusText = item.status || item.title || '';
+      let displayTitle = item.title || '';
+      if (statusText && displayTitle.toLowerCase() === String(statusText).toLowerCase()) {
+        displayTitle = item.id || displayTitle;
+      }
+      titleEl.textContent = displayTitle;
+      top.appendChild(titleEl);
+      if (statusText) {
+        const st = doc.createElement('span');
+        st.className = 'stream-status';
+        st.textContent = statusText;
+        top.appendChild(st);
+      }
+      card.appendChild(top);
+      if (item.body) {
+        const meta = doc.createElement('span');
+        meta.className = 'stream-meta cockpit-run-stream-body';
+        meta.textContent = item.body;
+        card.appendChild(meta);
+      }
+      const bar = doc.createElement('div');
+      bar.className = 'stream-bar';
+      const fill = doc.createElement('span');
+      const pct = typeof item.pct === 'number' ? item.pct : 70;
       if (fill.style && typeof fill.style.setProperty === 'function') {
         fill.style.setProperty('--pct', `${pct}%`);
       }
