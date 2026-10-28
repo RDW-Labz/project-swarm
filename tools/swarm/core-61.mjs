@@ -137,7 +137,11 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
     if (venv.unresolvable.length) { result = venvUnresolvableResult(venv.unresolvable); return result; }
     const grantHomeDir = async (dir, deniedCode) => {
       let real = dir;
-      try { real = await fs.realpath(dir); } catch { /* the link path itself is still granted */ }
+      try { real = await fs.realpath(dir); } catch (error) {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ELOOP') {
+          console.error('[tools/swarm/core-61.mjs] grantHomeDir fs.realpath:', error?.message ?? error);
+        }
+      }
       if (!insideHome(dir) && !insideHome(real)) return;
       try {
         const literal = validateReadPaths([dir]);
@@ -264,7 +268,10 @@ export async function writeRunLedger(root, id) {
   const state = await readState(root, id);
   const manifest = JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true));
   const written = await appendRunLedger(root, state, manifest);
-  const brain = await brainStats(root).catch(() => null);
+  const brain = await brainStats(root).catch((error) => {
+    console.error('[tools/swarm/core-61.mjs] writeRunLedger brainStats:', error?.message ?? error);
+    return null;
+  });
   return brain?.calls ? { ...written, localBrain: brain } : written;
 }
 
@@ -418,11 +425,11 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
           const { digest } = await import('../brain-tasks.mjs');
           const project = createProjectBrain({ root });
           let timer;
-          try { summary = (await Promise.race([digest(project.ask, res.tail, { kind: 'tests' }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('brain-timeout')), 15000); })])).lines.join(' '); } finally { clearTimeout(timer); await project.close().catch(() => {}); }
-        } catch { /* the tail is used */ }
-        try { record.ticket = await addCiFixTicket(root, fixTicketFromFailure({ kind, batchNumber: ciBatchNumber, files: changes.map(change => change.file), tail: res.tail, summary })); } catch { /* no ledger or a full one: the warning below remains */ }
+          try { summary = (await Promise.race([digest(project.ask, res.tail, { kind: 'tests' }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('brain-timeout')), 15000); })])).lines.join(' '); } finally { clearTimeout(timer); await project.close().catch((error) => { console.error('[tools/swarm/core-61.mjs] CI digest project.close:', error?.message ?? error); }); }
+        } catch (error) { if (error?.message !== 'brain-timeout') console.error('[tools/swarm/core-61.mjs] CI failure digest:', error?.message ?? error); }
+        try { record.ticket = await addCiFixTicket(root, fixTicketFromFailure({ kind, batchNumber: ciBatchNumber, files: changes.map(change => change.file), tail: res.tail, summary })); } catch (error) { console.error('[tools/swarm/core-61.mjs] addCiFixTicket:', error?.message ?? error); }
         warnings.push(`ci-${kind}-${res.status}: batch ${ciBatchNumber}${record.ticket ? ` (fix ticket ${record.ticket})` : ''}`);
-        await appendEvent(root, { kind: 'ci-failure', hook: kind, batch: ciBatchNumber, status: res.status }, { best: true }).catch(() => {});
+        await appendEvent(root, { kind: 'ci-failure', hook: kind, batch: ciBatchNumber, status: res.status }, { best: true }).catch((error) => { console.error('[tools/swarm/core-61.mjs] appendEvent ci-failure:', error?.message ?? error); });
       }
       queue.ci.push(record);
       // A preview that came up is measured: Lighthouse and axe on the key screens, against the profile's budgets.
@@ -499,7 +506,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
           const seenHuman = await readJournal(root, { kinds: ['human'] }).catch(() => []);
           for (const item of migration.needsApproval) {
             const text = `migration ${item.file} (${item.sha256.slice(0, 12)}) drops or rewrites data (${item.statements[0].kind}, line ${item.statements[0].line}): run swarm migrations approve ${item.file}`;
-            if (!seenHuman.some(event => event.text === text)) await appendEvent(root, { kind: 'human', text }, { best: true }).catch(() => {});
+            if (!seenHuman.some(event => event.text === text)) await appendEvent(root, { kind: 'human', text }, { best: true }).catch((error) => { console.error('[tools/swarm/core-61.mjs] appendEvent migration human:', error?.message ?? error); });
           }
         }
       }
