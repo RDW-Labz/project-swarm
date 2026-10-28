@@ -1801,6 +1801,63 @@ const omSwarmFreeTextHeredoc = words => {
   return OM_SWARM_FREE_TEXT_SUBS.has(sub);
 };
 
+const omRelUnderOmManifestWriteArea = rel => {
+  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
+  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
+};
+
+const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
+
+const omWriteTargetRel = (raw, ctx, expands) => {
+  if (expands || /^\$/.test(String(raw ?? ''))) return null;
+  if (!ctx?.root) return null;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(ctx.root);
+  } catch {
+    return null;
+  }
+  let p = String(raw ?? '');
+  if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
+  let cwdBase = ctx.cwd ?? ctx.root;
+  try {
+    cwdBase = fs.realpathSync.native(cwdBase);
+  } catch {
+    cwdBase = ctx.cwd ?? ctx.root;
+  }
+  const candidate = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwdBase, p);
+  const tail = [];
+  let cur = candidate;
+  let resolved = candidate;
+  for (let i = 0; i < 64; i += 1) {
+    try {
+      resolved = path.join(fs.realpathSync.native(cur), ...tail);
+      break;
+    } catch {
+      tail.unshift(path.basename(cur));
+      const up = path.dirname(cur);
+      if (up === cur) {
+        resolved = path.resolve(candidate);
+        break;
+      }
+      cur = up;
+    }
+  }
+  const rel = path.relative(rootReal, resolved);
+  if (omWriteTargetEscapesProject(rel)) return null;
+  return rel.split(path.sep).join('/');
+};
+
+const omRedirectWriteTargetRel = (words, ctx) => {
+  const wordExp = words.expands ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      return omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+    }
+  }
+  return null;
+};
+
 const omRedirectTokenHarmless = (words, i) => {
   const w = words[i];
   if (w === '2>&1') return { skip: 0 };
@@ -1819,13 +1876,21 @@ const omTestRunnerRedirectForbidden = words => {
   return false;
 };
 
-const omRedirectsForbidden = words => {
+const omRedirectsForbidden = (words, ctx) => {
   let heredocOnly = false;
+  const wordExp = words.expands ?? [];
   for (let i = 0; i < words.length; i += 1) {
     const harmless = omRedirectTokenHarmless(words, i);
     if (harmless) { i += harmless.skip; continue; }
     const w = words[i];
     if (w === '<<') { heredocOnly = true; continue; }
+    if (['>', '>>', '>|', '>&', '&>'].includes(w) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+      if (rel === null) return true;
+      if (omRelUnderOmManifestWriteArea(rel)) return true;
+      if (orchestratorWriteAllowedRel(rel)) continue;
+      return true;
+    }
     if (/[<>]/.test(w) || w.includes('&')) return true;
   }
   if (heredocOnly) return !omSwarmFreeTextHeredoc(words);
@@ -2338,7 +2403,7 @@ const omNaturallySmall = (cmd, args) => {
 };
 
 const omSimpleCommandAllowed = (words, commandText, ctx) => {
-  if (omRedirectsForbidden(words)) return false;
+  if (omRedirectsForbidden(words, ctx)) return false;
   const { plain, expands } = omPlainWords(words);
   let k = 0;
   for (;;) {
@@ -2454,38 +2519,27 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   }
   if (omNaturallySmall(cmd, args)) return true;
   if (cmd === 'true' || cmd === 'false' || cmd === ':') return true;
+  const redirectRel = omRedirectWriteTargetRel(words, ctx);
+  if (
+    redirectRel !== null
+    && orchestratorWriteAllowedRel(redirectRel)
+    && !omRelUnderOmManifestWriteArea(redirectRel)
+    && !words.piped
+    && !feedsPipe
+    && (cmd === 'echo' || cmd === 'printf')
+  ) {
+    return true;
+  }
   return false;
 };
 
 const OM_COMPOUND_SEPS = new Set(['&&', ';', '||', '|']);
-
-const omRelUnderOmManifestWriteArea = rel => {
-  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
-  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
-};
 
 const omCommandIsCompound = (tokenized, commandText) => {
   if (tokenized.length > 1) return true;
   if (tokenized.some(w => OM_COMPOUND_SEPS.has(w.sepAfter))) return true;
   if (/[^&]&[^&>]/.test(String(commandText ?? ''))) return true;
   return false;
-};
-
-const omWriteTargetRel = (raw, ctx, expands) => {
-  if (expands || /^\$/.test(String(raw ?? ''))) return null;
-  if (!ctx?.root) return null;
-  try {
-    const rootReal = fs.realpathSync.native(ctx.root);
-    let p = String(raw ?? '');
-    if (p.startsWith('~/')) p = path.join(os.homedir(), p.slice(2));
-    const cwd = ctx.cwd ?? ctx.root;
-    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(cwd, p);
-    const rel = path.relative(rootReal, abs);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return rel.split(path.sep).join('/');
-  } catch {
-    return null;
-  }
 };
 
 const omWordsRedirectManifestArea = (words, ctx) => {
