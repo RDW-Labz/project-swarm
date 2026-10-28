@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runManifest } from '../tools/swarm.mjs';
 import { executeApi } from '../tools/api-adapters.mjs';
-import { assertDailyLimitBeforeSend, withSpendStore } from '../tools/spend.mjs';
+import { assertDailyLimitBeforeSend, billedMeteredTodayUsd, finalCost, withSpendStore } from '../tools/spend.mjs';
 
 const now = () => new Date('2026-10-29T02:00:00Z'); // Still October 28 in Chicago.
 const answer = JSON.stringify({ summary: 'ok', files: [], edits: [] });
@@ -43,6 +43,49 @@ async function run(agent, fixture, overrides = {}, truncated = false) {
         message: { content: cut ? '' : answer } }], usage: { cost: 0.02 } });
   } });
   return { result, calls };
+}
+
+test('unpriced mocked API results explain $2.5000 without any real machine spend', async t => {
+  const f = await fixture(t, { billed: 0 });
+  const cost = finalCost({ lane: 'openai', record: { costUsd: null,
+    usage: { input_tokens: 23, output_tokens: 19 } }, reservation: { usd: 0.5 } });
+  assert.deepEqual(cost, { usd: 0.5, kind: 'reserved-as-cost', flagged: true, costSource: 'reservation' });
+  await withSpendStore(store => {
+    for (let i = 0; i < 5; i++) store.entries[`mock-${i}`] = {
+      day: '2026-10-29', at: now().toISOString(), lane: 'openai', root: f.root,
+      jobId: `mock-${i}`, usd: cost.usd, kind: cost.kind, tokens: 42,
+    };
+    assert.equal(billedMeteredTodayUsd(store, { now }), 2.5);
+  }, { dir: f.env.SWARM_SPEND_DIR, now: () => +now() });
+  await assert.rejects(assertDailyLimitBeforeSend({ ...f, lane: 'openai', now,
+    jobId: 'next', billedUsd: 0 }), /billed \$2\.5000 today.*worstUsd \$0\.5000/);
+});
+
+for (const billed of [0, 2.5]) {
+  for (const cancellation of ['signal', 'poll']) {
+    test(`cancellation during daily-limit check wins with billed=${billed} via ${cancellation}`, async t => {
+      const f = await fixture(t, { billed });
+      const controller = new AbortController();
+      let cancelled = false, clockCalls = 0, calls = 0;
+      const result = await executeApi({ id: 'cancel-check', agent: 'openai', model: 'test-model',
+        prompt: 'say ok', outputs: [], sensitive: false }, [], {
+        ...f, env: { ...f.env, OPENAI_API_KEY: 'test-openai-secret' }, signal: controller.signal,
+        cancelled: async () => cancelled,
+        now: () => {
+          // withSpendStore calls the clock after acquiring its lock, during the check.
+          clockCalls++;
+          if (cancellation === 'signal') controller.abort();
+          else cancelled = true;
+          return now();
+        },
+        fetchImpl: async () => { calls++; throw Error('cancelled request reached fetch'); },
+      });
+      assert.ok(clockCalls > 0);
+      assert.equal(calls, 0);
+      assert.equal(result.status, 'cancelled', result.error);
+      assert.deepEqual(result.files, []);
+    });
+  }
 }
 
 test('Anthropic length retry rechecks the shared daily limit before a second fetch', async t => {

@@ -691,6 +691,9 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       await onFinishReason(finishReason);
       await assertDailyLimitBeforeSend({ root, lane: job.agent, worstUsd: requestWorstUsd,
         billedUsd: requestBilledUsd, now, env, jobId: job.id, runId: job.runId, excludeKey: spendKey });
+      // The store lock/config read can outlast cancellation; never start HTTP afterwards.
+      if (!reason && (signal?.aborted || await cancelled())) abort('cancelled');
+      if (reason) fail('Request cancelled');
       try {
         const init = {
           method: 'POST',
@@ -802,6 +805,7 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
       : (envelope.result ? `${envelope.summary}\n${JSON.stringify(envelope.result)}\n` : envelope.summary);
     return { ...(bestOfInfo ? { bestOf: bestOfInfo } : {}), finalObject: envelope.result ?? (job.report === 'short' ? null : envelope), status: 'complete', error: null, finishReason, files: envelope.files, edits, contextInlined, response: responseText, actualModel: result.actualModel, usage: result.usage, modelUsage: null, costUsd: job.agent === 'local' ? 0 : job.agent === 'anthropic' ? priced(anthropicCostUsd(job.model, firstCallUsage ? sumUsage(firstCallUsage, anthropicUsage) : result.usage)) : job.agent === 'openrouter' && Number.isFinite(Number(result.usage?.cost)) ? Number(result.usage.cost) : null, exitCode: null, stderr: '', ...(retriedForLength ? { retriedForLength: true } : {}), stdout: JSON.stringify({ type: 'result', provider: job.agent, status: 'complete', actualModel: result.actualModel, usage: result.usage, ...(result.provider ? { upstream: result.provider } : {}) }) + '\n' };
   } catch (error) {
+    if (!reason && (signal?.aborted || await cancelled())) abort('cancelled');
     // Field lesson #285: a truncated-response error otherwise gives no sense of scale; the prompt
     // size rides along so a too-small maxOutputTokens is provable without guessing.
     const message = reason || (error instanceof AdapterError || error instanceof OpenRouterError || error instanceof AnthropicError || error.code?.startsWith('daily-limit-') ? error.message : 'Provider processing failed; details omitted to protect credentials');

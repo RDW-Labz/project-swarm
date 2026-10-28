@@ -24,7 +24,7 @@
 // Lesson #152: imported directly (not only via the package.json test script) so this file stays
 // hermetic even run alone as `node --test tests/adapters.test.mjs`.
 import './_isolate-config.mjs';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -34,7 +34,17 @@ import { runManifest, integrateRun, validateManifest, validateProject, cancelRun
 
 const fake = name => [name, 'fixture', 'value'].join('-');
 const cred = tag => [tag, 'fixture', 'credential'].join('-');
+const isolateDir = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP || os.tmpdir(), 'swarm-adapter-env-'));
+const isolatedEnv = {
+  SWARM_SPEND_DIR: path.join(isolateDir, 'spend'),
+  SWARM_CONFIG: path.join(isolateDir, 'config.json'),
+};
+await fs.writeFile(isolatedEnv.SWARM_CONFIG, JSON.stringify({ dailyLimit: {
+  usd: 1_000_000, mode: 'notify', ceilingUsd: 10_000_000,
+} }), { mode: 0o600 });
+after(() => fs.rm(isolateDir, { recursive: true, force: true }));
 const env = {
+  ...isolatedEnv,
   OPENAI_API_KEY: fake('openai'),
   GEMINI_API_KEY: fake('gemini'),
   LAMBDA_API_KEY: fake('lambda'),
@@ -97,7 +107,7 @@ test('API jobs copy only assigned text and integrate after review without Claude
 test('structured output rejects undeclared, missing, duplicate and invalid files', () => { for (const value of [null, { ...envelope, extra: true }, { summary: 'x', files: [] }, { summary: 'x', files: [{ path: '../bad', content: 'x' }] }, { summary: 'x', files: [{ path: 'report.md', content: 3 }] }, { summary: 'x', files: [{ path: 'report.md', content: 'x', mode: 511 }] }]) assert.throws(() => validateEnvelope(value, ['report.md'])); assert.throws(() => validateEnvelope({ summary: 'x', files: [{ path: 'a', content: 'x' }, { path: 'a', content: 'y' }] }, ['a', 'b'])); assert.deepEqual(validateEnvelope({ summary: 'read-only', files: [] }, []), { summary: 'read-only', files: [] }); });
 test('invalid API output writes nothing and cannot integrate', async t => { const root = await fixture(t); const state = await runManifest(root, manifest([job()]), { env, fetchImpl: async () => reply(body('openai', { summary: 'bad', files: [{ path: '../escape', content: 'x' }] })) }); assert.equal(state.status, 'failed'); await assert.rejects(fs.access(path.join(root, '.swarm/workspaces', state.id, 'openai/report.md'))); await assert.rejects(integrateRun(root, state.id), /Only a complete/); });
 test('a self-hosted Lambda origin disables thinking by default and honours an explicit opt-in', async () => {
-  const capture = async request => { let seen; await executeApi(job('lambda'), [], { env: request, fetchImpl: async (url, options) => { seen = JSON.parse(options.body); return reply(body('lambda')); } }); return seen; };
+  const capture = async request => { let seen; await executeApi(job('lambda'), [], { env: { ...isolatedEnv, ...request }, fetchImpl: async (url, options) => { seen = JSON.parse(options.body); return reply(body('lambda')); } }); return seen; };
   const hosted = await capture(env); assert.equal(hosted.chat_template_kwargs, undefined);
   for (const origin of ['http://127.0.0.1:8000', 'https://gpu.example']) { const off = await capture({ SWARM_LAMBDA_URL: origin }); assert.deepEqual(off.chat_template_kwargs, { enable_thinking: false }); assert.equal(off.response_format.json_schema.strict, true); assert.equal(off.max_tokens, 8192); }
   const on = await capture({ SWARM_LAMBDA_URL: 'http://127.0.0.1:8000', SWARM_LAMBDA_THINKING: 'on' }); assert.equal(on.chat_template_kwargs, undefined);
@@ -226,7 +236,7 @@ for (const agent of ['openai', 'gemini', 'ollama', 'lambda']) {
         else value.files[0][field] = key;
         const text = JSON.stringify(value).replace(/[a-z]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
         const result = await executeApi(job(agent, { outputs: [value.files[0].path] }), [], {
-          env: { [keyName]: key }, fetchImpl: async () => reply(withOutputText(agent, text)),
+          env: { ...isolatedEnv, [keyName]: key }, fetchImpl: async () => reply(withOutputText(agent, text)),
         });
         assert.equal(result.status, 'failed', `${field} echo for ${agent}`);
         assert.match(result.error, /contained a credential/);
@@ -243,7 +253,7 @@ test('credential checks inspect retained metadata without treating JSON field na
   const textKey = [116, 101, 120, 116].map(code => String.fromCharCode(code)).join('');
   const unitKey = [117, 110, 105, 116].map(code => String.fromCharCode(code)).join('');
   const safe = await executeApi(job('lambda'), [], {
-    env: { LAMBDA_API_KEY: textKey }, fetchImpl: async () => reply(body('lambda')),
+    env: { ...isolatedEnv, LAMBDA_API_KEY: textKey }, fetchImpl: async () => reply(body('lambda')),
   });
   assert.equal(safe.status, 'complete');
   for (const field of ['model', 'usage']) {
@@ -251,7 +261,7 @@ test('credential checks inspect retained metadata without treating JSON field na
     if (field === 'model') value.model = unitKey;
     else value.usage = { [unitKey]: 42 };
     const result = await executeApi(job('lambda'), [], {
-      env: { LAMBDA_API_KEY: unitKey }, fetchImpl: async () => reply(value),
+      env: { ...isolatedEnv, LAMBDA_API_KEY: unitKey }, fetchImpl: async () => reply(value),
     });
     assert.equal(result.status, 'failed');
     assert.match(result.error, /contained a credential/);
@@ -259,7 +269,7 @@ test('credential checks inspect retained metadata without treating JSON field na
     assert.equal(result.usage, null);
   }
   const empty = await executeApi(job('ollama'), [], {
-    env: { OLLAMA_API_KEY: [].join() }, fetchImpl: async () => reply(body('ollama')),
+    env: { ...isolatedEnv, OLLAMA_API_KEY: [].join() }, fetchImpl: async () => reply(body('ollama')),
   });
   assert.equal(empty.status, 'complete');
 });
@@ -297,7 +307,7 @@ test('escaped credential rejection fails the manifest without persisting or inte
   const key = cred('lambda');
   const text = JSON.stringify({ summary: key, files: [{ path: 'report.md', content: key }] }).replaceAll('fixture', '\\u0066ixture');
   const state = await runManifest(root, manifest([job('lambda')]), {
-    env: { LAMBDA_API_KEY: key }, fetchImpl: async () => reply(withOutputText('lambda', text)),
+    env: { ...isolatedEnv, LAMBDA_API_KEY: key }, fetchImpl: async () => reply(withOutputText('lambda', text)),
   });
   assert.equal(state.status, 'failed');
   assert.equal(state.jobs[0].status, 'failed');
