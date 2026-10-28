@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-projcmd-batch-16a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 16a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/project-commands.mjs' section. Edit ONLY tools/project-commands.mjs. Visibility only: do NOT change control flow, return values, what is pushed into items, or anything printed to stdout (these commands print JSON there; logs go to stderr only).\n\nNo logger exists in this file. Use: console.error('[tools/project-commands.mjs] <short context>:', error?.message ?? error)\n\nFlagged lines and what to do:\n1. Line 113 `const ledger = await readLedger(root).catch(() => null);` in currentBrief: bind, log, still evaluate to null.\n2. Line 212 `} catch { /* ignore */ }` around `git branch --show-current` for a worktree: detached HEAD returns empty stdout, not an error, so an error is unexpected. Bind and log (include wtRoot). branch stays ''. Keep the comment.\n3. Line 257 `const ledger = await readLedger(wtRoot).catch(() => null);`: bind, log (include wtRoot), still null.\n4. Line 278 `} catch { /* no pending cap raise */ }` around reading + JSON.parse of the pending budget cap-raise file: ENOENT is the expected 'no pending cap raise' case, stay silent. Anything else (including a SyntaxError from a corrupt file) means a pending SPEND decision is hidden from the owner: log it with wtRoot. Keep the comment. Do NOT touch the outer catch at line 279.\n5. Line 414 `await writeHandoffFile(root, { now }).catch(() => {});`: bind and log; continue as today.\n\nDo NOT touch any other catch (e.g. line 412's JSON.parse fallback). Do not refactor, reformat, rename, or change exports. Keep existing comments.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the covering tests (grep tests/ for project-commands / currentBrief / writeHandoffFile / cap-raise) with: node --import ./tests/_isolate-config.mjs --test <files>, and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/project-commands.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff-regenerate.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/phase10b-cli.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

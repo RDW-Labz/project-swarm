@@ -110,7 +110,10 @@ async function readText(file) {
 async function currentBrief(root, { now = Date.now } = {}) {
   const [events, runs] = await Promise.all([readJournal(root), loadRuns(root)]);
   const brief = buildBrief({ root, events, runs, now });
-  const ledger = await readLedger(root).catch(() => null);
+  const ledger = await readLedger(root).catch((error) => {
+    console.error('[tools/project-commands.mjs] readLedger currentBrief:', error?.message ?? error);
+    return null;
+  });
   if (ledger) {
     const s = ledgerStats(ledger);
     brief.tickets = { total: s.total, percentDone: s.percentDone, byStatus: s.byStatus };
@@ -209,7 +212,10 @@ async function pendingForWorktreeRoot(wtRoot, { nowMs, exec }) {
   try {
     const branchRes = await exec('git', ['-C', wtRoot, 'branch', '--show-current']);
     branch = branchRes?.stdout?.trim() ?? '';
-  } catch { /* ignore */ }
+  } catch (error) {
+    console.error('[tools/project-commands.mjs] git branch --show-current:', error?.message ?? error, wtRoot);
+    /* ignore */
+  }
   try {
     const events = await readJournal(wtRoot, { limit: Infinity });
     const pendingHb = new Set();
@@ -254,7 +260,10 @@ async function pendingForWorktreeRoot(wtRoot, { nowMs, exec }) {
         worktree: worktreeLabel,
       });
     }
-    const ledger = await readLedger(wtRoot).catch(() => null);
+    const ledger = await readLedger(wtRoot).catch((error) => {
+      console.error('[tools/project-commands.mjs] readLedger pending worktree:', error?.message ?? error, wtRoot);
+      return null;
+    });
     for (const ticket of ledger?.tickets ?? []) {
       if (ticket?.status !== 'proposed') continue;
       items.push({
@@ -275,7 +284,12 @@ async function pendingForWorktreeRoot(wtRoot, { nowMs, exec }) {
         branch,
         worktree: worktreeLabel,
       });
-    } catch { /* no pending cap raise */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/project-commands.mjs] pending cap-raise read/parse:', error?.message ?? error, wtRoot);
+      }
+      /* no pending cap raise */
+    }
   } catch {
     return [{
       kind: 'unreadable',
@@ -411,5 +425,7 @@ export async function journalAfterCommand(root, argv, { status, ms, printed, now
   let result = null;
   if (printed && status === 'ok') { try { result = JSON.parse(printed.trim().split('\n').at(-1)); } catch { result = null; } }
   for (const event of eventsFromResult(command, argument, result)) await appendEvent(root, event, { now, best: true });
-  await writeHandoffFile(root, { now }).catch(() => {});
+  await writeHandoffFile(root, { now }).catch((error) => {
+    console.error('[tools/project-commands.mjs] writeHandoffFile journalAfterCommand:', error?.message ?? error);
+  });
 }
