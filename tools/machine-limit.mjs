@@ -239,7 +239,8 @@ function laneCapsFromState(state, { now }) {
   if (state?.laneCaps) {
     try {
       return createLaneCaps.fromJSON(state.laneCaps, { now: () => now });
-    } catch {
+    } catch (error) {
+      console.error('[tools/machine-limit.mjs] laneCaps fromJSON:', error?.message ?? error);
       /* fall through */
     }
   }

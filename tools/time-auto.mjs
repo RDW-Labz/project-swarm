@@ -45,7 +45,11 @@ async function transcriptStamps(root, opts) {
         const at = Date.parse(e.timestamp ?? '');
         if (Number.isFinite(at) && isOwnerMessage(e)) stamps.push({ at, source: 'message' });
       }
-    } catch { /* an unreadable session file is skipped */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/time-auto.mjs] read transcript session file:', error?.message ?? error);
+      }
+    }
   }
   return stamps;
 }

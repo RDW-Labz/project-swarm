@@ -773,8 +773,8 @@ function buildOpaqueRanges(text) {
       }
     }
     walk(ast);
-  } catch {
-    // ignore
+  } catch (error) {
+    console.error('[tools/split-scan.mjs] parseSource opaque ranges:', error?.message ?? error);
   }
   opaqueRangeCache.set(text, ranges);
   return ranges;
