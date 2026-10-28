@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "t2reviewgaps",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Release train 2, two security-review gaps in tools/scope-commands.mjs (Opus security review on this train).\nB16: in cmdSync (around the `if (syncCheck.kind === 'delete-only') { await lockedTransition(root, t.id, 'done', ...); done.push(t.id); continue; }` branch), a delete-only ticket is marked done BEFORE the security review check that every other ticket goes through later in the same loop. securityReviewReason (tools/security-review.mjs) counts deletes, so a delete-only ticket touching auth/api/db paths skips the Opus security review. Fix: a delete-only ticket must pass the same security-review requirement as the normal path before it is marked done: find how the normal path in the same loop checks the security review (and how it records a ticket that is waiting on review, e.g. the unreviewed/needs-review list and --accept-unreviewed handling) and apply exactly that to the delete-only branch; only when no security review is required, or it passed, or the owner accepted unreviewed, transition to done. Keep the delete-only acceptance check as is.\nB17: sensitiveDeliveredRefusals returns [] unless ticket.sensitive === true, so `swarm tickets <ID> --delivered <PR>` skips the security review for a ticket that touches sensitive paths but was never flagged. Fix: require the security review when ticket.sensitive === true OR securityReviewReason(ticket) is non-null (same rule as sync). Keep the refusal text and everything else.\nTests in NEW tests/train2-review-gaps.test.mjs (first import: import './_isolate-config.mjs';), driving runScopeCommand / runTicketsCommand in a temp project the way tests/tickets-delivered.test.mjs and tests/scope-sync-delete.test.mjs do: (1) a delete-only ticket whose deletes include src/auth/session.ts is NOT marked done by sync --integrated without a passing security review, and is marked done once the review passes (or with --accept-unreviewed and a reason, if that is how the normal path works); (2) a delete-only ticket deleting a non-sensitive file is still marked done as before; (3) --delivered on an unflagged ticket whose files include an auth path is refused without the security review and allowed with it; (4) --delivered on a non-sensitive unflagged ticket still works. Change nothing else.",
+   "context": [
+    "tools/security-review.mjs",
+    "tests/tickets-delivered.test.mjs",
+    "tests/scope-sync-delete.test.mjs"
+   ],
+   "outputs": [
+    "tools/scope-commands.mjs",
+    "tests/train2-review-gaps.test.mjs"
+   ],
+   "ignoreTestsReason": "tools/scope-commands.mjs is referenced by about 50 test files; this change is limited to the delete-only sync branch and sensitiveDeliveredRefusals, and the coordinator runs the scope, sync, delivered and acceptance suites as checks.",
+   "timeoutMs": 2400000
+  }
+ ],
+ "checks": [
+  { "name": "review-gaps", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/train2-review-gaps.test.mjs", "tests/tickets-delivered.test.mjs", "tests/scope-sync-delete.test.mjs", "tests/scope-commands.test.mjs", "tests/acceptance-sync.test.mjs", "tests/security-gate.test.mjs", "tests/scope-approve-managers.test.mjs", "tests/split-auto-approve.test.mjs", "tests/ticket-sync-checks.test.mjs", "tests/scope-loop.test.mjs"] }
+ ]
+}
