@@ -100,13 +100,16 @@ async function readPackageVersion(dir) {
  * @param {string} projectRoot
  */
 async function resolveProjectInstallRoot(projectRoot) {
+  const projectSwarmJsonPath = path.join(projectRoot, '.project-swarm.json');
   try {
-    const pointer = JSON.parse(await fs.readFile(path.join(projectRoot, '.project-swarm.json'), 'utf8'));
+    const pointer = JSON.parse(await fs.readFile(projectSwarmJsonPath, 'utf8'));
     if (typeof pointer?.install === 'string' && pointer.install) {
       return await fs.realpath(pointer.install);
     }
-  } catch {
-    /* no pointer */
+  } catch (error) {
+    if (!(error?.code === 'ENOENT' && error?.path === projectSwarmJsonPath)) {
+      console.error('[tools/managers/version/index.mjs] resolveProjectInstallRoot:', error?.message ?? error, projectRoot);
+    }
   }
   return await fs.realpath(swarmPackageRoot);
 }
@@ -158,8 +161,10 @@ async function resolveSwarmUpdateRunner(installRoot) {
     try {
       await fs.access(candidate);
       return candidate;
-    } catch {
-      /* try next */
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/managers/version/index.mjs] resolveSwarmUpdateRunner:', error?.message ?? error, candidate);
+      }
     }
   }
   return null;
@@ -200,8 +205,10 @@ async function machineBusyForUpdate(installHome, installRoot) {
   for (const dir of dirs) {
     try {
       dirs.add(await fs.realpath(dir));
-    } catch {
-      /* not present */
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/managers/version/index.mjs] machineBusyForUpdate realpath:', error?.message ?? error, dir);
+      }
     }
   }
 
@@ -309,8 +316,8 @@ class VersionManager extends BaseManager {
     let availability = { current: releaseVersion, latest: null, updateAvailable: false };
     try {
       availability = await readUpdateAvailability(installRoot);
-    } catch {
-      /* offline or non-install tree (replay) */
+    } catch (error) {
+      console.error('[tools/managers/version/index.mjs] readUpdateAvailability:', error?.message ?? error, installRoot);
     }
 
     const busy = await machineBusyForUpdate(installHome, installRoot);
