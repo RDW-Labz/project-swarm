@@ -190,19 +190,23 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
   throw fail('visual-qa-server', `${exited ? 'the dev server command exited' : `the dev server did not answer within ${config.timeoutSec} seconds`} (${ready})${tail ? `: ${tail.replace(/\s+/g, ' ')}` : ''}`);
 }
 
-async function atomicWrite(root, segments, bytes) {
+export async function atomicWrite(root, segments, bytes) {
   const dir = await safeWritableDir(root, segments.slice(0, -1));
   const file = path.join(dir, segments.at(-1));
   await assertRegularOrMissing(file);
   const tmp = path.join(dir, `.${segments.at(-1)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
+  let closed = false;
   try {
     await handle.writeFile(bytes);
     await handle.sync();
     await handle.close();
+    closed = true;
     await fs.rename(tmp, file);
   } catch (error) {
-    await handle.close().catch(() => {});
+    if (!closed) {
+      await handle.close().catch(() => {});
+    }
     await fs.rm(tmp, { force: true });
     throw error;
   }
