@@ -7,7 +7,7 @@
    "agent": "cursor",
    "model": "composer-2.5",
    "tier": "mid",
-   "prompt": "S10 Command Center: make Hive and Cockpit work in a real browser with no test patches. The measured failures are listed in coordination/review/cc-evidence-a.md; fix each one.\n1. tools/watch-assets/command-center.html: make every stylesheet and script URL root-absolute (/assets/...) so the page works when loaded at /command-center and at /command-center/project/<id>. Check tools/watch-server.mjs to confirm /assets/ is the served prefix (do not edit watch-server.mjs).\n2. tools/watch-assets/cc-cockpit-mount.js: remove withGlobalDocument and the globalThis.document assignment; pass the document explicitly where renderCockpit needs it, or call renderCockpit directly when deps.document is the page document (read tools/watch-assets/cockpit-view.js to see what renderCockpit uses; do not edit cockpit-view.js; if it cannot work without a document swap, return blocked and say why). Replace every array method called on an HTMLCollection or NodeList (blocks.find and any others) with Array.from(...).find(...) or an equivalent. Keep the existing unit tests in tests/cc-cockpit-mount.test.mjs passing; update them only where they asserted the removed document swap.\n3. tests/browser/command-center.smoke.mjs: delete installCockpitMountPatch and the HTMLCollection.prototype.find polyfill (no page.route rewriting of shipped assets, no addInitScript polyfills). Add a step that loads /command-center/project/alpha DIRECTLY by URL in a fresh page and asserts the Cockpit main area renders, no console errors, no responses with status >= 400, and that every stylesheet request returned content-type text/css. Keep the click-through step too.\n4. .github/workflows/ci.yml: add a job named browser-smoke on ubuntu-latest, Node 22: checkout, npm ci, npx playwright install --with-deps chromium, then npm run test:browser. package.json has no test:browser script yet: add \"test:browser\": \"node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs\" to its scripts and change nothing else in package.json. Do not change the existing jobs.\nDo not edit any file not in outputs.",
+   "prompt": "S10 Command Center: make Hive and Cockpit work in a real browser with no test patches. The measured failures are listed in coordination/review/cc-evidence-a.md; fix each one.\n1. tools/watch-assets/command-center.html: make every stylesheet and script URL root-absolute (/assets/...) so the page works when loaded at /command-center and at /command-center/project/<id>. Check tools/watch-server.mjs to confirm /assets/ is the served prefix (do not edit watch-server.mjs).\n2. tools/watch-assets/cc-cockpit-mount.js: remove withGlobalDocument and the globalThis.document assignment; pass the document explicitly where renderCockpit needs it, or call renderCockpit directly when deps.document is the page document (read tools/watch-assets/cockpit-view.js to see what renderCockpit uses; do not edit cockpit-view.js; if it cannot work without a document swap, return blocked and say why). Replace every array method called on an HTMLCollection or NodeList (blocks.find and any others) with Array.from(...).find(...) or an equivalent. Keep the existing unit tests in tests/cc-cockpit-mount.test.mjs passing; update them only where they asserted the removed document swap.\n3. tests/browser/command-center.smoke.mjs: delete installCockpitMountPatch and the HTMLCollection.prototype.find polyfill (no page.route rewriting of shipped assets, no addInitScript polyfills). Add a step that loads /command-center/project/alpha DIRECTLY by URL in a fresh page and asserts the Cockpit main area renders, no console errors, no responses with status >= 400, and that every stylesheet request returned content-type text/css. Keep the click-through step too.\n4. .github/workflows/ci.yml: add a job named browser-smoke on ubuntu-latest, Node 22: checkout, npm ci, npx playwright install --with-deps chromium, then npm run test:browser. package.json has no test:browser script yet: add \"test:browser\": \"node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs\" to its scripts and change nothing else in package.json. Do not change the existing jobs.\nDo not edit any file not in outputs. Read the tests in context that reference command-center.html; if one asserts the relative assets/ URLs, report it in your summary (it is not in your outputs) rather than leaving the HTML relative.",
    "context": [
     "tools/watch-server.mjs",
     "tools/watch-assets/cockpit-view.js",
@@ -15,7 +15,13 @@
     "tools/watch-assets/cc-router.js",
     "tests/cc-cockpit-mount.test.mjs",
     "tests/browser/browser-cleanup.mjs",
-    "coordination/review/cc-evidence-a.md"
+    "coordination/review/cc-evidence-a.md",
+    "tests/classic-routes.spec.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/command-center-routes.spec.mjs",
+    "tests/command-center-snapshot.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/command-center.html",
@@ -40,7 +46,9 @@
     "tests/cc-hive-mount.test.mjs",
     "tests/command-center-boot.test.mjs",
     "tests/command-center-routes-flag.test.mjs",
-    "tests/watch-assets-browser-safe.test.mjs"
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs"
    ]
   }
  ]
