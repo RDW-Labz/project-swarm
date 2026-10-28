@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-7a-train3",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 7a redo on top of swarm/train3 (replaces PR #421, whose atomicWrite hunk conflicts with train 3). Edit ONLY tools/managers/visual-qa/screenshots.mjs. Logging only: no change to control flow, kill order, return values, or throws. SENSITIVE (process kill).\n\ncoordination/manifests/d-audit-fix-batch-7a-train3.ref.diff is PR #421's diff against an older base. Re-apply the SAME logging changes to this tree's screenshots.mjs (find each catch by its code, not line number):\n1. page.waitForSelector catch: silent for error?.name === 'TimeoutError', log others.\n2. killLive `process.kill(-pid, 'SIGKILL')` catch: silent ESRCH, log others.\n3. runProcess: the -child.pid kill catch and the inner child.kill fallback catch (use the name fallbackError): silent ESRCH, log others; fallback order unchanged.\n4. ensureServer stop: `process.kill(-child.pid, 'SIGKILL')` catch silent ESRCH; `handle.close().catch(() => {})` logs always (closeError).\n5. ensureServer log-tail `fs.readFile(logFile, 'utf8').catch(() => '')`: silent ENOENT, keep returning ''.\n6. atomicWrite: THIS TREE IS DIFFERENT. It already has a `closed` flag and only calls `await handle.close().catch(() => {})` inside `if (!closed)` in the error path. Change only that .catch to log the close failure (binding closeError) with tmp; keep the closed flag, rm, and `throw error` exactly as they are.\n7. listChangedPageScreens `(deps.readLedger ?? readLedger)(root).catch(() => null)`: silent ENOENT; for a SyntaxError log the literal 'corrupt ledger (SyntaxError)' and NEVER error.message (V8 SyntaxError messages include ledger text); log other errors' message; keep returning null.\nUse the prefix '[tools/managers/visual-qa/screenshots.mjs] <context>:' as in the ref diff. Do NOT touch any other catch. Do NOT edit the .ref.diff file.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/managers/r039-visual-lessons.test.mjs plus any tests/ file that imports visual-qa/screenshots, and confirm green. One line per item.",
+      "context": [
+        "coordination/manifests/d-audit-fix-batch-7a-train3.ref.diff"
+      ],
+      "outputs": [
+        "tools/managers/visual-qa/screenshots.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/managers/r039-visual-lessons.test.mjs",
+        "tests/visual-qa-atomic-write.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}
