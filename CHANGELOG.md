@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.167.25
+
+Release train 2: money caps, paid-lane safety and verify-job provenance.
+- **Spend:** one spend cap, $2.50 per Mac per Chicago day in stop mode by default, and agents can no longer raise the daily limit at all (only the owner can);
+- **Anthropic:** one day cap (the spend lane default, $20) and one price table in tools/rates.mjs (Haiku 5.5 corrected to $0.10/$0.50 per MTok; Fable 5.1 added) that the Anthropic lane derives its prices from;
+- **Paid lanes:** rented, OpenAI and Gemini keys now pass the same paused-lane check as Anthropic and OpenRouter, and validate refuses any job on a paused paid lane;
+- **Guard:** the orchestrator check that blocks shell redirects into coordination/manifests/ or .swarm/ now compares real paths, so a symlinked project root (such as /tmp) no longer lets one through;
+- **Scope:** scope sync and swarm tickets --delivered need a passing security review for any ticket touching auth, api or db paths, deletes included;
+- **Verify jobs:** in orchestrator mode a shell verify job runs only when the runner rebuilt it from the approved ticket ledger; a hand-written shell job is still refused;
+- **Tests:** the cancellation-cleanup test now fails in 15 seconds instead of hanging when a kill is denied.
+
 ## 1.167.24
 
 Hotfix: swarm commands no longer exit silently inside Claude Code sessions.
