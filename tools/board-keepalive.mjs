@@ -135,7 +135,9 @@ async function readIdentityViaFd(file, { fs, uid, warn }) {
     const text = await handle.readFile({ encoding: 'utf8' });
     return { kind: 'trusted', text };
   } finally {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => {
+      console.error('[tools/board-keepalive.mjs] readIdentityViaFd close:', file, closeError?.message ?? closeError);
+    });
   }
 }
 
@@ -203,7 +205,9 @@ export async function loadOrCreateBoardIdentity({
   }
 
   if (trust.kind === 'untrusted') {
-    try { await fs.rm(file, { force: true }); } catch { /* best effort */ }
+    try { await fs.rm(file, { force: true }); } catch (error) {
+      console.error('[tools/board-keepalive.mjs] remove untrusted identity:', file, error?.message ?? error);
+    }
   }
 
   const port = resolvePort(requestedPort);
