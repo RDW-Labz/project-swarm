@@ -19,7 +19,7 @@ Needs the owner:
   - security-1793201346040-ae8b95bc-ccporthive_ccportcockpit (blocker): Security gate blocked ccporthive, ccportcockpit: high unsupported-manifest: tools/watch-assets/vendor/VENDOR.json changed: vendored code dependencies are not parsed yet; the owner must review it, then rerun integrate with --approve-manifest tools/watch-assets/vendor/VENDOR.json (after a --queue block the run is finished: run the job again and integrate the new run)
   - security-1793154137726-32b25faa-ccfixa (blocker): Security gate blocked ccfixa: high unsupported-manifest: .github/workflows/ci.yml changed: ci workflow dependencies are not parsed yet; the owner must review it, then rerun integrate with --approve-manifest .github/workflows/ci.yml (after a --queue block the run is finished: run the job again and integrate the new run)
 Next 3 actions:
-  1. swarm integrate 1793201346040-ae8b95bc --queue
+  1. swarm integrate 1793168676069-554d6a71 --queue
   2. swarm inspect 1793169130969-43cce8a7 --results
   3. swarm "describe the goal in one sentence"
 Rules:
@@ -31,11 +31,11 @@ Rules:
 ```
 
 Pending approvals:
-- blocker security-1793201346040-ae8b95bc-ccporthive_ccportcockpit 0m branch swarm/cc-mount2 main checkout
+- blocker security-1793201346040-ae8b95bc-ccporthive_ccportcockpit 4m branch swarm/cc-mount2 main checkout
 - blocker security-1793154137726-32b25faa-ccfixa 13h branch swarm/cc-mount2 main checkout
 - blocker security-1793121100760-1a835d60-shellpauseJ 22h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
 - blocker security-1793111389005-ec83d391-cism2 25h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
-- blocker integrate-checkout-1793071225012-e80056e1 35h branch swarm/ledger-root /Users/bean/project-swarm
+- blocker integrate-checkout-1793071225012-e80056e1 36h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker security-1793070907123-c780a4c2-lockL2 36h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
 - blocker integrate-checkout-1793066768605-ff4722d3 36h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker integrate-checkout-1793049988921-3c2c1e96 37h branch swarm/ledger-root /Users/bean/project-swarm
@@ -53,4 +53,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T15:44:23.899Z
+Generated at: 2026-10-28T15:48:45.881Z
