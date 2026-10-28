@@ -199,6 +199,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | ccportcockpit: complete | claude | sonnet | pass | 4,733,287 | $2.20 |
 | 2026-10-28 | - | ccportfix: complete | claude | sonnet | pass | 237,469 | $0.20 |
 | 2026-10-28 | - | servevendor: Extended TYPES with woff2/webp/png/svg and added loadVendorAssets to preload tools/watc | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | ccnavfix: complete | claude | sonnet | pass | 176,837 | $0.12 |
+| 2026-10-28 | - | ccgrade7: complete | claude | opus | pass | 78,974 | $0.28 |
+| 2026-10-28 | - | ask-1793208014427-1bb39b91: complete | claude | fable | pass | 7,517 | $0.09 |
 
 ## Daily summary
 
@@ -218,6 +221,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
-| 2026-10-28 | claude | 16 | 13 | 3 | 19,638,495 | $14.51 |
+| 2026-10-28 | claude | 19 | 16 | 3 | 19,901,823 | $15.00 |
 | 2026-10-28 | cursor | 12 | 12 | 0 | 0 | subscription |
-| **total** | all | 195 | 177 | 18 | 34,432,556 | $41.55 (incl. estimates) |
+| **total** | all | 198 | 180 | 18 | 34,695,884 | $42.04 (incl. estimates) |

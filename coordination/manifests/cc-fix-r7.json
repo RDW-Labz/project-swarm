@@ -27,7 +27,9 @@
     "tests/command-center-hive.test.mjs",
     "tests/watch-assets-dom-collections.test.mjs",
     "tests/command-center-boot.test.mjs",
-    "tests/command-center-tour.test.mjs"
+    "tests/command-center-tour.test.mjs",
+    "tools/watch-assets/cc-router.js",
+    "tests/command-center-nav.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/cc-hive.css",
@@ -60,7 +62,10 @@
     "tests/cc-cockpit-mount.test.mjs",
     "tests/command-center-lists.test.mjs",
     "tests/command-center-cockpit.test.mjs",
-    "tests/watch-assets-dom-collections.test.mjs"
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/cc-hive-mount.test.mjs",
+    "tools/watch-assets/cc-router.js",
+    "tests/command-center-nav.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/cc-cockpit.css",
@@ -91,7 +96,9 @@
     "tests/command-center-cockpit.test.mjs",
     "tests/command-center-nav.test.mjs",
     "tests/command-center-snapshot.test.mjs",
-    "tests/command-center-tour.test.mjs"
+    "tests/command-center-tour.test.mjs",
+    "tests/watch-vendor.test.mjs",
+    "tests/command-palette.test.mjs"
    ]
   }
  ]
