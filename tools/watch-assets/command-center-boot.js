@@ -130,10 +130,10 @@ function loadClassicScript(document, src) {
 
 async function ensureBrowserGlobals(document) {
   if (!resolveCommandCenterData()) {
-    await loadClassicScript(document, 'assets/command-center-data.js');
+    await loadClassicScript(document, '/assets/command-center-data.js');
   }
   if (!globalThis.HivePanels?.renderHivePanels) {
-    await loadClassicScript(document, 'assets/hive-panels.js');
+    await loadClassicScript(document, '/assets/hive-panels.js');
   }
 }
 

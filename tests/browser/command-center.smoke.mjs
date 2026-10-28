@@ -315,7 +315,9 @@ async function launchChromium() {
   ensurePlaywrightBrowserPath();
   const { chromium } = await import('playwright');
   try {
-    return await chromium.launch({ headless: true });
+    const server = await chromium.launchServer({ headless: true });
+    const browser = await chromium.connect(server.wsEndpoint());
+    return { server, browser };
   } catch (err) {
     const msg = err?.message || String(err);
     if (/executable doesn't exist|browser|chromium/i.test(msg)) {
@@ -328,6 +330,7 @@ async function launchChromium() {
 let smokeOn;
 let smokeOff;
 let smokeBrowser;
+let smokeServer;
 let smokeContext;
 let smokePages = [];
 let smokeTracked;
@@ -342,12 +345,43 @@ async function disposeSmokeServers() {
 }
 
 async function cleanupSmokeBrowser() {
-  await closeBrowserFully({
-    browser: smokeBrowser,
-    context: smokeContext,
-    pages: smokePages,
-    tracked: smokeTracked,
-  });
+  const pages = smokePages;
+  const context = smokeContext;
+  const browser = smokeBrowser;
+  const server = smokeServer;
+  const tracked = smokeTracked;
+
+  for (const page of pages) {
+    try {
+      if (page) await page.close();
+    } catch {
+      /* continue */
+    }
+  }
+  try {
+    if (context) await context.close();
+  } catch {
+    /* continue */
+  }
+  if (browser) {
+    try {
+      await browser.close();
+    } catch {
+      /* continue */
+    }
+    smokeBrowser = undefined;
+  }
+  if (server) {
+    try {
+      await server.close();
+    } catch {
+      /* continue */
+    }
+    smokeServer = undefined;
+  }
+  await closeBrowserFully({ tracked });
+  smokeContext = undefined;
+  smokePages = [];
 }
 
 test.after(async () => {
@@ -359,8 +393,10 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
   try {
     smokeOn = await startCommandCenterServer({ commandCenterOn: true });
     smokeOff = await startCommandCenterServer({ commandCenterOn: false });
-    smokeBrowser = await launchChromium();
-    smokeTracked = trackBrowser(smokeBrowser);
+    const launched = await launchChromium();
+    smokeServer = launched.server;
+    smokeBrowser = launched.browser;
+    smokeTracked = trackBrowser(smokeServer);
   } catch (err) {
     await disposeSmokeServers();
     throw err;

@@ -3,10 +3,39 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  trackBrowser,
   descendantPids,
   closeBrowserFully,
   assertNoLeftoverBrowser,
 } from './browser/browser-cleanup.mjs';
+
+test('trackBrowser records pid from a BrowserServer', () => {
+  const server = {
+    process: () => ({ pid: 4242 }),
+  };
+  const tracked = trackBrowser(server);
+  assert.equal(tracked.pid, 4242);
+  assert.equal(tracked.closed, false);
+});
+
+test('trackBrowser accepts { server, browser } and uses the server pid', () => {
+  const server = {
+    process: () => ({ pid: 5150 }),
+  };
+  const browser = { close: async () => {} };
+  const tracked = trackBrowser({ server, browser });
+  assert.equal(tracked.pid, 5150);
+});
+
+test('trackBrowser rejects a plain object without server.process()', () => {
+  assert.throws(
+    () => trackBrowser({ close: async () => {} }),
+    (err) => {
+      assert.match(err.message, /BrowserServer|server\.process/i);
+      return true;
+    },
+  );
+});
 
 test('descendantPids walks a multi-level tree and ignores unrelated rows', () => {
   const list = [

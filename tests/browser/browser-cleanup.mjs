@@ -42,13 +42,20 @@ function isKillablePid(pid) {
 }
 
 /**
- * @param {import('playwright').Browser} browser
+ * @param {import('playwright').BrowserServer | { server: import('playwright').BrowserServer, browser?: import('playwright').Browser }} target
  */
-export function trackBrowser(browser) {
-  const proc = browser.process();
+export function trackBrowser(target) {
+  let server = target;
+  if (target && typeof target === 'object' && target.server && typeof target.server.process === 'function') {
+    server = target.server;
+  }
+  if (!server || typeof server.process !== 'function') {
+    throw new Error('trackBrowser: expected a BrowserServer or { server, browser } with server.process()');
+  }
+  const proc = server.process();
   const pid = proc?.pid;
   if (!Number.isInteger(pid) || pid <= 0) {
-    throw new Error('trackBrowser: browser.process() did not return a pid');
+    throw new Error('trackBrowser: server.process() did not return a pid');
   }
   return { pid, closed: false };
 }
