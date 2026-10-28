@@ -134,7 +134,11 @@ export async function realGet(url, { fetchImpl = fetch } = {}) {
       let next;
       try { next = new URL(res.headers.get('location'), current); } catch { return { status: 0, body: '' }; }
       if (next.protocol !== first.protocol || next.host !== first.host) return { status: 0, body: '' };
-      try { await res.body?.cancel(); } catch { /* nothing to cancel */ }
+      try { await res.body?.cancel(); } catch (error) {
+        if (!(error instanceof TypeError || error?.code === 'ERR_INVALID_STATE')) {
+          console.error('[tools/handoff-docs.mjs] cancel response body:', error?.message ?? error);
+        }
+      }
       current = next;
       continue;
     }
@@ -143,7 +147,11 @@ export async function realGet(url, { fetchImpl = fetch } = {}) {
     if (res.body) {
       const reader = res.body.getReader();
       while (size < MAX_BODY) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); size += value.length; }
-      try { await reader.cancel(); } catch { /* already closed */ }
+      try { await reader.cancel(); } catch (error) {
+        if (!(error instanceof TypeError || error?.code === 'ERR_INVALID_STATE')) {
+          console.error('[tools/handoff-docs.mjs] cancel reader:', error?.message ?? error);
+        }
+      }
     }
     return { status: res.status, body: Buffer.concat(chunks.map(c => Buffer.from(c))).subarray(0, MAX_BODY).toString('utf8') };
   }
@@ -185,7 +193,13 @@ export async function guideFiles(root) {
   const dir = path.join(root, HANDOFF_DIR);
   const names = ['user-guide.md', 'admin-guide.md', 'runbook.md'];
   const out = [];
-  for (const name of names) { try { out.push({ name, text: await fs.readFile(path.join(dir, name), 'utf8') }); } catch { /* not written yet */ } }
+  for (const name of names) {
+    try { out.push({ name, text: await fs.readFile(path.join(dir, name), 'utf8') }); } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/handoff-docs.mjs] read guide file:', name, error?.message ?? error);
+      }
+    }
+  }
   return out;
 }
 export { parseScope };
