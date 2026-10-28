@@ -134,7 +134,9 @@ export async function runBakeoff({ candidates, hourlyUsd, capUsd, levels = LEVEL
       spent += ((now() - began) / 3600000) * hourlyUsd;
       results.push({ ...base, error: String(error?.message ?? error).slice(0, 200) });
     } finally {
-      try { await replica?.stop(); } catch { /* the node's dead-man timer still removes it */ }
+      try { await replica?.stop(); } catch (error) {
+        console.error('[tools/gpu-bakeoff.mjs] stop gpu replica:', error?.message ?? error);
+      }
     }
   }
   return { ranked: rankResults(results), spentUsd: r2(spent) };
