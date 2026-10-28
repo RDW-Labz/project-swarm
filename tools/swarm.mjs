@@ -856,7 +856,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
         const prepared = await prepare(job, record);
         resourcePayload = prepared.resources; snapshotFiles = prepared.snapshotFiles;
       } catch (error) {
-        record.status = await cancelled() ? 'cancelled' : error.name === 'AbortError' && refusedPauseUntil ? 'provider-limit' : 'failed';
+        record.status = await cancelled() ? 'cancelled' : error.code?.endsWith('-lane-paused') ? 'held' : error.name === 'AbortError' && refusedPauseUntil ? 'provider-limit' : 'failed';
+        if (record.status === 'held') { record.heldReason = 'lane-paused'; record.code = error.code; }
         record.error = record.status === 'provider-limit' ? `provider-limit: lane ${job.agent} paused until ${refusedPauseUntil}` : error.message;
         if (record.status === 'provider-limit') { record.heldReason = 'quota'; record.heldUntil = refusedPauseUntil; }
         record.finishedAt = new Date(now()).toISOString(); record.durationMs = 0;
@@ -1366,15 +1367,18 @@ async function recheckResumeSpend(root, manifest, state, budget, { env = process
   const lanes = resolveLanes({ config, manifest, env });
   const totals = await withSpendStore(store => laneDayTotals(store, { day: new Date(now()).toISOString().slice(0, 10) }), { dir: spendDir(env), now });
   const oversize = await editInPlaceOnlyJobs(root, manifest, { env });
-  for (const record of state.jobs.filter(record => ['lane-cap', 'run-cap'].includes(record.heldReason))) {
+  for (const record of state.jobs.filter(record => ['lane-cap', 'run-cap', 'lane-paused'].includes(record.heldReason))) {
     const original = manifest.jobs.find(job => job.id === record.id);
     let job = original;
     if (original.agent === 'auto') {
-      const route = pickJobRoute(original, lanes, {
+      let route;
+      try { route = pickJobRoute(original, lanes, {
         root, contract: manifest.contract, ready: readyAutoJobs(manifest),
         editInPlaceOnly: oversize.has(original.id), failures: record.routeFailures ?? {},
         health: agent => capDecision({ budget: { ...budget, maxUsd: null, maxTokens: null }, run: {}, laneToday: totals, agent }) ? { state: 'paused' } : { state: 'ready' },
-      });
+      }); } catch (error) {
+        fail(`resume-over-cap: no lane can take job ${original.id}; ${error.message}`, 'resume-over-cap');
+      }
       job = withoutApiOnlyFields({ ...original, agent: route.agent, model: route.model });
     }
     assertResumePaidLane(job, config, env);

@@ -91,14 +91,14 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
     };
   }
   if (agent === 'lambda') {
-    // Hosted Lambda Inference by default; SWARM_LAMBDA_URL selects an operator-owned OpenAI-compatible origin.
+    // Only loopback Lambda origins are self-hosted.
     let url;
     try { url = new URL(env.SWARM_LAMBDA_URL || 'https://api.lambda.ai'); } catch { fail('Invalid SWARM_LAMBDA_URL'); }
     const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/' || (!loopback && url.protocol !== 'https:') || !['http:', 'https:'].includes(url.protocol)) fail('SWARM_LAMBDA_URL must be a loopback HTTP(S) origin or explicit HTTPS origin without credentials, path, query, or fragment');
     endpoint = `${url.origin}/v1/chat/completions`;
     keyName = 'LAMBDA_API_KEY';
-    selfHosted = Boolean(env.SWARM_LAMBDA_URL);
+    selfHosted = !isHostedLambdaInference(env);
     if (isHostedLambdaInference(env)) assertPaidLaneNotPaused('lambda', resolvedConfig());
     key = env[keyName];
     if (key && url.protocol !== 'https:' && !loopback) fail('Credentials require HTTPS');

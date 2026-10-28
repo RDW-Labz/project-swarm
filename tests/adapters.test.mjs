@@ -109,7 +109,10 @@ test('invalid API output writes nothing and cannot integrate', async t => { cons
 test('a self-hosted Lambda origin disables thinking by default and honours an explicit opt-in', async () => {
   const capture = async request => { let seen; await executeApi(job('lambda'), [], { env: { ...isolatedEnv, ...request }, fetchImpl: async (url, options) => { seen = JSON.parse(options.body); return reply(body('lambda')); } }); return seen; };
   const hosted = await capture(env); assert.equal(hosted.chat_template_kwargs, undefined);
-  for (const origin of ['http://127.0.0.1:8000', 'https://gpu.example']) { const off = await capture({ SWARM_LAMBDA_URL: origin }); assert.deepEqual(off.chat_template_kwargs, { enable_thinking: false }); assert.equal(off.response_format.json_schema.strict, true); assert.equal(off.max_tokens, 8192); }
+  for (const origin of ['http://127.0.0.1:8000']) { const off = await capture({ SWARM_LAMBDA_URL: origin }); assert.deepEqual(off.chat_template_kwargs, { enable_thinking: false }); assert.equal(off.response_format.json_schema.strict, true); assert.equal(off.max_tokens, 8192); }
+  const remote = await capture({ SWARM_LAMBDA_URL: 'https://gpu.example', LAMBDA_API_KEY: env.LAMBDA_API_KEY }); assert.equal(remote.chat_template_kwargs, undefined);
+  assert.equal(apiConfiguration('lambda', { ...isolatedEnv, SWARM_LAMBDA_URL: 'https://gpu.example' }).configured, false);
+  assert.equal(apiConfiguration('lambda', { ...isolatedEnv, SWARM_LAMBDA_URL: 'https://gpu.example' }).selfHosted, false);
   const on = await capture({ SWARM_LAMBDA_URL: 'http://127.0.0.1:8000', SWARM_LAMBDA_THINKING: 'on' }); assert.equal(on.chat_template_kwargs, undefined);
   const other = await capture({ SWARM_LAMBDA_URL: 'http://127.0.0.1:8000', SWARM_LAMBDA_THINKING: 'yes' }); assert.deepEqual(other.chat_template_kwargs, { enable_thinking: false });
   assert.equal(apiConfiguration('lambda', env).selfHosted, false); assert.equal(apiConfiguration('lambda', { SWARM_LAMBDA_URL: 'http://127.0.0.1:8000' }).selfHosted, true);
