@@ -1,0 +1,82 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccfixhive1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Hive page, grader round 1 (Hive scored 2.5/5; target 4.5).\nFix every item in order; they come from an independent Opus grade of REAL screenshots of the running app (live board data), not the mockup.\nThe approved target look is docs/design/command-center-mockup/ (read hive.html, cockpit.html, shared.css). The grader's suggested CSS and markup are guidance: keep the intent, adapt to the real code.\nUse real data only, never hard-coded sample numbers. When a value or list is empty, render a short muted empty-state line, never a blank box.\nKeep every existing hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project cards, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file).\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nRead coordination/review/cc-design-contract.md for file ownership. If an item needs a file outside your outputs, skip it and name it in your summary.\nYou also own the first-visit tour (tools/watch-assets/cc-tour.js) for BOTH pages: it must never auto-open over content; open it only from a help button or once, remembered via a dismissed flag in localStorage (wrap storage in try/catch).\n\nFIXES:\n1. PROBLEM: Project cards show only the labels 'asks / out / fails' stacked vertically with no values and no meter. They read as broken empty cards, unlike the mockup's dt/dd two-column grid plus p() meter.\n   WHERE: Desktop stage, all five cards on the left; phone stage cards\n   FILE: tools/watch-assets/hive-panels.js, tools/watch-assets/cc-hive.css\n   CHANGE: Render each field as <dl class=\"hive-kv\"><dt>asks</dt><dd class=\"num\">{value}</dd>...</dl>, filling dd from the live project fields (open asks, tickets out, failures). Use an em dash '—' when a value is missing, never blank. Make sure cc-hive.css applies `.hive-kv{display:grid;grid-template-columns:1fr auto;gap:0 8px}` and `.hive-kv dd{margin:0;text-align:right;font-weight:600}`. Append the `.hive-meter` row (label, track, value) from a real per-project ratio such as done/total.\n2. PROBLEM: All five project cards sit in the left column, and the right half of the stage is empty. Content is stacked down one edge, and the five streams only fan out to the left.\n   WHERE: Desktop hive stage, right of the opus ring\n   FILE: tools/watch-assets/cc-hive-mount.js\n   CHANGE: Assign side and slot by alternating index: side = i % 2 ? 'right' : 'left', slot = Math.floor(i / 2). Use the mockup's SLOT_TOPS and COLUMN_INSET per side with width:21%, so N projects balance across both columns. Recompute the stream anchors from the right-side card's left edge.\n3. PROBLEM: A tour/onboarding popover ('The Hive, Step 1 of 2, Back/Next/Skip tour') sits over the throughput panel and the footer motto on desktop. On phone it covers the second project card and the panels.\n   WHERE: Bottom-right on desktop; lower half of the phone screen\n   FILE: tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css\n   CHANGE: Don't auto-open the tour on the Command Center. Gate it behind a dismissed flag in localStorage, or open it only from a help button. When it does show, anchor it to its target with a backdrop. On phone, set `position:fixed;inset:auto 8px 8px;max-height:40vh` so it never sits over content without being dismissable. Make 'Next' use the cc-btn style rather than a cyan focus ring by default.\n4. PROBLEM: The 'lanes and savings' and 'throughput' panels are empty boxes. Throughput shows a blank chart well and a bare 'decision latency' caption. The session log has no event rows. There is no empty-state text, so the panels look broken.\n   WHERE: Bottom panel row, middle and right panels, plus the top of the session log\n   FILE: tools/watch-assets/hive-panels.js\n   CHANGE: Fill lanes and savings from live lane counts as lane-row bars (name, lane-track/lane-fill, num), plus the stat-lines 'needs you' and 'agents live'. Fill the session log from recent board events with event-tag pills. When a source is empty, render `<p class=\"cc-empty\">No lane activity yet</p>` (muted, 11px) in place of the chart, and hide canvases that have no data instead of showing a blank #0a0a10 box.\n5. PROBLEM: The stat tiles are tall (about 70px) with small 18px values and lots of dead space. The 'live' pill is a cramped circle wrapped beside them. The mockup strip is a compact 8vh row with four stats.\n   WHERE: Stat strip under the header on desktop\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: Set `.hive-stat-strip{height:8vh;max-height:8vh;align-items:stretch}` and `.hive-stat-strip .cc-stat{padding:4px 10px;display:flex;flex-direction:column;justify-content:center}` with `.val{font-size:22px}`. Give `.cc-live` `border-radius:999px;padding:4px 14px;flex:0 0 auto` so it renders as a pill, not a circle.\n6. PROBLEM: On phone, a hard vertical line runs through the opus core and down through the project cards, and a darker square box frames the ring. The stream canvas and the core's overflow box are showing.\n   WHERE: Phone stage, around the opus ring and the first card\n   FILE: tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css\n   CHANGE: In phone layout, anchor streams to the card's top-centre as in the mockup's cardAnchor (geom.phone), and draw them only between the ring bottom and the card top. Remove the solid background from `.hive-stage.hive-phone .hive-core-ui` (`background:none;overflow:visible`). Move the 'answer before you spend' label onto the SVG textPath arc, not a free-floating heading above the ring (this also applies on desktop).",
+   "context": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r1/grade.json",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/cc-tour.js"
+   ],
+   "timeoutMs": 3000000
+  },
+  {
+   "id": "ccfixcockpit1",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Cockpit page, grader round 1 (Cockpit scored 1.6/5; target 4.5).\nFix every item in order; they come from an independent Opus grade of REAL screenshots of the running app (live board data), not the mockup.\nThe approved target look is docs/design/command-center-mockup/ (read hive.html, cockpit.html, shared.css). The grader's suggested CSS and markup are guidance: keep the intent, adapt to the real code.\nUse real data only, never hard-coded sample numbers. When a value or list is empty, render a short muted empty-state line, never a blank box.\nKeep every existing hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project cards, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file).\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nRead coordination/review/cc-design-contract.md for file ownership. If an item needs a file outside your outputs, skip it and name it in your summary.\nThe tour (cc-tour.js) belongs to the parallel Hive job; do not edit it.\n\nFIXES:\n1. PROBLEM: The page order is inverted. The ticket search and list render at the very top, and the header (breadcrumb, '0 OF 15 TICKETS DONE' hero, BACK) sits at the bottom of the viewport. The app header and nav (brand, Hive/Cockpit tabs) are missing entirely.\n   WHERE: Whole desktop page; hero at y≈690–790 instead of the top\n   FILE: tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css\n   CHANGE: Build the DOM in mockup order: `.shell > header.band-header` (app-nav with brand and Hive/Cockpit cc-tab links, then header-hero-pack with cockpit-nav breadcrumb, hero h1, tagline, scan-live) followed by `main.panel-cockpit` (band-main, band-bottom, footnote). Use `.shell{display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh}` and `.panel-cockpit{grid-template-rows:minmax(0,1fr) minmax(22vh,24vh) auto}`. Remove any `order` or absolute positioning that pushes the header down.\n2. PROBLEM: The stage is a single ticket column hugging the left edge. The centre has only a floating 'waiting on you' label with no mascot or now panel, and the right ticket column is empty. Roughly 60% of the stage is blank.\n   WHERE: Desktop top band, x≈570–1430\n   FILE: tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css\n   CHANGE: Wrap the stage in `.stage-wrap > .stage-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,280px) minmax(0,1fr)}`. Split tickets half and half into #tickets-left and #tickets-right (ceil(n/2)). Put the stage-center in the middle column: entity-label (orchestrator state), mascot-stage, and a now-panel showing the active ticket id, title and progress (k/n). Keep the ticket search hidden on desktop (`.ticket-search{display:none}`) as the mockup does.\n3. PROBLEM: The stage stack tile is broken. A tiny green-bordered box with '57%' overflows its own border, and the big panel around it is empty. 57% also contradicts the '0 of 15 tickets done' hero, with no label saying what 57% measures.\n   WHERE: Desktop, right-middle 'STAGE STACK 15 TICKETS' panel\n   FILE: tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css\n   CHANGE: Render stack-metrics as `display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px`. Each `.metric-tile` (border:2px solid var(--line);border-top-width:4px;padding:8px 6px 10px;text-align:center) gets an `.m-label` (e.g. ready, running, done, blocked) and an `.m-val` (font-size:clamp(1.75rem,2.8vh,2rem);line-height:1). Derive every tile from the same ticket counts as the hero. If a percentage is shown, label it and compute it from the same source.\n4. PROBLEM: The bottom band is missing. The loop blocks are absent, the run stream is a single small card floating left with 'running' while the hero says 'ENDED 2M AGO', and there is a large dead gap between the run stream and the hero.\n   WHERE: Desktop middle area, y≈420–640\n   FILE: tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css\n   CHANGE: Use the band-bottom grid `grid-template-columns:minmax(0,1.05fr) minmax(0,1.35fr) minmax(0,.95fr)` with bottom-loops spanning the full width, then a worker stream (2-col stream-grid of stream-card with a 6px accent top border, a stream-id/title/status row, and a stream-bar), a run stream, and the stack block. Reconcile run status with the orchestrator state, so a run shows 'ended' when the board says ended. When there are no runs, render a muted 'No runs yet' line inside the card.\n5. PROBLEM: On phone, the Now tab content is blank below the hero, and the tour popover covers the lower screen. The hero font is far larger than the mockup clamp, the breadcrumb wraps over three lines, and 'PROJECT project-swarm' repeats twice. 'LIVE SCAN 0OF15' has no spacing.\n   WHERE: Phone, everything below y≈350; hero and breadcrumb at the top\n   FILE: tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css\n   CHANGE: Populate #phone-now with stage-center--phone (entity-label, now-panel for the active ticket, then a phone-now-rows list of the next tickets as 44px ticket-rows). Set `@media (max-width:720px){.band-header .cockpit-hero h1{font-size:clamp(1.75rem,8vw,2.25rem)}}`. Render the project name once (drop the duplicate top-right crumb). Build scan-live as `<span class=\"num\">0</span> <span class=\"scan-of\">of</span> <span class=\"num\">15</span>` inside `.scan-live-count{display:inline-flex;gap:8px}`.\n6. PROBLEM: The 'Project Cockpit Step 1 of 1' tour popover covers content on both desktop and phone. The BACK pill floats on its own between sections, and ticket ids are bare orange text rather than the mockup's idx chips.\n   WHERE: Bottom-right on desktop and bottom on phone (tour); BACK at the left above the breadcrumb; ticket rows\n   FILE: tools/watch-assets/cc-cockpit-mount.js, tools/watch-assets/cc-cockpit.css, tools/watch-assets/cockpit-lists.js\n   CHANGE: Suppress the auto-opening tour (localStorage dismissed flag, or open only on demand). Move BACK into the app-nav `.nav-actions` as a `.btn-pill` next to the Hive/Cockpit tabs. Render the ticket id inside `.ticket-idx` (border:3px solid var(--cockpit-orange);border-radius:4px;background:rgba(201,120,74,.28)) with the lane modifier class, and use the 4-column ticket-row grid `36px minmax(0,1fr) auto 20px`.",
+   "context": [
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r1/grade.json",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit.css",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js"
+   ],
+   "timeoutMs": 3000000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs"
+   ]
+  }
+ ]
+}
