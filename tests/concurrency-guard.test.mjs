@@ -105,9 +105,11 @@ test('runGuarded puts the value back after a normal exit, a failing command, and
 
 test('runGuarded restores when the wrapper itself is told to stop (SIGTERM forwarded to the command)', async t => {
   const f = await fixture(t);
+  let childAttached;
+  const childAttachedP = new Promise(resolve => { childAttached = resolve; });
   const child = fakeChild(() => {});
-  const running = runGuarded({ value: 16, args: ['watch', '--all'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => child });
-  await sleep(50);
+  const running = runGuarded({ value: 16, args: ['watch', '--all'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => { childAttached(); return child; } });
+  await childAttachedP;
   assert.equal(f.read().machineConcurrency, 16);
   process.emit('SIGTERM');
   const result = await running;
@@ -197,20 +199,24 @@ test('a Ctrl-C in the moment between raising the value and the command starting 
 
 test('Ctrl-C: a command that ends on its own after the terminal signal gets no second signal; one that keeps running gets exactly one', async t => {
   const f = await fixture(t);
+  let endsAttached;
+  const endsAttachedP = new Promise(resolve => { endsAttached = resolve; });
   const ends = fakeChild(() => {});
   const kills = [];
   ends.kill = sig => kills.push(sig);
-  const first = runGuarded({ value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => ends });
-  await sleep(30);
+  const first = runGuarded({ value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => { endsAttached(); return ends; } });
+  await endsAttachedP;
   process.emit('SIGINT');
-  setTimeout(() => ends.emit('exit', 130, null), 60);   // the terminal's own SIGINT ended it
+  setImmediate(() => ends.emit('exit', 130, null));   // the terminal's own SIGINT ended it
   assert.equal((await first).code, 130);
-  await sleep(300);
-  assert.deepEqual(kills, [], 'no forwarded signal');
-  const stays = fakeChild(() => {});
+  const sigAt = Date.now();
+  assert.ok(await until(() => kills.length === 0 && Date.now() - sigAt > 250, 5000), `no forwarded signal; kills=${JSON.stringify(kills)}`);
   const f2 = await fixture(t);
-  const second = runGuarded({ value: 16, args: ['watch'], env: f2.env, configFile: f2.file, startWatcher: false, spawnImpl: () => stays });
-  await sleep(30);
+  let staysAttached;
+  const staysAttachedP = new Promise(resolve => { staysAttached = resolve; });
+  const stays = fakeChild(() => {});
+  const second = runGuarded({ value: 16, args: ['watch'], env: f2.env, configFile: f2.file, startWatcher: false, spawnImpl: () => { staysAttached(); return stays; } });
+  await staysAttachedP;
   process.emit('SIGINT');
   assert.equal((await second).code, 130);
   assert.equal(stays.killed, 'SIGINT');
