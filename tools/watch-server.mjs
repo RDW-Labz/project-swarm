@@ -19,6 +19,10 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
 };
 
 const SECURITY = {
@@ -511,6 +515,32 @@ export function createWatchServer(opts) {
     },
   });
 
+  async function loadVendorAssets(vendorRoot, keyPrefix) {
+    let entries;
+    try {
+      entries = await readdir(vendorRoot, { withFileTypes: true });
+    } catch (err) {
+      if (err?.code === 'ENOENT') return;
+      throw err;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (entry.isSymbolicLink()) continue;
+      const key = `${keyPrefix}/${entry.name}`;
+      const full = path.join(vendorRoot, entry.name);
+      if (entry.isDirectory()) {
+        await loadVendorAssets(full, key);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name === 'VENDOR.json') continue;
+      if (entry.name === 'LICENSE' || entry.name.startsWith('LICENSE-')) continue;
+      const ext = path.extname(entry.name);
+      if (!Object.hasOwn(TYPES, ext)) continue;
+      const body = await readFile(full);
+      assets.set(key, { type: TYPES[ext], body });
+    }
+  }
+
   async function loadAssets() {
     assets.clear();
     const entries = await readdir(assetDir, { withFileTypes: true });
@@ -521,6 +551,7 @@ export function createWatchServer(opts) {
       const body = await readFile(path.join(assetDir, entry.name));
       assets.set(entry.name, { type: TYPES[ext], body });
     }
+    await loadVendorAssets(path.join(assetDir, 'vendor'), 'vendor');
     const delta = await readFile(deltaFile);
     assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
   }
