@@ -3,70 +3,8 @@
 
 /** @typedef {{ ticketToQueueJob: (t: object) => object|null, listQueueJobsForProject: (jobs: object[], project: object) => object[] }} QueueDeps */
 
-export const COCKPIT_LISTS_CSS = `
-.cockpit-ticket-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.cockpit-ticket-search { margin-bottom: 4px; display: flex; flex-direction: column; gap: 4px; }
-.cockpit-ticket-search label { font-size: 0.65rem; text-transform: uppercase; }
-.cockpit-ticket-search input {
-  min-height: 44px; padding: 0 12px; width: 100%; box-sizing: border-box;
-}
-.cockpit-ticket-row {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 6px; align-items: center; padding: 6px 8px; min-width: 0;
-  font-family: ui-monospace, monospace; font-size: 0.64rem;
-}
-.cockpit-ticket-id { font-variant-numeric: tabular-nums; font-weight: 700; }
-.cockpit-ticket-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cockpit-ticket-status { text-transform: uppercase; font-size: 0.58rem; opacity: 0.85; }
-.cockpit-ticket-empty {
-  padding: 10px 8px; font-size: 0.68rem; line-height: 1.45; color: #9a9288;
-}
-.cockpit-stack-metrics {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px;
-}
-.cockpit-metric-tile {
-  box-sizing: border-box;
-  padding: 8px 6px 10px;
-  min-width: 0;
-  text-align: center;
-  overflow: visible;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-.cockpit-metric-tile .m-label {
-  display: block;
-  font-size: 0.48rem;
-  line-height: 1.2;
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cockpit-metric-tile .m-val {
-  display: block;
-  font-size: clamp(1.75rem, 2.8vh, 2rem);
-  line-height: 1;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  margin: 2px 0;
-  padding: 0 2px;
-}
-.cockpit-metric-tile .m-foot {
-  display: block;
-  font-size: 0.44rem;
-  line-height: 1.25;
-  margin: 0;
-  padding-top: 2px;
-  color: #5c564e;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-`;
+/** Styles live in /assets/cc-cockpit.css — kept for tests that reference layout constants. */
+export const COCKPIT_LISTS_CSS = '';
 
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
@@ -112,6 +50,7 @@ export function emptyReadyExplanation(ledger, readyTicketsFn) {
 }
 
 function ensureStyle(host, id, css) {
+  if (!css) return;
   const doc = host.ownerDocument || (typeof document !== 'undefined' ? document : null);
   if (!doc) return;
   const head = doc.head || doc.documentElement;
@@ -174,7 +113,7 @@ export function renderCockpitTicketList(host, ledger, options = {}) {
       const hay = `${job.id} ${title}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
       const row = doc.createElement('div');
-      row.className = 'cockpit-ticket-row';
+      row.className = `ticket-row cockpit-ticket-row ticket-row--${full?.status || job.status || 'todo'}`;
       row.setAttribute('data-ticket-id', job.id);
       const idEl = doc.createElement('span');
       idEl.className = 'cockpit-ticket-id';
@@ -205,11 +144,12 @@ export function renderStackSummaryTiles(host, tiles) {
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
   const grid = doc.createElement('div');
-  grid.className = 'cockpit-stack-metrics';
+  grid.className = 'stack-metrics cockpit-stack-metrics';
   grid.setAttribute('data-cockpit-summary-tiles', 'true');
   for (const tile of tiles) {
+    const variant = tile.variant ? ` metric-tile--${tile.variant} cockpit-metric-tile--${tile.variant}` : '';
     const el = doc.createElement('div');
-    el.className = 'cockpit-metric-tile' + (tile.variant ? ` cockpit-metric-tile--${tile.variant}` : '');
+    el.className = `metric-tile cockpit-metric-tile${variant}`;
     const label = doc.createElement('span');
     label.className = 'm-label';
     label.textContent = tile.label;

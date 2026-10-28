@@ -43,6 +43,35 @@ export function headlineTicketText(done, total) {
   return `${done} of ${total}`;
 }
 
+const METER_CLASSES = ['meter-opus', 'meter-skills', 'meter-engines', 'meter-taste', 'meter-broll', 'meter-web'];
+
+function appendCategoryBar(parent, rings, extraClass) {
+  if (!rings.length) return null;
+  const bar = el('div', `category-bar ${extraClass || ''}`.trim());
+  const links = el('div', 'category-links');
+  links.setAttribute('aria-label', 'Stage mix');
+  rings.forEach((ring, i) => {
+    if (i > 0) links.appendChild(el('span', 'sep', '/'));
+    links.appendChild(el('span', null, ring.label));
+  });
+  const meter = el('div', 'category-meter');
+  meter.setAttribute('aria-hidden', 'true');
+  rings.forEach((ring, i) => {
+    const seg = el('span', METER_CLASSES[i % METER_CLASSES.length]);
+    const w = String(Math.max(ring.total, 1));
+    if (seg.style && typeof seg.style.setProperty === 'function') {
+      seg.style.setProperty('--w', w);
+    } else if (seg.style) {
+      seg.style.flex = w;
+    }
+    meter.appendChild(seg);
+  });
+  bar.appendChild(links);
+  bar.appendChild(meter);
+  parent.appendChild(bar);
+  return bar;
+}
+
 export function stageRingProgress(ledger) {
   const tickets = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
   const byStage = {};
@@ -86,6 +115,8 @@ export function renderCockpit(host, data, opts) {
 
   host.replaceChildren();
 
+  const ringRows = stageRingProgress(ledger);
+
   const nav = el('nav', 'cockpit-nav');
   nav.setAttribute('aria-label', 'Cockpit breadcrumb');
   const block = el('span', 'nav-block');
@@ -125,9 +156,32 @@ export function renderCockpit(host, data, opts) {
   tag.textContent = orch.detail;
   hero.appendChild(tag);
 
+  appendCategoryBar(hero, ringRows, 'category-bar--hero-mobile');
+
+  host.appendChild(nav);
+  host.appendChild(hero);
+
+  const scanLive = el('div', 'scan-live scan-live--header');
+  scanLive.setAttribute('aria-label', 'Live ticket progress');
+  scanLive.appendChild(el('span', 'scan-live-label', 'Live scan'));
+  const scanCount = el('span', 'scan-live-count');
+  const doneNum = el('span', 'num');
+  doneNum.title = 'source field: ledger.tickets done';
+  doneNum.textContent = String(done);
+  scanCount.appendChild(doneNum);
+  scanCount.appendChild(el('span', 'scan-of', 'of'));
+  const totalNum = el('span', 'num');
+  totalNum.title = 'source field: ledger.tickets live total';
+  totalNum.textContent = String(total);
+  scanCount.appendChild(totalNum);
+  scanLive.appendChild(scanCount);
+  host.appendChild(scanLive);
+
+  appendCategoryBar(host, ringRows, 'category-bar--header');
+
   const rings = el('div', 'cockpit-stage-rings');
   rings.setAttribute('aria-label', 'Stage progress');
-  for (const ring of stageRingProgress(ledger)) {
+  for (const ring of ringRows) {
     const item = el('div', 'cockpit-stage-ring');
     item.dataset.stage = ring.id;
     const label = el('span', 'cockpit-stage-label', ring.label);
@@ -145,8 +199,6 @@ export function renderCockpit(host, data, opts) {
     rings.appendChild(item);
   }
 
-  host.appendChild(nav);
-  host.appendChild(hero);
   host.appendChild(rings);
 
   return {

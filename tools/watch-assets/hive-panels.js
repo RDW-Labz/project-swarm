@@ -175,6 +175,85 @@
     while (node.firstChild) { node.removeChild(node.firstChild); }
   }
 
+  function drawBarChart(canvas, samples, colors) {
+    if (!canvas || !canvas.getContext) { return; }
+    var ctx = canvas.getContext('2d');
+    if (!ctx || typeof ctx.fillRect !== 'function') { return; }
+    var w = canvas.width;
+    var h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var list = Array.isArray(samples) ? samples : [];
+    if (!list.length) {
+      var bars = 20;
+      for (var i = 0; i < bars; i += 1) {
+        var bh = 6 + ((i * 17) % 28);
+        var x = 4 + i * ((w - 8) / bars);
+        ctx.fillStyle = (colors && colors[i % colors.length]) || '#5eb8ff';
+        ctx.fillRect(x, h - bh - 3, (w - 8) / bars - 2, bh);
+      }
+      return;
+    }
+    var max = list[0];
+    for (var j = 1; j < list.length; j += 1) {
+      if (list[j] > max) { max = list[j]; }
+    }
+    if (max <= 0) { max = 1; }
+    var barW = list.length > 0 ? (w - 8) / list.length - 2 : 8;
+    for (var n = 0; n < list.length; n += 1) {
+      var bh2 = Math.max(3, (list[n] / max) * (h - 8));
+      var x2 = 4 + n * ((w - 8) / list.length);
+      ctx.fillStyle = (colors && colors[n % colors.length]) || '#3dd6a5';
+      ctx.fillRect(x2, h - bh2 - 3, barW, bh2);
+    }
+  }
+
+  function renderSessionTermBlock(host, model, options) {
+    if (!host) { return; }
+    clearChildren(host);
+    var opts = options || {};
+    var modelObj = model || {};
+    var prompt = el('p', 'term-prompt', '~/swarm $ watch --board');
+    host.appendChild(prompt);
+    var canvas = document.createElement('canvas');
+    canvas.className = 'mini-chart';
+    canvas.id = 'chart-fps';
+    canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
+    canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
+    canvas.setAttribute('aria-label', modelObj.throughputChartLabel || 'Throughput chart');
+    host.appendChild(canvas);
+    drawBarChart(canvas, modelObj.throughputSamples || [], ['#5eb8ff', '#3dd6a5', '#ff4d8d', '#f5c451']);
+    var caption = el('p', 'term-prompt term-prompt--chart-caption');
+    caption.appendChild(el('span', 'lbl', 'throughput samples'));
+    if (typeof modelObj.throughputPeak === 'number' && Number.isFinite(modelObj.throughputPeak)) {
+      caption.appendChild(document.createTextNode(': '));
+      var peak = el('span', 'num', String(Math.round(modelObj.throughputPeak)));
+      if (modelObj.throughputPeakTitle) { peak.title = modelObj.throughputPeakTitle; }
+      caption.appendChild(peak);
+    }
+    host.appendChild(caption);
+  }
+
+  function renderStatLines(host, lines) {
+    if (!host || !Array.isArray(lines) || !lines.length) { return; }
+    var root = host.querySelector ? host.querySelector('.hive-stat-lines') : null;
+    if (!root) {
+      root = el('div', 'stat-lines hive-stat-lines');
+      host.appendChild(root);
+    } else {
+      clearChildren(root);
+    }
+    for (var i = 0; i < lines.length; i += 1) {
+      var row = lines[i];
+      var rowEl = el('div', 'row');
+      rowEl.appendChild(el('span', null, row.label || ''));
+      var num = el('span', 'num', row.value != null ? String(row.value) : '');
+      if (row.tone) { num.className += ' ' + row.tone; }
+      if (row.title) { num.title = row.title; }
+      rowEl.appendChild(num);
+      root.appendChild(rowEl);
+    }
+  }
+
   function renderEventLog(host, events, options) {
     if (!host) { return; }
     var opts = options || {};
@@ -237,18 +316,21 @@
       if (!hero) {
         hero = el('p', 'gates-hero hive-gates-hero');
         host.insertBefore(hero, barsRoot);
+      } else {
+        clearChildren(hero);
       }
-      var parts = [];
       if (typeof opts.hero.repos === 'number') {
-        parts.push(el('span', 'num', String(opts.hero.repos)));
-        hero.appendChild(parts[0]);
+        hero.appendChild(el('span', 'num', String(opts.hero.repos)));
         hero.appendChild(document.createTextNode(' repos. '));
       }
       if (typeof opts.hero.rings === 'number') {
-        var ringSpan = el('span', 'num', String(opts.hero.rings));
-        hero.appendChild(ringSpan);
+        hero.appendChild(el('span', 'num', String(opts.hero.rings)));
         hero.appendChild(document.createTextNode(' ring.'));
       }
+    }
+
+    if (Array.isArray(opts.statLines) && opts.statLines.length) {
+      renderStatLines(host, opts.statLines);
     }
   }
 
@@ -297,12 +379,19 @@
       height: canvas.height,
       strokeStyle: opts.strokeStyle || '#3dd6a5',
     });
+
+    var caption = host.querySelector ? host.querySelector('.hive-term-prompt') : null;
+    if (!caption) {
+      caption = el('p', 'term-prompt hive-term-prompt term-prompt--chart-caption');
+      caption.appendChild(el('span', 'lbl', opts.latencyCaption || 'decision latency'));
+      host.appendChild(caption);
+    }
   }
 
   function drawSparkline(canvas, samples, options) {
     if (!canvas || !canvas.getContext) { return; }
     var ctx = canvas.getContext('2d');
-    if (!ctx) { return; }
+    if (!ctx || typeof ctx.clearRect !== 'function') { return; }
     var opts = options || {};
     var width = typeof opts.width === 'number' ? opts.width : canvas.width;
     var height = typeof opts.height === 'number' ? opts.height : canvas.height;
@@ -333,17 +422,24 @@
     if (containers && containers.eventLog) {
       renderEventLog(containers.eventLog, model.journalEvents || [], opts);
     }
+    if (containers && containers.sessionTerm) {
+      renderSessionTermBlock(containers.sessionTerm, model, opts);
+    }
     if (containers && containers.lanes) {
-      renderLanesPanel(containers.lanes, model.laneCounts || {}, opts);
+      renderLanesPanel(containers.lanes, model.laneCounts || {}, {
+        hero: model.lanesHero,
+        statLines: model.statLines,
+      });
     }
     if (containers && containers.savings) {
       renderSavingsPanel(containers.savings, model.savingsRows || [], {
         savingsMax: model.savingsMax,
-        throughputSamples: model.throughputSamples,
-        chartLabel: model.throughputChartLabel,
+        throughputSamples: model.latencySamples || model.throughputSamples,
+        chartLabel: model.latencyChartLabel || model.throughputChartLabel,
         chartWidth: opts.chartWidth,
         chartHeight: opts.chartHeight,
-        strokeStyle: opts.strokeStyle,
+        strokeStyle: opts.latencyStroke || opts.strokeStyle || '#ff4d8d',
+        latencyCaption: model.latencyCaption,
       });
     }
   }
@@ -359,6 +455,9 @@
     renderEventLog: renderEventLog,
     renderLanesPanel: renderLanesPanel,
     renderSavingsPanel: renderSavingsPanel,
+    renderSessionTermBlock: renderSessionTermBlock,
+    renderStatLines: renderStatLines,
+    drawBarChart: drawBarChart,
     renderHivePanels: renderHivePanels,
   };
 }));

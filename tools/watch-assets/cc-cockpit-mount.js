@@ -127,7 +127,9 @@ function paintStack(stackTilesHost, stackFootHost, project, viewport) {
     variant,
   }));
   renderStackSummaryTiles(stackTilesHost, forRender);
-  const rendered = stackTilesHost.querySelectorAll?.('.cockpit-metric-tile') ?? [];
+  const rendered = stackTilesHost.querySelectorAll
+    ? Array.from(stackTilesHost.querySelectorAll('.cockpit-metric-tile'))
+    : [];
   for (const tile of rendered) {
     layoutSummaryTileElement(tile, viewport);
   }
@@ -139,6 +141,152 @@ function paintStack(stackTilesHost, stackFootHost, project, viewport) {
 function paintRunStream(host, project) {
   const items = Array.isArray(project?.runStream) ? project.runStream : [];
   renderRunStream(host, items);
+}
+
+function safeClone(node, deep) {
+  if (node && typeof node.cloneNode === 'function') {
+    return node.cloneNode(Boolean(deep));
+  }
+  return null;
+}
+
+function phoneLayoutOn(matchMedia) {
+  const mq = matchMedia || globalThis.matchMedia?.bind(globalThis);
+  if (!mq) return false;
+  try {
+    return mq('(max-width: 720px)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function paintPhonePanels(deps, refs, project) {
+  const {
+    doc,
+    phoneNow,
+    phoneTickets,
+    phoneStream,
+    phoneStack,
+    stageCenter,
+    streamSection,
+    stackBlock,
+    viewport,
+  } = refs;
+
+  for (const panel of [phoneNow, phoneTickets, phoneStream, phoneStack]) {
+    if (panel) while (panel.firstChild) panel.removeChild(panel.firstChild);
+  }
+
+  if (!phoneLayoutOn(deps.matchMedia)) return;
+  if (phoneNow && stageCenter) {
+    const nowStage = safeClone(stageCenter, true);
+    if (nowStage) {
+      nowStage.classList.add('stage-center--phone');
+      phoneNow.appendChild(nowStage);
+    }
+  }
+  if (phoneTickets) {
+    const wrap = el(doc, 'div', 'stage-wrap stage-wrap--phone');
+    wrap.setAttribute('aria-label', 'Ticket list');
+    const grid = el(doc, 'div', 'stage-grid');
+    grid.style.gridTemplateColumns = '1fr';
+    const col = el(doc, 'div', 'ticket-col ticket-col--phone');
+    renderCockpitTicketList(col, project?.ledger ?? { tickets: [] }, {
+      projectConfig: { id: project?.id },
+      queueDeps,
+    });
+    grid.appendChild(col);
+    wrap.appendChild(grid);
+    phoneTickets.appendChild(wrap);
+  }
+  if (phoneStream && streamSection) {
+    const clone = safeClone(streamSection, true);
+    if (clone) {
+      clone.classList.add('stream-section--phone');
+      phoneStream.appendChild(clone);
+    }
+  }
+  if (phoneStack && stackBlock) {
+    const clone = safeClone(stackBlock, true);
+    if (clone) {
+      clone.classList.add('stack-block--phone');
+      const tilesHost = clone.querySelector?.('.cc-cockpit-stack-tiles');
+      if (tilesHost) {
+        const tiles = stackSummaryTiles(project);
+        const forRender = tiles.map(({ label, value, footnote, variant }) => ({
+          label,
+          value,
+          footnote,
+          variant,
+        }));
+        renderStackSummaryTiles(tilesHost, forRender);
+        const rendered = tilesHost.querySelectorAll
+          ? Array.from(tilesHost.querySelectorAll('.cockpit-metric-tile'))
+          : [];
+        for (const tile of rendered) {
+          layoutSummaryTileElement(tile, viewport);
+        }
+      }
+      phoneStack.appendChild(clone);
+    }
+  }
+}
+
+function bindPhoneTabs(panel, tabs, phonePanels, tabIds, matchMedia) {
+  const mq = matchMedia || globalThis.matchMedia?.bind(globalThis);
+  const query = mq ? mq('(max-width: 720px)') : null;
+
+  function selectPhoneTab(which) {
+    tabIds.forEach((id, i) => {
+      const selected = id === which;
+      if (tabs[i]) tabs[i].setAttribute('aria-selected', selected ? 'true' : 'false');
+      if (phonePanels[i]) phonePanels[i].dataset.active = selected ? 'true' : 'false';
+    });
+  }
+
+  function syncTabMode() {
+    const on = query ? query.matches : false;
+    if (panel) panel.dataset.tabMode = on ? 'true' : 'false';
+    if (!on) {
+      for (const p of phonePanels) {
+        if (p) p.dataset.active = 'false';
+      }
+      return;
+    }
+    let active = tabs.findIndex(t => t && t.getAttribute('aria-selected') === 'true');
+    if (active < 0) active = 0;
+    selectPhoneTab(tabIds[active]);
+  }
+
+  const clickHandlers = [];
+  tabIds.forEach((id, i) => {
+    const tab = tabs[i];
+    if (!tab) return;
+    const onClick = () => selectPhoneTab(id);
+    tab.addEventListener('click', onClick);
+    clickHandlers.push({ tab, onClick });
+  });
+
+  syncTabMode();
+  if (query && typeof query.addEventListener === 'function') {
+    query.addEventListener('change', syncTabMode);
+  } else if (query && typeof query.addListener === 'function') {
+    query.addListener(syncTabMode);
+  }
+
+  return {
+    syncTabMode,
+    destroyTabs: () => {
+      for (const { tab, onClick } of clickHandlers) {
+        tab.removeEventListener('click', onClick);
+      }
+      if (query && typeof query.removeEventListener === 'function') {
+        query.removeEventListener('change', syncTabMode);
+      } else if (query && typeof query.removeListener === 'function') {
+        query.removeListener(syncTabMode);
+      }
+    },
+  };
 }
 
 /**
@@ -214,7 +362,7 @@ export function renderProjectCockpit(host, project, deps) {
     stackTitle.textContent = 'Tickets';
   }
   stackHead.appendChild(stackTitle);
-  const stackTilesHost = el(doc, 'div', 'cc-cockpit-stack-tiles');
+  const stackTilesHost = el(doc, 'div', 'stack-metrics cc-cockpit-stack-tiles');
   const stackFootHost = el(doc, 'div', 'stack-foot');
   stackBlock.appendChild(stackHead);
   stackBlock.appendChild(stackTilesHost);
@@ -223,6 +371,32 @@ export function renderProjectCockpit(host, project, deps) {
   bandBottom.appendChild(streamSection);
   bandBottom.appendChild(stackBlock);
 
+  const tabIds = ['now', 'tickets', 'stream', 'stack'];
+  const viewTabs = el(doc, 'div', 'view-tabs');
+  viewTabs.setAttribute('role', 'tablist');
+  viewTabs.setAttribute('aria-label', 'Cockpit panels');
+  const tabs = [];
+  const phonePanels = [];
+  for (let i = 0; i < tabIds.length; i++) {
+    const id = tabIds[i];
+    const tab = el(doc, 'button', null, id.charAt(0).toUpperCase() + id.slice(1));
+    tab.type = 'button';
+    tab.setAttribute('role', 'tab');
+    tab.id = `tab-${id}`;
+    tab.setAttribute('aria-controls', `phone-${id}`);
+    tab.setAttribute('aria-selected', i === 0 ? 'true' : 'false');
+    viewTabs.appendChild(tab);
+    tabs.push(tab);
+    const panel = el(doc, 'div', 'phone-panel');
+    panel.id = `phone-${id}`;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', `tab-${id}`);
+    panel.dataset.active = i === 0 ? 'true' : 'false';
+    phonePanels.push(panel);
+  }
+
+  panel.appendChild(viewTabs);
+  for (const p of phonePanels) panel.appendChild(p);
   panel.appendChild(bandHeader);
   panel.appendChild(bandMain);
   panel.appendChild(bandBottom);
@@ -231,6 +405,18 @@ export function renderProjectCockpit(host, project, deps) {
 
   let projectRef = project;
   const viewport = { width: 1440, height: 900 };
+  const phoneRefs = {
+    doc,
+    phoneNow: phonePanels[0],
+    phoneTickets: phonePanels[1],
+    phoneStream: phonePanels[2],
+    phoneStack: phonePanels[3],
+    stageCenter,
+    streamSection,
+    stackBlock,
+    viewport,
+  };
+  const tabCtl = bindPhoneTabs(panel, tabs, phonePanels, tabIds, deps.matchMedia);
   const onBackClick = () => {
     if (typeof deps.onBack === 'function') deps.onBack();
   };
@@ -243,6 +429,8 @@ export function renderProjectCockpit(host, project, deps) {
     paintTicketLists(ticketsLeft, ticketsRight, projectRef);
     paintRunStream(streamHost, projectRef);
     paintStack(stackTilesHost, stackFootHost, projectRef, viewport);
+    paintPhonePanels(deps, phoneRefs, projectRef);
+    tabCtl.syncTabMode();
     const nums = headerHost.querySelector?.('.headline-num');
     if (nums && projectRef) {
       nums.textContent = headlineTicketText(projectRef.done ?? 0, projectRef.total ?? 0);
@@ -260,6 +448,7 @@ export function renderProjectCockpit(host, project, deps) {
     },
     destroy() {
       backBtn.removeEventListener('click', onBackClick);
+      tabCtl.destroyTabs();
       while (host.firstChild) host.removeChild(host.firstChild);
     },
   };

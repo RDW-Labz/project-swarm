@@ -28,6 +28,75 @@ function el(doc, tag, cls, text) {
   return n;
 }
 
+function appendCoreRingSvg(doc, coreUi) {
+  const svg = el(doc, 'svg', 'hive-ring-text');
+  svg.setAttribute('viewBox', '0 0 200 200');
+  svg.setAttribute('aria-hidden', 'true');
+  const defs = el(doc, 'defs');
+  const path = el(doc, 'path');
+  path.id = 'hive-orbit-arc';
+  path.setAttribute('fill', 'none');
+  path.setAttribute('d', 'M 34 118 A 66 66 0 1 1 166 118');
+  defs.appendChild(path);
+  svg.appendChild(defs);
+  const ticks = el(doc, 'g', 'hive-ring-ticks');
+  const circle = el(doc, 'circle');
+  circle.setAttribute('cx', '100');
+  circle.setAttribute('cy', '100');
+  circle.setAttribute('r', '78');
+  circle.setAttribute('fill', 'none');
+  circle.setAttribute('stroke', 'rgba(255,255,255,0.14)');
+  circle.setAttribute('stroke-width', '1');
+  circle.setAttribute('stroke-dasharray', '4 7');
+  ticks.appendChild(circle);
+  svg.appendChild(ticks);
+  const label = el(doc, 'text', 'hive-orbit-label');
+  const textPath = el(doc, 'textPath');
+  textPath.setAttribute('href', '#hive-orbit-arc');
+  textPath.setAttribute('startOffset', '4%');
+  textPath.textContent = 'answer before you spend';
+  label.appendChild(textPath);
+  svg.appendChild(label);
+  coreUi.appendChild(svg);
+}
+
+function buildHiveChrome(doc, legendEl, firstProjectId) {
+  const chromeTop = el(doc, 'div', 'hive-chrome-top');
+  const brand = el(doc, 'h1', 'cc-brand brand-glitch hive-brand');
+  brand.setAttribute('aria-label', 'Command Center Hive');
+  brand.appendChild(el(doc, 'span', 'jev', 'jev'));
+  brand.appendChild(el(doc, 'span', 'plus', ' + '));
+  brand.appendChild(el(doc, 'span', 'opus', 'opus'));
+  chromeTop.appendChild(brand);
+
+  const nav = el(doc, 'nav', 'cc-nav hive-nav');
+  nav.setAttribute('role', 'tablist');
+  nav.setAttribute('aria-label', 'Command Center views');
+  const hiveTab = el(doc, 'a', 'cc-tab', 'Hive');
+  hiveTab.setAttribute('role', 'tab');
+  hiveTab.setAttribute('aria-current', 'page');
+  hiveTab.href = '/command-center';
+  nav.appendChild(hiveTab);
+  if (firstProjectId) {
+    const cockpitTab = el(doc, 'a', 'cc-tab', 'Cockpit');
+    cockpitTab.setAttribute('role', 'tab');
+    cockpitTab.href = `/command-center/project/${encodeURIComponent(firstProjectId)}`;
+    nav.appendChild(cockpitTab);
+  }
+  const pauseBtn = el(doc, 'button', 'cc-btn');
+  pauseBtn.type = 'button';
+  pauseBtn.id = 'pause-motion';
+  pauseBtn.setAttribute('aria-pressed', 'false');
+  pauseBtn.innerHTML = 'Pause motion <kbd>p</kbd>';
+  nav.appendChild(pauseBtn);
+  chromeTop.appendChild(nav);
+
+  const illus = el(doc, 'p', 'cc-illus-banner hive-illus');
+  illus.setAttribute('role', 'note');
+  illus.textContent = 'Live board data from your Swarm watch server.';
+  return { chromeTop, illus, pauseBtn };
+}
+
 function formatStatValue(field) {
   if (!field || typeof field.value !== 'number') return '';
   if (field.unit === 'usd') return String(field.value);
@@ -92,8 +161,10 @@ export function renderHive(host, snapshot, deps) {
   while (host.firstChild) host.removeChild(host.firstChild);
 
   const shell = el(doc, 'div', 'hive-shell');
+  shell.id = 'hive-shell';
   const chrome = el(doc, 'header', 'hive-chrome');
   const legendEl = el(doc, 'div', 'cc-legend hive-legend');
+  legendEl.setAttribute('aria-label', 'Node lane colours');
   chrome.appendChild(legendEl);
 
   const statStrip = el(doc, 'div', 'hive-stat-strip');
@@ -101,6 +172,7 @@ export function renderHive(host, snapshot, deps) {
   statStrip.setAttribute('aria-label', 'Hive summary strip');
 
   const stage = el(doc, 'section', 'hive-stage');
+  stage.id = 'hive-stage';
   stage.setAttribute('aria-label', 'Hive diagram');
 
   const canvas = el(doc, 'canvas', '');
@@ -109,6 +181,7 @@ export function renderHive(host, snapshot, deps) {
 
   const coreUi = el(doc, 'div', 'hive-core-ui');
   coreUi.id = 'hive-core-ui';
+  appendCoreRingSvg(doc, coreUi);
   const coreDisk = el(doc, 'div', 'hive-core-disk');
   const coreInner = el(doc, 'div', 'hive-core-inner');
   coreInner.appendChild(el(doc, 'div', 'hive-core-label', 'the model'));
@@ -128,24 +201,36 @@ export function renderHive(host, snapshot, deps) {
   const panelsWrap = el(doc, 'div', 'hive-panels-wrap');
   const panelsRoot = el(doc, 'div', 'cc-panels cc-panels--hive hive-panels');
   const panelLog = el(doc, 'section', 'cc-panel');
-  panelLog.appendChild(el(doc, 'h2', null, 'session log'));
+  panelLog.setAttribute('aria-labelledby', 'panel-log');
+  const logHeading = el(doc, 'h2', null, 'session log');
+  logHeading.id = 'panel-log';
+  panelLog.appendChild(logHeading);
   const eventLog = el(doc, 'ul', 'event-log hive-event-log');
   panelLog.appendChild(eventLog);
+  const sessionTerm = el(doc, 'div', 'term-block hive-term-block');
+  panelLog.appendChild(sessionTerm);
 
   const panelGates = el(doc, 'section', 'cc-panel');
-  panelGates.appendChild(el(doc, 'h2', null, 'lanes and savings'));
-  const lanesPanel = el(doc, 'div', '');
-  panelGates.appendChild(lanesPanel);
+  panelGates.setAttribute('aria-labelledby', 'panel-gates');
+  const gatesHeading = el(doc, 'h2', null, 'lanes and savings');
+  gatesHeading.id = 'panel-gates';
+  panelGates.appendChild(gatesHeading);
 
   const panelSaved = el(doc, 'section', 'cc-panel');
-  panelSaved.appendChild(el(doc, 'h2', null, 'throughput'));
-  const savingsPanel = el(doc, 'div', '');
-  panelSaved.appendChild(savingsPanel);
+  panelSaved.setAttribute('aria-labelledby', 'panel-saved');
+  const savedHeading = el(doc, 'h2', null, 'throughput');
+  savedHeading.id = 'panel-saved';
+  panelSaved.appendChild(savedHeading);
 
   panelsRoot.appendChild(panelLog);
   panelsRoot.appendChild(panelGates);
   panelsRoot.appendChild(panelSaved);
   panelsWrap.appendChild(panelsRoot);
+  const footer = el(doc, 'footer', 'cc-footer hive-footer');
+  footer.appendChild(el(doc, 'span', null, 'command center — live swarm board'));
+  const motto = el(doc, 'span', 'motto', 'opus thinks. jev decides. code enforces.');
+  footer.appendChild(motto);
+  panelsWrap.appendChild(footer);
 
   shell.appendChild(chrome);
   shell.appendChild(statStrip);
@@ -160,8 +245,61 @@ export function renderHive(host, snapshot, deps) {
   const particles = [];
   const cardCleanups = [];
   const listeners = [];
+  let userPaused = false;
+  let pauseBtn = null;
+  let chromeTopEl = null;
+  let chromeIllusEl = null;
 
   const reducedMotionMq = deps.matchMedia('(prefers-reduced-motion: reduce)');
+  const bodyEl = doc.body;
+
+  function firstProjectId(projects) {
+    const list = Array.isArray(projects) ? projects : [];
+    for (const p of list) {
+      if (p && typeof p.id === 'string' && p.id.length) return p.id;
+    }
+    return '';
+  }
+
+  function ensureChromeExtras(projects) {
+    const pid = firstProjectId(projects);
+    if (!chromeTopEl) {
+      const built = buildHiveChrome(doc, legendEl, pid);
+      chromeTopEl = built.chromeTop;
+      chromeIllusEl = built.illus;
+      pauseBtn = built.pauseBtn;
+      chrome.appendChild(chromeTopEl);
+      chrome.appendChild(chromeIllusEl);
+      const onPauseClick = () => {
+        userPaused = !userPaused;
+        setPauseUi();
+        if (shouldAnimate()) scheduleFrame();
+        else drawFrame(deps.now(), true);
+      };
+      const onPauseKey = (e) => {
+        if (e.key === 'p' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault();
+          onPauseClick();
+        }
+      };
+      addListener(pauseBtn, 'click', onPauseClick);
+      addListener(doc, 'keydown', onPauseKey);
+    } else if (chromeTopEl) {
+      const cockpitTab = chromeTopEl.querySelector?.('.cc-tab[href*="/command-center/project/"]');
+      if (cockpitTab && pid) {
+        cockpitTab.href = `/command-center/project/${encodeURIComponent(pid)}`;
+      }
+    }
+  }
+
+  function setPauseUi() {
+    const motionOff = userPaused || prefersReducedMotion() || documentHidden();
+    if (bodyEl?.classList) bodyEl.classList.toggle('motion-off', motionOff);
+    if (pauseBtn) {
+      pauseBtn.setAttribute('aria-pressed', String(userPaused));
+      pauseBtn.innerHTML = (userPaused ? 'Resume motion ' : 'Pause motion ') + '<kbd>p</kbd>';
+    }
+  }
 
   function addListener(target, type, handler, options) {
     target.addEventListener(type, handler, options);
@@ -180,7 +318,7 @@ export function renderHive(host, snapshot, deps) {
     return hiveStreamsRenderPath({
       reducedMotion: prefersReducedMotion(),
       documentHidden: documentHidden(),
-      userPaused: false,
+      userPaused,
     });
   }
 
@@ -233,13 +371,23 @@ export function renderHive(host, snapshot, deps) {
   }
 
   function paintDom(snapshotData) {
-    renderHiveStatStrip(statStrip, statStripEntries(snapshotData.stats));
     const projects = Array.isArray(snapshotData.projects) ? snapshotData.projects.slice(0, 10) : [];
+    ensureChromeExtras(projects);
+    renderHiveStatStrip(statStrip, statStripEntries(snapshotData.stats));
+    let liveEl = statStrip.querySelector?.('.cc-live');
+    if (!liveEl) {
+      liveEl = el(doc, 'div', 'cc-live');
+      liveEl.setAttribute('role', 'status');
+      liveEl.appendChild(el(doc, 'span', 'dot'));
+      liveEl.appendChild(el(doc, 'span', null, 'live'));
+      statStrip.appendChild(liveEl);
+    }
     renderHiveLayout(shell, projects, { legendEl, nodesMount, stageEl: stage });
     layoutHiveProjectNodes(nodesMount);
     clearCardHandlers();
-    for (let i = 0; i < (nodesMount.children || []).length; i += 1) {
-      const card = nodesMount.children[i];
+    const cardNodes = Array.from(nodesMount.children || []);
+    for (let i = 0; i < cardNodes.length; i += 1) {
+      const card = cardNodes[i];
       const project = projects[i];
       if (card && project?.id) {
         card.dataset.projectId = project.id;
@@ -247,10 +395,12 @@ export function renderHive(host, snapshot, deps) {
       }
     }
     applyBrain();
+    setPauseUi();
     const { renderHivePanels } = resolveHivePanels();
+    const panelModel = panelModelFromSnapshot(snapshotData);
     renderHivePanels(
-      { eventLog, lanes: panelGates, savings: panelSaved },
-      panelModelFromSnapshot(snapshotData),
+      { eventLog, lanes: panelGates, savings: panelSaved, sessionTerm },
+      panelModel,
       { nowMs: deps.now() },
     );
   }
@@ -276,7 +426,7 @@ export function renderHive(host, snapshot, deps) {
     const ringR = coreRect.width / 2;
 
     const nodeEntries = [];
-    const children = nodesMount.children || [];
+    const children = Array.from(nodesMount.children || []);
     for (let i = 0; i < children.length; i += 1) {
       const card = children[i];
       const box = card.getBoundingClientRect?.() || {
