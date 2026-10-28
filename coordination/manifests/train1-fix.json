@@ -1,0 +1,63 @@
+{
+ "version": 1,
+ "concurrency": 3,
+ "jobs": [
+  {
+   "id": "fixapprove",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix two Opus-review BLOCKERS in the change-order auto-approve (swarm scope approve --auto-ok).\nB1 snapshot forgery: in orchestrator mode the orchestrator may write any .swarm/**/*.json|jsonl|ndjson|md|yaml (ORCHESTRATOR_WRITE_RULES in tools/orchestrator-allow.mjs), so it can write .swarm/project/approved-tickets.json (the auto-approve baseline) and also the ledger .swarm/project/tickets.json and its log .swarm/project/tickets.log, then auto-approve anything. Fix: (a) in tools/orchestrator-allow.mjs add an explicit deny so orchestratorWriteAllowedRel (and anything built on it, including the shell-redirect check that imports it) refuses writes to .swarm/project/approved-tickets.json, .swarm/project/tickets.json and .swarm/project/tickets.log (exact paths, also after normalisation: ./ prefixes, case differences on a case-insensitive filesystem must not slip through, compare lowercased); swarm commands themselves still write them (they are not hooked). (b) Bind the snapshot to the approval record: in tools/split-auto-approve.mjs evaluateAutoApprove gains an input approveLogTicketsHash (the ticketsHash of the LAST {event:'approve'} entry in the tickets log); the snapshot condition fails unless snapshot.ticketsHash === approveLogTicketsHash === ticketSetHash(snapshot.tickets) (import ticketSetHash from tools/tickets.mjs). In tools/scope-commands.mjs cmdApprove --auto-ok path, read the tickets log (see how appendLog writes it in tickets.mjs; read it the same way) to find that last approve entry and pass it in. Also write the snapshot BEFORE the approve log entry is appended and before writeLedger, so a failed snapshot write leaves the ledger unapproved (follow-up from the review).\nB2 cancelled done work: no-done-cancelled only checks tickets that were done in the snapshot; work finished since the last approval can be cancelled. Fix: the condition fails when ANY ticket that exists in the snapshot is now cancelled or missing from the ledger while it was not cancelled in the snapshot (any status change to cancelled since the snapshot fails, and a vanished ticket fails); also fails when a ticket that is done now goes back to any other status. Report the ids.\nAlso (follow-up, same files): omSwarmScopeApproveAutoOkOnly must match exactly ['approve','--auto-ok'] case-sensitively (no lowercasing), so 'APPROVE --AUTO-OK' is denied.\nTests in tests/split-auto-approve.test.mjs: orchestratorWriteAllowedRel denies the three paths (and ./.swarm/project/Tickets.json); a hand-edited snapshot whose hash does not match the last approve log entry is refused; a snapshot with no approve log entry is refused; snapshot todo -> ledger done -> change order cancels it: refused; a ticket missing from the ledger: refused; uppercase approve form denied; the existing passing case still passes when the snapshot and log agree.",
+   "context": [
+    "tools/tickets.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/scope-approve-managers.test.mjs"
+   ],
+   "outputs": [
+    "tools/orchestrator-allow.mjs",
+    "tools/split-auto-approve.mjs",
+    "tools/scope-commands.mjs",
+    "tests/split-auto-approve.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  },
+  {
+   "id": "fixguardrace",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix an Opus-review BLOCKER in the orchestrator manifest guard. Today tools/shell-writes.mjs (omSwarmSubcommandAllowed) vets the manifest file for swarm run/go/ticket only in the PreToolUse shell hook, against what is on disk at check time; the runner reads the file again later. So `printf '<manifest with sh -c check>' > coordination/manifests/x.json && swarm run coordination/manifests/x.json` passes (x.json does not exist at check time and a missing manifest counts as vetted), as does overwriting it from a background command. Fix in three layers:\n1. Runner-side gate (the real fix): add export function orchestratorManifestGate(root, manifest, env) to tools/om-manifest-guard.mjs that vets the PARSED manifest object (reuse the same field collection and vetted-argv rules as omRunManifestVetted, refactor so both share one vetManifestBody) and throws an Error with code 'orchestrator-manifest-unvetted' and the reason when it fails. It applies only when ALL of: env.CLAUDECODE === '1' (the command runs inside a Claude Code session), orchestratorModeEnabled(root) from tools/shell-writes.mjs is true, and the orchestrator hook is installed for that project (export orchestratorHookInstalledFor from tools/orchestrator-hook.mjs and use it). Otherwise it does nothing (the owner's own terminal runs are never affected). Call it as the FIRST statement of applyManifestJobTypes in tools/swarm/core-1.mjs (it receives root, manifest and {env}); tools/swarm.mjs calls applyManifestJobTypes in runManifestMain before runBaseChecks and before any job, so every run/go/ticket path is covered. Read tools/swarm.mjs (context, read-only) to confirm that order; if it is not true, return blocked with the call chain.\n2. Hook: a run/go/ticket positional that does not exist on disk but looks like a manifest path (ends in .json or contains a /) is refused, not ok; a bare run id (no dot, no slash) stays ok.\n3. Hook: refuse a compound command (any && ; || | or newline sequence, or a background &) that both writes to a path under coordination/manifests/ or .swarm/ and invokes swarm run, go or ticket.\nTests in tests/om-manifest-guard.test.mjs: gate throws for an unvetted checks argv when CLAUDECODE=1, mode on and hook installed (build the temp project the way the orchestrator-mode tests install the hook); does nothing when CLAUDECODE is unset, when mode is off, or when the hook is not installed; passes for vetted argv. Hook: the printf-then-run compound is refused; a missing coordination/manifests/new.json is refused; a bare run id passes.",
+   "context": [
+    "tools/swarm.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "outputs": [
+    "tools/om-manifest-guard.mjs",
+    "tools/shell-writes.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tools/swarm/core-1.mjs",
+    "tests/om-manifest-guard.test.mjs"
+   ],
+   "timeoutMs": 2700000
+  },
+  {
+   "id": "fixdefaultbranch",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Fix an Opus-review BLOCKER in tools/go.mjs commitIntegratedRun / integrate.commitBranches. The default branch is found only via git symbolic-ref refs/remotes/origin/HEAD, which is missing in many repos (created locally, remote not named origin, no remote). Then only literal main/master are protected and a lone '*' or a named default branch like develop gets the auto-commit. Fix, failing closed: (1) protected = main, master, every branch named by any refs/remotes/<remote>/HEAD (git for-each-ref --format='%(symref)' 'refs/remotes/*/HEAD'), and git config init.defaultBranch if set; compare case-insensitively. (2) If no remote HEAD could be read at all, a lone '*' pattern and any pattern that matches main/master/init.defaultBranch is ignored (treated as not matching) and the skip reason says the default branch could not be determined, so only swarm/* and explicitly named branches commit. (3) Follow-up regression: an unreadable or invalid .project-swarm.json or a malformed integrate.commitBranches must NOT stop commits on swarm/* branches (they committed unconditionally before): on swarm/* commit as before and add the config problem to the result as a warning; on other branches skip with the config reason as now. Tests in tests/integrate-commit-branches.test.mjs: a repo whose default is develop via refs/remotes/upstream/HEAD and commitBranches ['*'] never commits on develop; a repo with no remote and init.defaultBranch trunk never commits on trunk; no remote HEAD + ['*'] does not commit on feature/x but ['feature/x'] does; 'Main' is treated as main; invalid .project-swarm.json still commits on swarm/test with a warning.",
+   "context": [
+    "tools/project-spend.mjs"
+   ],
+   "outputs": [
+    "tools/go.mjs",
+    "tests/integrate-commit-branches.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ],
+ "checks": [
+  { "name": "train1", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/split-auto-approve.test.mjs", "tests/om-manifest-guard.test.mjs", "tests/integrate-commit-branches.test.mjs", "tests/integrate-autocommit.test.mjs", "tests/orchestrator-allow.test.mjs", "tests/orchestrator-mode.test.mjs", "tests/scope-approve-managers.test.mjs", "tests/split-park-supersede.test.mjs"] }
+ ]
+}
