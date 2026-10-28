@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain1delta",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner order: short Opus look at the two changes made after the train 1 re-review",
+   "prompt": "Short focused review of two changes added to release train 1 after its Opus re-review (coordination/review/train1-delta.diff; earlier verdicts in coordination/review/train1-review-r1.json and the round-2 summary below). (1) tools/om-manifest-guard.mjs vetJobs now allows a shell:true or -shell-model job only when the job id is a ticket in an APPROVED ledger (.swarm/project/tickets.json) and its agent, model, shell, setup, testEnv and timeoutMs exactly equal verifyJobFields(ticket, profile.verify); this answers the round-2 blocker that swarm-generated verify jobs were refused. (2) tests/_isolate-config.mjs deletes process.env.CLAUDECODE so the suite never inherits a Claude Code session (which switched the runner gate on inside test fixtures), and tests/orchestrator-parts-flow.test.mjs now creates the manifest files it runs. Questions: can a hand-written manifest get a shell job through (1) (id collision with a real ticket, an unapproved ledger, a stale approval, deep-equal gaps such as extra keys, prompt or context changes on a matching job, a ticket whose tests list makes verifyJobFields non-null)? Is the ledger read safe (symlinks, partial writes, approval check correct)? Does (2) hide any real failure? Same pass bar as before. Write ONLY coordination/review/train1-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same],\"summary\":\"\"}.",
+   "context": [
+    "coordination/review/train1-delta.diff",
+    "coordination/review/train1-review-r1.json",
+    "tools/om-manifest-guard.mjs",
+    "tools/verify-config.mjs",
+    "tools/tickets.mjs",
+    "tools/ticket-manifest.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train1-delta-review.json"
+   ],
+   "resultFile": "coordination/review/train1-delta-review.json",
+   "timeoutMs": 1800000
+  }
+ ]
+}
