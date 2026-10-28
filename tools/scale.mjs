@@ -145,7 +145,7 @@ export async function scaleFull(root, { jobs = 1000, concurrency = 1000, runMani
   const startedAt = Date.now();
   let startedJobs = 0;
   while (Date.now() - startedAt < 20000) {
-    try { const st = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'runs', 'scale-live', 'state.json'), 'utf8')); startedJobs = (st.jobs ?? []).filter(j => j.status === 'running').length; } catch { /* not written yet */ }
+    try { const st = JSON.parse(await fs.readFile(path.join(root, '.swarm', 'runs', 'scale-live', 'state.json'), 'utf8')); startedJobs = (st.jobs ?? []).filter(j => j.status === 'running').length; } catch (error) { if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/scale.mjs] scale-live state.json poll:', error?.message ?? error); }
     if (startedJobs >= Math.min(jobs, concurrency) * 0.9) break;
     await new Promise(r => setTimeout(r, 50));
   }
@@ -162,7 +162,7 @@ export async function scaleFull(root, { jobs = 1000, concurrency = 1000, runMani
     const live = await time(() => api.live(id));
     const run = await time(() => api.run(id, 'scale-live'));
     out.watch = { snapshotMs: snap.ms, projectMs: proj.ms, liveMs: live.ms, runInspectorMs: run.ms, liveJobsRunning: live.value?.header?.jobs?.running ?? null, liveMapSquares: live.value?.map?.length ?? null, liveHeads: (live.value?.lanes ?? []).reduce((n, l) => n + l.agents.length, 0), inspectorJobs: run.value?.jobs?.length ?? null, bytes: { snapshot: JSON.stringify(snap.value).length, live: JSON.stringify(live.value).length, run: JSON.stringify(run.value).length } };
-  } finally { await api.close?.().catch(() => {}); }
+  } finally { await api.close?.().catch((closeError) => { console.error('[tools/scale.mjs] board api close:', closeError?.message ?? closeError); }); }
   // The panic button, with the workers still going.
   const stopped = await time(() => stop.runStopAll(root, stop.deps));
   const stopAt = Date.now();
