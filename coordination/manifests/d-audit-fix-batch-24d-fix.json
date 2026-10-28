@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24d-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24d fixup. Edit ONLY tools/scope-loop.mjs and tools/state-guard.mjs. The working tree already has this batch's logging changes; keep them except for the two fixes below.\n\n1. tools/scope-loop.mjs, the `readReviewManifest(projectRoot, ticketFile).catch((error) => { ... })` handler: readReviewManifest (tools/acceptance.mjs:423) rethrows a missing file as an Error with code 'review-manifest', so the normal 'no manifest yet' case currently logs. Change the condition to stay silent when error?.code === 'ENOENT' OR error?.code === 'review-manifest'; log everything else. Keep `return null;`.\n\n2. tools/state-guard.mjs, recordDeletion's outer catch (`catch (auditError) { console.error(..., deletionsLogFile(home, env), ...) }`): recordDeletion must never throw, so the catch body must not call anything that can throw. Remove the deletionsLogFile(home, env) call from the console.error arguments (log the caller/outcome text and auditError?.message ?? auditError only). Nothing else changes.\n\nDo not touch any other code. Then run: node --import ./tests/_isolate-config.mjs --test tests/state-guard.test.mjs (if present) and confirm green. One-line summary per file.",
+      "context": [
+        "tools/acceptance.mjs"
+      ],
+      "outputs": [
+        "tools/scope-loop.mjs",
+        "tools/state-guard.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/acceptance-review-skip.test.mjs",
+        "tests/autopilot-lock-parent.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/scope-loop-resume-review.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-guard.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}
