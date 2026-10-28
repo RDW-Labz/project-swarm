@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { PAID_LANES } from './spend.mjs';
 
-export const DEFAULT_DAILY_LIMIT_USD = 5;
+export const DEFAULT_DAILY_LIMIT_USD = 2.5;
 
 const MODES = new Set(['stop', 'notify']);
 const CHICAGO = 'America/Chicago';

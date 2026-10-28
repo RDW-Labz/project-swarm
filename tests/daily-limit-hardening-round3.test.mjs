@@ -79,16 +79,21 @@ describe('round3 (2) cumulative allowance and bound approval', () => {
     const env = { HOME: root, CLAUDECODE: '1', XDG_CONFIG_HOME: path.join(root, 'xdg') };
     const now = () => ms('2024-06-15T15:00:00.000Z');
     const out = { chunks: [], write(s) { this.chunks.push(s); } };
+    const beforeDefault = { usd: 2.5, mode: 'stop', ceilingUsd: 7.5 };
 
-    // 5→6: +$1 daily and +$3 implied ceiling = $4 allowance (within $5/day).
-    assert.equal(await budgetCommand(['set', '--daily', '6'], { out, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 0);
+    assert.equal(await budgetCommand(['set', '--daily', '6'], { out, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 1);
+    let pending = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_PENDING_REL), 'utf8'));
+    assert.deepEqual(pending.request.patch, { usd: 6 });
+
+    await writeOwnerBudgetApproval(fs, root, { request: pending.request, now });
+    assert.equal(await budgetCommand(['set', '--daily', '6'], { out: { write() {} }, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 0);
+    const afterSix = { usd: 6, mode: 'stop', ceilingUsd: 18 };
     const raised = await raisedTodayUsdFromLog(fs, { root, machine: false, machineConfigFile: '', now });
-    assert.equal(raised, 4);
+    assert.equal(raised, raiseDeltaUsd(beforeDefault, afterSix, { usd: 6 }));
 
     out.chunks = [];
-    // 6→7 would add another $4 and exceed the $5 cumulative allowance.
     assert.equal(await budgetCommand(['set', '--daily', '7'], { out, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 1);
-    const pending = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_PENDING_REL), 'utf8'));
+    pending = JSON.parse(await fs.readFile(path.join(root, BUDGET_RAISE_PENDING_REL), 'utf8'));
     assert.deepEqual(pending.request.patch, { usd: 7 });
 
     await writeOwnerBudgetApproval(fs, root, { request: pending.request, now });
@@ -98,6 +103,7 @@ describe('round3 (2) cumulative allowance and bound approval', () => {
     assert.equal(await budgetCommand(['set', '--daily', '8'], { out: { write() {} }, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 1);
 
     assert.equal(await budgetCommand(['set', '--daily', '7'], { out: { write() {} }, env, root, fs, homedir: () => root, now, appendEvent: async () => {} }), 0);
+    await assert.rejects(fs.access(path.join(root, BUDGET_RAISE_PENDING_REL)));
     await assert.rejects(fs.access(path.join(root, BUDGET_RAISE_APPROVAL_REL)));
   });
 });

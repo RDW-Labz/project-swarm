@@ -17,7 +17,7 @@ export const BUDGET_RAISE_PENDING_REL = '.swarm/project/daily-limit-raise-pendin
 export const BUDGET_RAISE_PENDING_MACHINE_BASENAME = 'daily-limit-raise-pending-machine.json';
 export const BUDGET_RAISE_APPROVAL_MACHINE_BASENAME = 'daily-limit-raise-approval-machine.json';
 export const OWNER_APPROVAL_TTL_MS = 15 * 60 * 1000;
-export const DAILY_AGENT_RAISE_ALLOWANCE_USD = 5;
+export const DAILY_AGENT_RAISE_ALLOWANCE_USD = 0;
 
 const SET_OPTS = new Set(['--daily', '--mode', '--ceiling', '--machine']);
 
@@ -52,7 +52,7 @@ export function budgetSetActor(env = process.env, { stdinIsTTY, stdoutIsTTY, ove
 }
 
 export function agentBudgetRaiseRefusalMessage() {
-  return 'budget-set: raising the daily limit or ceiling by more than $5, or switching stop to notify, needs owner approval. '
+  return 'budget-set: only the owner decides spend caps; raising the daily limit or ceiling, or switching stop to notify, needs owner approval. '
     + 'The owner runs: swarm budget approve-raise --yes (outside an agent session), then retries within 15 minutes.';
 }
 

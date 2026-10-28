@@ -14,17 +14,17 @@ import { resolveLanes } from '../tools/lanes.mjs';
 import { batchEligible, batchPolicyFor } from '../tools/batch.mjs';
 import { anthropicUserContent, inlineContext } from '../tools/api-adapters.mjs';
 
-test('anthropic spend caps: owner-approved day $25, total $500, job $5; day mode stop refuses before send', () => {
-  assert.equal(DAY_CAP_USD, 25);
+test('anthropic spend caps: owner-approved day $20, total $500, job $5; day mode stop refuses before send', () => {
+  assert.equal(DAY_CAP_USD, 20);
   assert.equal(TOTAL_CAP_USD, 500);
   assert.equal(JOB_CAP_USD, 5);
   const limits = caps({ SWARM_CONFIG: '/nonexistent/config.json' });
-  assert.equal(limits.dayUsd, 25);
+  assert.equal(limits.dayUsd, 20);
   assert.equal(limits.dayMode, 'stop');
-  assert.equal(dayCapWouldRefuse({ worstUsd: 0.5, spent: { today: 24.6, job: 0, total: 0 }, limits }), true);
-  assert.throws(() => assertWithinCaps({ worstUsd: 0.5, spent: { today: 24.6, job: 0, total: 0 }, limits }), /day cap/);
+  assert.equal(dayCapWouldRefuse({ worstUsd: 0.5, spent: { today: 19.6, job: 0, total: 0 }, limits }), true);
+  assert.throws(() => assertWithinCaps({ worstUsd: 0.5, spent: { today: 19.6, job: 0, total: 0 }, limits }), /day cap/);
   const notify = { ...limits, dayMode: 'notify' };
-  assert.doesNotThrow(() => assertWithinCaps({ worstUsd: 0.5, spent: { today: 24.6, job: 0, total: 0 }, limits: notify }));
+  assert.doesNotThrow(() => assertWithinCaps({ worstUsd: 0.5, spent: { today: 19.6, job: 0, total: 0 }, limits: notify }));
 });
 
 test('codex is paused in default lane config; router skips it unless paused is false', () => {
