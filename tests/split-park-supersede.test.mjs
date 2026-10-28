@@ -77,15 +77,41 @@ test('stage filter limits evaluation', () => {
   assert.deepEqual(superseded.map(s => s.id), ['split-park-S19-T-0001']);
 });
 
-test('resolved blockers are not candidates but set newest run', () => {
+test('resolved blockers do not set newest ingest run per stage', () => {
   const events = [
     splitParkEvent({ stage: 'S19', ticket: 'T-0001', run: 'run-old', ts: iso(0) }),
     splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-new', ts: iso(500), resolved: true }),
     splitParkEvent({ stage: 'S19', ticket: 'T-0003', run: 'run-stale-open', ts: iso(100) }),
   ];
   const { superseded } = supersededSplitParks(events);
-  assert.deepEqual(superseded.map(s => s.id), ['split-park-S19-T-0001', 'split-park-S19-T-0003']);
+  assert.deepEqual(superseded.map(s => s.id), ['split-park-S19-T-0001']);
+  assert.equal(superseded[0].newerRun, 'run-stale-open');
+});
+
+test('superseded resolution events with old run text do not rewind newest run', () => {
+  const events = [
+    splitParkEvent({ stage: 'S19', ticket: 'T-0001', run: 'run-old', ts: iso(0) }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-old', ts: iso(500) }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0003', run: 'run-new', ts: iso(1000) }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0001', run: 'run-old', ts: iso(2000), resolved: true }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-old', ts: iso(2500), resolved: true }),
+  ];
+  const { superseded, kept } = supersededSplitParks(events);
+  assert.equal(superseded.length, 0);
+  assert.deepEqual(kept.map(k => k.id), ['split-park-S19-T-0003']);
+  assert.match(kept[0].reason, /newest ingest run/);
+});
+
+test('manual resolve of newest-run blocker does not make older runs current', () => {
+  const events = [
+    splitParkEvent({ stage: 'S19', ticket: 'T-0001', run: 'run-old', ts: iso(0) }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-new', ts: iso(1000) }),
+    splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-new', ts: iso(2000), resolved: true }),
+  ];
+  const { superseded, kept } = supersededSplitParks(events);
+  assert.deepEqual(superseded.map(s => s.id), ['split-park-S19-T-0001']);
   assert.equal(superseded[0].newerRun, 'run-new');
+  assert.equal(kept.length, 0);
 });
 
 test('non-split blockers are untouched', () => {
@@ -152,6 +178,29 @@ test('resolve --superseded-splits dry-run writes nothing; real run resolves only
   assert.doesNotMatch(inbox.stdout, /split-park-S19-T-0001/);
   assert.doesNotMatch(inbox.stdout, /split-park-S19-T-0002/);
   assert.match(inbox.stdout, /split-park-S19-T-0003/);
+});
+
+test('resolve --superseded-splits twice resolves 0 on second run', async t => {
+  const root = await tempRoot(t);
+  await appendEvent(root, splitParkEvent({ stage: 'S19', ticket: 'T-0001', run: 'run-old', ts: iso(0) }), { now: () => NOW });
+  await appendEvent(root, splitParkEvent({ stage: 'S19', ticket: 'T-0002', run: 'run-old', ts: iso(500) }), { now: () => NOW + 500 });
+  await appendEvent(root, splitParkEvent({ stage: 'S19', ticket: 'T-0003', run: 'run-new', ts: iso(1000) }), { now: () => NOW + 1000 });
+
+  const first = await runInboxCommand(root, 'resolve', ['--superseded-splits'], { now: () => NOW + 2000 });
+  assert.equal(first.exitCode, 0);
+  assert.match(first.stdout, /resolved 2 superseded split blockers/);
+
+  const second = await runInboxCommand(root, 'resolve', ['--superseded-splits'], { now: () => NOW + 3000 });
+  assert.equal(second.exitCode, 0);
+  assert.match(second.stdout, /resolved 0 superseded split blockers/);
+  assert.doesNotMatch(second.stdout, /resolved: split-park/);
+
+  const open = openItems(await readJournal(root, { limit: Infinity }));
+  assert.deepEqual(open.filter(e => String(e.id).startsWith('split-park-')).map(e => e.id), ['split-park-S19-T-0003']);
+  const inbox = await runInboxCommand(root, 'inbox', [], { now: () => NOW + 3000 });
+  assert.match(inbox.stdout, /split-park-S19-T-0003/);
+  assert.doesNotMatch(inbox.stdout, /split-park-S19-T-0001/);
+  assert.doesNotMatch(inbox.stdout, /split-park-S19-T-0002/);
 });
 
 test('resolve --superseded-splits --json and bad flags', async t => {

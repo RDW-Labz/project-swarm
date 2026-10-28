@@ -30,6 +30,7 @@ export function supersededSplitParks(events, { stage: stageFilter } = {}) {
 
   list.forEach((event, index) => {
     if (event?.kind !== 'blocker' || !String(event.id ?? '').startsWith(SPLIT_PARK_PREFIX)) return;
+    if (event.resolved === true) return;
     const parsed = parseSplitParkStage(event.id);
     if (!parsed) return;
     if (stageFilter && parsed.stage !== stageFilter) return;
