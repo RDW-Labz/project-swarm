@@ -1,0 +1,98 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccfixhive7",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner order: Opus 5.5 builds once Sonnet could not reach the target (round 7 Cockpit 3.1)",
+   "prompt": "S10 Command Center, Hive page, round 7 (Hive scored 3.6/5 against the target; goal 4.5+).\nGOAL: the owner wants this page to look IDENTICAL to the target image docs/design/reference/hive-target.png in composition, components, styling and motion. OPEN AND STUDY THE TARGET IMAGE FIRST, then the current screenshots: coordination/review/cc-grade/r7/hive-desktop.png (1440x900), coordination/review/cc-grade/r7/hive-desktop-b.png (same page about 0.8 s later: if the two look the same, nothing is animating) and coordination/review/cc-grade/r7/hive-phone.png (390x844; the target has no phone view, so make a faithful single-column adaptation), and coordination/review/cc-grade/r7/hive-full.png (the whole desktop page including what is below the fold).\nThe target's text and numbers are illustrative. Keep the app's REAL data (project names, ticket titles, counts) and its data bindings; match everything else: layout and placement, shapes, borders, glows, gradients, colours, typography, spacing, icons, and animations.\nMotion is required where the target implies it (particles and streams flowing, the ring and orbit, scan or progress motion, live chips pulsing), with CSS animations or requestAnimationFrame on canvas/SVG, smooth at 60 fps, paused under prefers-reduced-motion.\nFix every grader item below in order, then keep going toward the target until you run out of clear differences. You cannot re-render, so reason concretely about sizes at 1440x900 and 390x844 (heights vs content, grid tracks, overflow).\nNever hard-code sample numbers. Empty values render as a short muted line, never a blank box.\nKeep every hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project nodes, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file). Existing tests in your context must keep passing; update a test only where it asserted the old look, never its data behaviour.\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nExactly one tasteful glitch effect in the whole app (the brand wordmark, via tools/watch-assets/cc-glitch.js, read-only). Read coordination/review/cc-design-contract.md for file ownership; if an item needs a file outside your outputs, skip it and name it in your summary.\nYou also own the first-visit tour (tools/watch-assets/cc-tour.js) for both pages: it never opens by itself; only the help button starts it.\n\nGRADER ITEMS:\n1. PROBLEM: The composition is taller than the target. The bottom nodes (06, 05) are cut off at the 900px fold, and the lane legend, italic tagline and all three bottom panels sit off-screen. In the target, the whole ring plus all nodes fit above the legend row.\n   WHERE: Whole Hive stage, below the ring\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: Size the stage from the viewport, e.g. .cc-hive-stage{height:min(78vh,720px)}. Shrink the ring to about 46% of the stage height and place the nodes on an ellipse radius tied to it, so nodes 05/06 end above about 760px and the legend/tagline row shows at the bottom of the first screen.\n2. PROBLEM: The particle streams from nodes into the ring are thin single lines with a few sparks. The target has dense, lane-coloured particle sprays fanning out from each node and converging on the ring.\n   WHERE: Between each node card and the ring\n   FILE: tools/watch-assets/cc-hive-mount.js\n   CHANGE: Per node, emit 30-60 particles in the node's lane colour along a bezier from the card edge to the ring, with ±12px perpendicular jitter, size 1-3px and additive blending (globalCompositeOperation='lighter'). Add a soft radial bloom where each stream meets the ring.\n3. PROBLEM: The extra nav row (The Hive / Command Center / Cockpit / Classic / Search / Tour) and the 'A run failed' toast are not in the target. They push the composition down, and the toast covers the area near node 02.\n   WHERE: Below the header rule, top right\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: Fold the nav into the header as small mono links next to LIVE (font-size 11px, letter-spacing .2em) or into a hover overflow. Move the toast to bottom-right of the viewport, above the footer, with position:fixed; bottom:24px.\n4. PROBLEM: The node card headers use a status label (NEEDS YOU/BUILDING/IDLE) plus an emoji robot and badge icons. The target shows a clean index + name + lane tag. Names are truncated with an ellipsis (forge-recipe-ca…, parts-request-…).\n   WHERE: Node card header bars\n   FILE: tools/watch-assets/hive-panels.js\n   CHANGE: Render the header as `NN name` + a right-aligned lane tag in 9px mono caps. Move the needs-you count into a small pill inside the card body. Raise the card min-width to 260px and reduce the name font size to 12px before truncating.\n5. PROBLEM: The footer row duplicates the percentage: a coloured '71%' on the left and '.71' on the right. The target has one label like p(x) on the left and one value on the right.\n   WHERE: Node card bottom progress row\n   FILE: tools/watch-assets/hive-panels.js\n   CHANGE: Replace the left percent with a mono label such as `p(done)` in the lane colour and keep the right `.71` value, matching the target's p(label) / bar / value layout.\n6. PROBLEM: The ring's core glow is weaker than the target. The target ring is a saturated pink-to-violet gradient with heavy outer bloom; here the inner rings read grey and busy with coloured dashes.\n   WHERE: Central ring\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: Give the main ring a conic-gradient stroke (#ff3d8b→#c86bff→#ff3d8b) with filter: drop-shadow(0 0 18px #ff3d8bcc) drop-shadow(0 0 48px #b04dff66). Make the inner tick ring 30% opacity and drop the multi-coloured dash confetti inside it.\n7. PROBLEM: The ring label letters are spaced unevenly and are the same weight as the surroundings. In the target the label sits tight along the arc in small spaced mono.\n   WHERE: Arc text around the ring\n   FILE: tools/watch-assets/cc-hive-mount.js\n   CHANGE: Use an SVG <textPath> on a circle 14px outside the ring with font-size 11px, letter-spacing 0.45em and fill rgba(255,255,255,.75), and animate startOffset slowly (60s linear infinite).\n8. PROBLEM: Phone: the 'A run failed' toast overlaps the first node card, and the nav tabs wrap onto two lines above the ring.\n   WHERE: Hive phone, bottom of first screen\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: At max-width:480px, make the nav a single horizontally scrollable row (overflow-x:auto; white-space:nowrap). Give the toast bottom:calc(env(safe-area-inset-bottom)+12px) and pad the content below it so the toast never covers a card.\n\nCOORDINATOR NOTES: the 900px first screen should match the target composition: drop the extra nav row (keep a compact nav in the header line as the target does), never show a toast over the stage (move notifications into the header LIVE area), and fit the ring and all node cards above the fold at 1440x900 with the legend/tagline row just below.",
+   "context": [
+    "docs/design/reference/hive-target.png",
+    "coordination/review/cc-grade/r7/hive-desktop.png",
+    "coordination/review/cc-grade/r7/hive-desktop-b.png",
+    "coordination/review/cc-grade/r7/hive-full.png",
+    "coordination/review/cc-grade/r7/hive-phone.png",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/cc-glitch.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r7/grade.json",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-tour.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/cc-tour.js"
+   ],
+   "timeoutMs": 3000000
+  },
+  {
+   "id": "ccfixcockpit7",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner order: Opus 5.5 builds once Sonnet could not reach the target (round 7 Cockpit 3.1)",
+   "prompt": "S10 Command Center, Cockpit page, round 7 (Cockpit scored 3.1/5 against the target; goal 4.5+).\nGOAL: the owner wants this page to look IDENTICAL to the target image docs/design/reference/cockpit-target.png in composition, components, styling and motion. OPEN AND STUDY THE TARGET IMAGE FIRST, then the current screenshots: coordination/review/cc-grade/r7/cockpit-desktop.png (1440x900), coordination/review/cc-grade/r7/cockpit-desktop-b.png (same page about 0.8 s later: if the two look the same, nothing is animating) and coordination/review/cc-grade/r7/cockpit-phone.png (390x844; the target has no phone view, so make a faithful single-column adaptation), and coordination/review/cc-grade/r7/cockpit-full.png (the whole desktop page including what is below the fold).\nThe target's text and numbers are illustrative. Keep the app's REAL data (project names, ticket titles, counts) and its data bindings; match everything else: layout and placement, shapes, borders, glows, gradients, colours, typography, spacing, icons, and animations.\nMotion is required where the target implies it (particles and streams flowing, the ring and orbit, scan or progress motion, live chips pulsing), with CSS animations or requestAnimationFrame on canvas/SVG, smooth at 60 fps, paused under prefers-reduced-motion.\nFix every grader item below in order, then keep going toward the target until you run out of clear differences. You cannot re-render, so reason concretely about sizes at 1440x900 and 390x844 (heights vs content, grid tracks, overflow).\nNever hard-code sample numbers. Empty values render as a short muted line, never a blank box.\nKeep every hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project nodes, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file). Existing tests in your context must keep passing; update a test only where it asserted the old look, never its data behaviour.\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nExactly one tasteful glitch effect in the whole app (the brand wordmark, via tools/watch-assets/cc-glitch.js, read-only). Read coordination/review/cc-design-contract.md for file ownership; if an item needs a file outside your outputs, skip it and name it in your summary.\nThe tour (cc-tour.js) belongs to the parallel Hive job; do not edit it. The big pixel robot may reuse tools/watch-assets/robot-head.js (read-only) if it can match the target's flat orange pixel creature; otherwise draw it in your own files.\n\nGRADER ITEMS:\n1. PROBLEM: The central figure is a glossy 3D purple box robot. The target is a flat, large pixel-art creature in one warm colour, with blocky square eyes and legs and a flat shadow ellipse.\n   WHERE: Centre of the Cockpit stage\n   FILE: tools/watch-assets/cockpit-view.js\n   CHANGE: Render the robot as an SVG/CSS grid of square pixels (e.g. 12x10 cells, 28px each, shape-rendering:crispEdges) in one accent fill, with two dark square eyes and four leg columns. Add a flat dark ellipse shadow underneath and no gradients or 3D shading.\n2. PROBLEM: The segmented multi-colour rule under the headline is a single solid green line. The target is a row of short separated segments coloured by category.\n   WHERE: Rule under the subhead, y≈190\n   FILE: tools/watch-assets/cc-cockpit.css\n   CHANGE: Render one segment per ticket (or per category share) as a flex row with gap:6px. Each segment is height:3px with background:var(--cat-color) from its category, and done segments get full opacity, the rest .35.\n3. PROBLEM: The index chips are all the same cyan, and the right tag shows status (RUNNING/READY/DONE) rather than a coloured category tag. The target colour-codes the chip, left border and tag by category.\n   WHERE: Both ticket columns\n   FILE: tools/watch-assets/cockpit-lists.js\n   CHANGE: Derive a category per ticket from real board data (lane/area/type). Set --cat-color on the row and use it for the chip background, the left border and the tag text. Show status as the check/play glyph only.\n4. PROBLEM: The dotted path goes to the right-column DONE row (photo upload retries), while NOW RUNNING names T-0615 in the left column. The path should point at the active row.\n   WHERE: Path from the orbit ellipse to the right column\n   FILE: tools/watch-assets/cockpit-view.js\n   CHANGE: Compute the path target from the same active ticket as the NOW RUNNING card, and give that row the highlighted border state. If the active row is in the left column, draw the path to that side.\n5. PROBLEM: Almost nothing changes between the two frames: only the orbit dots move and the robot's mouth pixels change. The target feels live, with a scanning highlight, a pulsing active row and filling progress.\n   WHERE: Whole stage\n   FILE: tools/watch-assets/cc-cockpit.css\n   CHANGE: Add @keyframes for (a) a dash-offset march on the dotted path (stroke-dasharray:2 6; animation: dash 1.2s linear infinite), (b) a soft border pulse on the active row, and (c) a 3-4s scan sweep across the segmented rule, plus a gentle 2px idle bob on the robot.\n6. PROBLEM: The breadcrumb is merged into a stat/nav bar with pills (THE HIVE, Command Center, Classic). The target has a plain small mono breadcrumb on the left and a meta line on the right.\n   WHERE: Top line\n   FILE: tools/watch-assets/cockpit-view.js\n   CHANGE: Render the top line as `SW / THE HIVE / PARTS-REQUEST-APP` in 11px bold mono caps with letter-spacing .12em, and put `N TICKETS / AGENTS / DATE` right-aligned in the same style. Move the view switch into a small overflow.\n7. PROBLEM: The NOW RUNNING card is narrower than and offset from the target's NOW LOADING card. The title box 'ORCHESTRATOR' is fine, but the card lacks the target's big title weight and the orange 'GETS >' line.\n   WHERE: Card under the robot\n   FILE: tools/watch-assets/cc-cockpit.css\n   CHANGE: Align the card width to the title box column (same left/right edges). Set the title to font-size 26px, weight 800, and render the last line as `WORKER > …` with the label in the accent orange (#ff7a45) and 10px mono caps.\n8. PROBLEM: Phone: the robot fills most of the screen and pushes NOW RUNNING below the fold. The header wordmark is clipped to 'SWA', and the meta line is truncated ('S19 …').\n   WHERE: Cockpit phone\n   FILE: tools/watch-assets/cc-cockpit.css\n   CHANGE: At max-width:480px, cap the robot at max-height:200px, show the full short wordmark 'SW' (or let it wrap), and let the meta line wrap with white-space:normal so the NOW RUNNING card shows near the first screen.\n\nCOORDINATOR NOTES: (a) The centre figure must be the target's FLAT pixel-art creature (one warm orange colour, blocky square eyes, four legs, flat shadow ellipse beneath, orbit ellipse around it), drawn on canvas in tools/watch-assets/cc-cockpit-orbit.js, not the 3D robot head; it can still show state by small eye changes. (b) Category = the ticket's lane or type from the ledger (whichever is present); give each category a fixed colour and use it for the index chip, the left border, the right tag and the segmented rule under the headline. (c) The dotted path must end at the row of the NOW RUNNING ticket.",
+   "context": [
+    "docs/design/reference/cockpit-target.png",
+    "coordination/review/cc-grade/r7/cockpit-desktop.png",
+    "coordination/review/cc-grade/r7/cockpit-desktop-b.png",
+    "coordination/review/cc-grade/r7/cockpit-full.png",
+    "coordination/review/cc-grade/r7/cockpit-phone.png",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/command-center-snapshot.mjs",
+    "tools/watch-assets/robot-head.js",
+    "tools/watch-assets/cc-glitch.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r7/grade.json",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit.css",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js"
+   ],
+   "timeoutMs": 3000000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs"
+   ]
+  }
+ ]
+}
