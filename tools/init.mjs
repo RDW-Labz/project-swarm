@@ -69,7 +69,9 @@ export async function collectChecks(root, stack) {
     try {
       const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
       checks.push(...packageChecks(pkg, node.packageManager));
-    } catch { /* a broken package.json still leaves CI checks */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/init.mjs] collectChecks package.json:', error?.message ?? error);
+    }
   }
   const ci = await loadChecksFromCi(root, DEFAULT_CI_PATH);
   for (const check of ci.checks) {
@@ -155,7 +157,7 @@ export function runCheckArgv(argv, { cwd, timeoutMs }) {
     const keep = (current, chunk) => (current + chunk).slice(-65536);
     child.stdout.on('data', chunk => { stdout = keep(stdout, chunk); });
     child.stderr.on('data', chunk => { stderr = keep(stderr, chunk); });
-    const kill = signal => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* gone */ } } };
+    const kill = signal => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/init.mjs] runCheckArgv child.kill:', error?.message ?? error); } } };
     const finish = action => {
       if (done) return;
       done = true;

@@ -517,14 +517,14 @@ function killProcessGroup(child, signal, killImpl = defaultKill) {
     try {
       killImpl(-child.pid, signal);
       return;
-    } catch {
-      /* fall through */
+    } catch (error) {
+      if (error?.code !== 'ESRCH') console.error('[tools/gate-rerun.mjs] killProcessGroup process group:', error?.message ?? error);
     }
   }
   try {
     child.kill(signal);
-  } catch {
-    /* gone */
+  } catch (error) {
+    if (error?.code !== 'ESRCH') console.error('[tools/gate-rerun.mjs] killProcessGroup child.kill:', error?.message ?? error);
   }
 }
 
