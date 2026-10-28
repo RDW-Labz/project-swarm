@@ -110,14 +110,16 @@ function wrapHeaderHeroPack(headerHost, doc) {
   const scan = headerHost.querySelector?.('.scan-live--header');
   if (!nav || !hero || !scan) return;
   const pack = el(doc, 'div', 'header-hero-pack');
+  const row = el(doc, 'div', 'header-hero-row');
   const main = el(doc, 'div', 'header-hero-main');
   nav.parentNode?.removeChild(nav);
   hero.parentNode?.removeChild(hero);
   scan.parentNode?.removeChild(scan);
-  main.appendChild(nav);
   main.appendChild(hero);
-  pack.appendChild(main);
-  pack.appendChild(scan);
+  row.appendChild(main);
+  row.appendChild(scan);
+  pack.appendChild(nav);
+  pack.appendChild(row);
   headerHost.insertBefore(pack, headerHost.firstChild);
 }
 
@@ -265,20 +267,27 @@ function runStreamItems(project, at) {
 }
 
 function paintRunStream(host, project, at) {
-  const items = runStreamItems(project, at);
-  if (!items.length) {
-    while (host.firstChild) host.removeChild(host.firstChild);
-    const doc = host.ownerDocument;
-    const empty = el(doc, 'p', 'cc-empty');
-    empty.textContent = 'No runs yet';
-    host.appendChild(empty);
-    return;
-  }
-  renderOrchestratorRunStream(host, items);
+  renderOrchestratorRunStream(host, runStreamItems(project, at));
 }
 
-function paintWorkerStream(host, project) {
+function syncStreamCount(headEl, shown, total) {
+  if (!headEl) return;
+  let count = headEl.querySelector?.('.stream-count');
+  if (!count && headEl.appendChild) {
+    count = headEl.ownerDocument?.createElement('span');
+    if (!count) return;
+    count.className = 'stream-count';
+    headEl.appendChild(count);
+  }
+  if (count) count.textContent = `${shown} of ${total}`;
+}
+
+function paintWorkerStream(host, project, workerHead) {
   const items = workerStreamFromLedger(project?.ledger, 4);
+  const total = project?.total ?? (project?.ledger?.tickets ?? []).filter(
+    t => !['cancelled', 'proposed'].includes(t.status),
+  ).length;
+  syncStreamCount(workerHead, items.length, total);
   renderWorkerStream(host, items);
 }
 
@@ -580,7 +589,10 @@ export function renderProjectCockpit(host, project, deps) {
   const workerSection = el(doc, 'section', 'stream-section');
   workerSection.setAttribute('aria-label', 'Worker stream');
   const workerHead = el(doc, 'div', 'stream-head stream-head--worker');
-  workerHead.textContent = '// Worker stream / latest finished tickets';
+  const workerTitle = el(doc, 'span', null, '// Worker stream / latest finished tickets');
+  workerHead.appendChild(workerTitle);
+  const workerCount = el(doc, 'span', 'stream-count');
+  workerHead.appendChild(workerCount);
   const workerHost = el(doc, 'div', 'cc-cockpit-worker-stream-host');
   workerSection.appendChild(workerHead);
   workerSection.appendChild(workerHost);
@@ -588,7 +600,10 @@ export function renderProjectCockpit(host, project, deps) {
   const streamSection = el(doc, 'section', 'stream-section');
   streamSection.setAttribute('aria-label', 'Run stream');
   const streamHead = el(doc, 'div', 'stream-head stream-head--render');
-  streamHead.textContent = '// Run stream / orchestrator activity';
+  const streamTitle = el(doc, 'span', null, '// Run stream / orchestrator activity');
+  streamHead.appendChild(streamTitle);
+  const streamCount = el(doc, 'span', 'stream-count');
+  streamHead.appendChild(streamCount);
   const streamHost = el(doc, 'div', 'cc-cockpit-run-stream-host stream-grid');
   streamSection.appendChild(streamHead);
   streamSection.appendChild(streamHost);
@@ -685,15 +700,26 @@ export function renderProjectCockpit(host, project, deps) {
     orchTitle.textContent = orch.label;
     paintTicketLists(ticketsLeft, ticketsRight, readyHost, projectRef);
     paintNowPanel(nowPanelHost, projectRef);
-    paintWorkerStream(workerHost, projectRef);
+    paintWorkerStream(workerHost, projectRef, workerHead);
     paintRunStream(streamHost, projectRef, at);
+    syncStreamCount(streamHead, runStreamItems(projectRef, at).length, projectRef?.total ?? 0);
     paintStack(stackTilesHost, stackFootHost, projectRef, viewport);
     paintPhonePanels(deps, phoneRefs, projectRef, at);
     tabCtl.syncTabMode();
     const nums = headerHost.querySelector?.('.headline-num');
     if (nums && projectRef) {
-      nums.textContent = headlineTicketText(projectRef.done ?? 0, projectRef.total ?? 0);
+      const done = projectRef.done ?? 0;
+      const total = projectRef.total ?? 0;
       nums.title = 'source field: ledger.tickets done / live total';
+      const parts = nums.querySelectorAll
+        ? Array.from(nums.querySelectorAll('.headline-num-part'))
+        : [];
+      if (parts.length >= 2) {
+        parts[0].textContent = String(done);
+        parts[1].textContent = String(total);
+      } else {
+        nums.textContent = headlineTicketText(done, total);
+      }
     }
   }
 

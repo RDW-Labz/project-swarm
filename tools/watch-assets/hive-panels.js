@@ -340,6 +340,35 @@
     else if (Array.isArray(snapshot.events)) { journalEvents = snapshot.events; }
 
     var savingsRows = [];
+    if (stats.needsYouCount && typeof stats.needsYouCount.value === 'number') {
+      savingsRows.push({
+        label: 'needs you',
+        value: stats.needsYouCount.value,
+        unit: 'count',
+        title: stats.needsYouCount.source,
+        max: Math.max(stats.needsYouCount.value, 1),
+        fillGradient: 'linear-gradient(90deg,#fbbf24,#fb923c)',
+      });
+    }
+    var doneProjects = 0;
+    var trackedProjects = projects.length;
+    for (var pj = 0; pj < projects.length; pj += 1) {
+      var pctField = projects[pj].percentDone;
+      if (pctField && typeof pctField.value === 'string') {
+        var pct = parseInt(pctField.value, 10);
+        if (Number.isFinite(pct) && pct >= 100) { doneProjects += 1; }
+      }
+    }
+    if (trackedProjects > 0) {
+      savingsRows.push({
+        label: 'tickets done/total',
+        displayValue: doneProjects + '/' + trackedProjects,
+        value: doneProjects,
+        max: trackedProjects,
+        title: 'projects[].progress.overall',
+        fillGradient: 'linear-gradient(90deg,#34d399,#3dd6a5)',
+      });
+    }
     if (stats.spendUsd && typeof stats.spendUsd.value === 'number' && stats.spendUsd.value >= 0) {
       savingsRows.push({
         label: 'board spend',
@@ -405,21 +434,22 @@
     canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
     canvas.setAttribute('aria-label', modelObj.throughputChartLabel || 'Throughput chart');
     var throughputSamples = Array.isArray(modelObj.throughputSamples) ? modelObj.throughputSamples : [];
+    host.appendChild(canvas);
     if (throughputSamples.length) {
-      host.appendChild(canvas);
       drawBarChart(canvas, throughputSamples, ['#5eb8ff', '#3dd6a5', '#ff4d8d', '#f5c451']);
+      var caption = el('p', 'term-prompt term-prompt--chart-caption');
+      caption.appendChild(el('span', 'lbl', 'throughput samples'));
+      if (typeof modelObj.throughputPeak === 'number' && Number.isFinite(modelObj.throughputPeak)) {
+        caption.appendChild(document.createTextNode(': '));
+        var peak = el('span', 'num', String(Math.round(modelObj.throughputPeak)));
+        if (modelObj.throughputPeakTitle) { peak.title = modelObj.throughputPeakTitle; }
+        caption.appendChild(peak);
+      }
+      host.appendChild(caption);
     } else {
-      appendEmpty(host, 'No lane activity yet');
+      var empty = el('p', 'term-prompt', 'no throughput samples yet');
+      host.appendChild(empty);
     }
-    var caption = el('p', 'term-prompt term-prompt--chart-caption');
-    caption.appendChild(el('span', 'lbl', 'throughput samples'));
-    if (typeof modelObj.throughputPeak === 'number' && Number.isFinite(modelObj.throughputPeak)) {
-      caption.appendChild(document.createTextNode(': '));
-      var peak = el('span', 'num', String(Math.round(modelObj.throughputPeak)));
-      if (modelObj.throughputPeakTitle) { peak.title = modelObj.throughputPeakTitle; }
-      caption.appendChild(peak);
-    }
-    host.appendChild(caption);
   }
 
   function renderStatLines(host, lines) {
@@ -491,23 +521,29 @@
     var rows = shouldUseHiveLanePanel(laneCounts)
       ? hiveLanePanelRows(laneCounts)
       : laneRowsFromCounts(laneCounts);
-    if (!rows.length) {
-      appendEmpty(barsRoot, 'No lane activity yet');
+    var laneTotal = 0;
+    for (var t = 0; t < rows.length; t += 1) {
+      laneTotal += typeof rows[t].count === 'number' ? rows[t].count : 0;
     }
-    for (var i = 0; i < rows.length; i += 1) {
-      var row = rows[i];
-      var rowEl = el('div', 'lane-row');
-      rowEl.appendChild(el('span', 'name', row.name));
-      var track = el('span', 'lane-track');
-      var fill = document.createElement('i');
-      fill.className = 'lane-fill ' + (row.laneClass || row.name);
-      fill.style.width = row.fillPct.toFixed(2) + '%';
-      track.appendChild(fill);
-      rowEl.appendChild(track);
-      var num = el('span', 'num', String(row.count));
-      num.title = 'lane.' + row.name;
-      rowEl.appendChild(num);
-      barsRoot.appendChild(rowEl);
+    if (!rows.length || laneTotal <= 0) {
+      var laneEmpty = el('p', 'term-prompt', 'no lane traffic yet');
+      barsRoot.appendChild(laneEmpty);
+    } else {
+      for (var i = 0; i < rows.length; i += 1) {
+        var row = rows[i];
+        var rowEl = el('div', 'lane-row');
+        rowEl.appendChild(el('span', 'name', row.name));
+        var track = el('span', 'lane-track');
+        var fill = document.createElement('i');
+        fill.className = 'lane-fill ' + (row.laneClass || row.name);
+        fill.style.width = row.fillPct.toFixed(2) + '%';
+        track.appendChild(fill);
+        rowEl.appendChild(track);
+        var num = el('span', 'num', String(row.count));
+        num.title = 'lane.' + row.name;
+        rowEl.appendChild(num);
+        barsRoot.appendChild(rowEl);
+      }
     }
 
     if (opts.hero && typeof opts.hero === 'object') {
@@ -550,11 +586,16 @@
 
     var rows = Array.isArray(savingsRows) ? savingsRows : [];
     var scaleMax = typeof opts.savingsMax === 'number' ? opts.savingsMax : null;
+    if (!rows.length) {
+      var savingsEmpty = el('p', 'term-prompt', 'no throughput metrics yet');
+      host.appendChild(savingsEmpty);
+    }
     for (var i = 0; i < rows.length; i += 1) {
       var row = rows[i];
       var rowEl = el('div', 'saving-row');
       rowEl.appendChild(el('span', 'lbl', row.label || ''));
-      var num = el('span', 'num', formatSavingsValue(row));
+      var display = row.displayValue != null ? String(row.displayValue) : formatSavingsValue(row);
+      var num = el('span', 'num', display);
       if (row.title) { num.title = row.title; }
       rowEl.appendChild(num);
       var track = el('span', 'track');
@@ -581,24 +622,28 @@
     if (existingEmpty && existingEmpty.parentNode) {
       existingEmpty.parentNode.removeChild(existingEmpty);
     }
+    var baselineCanvas = host.querySelector ? host.querySelector('canvas.mini-chart') : null;
+    if (!baselineCanvas) {
+      baselineCanvas = document.createElement('canvas');
+      baselineCanvas.className = 'mini-chart';
+      baselineCanvas.id = 'chart-latency';
+      baselineCanvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
+      baselineCanvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
+      baselineCanvas.setAttribute('aria-label', opts.chartLabel || 'Decision latency chart');
+      host.appendChild(baselineCanvas);
+    }
     if (samples.length >= 2) {
-      var canvas = document.createElement('canvas');
-      canvas.className = 'mini-chart';
-      canvas.id = 'chart-latency';
-      canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
-      canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
-      canvas.setAttribute('aria-label', opts.chartLabel || 'Decision latency chart');
-      host.appendChild(canvas);
-      drawSparkline(canvas, samples, {
-        width: canvas.width,
-        height: canvas.height,
+      drawSparkline(baselineCanvas, samples, {
+        width: baselineCanvas.width,
+        height: baselineCanvas.height,
         strokeStyle: opts.strokeStyle || '#3dd6a5',
       });
       var caption = el('p', 'term-prompt hive-term-prompt term-prompt--chart-caption');
       caption.appendChild(el('span', 'lbl', opts.latencyCaption || 'decision latency'));
       host.appendChild(caption);
     } else if (!samples.length) {
-      appendEmpty(host, 'no decisions timed yet');
+      var latencyEmpty = el('p', 'term-prompt', 'no decisions timed yet');
+      host.appendChild(latencyEmpty);
     }
   }
 

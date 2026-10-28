@@ -68,19 +68,85 @@ function ledgerTicketById(ledger, id) {
   return (ledger?.tickets ?? []).find(t => t.id === id);
 }
 
+function ticketMetaHaystack(ticket) {
+  return [
+    ticket?.category,
+    ticket?.lane,
+    ticket?.agent,
+    ticket?.stage,
+    ticket?.epic,
+    ticket?.title,
+  ]
+    .filter(v => v != null && String(v).length)
+    .join(' ')
+    .toLowerCase();
+}
+
+function ticketCategorySlug(ticket) {
+  const hay = ticketMetaHaystack(ticket);
+  if (!hay) return null;
+  if (hay.includes('opus') || hay.includes('s1')) return 'opus';
+  if (hay.includes('skill')) return 'skills';
+  if (hay.includes('engine') || hay.includes('burst')) return 'engines';
+  if (hay.includes('taste')) return 'taste';
+  if (hay.includes('broll') || hay.includes('b-roll')) return 'broll';
+  if (hay.includes('web')) return 'web';
+  return null;
+}
+
+function ticketIsUnclaimed(ticket) {
+  if (!ticket) return true;
+  if (ticket.status === 'proposed' || ticket.status === 'cancelled') return true;
+  if (ticket.agent || ticket.lane) return false;
+  if (ticket.status === 'running' || ticket.status === 'done') return false;
+  return true;
+}
+
 function ticketIdxModifier(ticket) {
-  const stage = ticket?.stage;
-  const name = typeof stage === 'string' ? stage.toLowerCase() : '';
-  if (name.includes('opus') || name.includes('s1')) return 'ticket-idx--opus';
-  if (name.includes('skill')) return 'ticket-idx--skills';
-  if (name.includes('engine')) return 'ticket-idx--engines';
-  if (name.includes('taste')) return 'ticket-idx--taste';
-  if (name.includes('broll') || name.includes('b-roll')) return 'ticket-idx--broll';
-  if (name.includes('web')) return 'ticket-idx--web';
+  const slug = ticketCategorySlug(ticket);
+  if (slug) return `ticket-idx--${slug}`;
+  if (ticketIsUnclaimed(ticket)) return 'ticket-idx--pending';
+  if (ticket?.status === 'running') return 'ticket-idx--engines';
   if (ticket?.status === 'done') return 'ticket-idx--taste';
   if (ticket?.status === 'blocked') return 'ticket-idx--broll';
-  if (ticket?.status === 'running') return 'ticket-idx--engines';
   return 'ticket-idx--pending';
+}
+
+/** @param {object|null|undefined} ticket */
+export function ticketIdxCategoryClass(ticket) {
+  return ticketIdxModifier(ticket);
+}
+
+const COCKPIT_CATEGORY_DEFS = [
+  { slug: 'opus', label: 'Opus 5.5', meter: 'meter-opus' },
+  { slug: 'skills', label: 'Skills', meter: 'meter-skills' },
+  { slug: 'engines', label: 'Engines', meter: 'meter-engines' },
+  { slug: 'taste', label: 'Taste', meter: 'meter-taste' },
+  { slug: 'broll', label: 'B-roll', meter: 'meter-broll' },
+  { slug: 'web', label: 'Web', meter: 'meter-web' },
+];
+
+/**
+ * Live ticket counts per cockpit category for header meters.
+ * @param {object|null|undefined} ledger
+ */
+export function cockpitCategoryCounts(ledger) {
+  const tickets = (ledger?.tickets ?? []).filter(
+    t => !['cancelled', 'proposed'].includes(t.status),
+  );
+  const counts = Object.fromEntries(COCKPIT_CATEGORY_DEFS.map(d => [d.slug, 0]));
+  for (const t of tickets) {
+    const slug = ticketCategorySlug(t);
+    if (slug && Object.prototype.hasOwnProperty.call(counts, slug)) {
+      counts[slug] += 1;
+    } else if (!ticketIsUnclaimed(t)) {
+      counts.engines += 1;
+    }
+  }
+  return COCKPIT_CATEGORY_DEFS.map(def => ({
+    ...def,
+    total: counts[def.slug] || 0,
+  }));
 }
 
 function formatQueueIndex(index) {
@@ -246,10 +312,13 @@ export function renderWorkerStream(host, items) {
   grid.setAttribute('data-cockpit-worker-stream', 'true');
   const list = Array.isArray(items) ? items : [];
   if (!list.length) {
-    const empty = doc.createElement('p');
-    empty.className = 'cc-empty';
-    empty.textContent = 'No finished tickets yet';
-    grid.appendChild(empty);
+    const card = doc.createElement('article');
+    card.className = 'stream-card stream-card--accent-white stream-card--empty';
+    const meta = doc.createElement('span');
+    meta.className = 'stream-meta';
+    meta.textContent = 'No finished tickets yet';
+    card.appendChild(meta);
+    grid.appendChild(card);
   } else {
     for (const item of list) {
       const accent = item.accent || 'stream-card--accent-teal';
@@ -310,10 +379,13 @@ export function renderOrchestratorRunStream(host, items) {
   grid.setAttribute('data-cockpit-run-stream', 'true');
   const list = Array.isArray(items) ? items : [];
   if (!list.length) {
-    const empty = doc.createElement('p');
-    empty.className = 'cc-empty';
-    empty.textContent = 'No runs yet';
-    grid.appendChild(empty);
+    const card = doc.createElement('article');
+    card.className = 'stream-card stream-card--accent-white stream-card--empty cockpit-run-stream-item';
+    const meta = doc.createElement('span');
+    meta.className = 'stream-meta cockpit-run-stream-body';
+    meta.textContent = 'No runs yet';
+    card.appendChild(meta);
+    grid.appendChild(card);
   } else {
     for (const item of list) {
       const accent = item.accent || 'stream-card--accent-teal';
@@ -428,7 +500,7 @@ export function summaryTileLayoutBoxes(viewport, tile) {
   const padX = 6;
   const labelH = 12;
   const labelGap = 2;
-  const valH = clampCss(28, 2.8, 32, viewport?.height ?? 800);
+  const valH = clampCss(24, 2.8, 32, viewport?.height ?? 800);
   const valMargin = 4;
   const footPad = 2;
   const footH = 11;

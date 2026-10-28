@@ -2,6 +2,7 @@
 // Command Center cockpit header: ticket headline + stage rings from ledger progress.
 import { ledgerStats } from './cc-ledger-browser.js';
 import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
+import { cockpitCategoryCounts } from './cockpit-lists.js';
 
 /** Desktop shell headline — matches docs/design/command-center-mockup/cockpit.html @media (min-width: 721px) */
 export const COCKPIT_HEADLINE_CLAMP = 'clamp(3.5rem, 4.8vw, 4.25rem)';
@@ -43,7 +44,9 @@ export function headlineTicketText(done, total) {
   return `${done} of ${total}`;
 }
 
-const METER_CLASSES = ['meter-opus', 'meter-skills', 'meter-engines', 'meter-taste', 'meter-broll', 'meter-web'];
+function headlineNumberParts(done, total) {
+  return { done: String(done), total: String(total) };
+}
 
 const MASCOT_PIXEL_SVG = [
   '<svg class="mascot-pixel" viewBox="0 0 22 18" focusable="false" aria-label="Opus orchestrator mascot" shape-rendering="crispEdges">',
@@ -93,20 +96,21 @@ export function appendMascotStage(parent, doc, opts) {
   return mascot;
 }
 
-function appendCategoryBar(parent, rings, extraClass) {
-  if (!rings.length) return null;
+function appendCategoryBar(parent, categories, extraClass) {
+  if (!categories.length) return null;
   const bar = el('div', `category-bar ${extraClass || ''}`.trim());
   const links = el('div', 'category-links');
-  links.setAttribute('aria-label', 'Stage mix');
-  rings.forEach((ring, i) => {
+  links.setAttribute('aria-label', 'Category mix');
+  categories.forEach((row, i) => {
     if (i > 0) links.appendChild(el('span', 'sep', '/'));
-    links.appendChild(el('span', null, ring.label));
+    links.appendChild(el('span', null, row.label));
   });
   const meter = el('div', 'category-meter');
   meter.setAttribute('aria-hidden', 'true');
-  rings.forEach((ring, i) => {
-    const seg = el('span', METER_CLASSES[i % METER_CLASSES.length]);
-    const w = String(Math.max(ring.total, 1));
+  meter.title = 'source field: ledger.tickets per category';
+  categories.forEach(row => {
+    const seg = el('span', row.meter);
+    const w = String(Math.max(row.total, 0));
     if (seg.style && typeof seg.style.setProperty === 'function') {
       seg.style.setProperty('--w', w);
     } else if (seg.style) {
@@ -164,10 +168,11 @@ export function renderCockpit(host, data, opts) {
   host.replaceChildren();
 
   const ringRows = stageRingProgress(ledger);
+  const categoryRows = cockpitCategoryCounts(ledger);
 
   const nav = el('nav', 'cockpit-nav');
   nav.setAttribute('aria-label', 'Cockpit breadcrumb');
-  const block = el('span', 'nav-block');
+  const block = el('span', 'nav-block nav-block--meta');
   if (meta.owner) block.appendChild(el('span', 'num-label', 'owner'));
   if (meta.owner) block.appendChild(document.createTextNode(' ' + meta.owner));
   if (meta.lane) {
@@ -177,7 +182,7 @@ export function renderCockpit(host, data, opts) {
   }
   nav.appendChild(block);
 
-  const orchBlock = el('span', 'nav-block');
+  const orchBlock = el('span', 'nav-block nav-block--orch');
   orchBlock.appendChild(el('span', 'num-label', 'orchestrator'));
   orchBlock.appendChild(document.createTextNode(' ' + orch.label));
   nav.appendChild(orchBlock);
@@ -185,9 +190,17 @@ export function renderCockpit(host, data, opts) {
   const hero = el('header', 'cockpit-hero');
   const h1 = el('h1');
   const line = el('span', 'headline-line');
+  const parts = headlineNumberParts(done, total);
   const nums = el('span', 'headline-num num');
   nums.title = 'source field: ledger.tickets done / live total';
-  nums.textContent = headlineTicketText(done, total);
+  const doneNum = el('span', 'num headline-num-part');
+  doneNum.textContent = parts.done;
+  const ofWord = el('span', 'headline-of', ' of ');
+  const totalNum = el('span', 'num headline-num-part');
+  totalNum.textContent = parts.total;
+  nums.appendChild(doneNum);
+  nums.appendChild(ofWord);
+  nums.appendChild(totalNum);
   line.appendChild(nums);
   line.appendChild(document.createTextNode(' tickets done'));
   h1.appendChild(line);
@@ -199,7 +212,7 @@ export function renderCockpit(host, data, opts) {
   tag.textContent = orch.detail;
   hero.appendChild(tag);
 
-  appendCategoryBar(hero, ringRows, 'category-bar--hero-mobile');
+  appendCategoryBar(hero, categoryRows, 'category-bar--hero-mobile');
 
   host.appendChild(nav);
   host.appendChild(hero);
@@ -208,19 +221,19 @@ export function renderCockpit(host, data, opts) {
   scanLive.setAttribute('aria-label', 'Live ticket progress');
   scanLive.appendChild(el('span', 'scan-live-label', 'Live scan'));
   const scanCount = el('span', 'scan-live-count');
-  const doneNum = el('span', 'num');
-  doneNum.title = 'source field: ledger.tickets done';
-  doneNum.textContent = String(done);
-  scanCount.appendChild(doneNum);
+  const scanDoneNum = el('span', 'num');
+  scanDoneNum.title = 'source field: ledger.tickets done';
+  scanDoneNum.textContent = String(done);
+  scanCount.appendChild(scanDoneNum);
   scanCount.appendChild(el('span', 'scan-of', 'of'));
-  const totalNum = el('span', 'num');
-  totalNum.title = 'source field: ledger.tickets live total';
-  totalNum.textContent = String(total);
-  scanCount.appendChild(totalNum);
+  const scanTotalNum = el('span', 'num');
+  scanTotalNum.title = 'source field: ledger.tickets live total';
+  scanTotalNum.textContent = String(total);
+  scanCount.appendChild(scanTotalNum);
   scanLive.appendChild(scanCount);
   host.appendChild(scanLive);
 
-  appendCategoryBar(host, ringRows, 'category-bar--header');
+  appendCategoryBar(host, categoryRows, 'category-bar--header');
 
   const rings = el('div', 'cockpit-stage-rings');
   rings.setAttribute('aria-label', 'Stage progress');

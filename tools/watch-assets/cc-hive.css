@@ -638,7 +638,7 @@ body.hive-body.cc-body {
   position: absolute;
   z-index: 3;
   min-width: 0;
-  min-height: 44px;
+  min-height: calc(28px + 3 * 1.3em + 20px);
   transform: none;
   border-radius: var(--r-sm);
   border: 1px solid var(--card-glow, rgba(255, 77, 141, .45));
@@ -721,12 +721,15 @@ body.hive-body.cc-body {
   overflow: visible;
   display: flex;
   flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
 }
 
 .hive-body .hive-kv{
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 0 8px;
+  row-gap: 4px;
   align-items: baseline;
   flex: 0 0 auto;
 }
@@ -735,7 +738,7 @@ body.hive-body.cc-body {
   margin: 0;
   color: var(--faint);
   font-size: 12.5px;
-  line-height: 1.35;
+  line-height: 1.3;
   text-transform: lowercase;
 }
 
@@ -744,7 +747,7 @@ body.hive-body.cc-body {
   text-align: right;
   font-weight: 600;
   font-size: 12.5px;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
 .hive-body .hive-meter{
@@ -838,7 +841,7 @@ body.hive-body.cc-body {
   min-width: 0;
   min-height: 0;
   justify-content: flex-start;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .hive-body .hive-event-log{
@@ -1215,7 +1218,7 @@ body.hive-body{
     height: auto;
     max-height: none;
     min-height: 100vh;
-    grid-template-rows: auto auto minmax(420px, 1fr) auto;
+    grid-template-rows: auto auto auto auto;
     overflow-x: hidden;
   }
 
@@ -1239,8 +1242,9 @@ body.hive-body{
     display: flex;
     flex-direction: column;
     align-items: stretch;
+    height: auto;
+    min-height: 0;
     overflow: visible;
-    min-height: 480px;
   }
 
 .hive-body .hive-stage.hive-phone .hive-core-ui{

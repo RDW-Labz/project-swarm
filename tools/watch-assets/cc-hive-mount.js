@@ -2,7 +2,13 @@
 /** Mount Command Center Hive view (stat strip, ring, streams, panels) from a snapshot. */
 
 import { renderHiveStatStrip } from './hive-stat-strip.js';
-import { layoutHiveProjectNodes, renderHiveLayout, CARD_GAP_PCT, CARD_HEIGHT_PCT } from './hive-layout.js';
+import {
+  layoutHiveProjectNodes,
+  renderHiveLayout,
+  CARD_GAP_PCT,
+  CARD_HEIGHT_PCT,
+  HIVE_LANES,
+} from './hive-layout.js';
 import { hiveBrainMotionDescriptor, hiveBrainReducedMotionStillFrame, hiveBrainStateFromEvents } from './hive-brain.js';
 import { HIVE_STREAM_FRAME_MS, HIVE_STREAM_RENDER_STATIC, advanceAndDrawHiveStreamComets, buildHiveStreams, drawHiveStreamStaticDots, hiveStreamDensityForProject, hiveStreamsPauseWhenDocumentHidden, hiveStreamsPrefersReducedMotion, hiveStreamsRenderPath } from './hive-streams.js';
 import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
@@ -54,6 +60,9 @@ function appendCoreRingSvg(doc, coreUi) {
   const label = el(doc, 'text', 'hive-orbit-label');
   const textPath = el(doc, 'textPath');
   textPath.setAttribute('href', '#hive-orbit-arc');
+  if (typeof textPath.setAttributeNS === 'function') {
+    textPath.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#hive-orbit-arc');
+  }
   textPath.setAttribute('startOffset', '4%');
   textPath.textContent = 'answer before you spend';
   label.appendChild(textPath);
@@ -133,6 +142,58 @@ function statStripEntries(stats) {
 function panelModelFromSnapshot(snapshot) {
   const { deriveHivePanelModel } = resolveHivePanels();
   return deriveHivePanelModel(snapshot);
+}
+
+function laneTagLabel(lane) {
+  const labels = { safety: 'SAFETY', route: 'ROUTE', context: 'CONTEXT', control: 'CONTROL' };
+  if (typeof lane === 'string' && labels[lane]) return labels[lane];
+  return 'CONTROL';
+}
+
+function normalizeProjectLane(lane) {
+  if (typeof lane === 'string' && HIVE_LANES.includes(lane)) return lane;
+  return 'control';
+}
+
+function syncProjectCardHeader(doc, card, project, index) {
+  if (!card || !project) return;
+  const lane = normalizeProjectLane(project.lane);
+  for (const l of HIVE_LANES) {
+    if (card.classList?.contains(l)) card.classList.remove(l);
+  }
+  if (card.classList) card.classList.add(lane);
+
+  let hd = null;
+  if (typeof card.querySelector === 'function') {
+    hd = card.querySelector('.hive-node-hd');
+  }
+  if (!hd) {
+    const kids = Array.from(card.children || []);
+    for (let ci = 0; ci < kids.length; ci += 1) {
+      if (kids[ci].classList?.contains('hive-node-hd')) {
+        hd = kids[ci];
+        break;
+      }
+    }
+  }
+  if (!hd) {
+    hd = el(doc, 'div', 'hive-node-hd');
+    if (typeof card.insertBefore === 'function' && card.firstChild) {
+      card.insertBefore(hd, card.firstChild);
+    } else {
+      card.appendChild(hd);
+    }
+  } else {
+    while (hd.firstChild) hd.removeChild(hd.firstChild);
+  }
+
+  const idx = el(doc, 'span', 'idx', String(index + 1).padStart(2, '0'));
+  hd.appendChild(idx);
+  const nameText = typeof project.name === 'string' && project.name.length
+    ? project.name
+    : String(project.id || '');
+  hd.appendChild(el(doc, 'span', 'name', nameText));
+  hd.appendChild(el(doc, 'span', 'tag', laneTagLabel(lane)));
 }
 
 function applyAlternatingNodeLayout(nodesMount) {
@@ -560,6 +621,7 @@ export function renderHive(host, snapshot, deps) {
       const card = cardNodes[i];
       const project = projects[i];
       if (card && project) {
+        syncProjectCardHeader(doc, card, project, i);
         renderProjectCardMetrics(card, project);
       }
       if (card && project?.id) {
