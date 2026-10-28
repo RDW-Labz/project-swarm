@@ -129,7 +129,7 @@ export async function readRuns(root) {
   const runs = [];
   for (const id of ids) {
     try { const state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); if (isObj(state)) runs.push({ id, state }); } catch (error) {
-      if (error?.code !== 'ENOENT') console.error('[tools/quotes.mjs] read run state:', error?.message ?? error, id);
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/quotes.mjs] read run state:', error?.message ?? error, id);
     }
   }
   return runs;
