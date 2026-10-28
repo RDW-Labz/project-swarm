@@ -1,0 +1,99 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "autoapprove",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Goal g-625a8283 (owner order): the orchestrator may approve a change-order scope split itself, but only when code proves the split is safe; otherwise the owner approves. Implement it as a swarm-side gate, never a general guard loosening.\n\n1. Approved-set snapshot. In tools/scope-commands.mjs cmdApprove, after a successful approval (owner or auto), write .swarm/project/approved-tickets.json = {at, by, ticketsHash, changeOrderIds: [ids in ledger.changeOrders at approval], tickets: [the full approved ticket objects]} (mode 0o600, pretty JSON). Nothing else in cmdApprove changes for the plain and --yes paths.\n\n2. NEW pure module tools/split-auto-approve.mjs exporting evaluateAutoApprove({ledger, snapshot, profile}) -> {ok, conditions: [{name, ok, detail}]}. Every condition is evaluated and reported (do not stop at the first failure). Conditions:\n  a. snapshot: a snapshot exists with a tickets array; else fail 'no approved-ticket snapshot: the owner approves once with swarm scope approve --yes'.\n  b. change-order: ledger.changeOrders contains at least one id not in snapshot.changeOrderIds (this split comes from a newly recorded change order); detail lists the new ids.\n  c. no-done-cancelled: every ticket with status 'done' in the snapshot is still present in the ledger with status 'done'; detail lists any that are missing, cancelled or reopened.\n  d. no-paid-lanes: no added or changed ticket (added = id not in snapshot; changed = same id but a different JSON of its fields other than status/updatedAt/notes) has a lane or agent naming anthropic or openrouter (case-insensitive, also forms like anthropic:haiku).\n  e. no-migrations: no added or changed ticket has type 'migration', or a file under supabase/migrations/, prisma/migrations/, db/migrations/, migrations/, any file ending in .sql, or a path under any directory named in profile.migrations (read whatever directory/path fields profile.migrations holds; if its shape is unknown, treat any non-empty profile.migrations plus a .sql or migrations/ file as a hit).\n  f. no-deploy-or-main-merge: no added or changed ticket has a file named vercel.json, netlify.toml, fly.toml, Dockerfile, or under .github/workflows/ whose name contains deploy or release, and no acceptance line matching /\\b(deploy|production|prod)\\b/i or /\\bmerge\\b.*\\bmain\\b/i.\n  ok = every condition ok.\n\n3. In cmdApprove add the flag --auto-ok (mutually exclusive with --yes and --accept-waves; together -> refuse with a usage line, exit 1). With --auto-ok: run every existing approval gate exactly as today (tree, wiring, screens, waves without accept, manager gate); then read the snapshot and profile and call evaluateAutoApprove. If not ok: approve nothing, append a needs-you style journal blocker {kind:'blocker', id:'auto-approve-refused-<first new change order id or none>', text:'Split needs your approval: <failed condition names and details>. Approve with: swarm scope approve --yes'} via the existing journal appendEvent, appendLog {event:'auto-approve-refused', conditions}, print every condition line and exit 1. If ok: approve with by:'orchestrator-auto', appendLog {event:'auto-approve', by:'orchestrator-auto', changeOrders:<new ids>, conditions}, append a journal note {kind:'note', text:'Auto-approved split for <ids>: all conditions passed (snapshot, change-order, no-done-cancelled, no-paid-lanes, no-migrations, no-deploy-or-main-merge)'} and print the conditions plus the normal approval output. The plain 'scope approve' without --yes keeps today's needsHuman behavior.\n\n4. tools/orchestrator-allow.mjs: the orchestrator guard must allow exactly 'swarm scope approve --auto-ok' (optionally preceded by the existing allowed --root handling done elsewhere) and nothing else under approve: any other approve form (plain, --yes, a FILE argument, --accept-waves, --auto-ok combined with any other word, --auto-ok=x) stays denied. Change only omSwarmScopeAllowed and what it needs; nothing else in that file.\n\n5. NEW tests/split-auto-approve.test.mjs (first import: import './_isolate-config.mjs';): evaluateAutoApprove with each condition failing alone (a..f) blocks with that condition named; all passing returns ok; a split that cancels a done ticket fails c. Guard: swarmSubcommandAlwaysAllowed('scope', ['approve','--auto-ok']) is true; ['approve'], ['approve','--yes'], ['approve','--auto-ok','--yes'], ['approve','--auto-ok','--accept-waves'], ['approve','scope.md','--auto-ok'], ['approve','--auto-ok=1'] are all false. A command-level test in a temp project (read any scope test in context that drives cmdApprove for the fixture pattern; if none fits, test the snapshot writer and evaluate function directly and say so in your summary). Do not edit tools/swarm.mjs or any file not in outputs. tests/scope-approve-managers.test.mjs drives cmdApprove in a temp project: use its fixture pattern for the command-level test. The other scope tests are left out of context because the existing approve, split and ingest behavior must not change; the coordinator runs the main ones as checks.",
+   "context": [
+    "tools/tickets.mjs",
+    "tools/change-orders.mjs",
+    "tools/journal.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/scope-approve-managers.test.mjs",
+    "tests/change-order-auto-split.test.mjs"
+   ],
+   "outputs": [
+    "tools/split-auto-approve.mjs",
+    "tools/scope-commands.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/split-auto-approve.test.mjs"
+   ],
+   "timeoutMs": 3000000,
+   "ignoreTests": [
+    "tests/acceptance-sync.test.mjs",
+    "tests/batch-a-eval.test.mjs",
+    "tests/batch-b-eval.test.mjs",
+    "tests/batch-c-eval.test.mjs",
+    "tests/dogfood-fixes.test.mjs",
+    "tests/errors.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/gallery-tickets.test.mjs",
+    "tests/kit-and-interview.test.mjs",
+    "tests/lesson-34-eval.test.mjs",
+    "tests/lesson-35-eval.test.mjs",
+    "tests/lesson-37-eval.test.mjs",
+    "tests/lesson-38-eval.test.mjs",
+    "tests/lesson-39-eval.test.mjs",
+    "tests/lesson-40-eval.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/mark-deps.test.mjs",
+    "tests/review-recorder-lanes.test.mjs",
+    "tests/review-retry.test.mjs",
+    "tests/s13-live-bugs.test.mjs",
+    "tests/scope-commands.test.mjs",
+    "tests/scope-delete-tickets.test.mjs",
+    "tests/scope-gate-list.test.mjs",
+    "tests/scope-ingest-acceptance.test.mjs",
+    "tests/scope-ingest-owns-tests.test.mjs",
+    "tests/scope-ingest-paths.test.mjs",
+    "tests/scope-ingest-sensitive.test.mjs",
+    "tests/scope-ingest-waves.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/scope-ownership.test.mjs",
+    "tests/scope-root-files.test.mjs",
+    "tests/scope-set-guard.test.mjs",
+    "tests/scope-spec-gate.test.mjs",
+    "tests/scope-spec-no-runner.test.mjs",
+    "tests/scope-split-guards.test.mjs",
+    "tests/scope-split-lane-size.test.mjs",
+    "tests/scope-split-repair-loop.test.mjs",
+    "tests/scope-sync-delete.test.mjs",
+    "tests/scope-sync-replan.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/split-repair-auto.test.mjs",
+    "tests/split-repair.test.mjs",
+    "tests/splitter-lesson-55.test.mjs",
+    "tests/ticket-check-timeout.test.mjs",
+    "tests/ticket-id-blocks.test.mjs",
+    "tests/ticket-lane-risk.test.mjs",
+    "tests/ticket-owner-note.test.mjs",
+    "tests/ticket-paths-new-files.test.mjs",
+    "tests/ticket-paths-regression.test.mjs",
+    "tests/tickets-delivered.test.mjs",
+    "tests/ui-check.test.mjs",
+    "tests/wave-prep-robust.test.mjs"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "name": "auto-approve",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/split-auto-approve.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/scope-approve-managers.test.mjs",
+    "tests/change-order-auto-split.test.mjs",
+    "tests/scope-commands.test.mjs",
+    "tests/scope-set-guard.test.mjs"
+   ]
+  }
+ ]
+}

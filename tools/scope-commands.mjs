@@ -75,6 +75,7 @@ import {
   normTicketPath,
 } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
+import { evaluateAutoApprove } from './split-auto-approve.mjs';
 import { parseUncovered } from './uncovered-tests.mjs';
 import { suggestIgnoreTests } from './context-check.mjs';
 import { API_AGENTS, decodeContext } from './api-adapters.mjs';
@@ -111,7 +112,7 @@ export const SCOPE_SUBCOMMANDS = [
   { name: 'template', summary: 'Print or write the scope template.', flags: ['--out'] },
   { name: 'check', summary: 'Validate the scope file.', flags: [] },
   { name: 'split', summary: 'Split the scope into tickets.', flags: ['--stage', '--ingest', '--merge', '--wire', '--all', '--max-repairs', '--accept-waves', '--accept-new-path'] },
-  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves'] },
+  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves', '--auto-ok'] },
   { name: 'gate', summary: 'Ticket-manager scope gate: list findings or fix duplicate file owners.', flags: ['--list', '--json', '--fix-owners', '--yes'] },
   { name: 'sync', summary: 'Sync ticket status from a run.', flags: ['--integrated', '--accept-unreviewed', '--accept-unmet', '--reason', '--yes'] },
   { name: 'security-review', summary: 'Record Opus security review verdicts for a run.', flags: [] },
@@ -1059,6 +1060,33 @@ export function parseLooseJson(text) {
     }
     out = out.replace(/,(\s*[}\]])/g, '$1');
     try { return { value: JSON.parse(out), repaired: true }; } catch { throw first; }
+  }
+}
+
+async function readApprovedTicketsSnapshot(root) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'approved-tickets.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function writeApprovedTicketsSnapshot(root, payload) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const file = path.join(dir, 'approved-tickets.json');
+  await assertRegularOrMissing(file);
+  const tmp = path.join(dir, `.approved-tickets.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(payload, null, 2) + '\n');
+    await handle.sync();
+    await handle.close();
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.rm(tmp, { force: true });
+    throw error;
   }
 }
 
@@ -2394,6 +2422,9 @@ async function cmdGate(root, { flags }) {
 }
 
 async function cmdApprove(root, { rest, flags }, deps = {}) {
+  if (flags['auto-ok'] === true && (flags.yes === true || flags['accept-waves'] === true)) {
+    return out('usage: swarm scope approve [--yes | --auto-ok] (--yes and --auto-ok and --accept-waves are mutually exclusive)', 1);
+  }
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   const { scope, hash, text, file } = await loadScope(root, rest[0] ?? ledger.scope?.file);
@@ -2429,7 +2460,8 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   const waveLine = waveSummary(waveSimulation);
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
   const policy = await readApprovalPolicy(root);
-  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
+  const autoOk = flags['auto-ok'] === true;
+  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true && !autoOk) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
   const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
   const managerWarnings = [];
   const managerFindingLines = [];
@@ -2455,7 +2487,25 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   for (const warning of managerWarnings) {
     await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
   }
-  const by = flags.yes === true ? 'owner' : 'policy';
+  let autoApproveLines = [];
+  if (autoOk) {
+    const priorSnapshot = await readApprovedTicketsSnapshot(root);
+    const evalProfile = await readProfile(root);
+    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile });
+    autoApproveLines = evalResult.conditions.map(c => `${c.name}: ${c.ok ? 'ok' : 'FAIL'} — ${c.detail}`);
+    if (!evalResult.ok) {
+      const newIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+      const failed = evalResult.conditions.filter(c => !c.ok);
+      const blockerText = `Split needs your approval: ${failed.map(c => `${c.name} (${c.detail})`).join('; ')}. Approve with: swarm scope approve --yes`;
+      await appendEvent(root, { kind: 'blocker', id: `auto-approve-refused-${newIds[0] ?? 'none'}`, text: blockerText });
+      await appendLog(root, { event: 'auto-approve-refused', conditions: evalResult.conditions });
+      return out(autoApproveLines.join('\n'), 1);
+    }
+    const newCoIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+    await appendLog(root, { event: 'auto-approve', by: 'orchestrator-auto', changeOrders: newCoIds, conditions: evalResult.conditions });
+    await appendEvent(root, { kind: 'note', text: `Auto-approved split for ${newCoIds.join(', ') || 'change order'}: all conditions passed (snapshot, change-order, no-done-cancelled, no-paid-lanes, no-migrations, no-deploy-or-main-merge)` });
+  }
+  const by = autoOk ? 'orchestrator-auto' : flags.yes === true ? 'owner' : 'policy';
   const next = approveLedger(ledger, { by, now: now() });
   next.scope = { ...next.scope, hash, file };
   await writeLedger(root, next);
@@ -2472,10 +2522,17 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   if (/\b(python|django|fastapi|flask)\b/i.test(`${scope.overview}`)) stacks.add('python');
   const ignored = stacks.size ? await ensureGitignore(root, [...stacks].filter(s => ['node', 'python'].includes(s))).catch(() => ({ changed: false })) : { changed: false };
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
+  await writeApprovedTicketsSnapshot(root, {
+    at: next.approved.at,
+    by: next.approved.by,
+    ticketsHash: next.approved.ticketsHash,
+    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
+    tickets: next.tickets,
+  });
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
   try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  return out([...(autoApproveLines.length ? [...autoApproveLines, ''] : []), waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
