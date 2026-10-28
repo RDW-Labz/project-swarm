@@ -1,0 +1,60 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccdesignhive",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Hive page design port. The approved design is the static mockup docs/design/command-center-mockup/hive.html with docs/design/command-center-mockup/shared.css (graded by Opus, round 21). The REAL Hive page (served at /command-center, built by tools/watch-assets/cc-hive-mount.js and tools/watch-assets/hive-panels.js from live board data) currently renders as unstyled text: project names, 'asks/out/fails' labels and section titles stacked down the left edge, because tools/watch-assets/command-center.css is almost empty and the mount markup does not use the mockup's structure or classes. Make the real Hive look like the mockup at 1440x900 and at 390px phone width: same layout grid, header, project cards/columns, stat tiles, lane rows, session log, colours, type scale, spacing. Put all Hive styles in the NEW file tools/watch-assets/cc-hive.css (port from shared.css and the mockup's inline styles; scope selectors under .hive-body or the Hive root so they cannot leak into Cockpit). Adjust the markup in cc-hive-mount.js and hive-panels.js to the mockup's structure and class names where needed, keeping every data binding, data-project-id attribute, click navigation and existing test expectations (tests in context). In tools/watch-assets/command-center.html add <link rel=\"stylesheet\" href=\"/assets/cc-hive.css\"> and <link rel=\"stylesheet\" href=\"/assets/cc-cockpit.css\"> after the existing links (cc-cockpit.css is written by the parallel Cockpit job; see the contract). Use real data only: no hard-coded sample numbers from the mockup. Keep the first-visit tour working but it must not cover the cards (position it bottom-right as a small panel). No external fonts or network assets; use the font stacks in shared.css.",
+   "context": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/swarm-ui.css",
+    "tools/watch-assets/cc-phone.css",
+    "tools/watch-assets/cc-tour.js",
+    "tests/cc-hive-mount.test.mjs",
+    "coordination/review/cc-design-contract.md"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/command-center.html"
+   ],
+   "timeoutMs": 3000000
+  },
+  {
+   "id": "ccdesigncockpit",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Cockpit page design port. The approved design is the static mockup docs/design/command-center-mockup/cockpit.html with docs/design/command-center-mockup/shared.css (graded by Opus, round 21). The REAL Cockpit page (served at /command-center/project/<id>, built by tools/watch-assets/cc-cockpit-mount.js, tools/watch-assets/cockpit-view.js and tools/watch-assets/cockpit-lists.js from live board data) has almost no styling. Make it look like the mockup at 1440x900 and at 390px phone width: the header (large bold title, orange subtitle, mono breadcrumb, multi-colour segment rule), stack tiles with large numerals and tinted outlines, stream boxes with coloured top bars and progress tracks, ticket lists, and the single-column phone layout with no overlap. Put all Cockpit styles in the NEW file tools/watch-assets/cc-cockpit.css (scope selectors under the Cockpit root, e.g. .cc-cockpit-shell, so they cannot leak into Hive). Adjust markup in cc-cockpit-mount.js, cockpit-view.js and cockpit-lists.js to the mockup's structure and class names where needed, keeping every data binding and existing test expectation (tests in context). Real browsers: never call array methods on .children/.childNodes/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces this). command-center.html is written by the parallel Hive job and already links /assets/cc-cockpit.css (see the contract). Use real data only: no hard-coded sample numbers from the mockup. No external fonts or network assets.",
+   "context": [
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-boot.js",
+    "tools/watch-assets/swarm-ui.css",
+    "tools/watch-assets/cc-phone.css",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "coordination/review/cc-design-contract.md"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit.css",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js"
+   ],
+   "timeoutMs": 3000000
+  }
+ ],
+ "checks": [
+  { "name": "cc-units", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/cc-hive-mount.test.mjs", "tests/cc-cockpit-mount.test.mjs", "tests/command-center-lists.test.mjs", "tests/watch-assets-dom-collections.test.mjs", "tests/command-center-boot.test.mjs", "tests/command-center-routes-flag.test.mjs", "tests/watch-assets-browser-safe.test.mjs"] }
+ ]
+}
