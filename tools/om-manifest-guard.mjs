@@ -60,7 +60,49 @@ export function omSwarmRunGoPositionals(sub, rest) {
     i = step.next;
   }
   return pos;
+}
+
+const OM_SWARM_TICKET_VALUE_FLAGS = new Set([
+  '--root', '--pr', '--repo', '--branch', '--commit-message', '--resume', '--check', '--require-section',
+]);
+
+const ticketFlagName = a => {
+  const low = String(a).toLowerCase();
+  const eq = low.indexOf('=');
+  return eq === -1 ? low : low.slice(0, eq);
 };
+
+/** Non-flag argv words from `swarm ticket` (skips values for pipeline ticket flags; matches parseTicketArgs). */
+export function omSwarmTicketPositionals(rest) {
+  const pos = [];
+  let i = 0;
+  while (i < rest.length) {
+    const a = String(rest[i]);
+    if (!a.startsWith('-')) {
+      pos.push(a);
+      i += 1;
+      continue;
+    }
+    const name = ticketFlagName(a);
+    if (name === '--wait-required-only' || name === '-h' || name === '--help') {
+      i += 1;
+      continue;
+    }
+    if (OM_SWARM_TICKET_VALUE_FLAGS.has(name)) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) {
+        i += 1;
+        continue;
+      }
+      if (i + 1 >= rest.length) return null;
+      i += 2;
+      continue;
+    }
+    if (a.startsWith('-')) return null;
+    i += 1;
+  }
+  return pos;
+}
 
 const argvStrings = raw => {
   if (!Array.isArray(raw)) return null;

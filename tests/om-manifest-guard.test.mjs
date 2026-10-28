@@ -228,3 +228,47 @@ test('missing root denies json positional on swarm run', () => {
   const r = omRunManifestVetted(undefined, 'evil.json');
   assert.equal(r.ok, false);
 });
+
+test('orchestratorModeCommandAllowed denies swarm ticket with unvetted manifest checks', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: ['npm', 'test'] });
+  const rel = 'coordination/manifests/m.json';
+  await writeManifest(root, rel, {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: 'evil', argv: EVIL_CHECK }],
+  });
+  const ctx = { root, cwd: root };
+  assert.equal(
+    orchestratorModeCommandAllowed(`swarm ticket ${rel} --pr coordination/manifests/p.json`, ctx),
+    false,
+  );
+});
+
+test('orchestratorModeCommandAllowed allows swarm ticket when manifest checks are vetted', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: EVIL_CHECK });
+  const rel = 'coordination/manifests/m.json';
+  await writeManifest(root, rel, {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: [] }],
+    checks: [{ name: VETTED_NAME, argv: EVIL_CHECK }],
+  });
+  const ctx = { root, cwd: root };
+  assert.equal(
+    orchestratorModeCommandAllowed(`swarm ticket ${rel} --pr coordination/manifests/p.json`, ctx),
+    true,
+  );
+});
+
+test('orchestratorModeCommandAllowed allows swarm ticket plain manifest', async t => {
+  await installLocalSwarmShim();
+  const root = await projectFixture(t, { checksArgv: null });
+  const rel = 'coordination/manifests/plain.json';
+  await writeManifest(root, rel, {
+    version: 1,
+    jobs: [{ id: 'j1', prompt: 'work', outputs: ['src/a.ts'] }],
+  });
+  const ctx = { root, cwd: root };
+  assert.equal(orchestratorModeCommandAllowed(`swarm ticket ${rel} --pr p.json`, ctx), true);
+});
