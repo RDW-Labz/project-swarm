@@ -136,6 +136,7 @@
     var value = row.value;
     if (typeof value !== 'number' || !Number.isFinite(value)) { return '0'; }
     if (row.unit === 'pct') { return Math.round(value) + '%'; }
+    if (row.unit === 'usd') { return String(Math.round(value * 100) / 100); }
     return String(Math.round(value));
   }
 
@@ -175,6 +176,146 @@
     while (node.firstChild) { node.removeChild(node.firstChild); }
   }
 
+  function readTrustedDisplay(field) {
+    if (!field || typeof field !== 'object') { return '—'; }
+    if (typeof field.source !== 'string' || !field.source.length) { return '—'; }
+    if (field.value === null || field.value === undefined || field.value === '') { return '—'; }
+    return String(field.value);
+  }
+
+  function trustedTitle(field) {
+    if (field && typeof field.source === 'string' && field.source.length) { return field.source; }
+    return '';
+  }
+
+  var CARD_ROW_KEYS = ['asks', 'out', 'fails'];
+
+  /**
+   * Rebuild card body metrics from live snapshot project fields (dt/dd grid + meter).
+   * @param {HTMLElement} cardEl
+   * @param {object} project
+   */
+  function renderProjectCardMetrics(cardEl, project) {
+    if (!cardEl || !project) { return; }
+    var bd = cardEl.querySelector ? cardEl.querySelector('.hive-node-bd') : null;
+    if (!bd) { return; }
+    clearChildren(bd);
+
+    var dl = el('dl', 'hive-kv');
+    for (var ki = 0; ki < CARD_ROW_KEYS.length; ki += 1) {
+      var key = CARD_ROW_KEYS[ki];
+      var field = project[key];
+      dl.appendChild(el('dt', null, key));
+      var dd = el('dd', 'num', readTrustedDisplay(field));
+      var title = trustedTitle(field);
+      if (title) { dd.setAttribute('title', title); }
+      dl.appendChild(dd);
+    }
+    bd.appendChild(dl);
+
+    var meterField = project.meter;
+    var meterPct = null;
+    if (meterField && typeof meterField === 'object' && Number.isFinite(meterField.value)) {
+      meterPct = Math.max(0, Math.min(100, meterField.value));
+    } else if (project.percentDone && typeof project.percentDone.value === 'string') {
+      var parsed = parseInt(project.percentDone.value, 10);
+      if (Number.isFinite(parsed)) { meterPct = Math.max(0, Math.min(100, parsed)); }
+    }
+    if (meterPct != null) {
+      var meter = el('div', 'hive-meter');
+      var meterLabel = (meterField && typeof meterField.label === 'string' && meterField.label.length)
+        ? meterField.label
+        : 'done';
+      meter.appendChild(el('span', null, meterLabel));
+      var track = el('span', 'track');
+      var fill = document.createElement('i');
+      fill.className = 'fill';
+      fill.style.width = meterPct.toFixed(0) + '%';
+      track.appendChild(fill);
+      meter.appendChild(track);
+      var val = el('span', 'num', meterPct + '%');
+      var meterTitle = trustedTitle(meterField) || trustedTitle(project.percentDone);
+      if (meterTitle) { val.setAttribute('title', meterTitle); }
+      meter.appendChild(val);
+      bd.appendChild(meter);
+    }
+  }
+
+  function statLineFromLabelled(field, label) {
+    if (!field || typeof field.value !== 'number' || !Number.isFinite(field.value)) { return null; }
+    if (typeof field.source !== 'string' || !field.source.length) { return null; }
+    return {
+      label: label,
+      value: String(Math.round(field.value)),
+      title: field.source,
+    };
+  }
+
+  /**
+   * Build panel model from a Command Center snapshot when panels blob is absent.
+   */
+  function deriveHivePanelModel(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return { journalEvents: [], laneCounts: {}, savingsRows: [], statLines: [] };
+    }
+    if (snapshot.panels && typeof snapshot.panels === 'object') {
+      return snapshot.panels;
+    }
+    var stats = snapshot.stats && typeof snapshot.stats === 'object' ? snapshot.stats : {};
+    var projects = Array.isArray(snapshot.projects) ? snapshot.projects : [];
+    var laneCounts = {};
+    for (var pi = 0; pi < projects.length; pi += 1) {
+      var proj = projects[pi];
+      var lane = typeof proj.lane === 'string' ? proj.lane : 'control';
+      var live = proj.liveAgents;
+      if (live && typeof live.value === 'number' && Number.isFinite(live.value) && live.value > 0) {
+        laneCounts[lane] = (laneCounts[lane] || 0) + Math.floor(live.value);
+      }
+    }
+    var statLines = [];
+    var needsLine = statLineFromLabelled(stats.needsYouCount, 'needs you');
+    if (needsLine) { statLines.push(needsLine); }
+    var agentsLine = statLineFromLabelled(stats.agentsLive, 'agents live');
+    if (agentsLine) { statLines.push(agentsLine); }
+    var lanesHero = {};
+    if (stats.projectsTotal && typeof stats.projectsTotal.value === 'number') {
+      lanesHero.repos = Math.floor(stats.projectsTotal.value);
+    } else {
+      lanesHero.repos = projects.length;
+    }
+    lanesHero.rings = 1;
+
+    var journalEvents = [];
+    if (Array.isArray(snapshot.journalEvents)) { journalEvents = snapshot.journalEvents; }
+    else if (Array.isArray(snapshot.events)) { journalEvents = snapshot.events; }
+
+    var savingsRows = [];
+    if (stats.spendUsd && typeof stats.spendUsd.value === 'number' && stats.spendUsd.value >= 0) {
+      savingsRows.push({
+        label: 'board spend',
+        value: stats.spendUsd.value,
+        unit: 'usd',
+        title: stats.spendUsd.source,
+        max: Math.max(stats.spendUsd.value, 1),
+      });
+    }
+
+    return {
+      journalEvents: journalEvents,
+      laneCounts: laneCounts,
+      statLines: statLines,
+      savingsRows: savingsRows,
+      lanesHero: lanesHero,
+      latencySamples: Array.isArray(snapshot.latencySamples) ? snapshot.latencySamples : [],
+      throughputSamples: Array.isArray(snapshot.throughputSamples) ? snapshot.throughputSamples : [],
+    };
+  }
+
+  function appendEmpty(host, message) {
+    var p = el('p', 'cc-empty', message);
+    host.appendChild(p);
+  }
+
   function drawBarChart(canvas, samples, colors) {
     if (!canvas || !canvas.getContext) { return; }
     var ctx = canvas.getContext('2d');
@@ -184,13 +325,6 @@
     ctx.clearRect(0, 0, w, h);
     var list = Array.isArray(samples) ? samples : [];
     if (!list.length) {
-      var bars = 20;
-      for (var i = 0; i < bars; i += 1) {
-        var bh = 6 + ((i * 17) % 28);
-        var x = 4 + i * ((w - 8) / bars);
-        ctx.fillStyle = (colors && colors[i % colors.length]) || '#5eb8ff';
-        ctx.fillRect(x, h - bh - 3, (w - 8) / bars - 2, bh);
-      }
       return;
     }
     var max = list[0];
@@ -220,8 +354,13 @@
     canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
     canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
     canvas.setAttribute('aria-label', modelObj.throughputChartLabel || 'Throughput chart');
-    host.appendChild(canvas);
-    drawBarChart(canvas, modelObj.throughputSamples || [], ['#5eb8ff', '#3dd6a5', '#ff4d8d', '#f5c451']);
+    var throughputSamples = Array.isArray(modelObj.throughputSamples) ? modelObj.throughputSamples : [];
+    if (throughputSamples.length) {
+      host.appendChild(canvas);
+      drawBarChart(canvas, throughputSamples, ['#5eb8ff', '#3dd6a5', '#ff4d8d', '#f5c451']);
+    } else {
+      appendEmpty(host, 'No lane activity yet');
+    }
     var caption = el('p', 'term-prompt term-prompt--chart-caption');
     caption.appendChild(el('span', 'lbl', 'throughput samples'));
     if (typeof modelObj.throughputPeak === 'number' && Number.isFinite(modelObj.throughputPeak)) {
@@ -268,6 +407,11 @@
     clearChildren(host);
     host.classList.add('event-log', 'hive-event-log');
 
+    if (!list.length) {
+      appendEmpty(host, 'No recent board events yet');
+      return;
+    }
+
     for (var i = 0; i < list.length; i += 1) {
       var event = list[i];
       var li = el('li');
@@ -295,6 +439,9 @@
     }
 
     var rows = laneRowsFromCounts(laneCounts);
+    if (!rows.length) {
+      appendEmpty(barsRoot, 'No lane activity yet');
+    }
     for (var i = 0; i < rows.length; i += 1) {
       var row = rows[i];
       var rowEl = el('div', 'lane-row');
@@ -315,7 +462,11 @@
       var hero = host.querySelector ? host.querySelector('.gates-hero') : null;
       if (!hero) {
         hero = el('p', 'gates-hero hive-gates-hero');
-        host.insertBefore(hero, barsRoot);
+        if (typeof host.insertBefore === 'function' && barsRoot.parentNode === host) {
+          host.insertBefore(hero, barsRoot);
+        } else {
+          host.appendChild(hero);
+        }
       } else {
         clearChildren(hero);
       }
@@ -365,20 +516,31 @@
       rowsRoot.appendChild(rowEl);
     }
 
-    var canvas = host.querySelector ? host.querySelector('canvas.mini-chart') : null;
-    if (!canvas) {
-      canvas = document.createElement('canvas');
+    var samples = Array.isArray(opts.throughputSamples) ? opts.throughputSamples : [];
+    var existingCanvas = host.querySelector ? host.querySelector('canvas.mini-chart') : null;
+    if (existingCanvas && existingCanvas.parentNode) {
+      existingCanvas.parentNode.removeChild(existingCanvas);
+    }
+    var existingEmpty = host.querySelector ? host.querySelector('.cc-empty') : null;
+    if (existingEmpty && existingEmpty.parentNode) {
+      existingEmpty.parentNode.removeChild(existingEmpty);
+    }
+    if (samples.length >= 2) {
+      var canvas = document.createElement('canvas');
       canvas.className = 'mini-chart';
+      canvas.id = 'chart-latency';
       canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
       canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
-      canvas.setAttribute('aria-label', opts.chartLabel || 'Throughput chart');
+      canvas.setAttribute('aria-label', opts.chartLabel || 'Decision latency chart');
       host.appendChild(canvas);
+      drawSparkline(canvas, samples, {
+        width: canvas.width,
+        height: canvas.height,
+        strokeStyle: opts.strokeStyle || '#3dd6a5',
+      });
+    } else if (!samples.length) {
+      appendEmpty(host, 'No lane activity yet');
     }
-    drawSparkline(canvas, opts.throughputSamples || [], {
-      width: canvas.width,
-      height: canvas.height,
-      strokeStyle: opts.strokeStyle || '#3dd6a5',
-    });
 
     var caption = host.querySelector ? host.querySelector('.hive-term-prompt') : null;
     if (!caption) {
@@ -459,5 +621,7 @@
     renderStatLines: renderStatLines,
     drawBarChart: drawBarChart,
     renderHivePanels: renderHivePanels,
+    renderProjectCardMetrics: renderProjectCardMetrics,
+    deriveHivePanelModel: deriveHivePanelModel,
   };
 }));

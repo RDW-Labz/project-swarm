@@ -121,15 +121,40 @@ function statStripEntries(stats) {
 }
 
 function panelModelFromSnapshot(snapshot) {
-  const raw = snapshot?.panels;
-  if (!raw || typeof raw !== 'object') {
-    return {
-      journalEvents: [],
-      laneCounts: {},
-      savingsRows: [],
-    };
+  const { deriveHivePanelModel } = resolveHivePanels();
+  return deriveHivePanelModel(snapshot);
+}
+
+function applyAlternatingNodeLayout(nodesMount) {
+  if (!nodesMount) return;
+  const cards = Array.from(nodesMount.children || []);
+  for (let i = 0; i < cards.length; i += 1) {
+    const card = cards[i];
+    if (!card?.dataset) continue;
+    const side = i % 2 ? 'right' : 'left';
+    const slot = Math.floor(i / 2);
+    card.dataset.side = side;
+    card.dataset.slot = String(slot);
   }
-  return raw;
+  layoutHiveProjectNodes(nodesMount);
+}
+
+function adjustPhoneStreams(streams, geom) {
+  if (!geom.phone || !streams?.length) return streams;
+  const ringBottomY = geom.cy + geom.ringR * 0.92;
+  return streams.map((s) => {
+    const to = s.to;
+    return {
+      ...s,
+      from: { x: geom.cx, y: ringBottomY },
+      ctrl: {
+        x: (geom.cx + to.x) * 0.5 + (to.x - geom.cx) * 0.12,
+        y: (ringBottomY + to.y) * 0.45,
+      },
+      to,
+      phone: true,
+    };
+  });
 }
 
 function brainEventsFromSnapshot(snapshot) {
@@ -383,12 +408,16 @@ export function renderHive(host, snapshot, deps) {
       statStrip.appendChild(liveEl);
     }
     renderHiveLayout(shell, projects, { legendEl, nodesMount, stageEl: stage });
-    layoutHiveProjectNodes(nodesMount);
+    applyAlternatingNodeLayout(nodesMount);
     clearCardHandlers();
     const cardNodes = Array.from(nodesMount.children || []);
+    const { renderProjectCardMetrics } = resolveHivePanels();
     for (let i = 0; i < cardNodes.length; i += 1) {
       const card = cardNodes[i];
       const project = projects[i];
+      if (card && project) {
+        renderProjectCardMetrics(card, project);
+      }
       if (card && project?.id) {
         card.dataset.projectId = project.id;
         wireProjectCard(card, project.id);
@@ -412,7 +441,7 @@ export function renderHive(host, snapshot, deps) {
     const phone = isPhoneLayout(win.innerWidth ?? 1024);
     if (stage.classList) stage.classList.toggle('hive-phone', phone);
 
-    layoutHiveProjectNodes(nodesMount);
+    applyAlternatingNodeLayout(nodesMount);
 
     const stageBox = stage.getBoundingClientRect?.() || stageRect;
     const coreRect = coreUi.getBoundingClientRect?.() || {
@@ -499,7 +528,7 @@ export function renderHive(host, snapshot, deps) {
     const rect = stage.getBoundingClientRect?.() || { width: geom.w, height: geom.h };
     ctx.clearRect(0, 0, rect.width || geom.w, rect.height || geom.h);
 
-    const streams = buildHiveStreams(geom.nodeEntries, geom);
+    const streams = adjustPhoneStreams(buildHiveStreams(geom.nodeEntries, geom), geom);
     drawGuidePaths(ctx, streams);
 
     const path = forceStatic ? HIVE_STREAM_RENDER_STATIC : renderPath();

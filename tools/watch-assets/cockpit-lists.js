@@ -68,70 +68,211 @@ function ledgerTicketById(ledger, id) {
   return (ledger?.tickets ?? []).find(t => t.id === id);
 }
 
+function ticketIdxModifier(ticket) {
+  const stage = ticket?.stage;
+  const name = typeof stage === 'string' ? stage.toLowerCase() : '';
+  if (name.includes('opus') || name.includes('s1')) return 'ticket-idx--opus';
+  if (name.includes('skill')) return 'ticket-idx--skills';
+  if (name.includes('engine')) return 'ticket-idx--engines';
+  if (name.includes('taste')) return 'ticket-idx--taste';
+  if (name.includes('broll') || name.includes('b-roll')) return 'ticket-idx--broll';
+  if (name.includes('web')) return 'ticket-idx--web';
+  if (ticket?.status === 'done') return 'ticket-idx--taste';
+  if (ticket?.status === 'blocked') return 'ticket-idx--broll';
+  if (ticket?.status === 'running') return 'ticket-idx--engines';
+  return 'ticket-idx--pending';
+}
+
+function formatQueueIndex(index) {
+  const n = index + 1;
+  return (n < 10 ? '0' : '') + String(n);
+}
+
+function ticketRowMark(doc, status) {
+  const mark = doc.createElement('span');
+  mark.className = 'ticket-mark';
+  if (status === 'done') {
+    mark.innerHTML = '<svg class="ticket-check" viewBox="0 0 12 12" focusable="false" aria-hidden="true"><path d="M2.5 6.2 5 8.7 9.5 3.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>';
+  } else if (status === 'running') {
+    const live = doc.createElement('span');
+    live.className = 'ticket-mark--live';
+    mark.appendChild(live);
+  } else {
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = 'o';
+  }
+  return mark;
+}
+
+function buildTicketRow(doc, job, full, queueIndex) {
+  const status = full?.status || job.status || 'todo';
+  const row = doc.createElement('button');
+  row.type = 'button';
+  row.className = `ticket-row cockpit-ticket-row ticket-row--${status}`;
+  row.setAttribute('data-ticket-id', job.id);
+  const idx = doc.createElement('span');
+  idx.className = `ticket-idx num ${ticketIdxModifier(full)}`;
+  idx.textContent = formatQueueIndex(queueIndex);
+  const main = doc.createElement('span');
+  main.className = 'ticket-main';
+  const title = doc.createElement('span');
+  title.className = 'ticket-name cockpit-ticket-title';
+  title.textContent = full?.title || job.id;
+  main.appendChild(title);
+  if (full?.stage) {
+    const sub = doc.createElement('span');
+    sub.className = 'ticket-sub';
+    sub.textContent = String(full.stage);
+    main.appendChild(sub);
+  }
+  const badge = doc.createElement('span');
+  badge.className = 'ticket-badge cockpit-ticket-status';
+  badge.textContent = status;
+  row.appendChild(idx);
+  row.appendChild(main);
+  row.appendChild(badge);
+  row.appendChild(ticketRowMark(doc, status));
+  return row;
+}
+
 /**
  * @param {HTMLElement|{ appendChild: Function, ownerDocument?: object }} host
  * @param {object|null|undefined} ledger
- * @param {{ projectConfig?: object, queueDeps: QueueDeps, filterQuery?: string }} options
+ * @param {{ projectConfig?: object, queueDeps: QueueDeps, filterQuery?: string, sliceStart?: number, sliceEnd?: number, showSearch?: boolean }} options
  */
 export function renderCockpitTicketList(host, ledger, options = {}) {
-  const { projectConfig = {}, queueDeps, filterQuery = '' } = options;
+  const {
+    projectConfig = {},
+    queueDeps,
+    filterQuery = '',
+    sliceStart = 0,
+    sliceEnd,
+    showSearch = true,
+  } = options;
   ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
   while (host.firstChild) host.removeChild(host.firstChild);
 
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
 
-  const search = doc.createElement('div');
-  search.className = 'cockpit-ticket-search';
-  const label = doc.createElement('label');
-  label.textContent = 'Search tickets';
-  const input = doc.createElement('input');
-  input.type = 'search';
-  input.placeholder = 'Filter by id or title';
-  input.value = filterQuery;
-  search.appendChild(label);
-  search.appendChild(input);
-  host.appendChild(search);
+  if (showSearch) {
+    const search = doc.createElement('div');
+    search.className = 'ticket-search cockpit-ticket-search';
+    const label = doc.createElement('label');
+    label.textContent = 'Search tickets';
+    const input = doc.createElement('input');
+    input.type = 'search';
+    input.placeholder = 'Filter by id or title';
+    input.value = filterQuery;
+    search.appendChild(label);
+    search.appendChild(input);
+    host.appendChild(search);
+  }
 
   const col = doc.createElement('div');
-  col.className = 'cockpit-ticket-col';
+  col.className = 'ticket-col cockpit-ticket-col';
   col.setAttribute('data-cockpit-ticket-list', 'true');
 
-  const jobs = queueVisibleJobs(ledger, projectConfig, queueDeps);
+  const allJobs = queueVisibleJobs(ledger, projectConfig, queueDeps);
+  const end = sliceEnd == null ? allJobs.length : Math.min(allJobs.length, sliceEnd);
+  const jobs = allJobs.slice(sliceStart, end);
   const q = String(filterQuery || '').trim().toLowerCase();
 
   if (!jobs.length) {
     const empty = doc.createElement('p');
-    empty.className = 'cockpit-ticket-empty';
+    empty.className = 'cockpit-ticket-empty cc-empty';
     empty.setAttribute('data-cockpit-empty', 'queue');
-    empty.textContent = 'Queue is empty for this project';
+    empty.textContent = 'No tickets in this column';
     col.appendChild(empty);
   } else {
-    for (const job of jobs) {
+    for (let i = 0; i < jobs.length; i += 1) {
+      const job = jobs[i];
       const full = ledgerTicketById(ledger, job.id);
       const title = full?.title || job.id;
       const hay = `${job.id} ${title}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
-      const row = doc.createElement('div');
-      row.className = `ticket-row cockpit-ticket-row ticket-row--${full?.status || job.status || 'todo'}`;
-      row.setAttribute('data-ticket-id', job.id);
-      const idEl = doc.createElement('span');
-      idEl.className = 'cockpit-ticket-id';
-      idEl.textContent = job.id;
-      const titleEl = doc.createElement('span');
-      titleEl.className = 'cockpit-ticket-title';
-      titleEl.textContent = title;
-      const statusEl = doc.createElement('span');
-      statusEl.className = 'cockpit-ticket-status';
-      statusEl.textContent = job.status || '';
-      row.appendChild(idEl);
-      row.appendChild(titleEl);
-      row.appendChild(statusEl);
-      col.appendChild(row);
+      col.appendChild(buildTicketRow(doc, job, full, sliceStart + i));
     }
   }
 
   host.appendChild(col);
+}
+
+/**
+ * @param {HTMLElement|{ appendChild: Function }} host
+ * @param {Array<{ id?: string, title: string, status?: string, body?: string, pct?: number, accent?: string }>} items
+ */
+export function renderWorkerStream(host, items) {
+  ensureStyle(host, 'cockpit-lists-css', COCKPIT_LISTS_CSS);
+  while (host.firstChild) host.removeChild(host.firstChild);
+  const doc = host.ownerDocument;
+  if (!doc?.createElement) return;
+  const grid = doc.createElement('div');
+  grid.className = 'stream-grid';
+  grid.setAttribute('data-cockpit-worker-stream', 'true');
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    const empty = doc.createElement('p');
+    empty.className = 'cc-empty';
+    empty.textContent = 'No finished tickets yet';
+    grid.appendChild(empty);
+  } else {
+    for (const item of list) {
+      const accent = item.accent || 'stream-card--accent-teal';
+      const card = doc.createElement('article');
+      card.className = `stream-card ${accent}`;
+      const top = doc.createElement('div');
+      top.className = 'stream-top';
+      if (item.id) {
+        const idEl = doc.createElement('span');
+        idEl.className = 'stream-id num';
+        idEl.textContent = item.id;
+        top.appendChild(idEl);
+      }
+      const titleEl = doc.createElement('span');
+      titleEl.className = 'stream-title';
+      titleEl.textContent = item.title || '';
+      top.appendChild(titleEl);
+      if (item.status) {
+        const st = doc.createElement('span');
+        st.className = 'stream-status';
+        st.textContent = item.status;
+        top.appendChild(st);
+      }
+      card.appendChild(top);
+      if (item.body) {
+        const meta = doc.createElement('span');
+        meta.className = 'stream-meta';
+        meta.textContent = item.body;
+        card.appendChild(meta);
+      }
+      const bar = doc.createElement('div');
+      bar.className = 'stream-bar';
+      const fill = doc.createElement('span');
+      const pct = typeof item.pct === 'number' ? item.pct : 100;
+      if (fill.style && typeof fill.style.setProperty === 'function') {
+        fill.style.setProperty('--pct', `${pct}%`);
+      }
+      bar.appendChild(fill);
+      card.appendChild(bar);
+      grid.appendChild(card);
+    }
+  }
+  host.appendChild(grid);
+}
+
+export function workerStreamFromLedger(ledger, limit = 4) {
+  const tickets = (ledger?.tickets ?? []).filter(t => t.status === 'done');
+  tickets.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const slice = tickets.slice(-limit).reverse();
+  return slice.map(t => ({
+    id: t.id,
+    title: t.title || t.id,
+    status: 'Done',
+    body: t.stage ? `Stage ${t.stage}` : 'Finished',
+    pct: 100,
+    accent: 'stream-card--accent-teal',
+  }));
 }
 
 /**

@@ -19,11 +19,57 @@ function setCompleted(storage, userId) {
   storage.setItem(completionKey(userId), '1');
 }
 
-function makeButton(doc, label) {
+function makeButton(doc, label, extraClass) {
   const b = doc.createElement('button');
   b.type = 'button';
   b.textContent = label;
+  if (extraClass) b.className = extraClass;
   return b;
+}
+
+function isPhoneTour(doc) {
+  try {
+    const win = doc.defaultView || globalThis;
+    if (win && typeof win.matchMedia === 'function') {
+      return win.matchMedia('(max-width: 720px)').matches;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+function positionTourCard(doc, card, targetEl) {
+  if (!card || !card.style) return;
+  card.style.position = 'fixed';
+  card.style.margin = '0';
+  card.style.width = 'min(300px, calc(100vw - 20px))';
+  card.style.maxHeight = 'min(40vh, 280px)';
+  card.style.overflow = 'auto';
+  card.style.right = '';
+  card.style.bottom = '';
+  card.style.left = '';
+  card.style.top = '';
+  if (isPhoneTour(doc)) {
+    card.style.inset = 'auto 8px 8px';
+    card.style.maxHeight = '40vh';
+    return;
+  }
+  if (!targetEl || typeof targetEl.getBoundingClientRect !== 'function') {
+    card.style.right = 'max(10px, env(safe-area-inset-right))';
+    card.style.bottom = 'max(10px, env(safe-area-inset-bottom))';
+    return;
+  }
+  const rect = targetEl.getBoundingClientRect();
+  const win = doc.defaultView || globalThis;
+  const vw = win.innerWidth || 1024;
+  const vh = win.innerHeight || 768;
+  const cardH = 220;
+  let top = rect.top - cardH - 12;
+  if (top < 8) top = Math.min(vh - cardH - 8, rect.bottom + 12);
+  const left = Math.max(8, Math.min(rect.left, vw - 308));
+  card.style.top = `${Math.max(8, top)}px`;
+  card.style.left = `${left}px`;
 }
 
 // Starts the tour. Replay ignores completion but never clears it for any user.
@@ -47,7 +93,7 @@ export function startTour(opts) {
   const body = doc.createElement('p');
   const counter = doc.createElement('p');
   const back = makeButton(doc, 'Back');
-  const next = makeButton(doc, 'Next');
+  const next = makeButton(doc, 'Next', 'cc-btn');
   const skip = makeButton(doc, 'Skip tour');
   card.append(title, body, counter, back, next, skip);
   overlay.append(card);
@@ -69,6 +115,7 @@ export function startTour(opts) {
       el.classList.add('cc-tour-highlight');
       highlighted = el;
     }
+    positionTourCard(doc, card, el);
     title.textContent = step.title;
     body.textContent = step.text;
     counter.textContent = 'Step ' + (i + 1) + ' of ' + steps.length;

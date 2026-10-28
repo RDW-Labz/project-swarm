@@ -127,11 +127,6 @@ export function renderCockpit(host, data, opts) {
     block.appendChild(el('span', 'num-label', 'lane'));
     block.appendChild(document.createTextNode(' ' + meta.lane));
   }
-  if (meta.project) {
-    block.appendChild(el('span', 'sep', '/'));
-    block.appendChild(el('span', 'num-label', 'project'));
-    block.appendChild(document.createTextNode(' ' + meta.project));
-  }
   nav.appendChild(block);
 
   const orchBlock = el('span', 'nav-block');

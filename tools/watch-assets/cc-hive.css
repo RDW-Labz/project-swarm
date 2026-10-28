@@ -148,17 +148,22 @@ body.hive-body.cc-body {
 
 .hive-body .hive-stat-strip .cc-stat{
   flex: 1 1 72px;
-  padding: 4px 8px;
+  padding: 4px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .hive-body .hive-stat-strip .cc-stat .val{
-  font-size: 18px;
+  font-size: 22px;
 }
 
 .hive-body .hive-stat-strip .cc-live{
   min-height: 44px;
-  padding: 4px 12px;
+  padding: 4px 14px;
   font-size: 11px;
+  border-radius: 999px;
+  flex: 0 0 auto;
 }
 
 .hive-body .hive-panels-wrap{
@@ -382,7 +387,7 @@ body.hive-body.cc-body {
 }
 
 @keyframes live-pulse {
-.hive-body 50%{
+  50% {
     opacity: .45;
     transform: scale(.85);
   }
@@ -891,6 +896,13 @@ body.hive-body.cc-body {
   font-size: 10px;
 }
 
+.hive-body .cc-empty{
+  margin: 4px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 @media (max-height: 920px) and (min-width: 721px) {
 .hive-body .hive-core-ui{
     width: min(34vh, 56%);
@@ -1215,7 +1227,8 @@ body.hive-body{
     max-width: min(60vw, calc(100% - 16px));
     max-height: min(60vw, calc(100% - 16px));
     flex: none;
-    overflow: hidden;
+    background: none;
+    overflow: visible;
   }
 
 .hive-body .hive-stage.hive-phone .hive-toolgate-callout{
@@ -1321,4 +1334,87 @@ body.hive-body{
   }
 }
 
-.hive-body .cc-tour-overlay{position:fixed;inset:0;z-index:120;pointer-events:none;background:transparent}.hive-body .cc-tour-card{position:fixed;right:max(10px,env(safe-area-inset-right));bottom:max(10px,env(safe-area-inset-bottom));left:auto;top:auto;width:min(300px,calc(100vw - 20px));max-height:min(40vh,280px);overflow:auto;pointer-events:auto;margin:0;padding:12px 14px;border-radius:var(--r,16px);border:1px solid var(--line,#2a2a34);background:linear-gradient(180deg,var(--card-2,#14141a),var(--card,#0e0e12));box-shadow:var(--shadow,0 10px 32px rgba(0,0,0,.45));font:13px/1.45 var(--font,ui-sans-serif,system-ui,sans-serif);color:var(--fg,#ececf1)}.hive-body .cc-tour-card h2{margin:0 0 8px;font-size:14px;font-weight:700}.hive-body .cc-tour-card p{margin:0 0 10px;color:var(--muted,#9ca3af);font-size:12px}.hive-body .cc-tour-card button{min-height:44px;min-width:44px;margin:4px 6px 0 0;padding:8px 12px;border-radius:var(--pill,999px);border:1px solid var(--line,#2a2a34);background:var(--card-2,#14141a);color:var(--fg,#ececf1);font:inherit;font-size:12px;cursor:pointer}.hive-body .cc-tour-highlight{outline:2px solid #7dd3fc;outline-offset:2px;border-radius:var(--r-sm,10px)}body.hive-body #command-center-root.cc-app{max-width:none;margin:0;padding:0;width:100%;height:100%;min-height:0}
+.hive-body .cc-tour-overlay{
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  pointer-events: auto;
+  background: rgba(5, 5, 8, 0.55);
+}
+
+.hive-body .cc-tour-card{
+  position: fixed;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  left: auto;
+  top: auto;
+  width: min(300px, calc(100vw - 20px));
+  max-height: min(40vh, 280px);
+  overflow: auto;
+  pointer-events: auto;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r, 16px);
+  border: 1px solid var(--line, #2a2a34);
+  background: linear-gradient(180deg, var(--card-2, #14141a), var(--card, #0e0e12));
+  box-shadow: var(--shadow, 0 10px 32px rgba(0, 0, 0, .45));
+  font: 13px/1.45 var(--font, ui-sans-serif, system-ui, sans-serif);
+  color: var(--fg, #ececf1);
+}
+
+.hive-body .cc-tour-card h2{
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.hive-body .cc-tour-card p{
+  margin: 0 0 10px;
+  color: var(--muted, #9ca3af);
+  font-size: 12px;
+}
+
+.hive-body .cc-tour-card button{
+  min-height: 44px;
+  min-width: 44px;
+  margin: 4px 6px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--pill, 999px);
+  border: 1px solid var(--line, #2a2a34);
+  background: var(--card-2, #14141a);
+  color: var(--fg, #ececf1);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hive-body .cc-tour-card button.cc-btn{
+  background: var(--card-2);
+  box-shadow: none;
+}
+
+.hive-body .cc-tour-card button.cc-btn:focus-visible{
+  box-shadow: var(--ring);
+}
+
+.hive-body .cc-tour-highlight{
+  outline: 2px solid #7dd3fc;
+  outline-offset: 2px;
+  border-radius: var(--r-sm, 10px);
+}
+
+@media (max-width: 720px) {
+  .hive-body .cc-tour-card{
+    inset: auto 8px 8px;
+    max-height: 40vh;
+  }
+}
+
+body.hive-body #command-center-root.cc-app{
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
