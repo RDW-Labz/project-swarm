@@ -376,7 +376,9 @@ const collectMutantCheck = (mutantCheck, fieldLabel, out, errors) => {
   errors.push(`unrecognized shape for ${fieldLabel}`);
 };
 
-const vetJobs = (jobs, out, errors) => {
+const isShellJob = job => job?.shell === true || String(job?.model ?? '').endsWith('-shell');
+
+const vetJobs = (jobs, out, errors, allowedJobs) => {
   if (jobs === undefined) return;
   if (!Array.isArray(jobs)) {
     errors.push('unrecognized shape for jobs');
@@ -388,12 +390,12 @@ const vetJobs = (jobs, out, errors) => {
       return;
     }
     const jobId = String(job.id ?? 'unknown');
-    if (job.shell === true) {
+    if (job.shell === true && !allowedJobs?.has(job)) {
       errors.push(`job ${jobId} has shell: true`);
       continue;
     }
     const model = job.model !== undefined && job.model !== null ? String(job.model) : '';
-    if (model.endsWith('-shell')) {
+    if (model.endsWith('-shell') && !allowedJobs?.has(job)) {
       errors.push(`job ${jobId} uses model ${model}`);
       continue;
     }
@@ -404,7 +406,7 @@ const vetJobs = (jobs, out, errors) => {
   }
 };
 
-const vetManifestBody = (manifest, vetted) => {
+const vetManifestBody = (manifest, vetted, allowedJobs) => {
   const errors = [];
   const collected = [];
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
@@ -414,7 +416,7 @@ const vetManifestBody = (manifest, vetted) => {
   collectSetupArgvs(manifest.setup, 'setup', collected, errors);
   collectPreChecksArgvs(manifest.preChecks, 'preChecks', collected, errors);
   collectMutantCheck(manifest.mutantCheck, 'mutantCheck', collected, errors);
-  vetJobs(manifest.jobs, collected, errors);
+  vetJobs(manifest.jobs, collected, errors, allowedJobs);
   if (errors.length) {
     const reason = errors[0];
     if (reason.includes('shell: true') || reason.includes('-shell')) return { ok: false, reason };
@@ -465,7 +467,16 @@ export function omRunManifestVetted(root, manifestArg) {
     return { ok: false, reason: 'manifest is not valid JSON' };
   }
   const vetted = loadVettedArgvs(root);
-  return vetManifestBody(manifest, vetted);
+  // The sync hook only defers ticket jobs; the runner checks their full provenance.
+  const deferred = new Set();
+  try {
+    const ledger = JSON.parse(fs.readFileSync(path.join(root, '.swarm', 'project', 'tickets.json'), 'utf8'));
+    const ids = new Set((ledger?.tickets ?? []).map(ticket => ticket.id));
+    for (const job of Array.isArray(manifest?.jobs) ? manifest.jobs : []) {
+      if (isShellJob(job) && ids.has(job.id)) deferred.add(job);
+    }
+  } catch { /* no readable ledger: keep the existing shell refusal */ }
+  return vetManifestBody(manifest, vetted, deferred);
 }
 
 /**
@@ -480,7 +491,27 @@ export async function orchestratorManifestGate(root, manifest, env = process.env
   if (!orchestratorModeEnabled(root)) return;
   if (!orchestratorHookInstalledFor(root)) return;
   const vetted = loadVettedArgvs(root);
-  const result = vetManifestBody(manifest, vetted);
+  const allowedJobs = new Set();
+  const jobs = Array.isArray(manifest?.jobs) ? manifest.jobs : [];
+  const refuse = reason => {
+    const err = new Error(reason);
+    err.code = 'orchestrator-manifest-unvetted';
+    throw err;
+  };
+  if (jobs.some(isShellJob)) {
+    const ids = new Set();
+    for (const job of jobs) {
+      if (ids.has(job?.id)) refuse(`job ${job?.id}: duplicate job id`);
+      ids.add(job?.id);
+    }
+    const { verifyJobProvenance } = await import('./verify-provenance.mjs');
+    for (const job of jobs.filter(isShellJob)) {
+      const result = await verifyJobProvenance(root, job);
+      if (!result.ok) refuse(`job ${job.id}: ${result.reason}`);
+      allowedJobs.add(job);
+    }
+  }
+  const result = vetManifestBody(manifest, vetted, allowedJobs);
   if (!result.ok) {
     const err = new Error(result.reason);
     err.code = 'orchestrator-manifest-unvetted';
