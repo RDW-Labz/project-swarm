@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-core-61",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/swarm/core-61.mjs (search for '### tools/swarm/core-61.mjs' - it lists exact line numbers and the catch form found there: try-catch-no-binding or dot-catch-arrow/noop-expr).\n\nIMPORTANT - treat this file as sensitive: it contains `spendGuard` (a real spend-cap enforcement function) and imports from tools/claude-shell.mjs (a file you must NOT touch or import-edit in any way - it belongs to another in-flight PR). None of the 7 flagged catches are inside spendGuard itself or inside the claude-shell sandbox-setup code directly, but stay disciplined: edit ONLY the exact flagged catch bodies, do not touch spendGuard's own logic, do not touch anything that imports from or calls into claude-shell.mjs beyond the one flagged catch that happens to sit near it (a `fs.realpath` fallback inside `grantHomeDir` - only touch that catch's own body, nothing else in that function).\n\nFor EACH flagged line in tools/swarm/core-61.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. `grantHomeDir`'s realpath fallback (a symlink that can't be resolved just uses the literal path instead - comment says 'the link path itself is still granted'), a best-effort brainStats/digest lookup that may time out or be unavailable, a best-effort CI-fix-ticket creation that may fail if there's no ledger, a best-effort appendEvent/readJournal call. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), narrow to a specific error code only where one clearly applies, and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own for these catches - use `console.error('[tools/swarm/core-61.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call - do not just rename-and-ignore a binding.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above - this includes never changing whether a CI-fix ticket gets created, whether a migration-approval inbox item gets appended, or any warning/record pushed to the caller's queue.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed via the claude CLI before merge given the sensitivity (money/spend-guard adjacency), and will send back any issue as a follow-up. List, in your final summary, which of the 7 flagged lines you touched, case (a) vs (b), with one line each, and confirm you did not touch spendGuard or anything in claude-shell.mjs.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/swarm/core-61.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": ["tests/split-module.test.mjs", "tests/helpers/swarm-source.mjs", "tests/swarm-source-helper.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}
