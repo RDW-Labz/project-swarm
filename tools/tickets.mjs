@@ -249,7 +249,11 @@ async function ledgerBackupAfterWrite(root) {
           tmpBase === homeReal || homeReal.startsWith(tmpBase + path.sep);
         if (inTmp && !tmpEqualsOrContainsHome) return;
       }
-    } catch { /* best effort */ }
+    } catch (realpathErr) {
+      if (realpathErr?.code !== 'ENOENT') {
+        console.error('[tools/tickets.mjs] ledgerBackupAfterWrite temp-root check:', root, realpathErr?.message ?? realpathErr);
+      }
+    }
   }
   let timer;
   const cap = new Promise((_, reject) => {
@@ -261,7 +265,9 @@ async function ledgerBackupAfterWrite(root) {
       backupLedgerForWrite(root, { reason: 'write', ...(explicitHome ? { home: explicitHome } : {}) }),
       cap,
     ]);
-  } catch { /* ignored */ }
+  } catch (backupErr) {
+    console.error('[tools/tickets.mjs] ledgerBackupAfterWrite backup failed:', root, backupErr?.message ?? backupErr);
+  }
   finally {
     if (timer) clearTimeout(timer);
   }
@@ -279,7 +285,9 @@ export async function writeLedger(root, ledger) {
     await handle.close();
     await fs.rename(tmp, file);
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeErr) => {
+      console.error('[tools/tickets.mjs] writeLedger close tmp on error:', tmp, closeErr?.message ?? closeErr);
+    });
     await fs.rm(tmp, { force: true });
     throw error;
   }
@@ -496,7 +504,10 @@ export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.
   try {
     // A note in the journal, not an inbox item: nothing here needs the owner.
     await appendEvent(root, { kind: 'note', id: `prune-${pruned[0].id}-${now}`, text: `a cancelled ticket was dropped as a dependency of ${list}` }, { now: () => now });
-  } catch { /* the note is a courtesy; the prune and its log line already happened */ }
+  } catch (noteErr) {
+    // The note is a courtesy; the prune and its log line already happened.
+    console.error('[tools/tickets.mjs] logPrune appendEvent note:', pruned[0].id, noteErr?.message ?? noteErr);
+  }
 }
 
 // Takes every cancelled ticket out of the dependsOn of the others (in place). The owner's approval stays valid when it was valid just
