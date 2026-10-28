@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-gpu",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/gpu.mjs (search for '### tools/gpu.mjs' - it lists exact line numbers, all try-catch-no-binding).\n\nIMPORTANT - this file is sensitive (MONEY): it manages real hourly-billed rented GPU nodes over ssh. Three flagged catches (re-find by content, not by exact line number) swallow a failed remote stop-servers/stop-tunnel call: `afterStartFailure`'s ssh stop attempt (comment: 'ignored: the timer still removes them'), its matching stopTunnel attempt ('already gone'), and the main stop path's stopTunnel attempt ('already gone'). These already have a real safety net (a dead-man timer on the rented node that powers it off at the session's expiry regardless), so the existing silent-and-continue behavior is genuinely safe by design - do NOT add a throw or change what happens next. But a failed remote stop still means the node keeps running (and billing) until that timer fires, which could be a real delay - so these three deserve a real log (case b: unconditional, no narrowing) so an operator can see 'the stop call failed, relying on the dead-man timer' rather than it vanishing entirely.\n\nThe other three flagged catches are ordinary best-effort/expected-during-normal-operation cases: `removeSession`'s file cleanup (the session file may already be gone), a replica-starting poll loop ('still starting, or not JSON yet' - fetch to a server that isn't up yet), and a replica health check ('down' - fetch to an unreachable/stopped replica). Treat these per the normal rules below.\n\nFor EACH flagged line in tools/gpu.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - the file-cleanup, starting-poll, and health-check sites described above. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), narrow to a specific error/network code only where one clearly applies, and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) The three dead-man-timer-backed stop/cleanup catches described above, or any other genuinely unexpected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own for these catches - use `console.error('[tools/gpu.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call - do not just rename-and-ignore a binding.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above - the dead-man timer remains the only enforced guarantee, these catches must never themselves become a blocking or throwing path.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed via the claude CLI before merge given the sensitivity (money/GPU billing), and will send back any issue as a follow-up. List, in your final summary, which of the 6 flagged lines you touched, how (unconditional log for the three stop/cleanup sites, or case a/b for the rest), with one line each.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-startup.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}
