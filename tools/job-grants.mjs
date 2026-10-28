@@ -189,7 +189,9 @@ export async function createJobGrant({
   try {
     await fs.writeFile(envFile, body, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   } catch (error) {
-    await fs.rm(grantDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(grantDir, { recursive: true, force: true }).catch((rmError) => {
+      console.error('[tools/job-grants.mjs] createJobGrant rm grantDir:', rmError?.message ?? rmError);
+    });
     if (error?.code === 'EEXIST') {
       throw new JobGrantAccessError('grant file already exists', 'EEXIST');
     }

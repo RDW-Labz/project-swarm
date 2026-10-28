@@ -66,7 +66,13 @@ async function worktreeStatusMap(worktree) {
     let file = line.slice(3);
     const arrow = file.indexOf(' -> ');
     if (arrow !== -1) file = file.slice(arrow + 4);
-    if (file.startsWith('"') && file.endsWith('"')) { try { file = JSON.parse(file); } catch { /* keep the quoted form as-is */ } }
+    if (file.startsWith('"') && file.endsWith('"')) {
+      try { file = JSON.parse(file); } catch (parseError) {
+        if (!(parseError instanceof SyntaxError)) {
+          console.error('[tools/swarm/workspace.mjs] worktreeStatusMap JSON.parse:', parseError?.message ?? parseError);
+        }
+      }
+    }
     map.set(file, code);
   }
   return map;
