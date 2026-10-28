@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-22d",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 22d (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/handoff-docs.mjs, tools/managers/replay.mjs, tools/pins.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/handoff-docs.mjs\nLogger prefix: console.error('[tools/handoff-docs.mjs] <short context>:', error?.message ?? error)\n- Line 137 `try { await res.body?.cancel(); } catch { /* nothing to cancel */ }`: an already-closed/locked stream throws TypeError or error?.code === 'ERR_INVALID_STATE'; stay silent for those, log others.\n- Line 146 `try { await reader.cancel(); } catch { /* already closed */ }`: same rule as line 137.\n- Line 188 `try { out.push({ name, text: await fs.readFile(path.join(dir, name), 'utf8') }); } catch { /* not written yet */ }`: SILENT-ENOENT; log others with name.\n\n### tools/managers/replay.mjs\nLogger prefix: console.error('[tools/managers/replay.mjs] <short context>:', error?.message ?? error)\n- Line 74 `const st = await fs.lstat(dir).catch(() => null);`: SILENT-ENOENT; log others with dir; keep null (the explicit throw on the next line stays).\n- Line 109 `const st = await fs.lstat(resolved).catch(() => null);`: SILENT-ENOENT; log others with resolved; keep null.\n- Line 470 `await fs.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});` in finally: LOG-ALWAYS with workspaceRoot (force means ENOENT never throws; any failure leaks a temp workspace).\n\n### tools/pins.mjs\nLogger prefix: console.error('[tools/pins.mjs] <short context>:', error?.message ?? error)\n- Line 91 `const real = await fs.realpath(needle).catch(() => null);`: SILENT-ENOENT; log others with needle; keep null.\n- Line 133 `await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});` in finally: LOG-ALWAYS with tmp (leaked temp dir).\n- Line 171 `} catch { /* listing still shows the pointer version */ }` around versionDirFor + runnerVersionAtRoot: LOG-ALWAYS with p.pinnedAt (the listing falls back silently today); runnerVersion stays null.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/handoff-docs.mjs",
+        "tools/managers/replay.mjs",
+        "tools/pins.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff.test.mjs",
+        "tests/managers/framework.test.mjs",
+        "tests/managers/r037-budget-lane.test.mjs",
+        "tests/managers/r037-cli.test.mjs",
+        "tests/managers/r038-version-merge.test.mjs",
+        "tests/pins-cycle.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/runner-version.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}
