@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-initprofile-batch-15a-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Tiny fixup on tools/init-profile.mjs, ONE comment line only. The comment directly above `export function protectedPathHit(` was accidentally changed: a sentence got duplicated. Replace that whole comment line with exactly this original text (one line):\n// `read`: the file is being READ as context. Paths in `readOnlyPaths` (a starter kit's files) are refused as outputs, deletes and edits, but a worker may read them.\nChange nothing else at all. Then run: node --check tools/init-profile.mjs.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/budgets.test.mjs",
+        "tests/ci-queue.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/env-example-context.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff.test.mjs",
+        "tests/init-base-detail.test.mjs",
+        "tests/init-profile.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/migration-down-dir.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/safety-commands.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ui-check.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}
