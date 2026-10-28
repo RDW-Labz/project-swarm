@@ -3125,8 +3125,32 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (syncCheck.kind === 'delete-only') {
+        let reviewReason = securityReviewReason(t);
+        if (reviewReason && unreviewedOk.has(t.id)) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          const failing = record?.verdict === 'fail' && record.filesHash === now;
+          const passed = record?.verdict === 'pass' && record.filesHash === now;
+          if (!failing && !passed) { skippedReview.push(t.id); reviewReason = null; }
+        }
+        if (reviewReason) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          if (t.securityReview?.state === 'blocked' && !(record && Date.parse(record.at) > Date.parse(t.securityReview.at))) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+          if (record?.verdict === 'fail' && record.filesHash === now) {
+            const found = (record.findings ?? []).map(f => `${f.severity} ${f.file}${f.line ? `:${f.line}` : ''} ${f.issue}${f.fix ? ` (fix: ${f.fix})` : ''}`).join('; ').slice(0, 500);
+            delete reviewRecords.tickets[t.id];
+            await writeReviewRecords(root, reviewRecords);
+            const result = await applyRetry(root, t.id, `failed checks: security review; ${found || 'the review failed this ticket'}`, rest[0]);
+            (result === 'blocked' ? blocked : retried).push(t.id);
+            continue;
+          }
+          if (!(record?.verdict === 'pass' && record.filesHash === now)) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+        }
         await lockedTransition(root, t.id, 'done', { by: 'sync', note: 'delete-only: files gone' });
         done.push(t.id);
+        if (skippedReview.includes(t.id)) await setSecurityReview(root, t.id, { state: 'accepted-unreviewed', reason: unreviewedReason, at: new Date().toISOString(), run: rest[0] });
+        else if (t.securityReview?.state === 'blocked') await setSecurityReview(root, t.id, undefined);
         continue;
       }
       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
@@ -3772,7 +3796,7 @@ async function doneReviewRefusals(root, ledger, ticket) {
 }
 
 async function sensitiveDeliveredRefusals(root, ledger, ticket) {
-  if (ticket.sensitive !== true) return [];
+  if (ticket.sensitive !== true && !securityReviewReason(ticket)) return [];
   const reasons = await doneReviewRefusals(root, ledger, ticket);
   return reasons.filter(r => r.startsWith('Opus security review'));
 }
