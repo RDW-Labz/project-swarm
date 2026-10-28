@@ -41,8 +41,10 @@ function runArgv(argv, { cwd, env, timeoutMs }) {
     timer = setTimeout(() => {
       try {
         child.kill('SIGKILL');
-      } catch {
-        // the process may already be gone
+      } catch (error) {
+        if (error?.code !== 'ESRCH') {
+          console.error('[tools/verify-local-runner.mjs] timeout SIGKILL:', error?.message ?? error);
+        }
       }
       finish({ status: 'timeout', code: null, tail: tailOf(out) });
     }, timeoutMs);
