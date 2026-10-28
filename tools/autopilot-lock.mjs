@@ -54,7 +54,15 @@ export async function acquireAutopilotLock(root, {
         try {
           const owner = JSON.parse(await fs.readFile(file, 'utf8'));
           if (owner.pid === pid) await fs.rm(file, { force: true });
-        } catch { /* already gone */ }
+        } catch (error) {
+          if (error?.code === 'ENOENT') {
+            /* already gone */
+          } else if (error instanceof SyntaxError) {
+            console.error('[tools/autopilot-lock.mjs] release autopilot lock:', 'corrupt autopilot lock (SyntaxError)');
+          } else {
+            console.error('[tools/autopilot-lock.mjs] release autopilot lock:', file, error?.message ?? error);
+          }
+        }
       };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
