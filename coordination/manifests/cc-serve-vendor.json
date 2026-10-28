@@ -1,0 +1,36 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "servevendor",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "tools/watch-server.mjs serves /assets/<name> only from a flat, preloaded listing of the asset folder (loadAssets) and its TYPES table has only .html, .css and .js. The Command Center now needs the vendored files under tools/watch-assets/vendor/ (fonts/*.woff2, fluent-emoji/*.webp, and the existing vendored js/css), requested as /assets/vendor/fonts/x.woff2 etc.; today they 404. Fix: (1) add to TYPES: .woff2 font/woff2, .webp image/webp, .png image/png, .svg image/svg+xml (svg served with the same security headers). (2) In loadAssets, after the flat files, also preload the vendor/ subtree recursively (only regular files, no symlinks: use readdir withFileTypes and skip entry.isSymbolicLink() and anything not isFile(); only extensions present in TYPES; skip LICENSE files and VENDOR.json), keyed by the forward-slash relative path from the asset folder, e.g. \"vendor/fonts/oxanium-latin-wght-normal.woff2\". (3) sendAsset keeps its exact-key lookup (no path joining from the URL, so traversal stays impossible); just make sure a key with slashes works. Keep everything else unchanged. Tests in NEW tests/watch-server-vendor-assets.test.mjs (first import: import './_isolate-config.mjs';): start createWatchServer the way existing watch-server tests do, request /assets/vendor/fonts/oxanium-latin-wght-normal.woff2 (200, content-type font/woff2, body equals the file), /assets/vendor/fluent-emoji/robot_56.webp (200, image/webp), /assets/vendor/VENDOR.json (404), /assets/vendor/fonts/LICENSE-oxanium (404), /assets/vendor/../watch-server.mjs and /assets/%2e%2e/x (404), and a symlink placed in a temp asset dir copy pointing outside is not served.",
+   "context": [
+    "tools/watch-assets/vendor/VENDOR.json"
+   ],
+   "outputs": [
+    "tools/watch-server.mjs",
+    "tests/watch-server-vendor-assets.test.mjs"
+   ],
+   "timeoutMs": 1500000
+  }
+ ],
+ "checks": [
+  {
+   "name": "watch",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/watch-server-vendor-assets.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs"
+   ]
+  }
+ ]
+}
