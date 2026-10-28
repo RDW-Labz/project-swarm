@@ -3,7 +3,12 @@
 export const PAID_KEY_LANES = Object.freeze(['anthropic', 'openrouter', 'openai', 'gemini', 'rented', 'lambda']);
 
 export function isHostedLambdaInference(env = process.env) {
-  return !env.SWARM_LAMBDA_URL;
+  try {
+    const { hostname } = new URL(env.SWARM_LAMBDA_URL);
+    return !(['localhost', '::1', '[::1]'].includes(hostname) || /^127(?:\.\d{1,3}){3}$/.test(hostname));
+  } catch {
+    return true;
+  }
 }
 
 export function paidLanePauseCode(lane) {
