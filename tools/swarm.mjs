@@ -2398,6 +2398,10 @@ export async function askRun(root, options = {}, runOptions = {}) {
   const { context = [], timeoutMs, question } = options;
   if (!Array.isArray(context) || !context.length) fail('ask requires --context with at least one file');
   if (typeof question !== 'string' || !question.trim()) fail('ask requires a non-empty question');
+  for (const file of context) {
+    const bytes = await bytesAt(root, file);
+    if (bytes !== null && bytes.length === 0) fail(`ask: context file ${file} is empty`, 'ask-context-empty');
+  }
   const answer = result => resolved.route ? { ...result, route: resolved.route, warnings: [...(result.warnings ?? []), ...modelMismatchWarnings(state), resolved.warning] } : result;
   // Field lesson 176: a worker reading only a fixed context list cannot tell a genuine absence
   // from a file it was never given; any claim of one must say so and name what it searched.
@@ -2408,6 +2412,9 @@ export async function askRun(root, options = {}, runOptions = {}) {
     return { job, state };
   });
   const record = state.jobs[0];
+  if (!record) {
+    return answer({ id, status: 'error', model, actualModel: null, modelMismatch: false, costUsd: null, contextFiles: job.context, warnings: [], error: state.error ?? 'ask job produced no worker result' });
+  }
   const parsed = await jobFinalJson(root, id, id);
   // Field lesson 133: a single-question run is real elapsed session time, not idle time; a
   // state.json-compatible record lets a session-metrics reader see it the same way it sees a run.
