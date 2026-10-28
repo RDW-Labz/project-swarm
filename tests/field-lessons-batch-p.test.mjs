@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Swarm batch P: field lessons 229-236 (see .swarm-manifests/contract-p.md).
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';

@@ -51,7 +51,19 @@ export function assertModelAllowed(job) {
   anthropicPrice(job.model);
 }
 
-export function readAnthropicKey(env = process.env, { platform = process.platform, exec = execFileSync } = {}) {
+export const ANTHROPIC_LANE_PAUSED = 'anthropic-lane-paused';
+export function anthropicLanePausedProblem(config) {
+  if (config?.lanes?.anthropic?.paused !== true) return null;
+  return `${ANTHROPIC_LANE_PAUSED}: the paid anthropic lane is paused and no key was read`;
+}
+export function assertAnthropicLaneNotPaused(config) {
+  const problem = anthropicLanePausedProblem(config);
+  if (problem) throw Object.assign(new Error(problem), { code: ANTHROPIC_LANE_PAUSED });
+}
+
+export function readAnthropicKey(env = process.env, { platform = process.platform, exec = execFileSync, config, loadConfig = loadLocalConfig, home } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env, home: home ?? env?.HOME });
+  assertAnthropicLaneNotPaused(resolvedConfig);
   const fromEnv = env[ANTHROPIC_KEY_ENV];
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_ANTHROPIC_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;

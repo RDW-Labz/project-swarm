@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.21
+
+The paid lanes are off for real.
+- **Pause:** when the anthropic or openrouter lane is paused in the machine config, the key readers refuse before reading any key and swarm validate refuses a job that names that agent explicitly, so a paused lane can no longer spend money through an explicit agent in a manifest; finished runs can still be integrated and shipped;
+- **Routing:** job type routes list the paid lane last and a paused lane is removed from the typed list;
+- **Tests:** tests that touch the paid keys isolate the machine config by themselves.
+
 ## 1.167.20
 
 The parts session can run its manifests and integrate runs.

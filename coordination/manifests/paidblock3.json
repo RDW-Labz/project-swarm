@@ -1,0 +1,61 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "paidblock3",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Test fixes for the paid-lane hard block and the new job type route order (both are intended changes; do not touch any file under tools). PART A, mechanical: these 17 test files read the owner's real machine config through the paid key readers and fail on a machine where the paid lanes are paused; add the line import './_isolate-config.mjs'; as the FIRST import statement (right after the leading comment lines, same spelling the other test files use) to each that does not already import it, changing nothing else: tests/bench-baseline.test.mjs, tests/crash-guards.test.mjs, tests/daily-limit-admission.test.mjs, tests/dead-run.test.mjs, tests/daily-limit.test.mjs, tests/field-lessons-batch-m2.test.mjs, tests/field-lessons-batch-p.test.mjs, tests/field-lessons-batch-o.test.mjs, tests/field-lessons-batch-m3.test.mjs, tests/field-lessons-batch-y.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/lessons-commands.test.mjs, tests/openrouter.test.mjs, tests/self-manage-lane-monitor.test.mjs, tests/self-manage-routing-score.test.mjs, tests/self-manage-quota-forecast.test.mjs, tests/spend.test.mjs. PART B, update expectations to the new order: job type preset routes now list the paid anthropic lane LAST (build and fix: local, cursor, anthropic; test: local, cursor, codex, hermes, anthropic; review: cursor, anthropic; docs: local, cursor, hermes, anthropic; research, merge and lead unchanged), and the router drops paused lanes from the typed list. Five tests assert the old order and fail: in tests/job-types.test.mjs the tests titled 'presets are frozen and match the contract defaults', 'unknown types and forged internal routes refuse', 'validateProject returns skill warnings and the applied prompt before routing' and 'research routes to Hermes first; docs and test use it only after Anthropic; the other job types never do'; in tests/escalation-routing.test.mjs the test 'an escalated ticket plans at every level: levels 0-2 on anthropic:claude-haiku-5-5, level 3 (tier expensive) on claude:opus'; in tests/s13-blockers.test.mjs the test 'routes by job type: Haiku first for build, fix and docs; codex first for test; paused lane hands on'. Read each, work out what the code does now (the preset order in tools/job-types.mjs and the router in tools/router.mjs are in your context) and change only the expected values and test titles that describe the old order (for example Anthropic first becomes Cursor first, Anthropic after the free lanes) so each test still checks its intent: preset shape, the route per type, the escalation levels, and that a paused lane hands on to the next one. Do not weaken or delete any assertion, do not change what a test is about. If you can run node --test on the three files do it, otherwise reason carefully. No credential-looking literals. STANDING TEST RULE: per-test timeout at most 60 s.",
+   "context": [
+    "tests/bench-baseline.test.mjs",
+    "tests/crash-guards.test.mjs",
+    "tests/daily-limit-admission.test.mjs",
+    "tests/dead-run.test.mjs",
+    "tests/daily-limit.test.mjs",
+    "tests/field-lessons-batch-m2.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-y.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/lessons-commands.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/self-manage-lane-monitor.test.mjs",
+    "tests/self-manage-routing-score.test.mjs",
+    "tests/self-manage-quota-forecast.test.mjs",
+    "tests/spend.test.mjs",
+    "tests/escalation-routing.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/s13-blockers.test.mjs",
+    "tools/job-types.mjs",
+    "tools/router.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tests/bench-baseline.test.mjs",
+    "tests/crash-guards.test.mjs",
+    "tests/daily-limit-admission.test.mjs",
+    "tests/dead-run.test.mjs",
+    "tests/daily-limit.test.mjs",
+    "tests/field-lessons-batch-m2.test.mjs",
+    "tests/field-lessons-batch-p.test.mjs",
+    "tests/field-lessons-batch-o.test.mjs",
+    "tests/field-lessons-batch-m3.test.mjs",
+    "tests/field-lessons-batch-y.test.mjs",
+    "tests/field-lessons-batch-x.test.mjs",
+    "tests/lessons-commands.test.mjs",
+    "tests/openrouter.test.mjs",
+    "tests/self-manage-lane-monitor.test.mjs",
+    "tests/self-manage-routing-score.test.mjs",
+    "tests/self-manage-quota-forecast.test.mjs",
+    "tests/spend.test.mjs",
+    "tests/escalation-routing.test.mjs",
+    "tests/job-types.test.mjs",
+    "tests/s13-blockers.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}
