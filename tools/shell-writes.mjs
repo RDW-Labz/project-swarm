@@ -1814,8 +1814,10 @@ const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../')
 const omStartingCwdSymlink = ctx => {
   if (ctx.omStartingCwdSymlink !== undefined) return ctx.omStartingCwdSymlink;
   const cwd = ctx.cwd ?? ctx.root;
-  if (!cwd) return false;
-  try { return path.resolve(cwd) !== fs.realpathSync.native(cwd); } catch { return false; }
+  if (!cwd || !ctx.root) return false;
+  try {
+    return path.relative(ctx.root, cwd) !== path.relative(fs.realpathSync.native(ctx.root), fs.realpathSync.native(cwd));
+  } catch { return false; }
 };
 
 const omResolvePath = (p, ctx, redirect = false) => {
@@ -1826,8 +1828,23 @@ const omResolvePath = (p, ctx, redirect = false) => {
   } catch {
     cwdBase = ctx.cwd ?? ctx.root;
   }
-  const components = p.split(path.sep).filter(Boolean);
+  let components = p.split(path.sep).filter(Boolean);
   let resolved = path.isAbsolute(p) ? path.parse(p).root : cwdBase;
+  if (path.isAbsolute(p) && ctx.root) {
+    try {
+      const rootReal = fs.realpathSync.native(ctx.root);
+      for (const root of [path.resolve(ctx.root), rootReal]) {
+        const rootComponents = root.split(path.sep).filter(Boolean);
+        if (rootComponents.every((component, i) => components[i] === component)) {
+          // Ignore links above the project, preserving every component below it
+          // (including links followed by ..) for the walk.
+          components = components.slice(rootComponents.length);
+          resolved = rootReal;
+          break;
+        }
+      }
+    } catch { /* keep the absolute walk when the root cannot be resolved */ }
+  }
   let sawSymlink = false;
   for (let i = 0; i < components.length; i += 1) {
     if (i >= 64) return null;

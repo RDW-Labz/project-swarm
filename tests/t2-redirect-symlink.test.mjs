@@ -58,6 +58,45 @@ test('cd refuses directory symlinks even without parent traversal', async t => {
   assert.equal(orchestratorModeCommandAllowed('cd D && echo x > plans/a.md', ctx), false);
 });
 
+test('cd ignores a symlinked parent above the project root', async t => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-t2-parent-'));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  await fs.mkdir(path.join(parent, 'real', 'proj'), { recursive: true });
+  await fs.symlink('real', path.join(parent, 'alias'));
+  const root = path.join(parent, 'alias', 'proj');
+  const realRoot = await fs.realpath(root);
+  for (const dir of ['.git', '.swarm/runs', 'coordination/manifests', 'docs/plans']) {
+    await fs.mkdir(path.join(root, dir), { recursive: true });
+  }
+  const ctx = { root, cwd: root };
+  for (const absoluteRoot of [root, realRoot]) {
+    const command = `cd ${absoluteRoot}/docs && echo x > plans/a.md`;
+    assert.equal(orchestratorModeCommandAllowed(command, ctx), true, command);
+  }
+  const fromDocs = { root, cwd: path.join(root, 'docs') };
+  assert.equal(orchestratorModeCommandAllowed('cd .. && echo x > docs/plans/a.md', fromDocs), true);
+  assert.equal(orchestratorModeCommandAllowed('echo x > ../docs/plans/a.md', fromDocs), true);
+  assert.equal(orchestratorSwarmSubfolderBlocked('cd .. && swarm status', fromDocs), false);
+
+  await fs.symlink('../coordination/manifests', path.join(root, 'docs/L'));
+  for (const target of ['docs/L', `${root}/docs/L`, `${realRoot}/docs/L`, `${root}/docs/L/../../docs`]) {
+    const command = `cd ${target} && echo x > plans/a.md`;
+    assert.equal(orchestratorModeCommandAllowed(command, ctx), false, command);
+  }
+  const linked = { root, cwd: path.join(root, 'docs/L') };
+  assert.equal(orchestratorModeCommandAllowed('cd .. && git status', linked), false);
+  assert.equal(orchestratorModeCommandAllowed(`cd ${root}/docs > plans/a.md && git status`, ctx), false);
+});
+
+test('cd permits the non-realpath temporary project prefix on darwin', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-t2-native-prefix-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'docs/plans'), { recursive: true });
+  assert.notEqual(root, await fs.realpath(root));
+  assert.equal(orchestratorModeCommandAllowed(`cd ${root}/docs && echo x > plans/a.md`, { root, cwd: root }), true);
+  assert.equal(orchestratorModeCommandAllowed('cd .. && echo x > docs/plans/a.md', { root, cwd: path.join(root, 'docs') }), true);
+});
+
 test('cd refuses symlinks at every target position before logical parent traversal', async t => {
   const ctx = await project(t);
   await fs.mkdir(path.join(ctx.root, '.swarm/project'), { recursive: true });
