@@ -54,7 +54,12 @@ async function resolveRunManifest(root) {
     let latestMtime = 0;
     for (const id of ids) {
       const manifestFile = path.join(runsDir, id, 'manifest.json');
-      const st = await fs.stat(manifestFile).catch(() => null);
+      const st = await fs.stat(manifestFile).catch((error) => {
+        if (error?.code !== 'ENOENT') {
+          console.error('[tools/managers/lane-health/index.mjs] resolveRunManifest stat:', manifestFile, error?.message ?? error);
+        }
+        return null;
+      });
       if (st && st.isFile() && st.mtimeMs > latestMtime) {
         latestMtime = st.mtimeMs;
         latestFile = manifestFile;
@@ -90,7 +95,12 @@ async function latestRunId(root) {
     let latestMtime = 0;
     for (const id of ids) {
       const manifestFile = path.join(runsDir, id, 'manifest.json');
-      const st = await fs.stat(manifestFile).catch(() => null);
+      const st = await fs.stat(manifestFile).catch((error) => {
+        if (error?.code !== 'ENOENT') {
+          console.error('[tools/managers/lane-health/index.mjs] latestRunId stat:', manifestFile, error?.message ?? error);
+        }
+        return null;
+      });
       if (st && st.isFile() && st.mtimeMs > latestMtime) {
         latestMtime = st.mtimeMs;
         latestId = id;
