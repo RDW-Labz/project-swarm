@@ -6,6 +6,7 @@
 Project Swarm brief
 Goal: none
 Done:
+  - run 1793156645593-299484c1 integrated, 2 files
   - run 1793155959693-65fcd3ec integrated, 4 files
   - run 1793154137726-32b25faa integrated, 6 files
 Running: none
@@ -24,14 +25,14 @@ Rules:
 ```
 
 Pending approvals:
-- blocker security-1793154137726-32b25faa-ccfixa 23m branch swarm/cc-mount2 main checkout
-- blocker security-1793121100760-1a835d60-shellpauseJ 9h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
+- blocker security-1793154137726-32b25faa-ccfixa 59m branch swarm/cc-mount2 main checkout
+- blocker security-1793121100760-1a835d60-shellpauseJ 10h branch swarm/shell-pause4 /Users/bean/.project-swarm-scratch/shellpause
 - blocker security-1793111389005-ec83d391-cism2 12h branch swarm/mount-classic /Users/bean/.project-swarm-scratch/mount
 - blocker integrate-checkout-1793071225012-e80056e1 23h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker security-1793070907123-c780a4c2-lockL2 23h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
+- blocker security-1793070907123-c780a4c2-lockL2 24h branch swarm/backlog-lock2 /Users/bean/.project-swarm-scratch/backlocklock
 - blocker integrate-checkout-1793066768605-ff4722d3 24h branch swarm/ledger-root /Users/bean/project-swarm
 - blocker integrate-checkout-1793049988921-3c2c1e96 25h branch swarm/ledger-root /Users/bean/project-swarm
-- blocker security-1793052518876-aa2ab8be-lwfixC 28h branch swarm/lane-self-manage-wave /Users/bean/.project-swarm-scratch/lanewave
+- blocker security-1793052518876-aa2ab8be-lwfixC 29h branch swarm/lane-self-manage-wave /Users/bean/.project-swarm-scratch/lanewave
 - blocker security-1793047718817-a2333c83-gaterr_gatefp 30h branch swarm/gatecap /Users/bean/.project-swarm-scratch/gatecap
 - blocker integrate-checkout-1792618361836-41e05e85 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
 - blocker integrate-checkout-1792618530141-575f4d93 5d branch swarm/roadmap-build /Users/bean/.project-swarm-scratch/roadmap-build
@@ -45,4 +46,4 @@ Pending approvals:
 - unreadable base unknown branch (no branch) /private/var/folders/cy/4s893hk94cv032kfrch2h2vc0000gn/T/swarm-origin-R2gksY/base
 - unreadable docs-wt unknown branch docs/plans-v2 /private/tmp/claude-501/-Users-bean-project-swarm/e3b30a37-2335-4220-91fa-d926ee2cf502/scratchpad/docs-wt
 
-Generated at: 2026-10-28T03:03:16.684Z
+Generated at: 2026-10-28T03:39:11.928Z
