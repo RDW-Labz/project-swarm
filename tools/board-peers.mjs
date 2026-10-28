@@ -55,7 +55,9 @@ async function writePeers(list, env = process.env, home = os.homedir()) {
     await fs.rename(tmp, file);
     await fs.chmod(file, 0o600);
   } catch (error) {
-    await fs.rm(tmp, { force: true }).catch(() => {});
+    await fs.rm(tmp, { force: true }).catch((cleanupError) => {
+      console.error('[tools/board-peers.mjs] writePeers tmp cleanup:', cleanupError?.message ?? cleanupError);
+    });
     throw error;
   }
 }

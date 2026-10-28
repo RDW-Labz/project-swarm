@@ -242,7 +242,9 @@ export async function createMarkerBarrier(markerDir, expected, { trace, signal }
   }
 
   const watcher = fs.watch(markerDir, () => {
-    publishProgress().catch(() => {});
+    publishProgress().catch((error) => {
+      console.error('[tools/load-sync-wait.mjs] publishProgress from watch:', error?.message ?? error);
+    });
   });
 
   const onAbort = () => close();

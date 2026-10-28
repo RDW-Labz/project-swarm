@@ -235,7 +235,9 @@ export async function persistReplans(root, ledger, options = {}) {
         try {
           const entry = JSON.parse(line);
           if (entry?.event === 'replan' && typeof entry.id === 'string') priorReplannedIds.add(entry.id);
-        } catch { /* ignore an incomplete journal line */ }
+        } catch {
+          if (line.trim()) console.error('[tools/ticket-replan.mjs] corrupt replan journal line (SyntaxError)');
+        }
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
