@@ -7,6 +7,7 @@ import { isProtectedTopic } from './board-action-guard.mjs';
 import { collectInbox, formatInbox, markDone, decide } from './inbox.mjs';
 import { readStore, updateGroup, groupAsState } from './human-jobs.mjs';
 import { readBacklog, addGoal, removeGoal } from './backlog.mjs';
+import { supersededSplitParks } from './split-park-supersede.mjs';
 
 const USAGE = {
   inbox: 'Usage: swarm inbox [--json] [--all]\n',
@@ -74,6 +75,27 @@ function flagValues(args, name) {
   return { values, rest };
 }
 
+function parseSupersededSplitsArgs(args) {
+  if (!args.length || args[0] !== '--superseded-splits') return null;
+  let stage;
+  let dryRun = false;
+  let json = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--dry-run') { dryRun = true; continue; }
+    if (arg === '--json') { json = true; continue; }
+    if (arg === '--stage') {
+      if (index + 1 >= args.length) return { bad: true };
+      stage = args[index + 1];
+      if (!/^S\d+$/.test(stage)) return { bad: true };
+      index += 1;
+      continue;
+    }
+    return { bad: true };
+  }
+  return { stage, dryRun, json };
+}
+
 export async function runInboxCommand(root, command, args, { installRoot, now = Date.now } = {}) {
   try {
     if (command === 'inbox') {
@@ -94,6 +116,41 @@ export async function runInboxCommand(root, command, args, { installRoot, now = 
       return { stdout: out.changed ? `decided ${out.id}: ${out.choice}; added to backlog: ${out.goal}\n` : `decided ${out.id}: ${out.choice}\n`, exitCode: 0 };
     }
     if (command === 'resolve') {
+      const supersededArgs = parseSupersededSplitsArgs(args);
+      if (supersededArgs?.bad) return bad(command);
+      if (supersededArgs) {
+        const events = await readJournal(root, { limit: Infinity });
+        const { superseded, kept } = supersededSplitParks(events, { stage: supersededArgs.stage });
+        const openById = new Map(
+          openItems(events)
+            .filter(event => event.kind === 'blocker')
+            .map(event => [String(event.id), event]),
+        );
+        const resolved = [];
+        for (const row of superseded) {
+          const open = openById.get(row.id);
+          if (!open) continue;
+          const entry = {
+            kind: 'blocker',
+            id: row.id,
+            resolved: true,
+            text: sanitizeText(open.text ?? ''),
+            resolvedBy: 'superseded-splits',
+            supersededBy: row.newerRun,
+          };
+          if (!supersededArgs.dryRun) await appendEvent(root, entry, { now });
+          resolved.push(row);
+        }
+        const payload = { resolved, kept, dryRun: supersededArgs.dryRun };
+        if (supersededArgs.json) {
+          return { stdout: `${JSON.stringify(payload)}\n`, exitCode: 0 };
+        }
+        const verb = supersededArgs.dryRun ? 'would resolve' : 'resolved';
+        const lines = resolved.map(row => `${verb}: ${row.id} (superseded by ingest ${row.newerRun})`);
+        lines.push(`${verb} ${resolved.length} superseded split blockers; kept ${kept.length}`);
+        for (const row of kept) lines.push(`kept: ${row.id} (${row.reason})`);
+        return { stdout: `${lines.join('\n')}\n`, exitCode: 0 };
+      }
       if (args.length === 2 && args[1] === '--handled') {
         const runId = args[0];
         if (!runId || runId.startsWith('-') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) return bad(command);
