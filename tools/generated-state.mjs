@@ -229,13 +229,19 @@ export function integrateOutputCollisions(outputPaths, trackedDirty, untrackedDi
   return [...hits].sort();
 }
 
+function isGitExitError(error) {
+  return typeof error?.code === 'number' || typeof error?.status === 'number';
+}
+
 async function pathExistsInCheckout(root, exec, relPath) {
   if (typeof root !== 'string' || !root || typeof relPath !== 'string' || !relPath) return false;
   if (typeof exec === 'function') {
     try {
       await exec('git', ['-C', root, 'rev-parse', '--verify', `HEAD:${relPath}`], { encoding: 'utf8' });
       return true;
-    } catch { /* not in HEAD */ }
+    } catch (error) {
+      if (!isGitExitError(error)) console.error('[tools/generated-state.mjs] rev-parse HEAD:', relPath, error?.message ?? error);
+    }
   }
   try {
     const { access } = await import('node:fs/promises');
@@ -269,9 +275,13 @@ async function gitPathExists(root, exec, gitPathName) {
       try {
         await access(candidate);
         return true;
-      } catch { /* try next */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/generated-state.mjs] access candidate:', candidate, error?.message ?? error);
+      }
     }
-  } catch { /* not in progress */ }
+  } catch (error) {
+    if (!isGitExitError(error)) console.error('[tools/generated-state.mjs] git-path:', gitPathName, error?.message ?? error);
+  }
   return false;
 }
 
