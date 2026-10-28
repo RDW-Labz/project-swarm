@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-22a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 22a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/errors-commands.mjs, tools/handbuild-commands.mjs, tools/lessons-commands.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/errors-commands.mjs\nLogger prefix: console.error('[tools/errors-commands.mjs] <short context>:', error?.message ?? error)\n- Line 22 `(await readLedger(root).catch(() => null))?.tickets...` in ticketStatus: SILENT-ENOENT (no ledger yet); log others with root; keep returning null.\n- Line 25 the flood-notification write `.catch(() => {})` before `return;`: LOG-ALWAYS (an owner alert was lost); keep the return.\n- Line 27 `await appendEvent(root, { kind: 'decision', ... }).catch(() => {})`: LOG-ALWAYS with the event id (an error notification was lost).\n\n### tools/handbuild-commands.mjs\nLogger prefix: console.error('[tools/handbuild-commands.mjs] <short context>:', error?.message ?? error)\n- Line 90 `await appendEvent(root, { kind: 'decision', id: `handbuild-${r.id}`, ... }).catch(() => {})`: LOG-ALWAYS with r.id (approve/deny audit event lost).\n- Line 99 `} catch { /* no local settings */ }` around JSON.parse(readFileSync(.claude/settings.local.json)): SILENT-ENOENT; log others (e.g. corrupt settings JSON) with the path; hookSettings stays {}.\n- Line 134 `} catch { /* none yet */ }` around reading LOG_FILE: SILENT-ENOENT; log others; lines stays []. Do NOT touch the per-line JSON.parse catch on line 135.\n\n### tools/lessons-commands.mjs\nLogger prefix: console.error('[tools/lessons-commands.mjs] <short context>:', error?.message ?? error)\n- Line 123 `await import('./history-hooks.mjs').then(hooks => hooks.recordLessonHistory(...)).catch(() => {})`: LOG-ALWAYS (history mirror write lost).\n- Line 170 `await handle.close().catch(() => {})` in the error path before rm + `throw error`: log the close error with tmp under a different binding; rethrow unchanged.\n- Line 179 `await fs.readFile(path.join(root, 'tests', f), 'utf8').catch(() => '')`: SILENT-ENOENT; log others with f; keep returning ''.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/errors-commands.mjs",
+        "tools/handbuild-commands.mjs",
+        "tools/lessons-commands.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-owner-routes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/evals-groups.test.mjs",
+        "tests/handbuild-guard.test.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/lesson-import.test.mjs",
+        "tests/lessons-commands.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

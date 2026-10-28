@@ -19,12 +19,18 @@ async function profileConfig(root) {
 
 const ticketDeps = root => ({
   addTicket: async partial => (await import('./scope-commands.mjs')).addProposedTicket(root, partial),
-  ticketStatus: async id => (await readLedger(root).catch(() => null))?.tickets.find(t => t.id === id)?.status ?? null,
+  ticketStatus: async id => (await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      const msg = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/errors-commands.mjs] readLedger:', msg, root);
+    }
+    return null;
+  }))?.tickets.find(t => t.id === id)?.status ?? null,
   notify: async (group, reason, ticketId) => {
     const stamp = Date.now();
-    if (reason === 'flood') { await appendEvent(root, { kind: 'decision', id: `error-flood-${stamp}`, text: `${group.count} more production error groups need a look (a flood; only the first few were listed one by one). swarm errors list shows them; their proposed tickets are in swarm tickets --status proposed.`, choice: 'looked', options: ['looked'], confirm: true }).catch(() => {}); return; }
+    if (reason === 'flood') { await appendEvent(root, { kind: 'decision', id: `error-flood-${stamp}`, text: `${group.count} more production error groups need a look (a flood; only the first few were listed one by one). swarm errors list shows them; their proposed tickets are in swarm tickets --status proposed.`, choice: 'looked', options: ['looked'], confirm: true }).catch((error) => { console.error('[tools/errors-commands.mjs] flood notification appendEvent:', error?.message ?? error, `error-flood-${stamp}`); }); return; }
     const text = `Production error ERR-${group.fingerprint.slice(0, 8)} (${reason === 'spike' ? 'a spike' : 'a payments or auth route'}): ${group.kind} on ${group.route}, ${group.count} time(s), last ${new Date(group.lastSeen).toISOString()}. ${ticketId ? `Proposed ticket ${ticketId}: read it, name its files, approve it with swarm tickets ${ticketId} --approve --yes.` : 'No ticket ledger yet, so no ticket was proposed.'} Details: swarm errors show ERR-${group.fingerprint.slice(0, 8)}.`;
-    await appendEvent(root, { kind: 'decision', id: `error-${group.fingerprint.slice(0, 8)}-${reason}-${stamp}`, text, choice: 'looked', options: ['looked'], confirm: true }).catch(() => {});
+    await appendEvent(root, { kind: 'decision', id: `error-${group.fingerprint.slice(0, 8)}-${reason}-${stamp}`, text, choice: 'looked', options: ['looked'], confirm: true }).catch((error) => { console.error('[tools/errors-commands.mjs] error notification appendEvent:', error?.message ?? error, `error-${group.fingerprint.slice(0, 8)}-${reason}-${stamp}`); });
   },
 });
 
