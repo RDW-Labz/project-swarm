@@ -137,8 +137,185 @@
     var value = row.value;
     if (typeof value !== 'number' || !Number.isFinite(value)) { return '0'; }
     if (row.unit === 'pct') { return Math.round(value) + '%'; }
-    if (row.unit === 'usd') { return String(Math.round(value * 100) / 100); }
+    if (row.unit === 'usd') { return formatUsd(value); }
     return String(Math.round(value));
+  }
+
+  function formatUsd(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) { return '—'; }
+    if (value >= 1000) { return '$' + Math.round(value).toLocaleString('en-US'); }
+    return '$' + (Math.round(value * 100) / 100);
+  }
+
+  function fieldNumber(field) {
+    if (!field || typeof field !== 'object') { return null; }
+    var v = field.value;
+    if (typeof v === 'string' && v.trim() !== '') { v = Number(v); }
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }
+
+  function projectTitle(project) {
+    if (!project || typeof project !== 'object') { return ''; }
+    if (typeof project.name === 'string' && project.name.length) { return project.name; }
+    return String(project.id || '');
+  }
+
+  function plural(n, one, many) {
+    return n + ' ' + (n === 1 ? one : (many || one + 's'));
+  }
+
+  /** Per-project counts read from whichever labelled fields the snapshot kept. */
+  function projectSignals(project) {
+    var needs = fieldNumber(project && project.needsYou);
+    var asksField = fieldNumber(project && project.asks);
+    return {
+      needs: needs !== null ? needs : 0,
+      ready: needs !== null && asksField !== null ? asksField : 0,
+      fails: fieldNumber(project && project.fails) || 0,
+      live: Math.max(fieldNumber(project && project.liveAgents) || 0, fieldNumber(project && project.out) || 0),
+    };
+  }
+
+  /** Lane the snapshot computes (needs you, building, ready, else control); derived when the field was dropped. */
+  function laneOfProject(project) {
+    if (project && typeof project.lane === 'string' && HIVE_PANEL_LANES.indexOf(project.lane) >= 0) {
+      return project.lane;
+    }
+    var s = projectSignals(project);
+    if (s.needs > 0) { return 'safety'; }
+    if (s.live > 0) { return 'context'; }
+    if (s.ready > 0) { return 'route'; }
+    return 'control';
+  }
+
+  /** Header status pill: failed beats needs you beats running beats idle. */
+  function projectStatus(project) {
+    var s = projectSignals(project);
+    if (s.fails > 0) { return { key: 'failed', label: 'failed' }; }
+    if (s.needs > 0) { return { key: 'needs', label: 'needs you' }; }
+    if (s.live > 0) { return { key: 'running', label: 'running' }; }
+    return { key: 'idle', label: 'idle' };
+  }
+
+  var BOT_SVG_METHODS = ['svg', 'toSvg', 'svgFor', 'markup', 'headSvg'];
+
+  /** Robot-head markup from the shared robot assets when they are loaded on the page; '' otherwise. */
+  function robotMarkup(seed) {
+    var g = typeof globalThis !== 'undefined' ? globalThis : {};
+    var apis = [g.RobotAvatar, g.RobotHead];
+    for (var a = 0; a < apis.length; a += 1) {
+      var api = apis[a];
+      if (!api) { continue; }
+      for (var m = 0; m < BOT_SVG_METHODS.length; m += 1) {
+        if (typeof api[BOT_SVG_METHODS[m]] !== 'function') { continue; }
+        try {
+          var out = api[BOT_SVG_METHODS[m]](seed);
+          if (typeof out === 'string' && out.indexOf('<svg') >= 0) { return out; }
+        } catch (e) { /* try the next entry point */ }
+      }
+    }
+    return '';
+  }
+
+  /** The project's robot head as <img class="hive-bot">; a lane-tinted monogram when the assets are not loaded. */
+  function createProjectBot(project) {
+    var title = projectTitle(project);
+    var markup = robotMarkup(String((project && project.id) || title));
+    if (markup) {
+      var img = document.createElement('img');
+      img.className = 'hive-bot';
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup);
+      img.alt = '';
+      img.setAttribute('aria-hidden', 'true');
+      return img;
+    }
+    var mono = el('span', 'hive-bot hive-bot--mono', title ? title.charAt(0).toUpperCase() : '·');
+    mono.setAttribute('aria-hidden', 'true');
+    return mono;
+  }
+
+  var NEEDS_RANK = { failed: 0, asks: 1, next: 2 };
+
+  /** Attention list rows: failed first, then asks, then next; no row for a zero count. */
+  function deriveNeedsYouItems(projects) {
+    var list = Array.isArray(projects) ? projects : [];
+    var items = [];
+    for (var i = 0; i < list.length; i += 1) {
+      var p = list[i];
+      if (!p || typeof p.id !== 'string') { continue; }
+      var s = projectSignals(p);
+      var name = projectTitle(p);
+      if (s.fails > 0) {
+        items.push({ kind: 'failed', projectId: p.id, name: name, count: s.fails, title: plural(s.fails, 'failed ticket'), project: p });
+      }
+      if (s.needs > 0) {
+        items.push({ kind: 'asks', projectId: p.id, name: name, count: s.needs, title: plural(s.needs, 'item') + ' waiting on you', project: p });
+      }
+      if (s.ready > 0) {
+        items.push({ kind: 'next', projectId: p.id, name: name, count: s.ready, title: plural(s.ready, 'ticket') + ' ready to run', project: p });
+      }
+    }
+    items.sort(function (a, b) {
+      if (NEEDS_RANK[a.kind] !== NEEDS_RANK[b.kind]) { return NEEDS_RANK[a.kind] - NEEDS_RANK[b.kind]; }
+      return b.count - a.count;
+    });
+    return items;
+  }
+
+  var NEEDS_PILL = { failed: 'failed', asks: 'needs you', next: 'next' };
+  var NEEDS_PILL_CLASS = { failed: 'st-failed', asks: 'st-needs', next: 'st-next' };
+
+  /**
+   * Fill the "needs you" list. options: limit (default 6), onOpen(projectId), hrefFor(projectId).
+   * Returns the number of rows that exist (before the limit).
+   */
+  function renderNeedsYou(host, items, options) {
+    if (!host) { return 0; }
+    var opts = options || {};
+    var list = Array.isArray(items) ? items : [];
+    clearChildren(host);
+    if (!list.length) {
+      var none = el('li', 'cc-empty hive-needs-empty', 'Nothing needs you right now.');
+      host.appendChild(none);
+      return 0;
+    }
+    var limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.floor(opts.limit) : 6;
+    var shown = list.slice(0, limit);
+    for (var i = 0; i < shown.length; i += 1) {
+      host.appendChild(needsRow(shown[i], opts));
+    }
+    if (list.length > shown.length) {
+      host.appendChild(el('li', 'cc-empty hive-needs-more', '+' + (list.length - shown.length) + ' more on the board'));
+    }
+    return list.length;
+  }
+
+  function needsRow(item, opts) {
+    var li = el('li', 'hive-needs-row');
+    li.setAttribute('data-kind', item.kind);
+    li.appendChild(createProjectBot(item.project || { id: item.projectId, name: item.name }));
+    var main = el('div', 'hive-needs-main');
+    var top = el('div', 'hive-needs-top');
+    top.appendChild(el('span', 'hive-needs-name', item.name));
+    top.appendChild(el('span', 'hive-pill ' + (NEEDS_PILL_CLASS[item.kind] || 'st-idle'), NEEDS_PILL[item.kind] || item.kind));
+    main.appendChild(top);
+    main.appendChild(el('div', 'hive-needs-title', item.title));
+    li.appendChild(main);
+    var href = typeof opts.hrefFor === 'function'
+      ? opts.hrefFor(item.projectId)
+      : '/command-center/project/' + encodeURIComponent(item.projectId);
+    var open = el('a', 'hive-open', 'Open');
+    open.href = href;
+    open.setAttribute('aria-label', 'Open ' + item.name + ' cockpit');
+    if (typeof opts.onOpen === 'function' && open.addEventListener) {
+      open.addEventListener('click', function (e) {
+        if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.button)) { return; }
+        if (e && typeof e.preventDefault === 'function') { e.preventDefault(); }
+        opts.onOpen(item.projectId);
+      });
+    }
+    li.appendChild(open);
+    return li;
   }
 
   /**
@@ -255,11 +432,17 @@
     for (var ki = 0; ki < CARD_ROW_KEYS.length; ki += 1) {
       var key = CARD_ROW_KEYS[ki];
       var field = cardMetricField(project, key);
-      dl.appendChild(el('dt', null, key));
-      var dd = el('dd', 'num', readTrustedDisplay(field));
+      if (key === 'out' && !field) { field = project.liveAgents || null; }
+      var cell = el('div', 'hive-kv-cell');
+      cell.appendChild(el('dt', null, key));
+      var shownValue = readTrustedDisplay(field);
+      var n = fieldNumber(field);
+      var tone = n !== null && n > 0 ? (key === 'fails' ? ' bad' : (key === 'asks' ? ' warn' : ' ok')) : (n === 0 ? ' zero' : '');
+      var dd = el('dd', 'num' + tone, shownValue);
       var title = trustedTitle(field);
       if (title) { dd.setAttribute('title', title); }
-      dl.appendChild(dd);
+      cell.appendChild(dd);
+      dl.appendChild(cell);
     }
     bd.appendChild(dl);
 
@@ -301,6 +484,26 @@
     };
   }
 
+  function boardEventsFromProjects(projects, at) {
+    var events = [];
+    for (var i = 0; i < projects.length; i += 1) {
+      var p = projects[i];
+      var s = projectSignals(p);
+      var name = projectTitle(p);
+      var base = { id: p.id, ts: at };
+      if (s.fails > 0) {
+        events.push({ kind: 'blocker', id: base.id + ':failed', ts: at, text: name + ': ' + plural(s.fails, 'failed ticket') });
+      }
+      if (s.needs > 0) {
+        events.push({ kind: 'human', id: base.id + ':asks', ts: at, text: name + ': ' + plural(s.needs, 'item') + ' waiting' });
+      }
+      if (s.live > 0) {
+        events.push({ kind: 'run', id: base.id + ':live', ts: at, text: name + ': ' + plural(s.live, 'agent') + ' running' });
+      }
+    }
+    return events;
+  }
+
   /**
    * Build panel model from a Command Center snapshot when panels blob is absent.
    */
@@ -314,19 +517,15 @@
     var stats = snapshot.stats && typeof snapshot.stats === 'object' ? snapshot.stats : {};
     var projects = Array.isArray(snapshot.projects) ? snapshot.projects : [];
     var laneCounts = {};
+    var runningProjects = 0;
     for (var pi = 0; pi < projects.length; pi += 1) {
       var proj = projects[pi];
-      var lane = typeof proj.lane === 'string' ? proj.lane : 'control';
-      var live = proj.liveAgents;
-      if (live && typeof live.value === 'number' && Number.isFinite(live.value) && live.value > 0) {
-        laneCounts[lane] = (laneCounts[lane] || 0) + Math.floor(live.value);
-      }
+      var lane = laneOfProject(proj);
+      laneCounts[lane] = (laneCounts[lane] || 0) + 1;
+      if (projectSignals(proj).live > 0) { runningProjects += 1; }
     }
+    // The stat cards already show needs-you and agents-live, so the lanes panel carries no duplicate lines.
     var statLines = [];
-    var needsLine = statLineFromLabelled(stats.needsYouCount, 'needs you');
-    if (needsLine) { statLines.push(needsLine); }
-    var agentsLine = statLineFromLabelled(stats.agentsLive, 'agents live');
-    if (agentsLine) { statLines.push(agentsLine); }
     var lanesHero = {};
     if (stats.projectsTotal && typeof stats.projectsTotal.value === 'number') {
       lanesHero.repos = Math.floor(stats.projectsTotal.value);
@@ -338,6 +537,8 @@
     var journalEvents = [];
     if (Array.isArray(snapshot.journalEvents)) { journalEvents = snapshot.journalEvents; }
     else if (Array.isArray(snapshot.events)) { journalEvents = snapshot.events; }
+    // No event feed on the snapshot: the log reports the same project signals that drive the stat cards.
+    if (!journalEvents.length) { journalEvents = boardEventsFromProjects(projects, snapshot.at); }
 
     var savingsRows = [];
     if (stats.needsYouCount && typeof stats.needsYouCount.value === 'number') {
@@ -350,23 +551,34 @@
         fillGradient: 'linear-gradient(90deg,#fbbf24,#fb923c)',
       });
     }
+    if (projects.length > 0) {
+      savingsRows.push({
+        label: 'projects running',
+        displayValue: runningProjects + '/' + projects.length,
+        value: runningProjects,
+        max: projects.length,
+        title: 'projects[].liveAgents',
+        fillGradient: 'linear-gradient(90deg,#34d399,#3dd6a5)',
+      });
+    }
     var doneProjects = 0;
-    var trackedProjects = projects.length;
+    var trackedProjects = 0;
     for (var pj = 0; pj < projects.length; pj += 1) {
       var pctField = projects[pj].percentDone;
-      if (pctField && typeof pctField.value === 'string') {
-        var pct = parseInt(pctField.value, 10);
-        if (Number.isFinite(pct) && pct >= 100) { doneProjects += 1; }
+      var pct = pctField && typeof pctField.value === 'string' ? parseInt(pctField.value, 10) : NaN;
+      if (Number.isFinite(pct)) {
+        trackedProjects += 1;
+        if (pct >= 100) { doneProjects += 1; }
       }
     }
     if (trackedProjects > 0) {
       savingsRows.push({
-        label: 'tickets done/total',
+        label: 'projects done',
         displayValue: doneProjects + '/' + trackedProjects,
         value: doneProjects,
         max: trackedProjects,
         title: 'projects[].progress.overall',
-        fillGradient: 'linear-gradient(90deg,#34d399,#3dd6a5)',
+        fillGradient: 'linear-gradient(90deg,#60a5fa,#93c5fd)',
       });
     }
     if (stats.spendUsd && typeof stats.spendUsd.value === 'number' && stats.spendUsd.value >= 0) {
@@ -427,15 +639,16 @@
     var modelObj = model || {};
     var prompt = el('p', 'term-prompt', '~/swarm $ watch --board');
     host.appendChild(prompt);
-    var canvas = document.createElement('canvas');
-    canvas.className = 'mini-chart';
-    canvas.id = 'chart-fps';
-    canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
-    canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
-    canvas.setAttribute('aria-label', modelObj.throughputChartLabel || 'Throughput chart');
     var throughputSamples = Array.isArray(modelObj.throughputSamples) ? modelObj.throughputSamples : [];
-    host.appendChild(canvas);
+    // No samples: no chart box and no "nothing yet" line (the board state above already says what is live).
     if (throughputSamples.length) {
+      var canvas = document.createElement('canvas');
+      canvas.className = 'mini-chart';
+      canvas.id = 'chart-fps';
+      canvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
+      canvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
+      canvas.setAttribute('aria-label', modelObj.throughputChartLabel || 'Throughput chart');
+      host.appendChild(canvas);
       drawBarChart(canvas, throughputSamples, ['#5eb8ff', '#3dd6a5', '#ff4d8d', '#f5c451']);
       var caption = el('p', 'term-prompt term-prompt--chart-caption');
       caption.appendChild(el('span', 'lbl', 'throughput samples'));
@@ -446,9 +659,6 @@
         caption.appendChild(peak);
       }
       host.appendChild(caption);
-    } else {
-      var empty = el('p', 'term-prompt', 'no throughput samples yet');
-      host.appendChild(empty);
     }
   }
 
@@ -587,8 +797,7 @@
     var rows = Array.isArray(savingsRows) ? savingsRows : [];
     var scaleMax = typeof opts.savingsMax === 'number' ? opts.savingsMax : null;
     if (!rows.length) {
-      var savingsEmpty = el('p', 'term-prompt', 'no throughput metrics yet');
-      host.appendChild(savingsEmpty);
+      rowsRoot.appendChild(el('p', 'cc-empty', 'No throughput metrics yet'));
     }
     for (var i = 0; i < rows.length; i += 1) {
       var row = rows[i];
@@ -618,21 +827,15 @@
     if (existingCaption && existingCaption.parentNode) {
       existingCaption.parentNode.removeChild(existingCaption);
     }
-    var existingEmpty = host.querySelector ? host.querySelector('.cc-empty') : null;
-    if (existingEmpty && existingEmpty.parentNode) {
-      existingEmpty.parentNode.removeChild(existingEmpty);
-    }
-    var baselineCanvas = host.querySelector ? host.querySelector('canvas.mini-chart') : null;
-    if (!baselineCanvas) {
-      baselineCanvas = document.createElement('canvas');
+    // Chart only when there is something to plot; an empty chart box is never rendered.
+    if (samples.length >= 2) {
+      var baselineCanvas = document.createElement('canvas');
       baselineCanvas.className = 'mini-chart';
       baselineCanvas.id = 'chart-latency';
       baselineCanvas.width = typeof opts.chartWidth === 'number' ? opts.chartWidth : 360;
       baselineCanvas.height = typeof opts.chartHeight === 'number' ? opts.chartHeight : 40;
       baselineCanvas.setAttribute('aria-label', opts.chartLabel || 'Decision latency chart');
       host.appendChild(baselineCanvas);
-    }
-    if (samples.length >= 2) {
       drawSparkline(baselineCanvas, samples, {
         width: baselineCanvas.width,
         height: baselineCanvas.height,
@@ -641,9 +844,6 @@
       var caption = el('p', 'term-prompt hive-term-prompt term-prompt--chart-caption');
       caption.appendChild(el('span', 'lbl', opts.latencyCaption || 'decision latency'));
       host.appendChild(caption);
-    } else if (!samples.length) {
-      var latencyEmpty = el('p', 'term-prompt', 'no decisions timed yet');
-      host.appendChild(latencyEmpty);
     }
   }
 
@@ -720,5 +920,12 @@
     renderHivePanels: renderHivePanels,
     renderProjectCardMetrics: renderProjectCardMetrics,
     deriveHivePanelModel: deriveHivePanelModel,
+    laneOfProject: laneOfProject,
+    projectStatus: projectStatus,
+    projectSignals: projectSignals,
+    createProjectBot: createProjectBot,
+    deriveNeedsYouItems: deriveNeedsYouItems,
+    renderNeedsYou: renderNeedsYou,
+    formatUsd: formatUsd,
   };
 }));

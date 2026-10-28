@@ -101,6 +101,9 @@ function appendCategoryBar(parent, categories, extraClass) {
   const bar = el('div', `category-bar ${extraClass || ''}`.trim());
   const links = el('div', 'category-links');
   links.setAttribute('aria-label', 'Category mix');
+  const lanesLabel = el('span', 'num-label lanes-label', 'lanes');
+  lanesLabel.title = 'ticket mix by lane';
+  links.appendChild(lanesLabel);
   categories.forEach((row, i) => {
     if (i > 0) links.appendChild(el('span', 'sep', '/'));
     links.appendChild(el('span', null, row.label));
@@ -208,29 +211,25 @@ export function renderCockpit(host, data, opts) {
   h1.dataset.headlineClamp = COCKPIT_HEADLINE_CLAMP;
   hero.appendChild(h1);
 
-  const tag = el('p', 'tagline');
-  tag.textContent = orch.detail;
-  hero.appendChild(tag);
+  if (orch.detail) {
+    const tag = el('p', 'tagline');
+    tag.textContent = String(orch.detail);
+    hero.appendChild(tag);
+  }
 
   appendCategoryBar(hero, categoryRows, 'category-bar--hero-mobile');
 
   host.appendChild(nav);
   host.appendChild(hero);
 
+  const runningCount = live.filter(t => t.status === 'running').length;
   const scanLive = el('div', 'scan-live scan-live--header');
-  scanLive.setAttribute('aria-label', 'Live ticket progress');
-  scanLive.appendChild(el('span', 'scan-live-label', 'Live scan'));
-  const scanCount = el('span', 'scan-live-count');
-  const scanDoneNum = el('span', 'num');
-  scanDoneNum.title = 'source field: ledger.tickets done';
-  scanDoneNum.textContent = String(done);
-  scanCount.appendChild(scanDoneNum);
-  scanCount.appendChild(el('span', 'scan-of', 'of'));
-  const scanTotalNum = el('span', 'num');
-  scanTotalNum.title = 'source field: ledger.tickets live total';
-  scanTotalNum.textContent = String(total);
-  scanCount.appendChild(scanTotalNum);
-  scanLive.appendChild(scanCount);
+  scanLive.setAttribute('aria-label', 'Live ticket state');
+  const chip = el('span', runningCount ? 'live-chip live-chip--on' : 'live-chip');
+  chip.title = 'source field: ledger.tickets with status running';
+  chip.appendChild(el('span', 'live-dot'));
+  chip.appendChild(el('span', 'live-chip-text', runningCount ? `live · ${runningCount} running` : 'idle · none running'));
+  scanLive.appendChild(chip);
   host.appendChild(scanLive);
 
   appendCategoryBar(host, categoryRows, 'category-bar--header');

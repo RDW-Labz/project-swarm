@@ -13,6 +13,7 @@ import {
   workerStreamFromLedger,
   renderOrchestratorRunStream,
 } from './cockpit-lists.js';
+import { ticketPillKey } from './cockpit-lists.js';
 import { completionKey } from './cc-tour.js';
 
 const queueDeps = { ticketToQueueJob, listQueueJobsForProject };
@@ -261,8 +262,14 @@ function runStreamItems(project, at) {
   const raw = Array.isArray(project?.runStream) ? project.runStream : [];
   return raw.map(item => {
     const status = ended ? 'ended' : (item.status || item.title || 'running');
-    const title = item.id || (item.title && item.title !== status ? item.title : 'run');
-    return { ...item, title, status };
+    const fullId = item.id ? String(item.id) : '';
+    const shortId = fullId.slice(0, 8);
+    const title = shortId || (item.title && item.title !== status ? item.title : 'run');
+    // "2/6 jobs" -> "jobs 2/6"
+    const body = typeof item.body === 'string'
+      ? item.body.replace(/^\s*(\d+\s*\/\s*\d+)\s+jobs?\s*$/i, 'jobs $1')
+      : item.body;
+    return { ...item, id: shortId || item.id, fullId, title, status, body };
   });
 }
 
@@ -270,7 +277,7 @@ function paintRunStream(host, project, at) {
   renderOrchestratorRunStream(host, runStreamItems(project, at));
 }
 
-function syncStreamCount(headEl, shown, total) {
+function syncStreamCount(headEl, shown, total, text) {
   if (!headEl) return;
   let count = headEl.querySelector?.('.stream-count');
   if (!count && headEl.appendChild) {
@@ -279,7 +286,7 @@ function syncStreamCount(headEl, shown, total) {
     count.className = 'stream-count';
     headEl.appendChild(count);
   }
-  if (count) count.textContent = `${shown} of ${total}`;
+  if (count) count.textContent = text || `${shown} of ${total}`;
 }
 
 function paintWorkerStream(host, project, workerHead) {
@@ -287,28 +294,17 @@ function paintWorkerStream(host, project, workerHead) {
   const total = project?.total ?? (project?.ledger?.tickets ?? []).filter(
     t => !['cancelled', 'proposed'].includes(t.status),
   ).length;
-  syncStreamCount(workerHead, items.length, total);
+  syncStreamCount(workerHead, items.length, total, `latest ${items.length} of ${total} tickets`);
   renderWorkerStream(host, items);
 }
 
+/** One collapsed explainer line (closed by default) instead of two always-open panels. */
 function buildBottomLoops(doc) {
-  const wrap = el(doc, 'div', 'bottom-loops');
-  const swarm = el(doc, 'section', 'loop-block loop-block--swarm');
-  swarm.setAttribute('aria-label', 'Swarm loop');
-  const swarmHead = el(doc, 'div', 'loop-head');
-  swarmHead.appendChild(el(doc, 'span', 'title', 'The swarm loop'));
-  swarmHead.appendChild(el(doc, 'span', 'tag', 'Ledger in, merged PR out'));
-  swarm.appendChild(swarmHead);
-  swarm.appendChild(el(doc, 'p', 'loop-steps', 'you approve the scope > the split makes tickets > workers build in waves > checks gate every merge > the PR merges > the ledger marks it done'));
-  const motion = el(doc, 'section', 'loop-block');
-  motion.setAttribute('aria-label', 'Project loop');
-  const motionHead = el(doc, 'div', 'loop-head');
-  motionHead.appendChild(el(doc, 'span', 'title', 'The delivery loop'));
-  motionHead.appendChild(el(doc, 'span', 'tag', 'Scope in, shipped out'));
-  motion.appendChild(motionHead);
-  motion.appendChild(el(doc, 'p', 'loop-steps', 'you set scope > orchestrator plans > workers execute > checks run > tickets close'));
-  wrap.appendChild(swarm);
-  wrap.appendChild(motion);
+  const wrap = el(doc, 'details', 'loop bottom-loops');
+  wrap.setAttribute('aria-label', 'How the loop works');
+  wrap.appendChild(el(doc, 'summary', 'loop-summary', 'How the swarm loop works'));
+  wrap.appendChild(el(doc, 'p', 'loop-steps', 'The swarm loop: you approve the scope > the split makes tickets > workers build in waves > checks gate every merge > the PR merges > the ledger marks it done.'));
+  wrap.appendChild(el(doc, 'p', 'loop-steps', 'The delivery loop: you set scope > orchestrator plans > workers execute > checks run > tickets close.'));
   return wrap;
 }
 
@@ -329,16 +325,27 @@ function phoneLayoutOn(matchMedia) {
   }
 }
 
-function paintPhoneNowRows(phoneNow, project, doc) {
+function phoneRowIsPriority(ticket) {
+  const key = ticketPillKey(ticket?.status);
+  return key === 'running' || key === 'needs' || key === 'failed';
+}
+
+/**
+ * Phone NOW rows. Priority = running / needs-you / failed (right under the Now card);
+ * otherwise the first few remaining tickets (below the search field).
+ */
+function paintPhoneNowRows(phoneNow, project, doc, priority) {
   const ledger = project?.ledger ?? { tickets: [] };
   const jobs = queueVisibleJobs(ledger, { id: project?.id }, queueDeps);
   const active = activeTicket(project);
-  const rows = el(doc, 'div', 'phone-now-rows');
-  rows.setAttribute('aria-label', 'Highlighted tickets');
+  const byId = new Map((ledger.tickets ?? []).map(t => [t.id, t]));
+  const rows = el(doc, 'div', priority ? 'phone-now-rows phone-now-rows--priority' : 'phone-now-rows');
+  rows.setAttribute('aria-label', priority ? 'Running and needs you' : 'Highlighted tickets');
   let added = 0;
   for (let i = 0; i < jobs.length; i += 1) {
     const job = jobs[i];
     if (active && job.id === active.id) continue;
+    if (phoneRowIsPriority(byId.get(job.id)) !== Boolean(priority)) continue;
     if (added >= 6) break;
     const col = el(doc, 'div', 'ticket-col ticket-col--phone');
     renderCockpitTicketList(col, ledger, {
@@ -353,6 +360,9 @@ function paintPhoneNowRows(phoneNow, project, doc) {
     if (row) rows.appendChild(row);
     added += 1;
   }
+  if (priority && !added) {
+    rows.appendChild(el(doc, 'p', 'cc-empty', 'Nothing else running or waiting on you'));
+  }
   phoneNow.appendChild(rows);
 }
 
@@ -365,8 +375,6 @@ function paintPhonePanels(deps, refs, project, at) {
     phoneStack,
     stageCenter,
     nowPanelHost,
-    readyHost,
-    bottomLoops,
     workerSection,
     streamSection,
     stackBlock,
@@ -389,13 +397,7 @@ function paintPhonePanels(deps, refs, project, at) {
       wrap.appendChild(safeClone(nowPanelHost, true));
     }
     phoneNow.appendChild(wrap);
-    if (bottomLoops) {
-      const loops = safeClone(bottomLoops, true);
-      if (loops) {
-        loops.classList.add('phone-now-loops');
-        phoneNow.appendChild(loops);
-      }
-    }
+    paintPhoneNowRows(phoneNow, project, doc, true);
     const search = el(doc, 'div', 'ticket-search cockpit-ticket-search');
     const searchLabel = el(doc, 'label', null, 'Search tickets');
     searchLabel.setAttribute('for', 'ticket-filter-phone-now');
@@ -407,7 +409,7 @@ function paintPhonePanels(deps, refs, project, at) {
     search.appendChild(searchLabel);
     search.appendChild(filterInput);
     phoneNow.appendChild(search);
-    paintPhoneNowRows(phoneNow, project, doc);
+    paintPhoneNowRows(phoneNow, project, doc, false);
     filterInput.addEventListener('input', () => {
       const q = String(filterInput.value || '').trim().toLowerCase();
       const rowNodes = phoneNow.querySelectorAll
@@ -534,8 +536,11 @@ export function renderProjectCockpit(host, project, deps) {
 
   const bandHeader = el(doc, 'header', 'band-header');
   const appNav = el(doc, 'div', 'app-nav');
-  appNav.setAttribute('aria-label', 'Swarm Watch chrome');
-  appNav.appendChild(el(doc, 'div', 'brand', 'Swarm Watch'));
+  appNav.setAttribute('aria-label', 'Command Center chrome');
+  const brand = el(doc, 'div', 'brand');
+  brand.appendChild(el(doc, 'span', 'brand-dot'));
+  brand.appendChild(el(doc, 'span', 'brand-name', 'jev + opus'));
+  appNav.appendChild(brand);
   const navActions = el(doc, 'div', 'nav-actions');
   const backBtn = el(doc, 'button', 'btn-pill cc-cockpit-back-btn', 'Back');
   backBtn.type = 'button';
@@ -576,8 +581,10 @@ export function renderProjectCockpit(host, project, deps) {
   const ticketsRight = el(doc, 'div', 'ticket-col ticket-col--right');
   ticketsRight.id = 'tickets-right';
   ticketsRight.setAttribute('aria-label', 'Queue tickets continued');
+  const stageRun = el(doc, 'div', 'stage-run');
   stageGrid.appendChild(ticketsLeft);
   stageGrid.appendChild(stageCenter);
+  stageGrid.appendChild(stageRun);
   stageGrid.appendChild(ticketsRight);
   stageWrap.appendChild(stageGrid);
   bandMain.appendChild(stageWrap);
@@ -630,10 +637,10 @@ export function renderProjectCockpit(host, project, deps) {
   stackBlock.appendChild(stackFootHost);
 
   bandBottom.appendChild(workerSection);
-  bandBottom.appendChild(streamSection);
-  bandBottom.appendChild(stackBlock);
+  stageRun.appendChild(streamSection);
+  stageRun.appendChild(stackBlock);
 
-  const footnote = el(doc, 'footer', 'cockpit-footnote');
+  const footnote = el(doc, 'footer', 'cockpit-footnote cockpit-footer');
   footnote.setAttribute('aria-label', 'Data notes');
   footnote.textContent = 'Live board data — ticket counts match the project ledger.';
 
@@ -702,7 +709,8 @@ export function renderProjectCockpit(host, project, deps) {
     paintNowPanel(nowPanelHost, projectRef);
     paintWorkerStream(workerHost, projectRef, workerHead);
     paintRunStream(streamHost, projectRef, at);
-    syncStreamCount(streamHead, runStreamItems(projectRef, at).length, projectRef?.total ?? 0);
+    const runCount = runStreamItems(projectRef, at).length;
+    syncStreamCount(streamHead, runCount, projectRef?.total ?? 0, `${runCount} ${runCount === 1 ? 'run' : 'runs'}`);
     paintStack(stackTilesHost, stackFootHost, projectRef, viewport);
     paintPhonePanels(deps, phoneRefs, projectRef, at);
     tabCtl.syncTabMode();

@@ -1202,9 +1202,248 @@
   }
 }
 
+/* ---- Round 4 fixes ---- */
+
+/* Page scrolls inside the shell on desktop; board sizes to content. */
+@media (min-width: 721px) {
+  .cc-cockpit-shell {
+    height: 100vh;
+    overflow-y: auto;
+    grid-template-rows: auto auto;
+    align-content: start;
+  }
+  .cc-cockpit-shell .panel-cockpit {
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+    align-content: start;
+  }
+  .cc-cockpit-shell .band-main,
+  .cc-cockpit-shell .stage-wrap,
+  .cc-cockpit-shell .ticket-col {
+    overflow: visible;
+  }
+  .cc-cockpit-shell .band-bottom {
+    grid-row: 2;
+  }
+}
+
+.cc-cockpit-shell .cockpit-board,
+.cc-cockpit-shell .stage-grid {
+  align-items: start;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px) minmax(0, 1fr);
+  grid-template-areas:
+    'done now queue'
+    'done run queue';
+}
+.cc-cockpit-shell .ticket-col--left { grid-area: done; align-self: start; }
+.cc-cockpit-shell .stage-center { grid-area: now; }
+.cc-cockpit-shell .stage-run { grid-area: run; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 0 4px; }
+.cc-cockpit-shell .ticket-col--right { grid-area: queue; align-self: start; }
+.cc-cockpit-shell .stage-run .stream-section,
+.cc-cockpit-shell .stage-run .stack-block { overflow: visible; }
+.cc-cockpit-shell .stage-run .stream-grid,
+.cc-cockpit-shell .stage-run .cc-cockpit-run-stream-host {
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: auto;
+}
+.cc-cockpit-shell .stage-run .stack-metrics { grid-template-rows: auto; }
+.cc-cockpit-shell .stage-run .cockpit-metric-tile .m-foot,
+.cc-cockpit-shell .stage-run .metric-tile .m-foot { display: none; }
+
+/* Bottom strip: worker stream + explainer, no overlap with the footer. */
+.cc-cockpit-shell .band-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 0 24px;
+  overflow: visible;
+}
+.cc-cockpit-shell .band-bottom .stream-section { overflow: visible; }
+.cc-cockpit-shell .band-bottom .stream-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-auto-rows: auto;
+}
+.cc-cockpit-shell .cockpit-footer { position: static; margin-top: 16px; }
+
+.cc-cockpit-shell .stream-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.cc-cockpit-shell .stream-top--noid { grid-template-columns: minmax(0, 1fr) auto; }
+.cc-cockpit-shell .stream-id {
+  white-space: nowrap;
+  min-width: 6ch;
+  overflow: visible;
+  text-overflow: clip;
+  color: var(--muted);
+}
+.cc-cockpit-shell .stream-card,
+.cc-cockpit-shell .cockpit-run-stream-item { min-height: 0; }
+.cc-cockpit-shell .stream-bar { margin-top: 4px; }
+
+/* Collapsed loop explainer */
+.cc-cockpit-shell .loop {
+  border: 1px solid var(--line);
+  border-radius: var(--pill);
+  background: linear-gradient(90deg, rgba(196, 155, 255, 0.08), rgba(94, 196, 184, 0.06));
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  padding: 0 14px;
+}
+.cc-cockpit-shell .loop[open] { border-radius: var(--r); padding-bottom: 8px; }
+.cc-cockpit-shell .loop-summary { cursor: pointer; padding: 8px 0; color: var(--lav); }
+.cc-cockpit-shell .loop .loop-steps { margin: 4px 0 0; }
+
+/* Stage stack tiles keep their labels */
+.cc-cockpit-shell .stack-chip,
+.cc-cockpit-shell .cockpit-metric-tile,
+.cc-cockpit-shell .metric-tile { min-width: 64px; padding: 8px 10px; }
+.cc-cockpit-shell .stack-chip .label,
+.cc-cockpit-shell .cockpit-metric-tile .m-label,
+.cc-cockpit-shell .metric-tile .m-label {
+  white-space: nowrap;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-overflow: clip;
+}
+.cc-cockpit-shell .stack-metrics { grid-template-columns: repeat(3, minmax(64px, 1fr)); }
+
+/* Ticket rows + status pills */
+.cc-cockpit-shell .ticket-row { max-height: none; min-height: 40px; padding: 5px 8px; font-size: 0.66rem; }
+.cc-cockpit-shell .ticket-row[data-status="ready"] { color: var(--text-2, #b8bcc8); }
+.cc-cockpit-shell .ticket-row[data-status="ready"] .ticket-name { color: var(--text-2, #b8bcc8); }
+.cc-cockpit-shell .ticket-row--pending { opacity: 0.9; }
+.cc-cockpit-shell .ticket-row--active,
+.cc-cockpit-shell .ticket-row[data-status="running"] {
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.25) inset;
+  background: linear-gradient(90deg, rgba(52, 211, 153, 0.1), rgba(12, 10, 14, 0.82));
+}
+.cc-cockpit-shell .ticket-row[data-status="failed"] { border-color: rgba(248, 113, 113, 0.5); }
+.cc-cockpit-shell .ticket-row[data-status="needs"] { border-color: rgba(251, 191, 36, 0.5); border-style: solid; }
+
+.cc-cockpit-shell .pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: var(--pill);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 1;
+  white-space: nowrap;
+}
+.cc-cockpit-shell .pill--ready { background: rgba(96, 165, 250, 0.14); color: #93c5fd; }
+.cc-cockpit-shell .pill--running {
+  background: rgba(52, 211, 153, 0.16);
+  color: #6ee7b7;
+  animation: cc-cockpit-pulse 1.8s ease-in-out infinite;
+}
+.cc-cockpit-shell .pill--done { background: rgba(94, 196, 184, 0.14); color: #8fd9cf; }
+.cc-cockpit-shell .pill--failed { background: rgba(248, 113, 113, 0.16); color: #fca5a5; }
+.cc-cockpit-shell .pill--needs { background: rgba(251, 191, 36, 0.16); color: #fcd34d; }
+.cc-cockpit-shell .ticket-mark--live { background: #34d399; animation: cc-cockpit-pulse 1.8s ease-in-out infinite; }
+
+@keyframes cc-cockpit-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-cockpit-shell .pill--running,
+  .cc-cockpit-shell .ticket-mark--live,
+  .cc-cockpit-shell .live-dot { animation: none; }
+}
+
+/* Header: brand + pill nav (matches Hive), live chip, lanes label */
+.cc-cockpit-shell .app-nav .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-style: normal;
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+.cc-cockpit-shell .brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--cockpit-pink), var(--lav));
+}
+.cc-cockpit-shell .app-nav .nav-actions .btn-pill,
+.cc-cockpit-shell .btn-pill {
+  text-transform: none;
+  font-family: var(--font);
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  min-height: 36px;
+  padding: 0 16px;
+}
+.cc-cockpit-shell .btn-pill--accent {
+  background: rgba(201, 120, 74, 0.16);
+  border-color: var(--cockpit-orange-dim);
+  color: #e9a77f;
+}
+.cc-cockpit-shell .live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: var(--pill);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-transform: none;
+}
+.cc-cockpit-shell .live-chip--on {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
+  color: #6ee7b7;
+}
+.cc-cockpit-shell .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.cc-cockpit-shell .live-chip--on .live-dot { background: #34d399; animation: cc-cockpit-pulse 1.8s ease-in-out infinite; }
+.cc-cockpit-shell .lanes-label { margin-right: 4px; align-self: center; }
+
+/* Phone: nav stays reachable, running tickets near the top */
+@media (max-width: 720px) {
+  .cc-cockpit-shell { display: block; }
+  .cc-cockpit-shell .band-header { display: contents; }
+  .cc-cockpit-shell .band-header .app-nav {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 14;
+    min-height: 52px;
+    margin: 0 -10px;
+    padding: 6px 10px;
+    background: rgba(7, 6, 10, 0.82);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .cc-cockpit-shell .view-tabs { top: 52px; }
+  .cc-cockpit-shell .app-nav .nav-actions { gap: 6px; }
+  .cc-cockpit-shell .app-nav .nav-actions .btn-pill { padding: 0 12px; }
+  .cc-cockpit-shell .mascot-stage { max-height: 120px; }
+  .cc-cockpit-shell .loop { display: none; }
+  .cc-cockpit-shell .phone-now-rows { display: flex; flex-direction: column; gap: 4px; }
+  .cc-cockpit-shell .phone-now-rows .ticket-row { min-height: var(--tap); }
+  .cc-cockpit-shell .stage-run,
+  .cc-cockpit-shell .band-bottom { display: none; }
+}
+
 @media (max-width: 390px) {
   .cc-cockpit-shell {
     padding: 0 8px 10px;
+  }
+
+  .cc-cockpit-shell .band-header .app-nav {
+    margin: 0 -8px;
+    padding: 6px 8px;
   }
 
   .cc-cockpit-shell .mascot-stage--phone {

@@ -176,12 +176,24 @@ function ticketRowStateClass(status) {
   return 'pending';
 }
 
+/** Status colour key: ready (blue), running (green), done, failed (red), needs (amber). */
+export function ticketPillKey(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'running') return 'running';
+  if (s === 'done') return 'done';
+  if (s === 'failed' || s === 'error') return 'failed';
+  if (s === 'blocked' || s === 'needs' || s === 'waiting' || s === 'review') return 'needs';
+  return 'ready';
+}
+
 function buildTicketRow(doc, job, full, queueIndex) {
   const status = full?.status || job.status || 'todo';
   const stateClass = ticketRowStateClass(status);
+  const pillKey = ticketPillKey(status);
   const row = doc.createElement('button');
   row.type = 'button';
   row.className = `ticket-row cockpit-ticket-row ticket-row--${stateClass}`;
+  row.setAttribute('data-status', pillKey);
   row.setAttribute('data-ticket-id', job.id);
   const repoKey = String(full?.title || job.id).toLowerCase();
   row.setAttribute('data-repo', repoKey);
@@ -202,7 +214,7 @@ function buildTicketRow(doc, job, full, queueIndex) {
     main.appendChild(sub);
   }
   const badge = doc.createElement('span');
-  badge.className = 'ticket-badge cockpit-ticket-status';
+  badge.className = `ticket-badge cockpit-ticket-status pill pill--${pillKey}`;
   badge.textContent = status;
   row.appendChild(idx);
   row.appendChild(main);
@@ -325,7 +337,7 @@ export function renderWorkerStream(host, items) {
       const card = doc.createElement('article');
       card.className = `stream-card ${accent}`;
       const top = doc.createElement('div');
-      top.className = 'stream-top';
+      top.className = item.id ? 'stream-top' : 'stream-top stream-top--noid';
       if (item.id) {
         const idEl = doc.createElement('span');
         idEl.className = 'stream-id num';
@@ -338,7 +350,7 @@ export function renderWorkerStream(host, items) {
       top.appendChild(titleEl);
       if (item.status) {
         const st = doc.createElement('span');
-        st.className = 'stream-status';
+        st.className = `stream-status pill pill--${ticketPillKey(item.status)}`;
         st.textContent = item.status;
         top.appendChild(st);
       }
@@ -392,15 +404,17 @@ export function renderOrchestratorRunStream(host, items) {
       const card = doc.createElement('article');
       card.className = `stream-card cockpit-run-stream-item ${accent}`;
       const top = doc.createElement('div');
-      top.className = 'stream-top';
+      top.className = item.id ? 'stream-top' : 'stream-top stream-top--noid';
       if (item.id) {
         const idEl = doc.createElement('span');
         idEl.className = 'stream-id num';
         idEl.textContent = item.id;
+        if (item.fullId) idEl.title = item.fullId;
         top.appendChild(idEl);
       }
       const titleEl = doc.createElement('span');
       titleEl.className = 'stream-title';
+      if (item.fullId) titleEl.title = item.fullId;
       const statusText = item.status || item.title || '';
       let displayTitle = item.title || '';
       if (statusText && displayTitle.toLowerCase() === String(statusText).toLowerCase()) {
@@ -410,7 +424,7 @@ export function renderOrchestratorRunStream(host, items) {
       top.appendChild(titleEl);
       if (statusText) {
         const st = doc.createElement('span');
-        st.className = 'stream-status';
+        st.className = `stream-status pill pill--${ticketPillKey(statusText)}`;
         st.textContent = statusText;
         top.appendChild(st);
       }

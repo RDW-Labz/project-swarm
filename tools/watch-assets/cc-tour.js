@@ -1,5 +1,6 @@
 const STORAGE_PREFIX = 'cc-tour-completed:';
 const TOUR_SEEN_KEY = 'cc-tour-seen';
+export const TOUR_DISMISSED_KEY = 'cc-tour-dismissed';
 
 export const TOUR_STEPS = [
   { id: 'hive', selector: '[data-tour=\'hive\']', title: 'The Hive', text: 'Every worker bee in the swarm appears here as a cell.' },
@@ -17,11 +18,25 @@ export function hasCompleted(storage, userId) {
 }
 
 function setCompleted(storage, userId) {
-  storage.setItem(completionKey(userId), '1');
   try {
-    storage.setItem(TOUR_SEEN_KEY, '1');
+    storage.setItem(completionKey(userId), '1');
   } catch {
     // ignore
+  }
+  try {
+    storage.setItem(TOUR_SEEN_KEY, '1');
+    storage.setItem(TOUR_DISMISSED_KEY, '1');
+  } catch {
+    // ignore
+  }
+}
+
+/** True once the tour was finished or skipped; storage failures read as "not dismissed". */
+export function isTourDismissed(storage) {
+  try {
+    return storage.getItem(TOUR_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
   }
 }
 
@@ -81,7 +96,7 @@ function positionTourCard(doc, card) {
 // Starts the tour. Replay ignores completion but never clears it for any user.
 export function startTour(opts) {
   const { doc, storage, userId, replay = false, onClose } = opts;
-  if (!replay && hasCompleted(storage, userId)) return null;
+  if (!replay && (hasCompleted(storage, userId) || isTourDismissed(storage))) return null;
 
   const steps = TOUR_STEPS.filter((s) => doc.querySelector(s.selector));
   if (steps.length === 0) return null;
@@ -92,6 +107,13 @@ export function startTour(opts) {
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-label', 'Command Center tour');
+  if (overlay.style) {
+    // Inline so the overlay works on both pages whichever stylesheet is loaded.
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.zIndex = '120';
+    overlay.style.background = 'rgba(5, 5, 8, 0.5)';
+  }
 
   const card = doc.createElement('div');
   card.className = 'cc-tour-card';
@@ -180,11 +202,42 @@ function isHarnessStorage(storage) {
   return Boolean(storage && storage._data instanceof Map);
 }
 
-// Never auto-open in real browsers; node boot tests use an in-memory storage with `_data`.
+function ensureHelpButton(opts) {
+  const { doc } = opts;
+  if (typeof doc.querySelector !== 'function' || typeof doc.createElement !== 'function' || !doc.body) return;
+  // Always present once per document; CSS hides it while the Hive header "?" button is on screen.
+  if (doc.querySelector('.cc-tour-fab')) return;
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.className = 'cc-tour-fab';
+  btn.setAttribute('aria-label', 'Command Center tour');
+  btn.textContent = '?';
+  if (btn.style) {
+    // Fixed corner button for views without a header help button (cc-hive.css hides it next to the Hive "?").
+    btn.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:110;width:44px;height:44px;border-radius:999px;'
+      + 'border:1px solid rgba(96,165,250,.45);background:#181822;color:#bfdbfe;font:700 14px ui-monospace,monospace;cursor:pointer;';
+  }
+  btn.addEventListener('click', () => {
+    if (isTourDisabledByQuery(doc.defaultView?.location || globalThis.location)) return;
+    startTour({ ...opts, replay: true });
+  });
+  doc.body.append(btn);
+}
+
+// The tour never opens by itself over content in real browsers: it opens from a help button
+// (the Hive header "?" or the corner button added here) and remembers dismissal in storage.
+// Node boot tests use an in-memory storage with `_data` and still get the one-time first-visit start.
 export function maybeStartFirstVisit(opts) {
   if (!opts || !opts.doc) return null;
   if (isTourDisabledByQuery(opts.doc.defaultView?.location || globalThis.location)) return null;
-  if (!isHarnessStorage(opts.storage)) return null;
+  if (!isHarnessStorage(opts.storage)) {
+    try {
+      ensureHelpButton(opts);
+    } catch {
+      // The help button is optional.
+    }
+    return null;
+  }
   return startTour({ ...opts, replay: false });
 }
 

@@ -2,13 +2,7 @@
 /** Mount Command Center Hive view (stat strip, ring, streams, panels) from a snapshot. */
 
 import { renderHiveStatStrip } from './hive-stat-strip.js';
-import {
-  layoutHiveProjectNodes,
-  renderHiveLayout,
-  CARD_GAP_PCT,
-  CARD_HEIGHT_PCT,
-  HIVE_LANES,
-} from './hive-layout.js';
+import { renderHiveLayout, HIVE_LANES } from './hive-layout.js';
 import { hiveBrainMotionDescriptor, hiveBrainReducedMotionStillFrame, hiveBrainStateFromEvents } from './hive-brain.js';
 import { HIVE_STREAM_FRAME_MS, HIVE_STREAM_RENDER_STATIC, advanceAndDrawHiveStreamComets, buildHiveStreams, drawHiveStreamStaticDots, hiveStreamDensityForProject, hiveStreamsPauseWhenDocumentHidden, hiveStreamsPrefersReducedMotion, hiveStreamsRenderPath } from './hive-streams.js';
 import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
@@ -94,6 +88,13 @@ function buildHiveChrome(doc, legendEl, firstProjectId, onTourHelp) {
     cockpitTab.href = `/command-center/project/${encodeURIComponent(firstProjectId)}`;
     nav.appendChild(cockpitTab);
   }
+  const liveChip = el(doc, 'div', 'cc-live');
+  liveChip.setAttribute('role', 'status');
+  liveChip.appendChild(el(doc, 'span', 'dot'));
+  liveChip.appendChild(el(doc, 'span', 'cc-live-label', 'live'));
+  const liveCount = el(doc, 'span', 'cc-live-n');
+  liveChip.appendChild(liveCount);
+  nav.appendChild(liveChip);
   const helpBtn = el(doc, 'button', 'cc-btn cc-tour-help');
   helpBtn.type = 'button';
   helpBtn.setAttribute('aria-label', 'Command Center tour');
@@ -110,18 +111,16 @@ function buildHiveChrome(doc, legendEl, firstProjectId, onTourHelp) {
   nav.appendChild(pauseBtn);
   chromeTop.appendChild(nav);
 
-  const illus = el(doc, 'p', 'cc-illus-banner hive-illus');
-  illus.setAttribute('role', 'note');
-  illus.textContent = 'Live board data from your Swarm watch server.';
-  return { chromeTop, illus, pauseBtn, brand, helpBtn };
+  return { chromeTop, pauseBtn, brand, helpBtn, liveChip, liveCount };
 }
 
 function formatStatValue(field) {
   if (!field || typeof field.value !== 'number') return '';
-  if (field.unit === 'usd') return String(field.value);
+  if (field.unit === 'usd') return resolveHivePanels().formatUsd(field.value);
   return String(field.value);
 }
 
+/** Entries for the stat strip, each carrying its key and raw field so trend pills can be added after render. */
 function statStripEntries(stats) {
   const out = [];
   if (!stats || typeof stats !== 'object') return out;
@@ -130,13 +129,60 @@ function statStripEntries(stats) {
     if (!field || typeof field.source !== 'string' || !field.source.length) continue;
     if (typeof field.label !== 'string' || !field.label.length) continue;
     out.push({
-      label: field.label,
-      value: formatStatValue(field),
-      source: field.source,
-      tone: STAT_TONES[key] || undefined,
+      key,
+      field,
+      entry: {
+        label: field.label,
+        value: formatStatValue(field),
+        source: field.source,
+        tone: STAT_TONES[key] || undefined,
+      },
     });
   }
   return out;
+}
+
+function trendCount(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function formatDelta(n) {
+  const rounded = Math.round(n * 100) / 100;
+  return `${rounded > 0 ? '+' : ''}${rounded}`;
+}
+
+/** Trend pill text from real board data: change since the page opened, else a context line. */
+function statTrend(key, field, projects, baseline) {
+  const panels = resolveHivePanels();
+  const value = field.value;
+  if (baseline != null && baseline !== value) {
+    const diff = value - baseline;
+    const worse = key === 'needsYouCount' ? diff > 0 : false;
+    return { text: `${formatDelta(diff)} since open`, tone: worse ? 'warn' : 'ok' };
+  }
+  const list = Array.isArray(projects) ? projects : [];
+  if (key === 'projectsTotal') {
+    const active = list.filter((p) => panels.projectSignals(p).live > 0).length;
+    return active > 0
+      ? { text: `${active} active`, tone: 'ok' }
+      : { text: 'none active', tone: 'muted' };
+  }
+  if (key === 'agentsLive') {
+    const hosts = list.filter((p) => panels.projectSignals(p).live > 0).length;
+    return value > 0
+      ? { text: `in ${trendCount(hosts, 'project', 'projects')}`, tone: 'ok' }
+      : { text: 'idle', tone: 'muted' };
+  }
+  if (key === 'needsYouCount') {
+    const waiting = list.filter((p) => panels.projectSignals(p).needs > 0).length;
+    return value > 0
+      ? { text: `${trendCount(waiting, 'project', 'projects')} waiting`, tone: 'warn' }
+      : { text: 'all clear', tone: 'ok' };
+  }
+  if (key === 'spendUsd' && list.length > 0) {
+    return { text: `${panels.formatUsd(value / list.length)}/project`, tone: 'info' };
+  }
+  return null;
 }
 
 function panelModelFromSnapshot(snapshot) {
@@ -144,24 +190,31 @@ function panelModelFromSnapshot(snapshot) {
   return deriveHivePanelModel(snapshot);
 }
 
-function laneTagLabel(lane) {
-  const labels = { safety: 'SAFETY', route: 'ROUTE', context: 'CONTEXT', control: 'CONTROL' };
-  if (typeof lane === 'string' && labels[lane]) return labels[lane];
-  return 'CONTROL';
+function agentsLiveCount(snapshotData) {
+  const field = snapshotData?.stats?.agentsLive;
+  if (field && typeof field.value === 'number' && Number.isFinite(field.value)) return field.value;
+  const panels = resolveHivePanels();
+  let sum = 0;
+  for (const p of Array.isArray(snapshotData?.projects) ? snapshotData.projects : []) {
+    sum += panels.projectSignals(p).live;
+  }
+  return sum;
 }
 
-function normalizeProjectLane(lane) {
-  if (typeof lane === 'string' && HIVE_LANES.includes(lane)) return lane;
-  return 'control';
-}
+const CARD_POSITION_PROPS = ['left', 'top', 'right', 'bottom', 'width', 'height', 'transform'];
 
 function syncProjectCardHeader(doc, card, project, index) {
   if (!card || !project) return;
-  const lane = normalizeProjectLane(project.lane);
+  const panels = resolveHivePanels();
+  const lane = panels.laneOfProject(project);
+  const status = panels.projectStatus(project);
   for (const l of HIVE_LANES) {
     if (card.classList?.contains(l)) card.classList.remove(l);
   }
   if (card.classList) card.classList.add(lane);
+  card.setAttribute('data-lane', lane);
+  card.setAttribute('data-status', status.key);
+  card.setAttribute('data-attn', status.key === 'failed' || status.key === 'needs' ? '1' : '0');
 
   let hd = null;
   if (typeof card.querySelector === 'function') {
@@ -187,62 +240,43 @@ function syncProjectCardHeader(doc, card, project, index) {
     while (hd.firstChild) hd.removeChild(hd.firstChild);
   }
 
+  hd.appendChild(panels.createProjectBot(project));
   const idx = el(doc, 'span', 'idx', String(index + 1).padStart(2, '0'));
   hd.appendChild(idx);
   const nameText = typeof project.name === 'string' && project.name.length
     ? project.name
     : String(project.id || '');
   hd.appendChild(el(doc, 'span', 'name', nameText));
-  hd.appendChild(el(doc, 'span', 'tag', laneTagLabel(lane)));
+  hd.appendChild(el(doc, 'span', `tag hive-pill st-${status.key}`, status.label));
 }
 
-function applyAlternatingNodeLayout(nodesMount) {
-  if (!nodesMount) return;
-  const cards = Array.from(nodesMount.children || []);
-  const bySide = { left: [], right: [] };
+/**
+ * Cards flow in two flex columns (alternating left/right) instead of absolute offsets, so they can
+ * never overlap or clip. Link endpoints come from getBoundingClientRect in layoutNodes.
+ */
+function placeProjectCards(doc, nodesMount, cards) {
+  const sides = { left: el(doc, 'div', 'hive-side hive-side--left'), right: el(doc, 'div', 'hive-side hive-side--right') };
+  sides.left.setAttribute('data-side', 'left');
+  sides.right.setAttribute('data-side', 'right');
+  const slots = { left: 0, right: 0 };
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i];
-    if (!card?.dataset) continue;
     const side = i % 2 ? 'right' : 'left';
-    card.dataset.side = side;
-    bySide[side].push(card);
-  }
-  for (const side of ['left', 'right']) {
-    const list = bySide[side];
-    const n = list.length;
-    for (let i = 0; i < n; i += 1) {
-      list[i].dataset.slot = String(i);
+    if (card.dataset) {
+      card.dataset.side = side;
+      card.dataset.slot = String(slots[side]);
     }
-  }
-  layoutHiveProjectNodes(nodesMount);
-  spreadVerticalNodeLayout(nodesMount);
-}
-
-function spreadVerticalNodeLayout(nodesMount) {
-  if (!nodesMount) return;
-  const cards = Array.from(nodesMount.children || []);
-  const bySide = { left: [], right: [] };
-  for (const card of cards) {
-    const side = card.dataset?.side === 'right' ? 'right' : 'left';
-    bySide[side].push(card);
-  }
-  for (const side of ['left', 'right']) {
-    const list = bySide[side];
-    const nodesOnSide = list.length;
-    if (!nodesOnSide) continue;
-    const gap = CARD_GAP_PCT;
-    const slotHeight = Math.min(CARD_HEIGHT_PCT, Math.max(0, 100 / nodesOnSide - gap));
-    const used = nodesOnSide * slotHeight + Math.max(0, nodesOnSide - 1) * gap;
-    const offset = (100 - used) / 2;
-    for (let i = 0; i < nodesOnSide; i += 1) {
-      const card = list[i];
-      const top = offset + i * (slotHeight + gap);
-      if (card.style) {
-        card.style.top = `${top}%`;
-        card.style.height = `${slotHeight}%`;
-      }
+    slots[side] += 1;
+    if (card.style) {
+      for (const prop of CARD_POSITION_PROPS) card.style[prop] = '';
     }
+    if (card.parentNode && typeof card.parentNode.removeChild === 'function') {
+      card.parentNode.removeChild(card);
+    }
+    sides[side].appendChild(card);
   }
+  nodesMount.appendChild(sides.left);
+  nodesMount.appendChild(sides.right);
 }
 
 function adjustPhoneStreams(streams, geom) {
@@ -270,7 +304,7 @@ function brainEventsFromSnapshot(snapshot) {
 }
 
 function isPhoneLayout(innerWidth) {
-  return innerWidth <= 720;
+  return innerWidth <= 900;
 }
 
 /**
@@ -336,6 +370,16 @@ export function renderHive(host, snapshot, deps) {
 
   const panelsWrap = el(doc, 'div', 'hive-panels-wrap');
   const panelsRoot = el(doc, 'div', 'cc-panels cc-panels--hive hive-panels');
+  const panelNeeds = el(doc, 'section', 'cc-panel hive-needs-panel');
+  panelNeeds.setAttribute('aria-labelledby', 'panel-needs');
+  const needsHeading = el(doc, 'h2', null, 'needs you');
+  needsHeading.id = 'panel-needs';
+  const needsCount = el(doc, 'span', 'hive-count');
+  needsHeading.appendChild(needsCount);
+  panelNeeds.appendChild(needsHeading);
+  const needsList = el(doc, 'ul', 'hive-needs-list');
+  panelNeeds.appendChild(needsList);
+
   const panelLog = el(doc, 'section', 'cc-panel');
   panelLog.setAttribute('aria-labelledby', 'panel-log');
   const logHeading = el(doc, 'h2', null, 'session log');
@@ -358,6 +402,7 @@ export function renderHive(host, snapshot, deps) {
   savedHeading.id = 'panel-saved';
   panelSaved.appendChild(savedHeading);
 
+  panelsRoot.appendChild(panelNeeds);
   panelsRoot.appendChild(panelLog);
   panelsRoot.appendChild(panelGates);
   panelsRoot.appendChild(panelSaved);
@@ -372,19 +417,25 @@ export function renderHive(host, snapshot, deps) {
   shell.appendChild(statStrip);
   shell.appendChild(stage);
   shell.appendChild(panelsWrap);
+  // Entrance animation plays on first mount only, not on every 5s poll.
+  shell.classList.add('is-entering');
   host.appendChild(shell);
 
   let snapshotRef = snapshot;
   let rafId = 0;
   let lastFrame = 0;
   let geomCache = null;
+  let cardEls = [];
+  let enterTimer = null;
+  const statBaseline = {};
   const particles = [];
   const cardCleanups = [];
   const listeners = [];
   let userPaused = false;
   let pauseBtn = null;
   let chromeTopEl = null;
-  let chromeIllusEl = null;
+  let liveChipEl = null;
+  let liveCountEl = null;
   let brandEl = null;
   let brandVerEl = null;
   let coreVerEl = coreVer;
@@ -494,12 +545,12 @@ export function renderHive(host, snapshot, deps) {
     if (!chromeTopEl) {
       const built = buildHiveChrome(doc, legendEl, pid, openTourFromHelp);
       chromeTopEl = built.chromeTop;
-      chromeIllusEl = built.illus;
+      liveChipEl = built.liveChip;
+      liveCountEl = built.liveCount;
       pauseBtn = built.pauseBtn;
       brandEl = built.brand;
       brandVerEl = brandEl.querySelector?.('.ver-script');
       chrome.appendChild(chromeTopEl);
-      chrome.appendChild(chromeIllusEl);
       const onPauseClick = () => {
         userPaused = !userPaused;
         setPauseUi();
@@ -563,6 +614,14 @@ export function renderHive(host, snapshot, deps) {
     coreStatus.className = frame.statusClass || 'hive-core-status';
     coreStatus.textContent = frame.statusText || 'waiting';
 
+    // Live agents always win over a quiet event feed: the ring never says "resting" while agents run.
+    const liveAgents = agentsLiveCount(snapshotRef);
+    if (liveAgents > 0) {
+      coreStatus.className = 'hive-core-status hive-core-status--live';
+      coreStatus.textContent = `running · ${trendCount(liveAgents, 'agent', 'agents')}`;
+      coreDisk.classList.add('is-live');
+    }
+
     coreDisk.style.animation = '';
     if (!reduced) {
       const motion = hiveBrainMotionDescriptor(state);
@@ -600,23 +659,47 @@ export function renderHive(host, snapshot, deps) {
     });
   }
 
+  function decorateStatTrends(statEntries, projects) {
+    const cells = Array.from(statStrip.children || []).filter((c) => c?.classList?.contains('cc-stat'));
+    for (let i = 0; i < cells.length && i < statEntries.length; i += 1) {
+      const cell = cells[i];
+      const { key, field } = statEntries[i];
+      for (const old of Array.from(cell.children || [])) {
+        if (old?.classList?.contains('trend')) cell.removeChild(old);
+      }
+      if (statBaseline[key] === undefined) statBaseline[key] = field.value;
+      const trend = statTrend(key, field, projects, statBaseline[key]);
+      if (trend) cell.appendChild(el(doc, 'span', `trend ${trend.tone}`, trend.text));
+    }
+  }
+
+  function syncLiveChip(snapshotData) {
+    if (!liveChipEl) return;
+    const live = agentsLiveCount(snapshotData);
+    liveChipEl.classList.toggle('is-idle', live <= 0);
+    if (liveCountEl) {
+      liveCountEl.textContent = live > 0 ? ` · ${trendCount(live, 'agent', 'agents')}` : '';
+    }
+  }
+
   function paintDom(snapshotData) {
     const projects = Array.isArray(snapshotData.projects) ? snapshotData.projects.slice(0, 10) : [];
     ensureChromeExtras(projects);
-    renderHiveStatStrip(statStrip, statStripEntries(snapshotData.stats));
-    let liveEl = statStrip.querySelector?.('.cc-live');
-    if (!liveEl) {
-      liveEl = el(doc, 'div', 'cc-live');
-      liveEl.setAttribute('role', 'status');
-      liveEl.appendChild(el(doc, 'span', 'dot'));
-      liveEl.appendChild(el(doc, 'span', null, 'live'));
-      statStrip.appendChild(liveEl);
-    }
+    const statEntries = statStripEntries(snapshotData.stats);
+    renderHiveStatStrip(statStrip, statEntries.map((s) => s.entry));
+    decorateStatTrends(statEntries, projects);
+    syncLiveChip(snapshotData);
+
+    // Rebuild the card columns from scratch: renderHiveLayout appends flat cards, placeProjectCards re-parents them.
+    while (nodesMount.firstChild) nodesMount.removeChild(nodesMount.firstChild);
     renderHiveLayout(shell, projects, { legendEl, nodesMount, stageEl: stage });
-    applyAlternatingNodeLayout(nodesMount);
+    const rendered = Array.from(nodesMount.children || []);
+    const flagged = rendered.filter((c) => c?.classList?.contains('hive-node'));
+    const cardNodes = flagged.length ? flagged : rendered;
+    placeProjectCards(doc, nodesMount, cardNodes);
+    cardEls = cardNodes;
     clearCardHandlers();
-    const cardNodes = Array.from(nodesMount.children || []);
-    const { renderProjectCardMetrics } = resolveHivePanels();
+    const { renderProjectCardMetrics, renderNeedsYou, deriveNeedsYouItems } = resolveHivePanels();
     for (let i = 0; i < cardNodes.length; i += 1) {
       const card = cardNodes[i];
       const project = projects[i];
@@ -629,6 +712,15 @@ export function renderHive(host, snapshot, deps) {
         wireProjectCard(card, project.id);
       }
     }
+    const needsItems = deriveNeedsYouItems(projects);
+    const needsTotal = renderNeedsYou(needsList, needsItems, {
+      limit: 6,
+      onOpen: (projectId) => {
+        if (typeof deps.onOpenProject === 'function') deps.onOpenProject(projectId);
+      },
+    });
+    needsCount.textContent = String(needsTotal);
+    needsCount.className = needsTotal > 0 ? 'hive-count hive-count--warn' : 'hive-count';
     applyBrain();
     setPauseUi();
     syncModelVersion(snapshotData);
@@ -648,8 +740,6 @@ export function renderHive(host, snapshot, deps) {
     const phone = isPhoneLayout(win.innerWidth ?? 1024);
     if (stage.classList) stage.classList.toggle('hive-phone', phone);
 
-    applyAlternatingNodeLayout(nodesMount);
-
     const stageBox = stage.getBoundingClientRect?.() || stageRect;
     const coreRect = coreUi.getBoundingClientRect?.() || {
       left: stageBox.left + w * 0.5 - 80,
@@ -662,7 +752,8 @@ export function renderHive(host, snapshot, deps) {
     const ringR = coreRect.width / 2;
 
     const nodeEntries = [];
-    const children = Array.from(nodesMount.children || []);
+    // Endpoints are measured from the laid-out cards, never from preset coordinates.
+    const children = cardEls;
     for (let i = 0; i < children.length; i += 1) {
       const card = children[i];
       const box = card.getBoundingClientRect?.() || {
@@ -734,6 +825,8 @@ export function renderHive(host, snapshot, deps) {
     const geom = geomCache || layoutNodes();
     const rect = stage.getBoundingClientRect?.() || { width: geom.w, height: geom.h };
     ctx.clearRect(0, 0, rect.width || geom.w, rect.height || geom.h);
+    // Stacked phone layout: the canvas is hidden and cards read top to bottom, so no links are drawn.
+    if (geom.phone) return;
 
     const streams = adjustPhoneStreams(
       buildHiveStreams(
@@ -815,6 +908,12 @@ export function renderHive(host, snapshot, deps) {
 
   paintDom(snapshotRef);
   resizeCanvas();
+  if (typeof win.setTimeout === 'function') {
+    enterTimer = win.setTimeout(() => {
+      enterTimer = null;
+      shell.classList.remove('is-entering');
+    }, 1500);
+  }
 
   addListener(doc, 'visibilitychange', onVisibilityChange);
   if (reducedMotionMq?.addEventListener) {
@@ -829,13 +928,16 @@ export function renderHive(host, snapshot, deps) {
     update(nextSnapshot) {
       snapshotRef = nextSnapshot;
       paintDom(snapshotRef);
-      layoutNodes();
+      // Card heights follow their content, so the stage (and canvas) can change size on update.
+      resizeCanvas();
       drawFrame(deps.now(), !shouldAnimate());
       if (shouldAnimate() && !rafId) scheduleFrame();
     },
     destroy() {
       deps.cancelAnimationFrame(rafId);
       rafId = 0;
+      if (enterTimer != null && typeof win.clearTimeout === 'function') win.clearTimeout(enterTimer);
+      enterTimer = null;
       clearCardHandlers();
       for (const l of listeners) {
         l.target.removeEventListener(l.type, l.handler, l.options);
