@@ -128,14 +128,18 @@ export async function readRuns(root) {
   try { ids = await fs.readdir(dir); } catch { return []; }
   const runs = [];
   for (const id of ids) {
-    try { const state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); if (isObj(state)) runs.push({ id, state }); } catch { /* an unreadable run is skipped */ }
+    try { const state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); if (isObj(state)) runs.push({ id, state }); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/quotes.mjs] read run state:', error?.message ?? error, id);
+    }
   }
   return runs;
 }
 
 export async function scopeText(root, ledger) {
   for (const file of ['.swarm/project/scope.snapshot.md', ledger?.scope?.file ?? 'docs/scope/scope.md']) {
-    try { return await fs.readFile(path.join(root, file), 'utf8'); } catch { /* the next one */ }
+    try { return await fs.readFile(path.join(root, file), 'utf8'); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/quotes.mjs] scopeText read:', error?.message ?? error, file);
+    }
   }
   return null;
 }
@@ -153,7 +157,10 @@ export function traitsOf(scope) {
 }
 
 export async function buildRecord(root, { name, source = 'recorded', charged, changeOrders, gpuHours, now = Date.now, activity } = {}) {
-  const ledger = await readLedger(root).catch(() => null);
+  const ledger = await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/quotes.mjs] readLedger:', error?.message ?? error, root);
+    return null;
+  });
   const text = await scopeText(root, ledger);
   const traits = text === null ? { requirements: null, stages: null, screens: null, services: null } : traitsOf(parseScope(text));
   const tickets = (ledger?.tickets ?? []).filter(t => t.status !== 'cancelled' && t.status !== 'proposed').length;
