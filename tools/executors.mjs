@@ -186,7 +186,9 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
       const spent = report?.costUsd;
       if (typeof spent === 'number' && Number.isFinite(spent)) {
         entry.orphanSpend += spent;
-        try { await onOrphanSpend?.(spent); } catch { /* the spend is already on the pool */ }
+        try { await onOrphanSpend?.(spent); } catch (error) {
+          console.error('[tools/executors.mjs] orphan spend callback:', error?.message ?? error, entry.host.id, spent);
+        }
       }
       pump();
     } catch {
@@ -218,7 +220,7 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
       }
       entry.controllers.clear();
     }
-    if (!closed) timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);
+    if (!closed) timer = setTimer(() => { beat().catch((error) => { console.error('[tools/executors.mjs] heartbeat beat:', error?.message ?? error); }); }, heartbeatMs);
   };
 
   const claim = ({ signal, sensitive = true, hostFilter = null } = {}) => new Promise((resolve, reject) => {
@@ -267,7 +269,7 @@ export function createHostPool({ hosts, ping = async () => true, kill = null, on
     return failed.map(({ entry, reason }) => ({ id: entry.host.id, reason }));
   };
 
-  timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);
+  timer = setTimer(() => { beat().catch((error) => { console.error('[tools/executors.mjs] heartbeat beat:', error?.message ?? error); }); }, heartbeatMs);
   return {
     claim,
     preflight,
