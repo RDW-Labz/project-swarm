@@ -1,0 +1,70 @@
+not ok 2 - project path renders the cockpit shell
+  location: '/private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-boot.test.mjs:430:1'
+  error: |-
+    The expression evaluated to a falsy value:
+    
+      assert.ok(rt.root.querySelector('.cc-cockpit-shell'))
+    
+  expected: true
+  actual: ~
+  stack: |-
+    TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-boot.test.mjs:434:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+# Subtest: clicking a hive card pushes the project path
+ok 3 - clicking a hive card pushes the project path
+--
+not ok 4 - back from cockpit returns to the hive view
+  location: '/private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-boot.test.mjs:446:1'
+  error: |-
+    The expression evaluated to a falsy value:
+    
+      assert.ok(back)
+    
+  expected: true
+  actual: ~
+  stack: |-
+    TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-boot.test.mjs:451:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+# Subtest: failed fetch shows an explanatory message
+ok 5 - failed fetch shows an explanatory message
+--
+not ok 9 - deriveHiveView reads counters and totals from labelled stats and the ledger counts
+  location: '/private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-hive.test.mjs:147:1'
+  error: |-
+    lanes sorted by jobs
+    
+    [
+      'cursor',
+      'claude'
+    ]
+    
+  expected:
+    0: 'cursor'
+    1: 'claude'
+  actual:
+    0: 'cursor'
+    1: 'claude'
+--
+not ok 10 - deriveHiveView leaves missing data null so panels can say so
+  location: '/private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-hive.test.mjs:162:1'
+  error: |-
+    session log falls back to project signals
+    
+    [
+      'needs',
+      'run'
+    ]
+    
+  expected:
+    0: 'needs'
+    1: 'run'
+  actual:
+    0: 'needs'
+    1: 'run'
+--
+not ok 20 - hive node click opens cockpit for that card project id
+  location: '/private/tmp/claude-501/-Users-bean-project-swarm/a07842fc-2e42-4ce9-a035-a262f65beadb/scratchpad/porttry/tests/command-center-nav.test.mjs:246:1'
+  error: 'cockpit breadcrumb visible'
+  expected: true
