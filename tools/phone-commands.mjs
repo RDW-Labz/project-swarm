@@ -38,7 +38,10 @@ export function realDeps() {
       for (const project of await listProjects()) {
         try {
           const inbox = await collectInbox([project.root], inboxDeps());
-          const ledger = await readLedger(project.root).catch(() => null);
+          const ledger = await readLedger(project.root).catch((error) => {
+            if (error?.code !== 'ENOENT') console.error('[tools/phone-commands.mjs] items readLedger:', error?.message ?? error);
+            return null;
+          });
           items.push(...phoneItems({ projectName: project.name, root: project.root, inbox, proposed: (ledger?.tickets ?? []).filter(t => t.status === 'proposed') }));
         } catch { /* a project that cannot be read is skipped */ }
       }
