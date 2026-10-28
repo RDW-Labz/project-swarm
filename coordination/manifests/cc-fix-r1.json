@@ -19,7 +19,9 @@
     "tests/cc-hive-mount.test.mjs",
     "tests/command-center-hive-panels.test.mjs",
     "tests/command-center-hive.test.mjs",
-    "tests/watch-assets-dom-collections.test.mjs"
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-tour.test.mjs"
    ],
    "outputs": [
     "tools/watch-assets/cc-hive.css",
@@ -75,7 +77,8 @@
     "tests/command-center-hive.test.mjs",
     "tests/command-center-cockpit.test.mjs",
     "tests/command-center-nav.test.mjs",
-    "tests/command-center-snapshot.test.mjs"
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs"
    ]
   }
  ]

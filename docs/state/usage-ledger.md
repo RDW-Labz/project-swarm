@@ -174,6 +174,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | ccfixa: Root-absolute /assets/ URLs fix Cockpit deep-link 404/MIME failures; Removed withGlobalDocum | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | ccfixa2: command-center-boot.js: classic script URLs are root-absolute (/assets/...) so deep /comman | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | ccfixa3: layoutSummaryTileElement uses Array.from(tileRoot.children).find for m-label/m-val/m-foot ( | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | ccdesignhive: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | ccdesigncockpit: Added scoped cc-cockpit.css from mockup tokens: header, category meter, stage, tick | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | ccgrade1: complete | claude | opus | pass | 240,903 | $0.77 |
 
 ## Daily summary
 
@@ -193,5 +196,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
 | 2026-10-27 | claude | 2 | 2 | 0 | 82,686 | $0.37 |
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
-| 2026-10-28 | cursor | 3 | 3 | 0 | 0 | subscription |
-| **total** | all | 170 | 155 | 15 | 14,794,061 | $27.04 (incl. estimates) |
+| 2026-10-28 | claude | 1 | 1 | 0 | 240,903 | $0.77 |
+| 2026-10-28 | cursor | 5 | 5 | 0 | 0 | subscription |
+| **total** | all | 173 | 158 | 15 | 15,034,964 | $27.81 (incl. estimates) |
