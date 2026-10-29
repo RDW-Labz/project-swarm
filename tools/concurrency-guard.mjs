@@ -18,6 +18,10 @@ const MIN = 1, MAX = 2048;
 
 export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
 const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+function termChildOnce(childPid) {
+  if (!Number.isInteger(childPid) || childPid <= 0 || !alive(childPid)) return;
+  try { process.kill(childPid, 'SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
+}
 
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 function writeJsonAtomic(file, value, mode = 0o600) {
@@ -52,6 +56,15 @@ export function restoreIfStale(configFile) {
     const marker = readJson(markerPath(configFile));
     if (!marker) return null;
     if (alive(marker.pid) && !fromBeforeBoot(marker)) return null;
+    const child = marker.childPid;
+    if (Number.isInteger(child) && child > 0 && child === process.pid) {
+      process.stderr.write('[tools/concurrency-guard.mjs] orphaned guarded command: exiting without running\n');
+      process.exit(0);
+    }
+    if (Number.isInteger(child) && child > 0 && alive(child)) {
+      termChildOnce(child);
+      return { restored: false, reason: 'orphaned command still running' };
+    }
     return restore(configFile);
   } catch { return null; }
 }
@@ -85,7 +98,7 @@ function watch(pid, configFile) {
         // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
         const child = marker.childPid;
         if (Number.isInteger(child) && child > 0 && alive(child)) {
-          try { process.kill(child, 'SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGTERM child:', error?.message ?? error); }
+          termChildOnce(child);
           for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
           if (alive(child)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
         }

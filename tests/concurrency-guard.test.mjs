@@ -218,6 +218,48 @@ test('Ctrl-C: a command that ends on its own after the terminal signal gets no s
   const second = runGuarded({ value: 16, args: ['watch'], env: f2.env, configFile: f2.file, startWatcher: false, spawnImpl: () => { staysAttached(); return stays; } });
   await staysAttachedP;
   process.emit('SIGINT');
+  const keep = setTimeout(() => {}, 5000);
   assert.equal((await second).code, 130);
+  clearTimeout(keep);
   assert.equal(stays.killed, 'SIGINT');
+});
+
+const GUARD = fileURLToPath(new URL('../tools/concurrency-guard.mjs', import.meta.url));
+
+test('restoreIfStale: a stale marker naming this process as childPid exits before running and leaves the marker', async t => {
+  const f = await fixture(t);
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import fs from 'node:fs';
+    import { restoreIfStale, markerPath } from ${JSON.stringify(GUARD)};
+    const configFile = process.argv[1];
+    const dead = Number(process.argv[2]);
+    fs.writeFileSync(configFile, JSON.stringify({ machineConcurrency: 16, lanes: { anthropic: { model: 'm' } } }));
+    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, at: 'x' }));
+    restoreIfStale(configFile);
+    console.log('ran command');
+  `, f.file, String(dead)], { env: f.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /ran command/);
+  assert.equal(f.read().machineConcurrency, 16);
+  assert.equal(fs.existsSync(markerPath(f.file)), true);
+});
+
+test('restoreIfStale: a stale marker with a live orphaned child sends SIGTERM once and does not restore', async t => {
+  const f = await fixture(t);
+  const dead = spawnSync(process.execPath, ['-e', '']).pid;
+  const holder = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>process.exit(143));setInterval(()=>{},1<<30);'], { stdio: 'ignore' });
+  t.after(() => { try { holder.kill('SIGKILL'); } catch { /* gone */ } });
+  assert.ok(await until(() => { try { process.kill(holder.pid, 0); return true; } catch { return false; } }, 5000));
+  fs.writeFileSync(f.file, JSON.stringify({ ...f.read(), machineConcurrency: 16 }));
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, at: 'x' }));
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { restoreIfStale } from ${JSON.stringify(GUARD)};
+    console.log(JSON.stringify(restoreIfStale(process.argv[1])));
+  `, f.file], { env: f.env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout.trim()), { restored: false, reason: 'orphaned command still running' });
+  assert.equal(f.read().machineConcurrency, 16);
+  assert.equal(fs.existsSync(markerPath(f.file)), true);
+  assert.ok(await until(() => { try { process.kill(holder.pid, 0); return false; } catch { return true; } }, 5000), 'orphan received SIGTERM');
 });
