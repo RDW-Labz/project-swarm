@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner plan: one Opus review of the combined release diff",
+      "prompt": "Review release train 3 of Project Swarm: branch swarm/train3 against main at 60de9058 (1.167.25). The combined code diff (236 files, 51 reviewed D-fix PRs plus the train-3 core work) is in your context at coordination/review/train3.diff; the full workspace is also present, so open any file you need before judging.\n\nWhat changed:\n(1) D-fix silent-catch audit (g-33a7a4ae): about 200 previously silent catches across roughly 100 tool modules now log a bounded message. Sensitive areas: locks (tools/base-check-lock.mjs, tools/projects.mjs, tools/integration-lock.mjs), money (tools/gpu-commands.mjs, tools/brain-commands.mjs, tools/project-commands.mjs), kill/process (tools/gpu-commands.mjs, tools/claude-shell.mjs), privacy (tools/errors.mjs, tools/tickets.mjs, tools/security-review.mjs), sandbox (tools/claude-shell.mjs).\n(2) tools/lane-health.mjs: persist writes are serialized behind a queue with flush/stop and no fire-and-forget last write.\n(3) tools/managers/visual-qa/screenshots.mjs: atomicWrite no longer closes its handle twice when rename fails; original error still rethrown and tmp cleanup unchanged.\n(4) tools/swarm.mjs: swarm ask with an empty --context file no longer crashes reading costUsd.\n(5) Tests: five load-flaky tests fixed at the root (concurrency-guard Ctrl-C path, handbuild chat-merge hook, field-lessons m2 salvage, local-lane slot release, lane-health persistence), with no retries or quarantine; 24 Phase 2 lock-race tests plus 8 tests recorded as todo for real lock bugs (base-check-lock, projects, integration-lock).\n(6) New tools/stress-tests.mjs and npm run test:stress: reruns the previously flaky files for 5 rounds at concurrency 8, fails fast with child output; STRESS_ROUNDS and STRESS_CONCURRENCY override.\n(7) Version/changelog/lock at 1.167.26.\n\nPass bar (owner): blockers only. Look hard for: a guard or approval bypass; money spent past a cap or on a paused lane; a key or secret reaching a paused lane or a log; wrong commits on protected branches; data loss (locks, review records, ledgers); a crash on a normal path; a regression to existing behavior; a log that leaks secrets, tokens, private names or file contents; a test weakened, skipped, retried or quarantined so a real failure can hide; a todo entry that masks a failure that should be fixed here. Everything else is a follow-up. For the D-fix batches, verify logging-only discipline: no control-flow, return value, fallback, throw or export change, silent only for the expected benign codes, and every catch binding really used.\n\nWrite ONLY coordination/review/train3-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train3.diff",
+        "package.json",
+        "CHANGELOG.md",
+        "tools/lane-health.mjs",
+        "tools/stress-tests.mjs",
+        "tools/managers/visual-qa/screenshots.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/lane-health-persist.test.mjs",
+        "tests/phase2-base-check-lock.test.mjs",
+        "tests/phase2-ledger-multiprocess.test.mjs",
+        "tests/phase2-state-pointer-migrate.test.mjs"
+      ],
+      "outputs": [
+        "coordination/review/train3-review.json"
+      ],
+      "resultFile": "coordination/review/train3-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}
