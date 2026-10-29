@@ -1,6 +1,6 @@
 {
   "name": "project-swarm",
-  "version": "1.167.25",
+  "version": "1.167.26",
   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
   "private": true,
   "type": "module",
