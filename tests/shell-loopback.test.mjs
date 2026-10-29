@@ -236,17 +236,18 @@ test('generated profile: the project root .git is unreadable without rootGit, re
   t.after(() => proxy.close());
   const up = path.relative(worktree, root);
   const probe = `cat '${up}/.git' >/dev/null 2>&1 && echo rootgit=allowed || echo rootgit=blocked`;
+  const sandboxEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' };
 
   const withoutRootGit = path.join(base, 'without.sb');
   await fs.writeFile(withoutRootGit, shellProfile({ home, worktree, commonDir, shellDir, proxyPort: proxy.port }));
-  const before = await execFileAsync('/usr/bin/sandbox-exec', ['-f', withoutRootGit, '/bin/sh', '-c', probe], { cwd: worktree, env: process.env });
+  const before = await execFileAsync('/usr/bin/sandbox-exec', ['-f', withoutRootGit, '/bin/sh', '-c', probe], { cwd: worktree, env: sandboxEnv });
   assert.match(before.stdout, /rootgit=blocked/);
 
   const rootGit = await resolveRootGitInfo(root);
   assert.equal(rootGit.kind, 'file');
   const withRootGit = path.join(base, 'with.sb');
   await fs.writeFile(withRootGit, shellProfile({ home, worktree, commonDir, shellDir, proxyPort: proxy.port, rootGit }));
-  const after = await execFileAsync('/usr/bin/sandbox-exec', ['-f', withRootGit, '/bin/sh', '-c', `${probe}; git rev-parse --show-toplevel`], { cwd: worktree, env: process.env });
+  const after = await execFileAsync('/usr/bin/sandbox-exec', ['-f', withRootGit, '/bin/sh', '-c', `${probe}; git rev-parse --show-toplevel`], { cwd: worktree, env: sandboxEnv });
   assert.match(after.stdout, /rootgit=allowed/);
   assert.equal(after.stdout.trim().split('\n').pop(), worktree);
 });
