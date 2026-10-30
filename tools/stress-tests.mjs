@@ -37,10 +37,10 @@ for (let i = 1; i <= rounds; i++) {
       `--test-concurrency=${concurrency}`,
       ...TEST_FILES,
     ],
-    { cwd: repoRoot, encoding: 'utf8', env: process.env },
+    { cwd: repoRoot, encoding: 'utf8', env: process.env, maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60 * 1000, killSignal: 'SIGKILL' },
   );
   const ms = Date.now() - start;
-  const ok = result.status === 0;
+  const ok = !result.error && result.status === 0;
   console.log(`stress round ${i}/${rounds} (concurrency ${concurrency}): ${ok ? 'pass' : 'fail'} (${ms} ms)`);
   if (!ok) {
     if (result.stdout) {

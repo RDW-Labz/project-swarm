@@ -191,6 +191,7 @@ export function createLaneHealthMonitor({
   const stateFile = laneHealthStatePath(home, env);
 
   let persistChain = Promise.resolve();
+  const persistErrorCodes = new Set();
   const pendingEvents = new Set();
   const pendingTicks = new Set();
   let stopped = false;
@@ -201,7 +202,12 @@ export function createLaneHealthMonitor({
       await writeAtomicJson(stateFile, state, fsImpl);
     });
     // A failed write must not prevent later writes from running.
-    persistChain = write.catch(() => {});
+    persistChain = write.catch(error => {
+      const code = error?.code ?? 'UNKNOWN';
+      if (code === 'ENOENT' || persistErrorCodes.has(code)) return;
+      persistErrorCodes.add(code);
+      console.error('[tools/lane-health.mjs] state persist failed');
+    });
     return write;
   }
 

@@ -103,6 +103,25 @@ test('runGuarded puts the value back after a normal exit, a failing command, and
   }
 });
 
+test('runGuarded records the child process start time with its pid', async t => {
+  const f = await fixture(t);
+  const child = fakeChild(() => {});
+  child.pid = 123457;
+  const seen = [];
+  const running = runGuarded({
+    value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false,
+    spawnImpl: () => child,
+    procStart: pid => { seen.push(pid); return 'recorded start'; },
+  });
+  const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
+  assert.equal(marker.childPid, child.pid);
+  assert.equal(marker.childProcStart, 'recorded start');
+  assert.deepEqual(seen, [child.pid]);
+  child.emit('exit', 0, null);
+  assert.equal((await running).code, 0);
+  assert.equal(f.read().machineConcurrency, 4);
+});
+
 test('runGuarded restores when the wrapper itself is told to stop (SIGTERM forwarded to the command)', async t => {
   const f = await fixture(t);
   let childAttached;
@@ -169,6 +188,7 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
   await sleep(500);   // the watcher is up
   const childPid = await (async () => { for (let i = 0; i < 100; i += 1) { try { const c = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).childPid; if (c) return c; } catch { /* not yet */ } await sleep(50); } return null; })();
   assert.ok(childPid, 'the marker names the command\'s pid');
+  assert.ok(Object.hasOwn(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')), 'childProcStart'), 'the marker records the command identity');
   process.kill(p.child.pid, 'SIGKILL');
   await p.exited;
   assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 30000), 'restored by the watcher');
@@ -235,8 +255,9 @@ test('restoreIfStale: a stale marker naming this process as childPid exits befor
     const configFile = process.argv[1];
     const dead = Number(process.argv[2]);
     fs.writeFileSync(configFile, JSON.stringify({ machineConcurrency: 16, lanes: { anthropic: { model: 'm' } } }));
-    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, at: 'x' }));
-    restoreIfStale(configFile);
+    const childProcStart = 'recorded start';
+    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, childProcStart, at: new Date().toISOString() }));
+    restoreIfStale(configFile, { procStart: () => childProcStart });
     console.log('ran command');
   `, f.file, String(dead)], { env: f.env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
@@ -252,14 +273,92 @@ test('restoreIfStale: a stale marker with a live orphaned child sends SIGTERM on
   t.after(() => { try { holder.kill('SIGKILL'); } catch { /* gone */ } });
   assert.ok(await until(() => { try { process.kill(holder.pid, 0); return true; } catch { return false; } }, 5000));
   fs.writeFileSync(f.file, JSON.stringify({ ...f.read(), machineConcurrency: 16 }));
-  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, at: 'x' }));
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, childProcStart: 'recorded start', at: new Date().toISOString() }));
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { restoreIfStale } from ${JSON.stringify(GUARD)};
-    console.log(JSON.stringify(restoreIfStale(process.argv[1])));
+    console.log(JSON.stringify(restoreIfStale(process.argv[1], { procStart: () => 'recorded start' })));
   `, f.file], { env: f.env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout.trim()), { restored: false, reason: 'orphaned command still running' });
   assert.equal(f.read().machineConcurrency, 16);
   assert.equal(fs.existsSync(markerPath(f.file)), true);
+  assert.ok(Number.isFinite(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt));
   assert.ok(await until(() => { try { process.kill(holder.pid, 0); return false; } catch { return true; } }, 5000), 'orphan received SIGTERM');
+});
+
+for (const childPid of [123456, process.pid]) {
+  test(`restoreIfStale: a pre-boot marker restores without probing, signalling, or exiting for child ${childPid}`, async t => {
+    const f = await fixture(t, { machineConcurrency: 16 });
+    const at = new Date(Date.now() - os.uptime() * 1000 - 60_000).toISOString();
+    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: process.pid, childPid, childProcStart: 'same', at }));
+    const calls = [];
+    const result = restoreIfStale(f.file, {
+      isAlive: pid => { calls.push(['alive', pid]); return true; },
+      procStart: pid => { calls.push(['start', pid]); return 'same'; },
+      kill: (...args) => calls.push(['kill', ...args]),
+      exit: code => calls.push(['exit', code]),
+    });
+    assert.deepEqual(result, { restored: true, to: 4 });
+    assert.deepEqual(calls, []);
+    assert.equal(f.read().machineConcurrency, 4);
+    assert.equal(fs.existsSync(markerPath(f.file)), false);
+  });
+}
+
+for (const currentStart of ['new process', null]) {
+  test(`restoreIfStale: a mismatched or unreadable child start (${currentStart}) restores without signalling or exiting`, async t => {
+    const f = await fixture(t, { machineConcurrency: 16 });
+    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'old process', at: new Date().toISOString() }));
+    const calls = [];
+    assert.deepEqual(restoreIfStale(f.file, {
+      isAlive: pid => pid === process.pid,
+      procStart: () => currentStart,
+      kill: (...args) => calls.push(['kill', ...args]),
+      exit: code => calls.push(['exit', code]),
+    }), { restored: true, to: 4 });
+    assert.deepEqual(calls, []);
+    assert.equal(f.read().machineConcurrency, 4);
+    assert.equal(fs.existsSync(markerPath(f.file)), false);
+  });
+}
+
+test('restoreIfStale: an EPERM-alive child restores without signalling or exiting', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', at: new Date().toISOString() }));
+  const calls = [];
+  assert.deepEqual(restoreIfStale(f.file, {
+    isAlive: pid => pid === process.pid,
+    procStart: () => 'same',
+    kill: (pid, signal) => {
+      calls.push([pid, signal]);
+      throw Object.assign(new Error('another user'), { code: 'EPERM' });
+    },
+    exit: code => calls.push(['exit', code]),
+  }), { restored: true, to: 4 });
+  assert.deepEqual(calls, [[process.pid, 0]]);
+  assert.equal(f.read().machineConcurrency, 4);
+  assert.equal(fs.existsSync(markerPath(f.file)), false);
+});
+
+test('restoreIfStale: SIGTERM is persisted and never repeated, including after 30 seconds', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', at: new Date().toISOString() }));
+  const calls = [];
+  let now = Date.now();
+  const sentAt = now;
+  const deps = {
+    isAlive: pid => pid === 123457,
+    procStart: () => 'same',
+    kill: (...args) => calls.push(args),
+    now: () => now,
+  };
+  for (const elapsed of [0, 1000, 31_000]) {
+    now = sentAt + elapsed;
+    assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
+    assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
+    assert.equal(f.read().machineConcurrency, 16);
+  }
+  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM']]);
+  deps.isAlive = () => false;
+  assert.deepEqual(restoreIfStale(f.file, deps), { restored: true, to: 4 });
 });
