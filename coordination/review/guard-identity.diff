@@ -1,0 +1,675 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 51f2c17e..5a822b5b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 1.167.27
++
++Hotfix: the guarded runner identifies its child before it signals anything.
++- Guarded runner: completes the 1.167.26 identity fix: within one boot the recorded child is signalled only when BOTH its process start time and its command line match the live pid; a missing, unreadable or mismatched identity restores the value and clears the marker instead of killing;
++- No silent success: a command that finds itself as the orphaned child of a dead guarded run now fails with exit 143 and a clear stderr error instead of exiting 0; a safe stale marker restores and the command runs;
++- EPERM: an owner or child that is alive only by EPERM belongs to another user, so the marker is restored and cleared instead of wedging the guard;
++- Tests: 42 concurrency-guard tests, including pre-boot reused pid, EPERM owner and child, start-time and command-line mismatches, and the self-orphan failure path.
++
+ ## 1.167.26
+ 
+ Release train 3: silent-failure visibility across the toolbelt, load-flake fixes at the root, and Phase 2 lock tests.
+diff --git a/README.md b/README.md
+index 9a7d7f36..0f9ac936 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.26 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.27 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.26 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.27 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/coordination/manifests/bump-1167-27.json b/coordination/manifests/bump-1167-27.json
+new file mode 100644
+index 00000000..35486a1f
+--- /dev/null
++++ b/coordination/manifests/bump-1167-27.json
+@@ -0,0 +1,78 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "bump16727",
++      "agent": "auto",
++      "tier": "cheap",
++      "prompt": "Bump the version from 1.167.26 to 1.167.27. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.26 to 1.167.27. In README.md change every 1.167.26 pin (kickoff text, tag name) to 1.167.26. In these tests replace the 1.167.26 current-version pin with 1.167.26 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. Leave historical versions in those tests alone.\n\nIn CHANGELOG.md add a NEW top entry above ## 1.167.26 (keep every existing entry unchanged) exactly in this house style:\n\n## 1.167.27\n\nHotfix: the guarded runner identifies its child before it signals anything.\n- Guarded runner: completes the 1.167.26 identity fix: within one boot the recorded child is signalled only when BOTH its process start time and its command line match the live pid; a missing, unreadable or mismatched identity restores the value and clears the marker instead of killing;\n- No silent success: a command that finds itself as the orphaned child of a dead guarded run now fails with exit 143 and a clear stderr error instead of exiting 0; a safe stale marker restores and the command runs;\n- EPERM: an owner or child that is alive only by EPERM belongs to another user, so the marker is restored and cleared instead of wedging the guard;\n- Tests: 42 concurrency-guard tests, including pre-boot reused pid, EPERM owner and child, start-time and command-line mismatches, and the self-orphan failure path.\n\nDo not touch any other file.",
++      "context": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "outputs": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "timeoutMs": 1500000,
++      "ignoreTests": [
++        "tests/acceptance-review-skip.test.mjs",
++        "tests/acceptance-review-worktree.test.mjs",
++        "tests/anthropic-lane.test.mjs",
++        "tests/api-workers.test.mjs",
++        "tests/cap-reroute.test.mjs",
++        "tests/codex-envelope.test.mjs",
++        "tests/commit-msg-manifest.test.mjs",
++        "tests/field-lessons-batch-aa-core.test.mjs",
++        "tests/field-lessons-batch-ai-context.test.mjs",
++        "tests/field-lessons-batch-ai-release.test.mjs",
++        "tests/field-lessons-batch-o.test.mjs",
++        "tests/field-lessons-batch-w.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/fixtures/make-practice-project.mjs",
++        "tests/git-hooks.test.mjs",
++        "tests/githook-push-range.test.mjs",
++        "tests/goal.test.mjs",
++        "tests/job-types.test.mjs",
++        "tests/kickoff.test.mjs",
++        "tests/kit-and-interview.test.mjs",
++        "tests/leads.test.mjs",
++        "tests/lessons120-ship.test.mjs",
++        "tests/local-lane-probe.test.mjs",
++        "tests/local-lane-review.test.mjs",
++        "tests/openrouter.test.mjs",
++        "tests/orchestrator-allow.test.mjs",
++        "tests/orchestrator-mode.test.mjs",
++        "tests/repo-map.test.mjs",
++        "tests/review-high-regressions.test.mjs",
++        "tests/router.test.mjs",
++        "tests/s13-blockers.test.mjs",
++        "tests/scope-loop-resume-review.test.mjs",
++        "tests/ship-125.test.mjs",
++        "tests/swarm-produced-hash.test.mjs",
++        "tests/ticket-context.test.mjs",
++        "tests/ticket-target-worktree.test.mjs",
++        "tests/update.test.mjs",
++        "tests/wave-prep-context.test.mjs",
++        "tests/wave-prep-robust.test.mjs"
++      ],
++      "ignoreTestsReason": "release bump; full suite runs before merge"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/package-lock.json b/package-lock.json
+index 64a27c6b..f23450e3 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.26",
++  "version": "1.167.27",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.26",
++      "version": "1.167.27",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index f53faf20..f173053d 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.26",
++  "version": "1.167.27",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/concurrency-guard.test.mjs b/tests/concurrency-guard.test.mjs
+index 49c49f09..7835f271 100644
+--- a/tests/concurrency-guard.test.mjs
++++ b/tests/concurrency-guard.test.mjs
+@@ -8,6 +8,8 @@ import fsp from 'node:fs/promises';
+ import os from 'node:os';
+ import path from 'node:path';
+ import { spawn, spawnSync } from 'node:child_process';
++import childProcess from 'node:child_process';
++import { syncBuiltinESMExports } from 'node:module';
+ import { EventEmitter } from 'node:events';
+ import { fileURLToPath } from 'node:url';
+ import { apply, restore, restoreIfStale, runGuarded, markerPath, runWithConcurrency } from '../tools/concurrency-guard.mjs';
+@@ -103,7 +105,7 @@ test('runGuarded puts the value back after a normal exit, a failing command, and
+   }
+ });
+ 
+-test('runGuarded records the child process start time with its pid', async t => {
++test('runGuarded records the child process start time and command line with its pid', async t => {
+   const f = await fixture(t);
+   const child = fakeChild(() => {});
+   child.pid = 123457;
+@@ -111,14 +113,16 @@ test('runGuarded records the child process start time with its pid', async t =>
+   const running = runGuarded({
+     value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false,
+     spawnImpl: () => child,
+-    procStart: pid => { seen.push(pid); return 'recorded start'; },
++    procStart: () => 'recorded start',
++    procIdentity: pid => { seen.push(pid); return { start: 'recorded start', command: 'recorded command' }; },
+   });
+   const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  child.emit('exit', 0, null);
++  assert.equal((await running).code, 0);
+   assert.equal(marker.childPid, child.pid);
+   assert.equal(marker.childProcStart, 'recorded start');
++  assert.equal(marker.childCommand, 'recorded command');
+   assert.deepEqual(seen, [child.pid]);
+-  child.emit('exit', 0, null);
+-  assert.equal((await running).code, 0);
+   assert.equal(f.read().machineConcurrency, 4);
+ });
+ 
+@@ -188,7 +192,8 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
+   await sleep(500);   // the watcher is up
+   const childPid = await (async () => { for (let i = 0; i < 100; i += 1) { try { const c = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).childPid; if (c) return c; } catch { /* not yet */ } await sleep(50); } return null; })();
+   assert.ok(childPid, 'the marker names the command\'s pid');
+-  assert.ok(Object.hasOwn(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')), 'childProcStart'), 'the marker records the command identity');
++  const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  for (const field of ['childProcStart', 'childCommand']) assert.ok(Object.hasOwn(marker, field), `the marker records ${field}, including an unreadable identity`);
+   process.kill(p.child.pid, 'SIGKILL');
+   await p.exited;
+   assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 30000), 'restored by the watcher');
+@@ -256,11 +261,16 @@ test('restoreIfStale: a stale marker naming this process as childPid exits befor
+     const dead = Number(process.argv[2]);
+     fs.writeFileSync(configFile, JSON.stringify({ machineConcurrency: 16, lanes: { anthropic: { model: 'm' } } }));
+     const childProcStart = 'recorded start';
+-    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, childProcStart, at: new Date().toISOString() }));
+-    restoreIfStale(configFile, { procStart: () => childProcStart });
++    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, childProcStart, childCommand: 'recorded command', at: new Date().toISOString() }));
++    restoreIfStale(configFile, { procStart: () => childProcStart, procIdentity: () => ({ start: childProcStart, command: 'recorded command' }) });
+     console.log('ran command');
+   `, f.file, String(dead)], { env: f.env, encoding: 'utf8' });
+-  assert.equal(r.status, 0, r.stderr);
++  assert.equal(r.status, 143, r.stderr);
++  assert.match(r.stderr, /concurrency-guard/);
++  assert.match(r.stderr, /this process is the orphaned command of a dead guarded run/);
++  assert.match(r.stderr, /command was NOT run/);
++  assert.match(r.stderr, /machineConcurrency is still raised/);
++  assert.match(r.stderr, /restored by the watcher or the next command/);
+   assert.doesNotMatch(r.stdout, /ran command/);
+   assert.equal(f.read().machineConcurrency, 16);
+   assert.equal(fs.existsSync(markerPath(f.file)), true);
+@@ -273,10 +283,10 @@ test('restoreIfStale: a stale marker with a live orphaned child sends SIGTERM on
+   t.after(() => { try { holder.kill('SIGKILL'); } catch { /* gone */ } });
+   assert.ok(await until(() => { try { process.kill(holder.pid, 0); return true; } catch { return false; } }, 5000));
+   fs.writeFileSync(f.file, JSON.stringify({ ...f.read(), machineConcurrency: 16 }));
+-  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, childProcStart: 'recorded start', at: new Date().toISOString() }));
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, childProcStart: 'recorded start', childCommand: 'recorded command', at: new Date().toISOString() }));
+   const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+     import { restoreIfStale } from ${JSON.stringify(GUARD)};
+-    console.log(JSON.stringify(restoreIfStale(process.argv[1], { procStart: () => 'recorded start' })));
++    console.log(JSON.stringify(restoreIfStale(process.argv[1], { procStart: () => 'recorded start', procIdentity: () => ({ start: 'recorded start', command: 'recorded command' }) })));
+   `, f.file], { env: f.env, encoding: 'utf8' });
+   assert.equal(r.status, 0, r.stderr);
+   assert.deepEqual(JSON.parse(r.stdout.trim()), { restored: false, reason: 'orphaned command still running' });
+@@ -290,11 +300,12 @@ for (const childPid of [123456, process.pid]) {
+   test(`restoreIfStale: a pre-boot marker restores without probing, signalling, or exiting for child ${childPid}`, async t => {
+     const f = await fixture(t, { machineConcurrency: 16 });
+     const at = new Date(Date.now() - os.uptime() * 1000 - 60_000).toISOString();
+-    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: process.pid, childPid, childProcStart: 'same', at }));
++    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: process.pid, childPid, childProcStart: 'same', childCommand: 'same command', at }));
+     const calls = [];
+     const result = restoreIfStale(f.file, {
+       isAlive: pid => { calls.push(['alive', pid]); return true; },
+       procStart: pid => { calls.push(['start', pid]); return 'same'; },
++      procIdentity: pid => { calls.push(['identity', pid]); return { start: 'same', command: 'same command' }; },
+       kill: (...args) => calls.push(['kill', ...args]),
+       exit: code => calls.push(['exit', code]),
+     });
+@@ -308,11 +319,12 @@ for (const childPid of [123456, process.pid]) {
+ for (const currentStart of ['new process', null]) {
+   test(`restoreIfStale: a mismatched or unreadable child start (${currentStart}) restores without signalling or exiting`, async t => {
+     const f = await fixture(t, { machineConcurrency: 16 });
+-    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'old process', at: new Date().toISOString() }));
++    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'old process', childCommand: 'same command', at: new Date().toISOString() }));
+     const calls = [];
+     assert.deepEqual(restoreIfStale(f.file, {
+       isAlive: pid => pid === process.pid,
+       procStart: () => currentStart,
++      procIdentity: () => ({ start: currentStart, command: 'same command' }),
+       kill: (...args) => calls.push(['kill', ...args]),
+       exit: code => calls.push(['exit', code]),
+     }), { restored: true, to: 4 });
+@@ -324,11 +336,12 @@ for (const currentStart of ['new process', null]) {
+ 
+ test('restoreIfStale: an EPERM-alive child restores without signalling or exiting', async t => {
+   const f = await fixture(t, { machineConcurrency: 16 });
+-  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', at: new Date().toISOString() }));
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
+   const calls = [];
+   assert.deepEqual(restoreIfStale(f.file, {
+     isAlive: pid => pid === process.pid,
+     procStart: () => 'same',
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
+     kill: (pid, signal) => {
+       calls.push([pid, signal]);
+       throw Object.assign(new Error('another user'), { code: 'EPERM' });
+@@ -342,13 +355,14 @@ test('restoreIfStale: an EPERM-alive child restores without signalling or exitin
+ 
+ test('restoreIfStale: SIGTERM is persisted and never repeated, including after 30 seconds', async t => {
+   const f = await fixture(t, { machineConcurrency: 16 });
+-  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', at: new Date().toISOString() }));
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
+   const calls = [];
+   let now = Date.now();
+   const sentAt = now;
+   const deps = {
+     isAlive: pid => pid === 123457,
+     procStart: () => 'same',
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
+     kill: (...args) => calls.push(args),
+     now: () => now,
+   };
+@@ -362,3 +376,130 @@ test('restoreIfStale: SIGTERM is persisted and never repeated, including after 3
+   deps.isAlive = () => false;
+   assert.deepEqual(restoreIfStale(f.file, deps), { restored: true, to: 4 });
+ });
++
++for (const childPid of [123457, process.pid]) {
++  for (const command of ['different command', null, '']) {
++    test(`restoreIfStale: matching start but mismatched or unreadable command (${command}) restores for child ${childPid}`, async t => {
++      const f = await fixture(t, { machineConcurrency: 16 });
++      fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid, childProcStart: 'same', childCommand: 'recorded command', at: new Date().toISOString() }));
++      const calls = [];
++      const result = restoreIfStale(f.file, {
++        isAlive: pid => pid === childPid,
++        procStart: () => 'same',
++        procIdentity: () => ({ start: 'same', command }),
++        kill: (...args) => calls.push(['kill', ...args]),
++        exit: code => calls.push(['exit', code]),
++      });
++      assert.deepEqual(result, { restored: true, to: 4 });
++      assert.deepEqual(calls, []);
++      assert.equal(f.read().machineConcurrency, 4);
++      assert.equal(fs.existsSync(markerPath(f.file)), false);
++    });
++  }
++}
++
++for (const field of ['childProcStart', 'childCommand']) {
++  for (const value of [undefined, null, '', '   ']) {
++    test(`restoreIfStale: missing or blank recorded ${field} (${JSON.stringify(value)}) restores safely`, async t => {
++      const f = await fixture(t, { machineConcurrency: 16 });
++      const marker = { previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString(), [field]: value };
++      fs.writeFileSync(markerPath(f.file), JSON.stringify(marker));
++      const calls = [];
++      assert.deepEqual(restoreIfStale(f.file, {
++        isAlive: pid => pid === process.pid,
++        procStart: () => marker.childProcStart,
++        procIdentity: () => ({ start: marker.childProcStart, command: marker.childCommand }),
++        kill: (...args) => calls.push(['kill', ...args]),
++        exit: code => calls.push(['exit', code]),
++      }), { restored: true, to: 4 });
++      assert.deepEqual(calls, []);
++      assert.equal(f.read().machineConcurrency, 4);
++      assert.equal(fs.existsSync(markerPath(f.file)), false);
++    });
++  }
++}
++
++test('restoreIfStale: an unreadable identity probe restores without signalling or exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: pid => pid === process.pid,
++    procStart: () => 'same',
++    procIdentity: () => { throw new Error('cannot read process identity'); },
++    kill: (...args) => calls.push(['kill', ...args]),
++    exit: code => calls.push(['exit', code]),
++  }), { restored: true, to: 4 });
++  assert.deepEqual(calls, []);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('restoreIfStale: an EPERM-alive owner restores and clears the marker without exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: () => true,
++    procStart: () => 'same',
++    procIdentity: () => { calls.push(['identity']); return { start: 'same', command: 'same command' }; },
++    kill: (pid, signal) => {
++      calls.push([pid, signal]);
++      throw Object.assign(new Error('another user'), { code: 'EPERM' });
++    },
++    exit: code => calls.push(['exit', code]),
++  }), { restored: true, to: 4 });
++  assert.deepEqual(calls, [[123456, 0]]);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('restoreIfStale: a safe stale marker restores and the command then runs without exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'old command', at: new Date().toISOString() }));
++  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
++    import { restoreIfStale } from ${JSON.stringify(GUARD)};
++    const result = restoreIfStale(process.argv[1], {
++      isAlive: pid => pid !== 123456,
++      procStart: () => 'same',
++      procIdentity: () => ({ start: 'same', command: 'new command' }),
++      kill: () => { console.error('unexpected signal'); },
++      exit: () => { console.error('unexpected exit'); process.exit(99); },
++    });
++    console.log(JSON.stringify(result));
++    console.log('ran command');
++  `, f.file], { env: f.env, encoding: 'utf8' });
++  assert.equal(r.status, 0, r.stderr);
++  assert.equal(r.stderr, '');
++  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n')[0]), { restored: true, to: 4 });
++  assert.match(r.stdout, /ran command/);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('runGuarded: the default identity probe normalizes both ps fields', async t => {
++  const f = await fixture(t);
++  const child = fakeChild(() => {});
++  child.pid = 123457;
++  const calls = [];
++  t.mock.method(childProcess, 'execFileSync', (command, args) => {
++    calls.push([command, args]);
++    return args[1] === 'lstart=' ? '  Fri Oct  30 12:00:00 2026\n' : '  node   swarm.mjs\twatch  \n';
++  });
++  syncBuiltinESMExports();
++  try {
++    const running = runGuarded({ value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => child });
++    const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++    child.emit('exit', 0, null);
++    assert.equal((await running).code, 0);
++    assert.equal(marker.childProcStart, 'Fri Oct 30 12:00:00 2026');
++    assert.equal(marker.childCommand, 'node swarm.mjs watch');
++    assert.deepEqual(calls, [
++      ['ps', ['-o', 'lstart=', '-p', String(child.pid)]],
++      ['ps', ['-o', 'command=', '-p', String(child.pid)]],
++    ]);
++  } finally {
++    t.mock.restoreAll();
++    syncBuiltinESMExports();
++  }
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index a28abc56..9ad941c8 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.26', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.27', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.26');
++  assert.equal(pkg.version, '1.167.27');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.26/);
+-  assert.match(readme, /Install from tag v1\.167\.26/);
++  assert.match(readme, /Use Project Swarm 1\.167\.27/);
++  assert.match(readme, /Install from tag v1\.167\.27/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.26\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index 0ddfa7f3..dce9c1a2 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.26', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.26 while 1.46.1 history remains', async () => {
++describe('release: 1.167.27', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.27 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.26');
+-    assert.equal(lock.version, '1.167.26');
+-    assert.equal(lock.packages[''].version, '1.167.26');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.26\n/);
++    assert.equal(pkg.version, '1.167.27');
++    assert.equal(lock.version, '1.167.27');
++    assert.equal(lock.packages[''].version, '1.167.27');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index d2404021..1c13f462 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.26');
+-  assert.equal(lock.version, '1.167.26');
+-  assert.equal(lock.packages[''].version, '1.167.26');
++  assert.equal(pkg.version, '1.167.27');
++  assert.equal(lock.version, '1.167.27');
++  assert.equal(lock.packages[''].version, '1.167.27');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.26\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.27\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index d1e1c5ee..466c869d 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.26 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.27 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.26');
+-  assert.equal(lock.version, '1.167.26');
+-  assert.equal(lock.packages[''].version, '1.167.26');
++  assert.equal(pkg.version, '1.167.27');
++  assert.equal(lock.version, '1.167.27');
++  assert.equal(lock.packages[''].version, '1.167.27');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.26\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.26',
++    'README.md': '1.167.27',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.26',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.26',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.26',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.26',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.27',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.27',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.27',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.27',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index c7186890..24a1b715 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.26', () => {
+-  test('package.json and package-lock.json are both at 1.167.26', async () => {
++describe('release: 1.167.27', () => {
++  test('package.json and package-lock.json are both at 1.167.27', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.26');
+-    assert.equal(lock.version, '1.167.26');
+-    assert.equal(lock.packages[''].version, '1.167.26');
++    assert.equal(pkg.version, '1.167.27');
++    assert.equal(lock.version, '1.167.27');
++    assert.equal(lock.packages[''].version, '1.167.27');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index e497276c..9c8192a9 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.26');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.26\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.27');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/concurrency-guard.mjs b/tools/concurrency-guard.mjs
+index 4928b903..21f4a901 100644
+--- a/tools/concurrency-guard.mjs
++++ b/tools/concurrency-guard.mjs
+@@ -18,16 +18,24 @@ const MIN = 1, MAX = 2048;
+ 
+ export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
+ const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+-// Same process identity as busy-marker.mjs; a reused pid is not the guarded child.
+-function defaultProcStart(pid) {
++// Normalize both identity fields alike; a reused pid is not the guarded child.
++function procField(pid, field) {
+   if (!Number.isInteger(pid) || pid <= 0) return null;
+   try {
+-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 });
++    const out = execFileSync('ps', ['-o', field, '-p', String(pid)], { encoding: 'utf8', timeout: 2000 });
+     const trimmed = out.trim();
+     return trimmed ? trimmed.replace(/\s+/g, ' ') : null;
+   } catch { return null; }
+ }
+-const matchesChild = (marker, procStart = defaultProcStart) => typeof marker.childProcStart === 'string' && marker.childProcStart.length > 0 && marker.childProcStart === procStart(marker.childPid);
++const defaultProcStart = pid => procField(pid, 'lstart=');
++const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
++function matchesChild(marker, procIdentity) {
++  if (![marker.childProcStart, marker.childCommand].every(value => typeof value === 'string' && value.trim().length > 0)) return false;
++  try {
++    const identity = procIdentity(marker.childPid);
++    return marker.childProcStart === identity?.start && marker.childCommand === identity?.command;
++  } catch { return false; }
++}
+ function termChildOnce(childPid) {
+   if (!Number.isInteger(childPid) || childPid <= 0 || !alive(childPid)) return;
+   try { process.kill(childPid, 'SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
+@@ -61,19 +69,22 @@ const bootedAt = () => Date.now() - os.uptime() * 1000;
+ const fromBeforeBoot = marker => { const at = Date.parse(marker?.at); return Number.isFinite(at) && at < bootedAt() - 5000; };
+ 
+ /** Called at the start of every swarm command: a marker whose owner is gone is restored. */
+-export function restoreIfStale(configFile, { isAlive = alive, procStart = defaultProcStart, kill = process.kill, exit = process.exit, now = Date.now } = {}) {
++export function restoreIfStale(configFile, { isAlive = alive, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart), kill = process.kill, exit = process.exit, now = Date.now } = {}) {
+   try {
+     const marker = readJson(markerPath(configFile));
+     if (!marker) return null;
+     if (fromBeforeBoot(marker)) return restore(configFile);
+-    if (isAlive(marker.pid)) return null;
++    if (isAlive(marker.pid)) {
++      // EPERM means another user's process, so it cannot own this guarded run.
++      try { kill(marker.pid, 0); return null; } catch { return restore(configFile); }
++    }
+     const child = marker.childPid;
+-    if (!Number.isInteger(child) || child <= 0 || !matchesChild(marker, procStart) || !isAlive(child)) return restore(configFile);
++    if (!Number.isInteger(child) || child <= 0 || !matchesChild(marker, procIdentity) || !isAlive(child)) return restore(configFile);
+     // alive() treats EPERM as alive, but another user's process is not ours.
+     try { kill(child, 0); } catch { return restore(configFile); }
+     if (child === process.pid) {
+-      process.stderr.write('[tools/concurrency-guard.mjs] orphaned guarded command: exiting without running\n');
+-      return exit(0);
++      process.stderr.write('[tools/concurrency-guard.mjs] this process is the orphaned command of a dead guarded run; the command was NOT run. machineConcurrency is still raised and will be restored by the watcher or the next command.\n');
++      return exit(143);
+     }
+     // Send once only, even after 30 seconds: the watcher owns escalation and restore.
+     if (marker.termSentAt === undefined) {
+@@ -128,12 +139,18 @@ function watch(pid, configFile) {
+ }
+ 
+ /** Records the command's pid in the marker, so a watcher that outlives a crashed wrapper can stop it. */
+-function noteChild(configFile, pid, childPid, procStart = defaultProcStart) {
+-  try { const marker = readJson(markerPath(configFile)); if (marker?.pid === pid) writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childProcStart: procStart(childPid) }); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
++function noteChild(configFile, pid, childPid, procIdentity = defaultProcIdentity) {
++  try {
++    const marker = readJson(markerPath(configFile));
++    if (marker?.pid === pid) {
++      const identity = procIdentity(childPid);
++      writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childProcStart: identity?.start ?? null, childCommand: identity?.command ?? null });
++    }
++  } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
+ }
+ 
+ /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
+-export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart }) {
++export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart) }) {
+   // The signal handlers go in BEFORE the value changes: a Ctrl-C in the moment between writing the value and starting the command must still reach the restore below
+   // (without a handler the wrapper would die on the spot and leave the value to the watcher a few hundred milliseconds later).
+   let child = null;
+@@ -159,7 +176,7 @@ export async function runGuarded({ value, args, env = process.env, configFile =
+   else {
+     child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+     child.on('exit', () => { childExited = true; });
+-    noteChild(configFile, process.pid, child.pid, procStart);
++    noteChild(configFile, process.pid, child.pid, procIdentity);
+     // A signal that arrived while the command was starting is passed on now.
+     if (pending) { try { child.kill(pending); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] pass pending signal to child:', error?.message ?? error); } }
+     code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
