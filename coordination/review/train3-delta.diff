@@ -1,0 +1,539 @@
+diff --git a/coordination/manifests/review-train3-delta.json b/coordination/manifests/review-train3-delta.json
+new file mode 100644
+index 00000000..a139c173
+--- /dev/null
++++ b/coordination/manifests/review-train3-delta.json
+@@ -0,0 +1,28 @@
++{
++ "version": 1,
++ "concurrency": 1,
++ "jobs": [
++  {
++   "id": "reviewtrain3delta",
++   "agent": "claude",
++   "model": "opus",
++   "tier": "expensive",
++   "tierReason": "owner rule: Opus delta review of the train 3 process-kill blocker fix",
++   "prompt": "Delta review of release train 3 of Project Swarm (process-kill path). Your earlier review (coordination/review/train3-review.json in context) failed with ONE blocker: tools/concurrency-guard.mjs restoreIfStale acted on marker.childPid even for markers from before boot, so after a reboot a swarm command could SIGTERM an unrelated process, wedge the marker (EPERM), or exit a normal command with code 0. coordination/review/train3-delta.diff is the diff from that review's head 362139a5 to the new head. Changes: restoreIfStale restores a pre-boot marker directly; it acts on childPid (self-exit or a single SIGTERM) only when the child's recorded process start time (childProcStart, written by noteChild using ps lstart as busy-marker.mjs does) matches the live pid's start time; an unknown start time, a mismatch, a dead child or an EPERM-only 'alive' child means restore; SIGTERM is sent at most once per marker (termSentAt), and escalation is left to the watcher. Also folded in: tools/stress-tests.mjs 64 MB maxBuffer plus a timeout with SIGKILL; tools/lane-health.mjs logs non-ENOENT persist failures once per code. Tests were added to tests/concurrency-guard.test.mjs.\nPass bar (owner): confirm the blocker is CLOSED for each of your three failure cases (an innocent process killed, a wedged marker, a normal command exited with 0), with line evidence and test names. Find NEW blockers introduced by this delta: a crash or hang on a normal swarm command path (restoreIfStale runs at the start of every swarm command), a regression of the in-boot orphan handling you confirmed earlier, the value never restored, or a kill of a process that isn't ours. Everything else is a follow-up.\nWrite ONLY coordination/review/train3-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round1\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if the round-1 blocker is open or blockers is non-empty.",
++   "context": [
++    "coordination/review/train3-delta.diff",
++    "coordination/review/train3-review.json",
++    "tools/concurrency-guard.mjs",
++    "tests/concurrency-guard.test.mjs",
++    "tools/busy-marker.mjs",
++    "tools/stress-tests.mjs",
++    "tools/lane-health.mjs"
++   ],
++   "outputs": [
++    "coordination/review/train3-delta-review.json"
++   ],
++   "resultFile": "coordination/review/train3-delta-review.json",
++   "timeoutMs": 2400000
++  }
++ ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t3-cg-preboot.json b/coordination/manifests/t3-cg-preboot.json
+new file mode 100644
+index 00000000..840ba40c
+--- /dev/null
++++ b/coordination/manifests/t3-cg-preboot.json
+@@ -0,0 +1,46 @@
++{
++  "version": 1,
++  "concurrency": 1,
++  "jobs": [
++    {
++      "id": "t3cgboot",
++      "agent": "codex",
++      "model": "gpt-6.1-sol",
++      "tier": "mid",
++      "sensitive": true,
++      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nTrain 3 Opus review (claude-opus-5-5, run 1793372061898-7517f56a) found ONE BLOCKER in the concurrency-guard startup-race fix, tools/concurrency-guard.mjs restoreIfStale (~line 53-68). Process-kill path: fix it exactly and minimally, in the surrounding style. Problem: the childPid branches run even when the marker is stale only because it is from before boot (fromBeforeBoot), although the file itself says a pre-boot pid belongs to no current process. After a power cut / reboot pids are reused, so the first swarm command can: (a) SIGTERM an unrelated live process holding the old childPid, and since the marker then stays, repeat it on every command; (b) if that pid belongs to another user/root, alive() is true on EPERM, kill fails, the marker never clears, machineConcurrency stays raised forever and apply() hits guard-busy forever; (c) if the reused childPid is the pid of a new normal swarm command, that command exits 0 without running. FIX: (1) a marker from before boot is restored directly, never acting on childPid: `if (fromBeforeBoot(marker)) return restore(configFile);` before any childPid logic. (2) Verify child identity: when noteChild records childPid, also record the child's process start time using the same procStart helper tools/busy-marker.mjs uses (import or reuse it; read busy-marker.mjs from context); in restoreIfStale act on childPid (self-exit or SIGTERM) only when the recorded start time matches the current start time of that pid; a mismatch or an unreadable start time means 'not ours': restore. (3) An alive() that is true only because of EPERM (another user's process) is not our child: restore instead of leaving the marker. (4) Bound repeats: persist termSentAt in the marker when SIGTERM is sent; if a later call finds termSentAt older than 30 s and the child still alive and matching, leave it for the watcher but never send SIGTERM a second time from restoreIfStale. Keep the in-boot behaviour the review confirmed correct: the orphan exits only when it is the recorded child and the wrapper is dead; the watcher still SIGTERMs, then SIGKILLs, then restores. Tests (add to tests/concurrency-guard.test.mjs, keeping all existing tests and the earlier ready-hook fixes): a pre-boot marker (`at` before boot) with an alive unrelated childPid restores the value, kills nothing, does not exit (inject alive/kill/exit seams if the module has them, or add minimal injectable parameters with production defaults); a pre-boot marker whose childPid equals process.pid restores and does NOT exit; an in-boot marker whose recorded start time does not match the live pid's start time restores without signalling; an EPERM-alive child restores. ALSO two small follow-ups from the same review (non-sensitive): tools/stress-tests.mjs ~30: spawnSync uses the default 1 MB maxBuffer and has no timeout; set maxBuffer to 64 MB and a timeout (kill the child on timeout, report it as a failure); tools/lane-health.mjs ~408: the persist chain swallows write failures; log non-ENOENT failures once per distinct error code to stderr with fixed text (no file contents). Do not touch any other file.",
++      "context": [
++        "tools/busy-marker.mjs",
++        "tests/lane-health-core.test.mjs",
++        "tests/lane-health-persist.test.mjs"
++      ],
++      "outputs": [
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs"
++      ],
++      "timeoutMs": 3000000,
++      "ignoreTests": [
++        "tests/s13-blockers.test.mjs",
++        "tests/self-manage-monitor.test.mjs",
++        "tests/split-module.test.mjs"
++      ]
++    }
++  ],
++  "checks": [
++    {
++      "name": "t3cgboot",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/concurrency-guard.test.mjs",
++        "tests/lane-health-core.test.mjs",
++        "tests/lane-health-persist.test.mjs",
++        "tests/busy-marker.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/tests/concurrency-guard.test.mjs b/tests/concurrency-guard.test.mjs
+index f0535262..7835f271 100644
+--- a/tests/concurrency-guard.test.mjs
++++ b/tests/concurrency-guard.test.mjs
+@@ -8,6 +8,8 @@ import fsp from 'node:fs/promises';
+ import os from 'node:os';
+ import path from 'node:path';
+ import { spawn, spawnSync } from 'node:child_process';
++import childProcess from 'node:child_process';
++import { syncBuiltinESMExports } from 'node:module';
+ import { EventEmitter } from 'node:events';
+ import { fileURLToPath } from 'node:url';
+ import { apply, restore, restoreIfStale, runGuarded, markerPath, runWithConcurrency } from '../tools/concurrency-guard.mjs';
+@@ -103,6 +105,27 @@ test('runGuarded puts the value back after a normal exit, a failing command, and
+   }
+ });
+ 
++test('runGuarded records the child process start time and command line with its pid', async t => {
++  const f = await fixture(t);
++  const child = fakeChild(() => {});
++  child.pid = 123457;
++  const seen = [];
++  const running = runGuarded({
++    value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false,
++    spawnImpl: () => child,
++    procStart: () => 'recorded start',
++    procIdentity: pid => { seen.push(pid); return { start: 'recorded start', command: 'recorded command' }; },
++  });
++  const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  child.emit('exit', 0, null);
++  assert.equal((await running).code, 0);
++  assert.equal(marker.childPid, child.pid);
++  assert.equal(marker.childProcStart, 'recorded start');
++  assert.equal(marker.childCommand, 'recorded command');
++  assert.deepEqual(seen, [child.pid]);
++  assert.equal(f.read().machineConcurrency, 4);
++});
++
+ test('runGuarded restores when the wrapper itself is told to stop (SIGTERM forwarded to the command)', async t => {
+   const f = await fixture(t);
+   let childAttached;
+@@ -169,6 +192,8 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
+   await sleep(500);   // the watcher is up
+   const childPid = await (async () => { for (let i = 0; i < 100; i += 1) { try { const c = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).childPid; if (c) return c; } catch { /* not yet */ } await sleep(50); } return null; })();
+   assert.ok(childPid, 'the marker names the command\'s pid');
++  const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  for (const field of ['childProcStart', 'childCommand']) assert.ok(Object.hasOwn(marker, field), `the marker records ${field}, including an unreadable identity`);
+   process.kill(p.child.pid, 'SIGKILL');
+   await p.exited;
+   assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 30000), 'restored by the watcher');
+@@ -235,11 +260,17 @@ test('restoreIfStale: a stale marker naming this process as childPid exits befor
+     const configFile = process.argv[1];
+     const dead = Number(process.argv[2]);
+     fs.writeFileSync(configFile, JSON.stringify({ machineConcurrency: 16, lanes: { anthropic: { model: 'm' } } }));
+-    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, at: 'x' }));
+-    restoreIfStale(configFile);
++    const childProcStart = 'recorded start';
++    fs.writeFileSync(markerPath(configFile), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: process.pid, childProcStart, childCommand: 'recorded command', at: new Date().toISOString() }));
++    restoreIfStale(configFile, { procStart: () => childProcStart, procIdentity: () => ({ start: childProcStart, command: 'recorded command' }) });
+     console.log('ran command');
+   `, f.file, String(dead)], { env: f.env, encoding: 'utf8' });
+-  assert.equal(r.status, 0, r.stderr);
++  assert.equal(r.status, 143, r.stderr);
++  assert.match(r.stderr, /concurrency-guard/);
++  assert.match(r.stderr, /this process is the orphaned command of a dead guarded run/);
++  assert.match(r.stderr, /command was NOT run/);
++  assert.match(r.stderr, /machineConcurrency is still raised/);
++  assert.match(r.stderr, /restored by the watcher or the next command/);
+   assert.doesNotMatch(r.stdout, /ran command/);
+   assert.equal(f.read().machineConcurrency, 16);
+   assert.equal(fs.existsSync(markerPath(f.file)), true);
+@@ -252,14 +283,223 @@ test('restoreIfStale: a stale marker with a live orphaned child sends SIGTERM on
+   t.after(() => { try { holder.kill('SIGKILL'); } catch { /* gone */ } });
+   assert.ok(await until(() => { try { process.kill(holder.pid, 0); return true; } catch { return false; } }, 5000));
+   fs.writeFileSync(f.file, JSON.stringify({ ...f.read(), machineConcurrency: 16 }));
+-  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, at: 'x' }));
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid, childProcStart: 'recorded start', childCommand: 'recorded command', at: new Date().toISOString() }));
+   const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
+     import { restoreIfStale } from ${JSON.stringify(GUARD)};
+-    console.log(JSON.stringify(restoreIfStale(process.argv[1])));
++    console.log(JSON.stringify(restoreIfStale(process.argv[1], { procStart: () => 'recorded start', procIdentity: () => ({ start: 'recorded start', command: 'recorded command' }) })));
+   `, f.file], { env: f.env, encoding: 'utf8' });
+   assert.equal(r.status, 0, r.stderr);
+   assert.deepEqual(JSON.parse(r.stdout.trim()), { restored: false, reason: 'orphaned command still running' });
+   assert.equal(f.read().machineConcurrency, 16);
+   assert.equal(fs.existsSync(markerPath(f.file)), true);
++  assert.ok(Number.isFinite(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt));
+   assert.ok(await until(() => { try { process.kill(holder.pid, 0); return false; } catch { return true; } }, 5000), 'orphan received SIGTERM');
+ });
++
++for (const childPid of [123456, process.pid]) {
++  test(`restoreIfStale: a pre-boot marker restores without probing, signalling, or exiting for child ${childPid}`, async t => {
++    const f = await fixture(t, { machineConcurrency: 16 });
++    const at = new Date(Date.now() - os.uptime() * 1000 - 60_000).toISOString();
++    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: process.pid, childPid, childProcStart: 'same', childCommand: 'same command', at }));
++    const calls = [];
++    const result = restoreIfStale(f.file, {
++      isAlive: pid => { calls.push(['alive', pid]); return true; },
++      procStart: pid => { calls.push(['start', pid]); return 'same'; },
++      procIdentity: pid => { calls.push(['identity', pid]); return { start: 'same', command: 'same command' }; },
++      kill: (...args) => calls.push(['kill', ...args]),
++      exit: code => calls.push(['exit', code]),
++    });
++    assert.deepEqual(result, { restored: true, to: 4 });
++    assert.deepEqual(calls, []);
++    assert.equal(f.read().machineConcurrency, 4);
++    assert.equal(fs.existsSync(markerPath(f.file)), false);
++  });
++}
++
++for (const currentStart of ['new process', null]) {
++  test(`restoreIfStale: a mismatched or unreadable child start (${currentStart}) restores without signalling or exiting`, async t => {
++    const f = await fixture(t, { machineConcurrency: 16 });
++    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'old process', childCommand: 'same command', at: new Date().toISOString() }));
++    const calls = [];
++    assert.deepEqual(restoreIfStale(f.file, {
++      isAlive: pid => pid === process.pid,
++      procStart: () => currentStart,
++      procIdentity: () => ({ start: currentStart, command: 'same command' }),
++      kill: (...args) => calls.push(['kill', ...args]),
++      exit: code => calls.push(['exit', code]),
++    }), { restored: true, to: 4 });
++    assert.deepEqual(calls, []);
++    assert.equal(f.read().machineConcurrency, 4);
++    assert.equal(fs.existsSync(markerPath(f.file)), false);
++  });
++}
++
++test('restoreIfStale: an EPERM-alive child restores without signalling or exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: pid => pid === process.pid,
++    procStart: () => 'same',
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
++    kill: (pid, signal) => {
++      calls.push([pid, signal]);
++      throw Object.assign(new Error('another user'), { code: 'EPERM' });
++    },
++    exit: code => calls.push(['exit', code]),
++  }), { restored: true, to: 4 });
++  assert.deepEqual(calls, [[process.pid, 0]]);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('restoreIfStale: SIGTERM is persisted and never repeated, including after 30 seconds', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  let now = Date.now();
++  const sentAt = now;
++  const deps = {
++    isAlive: pid => pid === 123457,
++    procStart: () => 'same',
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
++    kill: (...args) => calls.push(args),
++    now: () => now,
++  };
++  for (const elapsed of [0, 1000, 31_000]) {
++    now = sentAt + elapsed;
++    assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
++    assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
++    assert.equal(f.read().machineConcurrency, 16);
++  }
++  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM']]);
++  deps.isAlive = () => false;
++  assert.deepEqual(restoreIfStale(f.file, deps), { restored: true, to: 4 });
++});
++
++for (const childPid of [123457, process.pid]) {
++  for (const command of ['different command', null, '']) {
++    test(`restoreIfStale: matching start but mismatched or unreadable command (${command}) restores for child ${childPid}`, async t => {
++      const f = await fixture(t, { machineConcurrency: 16 });
++      fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid, childProcStart: 'same', childCommand: 'recorded command', at: new Date().toISOString() }));
++      const calls = [];
++      const result = restoreIfStale(f.file, {
++        isAlive: pid => pid === childPid,
++        procStart: () => 'same',
++        procIdentity: () => ({ start: 'same', command }),
++        kill: (...args) => calls.push(['kill', ...args]),
++        exit: code => calls.push(['exit', code]),
++      });
++      assert.deepEqual(result, { restored: true, to: 4 });
++      assert.deepEqual(calls, []);
++      assert.equal(f.read().machineConcurrency, 4);
++      assert.equal(fs.existsSync(markerPath(f.file)), false);
++    });
++  }
++}
++
++for (const field of ['childProcStart', 'childCommand']) {
++  for (const value of [undefined, null, '', '   ']) {
++    test(`restoreIfStale: missing or blank recorded ${field} (${JSON.stringify(value)}) restores safely`, async t => {
++      const f = await fixture(t, { machineConcurrency: 16 });
++      const marker = { previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString(), [field]: value };
++      fs.writeFileSync(markerPath(f.file), JSON.stringify(marker));
++      const calls = [];
++      assert.deepEqual(restoreIfStale(f.file, {
++        isAlive: pid => pid === process.pid,
++        procStart: () => marker.childProcStart,
++        procIdentity: () => ({ start: marker.childProcStart, command: marker.childCommand }),
++        kill: (...args) => calls.push(['kill', ...args]),
++        exit: code => calls.push(['exit', code]),
++      }), { restored: true, to: 4 });
++      assert.deepEqual(calls, []);
++      assert.equal(f.read().machineConcurrency, 4);
++      assert.equal(fs.existsSync(markerPath(f.file)), false);
++    });
++  }
++}
++
++test('restoreIfStale: an unreadable identity probe restores without signalling or exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: pid => pid === process.pid,
++    procStart: () => 'same',
++    procIdentity: () => { throw new Error('cannot read process identity'); },
++    kill: (...args) => calls.push(['kill', ...args]),
++    exit: code => calls.push(['exit', code]),
++  }), { restored: true, to: 4 });
++  assert.deepEqual(calls, []);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('restoreIfStale: an EPERM-alive owner restores and clears the marker without exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
++  const calls = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: () => true,
++    procStart: () => 'same',
++    procIdentity: () => { calls.push(['identity']); return { start: 'same', command: 'same command' }; },
++    kill: (pid, signal) => {
++      calls.push([pid, signal]);
++      throw Object.assign(new Error('another user'), { code: 'EPERM' });
++    },
++    exit: code => calls.push(['exit', code]),
++  }), { restored: true, to: 4 });
++  assert.deepEqual(calls, [[123456, 0]]);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('restoreIfStale: a safe stale marker restores and the command then runs without exiting', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: process.pid, childProcStart: 'same', childCommand: 'old command', at: new Date().toISOString() }));
++  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
++    import { restoreIfStale } from ${JSON.stringify(GUARD)};
++    const result = restoreIfStale(process.argv[1], {
++      isAlive: pid => pid !== 123456,
++      procStart: () => 'same',
++      procIdentity: () => ({ start: 'same', command: 'new command' }),
++      kill: () => { console.error('unexpected signal'); },
++      exit: () => { console.error('unexpected exit'); process.exit(99); },
++    });
++    console.log(JSON.stringify(result));
++    console.log('ran command');
++  `, f.file], { env: f.env, encoding: 'utf8' });
++  assert.equal(r.status, 0, r.stderr);
++  assert.equal(r.stderr, '');
++  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n')[0]), { restored: true, to: 4 });
++  assert.match(r.stdout, /ran command/);
++  assert.equal(f.read().machineConcurrency, 4);
++  assert.equal(fs.existsSync(markerPath(f.file)), false);
++});
++
++test('runGuarded: the default identity probe normalizes both ps fields', async t => {
++  const f = await fixture(t);
++  const child = fakeChild(() => {});
++  child.pid = 123457;
++  const calls = [];
++  t.mock.method(childProcess, 'execFileSync', (command, args) => {
++    calls.push([command, args]);
++    return args[1] === 'lstart=' ? '  Fri Oct  30 12:00:00 2026\n' : '  node   swarm.mjs\twatch  \n';
++  });
++  syncBuiltinESMExports();
++  try {
++    const running = runGuarded({ value: 16, args: ['watch'], env: f.env, configFile: f.file, startWatcher: false, spawnImpl: () => child });
++    const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++    child.emit('exit', 0, null);
++    assert.equal((await running).code, 0);
++    assert.equal(marker.childProcStart, 'Fri Oct 30 12:00:00 2026');
++    assert.equal(marker.childCommand, 'node swarm.mjs watch');
++    assert.deepEqual(calls, [
++      ['ps', ['-o', 'lstart=', '-p', String(child.pid)]],
++      ['ps', ['-o', 'command=', '-p', String(child.pid)]],
++    ]);
++  } finally {
++    t.mock.restoreAll();
++    syncBuiltinESMExports();
++  }
++});
+diff --git a/tools/concurrency-guard.mjs b/tools/concurrency-guard.mjs
+index 4a6957cd..21f4a901 100644
+--- a/tools/concurrency-guard.mjs
++++ b/tools/concurrency-guard.mjs
+@@ -7,7 +7,7 @@
+ import fs from 'node:fs';
+ import path from 'node:path';
+ import os from 'node:os';
+-import { spawn } from 'node:child_process';
++import { execFileSync, spawn } from 'node:child_process';
+ import { fileURLToPath } from 'node:url';
+ import { resolveConfigPath } from './local-config.mjs';
+ 
+@@ -18,6 +18,24 @@ const MIN = 1, MAX = 2048;
+ 
+ export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
+ const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
++// Normalize both identity fields alike; a reused pid is not the guarded child.
++function procField(pid, field) {
++  if (!Number.isInteger(pid) || pid <= 0) return null;
++  try {
++    const out = execFileSync('ps', ['-o', field, '-p', String(pid)], { encoding: 'utf8', timeout: 2000 });
++    const trimmed = out.trim();
++    return trimmed ? trimmed.replace(/\s+/g, ' ') : null;
++  } catch { return null; }
++}
++const defaultProcStart = pid => procField(pid, 'lstart=');
++const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
++function matchesChild(marker, procIdentity) {
++  if (![marker.childProcStart, marker.childCommand].every(value => typeof value === 'string' && value.trim().length > 0)) return false;
++  try {
++    const identity = procIdentity(marker.childPid);
++    return marker.childProcStart === identity?.start && marker.childCommand === identity?.command;
++  } catch { return false; }
++}
+ function termChildOnce(childPid) {
+   if (!Number.isInteger(childPid) || childPid <= 0 || !alive(childPid)) return;
+   try { process.kill(childPid, 'SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
+@@ -51,21 +69,32 @@ const bootedAt = () => Date.now() - os.uptime() * 1000;
+ const fromBeforeBoot = marker => { const at = Date.parse(marker?.at); return Number.isFinite(at) && at < bootedAt() - 5000; };
+ 
+ /** Called at the start of every swarm command: a marker whose owner is gone is restored. */
+-export function restoreIfStale(configFile) {
++export function restoreIfStale(configFile, { isAlive = alive, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart), kill = process.kill, exit = process.exit, now = Date.now } = {}) {
+   try {
+     const marker = readJson(markerPath(configFile));
+     if (!marker) return null;
+-    if (alive(marker.pid) && !fromBeforeBoot(marker)) return null;
++    if (fromBeforeBoot(marker)) return restore(configFile);
++    if (isAlive(marker.pid)) {
++      // EPERM means another user's process, so it cannot own this guarded run.
++      try { kill(marker.pid, 0); return null; } catch { return restore(configFile); }
++    }
+     const child = marker.childPid;
+-    if (Number.isInteger(child) && child > 0 && child === process.pid) {
+-      process.stderr.write('[tools/concurrency-guard.mjs] orphaned guarded command: exiting without running\n');
+-      process.exit(0);
++    if (!Number.isInteger(child) || child <= 0 || !matchesChild(marker, procIdentity) || !isAlive(child)) return restore(configFile);
++    // alive() treats EPERM as alive, but another user's process is not ours.
++    try { kill(child, 0); } catch { return restore(configFile); }
++    if (child === process.pid) {
++      process.stderr.write('[tools/concurrency-guard.mjs] this process is the orphaned command of a dead guarded run; the command was NOT run. machineConcurrency is still raised and will be restored by the watcher or the next command.\n');
++      return exit(143);
+     }
+-    if (Number.isInteger(child) && child > 0 && alive(child)) {
+-      termChildOnce(child);
+-      return { restored: false, reason: 'orphaned command still running' };
++    // Send once only, even after 30 seconds: the watcher owns escalation and restore.
++    if (marker.termSentAt === undefined) {
++      try { kill(child, 'SIGTERM'); } catch (error) {
++        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
++        throw error;
++      }
++      writeJsonAtomic(markerPath(configFile), { ...marker, termSentAt: now() });
+     }
+-    return restore(configFile);
++    return { restored: false, reason: 'orphaned command still running' };
+   } catch { return null; }
+ }
+ 
+@@ -110,12 +139,18 @@ function watch(pid, configFile) {
+ }
+ 
+ /** Records the command's pid in the marker, so a watcher that outlives a crashed wrapper can stop it. */
+-function noteChild(configFile, pid, childPid) {
+-  try { const marker = readJson(markerPath(configFile)); if (marker?.pid === pid) writeJsonAtomic(markerPath(configFile), { ...marker, childPid }); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
++function noteChild(configFile, pid, childPid, procIdentity = defaultProcIdentity) {
++  try {
++    const marker = readJson(markerPath(configFile));
++    if (marker?.pid === pid) {
++      const identity = procIdentity(childPid);
++      writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childProcStart: identity?.start ?? null, childCommand: identity?.command ?? null });
++    }
++  } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
+ }
+ 
+ /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
+-export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now }) {
++export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart) }) {
+   // The signal handlers go in BEFORE the value changes: a Ctrl-C in the moment between writing the value and starting the command must still reach the restore below
+   // (without a handler the wrapper would die on the spot and leave the value to the watcher a few hundred milliseconds later).
+   let child = null;
+@@ -141,7 +176,7 @@ export async function runGuarded({ value, args, env = process.env, configFile =
+   else {
+     child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+     child.on('exit', () => { childExited = true; });
+-    noteChild(configFile, process.pid, child.pid);
++    noteChild(configFile, process.pid, child.pid, procIdentity);
+     // A signal that arrived while the command was starting is passed on now.
+     if (pending) { try { child.kill(pending); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] pass pending signal to child:', error?.message ?? error); } }
+     code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
+diff --git a/tools/lane-health.mjs b/tools/lane-health.mjs
+index f6e2b7e6..4ebd736e 100644
+--- a/tools/lane-health.mjs
++++ b/tools/lane-health.mjs
+@@ -191,6 +191,7 @@ export function createLaneHealthMonitor({
+   const stateFile = laneHealthStatePath(home, env);
+ 
+   let persistChain = Promise.resolve();
++  const persistErrorCodes = new Set();
+   const pendingEvents = new Set();
+   const pendingTicks = new Set();
+   let stopped = false;
+@@ -201,7 +202,12 @@ export function createLaneHealthMonitor({
+       await writeAtomicJson(stateFile, state, fsImpl);
+     });
+     // A failed write must not prevent later writes from running.
+-    persistChain = write.catch(() => {});
++    persistChain = write.catch(error => {
++      const code = error?.code ?? 'UNKNOWN';
++      if (code === 'ENOENT' || persistErrorCodes.has(code)) return;
++      persistErrorCodes.add(code);
++      console.error('[tools/lane-health.mjs] state persist failed');
++    });
+     return write;
+   }
+ 
+diff --git a/tools/stress-tests.mjs b/tools/stress-tests.mjs
+index a0eb3cbc..af6ca4ce 100644
+--- a/tools/stress-tests.mjs
++++ b/tools/stress-tests.mjs
+@@ -37,10 +37,10 @@ for (let i = 1; i <= rounds; i++) {
+       `--test-concurrency=${concurrency}`,
+       ...TEST_FILES,
+     ],
+-    { cwd: repoRoot, encoding: 'utf8', env: process.env },
++    { cwd: repoRoot, encoding: 'utf8', env: process.env, maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60 * 1000, killSignal: 'SIGKILL' },
+   );
+   const ms = Date.now() - start;
+-  const ok = result.status === 0;
++  const ok = !result.error && result.status === 0;
+   console.log(`stress round ${i}/${rounds} (concurrency ${concurrency}): ${ok ? 'pass' : 'fail'} (${ms} ms)`);
+   if (!ok) {
+     if (result.stdout) {

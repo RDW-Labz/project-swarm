@@ -1,28 +1,28 @@
 {
- "version": 1,
- "concurrency": 1,
- "jobs": [
-  {
-   "id": "reviewtrain3delta",
-   "agent": "claude",
-   "model": "opus",
-   "tier": "expensive",
-   "tierReason": "owner rule: Opus delta review of the train 3 process-kill blocker fix",
-   "prompt": "Delta review of release train 3 of Project Swarm (process-kill path). Your earlier review (coordination/review/train3-review.json in context) failed with ONE blocker: tools/concurrency-guard.mjs restoreIfStale acted on marker.childPid even for markers from before boot, so after a reboot a swarm command could SIGTERM an unrelated process, wedge the marker (EPERM), or exit a normal command with code 0. coordination/review/train3-delta.diff is the diff from that review's head 362139a5 to the new head. Changes: restoreIfStale restores a pre-boot marker directly; it acts on childPid (self-exit or a single SIGTERM) only when the child's recorded process start time (childProcStart, written by noteChild using ps lstart as busy-marker.mjs does) matches the live pid's start time; an unknown start time, a mismatch, a dead child or an EPERM-only 'alive' child means restore; SIGTERM is sent at most once per marker (termSentAt), and escalation is left to the watcher. Also folded in: tools/stress-tests.mjs 64 MB maxBuffer plus a timeout with SIGKILL; tools/lane-health.mjs logs non-ENOENT persist failures once per code. Tests were added to tests/concurrency-guard.test.mjs.\nPass bar (owner): confirm the blocker is CLOSED for each of your three failure cases (an innocent process killed, a wedged marker, a normal command exited with 0), with line evidence and test names. Find NEW blockers introduced by this delta: a crash or hang on a normal swarm command path (restoreIfStale runs at the start of every swarm command), a regression of the in-boot orphan handling you confirmed earlier, the value never restored, or a kill of a process that isn't ours. Everything else is a follow-up.\nWrite ONLY coordination/review/train3-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round1\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if the round-1 blocker is open or blockers is non-empty.",
-   "context": [
-    "coordination/review/train3-delta.diff",
-    "coordination/review/train3-review.json",
-    "tools/concurrency-guard.mjs",
-    "tests/concurrency-guard.test.mjs",
-    "tools/busy-marker.mjs",
-    "tools/stress-tests.mjs",
-    "tools/lane-health.mjs"
-   ],
-   "outputs": [
-    "coordination/review/train3-delta-review.json"
-   ],
-   "resultFile": "coordination/review/train3-delta-review.json",
-   "timeoutMs": 2400000
-  }
- ]
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain3delta",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: Opus delta review of the train 3 process-kill blocker fix",
+      "prompt": "Delta review of release train 3 of Project Swarm (process-kill path). Round 1 (your review, coordination/review/train3-review.json in context) failed on tools/concurrency-guard.mjs restoreIfStale: it acted on marker.childPid even for markers written before boot, so after a reboot a swarm command could SIGTERM an unrelated process, wedge the marker on EPERM, or exit a normal command with code 0 without running it. coordination/review/train3-delta.diff is the diff from the reviewed head 362139a5 to the new head; the full current files are also in context.\n\nWhat changed in this delta:\n- Pre-boot markers: restoreIfStale restores directly and never probes, signals, or exits for a marker whose `at` predates the current boot.\n- Same-boot identity: noteChild now records BOTH the child's process start time (ps -o lstart=) and its command line (ps -o command=). restoreIfStale acts on childPid only when both recorded values are non-empty and exactly match the live pid's current values; a missing, unreadable or mismatched start time OR command line means 'not ours' and restores, clears the marker, and signals nothing.\n- No silent success: a genuine self-orphan (the recorded child, wrapper dead, identity matches) now writes a clear stderr error that the command was NOT run and exits 143 instead of 0; the marker stays for the watcher or the next command. A safe stale marker restores and the command runs.\n- EPERM: an owner or child that is alive only by EPERM is another user's process, not ours: restore and clear the marker, never wedge.\n- Kept: SIGTERM at most once per marker (termSentAt), watcher still SIGTERMs, waits, SIGKILLs, then restores; in-boot orphan handling confirmed in round 1.\n- Also folded: tools/stress-tests.mjs maxBuffer + timeout; tools/lane-health.mjs logs non-ENOENT persist failures once per code. Tests: 42 in tests/concurrency-guard.test.mjs, including pre-boot reused pid (no kill/exit), EPERM owner and child, start-time and command-line mismatches, blank/unreadable identity, self-orphan exits 143 with the marker left, safe stale marker runs, and the real ps identity probe.\n\nPass bar (owner): confirm the round-1 blocker is CLOSED for each failure case (an innocent process killed; a wedged marker; a normal command exited 0 without running), with line evidence and test names. Find NEW blockers introduced by this delta: a crash or hang on the normal every-command path (restoreIfStale runs at the start of every swarm command), a regression of the in-boot orphan handling, the value never restored, a kill of a process that is not ours, or any success exit that hides a guard failure. Everything else is a follow-up.\n\nWrite ONLY coordination/review/train3-delta-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round1\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if a round-1 blocker is open or blockers is non-empty.",
+      "context": [
+        "coordination/review/train3-delta.diff",
+        "coordination/review/train3-review.json",
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/busy-marker.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs"
+      ],
+      "outputs": [
+        "coordination/review/train3-delta-review.json"
+      ],
+      "resultFile": "coordination/review/train3-delta-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
 }

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t3cgidentity",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\n\nTrain 3 Opus review blocker, second delta on tools/concurrency-guard.mjs restoreIfStale (~line 61). The pre-boot and start-time parts are already fixed in your worktree; two owner requirements are still open and must be closed. Tests FIRST: add the failing tests, run them, confirm they fail for the stated reason, then fix.\n\nOPEN REQUIREMENT 1 (identity must include the command line): the review says 'for same-boot markers, check that the process start time AND command line match before any kill'. Today noteChild records only childProcStart and matchesChild compares only the start time. Extend the identity probe to return both the start time (ps -o lstart= -p PID) and the command line (ps -o command= -p PID), normalized the same way. Record BOTH in the marker in noteChild (childProcStart and childCommand). In restoreIfStale, act on marker.childPid (self-exit or SIGTERM) ONLY when both recorded values are non-empty and exactly match the live pid's current start time and command line. A missing, unreadable or mismatched start time OR command line means 'not ours': restore the value, clear the marker, never signal or exit. Keep the existing injectable seams; add a procIdentity seam if needed with production defaults. Tests: start matches but command line differs -> restores, kills nothing, no exit; command line matches but start differs -> restores (keep existing); both match -> the orphan path applies.\n\nOPEN REQUIREMENT 2 (never exit 0 without running): the self-orphan branch currently does `return exit(0)`. Change it to fail clearly: write a clear stderr error naming the guard problem (this process is the orphaned command of a dead guarded run, the command was NOT run, machineConcurrency is still raised and will be restored by the watcher or the next command) and exit NON-ZERO (143). Leave the marker in place. Update the existing test 'restoreIfStale: a stale marker naming this process as childPid exits before running and leaves the marker' to assert status 143 (or at least non-zero), the clear message, no 'ran command' output, the value still raised, and the marker still present. Add a positive test: a safe stale marker returns { restored: true } and the command then runs (no exit call).\n\nOPEN REQUIREMENT 3 (EPERM must not wedge): an alive() that is true only because of EPERM is another user's process, not ours. For marker.pid, do not treat EPERM as a live owner: treat the marker as stale, restore the value and clear it. For marker.childPid, the existing probe kill(child, 0) that throws EPERM already restores; keep it. Add a test for a marker whose marker.pid is EPERM-only (inject an isAlive that reports true but a kill/owner probe that throws EPERM) asserting restore + marker cleared + no exit.\n\nKeep the already-approved behavior: a pre-boot marker restores directly with no probe/signal/exit; a SIGTERM is sent at most once (termSentAt) and never repeated; the watcher still SIGTERMs, waits, SIGKILLs, then restores; in-boot orphan handling stays as confirmed. Do not touch any other file, no skips, no retries.\n\nVerify: (1) node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs -> all pass; (2) STRESS_ROUNDS=2 STRESS_CONCURRENCY=8 npm run test:stress -> both rounds pass. Report the tests you added, the before/after failure reason, and the exact counts.",
+      "context": [
+        "tools/busy-marker.mjs",
+        "tools/stress-tests.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused concurrency-guard file plus test:stress run here, full suite runs before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3cgidentity",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs"
+      ]
+    }
+  ]
+}
