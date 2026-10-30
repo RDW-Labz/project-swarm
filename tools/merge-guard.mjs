@@ -9,7 +9,65 @@ import os from 'node:os';
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+const PR_FIELDS =
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
+const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
+const ANY_HEADING_RE = /^##\s/;
+const HEX_TOKEN_RE = /\b[0-9a-f]{7,40}\b/gi;
+const FAIL_WORD_RE = /\b(?:fail(?:ed)?|blocker(?:s)?)\b/i;
+const PASS_WORD_RE = /\bpass(?:ed)?\b/i;
+
+export function releaseReviewGate({ title, body, headRefOid }) {
+  const t = String(title ?? '');
+  if (!RELEASE_TITLE_RE.test(t)) {
+    return { required: false, ok: true };
+  }
+  const head = String(headRefOid ?? '');
+  if (!/^[0-9a-f]{7,}$/i.test(head)) {
+    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
+  }
+  const headLower = head.toLowerCase();
+  const sha8 = headLower.slice(0, 8);
+
+  const reviewLines = [];
+  let inReviews = false;
+  for (const line of String(body ?? '').split('\n')) {
+    if (REVIEWS_HEADING_RE.test(line)) {
+      inReviews = true;
+      continue;
+    }
+    if (inReviews && ANY_HEADING_RE.test(line)) break;
+    if (inReviews) reviewLines.push(line);
+  }
+
+  function lineNamesHead(line) {
+    const tokens = line.match(HEX_TOKEN_RE) ?? [];
+    for (const tok of tokens) {
+      if (headLower.startsWith(tok.toLowerCase())) return true;
+    }
+    return false;
+  }
+
+  function verdictOf(line) {
+    if (FAIL_WORD_RE.test(line)) return 'fail';
+    if (PASS_WORD_RE.test(line)) return 'pass';
+    return 'pending';
+  }
+
+  let lastVerdict = null;
+  for (const line of reviewLines) {
+    if (lineNamesHead(line)) lastVerdict = verdictOf(line);
+  }
+
+  if (lastVerdict === null) {
+    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+  }
+  if (lastVerdict === 'pass') {
+    return { required: true, ok: true };
+  }
+  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
+}
 
 async function realExec(command, args, { cwd } = {}) {
   try {
@@ -274,6 +332,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
 
   const reasons = [...verdict.reasons];
   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
+  const reviewGate = releaseReviewGate({
+    title: view.title,
+    body: view.body,
+    headRefOid: view.headRefOid,
+  });
+  if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
   const checks = {
     failing: rollup.failing,
     pending: [...rollup.pending, ...missing],

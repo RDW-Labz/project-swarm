@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkRollup, assertMergeable, parsePrArgument, runMerge } from '../tools/merge-guard.mjs';
+import {
+  checkRollup,
+  assertMergeable,
+  parsePrArgument,
+  releaseReviewGate,
+  runMerge,
+} from '../tools/merge-guard.mjs';
 
 const T1 = '2024-01-01T00:00:00Z';
 const T2 = '2024-01-02T00:00:00Z';
@@ -68,15 +74,27 @@ function prListKey(baseBranch) {
   return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
 }
 
-const PR_VIEW_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+const PR_VIEW_FIELDS =
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
 
 const KEY = {
   repo: 'gh repo view --json defaultBranchRef,nameWithOwner',
-  view: `gh pr view 123 --json ${PR_VIEW_FIELDS}`,
   after: 'gh pr view 123 --json state',
-  merge: 'gh pr merge 123 --squash --delete-branch --match-head-commit abc123',
-  mergeKeepLocal: 'gh pr merge 123 --squash --match-head-commit abc123',
 };
+
+function prViewKey(fields = PR_VIEW_FIELDS) {
+  return `gh pr view 123 --json ${fields}`;
+}
+
+function mergeKey(headOid, deleteBranch = true) {
+  const parts = ['gh', 'pr', 'merge', '123', '--squash'];
+  if (deleteBranch) parts.push('--delete-branch');
+  parts.push('--match-head-commit', headOid);
+  return parts.join(' ');
+}
+
+const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
+const HEAD_PREFIX7 = HEAD_SHA.slice(0, 7);
 
 function prView(over = {}) {
   return {
@@ -87,18 +105,24 @@ function prView(over = {}) {
     headRefOid: 'abc123',
     statusCheckRollup: GREEN,
     isCrossRepository: false,
+    title: 'Fix the widget',
+    body: '',
     ...over,
   };
 }
 
 function routes(o = {}, root = '/repo') {
   const headBranch = o.view?.headRefName ?? 'feat';
+  const headOid = o.view?.headRefOid ?? 'abc123';
   const deleteKey = remoteDeleteKey(headBranch);
+  const viewKey = prViewKey();
+  const mergeRoute = mergeKey(headOid, true);
+  const mergeKeepLocalRoute = mergeKey(headOid, false);
   const base = {
     [KEY.repo]: json({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }),
-    [KEY.view]: o.rawView ?? json(prView(o.view)),
+    [viewKey]: o.rawView ?? json(prView(o.view)),
     [prListKey(headBranch)]: json(o.list ?? []),
-    [KEY.merge]: o.merge ?? ok(''),
+    [mergeRoute]: o.merge ?? ok(''),
     [KEY.after]: json(o.after ?? { state: 'MERGED' }),
     [PROTECTION]: o.protection ?? fail('404 Not Found'),
     [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
@@ -111,8 +135,8 @@ function routes(o = {}, root = '/repo') {
     'git pull --ff-only origin main': ok(''),
   };
   if (o.keepLocalHeadBranch) {
-    base[KEY.mergeKeepLocal] = o.merge ?? ok('');
-    delete base[KEY.merge];
+    base[mergeKeepLocalRoute] = o.merge ?? ok('');
+    delete base[mergeRoute];
   }
   return base;
 }
@@ -596,4 +620,182 @@ test('runMerge: remote delete encodes each ref segment separately', async () => 
   const deletes = calls.filter((c) => c.command === 'gh' && c.args[0] === 'api' && c.args[2] === 'DELETE');
   assert.equal(deletes.length, 1);
   assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
+});
+
+function reviewsBody(lines) {
+  return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
+}
+
+// releaseReviewGate
+
+test('releaseReviewGate: non-release title is not required', () => {
+  const r = releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
+  assert.equal(r.required, false);
+  assert.equal(r.ok, true);
+});
+
+test('releaseReviewGate: semver titles require review section', () => {
+  for (const title of ['1.167.26: ship', 'v1.168.0 - ship']) {
+    const r = releaseReviewGate({ title, body: '', headRefOid: HEAD_SHA });
+    assert.equal(r.required, true);
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /^review-verdict-missing-for-head: abcdef12$/);
+  }
+});
+
+// runMerge release-review gate
+
+test('runMerge: release PR merges when Reviews PASS names full head sha', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.167.26: release',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- Opus review: PASS for ${HEAD_SHA}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  const merges = mergeCalls(calls);
+  assert.equal(merges.length, 1);
+  assert.ok(merges[0].args.includes('--match-head-commit'));
+  assert.equal(merges[0].args[merges[0].args.indexOf('--match-head-commit') + 1], HEAD_SHA);
+});
+
+test('runMerge: release PR merges with 7-char head prefix PASS', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- review PASS ${HEAD_PREFIX7}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(mergeCalls(calls).length, 1);
+});
+
+test('runMerge: release PR merges when PASS uses uppercase SHA', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- PASS for ${HEAD_SHA.toUpperCase()}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(mergeCalls(calls).length, 1);
+});
+
+test('runMerge: release PR refuses PASS for different commit', async () => {
+  const other = '0000000000000000000000000000000000000001';
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- PASS for ${other}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses FAIL for head', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- review FAIL ${HEAD_SHA}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses blockers open for head', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([`- blockers open at ${HEAD_SHA}`]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses with no Reviews section', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: '## Summary\n\nno reviews here\n',
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR ignores PASS only in Checks section', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: `## Checks\n\n- PASS for ${HEAD_SHA}\n`,
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR last matching verdict wins (FAIL then delta PASS)', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: '1.0.0: x',
+      headRefOid: HEAD_SHA,
+      body: reviewsBody([
+        `- FAIL ${HEAD_SHA}`,
+        `- delta PASS ${HEAD_SHA}`,
+      ]),
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(mergeCalls(calls).length, 1);
+});
+
+test('runMerge: non-release title merges without Reviews section', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: {
+      title: 'Fix the widget',
+      headRefOid: HEAD_SHA,
+      body: '',
+    },
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(mergeCalls(calls).length, 1);
+});
+
+test('runMerge: release PR refuses when headRefOid missing', async () => {
+  const view = prView({
+    title: '1.0.0: x',
+    body: reviewsBody([`- PASS ${HEAD_SHA}`]),
+  });
+  delete view.headRefOid;
+  const { exec, calls } = makeExec(routes({ rawView: json(view) }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes('review-verdict-missing-for-head: no-head'));
+  assert.equal(mergeCalls(calls).length, 0);
 });
