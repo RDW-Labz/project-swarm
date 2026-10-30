@@ -22,7 +22,6 @@ function hiveSnapshot() {
       projectsTotal: { label: 'Projects', value: 4, unit: 'count', source: 'projects.length', explanation: 'x' },
       agentsLive: { label: 'Agents live', value: 3, unit: 'count', source: 'machine.agents.total', explanation: 'x' },
       needsYouCount: { label: 'Needs you', value: 2, unit: 'count', source: 'projects[].card.blocked.needYou', explanation: 'x' },
-      spendUsd: { label: 'Spend', value: 42.5, unit: 'usd', source: 'machine.cost.allUsd', explanation: 'x' },
     },
     projects: [
       { id: 'hive-alpha', name: 'Alpha', needsYou: { value: 2, source: 'a' }, liveAgents: { value: 0, source: 'a' }, ticketCounts: counts({ total: 10, done: 4, ready: 2, blocked: 1, review: 1, cancelled: 2, remaining: 4 }) },
@@ -150,7 +149,6 @@ test('deriveHiveView reads counters and totals from labelled stats and the ledge
   assert.equal(view.projectsTotal, 4);
   assert.equal(view.agents, 3, 'agents from stats.agentsLive');
   assert.equal(view.needs, 2, 'need you from stats.needsYouCount');
-  assert.equal(view.spend, 42.5);
   assert.equal(view.doneLast24h, 11);
   assert.deepEqual(
     { tickets: view.totals.tickets, done: view.totals.done, ready: view.totals.ready, blocked: view.totals.blocked, review: view.totals.review, remaining: view.totals.remaining, counted: view.totals.counted },
@@ -209,7 +207,6 @@ test('renderHiveDashboard draws the session log, bars, project and lane rows, kv
   assert.match(text, /tickets left to do12/);
   assert.match(text, /open pull requests2/);
   assert.match(text, /worker jobs in 24 h40/);
-  assert.match(text, /spend recorded\$42\.5/);
   assert.match(text, /held for you2/);
   assert.match(text, /done in 24 h11/);
   assert.match(text, /ready to start5/);

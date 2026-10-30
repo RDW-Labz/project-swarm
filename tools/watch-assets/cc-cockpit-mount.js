@@ -215,7 +215,7 @@ export function renderProjectCockpit(host, project, deps) {
   ccTab.href = '/command-center';
   ccTab.setAttribute('aria-current', 'page');
   const classicTab = el(doc, 'a', null, 'Classic');
-  classicTab.href = '/';
+  classicTab.href = '/classic';
   tabs.appendChild(ccTab);
   tabs.appendChild(classicTab);
   more.appendChild(moreSum);

@@ -44,9 +44,6 @@ function buildProjectCard(p, index) {
   if (live) card.liveAgents = live;
   const need = field('Needs you', p.card?.blocked?.needYou, 'count', `${prefix}.card.blocked.needYou`, 'Inbox items waiting for the owner on this project.');
   if (need) card.needsYou = need;
-  const spendUsd = num(p.spend?.usd ?? p.cost?.allUsd);
-  const spend = field('Spend', spendUsd, 'usd', `${prefix}.spend.usd`, 'Total spend recorded for this project on the board.');
-  if (spend) card.spendUsd = spend;
   const overall = p.progress?.overall;
   if (typeof overall === 'number' && Number.isFinite(overall)) {
     card.percentDone = textField('Done', `${Math.round(overall)}%`, `${prefix}.progress.overall`, 'Overall build progress percent from the project ledger.');
@@ -194,8 +191,6 @@ export function buildCommandCenterSnapshot(board, options = {}) {
   const needTotal = needsYouTotal(board?.projects ?? []);
   const ny = field('Needs you', needTotal, 'count', 'projects[].card.blocked.needYou', 'Owner inbox items summed across projects.');
   if (ny) stats.needsYouCount = ny;
-  const spend = field('Spend', board?.machine?.cost?.allUsd, 'usd', 'machine.cost.allUsd', 'Total machine spend from project run history.');
-  if (spend) stats.spendUsd = spend;
   const cards = [];
   for (let i = 0; i < (board?.projects ?? []).length; i += 1) {
     const p = board.projects[i];

@@ -10,6 +10,22 @@ import { fileURLToPath } from 'node:url';
 import { createWatchServer } from '../tools/watch-server.mjs';
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
+const cockpitMountPath = fileURLToPath(new URL('../tools/watch-assets/cc-cockpit-mount.js', import.meta.url));
+
+const MONEY_KEY = /usd|Usd|USD|cost|Cost|spend|Spend/;
+const DOLLAR_IN_TEXT = /\$\s?\d/;
+
+function assertSnapshotNoMoney(value, at = '$') {
+  if (Array.isArray(value)) return value.forEach((item, i) => assertSnapshotNoMoney(item, `${at}[${i}]`));
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string') assert.doesNotMatch(value, DOLLAR_IN_TEXT, at);
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    assert.doesNotMatch(key, MONEY_KEY, `${at}.${key}`);
+    assertSnapshotNoMoney(child, `${at}.${key}`);
+  }
+}
 
 const BOARD_MARK = '<!doctype html><title>classic-board</title>';
 const CC_HTML = `<!doctype html><title>command-center</title>
@@ -209,6 +225,12 @@ test('command center HTML and JSON when the flag is on', async () => {
     });
     assert.equal(cockpit.status, 200);
     assert.equal(JSON.parse(cockpit.body).id, 'abc');
+
+    assertSnapshotNoMoney(body, '/api/command-center');
+    assertSnapshotNoMoney(JSON.parse(cockpit.body), '/api/command-center/project');
+
+    const mountSource = await fs.readFile(cockpitMountPath, 'utf8');
+    assert.match(mountSource, /classicTab\.href\s*=\s*['"]\/classic['"]/, 'Cockpit Classic tab points at /classic');
 
     const missing = await request({
       port: on.port,

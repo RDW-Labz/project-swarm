@@ -584,15 +584,6 @@
         max: Math.max(hiveExtra.doneLast24h, 1),
         fillGradient: 'linear-gradient(90deg,#a78bfa,#c4b5fd)',
       });
-    } else if (stats.spendUsd && typeof stats.spendUsd.source === 'string' && stats.spendUsd.source.length) {
-      savingsRows.push({
-        label: 'spend tracked',
-        displayValue: 'hidden',
-        value: 1,
-        max: 1,
-        title: stats.spendUsd.source,
-        fillGradient: 'linear-gradient(90deg,#64748b,#94a3b8)',
-      });
     }
 
     return {
@@ -1041,7 +1032,6 @@
       agents: agents,
       needs: needs,
       projectsTotal: fieldNumber(stats.projectsTotal) !== null ? fieldNumber(stats.projectsTotal) : projects.length,
-      spend: fieldNumber(stats.spendUsd),
       doneLast24h: nonNeg(hive.doneLast24h),
       throughput: Array.isArray(hive.throughput24h) && hive.throughput24h.length ? hive.throughput24h : null,
       lanes: lanes,
@@ -1374,8 +1364,6 @@
     var ledFoot = el('div', 'hive-push hive-kvs');
     ledFoot.appendChild(kvRow('done in 24 h', numOrNull(view.doneLast24h)));
     ledFoot.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));
-    var spendShown = view.spend === null ? null : (String.fromCharCode(36) + String(view.spend));
-    ledFoot.appendChild(kvRow('spend recorded', spendShown, null, 'stats.spendUsd'));
     ledFoot.appendChild(kvRow('saved by the swarm', 'not measured yet'));
     led.appendChild(ledFoot);
 
