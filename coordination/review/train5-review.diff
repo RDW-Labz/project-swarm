@@ -1151,10 +1151,10 @@ index d74df424..b4918333 100644
    if (result.timedOut) {
      console.log(`stress round ${i}/${rounds}: FAIL (timed out after ${ms}ms)`);
 diff --git a/tools/swarm.mjs b/tools/swarm.mjs
-index a97e78c1..c4231773 100644
+index a97e78c1..442096c1 100644
 --- a/tools/swarm.mjs
 +++ b/tools/swarm.mjs
-@@ -254,6 +254,32 @@ export function inSourceTestHits(writes) {
+@@ -254,6 +254,47 @@ export function inSourceTestHits(writes) {
  
  
  
@@ -1169,7 +1169,22 @@ index a97e78c1..c4231773 100644
 +  const recordFile = `.swarm/runs/${state.id}/review-record.json`;
 +  const temporary = `${recordFile}.${crypto.randomUUID()}.tmp`;
 +  try {
-+    const bytes = await fs.readFile(path.join(workspaceRoot, resultFile));
++    const resultPath = path.join(workspaceRoot, resultFile);
++    let bytes = await fs.readFile(resultPath);
++    try {
++      const parsed = JSON.parse(bytes.toString('utf8'));
++      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
++        parsed.head = state.baseCommit;
++        const stamped = `${JSON.stringify(parsed)}\n`;
++        const resultTemporary = `${resultPath}.${crypto.randomUUID()}.tmp`;
++        await fs.writeFile(resultTemporary, stamped, { flag: 'wx', mode: 0o600 });
++        await fs.chmod(resultTemporary, 0o600);
++        await fs.rename(resultTemporary, resultPath);
++        bytes = Buffer.from(stamped);
++      }
++    } catch (error) {
++      if (!(error instanceof SyntaxError)) throw error;
++    }
 +    const resultHash = crypto.createHash('sha256').update(bytes).digest('hex');
 +    await jsonWrite(root, temporary, {
 +      version: 1, runId: state.id, jobId: job.id, agent: job.agent,
@@ -1187,7 +1202,7 @@ index a97e78c1..c4231773 100644
  
  // Human jobs never reach the worker pipeline: the run keeps every job that does not depend on one, and the
  // rest waits in .swarm/project/human-jobs.json until the owner has done them (see tools/human-jobs.mjs).
-@@ -1280,6 +1306,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+@@ -1280,6 +1321,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
            record.durationMs = now() - Date.parse(record.startedAt);
          }
          if (result?.hostDead && !signal.aborted) retry = true;
