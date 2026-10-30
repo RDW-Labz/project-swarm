@@ -93,6 +93,18 @@ function positionTourCard(doc, card) {
   }
 }
 
+// A step target inside a closed <details> (the Hive "···" views menu) is shown by opening it; returns what it opened.
+function openCollapsedParents(el) {
+  const opened = [];
+  for (let n = el && el.parentNode; n && n.tagName; n = n.parentNode) {
+    if (n.tagName === 'DETAILS' && !n.open) {
+      n.open = true;
+      opened.push(n);
+    }
+  }
+  return opened;
+}
+
 // Starts the tour. Replay ignores completion but never clears it for any user.
 export function startTour(opts) {
   const { doc, storage, userId, replay = false, onClose } = opts;
@@ -130,6 +142,12 @@ export function startTour(opts) {
   const focusables = [back, next, skip];
   let index = 0;
   let highlighted = null;
+  let revealed = [];
+
+  function unreveal() {
+    for (const d of revealed) d.open = false;
+    revealed = [];
+  }
 
   function show(i) {
     index = i;
@@ -137,9 +155,11 @@ export function startTour(opts) {
       highlighted.classList.remove('cc-tour-highlight');
       highlighted = null;
     }
+    unreveal();
     const step = steps[i];
     const el = doc.querySelector(step.selector);
     if (el) {
+      revealed = openCollapsedParents(el);
       el.classList.add('cc-tour-highlight');
       highlighted = el;
     }
@@ -157,6 +177,7 @@ export function startTour(opts) {
     if (closed) return;
     closed = true;
     if (highlighted) highlighted.classList.remove('cc-tour-highlight');
+    unreveal();
     const shell = doc.querySelector?.('.hive-shell');
     if (shell?.classList) shell.classList.remove('hive-tour-sheet-open');
     overlay.remove();

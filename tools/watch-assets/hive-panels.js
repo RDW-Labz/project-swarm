@@ -1131,6 +1131,68 @@
     }
   }
 
+  var STATUS_BARS = [['done', '#4d7cff', 'done'], ['ready', '#2fe0a0', 'ready to start'], ['review', '#ff4d7e', 'in review'], ['blocked', '#ffb62e', 'waiting on others']];
+
+  /**
+   * Bars when the ledger has no completion times: one bar per project and ticket status, in ring order
+   * (square-root scale so a handful of tickets still shows next to hundreds). Returns how many bars it drew.
+   */
+  function renderStatusBars(host, projects) {
+    clearChildren(host);
+    var list = [];
+    var max = 0;
+    for (var i = 0; i < projects.length; i += 1) {
+      var c = projects[i].counts;
+      if (!c) { continue; }
+      list.push(projects[i]);
+      for (var s = 0; s < STATUS_BARS.length; s += 1) { if (c[STATUS_BARS[s][0]] > max) { max = c[STATUS_BARS[s][0]]; } }
+    }
+    if (!list.length || max <= 0) { return 0; }
+    host.setAttribute('data-mode', 'status');
+    host.setAttribute('role', 'img');
+    host.setAttribute('aria-label', 'Tickets per project by status');
+    var top = Math.sqrt(max);
+    var n = 0;
+    for (var j = 0; j < list.length; j += 1) {
+      for (var k = 0; k < STATUS_BARS.length; k += 1) {
+        var v = list[j].counts[STATUS_BARS[k][0]];
+        var col = STATUS_BARS[k][1];
+        var bar = el('i', 'has-tip');
+        bar.setAttribute('data-tip', list[j].name + ': ' + v + ' ' + STATUS_BARS[k][2]);
+        bar.style.height = (v > 0 ? Math.max(3, (Math.sqrt(v) / top) * 64) : 2) + 'px';
+        bar.style.background = col;
+        bar.style.boxShadow = v > 0 ? '0 0 6px ' + col + '88' : 'none';
+        if (v <= 0) { bar.style.opacity = '0.35'; }
+        host.appendChild(bar);
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  /** "Who" bars without per-lane job counts: live agents per project, else projects per ring colour. */
+  function whoGroups(view) {
+    var projects = view.projects;
+    if (!projects.length) { return null; }
+    var busy = projects.filter(function (p) { return p.agents > 0; });
+    if (busy.length) {
+      busy.sort(function (a, b) { return b.agents - a.agents; });
+      return {
+        title: 'Who is building now',
+        total: busy.reduce(function (a, p) { return a + p.agents; }, 0),
+        rows: busy.map(function (p) { return { label: p.name, value: p.agents, color: p.color }; }),
+        cap: 'live agents per project, from the run folders',
+      };
+    }
+    var order = ['building', 'need', 'blocked', 'done', 'idle', 'off'];
+    var rows = [];
+    for (var i = 0; i < order.length; i += 1) {
+      var n = projects.filter(function (p) { return p.cat === order[i]; }).length;
+      if (n > 0) { rows.push({ label: CAT_TAG[order[i]].toLowerCase(), value: n, color: CAT_COLOR[order[i]] }); }
+    }
+    return { title: 'Projects by state', total: projects.length, rows: rows, cap: 'projects per colour on the ring' };
+  }
+
   function hbar(cols, labelNode, frac, color, valueText, valueColor) {
     var row = el('div', 'hive-hbar');
     row.style.gridTemplateColumns = cols;
@@ -1177,11 +1239,28 @@
     var slog = el('div', 'hive-slog');
     renderSessionLog(slog, view.events, nowMs);
     log.appendChild(slog);
-    log.appendChild(el('div', 'hive-cap hive-cap--cmd', '~/swarm $ swarm tickets --status done --since 24h'));
+    // Command line, bars and caption sit at the foot of the panel so all three columns end on one line.
+    var logFoot = el('div', 'hive-push');
     var bars = el('div', 'hive-bars');
-    renderHourBars(bars, view.throughput);
-    log.appendChild(bars);
-    if (view.throughput) { log.appendChild(el('div', 'hive-cap', 'done per hour, last 24 h, oldest on the left')); }
+    var cmd = el('div', 'hive-cap hive-cap--cmd');
+    cmd.appendChild(el('span', 'p', '~/swarm $ '));
+    logFoot.appendChild(cmd);
+    logFoot.appendChild(bars);
+    if (view.throughput) {
+      cmd.appendChild(el('b', null, 'swarm tickets --status done --since 24h'));
+      renderHourBars(bars, view.throughput);
+      logFoot.appendChild(el('div', 'hive-cap', 'done per hour, last 24 h, oldest on the left'));
+    } else if (renderStatusBars(bars, view.projects) > 0) {
+      cmd.appendChild(el('b', null, 'watch --board'));
+      var capRow = el('div', 'hive-cap hive-cap--row');
+      capRow.appendChild(el('span', null, 'tickets per project · done · ready · review · waiting'));
+      capRow.appendChild(muted('no completion times in the ledger'));
+      logFoot.appendChild(capRow);
+    } else {
+      cmd.appendChild(el('b', null, 'swarm tickets --status done --since 24h'));
+      renderHourBars(bars, null);
+    }
+    log.appendChild(logFoot);
 
     var all = el('section', 'hive-panel');
     all.setAttribute('aria-labelledby', 'hive-h-all');
@@ -1193,18 +1272,33 @@
     all.appendChild(big);
     all.appendChild(el('div', 'hive-hint hive-hint--machines', view.machines.length ? 'read from ' + view.machines.join(', ') : 'machine names not reported'));
     all.appendChild(sectionHeading('Done per project'));
-    var byproj = el('div');
+    // Compact two-column list so the middle column is no taller than the others.
+    var byproj = el('div', 'hive-dpp');
     var withPct = view.projects.filter(function (p) { return p.pct !== null; });
     if (!withPct.length) { byproj.appendChild(muted('no ledger percentages yet')); }
     for (var i = 0; i < withPct.length; i += 1) {
-      byproj.appendChild(hbar('130px 1fr 44px', el('span', null, withPct[i].name), withPct[i].pct / 100, '#4d7cff', withPct[i].pct + '%'));
+      var nm = el('span', null, withPct[i].name);
+      nm.setAttribute('title', withPct[i].name);
+      byproj.appendChild(hbar('minmax(0,1fr) 38px 32px', nm, withPct[i].pct / 100, '#4d7cff', withPct[i].pct + '%'));
     }
     all.appendChild(byproj);
-    var who = sectionHeading('Who built (24 h)', 'hive-h-gap');
+    var groups = view.lanes ? null : whoGroups(view);
+    var who = sectionHeading(view.lanes || !groups ? 'Who built (24 h)' : groups.title, 'hive-h-gap');
     all.appendChild(who);
     var whoBox = el('div', 'hive-who');
-    if (!view.lanes) { whoBox.appendChild(muted('no per-lane job counts in the board data')); }
-    else {
+    if (!view.lanes) {
+      if (groups) {
+        var shown = groups.rows.slice(0, 3);
+        for (var gi = 0; gi < shown.length; gi += 1) {
+          var gl = el('span', 'hive-fg', shown[gi].label);
+          gl.setAttribute('title', shown[gi].label);
+          whoBox.appendChild(hbar('minmax(0,150px) 1fr 40px', gl, shown[gi].value / (groups.total || 1), shown[gi].color, String(shown[gi].value), shown[gi].color));
+        }
+        var more = groups.rows.length - shown.length;
+        whoBox.appendChild(el('div', 'hive-cap', groups.cap + (more > 0 ? ' · +' + more + ' more' : '')));
+      }
+      whoBox.appendChild(muted('no per-lane job counts in the board data'));
+    } else {
       var tot = view.lanes.reduce(function (a, l) { return a + l.jobs24h; }, 0) || 1;
       for (var li = 0; li < view.lanes.length; li += 1) {
         var lane = view.lanes[li];
@@ -1223,12 +1317,12 @@
     all.appendChild(whoBox);
     var t = view.totals;
     var jobs = view.lanes ? view.lanes.reduce(function (a, l) { return a + l.jobs24h; }, 0) : null;
-    all.appendChild(kvRow('tickets in the ledger', numOrNull(t.tickets)));
-    all.appendChild(kvRow('tickets left to do', numOrNull(t.remaining)));
-    all.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));
-    all.appendChild(kvRow('worker jobs in 24 h', jobs));
-    all.appendChild(kvRow('spend recorded', view.spend === null ? null : formatUsd(view.spend), null, 'stats.spendUsd'));
-    all.appendChild(kvRow('held for you', view.needs, 'var(--amber)', 'stats.needsYouCount'));
+    var allFoot = el('div', 'hive-push hive-kvs');
+    allFoot.appendChild(kvRow('tickets in the ledger', numOrNull(t.tickets)));
+    allFoot.appendChild(kvRow('tickets left to do', numOrNull(t.remaining)));
+    allFoot.appendChild(kvRow('worker jobs in 24 h', jobs));
+    allFoot.appendChild(kvRow('held for you', view.needs, 'var(--amber)', 'stats.needsYouCount'));
+    all.appendChild(allFoot);
 
     var led = el('section', 'hive-panel');
     led.setAttribute('aria-labelledby', 'hive-h-led');
@@ -1244,24 +1338,40 @@
       ledBox.appendChild(hbar('130px 1fr 52px', el('span', null, 'in review'), t.review / t.counted, '#ff4d7e', String(t.review), null));
     }
     led.appendChild(ledBox);
-    if (view.throughput) {
+    // Step line: completions per hour when the ledger has times, else done per project in ring order.
+    var series = view.throughput;
+    var stepLabel = 'Completions per hour';
+    var stepCap = 'completions per hour, last 24 h';
+    if (!series && withPct.length >= 2) {
+      series = withPct.map(function (p) { return p.pct; });
+      stepLabel = 'Done per project';
+      stepCap = 'done per project, %, in ring order';
+    }
+    if (series) {
       var svg = svgEl('svg');
       svg.setAttribute('class', 'hive-step');
       svg.setAttribute('viewBox', '0 0 300 70');
       svg.setAttribute('preserveAspectRatio', 'none');
-      svg.setAttribute('aria-label', 'Completions per hour');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', stepLabel);
+      var d = stepPath(series);
       var path = svgEl('path');
-      path.setAttribute('d', stepPath(view.throughput));
+      path.setAttribute('d', d);
       svg.appendChild(path);
+      var scan = svgEl('path');
+      scan.setAttribute('class', 'hive-step-scan');
+      scan.setAttribute('d', d);
+      scan.setAttribute('pathLength', '1000');
+      svg.appendChild(scan);
       led.appendChild(svg);
-      led.appendChild(el('div', 'hive-cap', 'completions per hour, last 24 h'));
+      led.appendChild(el('div', 'hive-cap', stepCap));
     }
-    var kv0 = kvRow('done in 24 h', numOrNull(view.doneLast24h));
-    kv0.className += ' hive-kv--gap';
-    led.appendChild(kv0);
-    led.appendChild(kvRow('ready to start', numOrNull(t.ready)));
-    led.appendChild(kvRow('waiting on others', numOrNull(t.blocked)));
-    led.appendChild(kvRow('saved by the swarm', 'not measured yet'));
+    var ledFoot = el('div', 'hive-push hive-kvs');
+    ledFoot.appendChild(kvRow('done in 24 h', numOrNull(view.doneLast24h)));
+    ledFoot.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));
+    ledFoot.appendChild(kvRow('spend recorded', view.spend === null ? null : formatUsd(view.spend), null, 'stats.spendUsd'));
+    ledFoot.appendChild(kvRow('saved by the swarm', 'not measured yet'));
+    led.appendChild(ledFoot);
 
     root.appendChild(log);
     root.appendChild(all);

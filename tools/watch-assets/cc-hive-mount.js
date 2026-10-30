@@ -13,7 +13,9 @@ const TAU = Math.PI * 2;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const ARC_TEXT = 'EVERY MERGE CHECKED · ONE LEDGER · MANY WORKERS · NOTHING GUESSED ·';
 // Particles per stream by colour category: busier projects spray denser streams.
-const STREAM_DENSITY = { building: 60, need: 50, blocked: 40, done: 34, idle: 30, off: 10 };
+const STREAM_DENSITY = { building: 120, need: 104, blocked: 84, done: 72, idle: 64, off: 24 };
+// Bloomed 3-4 px sparks riding each stream.
+const SPARKS_PER_STREAM = 4;
 const RING_COLORS = ['#ff4d8d', '#c86bff', '#ffd6ec', '#ff3d8b'];
 
 function hexRgb(hex) {
@@ -40,7 +42,7 @@ export function hiveGeometry(cw, ch, n, phone, cardW, cardH) {
   let R;
   if (phone) {
     const edge = Math.min(w, h) / 2;
-    R = Math.max(24, edge * 0.6);
+    R = Math.max(24, edge * 0.62);
     for (let i = 0; i < n; i += 1) {
       const a = -Math.PI / 2 + (i * TAU) / Math.max(1, n);
       nodes.push({ x: cx + Math.cos(a) * edge, y: cy + Math.sin(a) * edge, sx: cx + Math.cos(a) * edge * 0.98, sy: cy + Math.sin(a) * edge * 0.98, a, fan: 20 });
@@ -50,7 +52,8 @@ export function hiveGeometry(cw, ch, n, phone, cardW, cardH) {
     const hh = cardH / 2;
     const ry = Math.max(30, cy - hh - 4);
     const rx = Math.max(40, cx - hw - 6);
-    let lim = ry * 0.62;
+    // As large as the cards allow (about 30% of a 1440 px screen), leaving room for the arc label.
+    let lim = ry * 0.7;
     for (let i = 0; i < n; i += 1) {
       const a = -Math.PI / 2 + (i * TAU) / Math.max(1, n);
       const x = cx + Math.cos(a) * rx;
@@ -63,7 +66,7 @@ export function hiveGeometry(cw, ch, n, phone, cardW, cardH) {
       const ux = (cx - x) / len;
       const uy = (cy - y) / len;
       const t = Math.min(ux ? hw / Math.abs(ux) : Infinity, uy ? hh / Math.abs(uy) : Infinity);
-      nodes.push({ x, y, sx: x + ux * t, sy: y + uy * t, a, fan: Math.min(46, hw * 0.34) });
+      nodes.push({ x, y, sx: x + ux * t, sy: y + uy * t, a, fan: Math.min(58, hw * 0.4) });
     }
     R = Math.max(24, lim);
   }
@@ -109,8 +112,9 @@ function createHiveRenderer(canvas, makeCanvas) {
       const x = c.getContext('2d');
       const g = x.createRadialGradient(16, 16, 0, 16, 16, 16);
       g.addColorStop(0, 'rgba(255,255,255,1)');
-      g.addColorStop(0.18, rgba(col, 1));
-      g.addColorStop(0.45, rgba(col, 0.32));
+      g.addColorStop(0.14, rgba(col, 1));
+      g.addColorStop(0.34, rgba(col, 0.5));
+      g.addColorStop(0.62, rgba(col, 0.14));
       g.addColorStop(1, rgba(col, 0));
       x.fillStyle = g;
       x.fillRect(0, 0, 32, 32);
@@ -152,12 +156,12 @@ function createHiveRenderer(canvas, makeCanvas) {
 
   function newParticle(p, fresh) {
     p.t = fresh ? Math.random() : -Math.random() * 0.25;
-    p.v = 0.32 + Math.random() * 0.5;
+    p.v = (p.big ? 0.42 : 0.32) + Math.random() * 0.5;
     p.s0 = Math.random() * 2 - 1;
     p.ph = Math.random() * TAU;
     p.k = 3 + Math.random() * 5;
-    p.size = 0.6 + Math.random() * 1.1;
-    p.hot = Math.random() < 0.18;
+    p.size = p.big ? 3 + Math.random() : 1 + Math.random() * 1.5;
+    p.hot = !p.big && Math.random() < 0.14;
     return p;
   }
 
@@ -169,7 +173,7 @@ function createHiveRenderer(canvas, makeCanvas) {
       streams = list.map((k) => {
         const n = STREAM_DENSITY[k.cat] || 30;
         const parts = [];
-        for (let i = 0; i < n; i += 1) parts.push(newParticle({}, true));
+        for (let i = 0; i < n; i += 1) parts.push(newParticle({ big: i < SPARKS_PER_STREAM }, true));
         return { col: k.col, cat: k.cat, parts, boost: 0, spark: 0 };
       });
     }
@@ -194,8 +198,8 @@ function createHiveRenderer(canvas, makeCanvas) {
     }
   }
 
-  function streamPos(k, p) {
-    const t = Math.max(0, Math.min(1, p.t));
+  function streamPos(k, p, at) {
+    const t = Math.max(0, Math.min(1, at === undefined ? p.t : at));
     const u = 1 - t;
     const bx = u * u * k.sx + 2 * u * t * k.qx + t * t * k.tx;
     const by = u * u * k.sy + 2 * u * t * k.qy + t * t * k.ty;
@@ -257,55 +261,101 @@ function createHiveRenderer(canvas, makeCanvas) {
       ctx.arc(cx, cy, R * 1.05, 0, TAU);
       ctx.fill();
     }
-    // spokes and the inner tick ring, kept quiet (30%)
+    // radial spokes (~15%) and a dotted tick ring inside the band, turning slowly
     ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(200,140,255,1)';
-    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = 'rgba(210,150,255,1)';
+    ctx.globalAlpha = 0.15;
     ctx.beginPath();
     const rot = time * 0.03;
-    for (let i = 0; i < 36; i += 1) {
-      const a = rot + (i * TAU) / 36;
-      ctx.moveTo(cx + Math.cos(a) * coreR * 1.1, cy + Math.sin(a) * coreR * 1.1);
+    for (let i = 0; i < 48; i += 1) {
+      const a = rot + (i * TAU) / 48;
+      ctx.moveTo(cx + Math.cos(a) * coreR * 1.08, cy + Math.sin(a) * coreR * 1.08);
       ctx.lineTo(cx + Math.cos(a) * R * 0.8, cy + Math.sin(a) * R * 0.8);
     }
     ctx.stroke();
-    ctx.globalAlpha = 0.3;
+    ctx.globalAlpha = 0.34;
     if (typeof ctx.setLineDash === 'function') ctx.setLineDash([1.5, 5]);
     ctx.beginPath();
-    ctx.arc(cx, cy, R * 0.86, 0, TAU);
+    ctx.arc(cx, cy, R * 0.74, 0, TAU);
     ctx.stroke();
-    ctx.globalAlpha = 0.22;
+    // dashed orbit outside the arc label, turning the other way
+    ctx.globalAlpha = 0.3;
     ctx.strokeStyle = 'rgba(255,77,141,1)';
     ctx.setLineDash?.([10, 9]);
     ctx.beginPath();
-    ctx.arc(cx, cy, R + 13, rot * -2, rot * -2 + TAU);
+    ctx.arc(cx, cy, R + 34, rot * -2, rot * -2 + TAU);
     ctx.stroke();
     ctx.setLineDash?.([]);
 
     ctx.globalCompositeOperation = 'lighter';
-    // streams: faint filaments, then the particle spray, then a bloom where each stream meets the ring
+    // streams: glowing filaments, comet trails, bloomed heads, a few big sparks, then a bloom where each meets the ring
     streams.forEach((s, i) => {
       const k = g.nodes[i];
       if (!k) return;
       ctx.strokeStyle = s.col;
-      ctx.lineWidth = 0.8;
-      for (let j = 0; j < 6; j += 1) {
-        const f = -1 + j * 0.4;
-        const wob = Math.sin(time * 0.9 + j + i) * 5;
-        ctx.globalAlpha = 0.13 + s.boost * 0.15;
+      ctx.lineWidth = 0.7;
+      for (let j = 0; j < 9; j += 1) {
+        const f = -1 + j * 0.25;
+        const wob = Math.sin(time * 0.9 + j + i) * 6;
+        ctx.globalAlpha = 0.16 + s.boost * 0.15;
         ctx.beginPath();
         ctx.moveTo(k.sx + k.nx * f * k.fan, k.sy + k.ny * f * k.fan);
         ctx.quadraticCurveTo(k.qx + k.nx * (f * k.fan * 0.55 + wob), k.qy + k.ny * (f * k.fan * 0.55 + wob), k.tx, k.ty);
         ctx.stroke();
       }
+      const alive = [];
       for (const p of s.parts) {
         if (p.t <= 0) continue;
-        const [x, y] = streamPos(k, p);
         const fade = Math.min(1, p.t * 5) * (p.t > 0.86 ? (1 - p.t) / 0.14 : 1);
-        glow(p.hot ? '#ffffff' : s.col, x, y, p.size * (p.hot ? 0.8 : 1), fade * (0.85 + s.boost * 0.3));
+        alive.push([p, streamPos(k, p), fade]);
       }
-      const pulse = 0.45 + 0.15 * Math.sin(time * 2.2 + i) + s.spark * 0.6;
-      glow(s.col, k.tx, k.ty, 11, pulse);
+      // tapering trail: a long faint tail and a short bright neck, each batched into one path
+      ctx.lineCap = 'round';
+      for (const [from, to, w, a] of [[0.1, 0.035, 1, 0.22], [0.035, 0, 1.8, 0.55]]) {
+        ctx.globalAlpha = a + s.boost * 0.1;
+        ctx.lineWidth = w;
+        ctx.beginPath();
+        for (const [p] of alive) {
+          if (p.t < from) continue;
+          const [x0, y0] = streamPos(k, p, p.t - from);
+          const [x1, y1] = streamPos(k, p, p.t - to);
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+        }
+        ctx.stroke();
+      }
+      // bloomed comet heads in the lane colour (sprite halo about 8 px)
+      for (const [p, [x, y], fade] of alive) {
+        if (p.big) continue;
+        glow(p.hot ? '#ffffff' : s.col, x, y, p.size * 0.6 + 2.6, fade * (0.95 + s.boost * 0.3));
+      }
+      // white-hot cores, one fill
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      for (const [p, [x, y], fade] of alive) {
+        if (p.big) continue;
+        const r = p.size * 0.45 * fade;
+        if (r < 0.2) continue;
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, TAU);
+      }
+      ctx.fill();
+      // sparks: 3-4 px with a real shadow bloom (only a handful per stream, so the blur stays cheap)
+      ctx.shadowColor = s.col;
+      ctx.shadowBlur = 9;
+      ctx.fillStyle = s.col;
+      for (const [p, [x, y], fade] of alive) {
+        if (!p.big) continue;
+        ctx.globalAlpha = fade;
+        ctx.beginPath();
+        ctx.arc(x, y, p.size * 0.5, 0, TAU);
+        ctx.fill();
+        glow('#ffffff', x, y, p.size * 0.7, fade * 0.9);
+      }
+      ctx.shadowBlur = 0;
+      const pulse = 0.6 + 0.18 * Math.sin(time * 2.2 + i) + s.spark * 0.6;
+      glow(s.col, k.tx, k.ty, 16, pulse);
       if (s.spark > 0) glow('#ffb62e', k.sx, k.sy, 14, s.spark);
     });
 
@@ -313,9 +363,9 @@ function createHiveRenderer(canvas, makeCanvas) {
     const hot = flick > 0 && Math.sin(time * 60) > 0 ? '#ff5a5a' : '#ffd6ec';
     ctx.globalAlpha = 0.85;
     ctx.strokeStyle = hot;
-    ctx.lineWidth = 1.8 + flash * 3;
+    ctx.lineWidth = 2.2 + flash * 3;
     ctx.shadowColor = '#ff3d8b';
-    ctx.shadowBlur = 12 + flash * 20;
+    ctx.shadowBlur = 16 + flash * 20;
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, TAU);
     ctx.stroke();
@@ -586,22 +636,33 @@ export function renderHive(host, snapshot, deps) {
   cnt.setAttribute('role', 'group');
   cnt.setAttribute('aria-label', 'Hive summary');
   top.appendChild(cnt);
+  // End of the single header line: LIVE (with its notification slot), a small tour link and the "···" views menu.
+  const end = h(doc, 'div', 'hive-end');
   const live = h(doc, 'span', 'hive-live');
   live.appendChild(h(doc, 'i'));
   live.appendChild(doc.createTextNode('LIVE'));
-  top.appendChild(live);
-
-  // Compact view links on the header rule under LIVE (no extra row above the stage).
-  const nav = h(doc, 'nav', 'hive-nav');
-  nav.setAttribute('aria-label', 'Command Center views');
-  const tabs = nav;
-  // Notifications appear in the same header line, never over the stage.
+  end.appendChild(live);
+  // Notifications slide in under LIVE inside the header, never against the rule or over the stage.
   const toast = h(doc, 'span', 'hive-toast');
   toast.setAttribute('role', 'status');
   toast.setAttribute('aria-live', 'polite');
   const toastText = h(doc, 'span');
   toast.appendChild(toastText);
-  nav.appendChild(toast);
+  end.appendChild(toast);
+  const tourBtn = h(doc, 'button', 'hive-link cc-tour-help', 'Tour');
+  tourBtn.type = 'button';
+  tourBtn.setAttribute('aria-label', 'Command Center tour');
+  end.appendChild(tourBtn);
+  const menu = h(doc, 'details', 'hive-menu');
+  const menuBtn = h(doc, 'summary', 'hive-menu-btn', '···');
+  menuBtn.setAttribute('aria-label', 'Views and search');
+  menuBtn.setAttribute('title', 'Views and search');
+  menu.appendChild(menuBtn);
+  const nav = h(doc, 'nav', 'hive-nav');
+  nav.setAttribute('aria-label', 'Command Center views');
+  menu.appendChild(nav);
+  end.appendChild(menu);
+  const tabs = nav;
   const tabHive = h(doc, 'a', 'hive-tab', 'Command Center');
   tabHive.setAttribute('aria-current', 'page');
   tabHive.href = '/command-center';
@@ -617,11 +678,7 @@ export function renderHive(host, snapshot, deps) {
   searchBtn.appendChild(doc.createTextNode('Search'));
   searchBtn.appendChild(h(doc, 'span', 'hive-mono hive-hint', 'Ctrl K'));
   tabs.appendChild(searchBtn);
-  const tourBtn = h(doc, 'button', 'hive-tabbtn cc-tour-help', 'Tour');
-  tourBtn.type = 'button';
-  tourBtn.setAttribute('aria-label', 'Command Center tour');
-  tabs.appendChild(tourBtn);
-  top.appendChild(nav);
+  top.appendChild(end);
 
   const stage = h(doc, 'section', 'hive-stage');
   stage.id = 'hive-stage';
@@ -629,7 +686,9 @@ export function renderHive(host, snapshot, deps) {
   stage.setAttribute('aria-label', 'Hive diagram');
   const ringfx = h(doc, 'div', 'hive-ringfx');
   ringfx.setAttribute('aria-hidden', 'true');
+  // i: the thick glowing band (its ::before/::after on the wrapper are the two inner rings); b: dotted outer ring.
   ringfx.appendChild(h(doc, 'i'));
+  ringfx.appendChild(h(doc, 'b'));
   const canvas = h(doc, 'canvas');
   canvas.id = 'hive-canvas';
   canvas.setAttribute('aria-hidden', 'true');
@@ -708,8 +767,9 @@ export function renderHive(host, snapshot, deps) {
   const stageApi = createHiveRenderer(canvas, () => doc.createElement('canvas'));
 
   /* ---- toast (real events only: more agents, a finished ticket, something new for you) ---- */
-  function showToast(message, icon) {
+  function showToast(message, icon, tone) {
     toastText.textContent = message;
+    toast.classList.toggle('is-bad', tone === 'bad');
     const old = toast.querySelector ? toast.querySelector('img') : null;
     if (old && old.parentNode) old.parentNode.removeChild(old);
     if (icon && TOAST_ICON[icon]) {
@@ -940,7 +1000,7 @@ export function renderHive(host, snapshot, deps) {
     const ox = (cr.left || 0) - (sr.left || 0) + g.cx;
     const oy = (cr.top || 0) - (sr.top || 0) + g.cy;
     place(ringfx, ox, oy, Math.round(g.R * 2 + 10));
-    const arcR = g.R + 20;
+    const arcR = g.R + 18;
     const box = Math.round((arcR + 24) * 2);
     place(arc, ox, oy, box);
     arc.setAttribute('viewBox', `0 0 ${box} ${box}`);
@@ -1011,7 +1071,7 @@ export function renderHive(host, snapshot, deps) {
       stageApi.flick();
       next.projects.forEach((p, i) => { if (failsOf(p) > (prevFails.get(p.id) || 0)) stageApi.sparkAt(i); });
       burst(true);
-      showToast('A run failed', 'think');
+      showToast('A run failed', 'think', 'bad');
     }
   }
 
@@ -1069,6 +1129,16 @@ export function renderHive(host, snapshot, deps) {
     const mac = /mac|iphone|ipad/i.test(String(win.navigator?.platform || ''));
     doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'k', ctrlKey: !mac, metaKey: mac, bubbles: true }));
   });
+  // The views menu closes after a pick, on a click elsewhere and on Escape.
+  const closeMenu = () => { if (menu.open) menu.open = false; };
+  addListener(nav, 'click', closeMenu);
+  addListener(doc, 'click', (e) => {
+    if (!menu.open || typeof menu.contains !== 'function') return;
+    const t = e && e.target;
+    // The tour opens the menu to show a step; its own buttons must not close it again.
+    if (t && typeof t.closest === 'function' && t.closest('.cc-tour-overlay')) return;
+    if (!menu.contains(t)) closeMenu();
+  });
   addListener(tourBtn, 'click', () => {
     if (isTourDisabledByQuery(win.location)) return;
     const storage = { getItem: (k) => { try { return win.localStorage?.getItem(k) ?? null; } catch { return null; } }, setItem: (k, v) => { try { win.localStorage?.setItem(k, v); } catch { /* ignore */ } } };
@@ -1081,7 +1151,11 @@ export function renderHive(host, snapshot, deps) {
   };
   addListener(pauseBtn, 'click', togglePause);
   addListener(doc, 'keydown', (e) => {
-    if (e.key === 'p' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === 'Escape' && menu.open) {
+      closeMenu();
+      return;
+    }
+    if (e.key === 'p'&& !e.metaKey && !e.ctrlKey && !e.altKey) {
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       e.preventDefault();

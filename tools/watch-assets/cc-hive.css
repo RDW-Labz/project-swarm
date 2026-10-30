@@ -54,8 +54,8 @@
 .hive-shell .hive-hint{color:var(--muted);font-size:12px}
 .hive-shell .hive-muted{font-family:var(--font-mono);font-size:11px;color:var(--dim);margin:0}
 
-/* header (logo, tagline, counters, LIVE with its notification slot; the view links sit on the header rule) */
-.hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 14px;border-bottom:1px solid var(--line)}
+/* header: one line like the target (logo, tagline, counters, LIVE); the tour link and a small "···" views menu close it */
+.hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 20px;border-bottom:1px solid var(--line)}
 .hive-shell .hive-logo{font-family:var(--font-display);font-style:italic;font-weight:900;font-size:44px;letter-spacing:-.01em;filter:drop-shadow(0 0 14px rgba(255,77,126,.35));line-height:1;background:linear-gradient(90deg,#ff4d7e,#a98bff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .hive-shell .hive-tag{font-family:var(--font-mono);font-size:12.5px;color:#c9d1e3;line-height:1.75;white-space:nowrap}
 .hive-shell .hive-cnt{display:flex;gap:26px;margin-left:auto}
@@ -67,14 +67,23 @@
 @keyframes hive-beat{0%,100%{opacity:1}50%{opacity:.35}}
 .hive-shell .hive-cnt .v.is-bump{animation:hive-bump .9s ease-out 1}
 @keyframes hive-bump{0%{text-shadow:0 0 0 transparent}30%{text-shadow:0 0 14px currentColor}100%{text-shadow:0 0 0 transparent}}
-.hive-shell .hive-nav{position:absolute;right:0;bottom:-8px;display:flex;align-items:center;gap:2px;padding-left:12px;background:var(--bg);font-family:var(--font-mono);white-space:nowrap}
-.hive-shell .hive-tab,.hive-shell .hive-tabbtn{font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;line-height:16px;background:none;border:0;border-radius:4px;padding:0 7px;color:var(--dim);text-decoration:none;cursor:pointer}
-.hive-shell .hive-tab:hover,.hive-shell .hive-tabbtn:hover,.hive-shell .hive-tab:focus-visible,.hive-shell .hive-tabbtn:focus-visible{color:var(--fg)}
+.hive-shell .hive-end{display:flex;align-items:center;gap:16px}
+.hive-shell .hive-link{background:none;border:0;border-radius:4px;padding:0 2px;font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;line-height:20px;color:var(--dim);cursor:pointer}
+.hive-shell .hive-link:hover,.hive-shell .hive-link:focus-visible{color:var(--fg)}
+.hive-shell .hive-menu{position:relative}
+.hive-shell .hive-menu-btn{display:block;list-style:none;cursor:pointer;user-select:none;padding:0 7px;border:1px solid var(--line);border-radius:6px;font-family:var(--font-mono);font-size:13px;font-weight:700;letter-spacing:.08em;line-height:20px;color:var(--muted)}
+.hive-shell .hive-menu-btn::-webkit-details-marker{display:none}
+.hive-shell .hive-menu-btn::marker{content:""}
+.hive-shell .hive-menu-btn:hover,.hive-shell .hive-menu[open] .hive-menu-btn{color:var(--fg);border-color:color-mix(in srgb,var(--red) 60%,var(--line))}
+.hive-shell .hive-nav{position:absolute;right:0;top:calc(100% + 8px);z-index:60;display:flex;flex-direction:column;align-items:stretch;min-width:200px;padding:6px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.6);animation:hive-drop .16s ease-out both}
+@keyframes hive-drop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.hive-shell .hive-tab,.hive-shell .hive-tabbtn{display:flex;align-items:center;justify-content:space-between;width:100%;font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;line-height:28px;text-align:left;background:none;border:0;border-radius:6px;padding:0 10px;color:var(--muted);text-decoration:none;cursor:pointer;white-space:nowrap}
+.hive-shell .hive-tab:hover,.hive-shell .hive-tabbtn:hover,.hive-shell .hive-tab:focus-visible,.hive-shell .hive-tabbtn:focus-visible{color:var(--fg);background:rgba(255,255,255,.04)}
 .hive-shell .hive-tab[aria-current=page]{color:var(--red);text-shadow:0 0 10px rgba(255,77,126,.55)}
-.hive-shell .hive-tabbtn .hive-hint{font-size:10px;letter-spacing:.1em;color:#5d6780;margin-left:4px}
+.hive-shell .hive-tabbtn .hive-hint{font-size:10px;letter-spacing:.1em;color:#5d6780;margin-left:10px}
 
 /* HIVE stage: sized from the viewport so the ring, every card and the legend row fit the first screen */
-.hive-shell .hive-stage{--hs:1;position:relative;height:min(78vh,720px);min-height:560px;max-width:1320px;margin:0 auto}
+.hive-shell .hive-stage{--hs:1;position:relative;height:clamp(560px,calc(100vh - 120px),800px);max-width:1320px;margin:0 auto}
 .hive-shell .hive-stage canvas{position:absolute;z-index:2;inset:0;width:100%;height:100%;display:block;pointer-events:none}
 .hive-shell .hive-card{position:absolute;z-index:3;width:270px;transform:translate(-50%,-50%) scale(var(--hs));background:#07080f;border:2px solid var(--c);border-radius:6px;box-shadow:0 0 0 1px color-mix(in srgb,var(--c) 70%,transparent),0 0 10px 1px color-mix(in srgb,var(--c) 85%,transparent),0 0 30px 4px color-mix(in srgb,var(--c) 42%,transparent),0 0 64px 12px color-mix(in srgb,var(--c) 14%,transparent),inset 0 0 22px -12px color-mix(in srgb,var(--c) 55%,transparent);cursor:pointer;transition:transform .2s var(--ease),box-shadow .2s}
 .hive-shell .hive-card:hover,.hive-shell .hive-card:focus-visible{transform:translate(-50%,calc(-50% - 3px)) scale(var(--hs));box-shadow:0 0 0 1px var(--c),0 0 14px 2px var(--c),0 0 40px 8px color-mix(in srgb,var(--c) 50%,transparent),inset 0 0 22px -10px var(--c)}
@@ -100,9 +109,14 @@
 .hive-shell .hive-card .pb em{font-style:normal;color:#f1f4fa;flex:none}
 .hive-shell .hive-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
-/* the ring: conic pink-violet band with heavy bloom (canvas adds the hot line, sparkles and streams on top) */
-.hive-shell .hive-ringfx{position:absolute;z-index:1;left:50%;top:50%;width:360px;height:360px;transform:translate(-50%,-50%);pointer-events:none;filter:drop-shadow(0 0 18px #ff3d8bcc) drop-shadow(0 0 48px #b04dff66)}
-.hive-shell .hive-ringfx i{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 200deg,#ff3d8b,#c86bff,#ff3d8b,#ff6aa8,#c86bff,#ff3d8b);-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 11px),#000 calc(100% - 9px),#000 calc(100% - 2px),transparent 100%);mask:radial-gradient(closest-side,transparent calc(100% - 11px),#000 calc(100% - 9px),#000 calc(100% - 2px),transparent 100%)}
+/* the ring: a thick conic pink-violet band, two thinner inner rings and a dotted outer ring under a stacked bloom
+   (canvas adds the spokes, the hot line, sparkles and the streams on top) */
+.hive-shell .hive-ringfx{position:absolute;z-index:1;left:50%;top:50%;width:440px;height:440px;transform:translate(-50%,-50%);pointer-events:none;filter:drop-shadow(0 0 24px rgba(255,61,139,.85)) drop-shadow(0 0 60px rgba(176,77,255,.55))}
+.hive-shell .hive-ringfx i{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 200deg,#ff3d8b,#c86bff,#ff3d8b,#ff6aa8,#c86bff,#ff3d8b);-webkit-mask:radial-gradient(closest-side,transparent calc(100% - 9px),#000 calc(100% - 8px),#000 calc(100% - 1px),transparent 100%);mask:radial-gradient(closest-side,transparent calc(100% - 9px),#000 calc(100% - 8px),#000 calc(100% - 1px),transparent 100%);animation:hive-spin 24s linear infinite}
+.hive-shell .hive-ringfx::before{content:"";position:absolute;inset:15px;border-radius:50%;border:2px solid rgba(255,96,170,.6);box-shadow:0 0 10px rgba(255,61,139,.5),inset 0 0 12px rgba(255,61,139,.25)}
+.hive-shell .hive-ringfx::after{content:"";position:absolute;inset:28px;border-radius:50%;border:1px solid rgba(190,120,255,.5);box-shadow:0 0 8px rgba(176,77,255,.35)}
+.hive-shell .hive-ringfx b{position:absolute;inset:-7px;border-radius:50%;border:1px dotted rgba(255,150,205,.7);animation:hive-spin 90s linear infinite reverse}
+@keyframes hive-spin{to{transform:rotate(360deg)}}
 .hive-shell .hive-arc{position:absolute;z-index:2;left:50%;top:50%;width:440px;height:440px;transform:translate(-50%,-50%);overflow:visible;pointer-events:none;animation:hive-orbit 60s linear infinite}
 .hive-shell .hive-arc text{font-family:var(--font-mono);font-size:11px;font-weight:500;letter-spacing:.45em;fill:rgba(255,255,255,.75)}
 @keyframes hive-orbit{from{transform:translate(-50%,-50%) rotate(0)}to{transform:translate(-50%,-50%) rotate(360deg)}}
@@ -129,36 +143,59 @@
 
 /* bottom panels */
 .hive-shell .hive-panels,.hive-shell .hive-panels *{font-family:var(--font-mono)}
-.hive-shell .hive-panels .hive-big{font-family:var(--font-head)}
 .hive-shell .hive-panels .hive-hint{font-size:11px}
-.hive-shell .hive-panels{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:10px}
-.hive-shell .hive-panel{padding:22px 24px;min-width:0;border-right:1px solid var(--line)}
+.hive-shell .hive-panels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch;background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:10px}
+/* each column is a flex stack whose last block (.hive-push) sits on the shared bottom line */
+.hive-shell .hive-panel{display:flex;flex-direction:column;padding:24px 26px 22px;min-width:0;border-right:1px solid var(--line)}
 .hive-shell .hive-panel:last-child{border:0}
+.hive-shell .hive-push{margin-top:auto;padding-top:14px}
 .hive-shell .hive-panel h2{font-size:11px;letter-spacing:.3em;color:var(--muted);font-weight:500;margin:0 0 16px;text-transform:uppercase}
-.hive-shell .hive-panel h2.hive-h-gap{margin-top:18px}
+.hive-shell .hive-panel h2.hive-h-gap{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
 .hive-shell .hive-slog{display:grid;gap:5px;font-size:11px;line-height:1.35}
 .hive-shell .hive-slog-row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px}
 .hive-shell .hive-slog-row>span{display:block;overflow-wrap:anywhere;color:var(--muted)}
 .hive-shell .hive-slog b{font-weight:500}
 .hive-shell .hive-slog-row span.hive-fg{color:var(--fg)}
 .hive-shell .hive-slog-row span.hive-dim{color:var(--dim)}
-.hive-shell .hive-bars{display:flex;align-items:flex-end;gap:3px;height:70px;margin-top:6px}
-.hive-shell .hive-bars i{flex:1;border-radius:2px 2px 0 0;min-height:3px;transform-origin:bottom}
-.hive-shell .hive-cap{font-size:11px;color:var(--dim);margin-top:6px}
-.hive-shell .hive-cap--cmd{margin-top:14px;color:var(--muted)}
-.hive-shell .hive-big{font-weight:800;font-size:72px;line-height:1;color:var(--red);text-shadow:0 0 22px rgba(255,77,126,.5)}
-.hive-shell .hive-big small{font-family:var(--font-mono);font-weight:400;font-size:14px;color:var(--muted);text-shadow:none;margin-left:10px}
-.hive-shell .hive-hint--machines{margin:6px 0 18px}
+/* mini bar chart under the command line: thin lane-coloured bars like the target's "forks per second" */
+.hive-shell .hive-bars{display:flex;align-items:flex-end;justify-content:space-between;gap:3px;height:64px;margin-top:10px}
+.hive-shell .hive-bars:has(.hive-muted){height:auto;align-items:center}
+.hive-shell .hive-bars i{flex:1 1 0;max-width:6px;border-radius:1px 1px 0 0;min-height:2px;transform-origin:bottom;animation:hive-rise .7s var(--ease) both}
+.hive-shell .hive-bars[data-mode=status] i:nth-child(4n+1):not(:first-child){margin-left:5px}
+@keyframes hive-rise{from{transform:scaleY(0)}to{transform:none}}
+.hive-shell .hive-cap{font-size:11px;color:var(--dim);margin-top:8px}
+.hive-shell .hive-cap--row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 12px}
+.hive-shell .hive-cap--row .hive-muted{font-size:10px;opacity:.8}
+.hive-shell .hive-cap--cmd{margin-top:0;font-size:12px;color:var(--muted)}
+.hive-shell .hive-cap--cmd .p{color:var(--dim)}
+.hive-shell .hive-cap--cmd b{font-weight:500;color:var(--fg)}
+.hive-shell .hive-panels .hive-big{font-family:var(--font-display);font-style:italic;font-weight:800;font-size:60px;line-height:1;color:var(--red);text-shadow:0 0 22px rgba(255,77,126,.5);margin-top:4px}
+.hive-shell .hive-big small{font-family:var(--font-mono);font-style:normal;font-weight:400;font-size:14px;color:var(--muted);text-shadow:none;margin-left:12px}
+.hive-shell .hive-hint--machines{margin:10px 0 16px;overflow-wrap:anywhere}
 .hive-shell .hive-hbar{display:grid;grid-template-columns:70px 1fr 56px;gap:10px;align-items:center;font-size:12px;margin:9px 0}
 .hive-shell .hive-hbar i{height:6px;border-radius:3px;background:#161b29;overflow:hidden}
 .hive-shell .hive-hbar u{display:block;height:100%;border-radius:3px;box-shadow:0 0 8px currentColor;transform-origin:left}
+.hive-shell .hive-hbar>span:first-child,.hive-shell .hive-hbar>span.hive-fg{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hive-shell .hive-hbar>span:last-child{text-align:right}
+.hive-shell .hive-hbar .hive-fg{color:var(--fg)}
+/* done per project: compact two-column list */
+.hive-shell .hive-dpp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 20px}
+.hive-shell .hive-dpp .hive-hbar{gap:6px;margin:0;font-size:11px}
+.hive-shell .hive-dpp .hive-hbar i{height:4px}
+.hive-shell .hive-dpp .hive-hbar>span:first-child{color:var(--muted)}
+.hive-shell .hive-dpp .hive-muted{grid-column:1/-1}
+.hive-shell .hive-who .hive-hbar{margin:10px 0}
+.hive-shell .hive-who .hive-cap{margin-top:4px}
+.hive-shell .hive-who>.hive-muted{font-size:10px;margin-top:4px;opacity:.8}
 .hive-shell .hive-lh{position:relative;display:flex}
-.hive-shell .hive-kv{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin:7px 0}
-.hive-shell .hive-kv b{font-weight:500}
-.hive-shell .hive-kv--gap{margin-top:12px}
-.hive-shell .hive-step{display:block;width:100%;height:70px;margin-top:10px}
-.hive-shell .hive-step path{fill:none;stroke:var(--red);stroke-width:2;filter:drop-shadow(0 0 5px rgba(255,77,126,.8))}
+.hive-shell .hive-kv{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted);margin:7px 0}
+.hive-shell .hive-kv b{font-weight:500;text-align:right}
+.hive-shell .hive-kvs .hive-kv:last-child{margin-bottom:0}
+/* step line: pink glowing steps with a bright segment running along them */
+.hive-shell .hive-step{display:block;width:100%;height:78px;margin-top:18px;overflow:visible}
+.hive-shell .hive-step path{fill:none;stroke:#ff4d7e;stroke-width:1.5;stroke-linejoin:miter;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 3px rgba(255,77,126,.95)) drop-shadow(0 0 9px rgba(255,61,139,.6))}
+.hive-shell .hive-step path.hive-step-scan{stroke:#ffd6ec;stroke-width:2;stroke-dasharray:60 940;animation:hive-trace 5s linear infinite}
+@keyframes hive-trace{from{stroke-dashoffset:1000}to{stroke-dashoffset:0}}
 
 /* footer, tooltips, toast */
 .hive-shell .hive-foot{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:baseline;margin-top:12px;padding:0 2px;font-family:var(--font-mono);font-size:10px;color:#6f7b94}
@@ -169,11 +206,12 @@
 .hive-shell .hive-foot details p{margin:6px 0 0;font-size:11px;line-height:1.5;color:#8d99b3;max-width:900px}
 .hive-shell .has-tip{border-bottom:1px dotted var(--dim);cursor:help;position:relative}
 .hive-shell .has-tip:hover::after,.hive-shell .has-tip:focus::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 6px);z-index:90;width:max-content;max-width:290px;white-space:normal;background:#e9eef8;color:#05060b;font-family:var(--font-body);font-size:12px;line-height:1.35;padding:6px 8px;border-radius:6px;letter-spacing:0;text-transform:none;font-weight:400}
-/* notifications: shown in the header line next to the view links, never over the stage */
-.hive-shell .hive-toast{display:none;flex:none;gap:6px;align-items:center;margin-right:10px;padding:0 8px;border:1px solid color-mix(in srgb,var(--green) 60%,transparent);border-radius:999px;white-space:nowrap;font-family:var(--font-mono);font-size:10px;line-height:16px;letter-spacing:.08em;color:#e6ecf7;pointer-events:none}
+/* notifications: slide in under LIVE at the right end of the header, clear of the header rule and the stage */
+.hive-shell .hive-toast{position:absolute;right:0;bottom:6px;z-index:5;display:none;gap:6px;align-items:center;padding:0 9px;border:1px solid color-mix(in srgb,var(--green) 60%,transparent);border-radius:999px;background:color-mix(in srgb,var(--green) 10%,var(--bg));box-shadow:0 0 12px color-mix(in srgb,var(--green) 30%,transparent);white-space:nowrap;font-family:var(--font-mono);font-size:10px;line-height:18px;letter-spacing:.08em;color:#e6ecf7;pointer-events:none}
+.hive-shell .hive-toast.is-bad{border-color:color-mix(in srgb,var(--red) 70%,transparent);background:color-mix(in srgb,var(--red) 12%,var(--bg));box-shadow:0 0 12px color-mix(in srgb,var(--red) 35%,transparent)}
 .hive-shell .hive-toast img{width:12px;height:12px}
-.hive-shell .hive-toast.is-on{display:inline-flex;animation:hive-toast 3s ease both}
-@keyframes hive-toast{0%{opacity:0;transform:translateX(6px)}12%,80%{opacity:1;transform:none}100%{opacity:0}}
+.hive-shell .hive-toast.is-on{display:inline-flex;animation:hive-toast 3.1s var(--ease) both}
+@keyframes hive-toast{0%{opacity:0;transform:translateX(18px)}10%,82%{opacity:1;transform:none}100%{opacity:0;transform:translateX(8px)}}
 
 /* glitch bursts (cc-glitch.js: under 400 ms, at most 3 at once, never on text being read) */
 @keyframes hive-glitch{0%{transform:translate(0);filter:none}15%{transform:translate(-2px,1px);filter:hue-rotate(40deg) saturate(1.6)}30%{transform:translate(2px,-1px);filter:none}45%{transform:translate(-1px,0);filter:hue-rotate(-30deg)}60%{transform:translate(1px,1px);filter:none}100%{transform:none;filter:none}}
@@ -193,9 +231,12 @@
 @media (max-width:900px){
   .hive-shell .hive-tag{white-space:normal}
   .hive-shell .hive-cnt{margin-left:0}
-  .hive-shell .hive-nav{position:static;flex-basis:100%;overflow-x:auto;padding:2px 0 4px;margin:0 -2px;scrollbar-width:none;background:none}
-  .hive-shell .hive-nav::-webkit-scrollbar{display:none}
-  .hive-shell .hive-tab,.hive-shell .hive-tabbtn{flex:none;line-height:28px}
+  .hive-shell .hive-top{padding-bottom:14px}
+  .hive-shell .hive-end{flex-basis:100%;flex-wrap:wrap;gap:8px 14px}
+  .hive-shell .hive-end .hive-link{margin-left:auto;line-height:28px}
+  .hive-shell .hive-menu-btn{line-height:26px;padding:0 10px}
+  .hive-shell .hive-toast{position:static;flex:none}
+  .hive-shell .hive-tab,.hive-shell .hive-tabbtn{line-height:36px}
   .hive-shell .hive-stage{height:auto;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr));gap:12px;padding:6px 0 10px}
   .hive-shell .hive-stage canvas{position:relative;inset:auto;grid-column:1/-1;justify-self:center;width:min(100%,420px);height:auto;aspect-ratio:1/1}
   .hive-shell .hive-card{position:relative!important;left:auto!important;top:auto!important;transform:none!important;width:auto}
@@ -211,6 +252,10 @@
   .hive-shell .hive-cnt{gap:18px;width:100%;justify-content:space-between}
   .hive-shell .hive-legend{gap:8px 14px;font-size:10px}
   .hive-shell .hive-legend .tl{margin-left:0;flex-basis:100%;font-size:20px}
+  .hive-shell .hive-panel{padding:20px 18px}
+  .hive-shell .hive-dpp{grid-template-columns:minmax(0,1fr)}
+  .hive-shell .hive-dpp .hive-hbar{grid-template-columns:minmax(0,1fr) 90px 34px!important}
+  .hive-shell .hive-nav{min-width:min(220px,calc(100vw - 32px))}
 }
 
 /* motion: off when the tab is hidden (the loop stops), paused by the user, or reduced motion is requested */

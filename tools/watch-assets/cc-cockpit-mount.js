@@ -8,15 +8,16 @@
 import { readyTickets } from './cc-ledger-browser.js';
 import { renderCockpit, orchestratorHeadState, orchestratorCaption, mountPixelCreature } from './cockpit-view.js';
 import {
-  cockpitColumns,
+  cockpitLedgerRows,
   cockpitCategories,
   renderTicketColumn,
   renderReadyEmptyState,
   renderStackSummaryTiles,
   renderWorkerCards,
-  renderRunCards,
+  renderRunLine,
   workerCards,
   shortTitle,
+  setCssVar,
 } from './cockpit-lists.js';
 import { glitch as defaultGlitch } from './cc-glitch.js';
 import { completionKey } from './cc-tour.js';
@@ -26,12 +27,23 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const HIDDEN_STATUSES = ['cancelled', 'proposed'];
 const TILE_COLOURS = { ready: '#2fe0a0', running: '#2fe0a0', review: '#ff4d7e', blocked: '#ffb62e', todo: '#a98bff', done: '#4d7cff' };
 const LOOP_STEPS = ['you approve the scope', 'the split makes tickets', 'workers build in waves', 'checks gate every merge', 'the PR merges'];
-const SOURCES_NOTE = 'Read from this project\'s ledger (tickets, stages and their lane or type), its orchestrator sessions and its run stream, as served by the Command Center. The pixel orchestrator, its orbit and the path to the running ticket are drawn here. One glitch in the app, on the SW wordmark: under 400 ms, off with reduced motion.';
+const SOURCES_NOTE = 'Read from this project\'s ledger (tickets, stages and their lane or type), its orchestrator sessions and its run stream, as served by the Command Center. The pixel orchestrator, its orbit and the path to the running ticket are drawn here. One glitch in the app, on the SWARM wordmark: under 400 ms, off with reduced motion.';
 /** Orbit ellipse relative to the creature box (fractions of its width / height). */
 const ORBIT = { cy: 0.56, rx: 0.82, ry: 0.19 };
-const NODE_TS = [0.2, 0.4, 0.6, 0.8];
-const SPARK_MS = 1800;
+/** Small dots along the path to the active row; the two ends get brighter nodes. */
+const NODE_TS = [0.3, 0.55, 0.78];
+/** Where the path leaves the orbit: this angle (radians) above or below the ellipse's outer point. */
+const WIRE_LEAVE = 0.62;
+const ROWS_PER_COLUMN = 10;
+/** Columns with at least this many rows spread down to the bottom of the middle column. */
+const SPREAD_MIN_ROWS = 4;
+const SPARK_MS = 2200;
 const ORBIT_MS = 7000;
+const BOB_MS = 4000;
+const BEAT_MS = 1600;
+const SCAN_MS = 3600;
+const SHINE_MS = 2200;
+const TAU = Math.PI * 2;
 
 function el(doc, tag, cls, text) {
   const n = doc.createElement(tag);
@@ -116,6 +128,18 @@ function cubicAt(p, t) {
   };
 }
 
+/** Length of a cubic Bezier, by sampling (close enough for a dash pattern). */
+function cubicLength(p, steps = 48) {
+  let len = 0;
+  let prev = p[0];
+  for (let i = 1; i <= steps; i += 1) {
+    const q = cubicAt(p, i / steps);
+    len += Math.hypot(q.x - prev.x, q.y - prev.y);
+    prev = q;
+  }
+  return len;
+}
+
 /**
  * @param {HTMLElement} host
  * @param {object} project buildProjectCockpit shape
@@ -157,15 +181,16 @@ export function renderProjectCockpit(host, project, deps) {
 
   while (host.firstChild) host.removeChild(host.firstChild);
 
-  const shell = el(doc, 'div', 'cc-cockpit-shell');
+  // .ck-intro lets the stream bars grow from zero once, on arrival only (not on every poll)
+  const shell = el(doc, 'div', 'cc-cockpit-shell ck-intro');
   if (project?.id != null) shell.setAttribute('data-project-id', String(project.id));
   const wrap = el(doc, 'div', 'ck-wrap');
 
-  // Top line: mono breadcrumb on the left (SW / THE HIVE / PROJECT), meta line on the right, view switch in an overflow.
+  // Top line: plain mono breadcrumb on the left (SWARM / THE HIVE / PROJECT), meta line on the right ending in the view switch.
   const gbar = el(doc, 'div', 'gbar');
   const crumbs = el(doc, 'nav', 'crumbs cockpit-nav');
   crumbs.setAttribute('aria-label', 'Breadcrumb');
-  const logo = el(doc, 'span', 'logo', 'SW');
+  const logo = el(doc, 'span', 'ck-brand', 'SWARM');
   logo.setAttribute('title', 'Swarm Watch');
   const backBtn = el(doc, 'button', 'cc-cockpit-back-btn nav-block', 'The Hive');
   backBtn.type = 'button';
@@ -200,9 +225,10 @@ export function renderProjectCockpit(host, project, deps) {
   tabs.appendChild(classicTab);
   more.appendChild(moreSum);
   more.appendChild(tabs);
+  meta.appendChild(el(doc, 'span', 'sep', '/'));
+  meta.appendChild(more);
   gbar.appendChild(crumbs);
   gbar.appendChild(meta);
-  gbar.appendChild(more);
 
   const panel = el(doc, 'main', 'panel-cockpit');
   panel.id = 'cc-cockpit-main';
@@ -211,10 +237,10 @@ export function renderProjectCockpit(host, project, deps) {
   const cols = el(doc, 'div', 'cols');
   const colL = el(doc, 'div', 'col l');
   colL.id = 'tickets-left';
-  colL.setAttribute('aria-label', 'Ready and running tickets');
+  colL.setAttribute('aria-label', 'Tickets, first half: running and ready first');
   const colR = el(doc, 'div', 'col r');
   colR.id = 'tickets-right';
-  colR.setAttribute('aria-label', 'Review, blocked and finished tickets');
+  colR.setAttribute('aria-label', 'Tickets, second half: finished last');
   const mid = el(doc, 'div', 'mid');
   const orbwrap = el(doc, 'div', 'orbwrap');
   const lab = el(doc, 'div', 'lab');
@@ -246,27 +272,29 @@ export function renderProjectCockpit(host, project, deps) {
       const odot2 = svg(doc, 'circle', 'odot2');
       odot2.setAttribute('r', '2.5');
       const path = svg(doc, 'path', 'wire');
+      const pulse = svg(doc, 'path', 'pulse');
       const nodes = NODE_TS.map(() => {
         const c = svg(doc, 'circle', 'node');
-        c.setAttribute('r', '3.5');
+        c.setAttribute('r', '1.6');
         return c;
       });
+      const start = svg(doc, 'circle', 'node end');
+      start.setAttribute('r', '2.6');
       const end = svg(doc, 'circle', 'node end');
-      end.setAttribute('r', '4');
-      const spark = svg(doc, 'circle', 'spark');
-      spark.setAttribute('r', '3');
+      end.setAttribute('r', '2.6');
       const wireG = svg(doc, 'g', 'wire-g');
       wireG.appendChild(path);
       nodes.forEach(n => wireG.appendChild(n));
+      wireG.appendChild(pulse);
+      wireG.appendChild(start);
       wireG.appendChild(end);
-      wireG.appendChild(spark);
       root.appendChild(ring2);
       root.appendChild(ring);
       root.appendChild(odot2);
       root.appendChild(odot);
       root.appendChild(wireG);
       cols.appendChild(root);
-      wire = { root, ring, ring2, odot, odot2, path, nodes, end, spark, wireG, geo: null, curve: null };
+      wire = { root, ring, ring2, odot, odot2, path, pulse, nodes, start, end, wireG, geo: null, curve: null, len: 0 };
     } catch {
       wire = null;
     }
@@ -294,15 +322,9 @@ export function renderProjectCockpit(host, project, deps) {
   wstream.appendChild(wHead);
   wstream.appendChild(wgrid);
 
-  const rstream = el(doc, 'section', 'wstream');
-  rstream.setAttribute('aria-label', 'Run stream');
-  const rHead = el(doc, 'h2');
-  rHead.appendChild(el(doc, 'span', null, '// RUN STREAM / ORCHESTRATOR RUNS'));
-  const rCount = el(doc, 'span');
-  rHead.appendChild(rCount);
-  const rgrid = el(doc, 'div', 'wgrid');
-  rstream.appendChild(rHead);
-  rstream.appendChild(rgrid);
+  // the orchestrator run is one line at the foot of the NOW card (no separate run-stream block)
+  const runLine = el(doc, 'div', 'ck-runs');
+  runLine.setAttribute('aria-label', 'Orchestrator run');
 
   const stack = el(doc, 'footer', 'stack');
   stack.setAttribute('aria-label', 'Ticket stack');
@@ -328,7 +350,6 @@ export function renderProjectCockpit(host, project, deps) {
   panel.appendChild(cols);
   panel.appendChild(loopbar);
   panel.appendChild(wstream);
-  panel.appendChild(rstream);
   panel.appendChild(stack);
   wrap.appendChild(gbar);
   wrap.appendChild(panel);
@@ -382,21 +403,32 @@ export function renderProjectCockpit(host, project, deps) {
         placeDots(0);
         return;
       }
+      // one smooth cubic: leaves the orbit on the row's side (above or below its outer point), bends toward the
+      // row and arrives level with its inner edge
       const s = hit.side;
-      const p0 = { x: cx + s * rx * 0.94, y: cy - ry * 0.34 };
       const p3 = { x: (s > 0 ? rr.left : rr.right) - base.left, y: rr.top + rr.height / 2 - base.top };
+      const up = p3.y < cy ? -1 : 1;
+      const p0 = { x: cx + s * rx * Math.cos(WIRE_LEAVE), y: cy + up * ry * Math.sin(WIRE_LEAVE) };
       const dx = Math.abs(p3.x - p0.x);
-      const p1 = { x: p0.x + s * Math.max(48, dx * 0.9), y: p0.y };
-      const p2 = { x: p3.x - s * Math.max(36, dx * 0.5), y: p3.y };
+      const dy = p3.y - p0.y;
+      const p1 = { x: p0.x + s * Math.max(28, dx * 0.35), y: p0.y + dy * 0.55 };
+      const p2 = { x: p3.x - s * Math.max(48, dx * 0.6), y: p3.y };
       const curve = [p0, p1, p2, p3];
       wire.curve = curve;
+      wire.len = cubicLength(curve);
       wire.wireG.setAttribute('visibility', 'visible');
-      wire.path.setAttribute('d', `M${p0.x.toFixed(1)} ${p0.y.toFixed(1)} C${p1.x.toFixed(1)} ${p1.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} ${p3.x.toFixed(1)} ${p3.y.toFixed(1)}`);
+      const d = `M${p0.x.toFixed(1)} ${p0.y.toFixed(1)} C${p1.x.toFixed(1)} ${p1.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)} ${p3.x.toFixed(1)} ${p3.y.toFixed(1)}`;
+      wire.path.setAttribute('d', d);
+      wire.pulse.setAttribute('d', d);
+      // one short dash per path length: moving its offset carries a single orange pulse from orbit to row
+      wire.pulse.setAttribute('stroke-dasharray', `2 ${(wire.len + 12).toFixed(1)}`);
       NODE_TS.forEach((t, i) => {
         const q = cubicAt(curve, t);
         wire.nodes[i].setAttribute('cx', q.x.toFixed(1));
         wire.nodes[i].setAttribute('cy', q.y.toFixed(1));
       });
+      wire.start.setAttribute('cx', p0.x.toFixed(1));
+      wire.start.setAttribute('cy', p0.y.toFixed(1));
       wire.end.setAttribute('cx', p3.x.toFixed(1));
       wire.end.setAttribute('cy', p3.y.toFixed(1));
       placeDots(0);
@@ -405,32 +437,62 @@ export function renderProjectCockpit(host, project, deps) {
     }
   }
 
-  /** Orbit dots and the spark on the path at time `ms` (0 = the still frame used under reduced motion). */
+  /** Orbit dots, ring drift and the pulse on the path at time `ms` (0 = the still frame used under reduced motion). */
   function placeDots(ms) {
     if (!wire || !wire.geo) return;
     const { cx, cy, rx, ry } = wire.geo;
-    const a = (ms / ORBIT_MS) * Math.PI * 2 + 0.9;
+    const a = (ms / ORBIT_MS) * TAU + 0.9;
     wire.odot.setAttribute('cx', (cx + rx * Math.cos(a)).toFixed(1));
     wire.odot.setAttribute('cy', (cy + ry * Math.sin(a)).toFixed(1));
     const b = a * -1.35 + 2.4;
     wire.odot2.setAttribute('cx', (cx + rx * 0.78 * Math.cos(b)).toFixed(1));
     wire.odot2.setAttribute('cy', (cy + ry * 0.78 * Math.sin(b)).toFixed(1));
-    if (wire.curve) {
-      const q = cubicAt(wire.curve, (ms % SPARK_MS) / SPARK_MS);
-      wire.spark.setAttribute('cx', q.x.toFixed(1));
-      wire.spark.setAttribute('cy', q.y.toFixed(1));
+    // slow drift of the ring dashes (outer one way, inner the other) and of the dotted path toward the row
+    wire.ring.setAttribute('stroke-dashoffset', (-(ms / 1000) * 14).toFixed(1));
+    wire.ring2.setAttribute('stroke-dashoffset', ((ms / 1000) * 9).toFixed(1));
+    wire.path.setAttribute('stroke-dashoffset', (-((ms / 1000) * 10) % 8).toFixed(2));
+    if (wire.curve && wire.len) {
+      const t = (ms % SPARK_MS) / SPARK_MS;
+      wire.pulse.setAttribute('stroke-dashoffset', (-(t * (wire.len + 4) - 2)).toFixed(1));
     }
+  }
+
+  // Creature, glow, live chips, scan and stream shine: driven here (inline transforms and CSS variables) so the
+  // motion runs on the same frame clock as the orbit; reduced motion never starts this loop and CSS keeps the still look.
+  let headBody = null;
+  let headShadow = null;
+  function animate(ms) {
+    const bob = (1 - Math.cos((ms / BOB_MS) * TAU)) / 2;
+    if (headBody) headBody.style.transform = `translate3d(0, ${(-6 * bob).toFixed(2)}px, 0)`;
+    if (headShadow) {
+      headShadow.style.transform = `translateX(-50%) scale(${(1 - 0.16 * bob).toFixed(3)})`;
+      headShadow.style.opacity = (0.74 - 0.22 * bob).toFixed(3);
+    }
+    setCssVar(orbwrap, '--ck-glow', (0.78 + 0.22 * bob).toFixed(3));
+    const beat = (1 + Math.cos((ms / BEAT_MS) * TAU)) / 2;
+    const pulseV = (0.35 + 0.65 * beat).toFixed(3);
+    const waveV = (1 - beat).toFixed(3);
+    for (const n of [gbar, titleHost, cols]) {
+      setCssVar(n, '--ck-pulse', pulseV);
+      setCssVar(n, '--ck-wave', waveV);
+    }
+    setCssVar(titleHost, '--ck-scan', (-100 + 200 * ((ms % SCAN_MS) / SCAN_MS)).toFixed(2));
+    setCssVar(wgrid, '--ck-shine', (-100 + 200 * ((ms % SHINE_MS) / SHINE_MS)).toFixed(2));
   }
 
   let frame = null;
   function tick(ts) {
     frame = null;
     if (destroyed) return;
-    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
+    if (!doc.hidden) {
+      const ms = typeof ts === 'number' ? ts : Date.now();
+      placeDots(ms);
+      animate(ms);
+    }
     frame = raf(tick);
   }
   function startMotion() {
-    if (!wire || reducedMotion || !raf || frame != null || destroyed) return;
+    if (reducedMotion || !raf || frame != null || destroyed) return;
     frame = raf(tick);
   }
 
@@ -450,6 +512,8 @@ export function renderProjectCockpit(host, project, deps) {
     if (key !== headKey) {
       if (headHandle) headHandle.destroy();
       headHandle = null;
+      headBody = null;
+      headShadow = null;
       headKey = key;
       headMounted = null;
       loadCreature().then((api) => {
@@ -463,6 +527,8 @@ export function renderProjectCockpit(host, project, deps) {
             label: headWanted.label,
           });
           headMounted = headWanted.state;
+          headBody = typeof hd2.querySelector === 'function' ? hd2.querySelector('.px-body') : null;
+          headShadow = typeof hd2.querySelector === 'function' ? hd2.querySelector('.px-shadow') : null;
           layoutWire();
         } catch {
           headHandle = null;
@@ -491,10 +557,10 @@ export function renderProjectCockpit(host, project, deps) {
     }
   }
 
-  function paintNow(columns, model) {
+  function paintNow(columns, model, runs) {
     clear(nowHost);
     const name = model.name;
-    const lead = columns.left[0];
+    const lead = columns.left[0] && ['running', 'ready'].includes(columns.left[0].state) ? columns.left[0] : null;
     if (lead) {
       const t = lead.ticket;
       const running = lead.state === 'running';
@@ -523,6 +589,8 @@ export function renderProjectCockpit(host, project, deps) {
     w.appendChild(el(doc, 'em', null, 'WORKER >'));
     w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
     nowHost.appendChild(w);
+    renderRunLine(runLine, runs);
+    nowHost.appendChild(runLine);
   }
 
   let projectRef = project;
@@ -540,13 +608,15 @@ export function renderProjectCockpit(host, project, deps) {
       done: p?.done,
       total: p?.total,
     }, { now: at });
-    const columns = cockpitColumns(ledger, readyTickets);
+    // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
+    const columns = cockpitLedgerRows(ledger, readyTickets, { perColumn: ROWS_PER_COLUMN });
     const { counts } = columns;
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
     const cats = cockpitCategories(ledger);
     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
-    activeId = columns.left[0] ? columns.left[0].ticket.id : null;
+    const lead = columns.left[0];
+    activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
 
     crumbProject.textContent = model.name;
     paintCounters(headerCounters(p, counts));
@@ -554,25 +624,24 @@ export function renderProjectCockpit(host, project, deps) {
 
     if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L', activeId, categoryOf: cats.of });
     else renderReadyEmptyState(colL, ledger, readyTickets);
-    renderTicketColumn(colR, columns.right, { side: 'R', activeId, categoryOf: cats.of, emptyText: 'No review, blocked or finished tickets yet.' });
+    renderTicketColumn(colR, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' });
+    const rowsR = columns.right.length + (columns.more ? 1 : 0);
+    colL.classList.toggle?.('spread', columns.left.length >= SPREAD_MIN_ROWS);
+    colR.classList.toggle?.('spread', rowsR >= SPREAD_MIN_ROWS);
 
     lab.setAttribute('data-orchestrator', orch.label);
     labSub.textContent = orchestratorCaption(orch.label, allDone);
     syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
-    paintNow(columns, model);
+    paintNow(columns, model, runStreamItems(p, orch));
 
     const cards = workerCards(ledger, at, 4);
     renderWorkerCards(wgrid, cards);
-    wCount.textContent = `${cards.length} LATEST`;
-    const runs = runStreamItems(p, orch);
-    rstream.hidden = runs.length === 0;
-    if (runs.length) {
-      renderRunCards(rgrid, runs);
-      rCount.textContent = `${runs.length} ${runs.length === 1 ? 'RUN' : 'RUNS'}`;
-    }
+    wCount.textContent = cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE';
 
     stackN.textContent = model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS';
-    stackSub.textContent = `${counts.cancelled} cancelled and left out of the percent${counts.proposed ? `, ${counts.proposed} proposed not counted` : ''}`;
+    stackSub.textContent = cats.field && cats.names.length
+      ? cats.names.join(' / ')
+      : 'no lane or type recorded on these tickets';
     const tiles = [
       ['ready', counts.ready],
       ...(counts.running ? [['running', counts.running]] : []),
@@ -584,7 +653,7 @@ export function renderProjectCockpit(host, project, deps) {
     const big = Math.max(...tiles.map(t => t.value));
     for (const t of tiles) t.hi = big > 0 && t.value === big;
     renderStackSummaryTiles(tilesHost, tiles);
-    footNote.textContent = `data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
+    footNote.textContent = `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
 
     layoutWire();
     if (firstPaint) {
@@ -592,8 +661,10 @@ export function renderProjectCockpit(host, project, deps) {
       if (doc.fonts && doc.fonts.ready && typeof doc.fonts.ready.then === 'function') {
         doc.fonts.ready.then(() => { if (!destroyed) layoutWire(); }, () => {});
       }
-      // the app's one glitch: the SW wordmark, once on arrival
+      // the app's one glitch: the SWARM wordmark, once on arrival
       later(() => glitch(logo), 600);
+      // stream bars grow from zero on arrival only; later polls repaint them at their width
+      later(() => shell.classList.remove('ck-intro'), 1600);
     }
     startMotion();
   }

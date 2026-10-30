@@ -9,7 +9,7 @@ export const COCKPIT_LISTS_CSS = '';
 
 /** Stage colours: stage "S<n>" takes colour n mod 7 (the artifact's SC palette). */
 export const STAGE_COLOURS = ['#2fe0a0', '#4d7cff', '#ffb62e', '#a98bff', '#ff4d7e', '#4ccce6', '#58627a'];
-const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', done: '✓' };
+const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', todo: '○', done: '✓' };
 const HIDDEN_STATUSES = ['cancelled', 'proposed'];
 const STAMP_FIELDS = ['doneAt', 'completedAt', 'finishedAt', 'updatedAt', 'at'];
 
@@ -211,6 +211,75 @@ export function cockpitColumns(ledger, readyFn, limits = {}) {
 }
 
 /**
+ * Every live ticket as one ordered list (running, ready, review, blocked, other open, then done newest first),
+ * split across two columns of up to `perColumn` rows and numbered continuously (01, 02, ... across both).
+ * The left column takes the first half (rounded down, at least one row); with nothing running or ready the
+ * left column is left to the empty-ready explanation and every row goes right. When the list is longer than
+ * both columns, the right column ends in a `more` row that counts what is not shown, so the rows always add up.
+ * @param {object|null|undefined} ledger
+ * @param {(tickets: object[]) => object[]} readyFn
+ * @param {{ perColumn?: number }} [opts]
+ */
+export function cockpitLedgerRows(ledger, readyFn, opts = {}) {
+  const perColumn = Math.max(2, opts.perColumn ?? 10);
+  const tickets = ledger?.tickets ?? [];
+  const live = tickets.filter(t => t && !HIDDEN_STATUSES.includes(t.status));
+  const liveIds = new Set(live.map(t => t.id));
+  const known = new Map(tickets.filter(Boolean).map(t => [t.id, t]));
+  const seen = new Set();
+  const ready = (typeof readyFn === 'function' ? readyFn(tickets) : [])
+    .map(t => (typeof t === 'string' ? known.get(t) : t))
+    .filter(t => t && liveIds.has(t.id) && !['running', 'done', 'review', 'blocked'].includes(t.status) && !seen.has(t.id) && seen.add(t.id))
+    .sort(byId);
+  const readyIds = new Set(ready.map(t => t.id));
+  const running = live.filter(t => t.status === 'running').sort(byId);
+  const review = live.filter(t => t.status === 'review').sort(byId);
+  const blocked = live.filter(t => t.status === 'blocked').sort(byId);
+  const open = live.filter(t => !['done', 'running', 'review', 'blocked'].includes(t.status) && !readyIds.has(t.id)).sort(byId);
+  const done = recentDone({ tickets: live }, live.length);
+  const all = [
+    ...running.map(ticket => ({ ticket, state: 'running' })),
+    ...ready.map(ticket => ({ ticket, state: 'ready' })),
+    ...review.map(ticket => ({ ticket, state: 'review' })),
+    ...blocked.map(ticket => ({ ticket, state: 'blocked' })),
+    ...open.map(ticket => ({ ticket, state: 'todo' })),
+    ...done.map(ticket => ({ ticket, state: 'done' })),
+  ];
+  const runnable = running.length + ready.length;
+  const total = all.length;
+  const room = runnable ? 2 * perColumn : perColumn;
+  const shown = total > room ? room - 1 : total;
+  let leftN = 0;
+  if (runnable) leftN = total > room ? perColumn : Math.min(perColumn, Math.max(1, Math.floor(total / 2)));
+  const numbered = all.slice(0, shown).map((e, i) => ({ ...e, no: i + 1 }));
+  const hidden = all.slice(shown);
+  let more = null;
+  if (hidden.length) {
+    const by = {};
+    for (const e of hidden) by[e.state] = (by[e.state] || 0) + 1;
+    const order = ['running', 'ready', 'review', 'blocked', 'todo', 'done'];
+    const names = { running: 'running', ready: 'ready', review: 'in review', blocked: 'blocked', todo: 'to do', done: 'done' };
+    more = { count: hidden.length, detail: order.filter(k => by[k]).map(k => `${by[k]} ${names[k]}`).join(' · ') };
+  }
+  return {
+    all,
+    left: numbered.slice(0, leftN),
+    right: numbered.slice(leftN),
+    more,
+    counts: {
+      ready: ready.length,
+      running: running.length,
+      review: review.length,
+      blocked: blocked.length,
+      todo: open.length,
+      done: done.length,
+      cancelled: tickets.filter(t => t && t.status === 'cancelled').length,
+      proposed: tickets.filter(t => t && t.status === 'proposed').length,
+    },
+  };
+}
+
+/**
  * Same job rows `swarm queue list` would show for this ledger snapshot.
  * @param {object|null|undefined} ledger
  * @param {object} projectConfig
@@ -261,19 +330,9 @@ function emptyLine(doc, text, key) {
   return p;
 }
 
-/**
- * One ticket card (`.tk`): index chip, short name, id and stage line, state glyph and category tag.
- * The category colour (--cat-color) paints the chip, the left border and the tag; the active row gets `.active` and an ON chip.
- */
-function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active) {
-  const full = String(ticket.title || ticket.id).replace(/"/g, '');
+/** Staggered side margins: the middle rows lean toward the creature, the ends sit on the outer edge. */
+function staggerCard(card, i, n, side) {
   const off = Math.min(30, 10 * Math.min(i, n - 1 - i));
-  const card = mk(doc, 'div', `tk${hot ? ' hot' : ''}${active ? ' active' : ''}`);
-  card.setAttribute('data-ticket-id', ticket.id);
-  card.setAttribute('data-status', state);
-  card.setAttribute('data-title', full);
-  card.setAttribute('data-category', category);
-  setCssVar(card, '--cat-color', categoryColour(category));
   if (side === 'R') {
     card.style.marginRight = `${off}px`;
     card.style.marginLeft = `${36 - off}px`;
@@ -281,7 +340,23 @@ function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active) 
     card.style.marginLeft = `${off}px`;
     card.style.marginRight = `${36 - off}px`;
   }
-  card.appendChild(mk(doc, 'span', 'no', String(i + 1).padStart(2, '0')));
+}
+
+/**
+ * One ticket card (`.tk`): index chip, short name, id and stage line, state glyph and category tag.
+ * The category colour (--cat-color) paints the chip, the left border and the tag. Running rows carry an ON chip;
+ * the NOW RUNNING row also gets `.active`.
+ */
+function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active, no = i + 1) {
+  const full = String(ticket.title || ticket.id).replace(/"/g, '');
+  const card = mk(doc, 'div', `tk${hot ? ' hot' : ''}${active ? ' active' : ''}`);
+  card.setAttribute('data-ticket-id', ticket.id);
+  card.setAttribute('data-status', state);
+  card.setAttribute('data-title', full);
+  card.setAttribute('data-category', category);
+  setCssVar(card, '--cat-color', categoryColour(category));
+  staggerCard(card, i, n, side);
+  card.appendChild(mk(doc, 'span', 'no', String(no).padStart(2, '0')));
   const tx = mk(doc, 'div', 'tx has-tip');
   tx.setAttribute('tabindex', '0');
   tx.setAttribute('data-tip', `${ticket.id}: ${full}`);
@@ -292,7 +367,8 @@ function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active) 
   tx.appendChild(mk(doc, 'div', 'sb', `${ticket.id}${ticket.stage ? ` · ${ticket.stage}` : ''}${ticket.sensitive ? ' · sensitive' : ''}`));
   card.appendChild(tx);
   const rt = mk(doc, 'div', 'rt');
-  const glyph = mk(doc, 'b', active ? 'on' : `g-${state}`, active ? 'ON' : (GLYPH[state] || GLYPH.ready));
+  const on = active || state === 'running';
+  const glyph = mk(doc, 'b', on ? 'on' : `g-${state}`, on ? 'ON' : (GLYPH[state] || GLYPH.ready));
   glyph.setAttribute('title', state);
   glyph.setAttribute('aria-label', state);
   rt.appendChild(glyph);
@@ -301,23 +377,42 @@ function buildTicketCard(doc, ticket, state, i, n, side, hot, category, active) 
   return card;
 }
 
+/** The closing "+n more" row of a truncated column: same card frame, muted, no ticket id. */
+function buildMoreCard(doc, more, i, n, side) {
+  const card = mk(doc, 'div', 'tk more');
+  card.setAttribute('data-cockpit-more', String(more.count));
+  staggerCard(card, i, n, side);
+  card.appendChild(mk(doc, 'span', 'no', '+'));
+  const tx = mk(doc, 'div', 'tx');
+  tx.appendChild(mk(doc, 'div', 'nm', `+${more.count} more`));
+  tx.appendChild(mk(doc, 'div', 'sb', more.detail || 'not shown here'));
+  card.appendChild(tx);
+  const rt = mk(doc, 'div', 'rt');
+  rt.appendChild(mk(doc, 'b', 'g-more', '…'));
+  rt.appendChild(mk(doc, 'span', 'tag', 'LEDGER'));
+  card.appendChild(rt);
+  return card;
+}
+
 /**
  * @param {HTMLElement} host a column element
- * @param {Array<{ ticket: object, state: string }>} entries
- * @param {{ side?: 'L'|'R', emptyText?: string, activeId?: string|null, categoryOf?: (t: object) => string }} [options]
+ * @param {Array<{ ticket: object, state: string, no?: number }>} entries `no` is the continuous row number (else i + 1)
+ * @param {{ side?: 'L'|'R', emptyText?: string, activeId?: string|null, categoryOf?: (t: object) => string, more?: { count: number, detail?: string }|null }} [options]
  */
 export function renderTicketColumn(host, entries, options = {}) {
-  const { side = 'L', emptyText, activeId = null } = options;
+  const { side = 'L', emptyText, activeId = null, more = null } = options;
   const categoryOf = typeof options.categoryOf === 'function' ? options.categoryOf : t => ticketCategory(t);
   clearHost(host);
   const doc = host.ownerDocument;
   if (!doc?.createElement) return;
   const list = Array.isArray(entries) ? entries : [];
+  const n = list.length + (more && more.count > 0 ? 1 : 0);
   list.forEach((e, i) => {
     const active = activeId != null && e.ticket.id === activeId;
-    host.appendChild(buildTicketCard(doc, e.ticket, e.state, i, list.length, side, side === 'R' && i === 0, categoryOf(e.ticket), active));
+    host.appendChild(buildTicketCard(doc, e.ticket, e.state, i, n, side, side === 'R' && i === 0, categoryOf(e.ticket), active, e.no ?? i + 1));
   });
-  if (!list.length && emptyText) host.appendChild(emptyLine(doc, emptyText, 'column'));
+  if (more && more.count > 0) host.appendChild(buildMoreCard(doc, more, list.length, n, side));
+  if (!n && emptyText) host.appendChild(emptyLine(doc, emptyText, 'column'));
 }
 
 /**
@@ -448,6 +543,46 @@ export function renderRunCards(host, items) {
     wc.appendChild(b);
     host.appendChild(wc);
   });
+}
+
+/**
+ * The orchestrator run as one line inside the NOW card (`RUN > id status · jobs 2/6` and a small bar);
+ * further runs are counted, not listed.
+ * @param {HTMLElement} host
+ * @param {Array<{ id?: string, fullId?: string, title?: string, status?: string, body?: string }>} items
+ */
+export function renderRunLine(host, items) {
+  clearHost(host);
+  const doc = host.ownerDocument;
+  if (!doc?.createElement) return;
+  host.setAttribute('data-cockpit-run-stream', 'true');
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    host.appendChild(mk(doc, 'span', 'ck-hint', 'no orchestrator run recorded'));
+    return;
+  }
+  const item = list[0];
+  const status = String(item.status || item.title || 'run');
+  const key = status.toLowerCase();
+  const color = /fail|error/.test(key) ? '#ff4d7e' : /run|live|work/.test(key) ? '#2fe0a0' : '#4d7cff';
+  const line = mk(doc, 'div', 'wc ck-run cockpit-run-stream-item');
+  setCssVar(line, '--c', color);
+  if (item.fullId) line.setAttribute('title', String(item.fullId));
+  line.appendChild(mk(doc, 'em', null, 'RUN >'));
+  const txt = mk(doc, 'span', 'rx');
+  txt.appendChild(mk(doc, 'b', null, `${item.id ? `${item.id} ` : ''}${status}`));
+  txt.appendChild(mk(doc, 'span', 'cockpit-run-stream-body', item.body ? ` · ${item.body}` : ' · no job count'));
+  if (list.length > 1) txt.appendChild(mk(doc, 'span', 'more', ` · +${list.length - 1} run${list.length === 2 ? '' : 's'}`));
+  line.appendChild(txt);
+  const m = typeof item.body === 'string' ? item.body.match(/(\d+)\s*\/\s*(\d+)/) : null;
+  if (m && Number(m[2]) > 0) {
+    const bar = mk(doc, 'i');
+    const fill = mk(doc, 'u');
+    fill.style.width = `${Math.min(100, Math.round((100 * Number(m[1])) / Number(m[2])))}%`;
+    bar.appendChild(fill);
+    line.appendChild(bar);
+  }
+  host.appendChild(line);
 }
 
 /**
