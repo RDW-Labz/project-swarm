@@ -1965,10 +1965,10 @@ index 00000000..ceda749d
 +}
 diff --git a/coordination/manifests/review-train5.json b/coordination/manifests/review-train5.json
 new file mode 100644
-index 00000000..b21e1764
+index 00000000..ddc316c6
 --- /dev/null
 +++ b/coordination/manifests/review-train5.json
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,40 @@
 +{
 +  "version": 1,
 +  "concurrency": 1,
@@ -1979,7 +1979,7 @@ index 00000000..b21e1764
 +      "model": "opus",
 +      "tier": "expensive",
 +      "tierReason": "owner rule: one Opus review of the combined release diff",
-+      "prompt": "Review release train 5 of Project Swarm: branch swarm/train5 against main at 0aef30bc (1.167.28). The combined code diff is in context at coordination/review/train5.diff; the full workspace is present, so open any file you need.\n\nWhat changed:\n(1) KILL PATHS, tools/concurrency-guard.mjs and tools/stress-tests.mjs: the guarded child is spawned in its own process group; the wrapper and watcher signal the whole group (child-pid fallback) after the start-time + command-line identity check; the watcher escalates once to SIGKILL; stress rounds stop on Ctrl-C (group kill, exit 130) or SIGTERM (143).\n(2) LEDGER, tools/tickets.mjs and tools/scope-commands.mjs: bulk supersede writes once under the scope lock from the fresh ledger; superseded tickets are pruned from dependents' dependsOn and the prune is logged; the approval hash ignores superseded tickets; renderBuildPlan uses the same live set as ledgerStats; last-touch reads id/ticket/ids/tickets log shapes and skips corrupt log lines.\n(3) OWNER CHECK: one gate for the bulk supersede and `tickets --set superseded`; refuses Claude/Codex/Cursor agent/worker sessions and non-TTY callers unless SWARM_OWNER=1.\n(4) MERGE GATE v2, tools/merge-guard.mjs: a release PR needs a committed review-run record (coordination/review/<train>-review-run.json) at the PR head, a metadata-only commit whose parent is the reviewed code head. The record carries train, runId, agent claude, an opus model, verdict pass, the full 40-char head, resultFile and its sha256, manifest and at. The gate fetches the record, the head commit parents and the compare from GitHub, requires the compare to touch only the record and the result file, verifies the result hash and the result verdict/head, and refuses before any `gh pr merge`. Reviews parsing is fence-aware; the release-title regex accepts case/whitespace and 'Release X.Y.Z'.\n(5) D-fix batches 27a (scope-commands) and 27b (server-restart): logging-only silent-catch visibility.\n\nPass bar (owner): blockers only. Look hard at: a way a release PR can pass the gate without a genuine committed review-run record for the full current head (or a record commit that also changes code); a process group kill that reaches an innocent process or misses the guarded descendants; a ledger lost update, a superseded dependency left blocking, or an approval lapse; an owner-only bypass; a crash/hang on a normal path; a test weakened/skipped; money/key leakage. Everything else is a follow-up.\n\nIMPORTANT for the review record: write the review JSON with a `head` field equal to the FULL 40-character SHA the review ran against (`git rev-parse HEAD` in your workspace). The orchestrator seat will build the committed run record from this result and the run state.\n\nWrite ONLY coordination/review/train5-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"head\":\"<full 40-char sha>\",\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
++      "prompt": "Review release train 5 of Project Swarm: branch swarm/train5 against main at 0aef30bc (1.167.28). The combined code diff is in context at coordination/review/train5.diff; the full workspace is present, so open any file you need.\n\nWhat changed:\n(1) KILL PATHS, tools/concurrency-guard.mjs and tools/stress-tests.mjs: the guarded child is spawned in its own process group; the wrapper and watcher signal the whole group (child-pid fallback) after the start-time + command-line identity check; the watcher escalates once to SIGKILL; stress rounds stop on Ctrl-C (group kill, exit 130) or SIGTERM (143).\n(2) LEDGER, tools/tickets.mjs and tools/scope-commands.mjs: bulk supersede writes once under the scope lock from the fresh ledger; superseded tickets are pruned from dependents' dependsOn and the prune is logged; the approval hash ignores superseded tickets; renderBuildPlan uses the same live set as ledgerStats; last-touch reads id/ticket/ids/tickets log shapes and skips corrupt log lines.\n(3) OWNER CHECK: one gate for the bulk supersede and `tickets --set superseded`; refuses Claude/Codex/Cursor agent/worker sessions and non-TTY callers unless SWARM_OWNER=1.\n(4) MERGE GATE v2, tools/merge-guard.mjs: a release PR needs a committed review-run record (coordination/review/<train>-review-run.json) at the PR head, a metadata-only commit whose parent is the reviewed code head. The record carries train, runId, agent claude, an opus model, verdict pass, the full 40-char head, resultFile and its sha256, manifest and at. The gate fetches the record, the head commit parents and the compare from GitHub, requires the compare to touch only the record and the result file, verifies the result hash and the result verdict/head, and refuses before any `gh pr merge`. Reviews parsing is fence-aware; the release-title regex accepts case/whitespace and 'Release X.Y.Z'.\n(5) D-fix batches 27a (scope-commands) and 27b (server-restart): logging-only silent-catch visibility.\n(6) S10 COMMAND CENTER: the Hive and Cockpit pages are now the default dashboard at `/`; the classic board is at `/classic` (Classic tab, always reachable) and the Command Center is disabled by SWARM_COMMAND_CENTER=0 or config.commandCenter=false. The port covers the watch-assets Command Center modules, the server snapshot/routes/flag, browser ledger stats synced with the server, no money output in board browser scripts, and a module-aware watch-assets parse test. The Fable design grade for the round 9 pages is Hive 4.2 and Cockpit 4.4. Focus: DOM/XSS injection from ledger, ticket, project or event strings (textContent vs innerHTML), token/privacy leaks (money is removed from browser output), route/auth bypass between the classic board and the Command Center, a default-on flag that can break or hang the board, and a regression on the classic view.\n\nPass bar (owner): blockers only. Look hard at: a way a release PR can pass the gate without a genuine committed review-run record for the full current head (or a record commit that also changes code); a process group kill that reaches an innocent process or misses the guarded descendants; a ledger lost update, a superseded dependency left blocking, or an approval lapse; an owner-only bypass; a crash/hang on a normal path; a test weakened/skipped; money/key leakage. Everything else is a follow-up.\n\nIMPORTANT for the review record: write the review JSON with a `head` field equal to the FULL 40-character SHA the review ran against (`git rev-parse HEAD` in your workspace). The orchestrator seat will build the committed run record from this result and the run state.\n\nWrite ONLY coordination/review/train5-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"head\":\"<full 40-char sha>\",\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
 +      "context": [
 +        "coordination/review/train5.diff",
 +        "tools/merge-guard.mjs",
@@ -1992,13 +1992,202 @@ index 00000000..b21e1764
 +        "tests/tickets-supersede.test.mjs",
 +        "tools/scope-commands.mjs",
 +        "package.json",
-+        "CHANGELOG.md"
++        "CHANGELOG.md",
++        "tools/watch-server.mjs",
++        "tools/command-center-flag.mjs",
++        "tools/watch-assets/hive-panels.js",
++        "tools/watch-assets/cc-ledger-browser.js",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-flag.test.mjs"
 +      ],
 +      "outputs": [
 +        "coordination/review/train5-review.json"
 +      ],
 +      "resultFile": "coordination/review/train5-review.json",
 +      "timeoutMs": 3000000
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t5-cc-default.json b/coordination/manifests/t5-cc-default.json
+new file mode 100644
+index 00000000..4ec0bd6a
+--- /dev/null
++++ b/coordination/manifests/t5-cc-default.json
+@@ -0,0 +1,76 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t5-cc-default",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "mid",
++      "prompt": "Train 5: make the S10 Command Center the default dashboard while keeping the old board reachable, and cover it with tests.\n\n1) tools/command-center-flag.mjs: commandCenterEnabled is currently opt-in. New semantics: enabled by default; disabled when SWARM_COMMAND_CENTER is the string '0' or config.commandCenter === false; still enabled for '1' or config.commandCenter === true. Keep the function signature and comments.\n\n2) tools/watch-server.mjs: when the Command Center is enabled, serve the Command Center Hive page at `/` (the dashboard root) and serve the classic board index (the existing indexName/board.html) at `/classic`. When it is disabled, `/` serves the classic board as today and `/classic` also serves the classic board (so the link never 404s). Add `/classic` to the route allowlist and to the HTML-page token/cookie handling (it is a page, so the query token works). Keep `/command-center` and `/command-center/project/...` as they are; keep the classic `/project` and `/run` routes unchanged. Do not break the remote-host rules (a remote board is read-only; `/classic` is a page).\n\n3) tools/watch-assets/cc-hive-mount.js: the existing Classic tab currently links to `/` with the search string. Point it at `/classic` with the same search string (so the old board stays reachable from the new dashboard). Keep the other tabs/routes.\n\n4) Tests: update tests/command-center-flag.test.mjs for the new default (enabled with no env/config, disabled for '0' and config false, enabled for '1' and config true). Update tests/command-center-routes-flag.test.mjs (and any watch-server route test that asserts `/` is the classic index) so: enabled -> `/` returns the Command Center page and `/classic` returns the classic board index; disabled -> both return the classic board; `/command-center` still works when enabled; the token-gated page handling works for `/classic`. Add a test asserting the Hive Classic tab href points at /classic. Keep every other assertion.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-flag.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-nav.test.mjs tests/cc-hive-mount.test.mjs tests/command-center-boot.test.mjs -> all pass. Report counts and the exact behavior table (enabled/disabled x / and /classic).",
++      "context": [
++        "tools/command-center-flag.mjs",
++        "tools/watch-server.mjs",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tests/command-center-flag.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-nav.test.mjs",
++        "tests/cc-hive-mount.test.mjs",
++        "tests/command-center-boot.test.mjs"
++      ],
++      "outputs": [
++        "tools/command-center-flag.mjs",
++        "tools/watch-server.mjs",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tests/command-center-flag.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-nav.test.mjs",
++        "tests/cc-hive-mount.test.mjs"
++      ],
++      "timeoutMs": 2400000,
++      "ignoreTests": [
++        "tests/board-inbox.test.mjs",
++        "tests/board-live-chip.test.mjs",
++        "tests/board-live.test.mjs",
++        "tests/board-nav.test.mjs",
++        "tests/board-no-money.test.mjs",
++        "tests/board-owner-actions.test.mjs",
++        "tests/board-owner-routes.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/board-run-federation.test.mjs",
++        "tests/browser/command-center.smoke.mjs",
++        "tests/classic-routes.spec.mjs",
++        "tests/command-center-snapshot.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/remote.test.mjs",
++        "tests/server-record-version.test.mjs",
++        "tests/server-restart-review.test.mjs",
++        "tests/server-restart-round2.test.mjs",
++        "tests/server-restart.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/watch-leftovers.test.mjs",
++        "tests/watch-review-fixes.test.mjs",
++        "tests/watch-server-vendor-assets.test.mjs",
++        "tests/watch-server.test.mjs",
++        "tests/watch-token-urls.test.mjs",
++        "tests/watch-ui.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; the focused command-center and route tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t5-cc-default",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-flag.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-nav.test.mjs",
++        "tests/cc-hive-mount.test.mjs",
++        "tests/command-center-boot.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t5-cc-suite-fix.json b/coordination/manifests/t5-cc-suite-fix.json
+new file mode 100644
+index 00000000..96c06ed8
+--- /dev/null
++++ b/coordination/manifests/t5-cc-suite-fix.json
+@@ -0,0 +1,46 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t5-cc-suite-fix",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "mid",
++      "prompt": "Fix the two red tests on train 5 after folding in S10. Tests must stay green; do not weaken the policies.\n\n1) tests/board-no-money.test.mjs: every board browser script must avoid money output patterns. tools/watch-assets/hive-panels.js has a spend stat that formats dollars: the `'$' + ...` branches (formatUsd and the value display) match the forbidden pattern. Remove money output from the browser: either drop the spend stat entirely and use a non-money value already available (e.g. jobs in 24h, done count) or show a non-money label like 'spend tracked' with a muted 'hidden' value. Remove the now-unused dollar formatting helpers and the spendUsd unit branch. Do not introduce `usd(`, `'$' +`, 'Billed', or a Cost tile label. Keep the panel layout and density; do not hard-code sample numbers.\n\n2) tests/cc-ledger-browser.test.mjs: tools/watch-assets/cc-ledger-browser.js ledgerStats must match the server tools/tickets.mjs ledgerStats after the train 5 change: add 'superseded' to the browser STATUSES and exclude superseded from the live set (like cancelled and proposed), so percentDone/coverage match the server. Keep total/byStatus/byStage semantics identical to the server.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/board-no-money.test.mjs tests/cc-ledger-browser.test.mjs -> all pass. Also run node --import ./tests/_isolate-config.mjs --test tests/command-center-hive-panels.test.mjs tests/command-center-hive.test.mjs tests/watch-assets.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/hive-panels.js",
++        "tools/watch-assets/cc-ledger-browser.js",
++        "tests/board-no-money.test.mjs",
++        "tests/cc-ledger-browser.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/hive-panels.js",
++        "tools/watch-assets/cc-ledger-browser.js"
++      ],
++      "timeoutMs": 1800000,
++      "ignoreTests": [
++        "tests/cc-hive-mount.test.mjs",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-hive-panels.test.mjs",
++        "tests/command-center-hive.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused money/ledger/CC tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t5-cc-suite-fix",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/board-no-money.test.mjs",
++        "tests/cc-ledger-browser.test.mjs",
++        "tests/command-center-hive-panels.test.mjs",
++        "tests/command-center-hive.test.mjs",
++        "tests/watch-assets.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t5-classic-tests.json b/coordination/manifests/t5-classic-tests.json
+new file mode 100644
+index 00000000..aaecdc12
+--- /dev/null
++++ b/coordination/manifests/t5-classic-tests.json
+@@ -0,0 +1,39 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t5-classic-tests",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 5: the Command Center is now the default at `/` and the classic board is at `/classic` (always classic). Three classic-board tests still fetch `/` and now receive the Command Center page, so they fail. Update ONLY these test files to test the classic board at `/classic` while keeping every assertion's intent (token gating, read-only behavior, privacy headers, panel markup, links):\n\n- tests/board-inbox.test.mjs (~line 180): the test 'the board serves it read-only behind the token: /api/board carries inbox, a wrong token is refused, the page has the panel and builds it with textContent only'. Fetch the classic page at `/classic` (with the token) instead of `/`; keep the `/api/board` and wrong-token assertions.\n- tests/board-page.test.mjs (~line 369): the test 'the board: every data route needs the token, only GET, wrong host refused; links open the right project and run'. Use `/classic` wherever it expects the classic board HTML/links; keep the data-route/token/host assertions.\n- tests/watch-token-urls.test.mjs (~line 139): the test 'HTML page query tokens are exchanged for a protected cookie and privacy headers'. Use the classic HTML page at `/classic` for the cookie/privacy exchange check; keep the wrong-token and header assertions. If the test also asserts the root page, update it to expect the Command Center page at `/` (still an HTML page, still token-gated, still exchanges the cookie).\n\nDo not change product code. Do not weaken assertions (no skips, no retries). Verify: node --import ./tests/_isolate-config.mjs --test tests/board-inbox.test.mjs tests/board-page.test.mjs tests/watch-token-urls.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tests/board-inbox.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/watch-token-urls.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ],
++      "outputs": [
++        "tests/board-inbox.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/watch-token-urls.test.mjs"
++      ],
++      "timeoutMs": 1800000
++    }
++  ],
++  "checks": [
++    {
++      "name": "t5-classic-tests",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/board-inbox.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/watch-token-urls.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
 +    }
 +  ]
 +}
@@ -8787,17 +8976,20 @@ index 15c0272a..d3bdff47 100644
  
    test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
 diff --git a/tests/merge-guard.test.mjs b/tests/merge-guard.test.mjs
-index 1e3d0b49..1ac2990c 100644
+index 1e3d0b49..ba0d6ab3 100644
 --- a/tests/merge-guard.test.mjs
 +++ b/tests/merge-guard.test.mjs
-@@ -1,5 +1,6 @@
+@@ -1,5 +1,9 @@
  import test from 'node:test';
  import assert from 'node:assert/strict';
 +import { createHash } from 'node:crypto';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
  import {
    checkRollup,
    assertMergeable,
-@@ -94,8 +95,7 @@ function mergeKey(headOid, deleteBranch = true) {
+@@ -94,8 +98,7 @@ function mergeKey(headOid, deleteBranch = true) {
  }
  
  const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
@@ -8807,14 +8999,14 @@ index 1e3d0b49..1ac2990c 100644
  
  function prView(over = {}) {
    return {
-@@ -624,201 +624,163 @@ test('runMerge: remote delete encodes each ref segment separately', async () =>
+@@ -623,202 +626,204 @@ test('runMerge: remote delete encodes each ref segment separately', async () =>
+   assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
  });
  
- function reviewsBody(lines) {
+-function reviewsBody(lines) {
 -  return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
-+  return '## Summary\n\nShip it.\n\n## Reviews\n\n' + lines.join('\n') + '\n';
- }
- 
+-}
+-
 -function reviewJsonBlock(obj) {
 -  return '```json\n' + JSON.stringify(obj) + '\n```';
 -}
@@ -8824,53 +9016,80 @@ index 1e3d0b49..1ac2990c 100644
 -    title: '1.0.0: x',
 -    headRefOid: HEAD_SHA,
 -    ...over,
-+const RECORD_PATH = 'coordination/review/train5-review-run.json';
 +const RESULT_PATH = 'coordination/review/train5-review.json';
-+const MARKER = '<!-- swarm-review-run: ' + RECORD_PATH + ' -->';
-+const FENCE = '```';
-+const LONG_FENCE = '````';
-+const contentsKey = (path, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + path + '?ref=' + head;
++const RECORD_PATH = 'coordination/review/train5-review-run.json';
++const MARKER = '<!-- swarm-review: ' + RESULT_PATH + ' -->';
++const FENCE = '`'.repeat(3);
++const LONG_FENCE = '`'.repeat(4);
++const contentsKey = (file, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + file + '?ref=' + head;
 +const commitKey = (head = HEAD_SHA) => 'gh api repos/octo/repo/commits/' + head;
 +const compareKey = (parent = OTHER_SHA, head = HEAD_SHA) => 'gh api repos/octo/repo/compare/' + parent + '...' + head;
 +const contentResponse = (bytes) => json({ encoding: 'base64', content: Buffer.from(bytes).toString('base64') });
 +const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-+const absentRun = { readFile: async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); } };
 +
-+function releaseFixture(o = {}) {
++async function releaseFixture(t, o = {}) {
++  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-merge-review-'));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
 +  const result = o.resultBytes ?? JSON.stringify({ verdict: 'pass', head: OTHER_SHA, ...o.result });
 +  const record = {
-+    train: '5', runId: 'review-5', agent: 'claude', model: 'claude-opus-4-6', verdict: 'pass',
-+    head: OTHER_SHA, resultFile: RESULT_PATH, resultHash: hash(result),
-+    manifest: 'coordination/manifests/review-5.json', at: T1, ...o.record,
++    version: 1, runId: 'review-5', jobId: 'review', agent: 'claude', model: 'claude-opus-4-6',
++    head: OTHER_SHA, status: 'complete', resultFile: RESULT_PATH, resultHash: hash(result),
++    manifest: '.swarm/runs/review-5/manifest.json', finishedAt: T1,
++    stateFile: '.swarm/runs/review-5/state.json', ...o.record,
    };
-+  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: reviewsBody([MARKER]), ...o.view };
++  const state = {
++    status: 'complete', baseCommit: OTHER_SHA,
++    jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }],
++    ...o.state,
++  };
++  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes) => {
++    const dir = path.join(root, '.swarm/runs', id);
++    await fs.mkdir(dir, { recursive: true });
++    await fs.writeFile(path.join(dir, 'review-record.json'), recordBytes ?? JSON.stringify(recordValue));
++    if (stateValue !== undefined) await fs.writeFile(path.join(dir, 'state.json'), stateBytes ?? JSON.stringify(stateValue));
++  };
++  // A newer unrelated sibling must never supply the selected review or its hash.
++  await writeRun('sibling', {
++    ...record, runId: 'sibling', head: HEAD_SHA, resultFile: 'coordination/review/other-review.json',
++    resultHash: '0'.repeat(64), finishedAt: T2, stateFile: '.swarm/runs/sibling/state.json',
++  }, { ...state, baseCommit: HEAD_SHA });
++  if (!o.noRecord) await writeRun('review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes);
++  for (const sibling of o.siblings ?? []) {
++    const id = sibling.id;
++    await writeRun(id, {
++      ...record, runId: id, manifest: '.swarm/runs/' + id + '/manifest.json',
++      stateFile: '.swarm/runs/' + id + '/state.json', ...sibling.record,
++    }, { ...state, ...sibling.state });
++  }
++  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: MARKER, ...o.view };
 +  const head = view.headRefOid;
-+  const rs = routes({ view });
-+  rs[contentsKey(RECORD_PATH, head)] = o.recordResponse ?? contentResponse(o.recordBytes ?? JSON.stringify(record));
++  const rs = routes({ view }, root);
 +  rs[commitKey(head)] = o.commitResponse ?? json({ parents: [{ sha: OTHER_SHA }] });
-+  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [
-+    { filename: RECORD_PATH, status: 'added' }, { filename: RESULT_PATH, status: 'added' },
-+  ] });
++  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [{ filename: RESULT_PATH, status: 'added' }] });
 +  rs[contentsKey(RESULT_PATH, head)] = o.resultResponse ?? contentResponse(result);
-+  return makeExec(rs);
++  // A legacy committed record is available, but must never be trusted or fetched.
++  rs[contentsKey(RECORD_PATH, head)] = contentResponse(JSON.stringify({ ...record, verdict: 'pass' }));
++  return { root, ...makeExec(rs) };
  }
  
 -// releaseReviewGate
-+async function checkRelease(o = {}, reason, extra = {}) {
-+  const { exec, calls } = releaseFixture(o);
-+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP, fs: absentRun, ...extra });
-+  assert.equal(r.status, reason ? 'refused' : 'merged');
++async function checkRelease(t, o = {}, reason) {
++  const { root, exec, calls } = await releaseFixture(t, o);
++  const r = await runMerge(root, ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, reason ? 'refused' : 'merged', JSON.stringify(r));
 +  if (reason) assert.ok(r.reasons.includes(reason), JSON.stringify(r));
 +  assert.equal(mergeCalls(calls).length, reason ? 0 : 1, 'refusals must precede gh pr merge');
++  assert.equal(calls.some((c) => [c.command, ...c.args].join(' ') === contentsKey(RECORD_PATH)), false);
 +  return { r, calls };
 +}
  
 -test('releaseReviewGate: non-release title is not required', () => {
 -  const r = releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
+-  assert.equal(r.required, false);
+-  assert.equal(r.ok, true);
 +test('releaseReviewGate: non-release title is not required', async () => {
 +  const r = await releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
-   assert.equal(r.required, false);
-   assert.equal(r.ok, true);
++  assert.deepEqual(r, { required: false, ok: true });
  });
  
 -test('releaseReviewGate: semver titles require JSON verdict for head', () => {
@@ -8879,9 +9098,9 @@ index 1e3d0b49..1ac2990c 100644
 -    assert.equal(r.required, true);
 -    assert.equal(r.ok, false);
 -    assert.equal(r.reason, `review-verdict-missing-for-head: ${SHA8}`);
-+test('runMerge: valid committed review record merges without a local mini run', async () => {
-+  const { calls } = await checkRelease();
-+  for (const key of [contentsKey(RECORD_PATH), contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
++test('runMerge: local completed Opus review and metadata-only result commit merge', async (t) => {
++  const { calls } = await checkRelease(t);
++  for (const key of [contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
 +    assert.ok(calls.some((c) => [c.command, ...c.args].join(' ') === key), key);
    }
  });
@@ -8898,7 +9117,12 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'merged');
 -  assert.equal(mergeCalls(calls).length, 1);
 -});
--
++for (const title of ['v1.168.0 - ship', '  V1.168.0 - ship', ' Release 1.2.3', 'release 1.2.3']) {
++  test('runMerge: release title ' + JSON.stringify(title) + ' requires a selector', async (t) => {
++    await checkRelease(t, { view: { title, body: '' } }, 'marker-missing');
++  });
++}
+ 
 -test('runMerge: release PR refuses prose PASS for other sha with head in text (exploit)', async () => {
 -  const { exec, calls } = makeExec(routes({
 -    view: releaseView({
@@ -8913,7 +9137,67 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
 -});
--
++for (const [name, options, reason] of [
++  ['missing selector', { view: { body: 'pass' } }, 'marker-missing'],
++  ['null body', { view: { body: null } }, 'marker-missing'],
++  ['multiline selector', { view: { body: '<!-- swarm-review:\n' + RESULT_PATH + ' -->' } }, 'marker-missing'],
++  ['inline selector', { view: { body: 'Ship it. ' + MARKER } }, 'marker-missing'],
++  ['typed JSON verdict', { noRecord: true, view: { body: [FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE].join('\n') } }, 'marker-missing'],
++  ['legacy committed record selector', { noRecord: true, view: { body: '<!-- swarm-review-run: ' + RECORD_PATH + ' -->' } }, 'marker-missing'],
++  ['committed record without local run', { noRecord: true }, 'review-run-record-missing'],
++  ['typed JSON alongside selector without local run', { noRecord: true, view: { body: [MARKER, FENCE + 'json', '{"verdict":"pass"}', FENCE].join('\n') } }, 'review-run-record-missing'],
++  ['malformed local record', { recordBytes: '{bad' }, 'review-run-record-missing'],
++  ['null local record', { recordBytes: 'null' }, 'review-run-record-missing'],
++  ['record for another head', { record: { head: HEAD_SHA } }, 'review-run-record-missing'],
++  ['record for another result', { record: { resultFile: 'coordination/review/another-review.json' } }, 'review-run-record-missing'],
++  ['non-Opus model', { record: { model: 'sonnet' } }, 'review-run-model-not-opus'],
++  ['missing model', { record: { model: null } }, 'review-run-model-not-opus'],
++  ['wrong agent', { record: { agent: 'codex' } }, 'review-run-model-not-opus'],
++  ['incomplete record', { record: { status: 'running' } }, 'review-run-state-mismatch'],
++  ['wrong record version', { record: { version: 2 } }, 'review-run-state-mismatch'],
++  ['invalid finish time', { record: { finishedAt: 'later' } }, 'review-run-state-mismatch'],
++  ['missing state', { noState: true }, 'review-run-state-mismatch'],
++  ['malformed state', { stateBytes: '{bad' }, 'review-run-state-mismatch'],
++  ['incomplete state', { state: { status: 'running' } }, 'review-run-state-mismatch'],
++  ['state for another head', { state: { baseCommit: HEAD_SHA } }, 'review-run-state-mismatch'],
++  ['missing jobs', { state: { jobs: null } }, 'review-run-state-mismatch'],
++  ['no matching job', { state: { jobs: [{ id: 'other', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
++  ['incomplete job', { state: { jobs: [{ id: 'review', status: 'running', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
++  ['different job agent', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'codex', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
++  ['different job model', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'other-opus' }] } }, 'review-run-state-mismatch'],
++  ['unsafe state path', { record: { stateFile: '../state.json' } }, 'review-run-state-mismatch'],
++  ['another run state path', { record: { stateFile: '.swarm/runs/sibling/state.json' } }, 'review-run-state-mismatch'],
++  ['mismatched run id', { record: { runId: 'sibling' } }, 'review-run-state-mismatch'],
++  ['code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'result-not-metadata-commit'],
++  ['committed record in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: RECORD_PATH }] }) }, 'result-not-metadata-commit'],
++  ['renamed code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'result-not-metadata-commit'],
++  ['wrong result in compare', { compareResponse: json({ files: [{ filename: 'coordination/review/other-review.json' }] }) }, 'result-not-metadata-commit'],
++  ['deleted result', { compareResponse: json({ files: [{ filename: RESULT_PATH, status: 'removed' }] }) }, 'result-not-metadata-commit'],
++  ['missing changed files', { compareResponse: json({ files: [] }) }, 'result-not-metadata-commit'],
++  ['malformed commit', { commitResponse: ok('{bad') }, 'result-not-metadata-commit'],
++  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'result-not-metadata-commit'],
++  ['no parents', { commitResponse: json({ parents: [] }) }, 'result-not-metadata-commit'],
++  ['short parent SHA', { commitResponse: json({ parents: [{ sha: 'abc123' }] }) }, 'result-not-metadata-commit'],
++  ['short PR head', { view: { headRefOid: 'abc123' } }, 'result-not-metadata-commit'],
++  ['commit fetch failure', { commitResponse: fail() }, 'result-not-metadata-commit'],
++  ['compare fetch failure', { compareResponse: fail() }, 'result-not-metadata-commit'],
++  ['compare parse failure', { compareResponse: ok('{bad') }, 'result-not-metadata-commit'],
++  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'result-hash-mismatch'],
++  ['malformed hash', { record: { resultHash: 'xyz' } }, 'result-hash-mismatch'],
++  ['result fetch failure', { resultResponse: fail() }, 'result-hash-mismatch'],
++  ['invalid base64', { resultResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'result-hash-mismatch'],
++  ['wrong contents encoding', { resultResponse: json({ encoding: 'utf8', content: '{}' }) }, 'result-hash-mismatch'],
++  ['result verdict fail', { result: { verdict: 'fail' } }, 'result-verdict'],
++  ['uppercase result verdict', { result: { verdict: 'PASS' } }, 'result-verdict'],
++  ['result head mismatch', { result: { head: HEAD_SHA } }, 'result-head-mismatch'],
++  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'result-head-mismatch'],
++  ['result null head', { result: { head: null } }, 'result-head-mismatch'],
++  ['malformed result', { resultBytes: '{bad json' }, 'result-verdict'],
++  ['null result', { resultBytes: 'null' }, 'result-verdict'],
++]) {
++  test('runMerge: release refuses ' + name + ' before merging', async (t) => { await checkRelease(t, options, reason); });
++}
+ 
 -test('runMerge: release PR refuses prose head fails review with head sha (exploit)', async () => {
 -  const { exec, calls } = makeExec(routes({
 -    view: releaseView({
@@ -8925,7 +9209,12 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
 -});
--
++for (const file of ['../train5-review.json', '/coordination/review/train5-review.json', 'coordination/review/../train5-review.json', 'coordination/review/%2e%2e/train5-review.json', 'coordination/review/train5-review-run.json', 'coordination/review/x\\train5-review.json', 'coordination/review/.json']) {
++  test('runMerge: unsafe selector path ' + file + ' refuses', async (t) => {
++    await checkRelease(t, { view: { body: '<!-- swarm-review: ' + file + ' -->' } }, 'selector-malformed');
++  });
++}
+ 
 -test('runMerge: release PR refuses JSON pass for different 40-char sha', async () => {
 -  const { exec, calls } = makeExec(routes({
 -    view: releaseView({
@@ -8936,12 +9225,9 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
--});
-+for (const title of ['v1.168.0 - ship', '  V1.168.0 - ship', ' Release 1.2.3', 'release 1.2.3']) {
-+  test('runMerge: release title ' + JSON.stringify(title) + ' requires a record', async () => {
-+    await checkRelease({ view: { title, body: '' } }, 'marker-missing');
-+  });
-+}
++test('runMerge: result head may be absent and bytes are hashed without normalization', async (t) => {
++  await checkRelease(t, { resultBytes: '{\r\n  "verdict": "pass"\r\n}\r\n' });
+ });
  
 -test('runMerge: release PR refuses JSON pass with 7-char head field', async () => {
 -  const { exec, calls } = makeExec(routes({
@@ -8953,51 +9239,9 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
--});
-+for (const [name, options, reason] of [
-+  ['missing marker', { view: { body: reviewsBody(['pass']) } }, 'marker-missing'],
-+  ['null body', { view: { body: null } }, 'marker-missing'],
-+  ['typed JSON verdict', { view: { body: reviewsBody([FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE]) } }, 'marker-missing'],
-+  ['marker outside Reviews', { view: { body: MARKER + '\n## Reviews\nnone' } }, 'marker-missing'],
-+  ['missing record', { recordResponse: fail('404 Not Found') }, 'record-missing'],
-+  ['malformed record', { recordBytes: '{bad json' }, 'record-malformed'],
-+  ['null record', { recordBytes: 'null' }, 'record-malformed'],
-+  ['unparseable contents response', { recordResponse: ok('{bad') }, 'record-malformed'],
-+  ['invalid base64', { recordResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'record-malformed'],
-+  ['wrong contents encoding', { recordResponse: json({ encoding: 'utf8', content: '{}' }) }, 'record-malformed'],
-+  ['code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'record-not-metadata-commit'],
-+  ['renamed code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'record-not-metadata-commit'],
-+  ['wrong result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: 'coordination/review/other.json' }] }) }, 'record-not-metadata-commit'],
-+  ['deleted metadata file', { compareResponse: json({ files: [{ filename: RECORD_PATH, status: 'removed' }, { filename: RESULT_PATH }] }) }, 'record-not-metadata-commit'],
-+  ['malformed commit response', { commitResponse: ok('{bad') }, 'record-not-metadata-commit'],
-+  ['missing result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }] }) }, 'record-not-metadata-commit'],
-+  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'record-not-metadata-commit'],
-+  ['no parents', { commitResponse: json({ parents: [] }) }, 'record-not-metadata-commit'],
-+  ['commit fetch failure', { commitResponse: fail() }, 'record-not-metadata-commit'],
-+  ['compare fetch failure', { compareResponse: fail() }, 'record-not-metadata-commit'],
-+  ['compare parse failure', { compareResponse: ok('{bad') }, 'record-not-metadata-commit'],
-+  ['head differs from parent', { record: { head: HEAD_SHA } }, 'record-head-mismatch'],
-+  ['short record head', { record: { head: OTHER_SHA.slice(0, 7) } }, 'record-head-mismatch'],
-+  ['short PR head', { view: { headRefOid: 'abc123' } }, 'record-head-mismatch'],
-+  ['record verdict fail', { record: { verdict: 'fail' } }, 'record-verdict-not-pass'],
-+  ['uppercase verdict', { record: { verdict: 'PASS' } }, 'record-verdict-not-pass'],
-+  ['missing PR head', { view: { headRefOid: null } }, 'record-head-mismatch'],
-+  ['wrong model', { record: { model: 'sonnet' } }, 'record-model-not-opus'],
-+  ['wrong agent', { record: { agent: 'codex' } }, 'record-run-invalid'],
-+  ['empty run id', { record: { runId: '  ' } }, 'record-run-invalid'],
-+  ['traversing run id', { record: { runId: '../other' } }, 'record-run-invalid'],
-+  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'record-result-hash-mismatch'],
-+  ['malformed hash', { record: { resultHash: 'xyz' } }, 'record-result-hash-mismatch'],
-+  ['result fetch failure', { resultResponse: fail() }, 'record-result-hash-mismatch'],
-+  ['result verdict fail', { result: { verdict: 'fail' } }, 'record-result-verdict'],
-+  ['result head mismatch', { result: { head: HEAD_SHA } }, 'record-result-verdict'],
-+  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'record-result-verdict'],
-+  ['result malformed', { resultBytes: '{bad json' }, 'record-result-verdict'],
-+  ['result null', { resultBytes: 'null' }, 'record-result-verdict'],
-+  ['unsafe result path', { record: { resultFile: 'coordination/review/../code.json' } }, 'record-malformed'],
-+]) {
-+  test('runMerge: release refuses ' + name + ' before merging', async () => { await checkRelease(options, reason); });
-+}
++test('runMerge: selectors work anywhere in the body outside fenced blocks', async (t) => {
++  await checkRelease(t, { view: { body: MARKER + '\n## Reviews\nnone' } });
+ });
  
 -test('runMerge: release PR refuses JSON verdict PASS uppercase', async () => {
 -  const { exec, calls } = makeExec(routes({
@@ -9010,9 +9254,11 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
 -  assert.equal(mergeCalls(calls).length, 0);
 -});
-+for (const path of ['../train5-review-run.json', '/coordination/review/train5-review-run.json', 'coordination/review/../train5-review-run.json', 'coordination/review/%2e%2e/train5-review-run.json', 'coordination/review/train5-review.json', 'coordination/review/x\\train5-review-run.json']) {
-+  test('runMerge: unsafe marker path ' + path + ' refuses', async () => {
-+    await checkRelease({ view: { body: reviewsBody(['<!-- swarm-review-run: ' + path + ' -->']) } }, 'record-malformed');
++for (const fence of [FENCE, '~~~~', '    ' + LONG_FENCE, '  ~~~~~']) {
++  test('runMerge: ' + JSON.stringify(fence) + ' fences hide fake selectors', async (t) => {
++    const body = [fence + 'markdown', MARKER, fence, fence + 'text', '<!-- swarm-review: bad -->', fence, MARKER].join('\r\n');
++    await checkRelease(t, { view: { body } });
++    await checkRelease(t, { view: { body: [fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
 +  });
 +}
  
@@ -9026,9 +9272,8 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
-+test('runMerge: uppercase full SHAs and result hash are accepted', async () => {
-+  const result = JSON.stringify({ verdict: 'pass', head: OTHER_SHA.toUpperCase() });
-+  await checkRelease({ view: { headRefOid: HEAD_SHA.toUpperCase() }, record: { head: OTHER_SHA.toUpperCase(), resultHash: hash(result).toUpperCase() }, resultBytes: result });
++test('runMerge: shorter or different fence delimiter does not close a fence', async (t) => {
++  await checkRelease(t, { view: { body: [LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE].join('\n') } }, 'marker-missing');
  });
  
 -test('runMerge: release PR refuses malformed JSON block in Reviews', async () => {
@@ -9041,8 +9286,8 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
-+test('runMerge: result head may be absent and bytes are hashed without normalization', async () => {
-+  await checkRelease({ resultBytes: '{\r\n  \"verdict\": \"pass\"\r\n}\r\n' });
++test('runMerge: duplicate selectors refuse', async (t) => {
++  await checkRelease(t, { view: { body: MARKER + '\n' + MARKER } }, 'selector-malformed');
  });
  
 -test('runMerge: release PR pass then fail for same head refuses (last wins fail)', async () => {
@@ -9058,14 +9303,14 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-failed-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
--});
-+for (const fence of [FENCE, '~~~~', '    ' + LONG_FENCE, '  ~~~~~']) {
-+  test('runMerge: ' + JSON.stringify(fence) + ' fences hide headings and fake markers', async () => {
-+    const body = [fence + 'markdown', '## Reviews', MARKER, fence, '## Reviews', fence + 'text', '## Other', '<!-- swarm-review-run: bad -->', fence, MARKER, '## End'].join('\r\n');
-+    await checkRelease({ view: { body } });
-+    await checkRelease({ view: { body: ['## Reviews', fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
-+  });
-+}
++test('runMerge: latest matching completed run supplies the hash', async (t) => {
++  await checkRelease(t, { record: { resultHash: '0'.repeat(64) }, siblings: [
++    { id: 'newer', record: { finishedAt: T2, resultHash: hash(JSON.stringify({ verdict: 'pass', head: OTHER_SHA })) } },
++  ] });
++  await checkRelease(t, { siblings: [
++    { id: 'newer', record: { finishedAt: T2, resultHash: '0'.repeat(64) } },
++  ] }, 'result-hash-mismatch');
+ });
  
 -test('runMerge: release PR fail then pass for same head merges (last wins pass)', async () => {
 -  const { exec, calls } = makeExec(routes({
@@ -9079,8 +9324,11 @@ index 1e3d0b49..1ac2990c 100644
 -  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 -  assert.equal(r.status, 'merged');
 -  assert.equal(mergeCalls(calls).length, 1);
-+test('runMerge: shorter or different fence delimiter does not close a fence', async () => {
-+  await checkRelease({ view: { body: reviewsBody([LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE]) } }, 'marker-missing');
++test('runMerge: job maps may include unrelated incomplete jobs', async (t) => {
++  await checkRelease(t, { state: { jobs: {
++    review: { id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' },
++    other: { id: 'other', status: 'running', agent: 'codex', model: 'other' },
++  } } });
  });
  
 -test('runMerge: release PR refuses with no Reviews section', async () => {
@@ -9093,9 +9341,8 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 -  assert.equal(mergeCalls(calls).length, 0);
-+test('runMerge: real heading ends Reviews and duplicate markers refuse', async () => {
-+  await checkRelease({ view: { body: reviewsBody(['## Other', MARKER]) } }, 'marker-missing');
-+  await checkRelease({ view: { body: reviewsBody([MARKER, MARKER]) } }, 'record-malformed');
++test('runMerge: completed job actualModel can match the runner record', async (t) => {
++  await checkRelease(t, { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: null, actualModel: 'claude-opus-4-6' }] } });
  });
  
 -test('runMerge: non-release title merges without Reviews section', async () => {
@@ -9124,23 +9371,82 @@ index 1e3d0b49..1ac2990c 100644
 -  assert.equal(r.status, 'refused');
 -  assert.ok(r.reasons.includes('review-verdict-missing-for-head: no-head'));
 -  assert.equal(mergeCalls(calls).length, 0);
-+  assert.equal(calls.some((c) => c.args[1]?.includes('/contents/')), false);
++  assert.equal(calls.some((c) => c.args[1]?.match(/\/(contents|commits|compare)\//)), false);
+ });
+diff --git a/tests/review-record.test.mjs b/tests/review-record.test.mjs
+new file mode 100644
+index 00000000..f5655b06
+--- /dev/null
++++ b/tests/review-record.test.mjs
+@@ -0,0 +1,68 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { createHash } from 'node:crypto';
++import { writeReviewRecord } from '../tools/swarm.mjs';
++
++async function fixture(t) {
++  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-review-record-'));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  const state = { id: 'review-5', baseCommit: 'a'.repeat(40) };
++  const workspace = path.join(root, 'workspace');
++  const resultFile = 'coordination/review/train5-review.json';
++  const bytes = Buffer.from('{\r\n  "verdict": "pass"\r\n}\r\n');
++  await fs.mkdir(path.join(root, '.swarm/runs', state.id), { recursive: true });
++  await fs.mkdir(path.dirname(path.join(workspace, resultFile)), { recursive: true });
++  await fs.writeFile(path.join(workspace, resultFile), bytes);
++  const job = {
++    id: 'review', agent: 'claude', model: 'claude-opus-4-6', status: 'complete',
++    outputs: [resultFile], finishedAt: '2026-10-30T12:00:00.000Z',
++  };
++  const recordFile = path.join(root, '.swarm/runs', state.id, 'review-record.json');
++  return { root, state, workspace, job, resultFile, bytes, recordFile };
++}
++
++test('runner writes review record from completed job and exact workspace bytes', async (t) => {
++  const f = await fixture(t);
++  await writeReviewRecord(f.root, f.state, f.job, f.workspace);
++  assert.deepEqual(JSON.parse(await fs.readFile(f.recordFile, 'utf8')), {
++    version: 1, runId: f.state.id, jobId: f.job.id, agent: f.job.agent, model: f.job.model,
++    manifest: '.swarm/runs/review-5/manifest.json', head: f.state.baseCommit,
++    status: 'complete', resultFile: f.resultFile,
++    resultHash: createHash('sha256').update(f.bytes).digest('hex'),
++    finishedAt: f.job.finishedAt, stateFile: '.swarm/runs/review-5/state.json',
++  });
++  assert.deepEqual(await fs.readdir(path.dirname(f.recordFile)), ['review-record.json']);
 +});
 +
-+test('runMerge: existing local run must be complete with matching job agent and model', async () => {
-+  const state = { status: 'complete', jobs: [{ agent: 'claude', model: 'claude-opus-4-6' }] };
-+  const localFs = (value) => ({ readFile: async (path) => {
-+    assert.equal(path, '/repo/.swarm/runs/review-5/state.json');
-+    return JSON.stringify(value);
-+  } });
-+  await checkRelease({}, undefined, { fs: localFs(state) });
-+  await checkRelease({}, undefined, { fs: localFs({ ...state, jobs: { review: state.jobs[0] } }) });
-+  for (const value of [null, { ...state, status: 'running' }, { ...state, jobs: [] }, { ...state, jobs: [{ agent: 'codex', model: 'claude-opus-4-6' }] }, { ...state, jobs: [{ agent: 'claude', model: 'other-opus' }] }]) {
-+    await checkRelease({}, 'record-run-invalid', { fs: localFs(value) });
-+  }
-+  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => '{bad' } });
-+  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } });
- });
++test('runner uses actualModel when no requested model exists', async (t) => {
++  const f = await fixture(t);
++  await writeReviewRecord(f.root, f.state, { ...f.job, model: null, actualModel: 'opus-actual' }, f.workspace);
++  assert.equal(JSON.parse(await fs.readFile(f.recordFile, 'utf8')).model, 'opus-actual');
++});
++
++for (const output of ['src/example.mjs', 'coordination/review/train5-review-run.json', 'elsewhere/train5-review.json']) {
++  test('runner does not write review record for ' + output, async (t) => {
++    const f = await fixture(t);
++    await writeReviewRecord(f.root, f.state, { ...f.job, outputs: [output] }, f.workspace);
++    await assert.rejects(fs.access(f.recordFile), { code: 'ENOENT' });
++  });
++}
++
++for (const status of ['running', 'failed', 'blocked', 'cancelled']) {
++  test('runner does not attest a ' + status + ' job', async (t) => {
++    const f = await fixture(t);
++    await writeReviewRecord(f.root, f.state, { ...f.job, status }, f.workspace);
++    await assert.rejects(fs.access(f.recordFile), { code: 'ENOENT' });
++  });
++}
++
++test('runner warns without writing a record when result bytes cannot be read', async (t) => {
++  const f = await fixture(t);
++  const warnings = [];
++  await writeReviewRecord(f.root, f.state, { ...f.job, outputs: ['coordination/review/missing-review.json'] }, f.workspace, { warn: warning => warnings.push(warning) });
++  await assert.rejects(fs.access(f.recordFile), { code: 'ENOENT' });
++  assert.deepEqual(warnings, ['review-record-write-failed']);
++});
 diff --git a/tests/stress-interrupt.test.mjs b/tests/stress-interrupt.test.mjs
 new file mode 100644
 index 00000000..1c39c547
@@ -10499,10 +10805,10 @@ index 928c40ca..7aec8774 100644
    }
    dropHandlers();
 diff --git a/tools/merge-guard.mjs b/tools/merge-guard.mjs
-index 4b8a1601..be38317d 100644
+index 4b8a1601..127fdb49 100644
 --- a/tools/merge-guard.mjs
 +++ b/tools/merge-guard.mjs
-@@ -5,23 +5,38 @@ import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
+@@ -5,98 +5,162 @@ import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
  import { holdsSwarmState } from './state-guard.mjs';
  import { projectsFile } from './projects.mjs';
  import os from 'node:os';
@@ -10516,39 +10822,39 @@ index 4b8a1601..be38317d 100644
  const PR_FIELDS =
    'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
 -const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
-+const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
- const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
- const ANY_HEADING_RE = /^##\s/;
+-const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
+-const ANY_HEADING_RE = /^##\s/;
 -const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
 -const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
++const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
  const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
-+const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
- 
-+// Strip fenced text before interpreting either headings or markers. A closing
-+// fence must use the opener's character and at least its delimiter length.
- function extractReviewsSectionText(body) {
-   const reviewLines = [];
-   let inReviews = false;
+-
+-function extractReviewsSectionText(body) {
+-  const reviewLines = [];
+-  let inReviews = false;
 -  for (const line of String(body ?? '').split('\n')) {
+-    if (REVIEWS_HEADING_RE.test(line)) {
+-      inReviews = true;
++const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
++
++// Strip fenced text before interpreting selectors. A closing
++// fence must use the opener's character and at least its delimiter length.
++function unfencedBodyText(body) {
++  const lines = [];
 +  let fence = null;
 +  for (const line of String(body ?? '').split(/\r?\n/)) {
 +    const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
 +    if (fence) {
 +      if (delimiter && delimiter[1][0] === fence.char &&
 +          delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
-+      continue;
-+    }
-+    if (delimiter) {
-+      fence = { char: delimiter[1][0], length: delimiter[1].length };
-+      continue;
-+    }
-     if (REVIEWS_HEADING_RE.test(line)) {
-       inReviews = true;
        continue;
-@@ -32,71 +47,125 @@ function extractReviewsSectionText(body) {
-   return reviewLines.join('\n');
- }
- 
+     }
+-    if (inReviews && ANY_HEADING_RE.test(line)) break;
+-    if (inReviews) reviewLines.push(line);
+-  }
+-  return reviewLines.join('\n');
+-}
+-
 -function collectJsonFenceContents(reviewsText) {
 -  const blocks = [];
 -  const lines = String(reviewsText ?? '').split('\n');
@@ -10559,17 +10865,22 @@ index 4b8a1601..be38317d 100644
 -    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
 -      contentLines.push(lines[i]);
 -      i++;
--    }
++    if (delimiter) {
++      fence = { char: delimiter[1][0], length: delimiter[1].length };
++      continue;
+     }
 -    blocks.push(contentLines.join('\n'));
--  }
++    lines.push(line);
+   }
 -  return blocks;
--}
--
++  return lines.join('\n');
+ }
+ 
 -function blockNamesHead(block, headLower) {
 -  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
 -  return block.head.toLowerCase() === headLower;
 +function safeReviewPath(value) {
-+  if (typeof value !== 'string' || !value.startsWith('coordination/review/')) return false;
++  if (typeof value !== 'string' || !value.startsWith('coordination/review/') || !value.endsWith('-review.json')) return false;
 +  return value.split('/').every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..');
  }
  
@@ -10591,30 +10902,29 @@ index 4b8a1601..be38317d 100644
    }
 -  const headLower = head.toLowerCase();
 -  const sha8 = headLower.slice(0, 8);
+-
+-  const reviewsText = extractReviewsSectionText(body);
+-  const rawBlocks = collectJsonFenceContents(reviewsText);
+-  const parsedBlocks = [];
+-  for (const raw of rawBlocks) {
+-    let block;
 +  return Buffer.from(encoded, 'base64');
 +}
- 
++
 +export async function releaseReviewGate(
 +  { title, body, headRefOid },
 +  { gh, repoName, root = '.', fs: fsImpl = fs } = {},
 +) {
 +  if (!RELEASE_TITLE_RE.test(String(title ?? '').trimStart())) return { required: false, ok: true };
 +  const refuse = (reason) => ({ required: true, ok: false, reason });
-   const reviewsText = extractReviewsSectionText(body);
--  const rawBlocks = collectJsonFenceContents(reviewsText);
--  const parsedBlocks = [];
--  for (const raw of rawBlocks) {
--    let block;
-+  const markers = [...reviewsText.matchAll(/<!--\s*swarm-review-run:\s*([^\r\n]*?)\s*-->/g)];
++  const markers = [...unfencedBodyText(body).matchAll(/^[\t ]*<!--[\t ]*swarm-review:[\t ]*([^\r\n]*?)[\t ]*-->[\t ]*$/gm)];
 +  if (!markers.length) return refuse('marker-missing');
-+  const recordPath = markers[0][1].trim();
-+  if (markers.length !== 1 || !safeReviewPath(recordPath) || !recordPath.endsWith('-review-run.json')) {
-+    return refuse('record-malformed');
-+  }
-+  if (!isSha(headRefOid)) return refuse('record-head-mismatch');
++  const resultFile = markers[0][1].trim();
++  if (markers.length !== 1 || !safeReviewPath(resultFile)) return refuse('selector-malformed');
++  if (!isSha(headRefOid)) return refuse('result-not-metadata-commit');
 +
-+  // Every remote read is pinned to R, the PR head, so the mini's local run
-+  // directory is not needed on the machine performing the merge.
++  // R must contain only the integrated result; its sole parent H is the code
++  // head reviewed by the local run. Pin all GitHub reads to these commits.
 +  const api = async (endpoint) => {
      try {
 -      block = JSON.parse(raw);
@@ -10622,23 +10932,28 @@ index 4b8a1601..be38317d 100644
 +      return response.code === 0 ? { ok: true, value: parseJson(response) } : { ok: false };
      } catch {
 -      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
--    }
--    if (!isObj(block)) {
--      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
 +      return { ok: false };
      }
+-    if (!isObj(block)) {
+-      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+-    }
 -    parsedBlocks.push(block);
 +  };
-+  const contents = (file) => api('contents/' + file + '?ref=' + headRefOid);
-+  const fetched = await contents(recordPath);
-+  if (!fetched.ok) return refuse('record-missing');
-+  let record;
-+  try {
-+    record = JSON.parse(decodeContents(fetched.value).toString('utf8'));
-+  } catch {
-+    return refuse('record-malformed');
++  const commit = await api('commits/' + headRefOid);
++  const parents = commit.value?.parents;
++  if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
++    return refuse('result-not-metadata-commit');
++  }
++  const reviewedHead = parents[0].sha;
++  const comparison = await api('compare/' + reviewedHead + '...' + headRefOid);
++  const files = comparison.value?.files;
++  if (!comparison.ok || !Array.isArray(files) || files.length !== 1 ||
++      !isObj(files[0]) || files[0].filename !== resultFile ||
++      (files[0].previous_filename && files[0].previous_filename !== resultFile) ||
++      ['renamed', 'removed', 'copied'].includes(files[0].status)) {
++    return refuse('result-not-metadata-commit');
    }
--
+ 
 -  let lastVerdictForHead = null;
 -  for (const block of parsedBlocks) {
 -    if (!blockNamesHead(block, headLower)) continue;
@@ -10646,82 +10961,83 @@ index 4b8a1601..be38317d 100644
 -    if (v === 'pass') lastVerdictForHead = 'pass';
 -    else if (v === 'fail') lastVerdictForHead = 'fail';
 -    else lastVerdictForHead = 'other';
-+  if (!isObj(record) || !safeReviewPath(record.resultFile) ||
-+      typeof record.train !== 'string' || !record.train.trim() ||
-+      typeof record.manifest !== 'string' ||
-+      !/^coordination\/manifests\/[A-Za-z0-9_.-]+\.json$/.test(record.manifest) ||
-+      typeof record.at !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(record.at) ||
-+      !Number.isFinite(Date.parse(record.at))) return refuse('record-malformed');
-+
-+  const commit = await api('commits/' + headRefOid);
-+  const parents = commit.value?.parents;
-+  if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
-+    return refuse('record-not-metadata-commit');
-+  }
-+  const parent = parents[0].sha;
-+  const comparison = await api('compare/' + parent + '...' + headRefOid);
-+  const files = comparison.value?.files;
-+  if (!comparison.ok || !Array.isArray(files) || files.length !== 2 ||
-+      record.resultFile === recordPath ||
-+      new Set(files.map((file) => file?.filename)).size !== 2 ||
-+      !files.every((file) => isObj(file) &&
-+        [recordPath, record.resultFile].includes(file.filename) &&
-+        (!file.previous_filename || file.previous_filename === file.filename) &&
-+        !['renamed', 'removed', 'copied'].includes(file.status))) {
-+    return refuse('record-not-metadata-commit');
++  const runsDir = path.join(root, '.swarm', 'runs');
++  let entries;
++  try {
++    entries = await fsImpl.readdir(runsDir, { withFileTypes: true });
++  } catch {
++    return refuse('review-run-record-missing');
    }
-+  if (!isSha(record.head) || record.head.toLowerCase() !== parent.toLowerCase()) {
-+    return refuse('record-head-mismatch');
++  const candidates = [];
++  for (const entry of entries) {
++    if (!entry.isDirectory()) continue;
++    try {
++      const record = JSON.parse(await fsImpl.readFile(path.join(runsDir, entry.name, 'review-record.json'), 'utf8'));
++      if (isObj(record) && record.head === reviewedHead && record.resultFile === resultFile) {
++        candidates.push({ record, runId: entry.name });
++      }
++    } catch {
++      // Unrelated runs and runs without readable records cannot attest a review.
++    }
 +  }
-+  if (record.verdict !== 'pass') return refuse('record-verdict-not-pass');
-+  if (typeof record.model !== 'string' || !/opus/i.test(record.model)) return refuse('record-model-not-opus');
-+  if (record.agent !== 'claude' || typeof record.runId !== 'string' ||
-+      !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(record.runId)) return refuse('record-run-invalid');
++  if (!candidates.length) return refuse('review-run-record-missing');
++  const opusRuns = candidates.filter(({ record }) =>
++    record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
++  if (!opusRuns.length) return refuse('review-run-model-not-opus');
++
++  const matching = [];
++  for (const { record, runId } of opusRuns) {
++    // Bind the state path to the directory containing the runner's record.
++    if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
++        typeof record.jobId !== 'string' || !record.jobId ||
++        record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
++        typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
++    try {
++      const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
++      const jobs = isObj(state?.jobs) ? Object.values(state.jobs) : state?.jobs;
++      if (!isObj(state) || state.status !== 'complete' || state.baseCommit !== reviewedHead ||
++          !Array.isArray(jobs) || !jobs.some((job) =>
++            isObj(job) && job.id === record.jobId && job.status === 'complete' &&
++            job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
++      matching.push(record);
++    } catch {
++      // Missing, malformed, or unreadable local state fails closed.
++    }
++  }
++  if (!matching.length) return refuse('review-run-state-mismatch');
++  matching.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
++  const record = matching[0];
  
 -  if (lastVerdictForHead === null) {
 -    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
-+  const resultResponse = await contents(record.resultFile);
++  const fetched = await api('contents/' + resultFile + '?ref=' + headRefOid);
 +  let resultBytes;
 +  try {
-+    if (!resultResponse.ok) throw new Error('result missing');
-+    resultBytes = decodeContents(resultResponse.value);
++    if (!fetched.ok) throw new Error('result missing');
++    resultBytes = decodeContents(fetched.value);
 +    if (typeof record.resultHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.resultHash) ||
 +        createHash('sha256').update(resultBytes).digest('hex') !== record.resultHash.toLowerCase()) {
-+      return refuse('record-result-hash-mismatch');
++      return refuse('result-hash-mismatch');
 +    }
 +  } catch {
-+    return refuse('record-result-hash-mismatch');
-+  }
++    return refuse('result-hash-mismatch');
+   }
+-  if (lastVerdictForHead === 'pass') {
+-    return { required: true, ok: true };
 +  let result;
 +  try {
 +    result = JSON.parse(resultBytes.toString('utf8'));
 +  } catch {
-+    return refuse('record-result-verdict');
-   }
--  if (lastVerdictForHead === 'pass') {
-+  if (!isObj(result) || result.verdict !== 'pass' ||
-+      (Object.hasOwn(result, 'head') && (!isSha(result.head) || result.head.toLowerCase() !== parent.toLowerCase()))) {
-+    return refuse('record-result-verdict');
-+  }
-+
-+  let localRun;
-+  try {
-+    localRun = JSON.parse(await fsImpl.readFile(path.join(root, '.swarm', 'runs', record.runId, 'state.json'), 'utf8'));
-+  } catch (error) {
-+    if (error.code !== 'ENOENT') return refuse('record-run-invalid');
-     return { required: true, ok: true };
++    return refuse('result-verdict');
    }
 -  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
-+  const jobs = isObj(localRun?.jobs) ? Object.values(localRun.jobs) : localRun?.jobs;
-+  if (!isObj(localRun) || localRun.status !== 'complete' || !Array.isArray(jobs) || !jobs.length ||
-+      !jobs.every((job) => isObj(job) && job.agent === record.agent && job.model === record.model)) {
-+    return refuse('record-run-invalid');
-+  }
++  if (!isObj(result) || result.verdict !== 'pass') return refuse('result-verdict');
++  if (Object.hasOwn(result, 'head') && result.head !== reviewedHead) return refuse('result-head-mismatch');
 +  return { required: true, ok: true };
  }
  
  async function realExec(command, args, { cwd } = {}) {
-@@ -362,11 +431,11 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
+@@ -362,11 +426,11 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
  
    const reasons = [...verdict.reasons];
    if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
@@ -11205,6 +11521,51 @@ index d74df424..b4918333 100644
    const ms = result.ms ?? Date.now() - start;
    if (result.timedOut) {
      console.log(`stress round ${i}/${rounds}: FAIL (timed out after ${ms}ms)`);
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index a97e78c1..c4231773 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -254,6 +254,32 @@ export function inSourceTestHits(writes) {
+ 
+ 
+ 
++
++// Only the coordinator calls this after the final job outcome is known. Worker
++// reports supply neither the attestation nor its hash.
++export async function writeReviewRecord(root, state, job, workspaceRoot, { warn = console.warn } = {}) {
++  if (job.status !== 'complete') return;
++  const resultFile = job.outputs?.find(file =>
++    /^coordination\/review\/[A-Za-z0-9_.-]+-review\.json$/.test(file));
++  if (!resultFile) return;
++  const recordFile = `.swarm/runs/${state.id}/review-record.json`;
++  const temporary = `${recordFile}.${crypto.randomUUID()}.tmp`;
++  try {
++    const bytes = await fs.readFile(path.join(workspaceRoot, resultFile));
++    const resultHash = crypto.createHash('sha256').update(bytes).digest('hex');
++    await jsonWrite(root, temporary, {
++      version: 1, runId: state.id, jobId: job.id, agent: job.agent,
++      model: job.model ?? job.actualModel,
++      manifest: `.swarm/runs/${state.id}/manifest.json`, head: state.baseCommit,
++      status: 'complete', resultFile, resultHash, finishedAt: job.finishedAt,
++      stateFile: `.swarm/runs/${state.id}/state.json`,
++    });
++    await fs.rename(path.join(root, temporary), path.join(root, recordFile));
++  } catch {
++    await fs.rm(path.join(root, temporary), { force: true }).catch(() => {});
++    warn('review-record-write-failed');
++  }
++}
+ 
+ // Human jobs never reach the worker pipeline: the run keeps every job that does not depend on one, and the
+ // rest waits in .swarm/project/human-jobs.json until the owner has done them (see tools/human-jobs.mjs).
+@@ -1280,6 +1306,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+           record.durationMs = now() - Date.parse(record.startedAt);
+         }
+         if (result?.hostDead && !signal.aborted) retry = true;
++        if (!retry) await writeReviewRecord(root, state, record, workspaceRoot);
+         await queueSave();
+       } catch (error) {
+         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;
 diff --git a/tools/tickets.mjs b/tools/tickets.mjs
 index 9200fd9f..6ecfddd4 100644
 --- a/tools/tickets.mjs
