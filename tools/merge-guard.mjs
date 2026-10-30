@@ -15,16 +15,13 @@ const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_FIELDS =
   'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
 const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
-const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
-const ANY_HEADING_RE = /^##\s/;
 const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
 const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
 
-// Strip fenced text before interpreting either headings or markers. A closing
+// Strip fenced text before interpreting selectors. A closing
 // fence must use the opener's character and at least its delimiter length.
-function extractReviewsSectionText(body) {
-  const reviewLines = [];
-  let inReviews = false;
+function unfencedBodyText(body) {
+  const lines = [];
   let fence = null;
   for (const line of String(body ?? '').split(/\r?\n/)) {
     const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
@@ -37,18 +34,13 @@ function extractReviewsSectionText(body) {
       fence = { char: delimiter[1][0], length: delimiter[1].length };
       continue;
     }
-    if (REVIEWS_HEADING_RE.test(line)) {
-      inReviews = true;
-      continue;
-    }
-    if (inReviews && ANY_HEADING_RE.test(line)) break;
-    if (inReviews) reviewLines.push(line);
+    lines.push(line);
   }
-  return reviewLines.join('\n');
+  return lines.join('\n');
 }
 
 function safeReviewPath(value) {
-  if (typeof value !== 'string' || !value.startsWith('coordination/review/')) return false;
+  if (typeof value !== 'string' || !value.startsWith('coordination/review/') || !value.endsWith('-review.json')) return false;
   return value.split('/').every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..');
 }
 
@@ -70,17 +62,14 @@ export async function releaseReviewGate(
 ) {
   if (!RELEASE_TITLE_RE.test(String(title ?? '').trimStart())) return { required: false, ok: true };
   const refuse = (reason) => ({ required: true, ok: false, reason });
-  const reviewsText = extractReviewsSectionText(body);
-  const markers = [...reviewsText.matchAll(/<!--\s*swarm-review-run:\s*([^\r\n]*?)\s*-->/g)];
+  const markers = [...unfencedBodyText(body).matchAll(/^[\t ]*<!--[\t ]*swarm-review:[\t ]*([^\r\n]*?)[\t ]*-->[\t ]*$/gm)];
   if (!markers.length) return refuse('marker-missing');
-  const recordPath = markers[0][1].trim();
-  if (markers.length !== 1 || !safeReviewPath(recordPath) || !recordPath.endsWith('-review-run.json')) {
-    return refuse('record-malformed');
-  }
-  if (!isSha(headRefOid)) return refuse('record-head-mismatch');
+  const resultFile = markers[0][1].trim();
+  if (markers.length !== 1 || !safeReviewPath(resultFile)) return refuse('selector-malformed');
+  if (!isSha(headRefOid)) return refuse('result-not-metadata-commit');
 
-  // Every remote read is pinned to R, the PR head, so the mini's local run
-  // directory is not needed on the machine performing the merge.
+  // R must contain only the integrated result; its sole parent H is the code
+  // head reviewed by the local run. Pin all GitHub reads to these commits.
   const api = async (endpoint) => {
     try {
       const response = await gh(['api', 'repos/' + repoName + '/' + endpoint]);
@@ -89,82 +78,88 @@ export async function releaseReviewGate(
       return { ok: false };
     }
   };
-  const contents = (file) => api('contents/' + file + '?ref=' + headRefOid);
-  const fetched = await contents(recordPath);
-  if (!fetched.ok) return refuse('record-missing');
-  let record;
-  try {
-    record = JSON.parse(decodeContents(fetched.value).toString('utf8'));
-  } catch {
-    return refuse('record-malformed');
-  }
-  if (!isObj(record) || !safeReviewPath(record.resultFile) ||
-      typeof record.train !== 'string' || !record.train.trim() ||
-      typeof record.manifest !== 'string' ||
-      !/^coordination\/manifests\/[A-Za-z0-9_.-]+\.json$/.test(record.manifest) ||
-      typeof record.at !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(record.at) ||
-      !Number.isFinite(Date.parse(record.at))) return refuse('record-malformed');
-
   const commit = await api('commits/' + headRefOid);
   const parents = commit.value?.parents;
   if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
-    return refuse('record-not-metadata-commit');
+    return refuse('result-not-metadata-commit');
   }
-  const parent = parents[0].sha;
-  const comparison = await api('compare/' + parent + '...' + headRefOid);
+  const reviewedHead = parents[0].sha;
+  const comparison = await api('compare/' + reviewedHead + '...' + headRefOid);
   const files = comparison.value?.files;
-  if (!comparison.ok || !Array.isArray(files) || files.length !== 2 ||
-      record.resultFile === recordPath ||
-      new Set(files.map((file) => file?.filename)).size !== 2 ||
-      !files.every((file) => isObj(file) &&
-        [recordPath, record.resultFile].includes(file.filename) &&
-        (!file.previous_filename || file.previous_filename === file.filename) &&
-        !['renamed', 'removed', 'copied'].includes(file.status))) {
-    return refuse('record-not-metadata-commit');
+  if (!comparison.ok || !Array.isArray(files) || files.length !== 1 ||
+      !isObj(files[0]) || files[0].filename !== resultFile ||
+      (files[0].previous_filename && files[0].previous_filename !== resultFile) ||
+      ['renamed', 'removed', 'copied'].includes(files[0].status)) {
+    return refuse('result-not-metadata-commit');
   }
-  if (!isSha(record.head) || record.head.toLowerCase() !== parent.toLowerCase()) {
-    return refuse('record-head-mismatch');
-  }
-  if (record.verdict !== 'pass') return refuse('record-verdict-not-pass');
-  if (typeof record.model !== 'string' || !/opus/i.test(record.model)) return refuse('record-model-not-opus');
-  if (record.agent !== 'claude' || typeof record.runId !== 'string' ||
-      !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(record.runId)) return refuse('record-run-invalid');
 
-  const resultResponse = await contents(record.resultFile);
+  const runsDir = path.join(root, '.swarm', 'runs');
+  let entries;
+  try {
+    entries = await fsImpl.readdir(runsDir, { withFileTypes: true });
+  } catch {
+    return refuse('review-run-record-missing');
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const record = JSON.parse(await fsImpl.readFile(path.join(runsDir, entry.name, 'review-record.json'), 'utf8'));
+      if (isObj(record) && record.head === reviewedHead && record.resultFile === resultFile) {
+        candidates.push({ record, runId: entry.name });
+      }
+    } catch {
+      // Unrelated runs and runs without readable records cannot attest a review.
+    }
+  }
+  if (!candidates.length) return refuse('review-run-record-missing');
+  const opusRuns = candidates.filter(({ record }) =>
+    record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
+  if (!opusRuns.length) return refuse('review-run-model-not-opus');
+
+  const matching = [];
+  for (const { record, runId } of opusRuns) {
+    // Bind the state path to the directory containing the runner's record.
+    if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
+        typeof record.jobId !== 'string' || !record.jobId ||
+        record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
+        typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
+    try {
+      const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
+      const jobs = isObj(state?.jobs) ? Object.values(state.jobs) : state?.jobs;
+      if (!isObj(state) || state.status !== 'complete' || state.baseCommit !== reviewedHead ||
+          !Array.isArray(jobs) || !jobs.some((job) =>
+            isObj(job) && job.id === record.jobId && job.status === 'complete' &&
+            job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
+      matching.push(record);
+    } catch {
+      // Missing, malformed, or unreadable local state fails closed.
+    }
+  }
+  if (!matching.length) return refuse('review-run-state-mismatch');
+  matching.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+  const record = matching[0];
+
+  const fetched = await api('contents/' + resultFile + '?ref=' + headRefOid);
   let resultBytes;
   try {
-    if (!resultResponse.ok) throw new Error('result missing');
-    resultBytes = decodeContents(resultResponse.value);
+    if (!fetched.ok) throw new Error('result missing');
+    resultBytes = decodeContents(fetched.value);
     if (typeof record.resultHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.resultHash) ||
         createHash('sha256').update(resultBytes).digest('hex') !== record.resultHash.toLowerCase()) {
-      return refuse('record-result-hash-mismatch');
+      return refuse('result-hash-mismatch');
     }
   } catch {
-    return refuse('record-result-hash-mismatch');
+    return refuse('result-hash-mismatch');
   }
   let result;
   try {
     result = JSON.parse(resultBytes.toString('utf8'));
   } catch {
-    return refuse('record-result-verdict');
+    return refuse('result-verdict');
   }
-  if (!isObj(result) || result.verdict !== 'pass' ||
-      (Object.hasOwn(result, 'head') && (!isSha(result.head) || result.head.toLowerCase() !== parent.toLowerCase()))) {
-    return refuse('record-result-verdict');
-  }
-
-  let localRun;
-  try {
-    localRun = JSON.parse(await fsImpl.readFile(path.join(root, '.swarm', 'runs', record.runId, 'state.json'), 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') return refuse('record-run-invalid');
-    return { required: true, ok: true };
-  }
-  const jobs = isObj(localRun?.jobs) ? Object.values(localRun.jobs) : localRun?.jobs;
-  if (!isObj(localRun) || localRun.status !== 'complete' || !Array.isArray(jobs) || !jobs.length ||
-      !jobs.every((job) => isObj(job) && job.agent === record.agent && job.model === record.model)) {
-    return refuse('record-run-invalid');
-  }
+  if (!isObj(result) || result.verdict !== 'pass') return refuse('result-verdict');
+  if (Object.hasOwn(result, 'head') && result.head !== reviewedHead) return refuse('result-head-mismatch');
   return { required: true, ok: true };
 }
 

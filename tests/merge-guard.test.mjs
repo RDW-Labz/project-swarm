@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   checkRollup,
   assertMergeable,
@@ -623,164 +626,204 @@ test('runMerge: remote delete encodes each ref segment separately', async () => 
   assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
 });
 
-function reviewsBody(lines) {
-  return '## Summary\n\nShip it.\n\n## Reviews\n\n' + lines.join('\n') + '\n';
-}
-
-const RECORD_PATH = 'coordination/review/train5-review-run.json';
 const RESULT_PATH = 'coordination/review/train5-review.json';
-const MARKER = '<!-- swarm-review-run: ' + RECORD_PATH + ' -->';
-const FENCE = '```';
-const LONG_FENCE = '````';
-const contentsKey = (path, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + path + '?ref=' + head;
+const RECORD_PATH = 'coordination/review/train5-review-run.json';
+const MARKER = '<!-- swarm-review: ' + RESULT_PATH + ' -->';
+const FENCE = '`'.repeat(3);
+const LONG_FENCE = '`'.repeat(4);
+const contentsKey = (file, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + file + '?ref=' + head;
 const commitKey = (head = HEAD_SHA) => 'gh api repos/octo/repo/commits/' + head;
 const compareKey = (parent = OTHER_SHA, head = HEAD_SHA) => 'gh api repos/octo/repo/compare/' + parent + '...' + head;
 const contentResponse = (bytes) => json({ encoding: 'base64', content: Buffer.from(bytes).toString('base64') });
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const absentRun = { readFile: async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); } };
 
-function releaseFixture(o = {}) {
+async function releaseFixture(t, o = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-merge-review-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
   const result = o.resultBytes ?? JSON.stringify({ verdict: 'pass', head: OTHER_SHA, ...o.result });
   const record = {
-    train: '5', runId: 'review-5', agent: 'claude', model: 'claude-opus-4-6', verdict: 'pass',
-    head: OTHER_SHA, resultFile: RESULT_PATH, resultHash: hash(result),
-    manifest: 'coordination/manifests/review-5.json', at: T1, ...o.record,
+    version: 1, runId: 'review-5', jobId: 'review', agent: 'claude', model: 'claude-opus-4-6',
+    head: OTHER_SHA, status: 'complete', resultFile: RESULT_PATH, resultHash: hash(result),
+    manifest: '.swarm/runs/review-5/manifest.json', finishedAt: T1,
+    stateFile: '.swarm/runs/review-5/state.json', ...o.record,
   };
-  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: reviewsBody([MARKER]), ...o.view };
+  const state = {
+    status: 'complete', baseCommit: OTHER_SHA,
+    jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }],
+    ...o.state,
+  };
+  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes) => {
+    const dir = path.join(root, '.swarm/runs', id);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'review-record.json'), recordBytes ?? JSON.stringify(recordValue));
+    if (stateValue !== undefined) await fs.writeFile(path.join(dir, 'state.json'), stateBytes ?? JSON.stringify(stateValue));
+  };
+  // A newer unrelated sibling must never supply the selected review or its hash.
+  await writeRun('sibling', {
+    ...record, runId: 'sibling', head: HEAD_SHA, resultFile: 'coordination/review/other-review.json',
+    resultHash: '0'.repeat(64), finishedAt: T2, stateFile: '.swarm/runs/sibling/state.json',
+  }, { ...state, baseCommit: HEAD_SHA });
+  if (!o.noRecord) await writeRun('review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes);
+  for (const sibling of o.siblings ?? []) {
+    const id = sibling.id;
+    await writeRun(id, {
+      ...record, runId: id, manifest: '.swarm/runs/' + id + '/manifest.json',
+      stateFile: '.swarm/runs/' + id + '/state.json', ...sibling.record,
+    }, { ...state, ...sibling.state });
+  }
+  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: MARKER, ...o.view };
   const head = view.headRefOid;
-  const rs = routes({ view });
-  rs[contentsKey(RECORD_PATH, head)] = o.recordResponse ?? contentResponse(o.recordBytes ?? JSON.stringify(record));
+  const rs = routes({ view }, root);
   rs[commitKey(head)] = o.commitResponse ?? json({ parents: [{ sha: OTHER_SHA }] });
-  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [
-    { filename: RECORD_PATH, status: 'added' }, { filename: RESULT_PATH, status: 'added' },
-  ] });
+  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [{ filename: RESULT_PATH, status: 'added' }] });
   rs[contentsKey(RESULT_PATH, head)] = o.resultResponse ?? contentResponse(result);
-  return makeExec(rs);
+  // A legacy committed record is available, but must never be trusted or fetched.
+  rs[contentsKey(RECORD_PATH, head)] = contentResponse(JSON.stringify({ ...record, verdict: 'pass' }));
+  return { root, ...makeExec(rs) };
 }
 
-async function checkRelease(o = {}, reason, extra = {}) {
-  const { exec, calls } = releaseFixture(o);
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP, fs: absentRun, ...extra });
-  assert.equal(r.status, reason ? 'refused' : 'merged');
+async function checkRelease(t, o = {}, reason) {
+  const { root, exec, calls } = await releaseFixture(t, o);
+  const r = await runMerge(root, ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, reason ? 'refused' : 'merged', JSON.stringify(r));
   if (reason) assert.ok(r.reasons.includes(reason), JSON.stringify(r));
   assert.equal(mergeCalls(calls).length, reason ? 0 : 1, 'refusals must precede gh pr merge');
+  assert.equal(calls.some((c) => [c.command, ...c.args].join(' ') === contentsKey(RECORD_PATH)), false);
   return { r, calls };
 }
 
 test('releaseReviewGate: non-release title is not required', async () => {
   const r = await releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
-  assert.equal(r.required, false);
-  assert.equal(r.ok, true);
+  assert.deepEqual(r, { required: false, ok: true });
 });
 
-test('runMerge: valid committed review record merges without a local mini run', async () => {
-  const { calls } = await checkRelease();
-  for (const key of [contentsKey(RECORD_PATH), contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
+test('runMerge: local completed Opus review and metadata-only result commit merge', async (t) => {
+  const { calls } = await checkRelease(t);
+  for (const key of [contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
     assert.ok(calls.some((c) => [c.command, ...c.args].join(' ') === key), key);
   }
 });
 
 for (const title of ['v1.168.0 - ship', '  V1.168.0 - ship', ' Release 1.2.3', 'release 1.2.3']) {
-  test('runMerge: release title ' + JSON.stringify(title) + ' requires a record', async () => {
-    await checkRelease({ view: { title, body: '' } }, 'marker-missing');
+  test('runMerge: release title ' + JSON.stringify(title) + ' requires a selector', async (t) => {
+    await checkRelease(t, { view: { title, body: '' } }, 'marker-missing');
   });
 }
 
 for (const [name, options, reason] of [
-  ['missing marker', { view: { body: reviewsBody(['pass']) } }, 'marker-missing'],
+  ['missing selector', { view: { body: 'pass' } }, 'marker-missing'],
   ['null body', { view: { body: null } }, 'marker-missing'],
-  ['typed JSON verdict', { view: { body: reviewsBody([FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE]) } }, 'marker-missing'],
-  ['marker outside Reviews', { view: { body: MARKER + '\n## Reviews\nnone' } }, 'marker-missing'],
-  ['missing record', { recordResponse: fail('404 Not Found') }, 'record-missing'],
-  ['malformed record', { recordBytes: '{bad json' }, 'record-malformed'],
-  ['null record', { recordBytes: 'null' }, 'record-malformed'],
-  ['unparseable contents response', { recordResponse: ok('{bad') }, 'record-malformed'],
-  ['invalid base64', { recordResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'record-malformed'],
-  ['wrong contents encoding', { recordResponse: json({ encoding: 'utf8', content: '{}' }) }, 'record-malformed'],
-  ['code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'record-not-metadata-commit'],
-  ['renamed code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'record-not-metadata-commit'],
-  ['wrong result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: 'coordination/review/other.json' }] }) }, 'record-not-metadata-commit'],
-  ['deleted metadata file', { compareResponse: json({ files: [{ filename: RECORD_PATH, status: 'removed' }, { filename: RESULT_PATH }] }) }, 'record-not-metadata-commit'],
-  ['malformed commit response', { commitResponse: ok('{bad') }, 'record-not-metadata-commit'],
-  ['missing result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }] }) }, 'record-not-metadata-commit'],
-  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'record-not-metadata-commit'],
-  ['no parents', { commitResponse: json({ parents: [] }) }, 'record-not-metadata-commit'],
-  ['commit fetch failure', { commitResponse: fail() }, 'record-not-metadata-commit'],
-  ['compare fetch failure', { compareResponse: fail() }, 'record-not-metadata-commit'],
-  ['compare parse failure', { compareResponse: ok('{bad') }, 'record-not-metadata-commit'],
-  ['head differs from parent', { record: { head: HEAD_SHA } }, 'record-head-mismatch'],
-  ['short record head', { record: { head: OTHER_SHA.slice(0, 7) } }, 'record-head-mismatch'],
-  ['short PR head', { view: { headRefOid: 'abc123' } }, 'record-head-mismatch'],
-  ['record verdict fail', { record: { verdict: 'fail' } }, 'record-verdict-not-pass'],
-  ['uppercase verdict', { record: { verdict: 'PASS' } }, 'record-verdict-not-pass'],
-  ['missing PR head', { view: { headRefOid: null } }, 'record-head-mismatch'],
-  ['wrong model', { record: { model: 'sonnet' } }, 'record-model-not-opus'],
-  ['wrong agent', { record: { agent: 'codex' } }, 'record-run-invalid'],
-  ['empty run id', { record: { runId: '  ' } }, 'record-run-invalid'],
-  ['traversing run id', { record: { runId: '../other' } }, 'record-run-invalid'],
-  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'record-result-hash-mismatch'],
-  ['malformed hash', { record: { resultHash: 'xyz' } }, 'record-result-hash-mismatch'],
-  ['result fetch failure', { resultResponse: fail() }, 'record-result-hash-mismatch'],
-  ['result verdict fail', { result: { verdict: 'fail' } }, 'record-result-verdict'],
-  ['result head mismatch', { result: { head: HEAD_SHA } }, 'record-result-verdict'],
-  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'record-result-verdict'],
-  ['result malformed', { resultBytes: '{bad json' }, 'record-result-verdict'],
-  ['result null', { resultBytes: 'null' }, 'record-result-verdict'],
-  ['unsafe result path', { record: { resultFile: 'coordination/review/../code.json' } }, 'record-malformed'],
+  ['multiline selector', { view: { body: '<!-- swarm-review:\n' + RESULT_PATH + ' -->' } }, 'marker-missing'],
+  ['inline selector', { view: { body: 'Ship it. ' + MARKER } }, 'marker-missing'],
+  ['typed JSON verdict', { noRecord: true, view: { body: [FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE].join('\n') } }, 'marker-missing'],
+  ['legacy committed record selector', { noRecord: true, view: { body: '<!-- swarm-review-run: ' + RECORD_PATH + ' -->' } }, 'marker-missing'],
+  ['committed record without local run', { noRecord: true }, 'review-run-record-missing'],
+  ['typed JSON alongside selector without local run', { noRecord: true, view: { body: [MARKER, FENCE + 'json', '{"verdict":"pass"}', FENCE].join('\n') } }, 'review-run-record-missing'],
+  ['malformed local record', { recordBytes: '{bad' }, 'review-run-record-missing'],
+  ['null local record', { recordBytes: 'null' }, 'review-run-record-missing'],
+  ['record for another head', { record: { head: HEAD_SHA } }, 'review-run-record-missing'],
+  ['record for another result', { record: { resultFile: 'coordination/review/another-review.json' } }, 'review-run-record-missing'],
+  ['non-Opus model', { record: { model: 'sonnet' } }, 'review-run-model-not-opus'],
+  ['missing model', { record: { model: null } }, 'review-run-model-not-opus'],
+  ['wrong agent', { record: { agent: 'codex' } }, 'review-run-model-not-opus'],
+  ['incomplete record', { record: { status: 'running' } }, 'review-run-state-mismatch'],
+  ['wrong record version', { record: { version: 2 } }, 'review-run-state-mismatch'],
+  ['invalid finish time', { record: { finishedAt: 'later' } }, 'review-run-state-mismatch'],
+  ['missing state', { noState: true }, 'review-run-state-mismatch'],
+  ['malformed state', { stateBytes: '{bad' }, 'review-run-state-mismatch'],
+  ['incomplete state', { state: { status: 'running' } }, 'review-run-state-mismatch'],
+  ['state for another head', { state: { baseCommit: HEAD_SHA } }, 'review-run-state-mismatch'],
+  ['missing jobs', { state: { jobs: null } }, 'review-run-state-mismatch'],
+  ['no matching job', { state: { jobs: [{ id: 'other', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['incomplete job', { state: { jobs: [{ id: 'review', status: 'running', agent: 'claude', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['different job agent', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'codex', model: 'claude-opus-4-6' }] } }, 'review-run-state-mismatch'],
+  ['different job model', { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'other-opus' }] } }, 'review-run-state-mismatch'],
+  ['unsafe state path', { record: { stateFile: '../state.json' } }, 'review-run-state-mismatch'],
+  ['another run state path', { record: { stateFile: '.swarm/runs/sibling/state.json' } }, 'review-run-state-mismatch'],
+  ['mismatched run id', { record: { runId: 'sibling' } }, 'review-run-state-mismatch'],
+  ['code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'result-not-metadata-commit'],
+  ['committed record in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: RECORD_PATH }] }) }, 'result-not-metadata-commit'],
+  ['renamed code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'result-not-metadata-commit'],
+  ['wrong result in compare', { compareResponse: json({ files: [{ filename: 'coordination/review/other-review.json' }] }) }, 'result-not-metadata-commit'],
+  ['deleted result', { compareResponse: json({ files: [{ filename: RESULT_PATH, status: 'removed' }] }) }, 'result-not-metadata-commit'],
+  ['missing changed files', { compareResponse: json({ files: [] }) }, 'result-not-metadata-commit'],
+  ['malformed commit', { commitResponse: ok('{bad') }, 'result-not-metadata-commit'],
+  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'result-not-metadata-commit'],
+  ['no parents', { commitResponse: json({ parents: [] }) }, 'result-not-metadata-commit'],
+  ['short parent SHA', { commitResponse: json({ parents: [{ sha: 'abc123' }] }) }, 'result-not-metadata-commit'],
+  ['short PR head', { view: { headRefOid: 'abc123' } }, 'result-not-metadata-commit'],
+  ['commit fetch failure', { commitResponse: fail() }, 'result-not-metadata-commit'],
+  ['compare fetch failure', { compareResponse: fail() }, 'result-not-metadata-commit'],
+  ['compare parse failure', { compareResponse: ok('{bad') }, 'result-not-metadata-commit'],
+  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'result-hash-mismatch'],
+  ['malformed hash', { record: { resultHash: 'xyz' } }, 'result-hash-mismatch'],
+  ['result fetch failure', { resultResponse: fail() }, 'result-hash-mismatch'],
+  ['invalid base64', { resultResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'result-hash-mismatch'],
+  ['wrong contents encoding', { resultResponse: json({ encoding: 'utf8', content: '{}' }) }, 'result-hash-mismatch'],
+  ['result verdict fail', { result: { verdict: 'fail' } }, 'result-verdict'],
+  ['uppercase result verdict', { result: { verdict: 'PASS' } }, 'result-verdict'],
+  ['result head mismatch', { result: { head: HEAD_SHA } }, 'result-head-mismatch'],
+  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'result-head-mismatch'],
+  ['result null head', { result: { head: null } }, 'result-head-mismatch'],
+  ['malformed result', { resultBytes: '{bad json' }, 'result-verdict'],
+  ['null result', { resultBytes: 'null' }, 'result-verdict'],
 ]) {
-  test('runMerge: release refuses ' + name + ' before merging', async () => { await checkRelease(options, reason); });
+  test('runMerge: release refuses ' + name + ' before merging', async (t) => { await checkRelease(t, options, reason); });
 }
 
-for (const path of ['../train5-review-run.json', '/coordination/review/train5-review-run.json', 'coordination/review/../train5-review-run.json', 'coordination/review/%2e%2e/train5-review-run.json', 'coordination/review/train5-review.json', 'coordination/review/x\\train5-review-run.json']) {
-  test('runMerge: unsafe marker path ' + path + ' refuses', async () => {
-    await checkRelease({ view: { body: reviewsBody(['<!-- swarm-review-run: ' + path + ' -->']) } }, 'record-malformed');
+for (const file of ['../train5-review.json', '/coordination/review/train5-review.json', 'coordination/review/../train5-review.json', 'coordination/review/%2e%2e/train5-review.json', 'coordination/review/train5-review-run.json', 'coordination/review/x\\train5-review.json', 'coordination/review/.json']) {
+  test('runMerge: unsafe selector path ' + file + ' refuses', async (t) => {
+    await checkRelease(t, { view: { body: '<!-- swarm-review: ' + file + ' -->' } }, 'selector-malformed');
   });
 }
 
-test('runMerge: uppercase full SHAs and result hash are accepted', async () => {
-  const result = JSON.stringify({ verdict: 'pass', head: OTHER_SHA.toUpperCase() });
-  await checkRelease({ view: { headRefOid: HEAD_SHA.toUpperCase() }, record: { head: OTHER_SHA.toUpperCase(), resultHash: hash(result).toUpperCase() }, resultBytes: result });
+test('runMerge: result head may be absent and bytes are hashed without normalization', async (t) => {
+  await checkRelease(t, { resultBytes: '{\r\n  "verdict": "pass"\r\n}\r\n' });
 });
 
-test('runMerge: result head may be absent and bytes are hashed without normalization', async () => {
-  await checkRelease({ resultBytes: '{\r\n  \"verdict\": \"pass\"\r\n}\r\n' });
+test('runMerge: selectors work anywhere in the body outside fenced blocks', async (t) => {
+  await checkRelease(t, { view: { body: MARKER + '\n## Reviews\nnone' } });
 });
 
 for (const fence of [FENCE, '~~~~', '    ' + LONG_FENCE, '  ~~~~~']) {
-  test('runMerge: ' + JSON.stringify(fence) + ' fences hide headings and fake markers', async () => {
-    const body = [fence + 'markdown', '## Reviews', MARKER, fence, '## Reviews', fence + 'text', '## Other', '<!-- swarm-review-run: bad -->', fence, MARKER, '## End'].join('\r\n');
-    await checkRelease({ view: { body } });
-    await checkRelease({ view: { body: ['## Reviews', fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
+  test('runMerge: ' + JSON.stringify(fence) + ' fences hide fake selectors', async (t) => {
+    const body = [fence + 'markdown', MARKER, fence, fence + 'text', '<!-- swarm-review: bad -->', fence, MARKER].join('\r\n');
+    await checkRelease(t, { view: { body } });
+    await checkRelease(t, { view: { body: [fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
   });
 }
 
-test('runMerge: shorter or different fence delimiter does not close a fence', async () => {
-  await checkRelease({ view: { body: reviewsBody([LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE]) } }, 'marker-missing');
+test('runMerge: shorter or different fence delimiter does not close a fence', async (t) => {
+  await checkRelease(t, { view: { body: [LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE].join('\n') } }, 'marker-missing');
 });
 
-test('runMerge: real heading ends Reviews and duplicate markers refuse', async () => {
-  await checkRelease({ view: { body: reviewsBody(['## Other', MARKER]) } }, 'marker-missing');
-  await checkRelease({ view: { body: reviewsBody([MARKER, MARKER]) } }, 'record-malformed');
+test('runMerge: duplicate selectors refuse', async (t) => {
+  await checkRelease(t, { view: { body: MARKER + '\n' + MARKER } }, 'selector-malformed');
+});
+
+test('runMerge: latest matching completed run supplies the hash', async (t) => {
+  await checkRelease(t, { record: { resultHash: '0'.repeat(64) }, siblings: [
+    { id: 'newer', record: { finishedAt: T2, resultHash: hash(JSON.stringify({ verdict: 'pass', head: OTHER_SHA })) } },
+  ] });
+  await checkRelease(t, { siblings: [
+    { id: 'newer', record: { finishedAt: T2, resultHash: '0'.repeat(64) } },
+  ] }, 'result-hash-mismatch');
+});
+
+test('runMerge: job maps may include unrelated incomplete jobs', async (t) => {
+  await checkRelease(t, { state: { jobs: {
+    review: { id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' },
+    other: { id: 'other', status: 'running', agent: 'codex', model: 'other' },
+  } } });
+});
+
+test('runMerge: completed job actualModel can match the runner record', async (t) => {
+  await checkRelease(t, { state: { jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: null, actualModel: 'claude-opus-4-6' }] } });
 });
 
 test('runMerge: non-release title merges without review API calls', async () => {
   const { exec, calls } = makeExec(routes());
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'merged');
-  assert.equal(calls.some((c) => c.args[1]?.includes('/contents/')), false);
-});
-
-test('runMerge: existing local run must be complete with matching job agent and model', async () => {
-  const state = { status: 'complete', jobs: [{ agent: 'claude', model: 'claude-opus-4-6' }] };
-  const localFs = (value) => ({ readFile: async (path) => {
-    assert.equal(path, '/repo/.swarm/runs/review-5/state.json');
-    return JSON.stringify(value);
-  } });
-  await checkRelease({}, undefined, { fs: localFs(state) });
-  await checkRelease({}, undefined, { fs: localFs({ ...state, jobs: { review: state.jobs[0] } }) });
-  for (const value of [null, { ...state, status: 'running' }, { ...state, jobs: [] }, { ...state, jobs: [{ agent: 'codex', model: 'claude-opus-4-6' }] }, { ...state, jobs: [{ agent: 'claude', model: 'other-opus' }] }]) {
-    await checkRelease({}, 'record-run-invalid', { fs: localFs(value) });
-  }
-  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => '{bad' } });
-  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } });
+  assert.equal(calls.some((c) => c.args[1]?.match(/\/(contents|commits|compare)\//)), false);
 });
