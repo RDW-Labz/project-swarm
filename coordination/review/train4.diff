@@ -1023,7 +1023,7 @@ index aaf7d8bd..93979b96 100644
  
  test('stop drains queued writes and prevents writes after it resolves', async () => {
 diff --git a/tests/merge-guard.test.mjs b/tests/merge-guard.test.mjs
-index 4d170bdc..662e3dd0 100644
+index 4d170bdc..1e3d0b49 100644
 --- a/tests/merge-guard.test.mjs
 +++ b/tests/merge-guard.test.mjs
 @@ -1,6 +1,12 @@
@@ -1040,7 +1040,7 @@ index 4d170bdc..662e3dd0 100644
  
  const T1 = '2024-01-01T00:00:00Z';
  const T2 = '2024-01-02T00:00:00Z';
-@@ -68,16 +74,28 @@ function prListKey(baseBranch) {
+@@ -68,16 +74,29 @@ function prListKey(baseBranch) {
    return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
  }
  
@@ -1068,12 +1068,13 @@ index 4d170bdc..662e3dd0 100644
 +}
 +
 +const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
-+const HEAD_PREFIX7 = HEAD_SHA.slice(0, 7);
++const OTHER_SHA = '0000000000000000000000000000000000000001';
++const SHA8 = HEAD_SHA.slice(0, 8);
 +
  function prView(over = {}) {
    return {
      state: 'OPEN',
-@@ -87,18 +105,24 @@ function prView(over = {}) {
+@@ -87,18 +106,24 @@ function prView(over = {}) {
      headRefOid: 'abc123',
      statusCheckRollup: GREEN,
      isCrossRepository: false,
@@ -1100,7 +1101,7 @@ index 4d170bdc..662e3dd0 100644
      [KEY.after]: json(o.after ?? { state: 'MERGED' }),
      [PROTECTION]: o.protection ?? fail('404 Not Found'),
      [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
-@@ -111,8 +135,8 @@ function routes(o = {}, root = '/repo') {
+@@ -111,8 +136,8 @@ function routes(o = {}, root = '/repo') {
      'git pull --ff-only origin main': ok(''),
    };
    if (o.keepLocalHeadBranch) {
@@ -1111,13 +1112,25 @@ index 4d170bdc..662e3dd0 100644
    }
    return base;
  }
-@@ -597,3 +621,181 @@ test('runMerge: remote delete encodes each ref segment separately', async () =>
+@@ -597,3 +622,203 @@ test('runMerge: remote delete encodes each ref segment separately', async () =>
    assert.equal(deletes.length, 1);
    assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
  });
 +
 +function reviewsBody(lines) {
 +  return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
++}
++
++function reviewJsonBlock(obj) {
++  return '```json\n' + JSON.stringify(obj) + '\n```';
++}
++
++function releaseView(over = {}) {
++  return {
++    title: '1.0.0: x',
++    headRefOid: HEAD_SHA,
++    ...over,
++  };
 +}
 +
 +// releaseReviewGate
@@ -1128,81 +1141,84 @@ index 4d170bdc..662e3dd0 100644
 +  assert.equal(r.ok, true);
 +});
 +
-+test('releaseReviewGate: semver titles require review section', () => {
++test('releaseReviewGate: semver titles require JSON verdict for head', () => {
 +  for (const title of ['1.167.26: ship', 'v1.168.0 - ship']) {
 +    const r = releaseReviewGate({ title, body: '', headRefOid: HEAD_SHA });
 +    assert.equal(r.required, true);
 +    assert.equal(r.ok, false);
-+    assert.match(r.reason, /^review-verdict-missing-for-head: abcdef12$/);
++    assert.equal(r.reason, `review-verdict-missing-for-head: ${SHA8}`);
 +  }
 +});
 +
-+// runMerge release-review gate
++// runMerge release-review gate (JSON verdict only)
 +
-+test('runMerge: release PR merges when Reviews PASS names full head sha', async () => {
++test('runMerge: release PR merges when Reviews has JSON pass for head', async () => {
 +  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.167.26: release',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- Opus review: PASS for ${HEAD_SHA}`]),
-+    },
-+  }));
-+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-+  assert.equal(r.status, 'merged');
-+  const merges = mergeCalls(calls);
-+  assert.equal(merges.length, 1);
-+  assert.ok(merges[0].args.includes('--match-head-commit'));
-+  assert.equal(merges[0].args[merges[0].args.indexOf('--match-head-commit') + 1], HEAD_SHA);
-+});
-+
-+test('runMerge: release PR merges with 7-char head prefix PASS', async () => {
-+  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- review PASS ${HEAD_PREFIX7}`]),
-+    },
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
++    }),
 +  }));
 +  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 +  assert.equal(r.status, 'merged');
 +  assert.equal(mergeCalls(calls).length, 1);
 +});
 +
-+test('runMerge: release PR merges when PASS uses uppercase SHA', async () => {
++test('runMerge: release PR refuses prose PASS for other sha with head in text (exploit)', async () => {
 +  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- PASS for ${HEAD_SHA.toUpperCase()}`]),
-+    },
-+  }));
-+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-+  assert.equal(r.status, 'merged');
-+  assert.equal(mergeCalls(calls).length, 1);
-+});
-+
-+test('runMerge: release PR refuses PASS for different commit', async () => {
-+  const other = '0000000000000000000000000000000000000001';
-+  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- PASS for ${other}`]),
-+    },
++    view: releaseView({
++      body: reviewsBody([
++        `PASS for ${OTHER_SHA}; head pending`,
++        HEAD_SHA,
++      ]),
++    }),
 +  }));
 +  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 +  assert.equal(r.status, 'refused');
-+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 +  assert.equal(mergeCalls(calls).length, 0);
 +});
 +
-+test('runMerge: release PR refuses FAIL for head', async () => {
++test('runMerge: release PR refuses prose head fails review with head sha (exploit)', async () => {
 +  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- review FAIL ${HEAD_SHA}`]),
-+    },
++    view: releaseView({
++      body: reviewsBody([`head fails review (lint passed)`, HEAD_SHA]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON pass for different 40-char sha', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: OTHER_SHA })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON pass with 7-char head field', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA.slice(0, 7) })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON verdict PASS uppercase', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'PASS', head: HEAD_SHA })]),
++    }),
 +  }));
 +  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 +  assert.equal(r.status, 'refused');
@@ -1210,62 +1226,69 @@ index 4d170bdc..662e3dd0 100644
 +  assert.equal(mergeCalls(calls).length, 0);
 +});
 +
-+test('runMerge: release PR refuses blockers open for head', async () => {
++test('runMerge: release PR refuses JSON pass outside Reviews section', async () => {
 +  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([`- blockers open at ${HEAD_SHA}`]),
-+    },
++    view: releaseView({
++      body: `## Summary\n\n${reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })}\n`,
++    }),
 +  }));
 +  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 +  assert.equal(r.status, 'refused');
-+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 +  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses malformed JSON block in Reviews', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody(['```json', '{not json', '```']),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR pass then fail for same head refuses (last wins fail)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([
++        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
++        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
++      ]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-failed-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR fail then pass for same head merges (last wins pass)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([
++        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
++        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
++      ]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'merged');
++  assert.equal(mergeCalls(calls).length, 1);
 +});
 +
 +test('runMerge: release PR refuses with no Reviews section', async () => {
 +  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
++    view: releaseView({
 +      body: '## Summary\n\nno reviews here\n',
-+    },
++    }),
 +  }));
 +  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
 +  assert.equal(r.status, 'refused');
-+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
 +  assert.equal(mergeCalls(calls).length, 0);
-+});
-+
-+test('runMerge: release PR ignores PASS only in Checks section', async () => {
-+  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: `## Checks\n\n- PASS for ${HEAD_SHA}\n`,
-+    },
-+  }));
-+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-+  assert.equal(r.status, 'refused');
-+  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
-+  assert.equal(mergeCalls(calls).length, 0);
-+});
-+
-+test('runMerge: release PR last matching verdict wins (FAIL then delta PASS)', async () => {
-+  const { exec, calls } = makeExec(routes({
-+    view: {
-+      title: '1.0.0: x',
-+      headRefOid: HEAD_SHA,
-+      body: reviewsBody([
-+        `- FAIL ${HEAD_SHA}`,
-+        `- delta PASS ${HEAD_SHA}`,
-+      ]),
-+    },
-+  }));
-+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-+  assert.equal(r.status, 'merged');
-+  assert.equal(mergeCalls(calls).length, 1);
 +});
 +
 +test('runMerge: non-release title merges without Reviews section', async () => {
@@ -1284,7 +1307,7 @@ index 4d170bdc..662e3dd0 100644
 +test('runMerge: release PR refuses when headRefOid missing', async () => {
 +  const view = prView({
 +    title: '1.0.0: x',
-+    body: reviewsBody([`- PASS ${HEAD_SHA}`]),
++    body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
 +  });
 +  delete view.headRefOid;
 +  const { exec, calls } = makeExec(routes({ rawView: json(view) }));
@@ -1649,10 +1672,10 @@ index 4ebd736e..af9467ba 100644
      return write;
    }
 diff --git a/tools/merge-guard.mjs b/tools/merge-guard.mjs
-index ae444880..9d9b8958 100644
+index ae444880..4b8a1601 100644
 --- a/tools/merge-guard.mjs
 +++ b/tools/merge-guard.mjs
-@@ -9,7 +9,65 @@ import os from 'node:os';
+@@ -9,7 +9,95 @@ import os from 'node:os';
  const execFileP = promisify(execFile);
  const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
  const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -1662,22 +1685,11 @@ index ae444880..9d9b8958 100644
 +const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
 +const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
 +const ANY_HEADING_RE = /^##\s/;
-+const HEX_TOKEN_RE = /\b[0-9a-f]{7,40}\b/gi;
-+const FAIL_WORD_RE = /\b(?:fail(?:ed)?|blocker(?:s)?)\b/i;
-+const PASS_WORD_RE = /\bpass(?:ed)?\b/i;
++const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
++const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
++const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
 +
-+export function releaseReviewGate({ title, body, headRefOid }) {
-+  const t = String(title ?? '');
-+  if (!RELEASE_TITLE_RE.test(t)) {
-+    return { required: false, ok: true };
-+  }
-+  const head = String(headRefOid ?? '');
-+  if (!/^[0-9a-f]{7,}$/i.test(head)) {
-+    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
-+  }
-+  const headLower = head.toLowerCase();
-+  const sha8 = headLower.slice(0, 8);
-+
++function extractReviewsSectionText(body) {
 +  const reviewLines = [];
 +  let inReviews = false;
 +  for (const line of String(body ?? '').split('\n')) {
@@ -1688,30 +1700,71 @@ index ae444880..9d9b8958 100644
 +    if (inReviews && ANY_HEADING_RE.test(line)) break;
 +    if (inReviews) reviewLines.push(line);
 +  }
++  return reviewLines.join('\n');
++}
 +
-+  function lineNamesHead(line) {
-+    const tokens = line.match(HEX_TOKEN_RE) ?? [];
-+    for (const tok of tokens) {
-+      if (headLower.startsWith(tok.toLowerCase())) return true;
++function collectJsonFenceContents(reviewsText) {
++  const blocks = [];
++  const lines = String(reviewsText ?? '').split('\n');
++  for (let i = 0; i < lines.length; i++) {
++    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
++    i++;
++    const contentLines = [];
++    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
++      contentLines.push(lines[i]);
++      i++;
 +    }
-+    return false;
++    blocks.push(contentLines.join('\n'));
++  }
++  return blocks;
++}
++
++function blockNamesHead(block, headLower) {
++  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
++  return block.head.toLowerCase() === headLower;
++}
++
++export function releaseReviewGate({ title, body, headRefOid }) {
++  const t = String(title ?? '');
++  if (!RELEASE_TITLE_RE.test(t)) {
++    return { required: false, ok: true };
++  }
++  const head = String(headRefOid ?? '');
++  if (!HEAD_SHA40_RE.test(head)) {
++    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
++  }
++  const headLower = head.toLowerCase();
++  const sha8 = headLower.slice(0, 8);
++
++  const reviewsText = extractReviewsSectionText(body);
++  const rawBlocks = collectJsonFenceContents(reviewsText);
++  const parsedBlocks = [];
++  for (const raw of rawBlocks) {
++    let block;
++    try {
++      block = JSON.parse(raw);
++    } catch {
++      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
++    }
++    if (!isObj(block)) {
++      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
++    }
++    parsedBlocks.push(block);
 +  }
 +
-+  function verdictOf(line) {
-+    if (FAIL_WORD_RE.test(line)) return 'fail';
-+    if (PASS_WORD_RE.test(line)) return 'pass';
-+    return 'pending';
++  let lastVerdictForHead = null;
++  for (const block of parsedBlocks) {
++    if (!blockNamesHead(block, headLower)) continue;
++    const v = block.verdict;
++    if (v === 'pass') lastVerdictForHead = 'pass';
++    else if (v === 'fail') lastVerdictForHead = 'fail';
++    else lastVerdictForHead = 'other';
 +  }
 +
-+  let lastVerdict = null;
-+  for (const line of reviewLines) {
-+    if (lineNamesHead(line)) lastVerdict = verdictOf(line);
-+  }
-+
-+  if (lastVerdict === null) {
++  if (lastVerdictForHead === null) {
 +    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
 +  }
-+  if (lastVerdict === 'pass') {
++  if (lastVerdictForHead === 'pass') {
 +    return { required: true, ok: true };
 +  }
 +  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
@@ -1719,7 +1772,7 @@ index ae444880..9d9b8958 100644
  
  async function realExec(command, args, { cwd } = {}) {
    try {
-@@ -274,6 +332,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
+@@ -274,6 +362,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
  
    const reasons = [...verdict.reasons];
    if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
