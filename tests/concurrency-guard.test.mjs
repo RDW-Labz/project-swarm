@@ -445,7 +445,7 @@ for (const alreadySent of [false, true]) {
   });
 }
 
-test('restoreIfStale: SIGTERM is persisted and never repeated, including after 30 seconds', async t => {
+test('restoreIfStale: SIGTERM is persisted and never repeated; SIGKILL follows after 30 seconds', async t => {
   const f = await fixture(t, { machineConcurrency: 16 });
   fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
   const calls = [];
@@ -458,15 +458,89 @@ test('restoreIfStale: SIGTERM is persisted and never repeated, including after 3
     kill: (...args) => calls.push(args),
     now: () => now,
   };
-  for (const elapsed of [0, 1000, 31_000]) {
-    now = sentAt + elapsed;
-    assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
-    assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
-    assert.equal(f.read().machineConcurrency, 16);
-  }
-  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM']]);
+  now = sentAt;
+  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
+  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
+  assert.equal(f.read().machineConcurrency, 16);
+
+  now = sentAt + 1000;
+  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
+  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
+  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, undefined);
+
+  now = sentAt + 31_000;
+  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
+  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, sentAt + 31_000);
+
+  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM'], [123457, 'SIGKILL']]);
   deps.isAlive = () => false;
   assert.deepEqual(restoreIfStale(f.file, deps), { restored: true, to: 4 });
+});
+
+test('restoreIfStale: termSentAt within grace sends no SIGKILL', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  const termSentAt = 5000;
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt, at: new Date().toISOString() }));
+  const signals = [];
+  restoreIfStale(f.file, {
+    isAlive: pid => pid === 123457,
+    procIdentity: () => ({ start: 'same', command: 'same command' }),
+    now: () => termSentAt + 29_999,
+    kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
+  });
+  assert.deepEqual(signals, []);
+  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, undefined);
+});
+
+test('restoreIfStale: after termSentAt grace exactly one SIGKILL and killSentAt persisted', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  const termSentAt = 10_000;
+  const marker = { previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt };
+  fs.writeFileSync(markerPath(f.file), JSON.stringify(marker));
+  const signals = [];
+  const killNow = termSentAt + 30_000;
+  assert.deepEqual(restoreIfStale(f.file, {
+    isAlive: pid => pid === 123457,
+    procIdentity: () => ({ start: 'same', command: 'same command' }),
+    now: () => killNow,
+    kill: (pid, signal) => {
+      if (signal === 0) fs.writeFileSync(markerPath(f.file), JSON.stringify({ ...marker, writerField: 'keep me', termSentAt }));
+      else signals.push([pid, signal]);
+    },
+  }), { restored: false, reason: 'orphaned command still running' });
+  assert.deepEqual(signals, [[123457, 'SIGKILL']]);
+  const saved = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
+  assert.equal(saved.writerField, 'keep me');
+  assert.equal(saved.killSentAt, killNow);
+});
+
+test('restoreIfStale: killSentAt present never sends a second SIGKILL', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt: 1, killSentAt: 99_999 }));
+  const signals = [];
+  for (let i = 0; i < 3; i += 1) {
+    restoreIfStale(f.file, {
+      isAlive: pid => pid === 123457,
+      procIdentity: () => ({ start: 'same', command: 'same command' }),
+      now: () => 200_000,
+      kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
+    });
+  }
+  assert.deepEqual(signals, []);
+});
+
+test('restoreIfStale: child gone after termSentAt restores without SIGKILL', async t => {
+  const f = await fixture(t, { machineConcurrency: 16 });
+  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt: 1, at: new Date().toISOString() }));
+  const signals = [];
+  assert.deepEqual(restoreIfStale(f.file, {
+    isAlive: () => false,
+    procIdentity: () => ({ start: 'same', command: 'same command' }),
+    now: () => 100_000,
+    kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
+  }), { restored: true, to: 4 });
+  assert.deepEqual(signals, []);
+  assert.equal(f.read().machineConcurrency, 4);
 });
 
 for (const childPid of [123457, process.pid]) {

@@ -15,6 +15,7 @@ const SELF = fileURLToPath(import.meta.url);
 const SWARM = path.join(path.dirname(SELF), 'swarm.mjs');
 export const GUARD_USAGE = 'Usage: swarm with-concurrency N -- COMMAND [ARGS...]   (N is 1 to 2048; the command is a swarm command; the old value is put back when it ends, whatever happens)';
 const MIN = 1, MAX = 2048;
+const TERM_TO_KILL_GRACE_MS = 30_000;
 
 export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
 const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
@@ -101,6 +102,14 @@ export function restoreIfStale(configFile, { isAlive = alive, procStart = defaul
       const sentAt = now();
       const latest = currentMarker();
       if (latest && latest.termSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, termSentAt: sentAt });
+    } else if (fresh.killSentAt === undefined && now() - fresh.termSentAt >= TERM_TO_KILL_GRACE_MS) {
+      try { kill(child, 'SIGKILL'); } catch (error) {
+        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
+        throw error;
+      }
+      const sentAt = now();
+      const latest = currentMarker();
+      if (latest && latest.killSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, killSentAt: sentAt });
     }
     return { restored: false, reason: 'orphaned command still running' };
   } catch { return null; }
