@@ -62,7 +62,15 @@ export async function removeRegistryRecord(file, { pid, url } = {}) {
     if (pid !== undefined && data.pid !== pid) return;
     if (url !== undefined && data.url !== url) return;
     await fs.rm(file, { force: true });
-  } catch { /* already gone */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (error instanceof SyntaxError) {
+        console.error('[tools/server-restart.mjs] corrupt registry (SyntaxError)');
+      } else {
+        console.error('[tools/server-restart.mjs] removeRegistryRecord:', error?.code ?? error?.name ?? 'unknown');
+      }
+    }
+  }
 }
 
 export async function removeRegistryRecordIfUnchanged(file, snapshot) {
@@ -237,7 +245,11 @@ export function installRunnerCandidates(installRoot) {
     for (const name of readdirSync(versionsDir)) {
       out.push(path.join(versionsDir, name, 'tools', 'swarm.mjs'));
     }
-  } catch { /* no versions dir */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/server-restart.mjs] versions dir:', error?.code ?? 'unknown');
+    }
+  }
   return out;
 }
 
@@ -630,8 +642,14 @@ export async function stealProcessLockIfStale(lockPath, opts = {}) {
         await fs.rm(stolen, { force: true });
         return false;
       }
-    } catch {
-      /* lock path absent after rename — expected */
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        if (error instanceof SyntaxError) {
+          console.error('[tools/server-restart.mjs] corrupt lock (SyntaxError)');
+        } else {
+          console.error('[tools/server-restart.mjs] stale lock re-read:', error?.code ?? error?.name ?? 'unknown');
+        }
+      }
     }
     await fs.rm(stolen, { force: true });
     return true;
@@ -646,7 +664,15 @@ export async function releaseProcessLock(lockPath, { pid = process.pid, clearRef
     const text = await fs.readFile(lockPath, 'utf8');
     const { pid: owner } = parseProcessLockPayload(text);
     if (owner === pid) await fs.rm(lockPath, { force: true });
-  } catch { /* already gone */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (error instanceof SyntaxError) {
+        console.error('[tools/server-restart.mjs] corrupt lock (SyntaxError)');
+      } else {
+        console.error('[tools/server-restart.mjs] releaseProcessLock:', error?.code ?? error?.name ?? 'unknown');
+      }
+    }
+  }
 }
 
 async function refreshProcessLockFile(lockPath, ownerIdentity) {
@@ -665,7 +691,11 @@ export function startProcessLockRefresh(lockPath, ownerIdentity, {
 } = {}) {
   if (!ownerIdentity?.pid) return () => {};
   const timer = setInterval(() => {
-    void refresh(lockPath, ownerIdentity).catch(() => {});
+    void refresh(lockPath, ownerIdentity).catch(error => {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/server-restart.mjs] lock refresh:', error?.code ?? error?.name ?? 'unknown');
+      }
+    });
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
@@ -679,7 +709,9 @@ export async function withProcessLock(lockPath, fn, {
   maxAgeMs = STALE_LOCK_MAX_AGE_MS,
   execFileImpl = execFileAsync,
 } = {}) {
-  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
+  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(error => {
+    console.error('[tools/server-restart.mjs] process lock dir:', error?.code ?? error?.name ?? 'unknown');
+  });
   const deadline = Date.now() + timeoutMs;
   let handle = null;
   let ownerIdentity = null;
@@ -833,7 +865,11 @@ export async function restartRegisteredServers({
     try {
       await fs.mkdir(path.dirname(stub), { recursive: true });
       await fs.writeFile(stub, 'export {}\n', { flag: 'wx' });
-    } catch { /* already present */ }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        console.error('[tools/server-restart.mjs] test stub runner:', error?.code ?? 'unknown');
+      }
+    }
     ({ runner } = await resolveRunnerForRestart(installRoot, targetVersion));
   }
 
@@ -987,7 +1023,11 @@ export async function restartRegisteredServers({
         servers.push({ kind, pid: confirm.pid ?? newPid, from, to: targetVersion, port: confirmedPort, status: 'restarted' });
         started = true;
       } else if (newPid && pidAliveImpl(newPid)) {
-        try { killImpl(newPid, 'SIGTERM'); } catch { /* best effort */ }
+        try { killImpl(newPid, 'SIGTERM'); } catch (error) {
+          if (error?.code !== 'ESRCH') {
+            console.error('[tools/server-restart.mjs] stop replacement after failed restart:', error?.code ?? error?.name ?? 'unknown');
+          }
+        }
         await waitForExit(newPid, 3000, sleep, pidAliveImpl);
       }
     }
