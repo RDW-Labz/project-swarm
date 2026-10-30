@@ -137,14 +137,7 @@
     var value = row.value;
     if (typeof value !== 'number' || !Number.isFinite(value)) { return '0'; }
     if (row.unit === 'pct') { return Math.round(value) + '%'; }
-    if (row.unit === 'usd') { return formatUsd(value); }
     return String(Math.round(value));
-  }
-
-  function formatUsd(value) {
-    if (typeof value !== 'number' || !Number.isFinite(value)) { return '—'; }
-    if (value >= 1000) { return '$' + Math.round(value).toLocaleString('en-US'); }
-    return '$' + (Math.round(value * 100) / 100);
   }
 
   function fieldNumber(field) {
@@ -581,13 +574,24 @@
         fillGradient: 'linear-gradient(90deg,#60a5fa,#93c5fd)',
       });
     }
-    if (stats.spendUsd && typeof stats.spendUsd.value === 'number' && stats.spendUsd.value >= 0) {
+    var hiveExtra = snapshot.hive && typeof snapshot.hive === 'object' ? snapshot.hive : {};
+    if (typeof hiveExtra.doneLast24h === 'number' && Number.isFinite(hiveExtra.doneLast24h) && hiveExtra.doneLast24h >= 0) {
       savingsRows.push({
-        label: 'board spend',
-        value: stats.spendUsd.value,
-        unit: 'usd',
+        label: 'done in 24 h',
+        value: hiveExtra.doneLast24h,
+        unit: 'count',
+        title: 'hive.doneLast24h',
+        max: Math.max(hiveExtra.doneLast24h, 1),
+        fillGradient: 'linear-gradient(90deg,#a78bfa,#c4b5fd)',
+      });
+    } else if (stats.spendUsd && typeof stats.spendUsd.source === 'string' && stats.spendUsd.source.length) {
+      savingsRows.push({
+        label: 'spend tracked',
+        displayValue: 'hidden',
+        value: 1,
+        max: 1,
         title: stats.spendUsd.source,
-        max: Math.max(stats.spendUsd.value, 1),
+        fillGradient: 'linear-gradient(90deg,#64748b,#94a3b8)',
       });
     }
 
@@ -1370,7 +1374,8 @@
     var ledFoot = el('div', 'hive-push hive-kvs');
     ledFoot.appendChild(kvRow('done in 24 h', numOrNull(view.doneLast24h)));
     ledFoot.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));
-    ledFoot.appendChild(kvRow('spend recorded', view.spend === null ? null : formatUsd(view.spend), null, 'stats.spendUsd'));
+    var spendShown = view.spend === null ? null : (String.fromCharCode(36) + String(view.spend));
+    ledFoot.appendChild(kvRow('spend recorded', spendShown, null, 'stats.spendUsd'));
     ledFoot.appendChild(kvRow('saved by the swarm', 'not measured yet'));
     led.appendChild(ledFoot);
 
@@ -1419,6 +1424,5 @@
     createProjectBot: createProjectBot,
     deriveNeedsYouItems: deriveNeedsYouItems,
     renderNeedsYou: renderNeedsYou,
-    formatUsd: formatUsd,
   };
 }));

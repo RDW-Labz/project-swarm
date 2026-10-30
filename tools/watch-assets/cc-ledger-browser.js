@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /** Browser-safe ledger queue helpers (no server imports). */
 
-const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
+const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled', 'superseded'];
 const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
 const BURST_LANE_TAG = 'lane:burst';
 const BURST_DEFAULT = 'off';
@@ -103,7 +103,7 @@ export function ledgerStats(ledger) {
     byStage[key].total++;
     if (t.status === 'done') byStage[key].done++;
   }
-  const live = tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const percentDone = live.length ? Math.round(100 * live.filter(t => t.status === 'done').length / live.length) : 0;
   let coveragePct = null;
   if (Array.isArray(ledger?.requirements)) {
