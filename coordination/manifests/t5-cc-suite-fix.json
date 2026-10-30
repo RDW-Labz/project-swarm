@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-cc-suite-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Fix the two red tests on train 5 after folding in S10. Tests must stay green; do not weaken the policies.\n\n1) tests/board-no-money.test.mjs: every board browser script must avoid money output patterns. tools/watch-assets/hive-panels.js has a spend stat that formats dollars: the `'$' + ...` branches (formatUsd and the value display) match the forbidden pattern. Remove money output from the browser: either drop the spend stat entirely and use a non-money value already available (e.g. jobs in 24h, done count) or show a non-money label like 'spend tracked' with a muted 'hidden' value. Remove the now-unused dollar formatting helpers and the spendUsd unit branch. Do not introduce `usd(`, `'$' +`, 'Billed', or a Cost tile label. Keep the panel layout and density; do not hard-code sample numbers.\n\n2) tests/cc-ledger-browser.test.mjs: tools/watch-assets/cc-ledger-browser.js ledgerStats must match the server tools/tickets.mjs ledgerStats after the train 5 change: add 'superseded' to the browser STATUSES and exclude superseded from the live set (like cancelled and proposed), so percentDone/coverage match the server. Keep total/byStatus/byStage semantics identical to the server.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/board-no-money.test.mjs tests/cc-ledger-browser.test.mjs -> all pass. Also run node --import ./tests/_isolate-config.mjs --test tests/command-center-hive-panels.test.mjs tests/command-center-hive.test.mjs tests/watch-assets.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-ledger-browser.js",
+        "tests/board-no-money.test.mjs",
+        "tests/cc-ledger-browser.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-ledger-browser.js"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/command-center-hive.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused money/ledger/CC tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-cc-suite-fix",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/board-no-money.test.mjs",
+        "tests/cc-ledger-browser.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/watch-assets.test.mjs"
+      ]
+    }
+  ]
+}

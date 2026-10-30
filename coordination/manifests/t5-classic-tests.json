@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-classic-tests",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Train 5: the Command Center is now the default at `/` and the classic board is at `/classic` (always classic). Three classic-board tests still fetch `/` and now receive the Command Center page, so they fail. Update ONLY these test files to test the classic board at `/classic` while keeping every assertion's intent (token gating, read-only behavior, privacy headers, panel markup, links):\n\n- tests/board-inbox.test.mjs (~line 180): the test 'the board serves it read-only behind the token: /api/board carries inbox, a wrong token is refused, the page has the panel and builds it with textContent only'. Fetch the classic page at `/classic` (with the token) instead of `/`; keep the `/api/board` and wrong-token assertions.\n- tests/board-page.test.mjs (~line 369): the test 'the board: every data route needs the token, only GET, wrong host refused; links open the right project and run'. Use `/classic` wherever it expects the classic board HTML/links; keep the data-route/token/host assertions.\n- tests/watch-token-urls.test.mjs (~line 139): the test 'HTML page query tokens are exchanged for a protected cookie and privacy headers'. Use the classic HTML page at `/classic` for the cookie/privacy exchange check; keep the wrong-token and header assertions. If the test also asserts the root page, update it to expect the Command Center page at `/` (still an HTML page, still token-gated, still exchanges the cookie).\n\nDo not change product code. Do not weaken assertions (no skips, no retries). Verify: node --import ./tests/_isolate-config.mjs --test tests/board-inbox.test.mjs tests/board-page.test.mjs tests/watch-token-urls.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ],
+      "outputs": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/watch-token-urls.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-classic-tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/board-inbox.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ]
+    }
+  ]
+}
