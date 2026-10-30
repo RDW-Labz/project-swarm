@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.167.28
+
+Release train 4: release-review merge gate, guarded-runner hardening, and owner-only bulk ticket supersede.
+- Merge gate: swarm merge refuses a release PR (title starts with a semver) unless its Reviews section has a passing verdict naming the current head commit (full or 7+ char prefix; last matching verdict wins; fail, blocker or missing refuses; non-release PRs unchanged);
+- Guarded runner: the watcher verifies the child's process start time and command line before SIGTERM/SIGKILL, so a reused pid is never signalled; old markers without identity restore without signalling; termSentAt is re-read and merged; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 seconds when the watcher is gone; a self-orphan still fails with 143;
+- Stress: test:stress runs each round in a detached process group and kills the whole group on timeout;
+- Lane health: persist failure logs include the error code;
+- Tickets: new owner-only swarm tickets supersede --before <date>. The dry-run lists every candidate (id, status, stage, last touch and its basis, title) and writes nothing; --yes applies one journaled bulk transition to the new terminal status superseded, only from proposed, todo, ready and blocked;
+- Version 1.167.28.
+
 ## 1.167.27
 
 Hotfix: the guarded runner identifies its child before it signals anything.
