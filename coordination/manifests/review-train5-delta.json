@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain5delta",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: Opus delta review of the train 5 money blocker fix",
+      "prompt": "Delta review of release train 5 (money blocker). Round 1 failed with ONE blocker: tools/watch-assets/hive-panels.js rendered a dollar amount built with String.fromCharCode(36) ('spend recorded'), and tools/command-center-snapshot.mjs forwarded spendUsd/cost into the /api/command-center JSON, breaking the owner's no-money-in-browser rule. The fix is in coordination/review/train5-delta.diff (against the round-1 head c0b23518); the changed source and the updated tests are in context.\n\nWhat changed: spendUsd removed from the project cards and machine stats in the Command Center snapshot; the Hive spend row, view.spend and all dollar/fromCharCode construction removed; the Cockpit Classic tab now points at /classic with the search string; tests/board-no-money.test.mjs now forbids String.fromCharCode(36); tests/command-center-routes-flag.test.mjs asserts the API bodies carry no usd/spend/cost keys or values for a fixture that has them; tests/command-center-hive.test.mjs drops the spend expectations.\n\nPass bar (owner): confirm the round-1 blocker is CLOSED for each facet (API money, rendered money, obfuscated dollar, Cockpit classic reachability, the new test coverage) and there is no NEW blocker: a layout/data regression in the Hive panels, an API consumer left reading spendUsd, a money value still reachable in the Command Center JSON, a broken classic route, or a test weakened. Everything else is a follow-up. The runner stamps the reviewed head into your result; do NOT add or change a head field. Write ONLY coordination/review/train5-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train5-delta.diff",
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/board-no-money.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-hive.test.mjs"
+      ],
+      "outputs": [
+        "coordination/review/train5-review.json"
+      ],
+      "resultFile": "coordination/review/train5-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}
