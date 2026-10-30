@@ -1251,11 +1251,9 @@
       renderHourBars(bars, view.throughput);
       logFoot.appendChild(el('div', 'hive-cap', 'done per hour, last 24 h, oldest on the left'));
     } else if (renderStatusBars(bars, view.projects) > 0) {
+      // Real ticket counts are on the board, so the chart stands on its own; the note is only for zero data.
       cmd.appendChild(el('b', null, 'watch --board'));
-      var capRow = el('div', 'hive-cap hive-cap--row');
-      capRow.appendChild(el('span', null, 'tickets per project · done · ready · review · waiting'));
-      capRow.appendChild(muted('no completion times in the ledger'));
-      logFoot.appendChild(capRow);
+      logFoot.appendChild(el('div', 'hive-cap', 'tickets per project · done · ready · review · waiting'));
     } else {
       cmd.appendChild(el('b', null, 'swarm tickets --status done --since 24h'));
       renderHourBars(bars, null);
@@ -1271,17 +1269,17 @@
     big.appendChild(el('small', null, view.projectsTotal === 1 ? 'project on the board' : 'projects on the board'));
     all.appendChild(big);
     all.appendChild(el('div', 'hive-hint hive-hint--machines', view.machines.length ? 'read from ' + view.machines.join(', ') : 'machine names not reported'));
-    all.appendChild(sectionHeading('Done per project'));
-    // Compact two-column list so the middle column is no taller than the others.
+    // Done per project: a compact two-column list. It sits under the right panel's step line, which plots the
+    // same percentages in ring order, so the middle column keeps the target's big number, who bars and figures.
     var byproj = el('div', 'hive-dpp');
+    byproj.setAttribute('aria-label', 'Done per project');
     var withPct = view.projects.filter(function (p) { return p.pct !== null; });
     if (!withPct.length) { byproj.appendChild(muted('no ledger percentages yet')); }
     for (var i = 0; i < withPct.length; i += 1) {
       var nm = el('span', null, withPct[i].name);
       nm.setAttribute('title', withPct[i].name);
-      byproj.appendChild(hbar('minmax(0,1fr) 38px 32px', nm, withPct[i].pct / 100, '#4d7cff', withPct[i].pct + '%'));
+      byproj.appendChild(hbar('minmax(0,1fr) 38px 32px', nm, withPct[i].pct / 100, withPct[i].color, withPct[i].pct + '%'));
     }
-    all.appendChild(byproj);
     var groups = view.lanes ? null : whoGroups(view);
     var who = sectionHeading(view.lanes || !groups ? 'Who built (24 h)' : groups.title, 'hive-h-gap');
     all.appendChild(who);
@@ -1366,6 +1364,9 @@
       led.appendChild(svg);
       led.appendChild(el('div', 'hive-cap', stepCap));
     }
+    // The step caption names the list when the line plots done per project; otherwise it gets its own heading.
+    if (!series || view.throughput) { led.appendChild(sectionHeading('Done per project', 'hive-h-sub')); }
+    led.appendChild(byproj);
     var ledFoot = el('div', 'hive-push hive-kvs');
     ledFoot.appendChild(kvRow('done in 24 h', numOrNull(view.doneLast24h)));
     ledFoot.appendChild(kvRow('open pull requests', view.prs ? view.prs.length : null));

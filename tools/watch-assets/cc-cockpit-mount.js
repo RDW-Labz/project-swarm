@@ -17,7 +17,6 @@ import {
   renderRunLine,
   workerCards,
   shortTitle,
-  setCssVar,
 } from './cockpit-lists.js';
 import { glitch as defaultGlitch } from './cc-glitch.js';
 import { completionKey } from './cc-tour.js';
@@ -39,10 +38,6 @@ const ROWS_PER_COLUMN = 10;
 const SPREAD_MIN_ROWS = 4;
 const SPARK_MS = 2200;
 const ORBIT_MS = 7000;
-const BOB_MS = 4000;
-const BEAT_MS = 1600;
-const SCAN_MS = 3600;
-const SHINE_MS = 2200;
 const TAU = Math.PI * 2;
 
 function el(doc, tag, cls, text) {
@@ -457,38 +452,14 @@ export function renderProjectCockpit(host, project, deps) {
     }
   }
 
-  // Creature, glow, live chips, scan and stream shine: driven here (inline transforms and CSS variables) so the
-  // motion runs on the same frame clock as the orbit; reduced motion never starts this loop and CSS keeps the still look.
-  let headBody = null;
-  let headShadow = null;
-  function animate(ms) {
-    const bob = (1 - Math.cos((ms / BOB_MS) * TAU)) / 2;
-    if (headBody) headBody.style.transform = `translate3d(0, ${(-6 * bob).toFixed(2)}px, 0)`;
-    if (headShadow) {
-      headShadow.style.transform = `translateX(-50%) scale(${(1 - 0.16 * bob).toFixed(3)})`;
-      headShadow.style.opacity = (0.74 - 0.22 * bob).toFixed(3);
-    }
-    setCssVar(orbwrap, '--ck-glow', (0.78 + 0.22 * bob).toFixed(3));
-    const beat = (1 + Math.cos((ms / BEAT_MS) * TAU)) / 2;
-    const pulseV = (0.35 + 0.65 * beat).toFixed(3);
-    const waveV = (1 - beat).toFixed(3);
-    for (const n of [gbar, titleHost, cols]) {
-      setCssVar(n, '--ck-pulse', pulseV);
-      setCssVar(n, '--ck-wave', waveV);
-    }
-    setCssVar(titleHost, '--ck-scan', (-100 + 200 * ((ms % SCAN_MS) / SCAN_MS)).toFixed(2));
-    setCssVar(wgrid, '--ck-shine', (-100 + 200 * ((ms % SHINE_MS) / SHINE_MS)).toFixed(2));
-  }
-
+  // The creature bob, glow, live chips, scan and stream shine are CSS keyframes (cc-cockpit.css), so they run on the
+  // compositor without restyling the page each frame; this loop only moves what depends on measured geometry.
+  // Reduced motion never starts it and CSS drops the keyframes.
   let frame = null;
   function tick(ts) {
     frame = null;
     if (destroyed) return;
-    if (!doc.hidden) {
-      const ms = typeof ts === 'number' ? ts : Date.now();
-      placeDots(ms);
-      animate(ms);
-    }
+    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
     frame = raf(tick);
   }
   function startMotion() {
@@ -512,8 +483,6 @@ export function renderProjectCockpit(host, project, deps) {
     if (key !== headKey) {
       if (headHandle) headHandle.destroy();
       headHandle = null;
-      headBody = null;
-      headShadow = null;
       headKey = key;
       headMounted = null;
       loadCreature().then((api) => {
@@ -527,8 +496,6 @@ export function renderProjectCockpit(host, project, deps) {
             label: headWanted.label,
           });
           headMounted = headWanted.state;
-          headBody = typeof hd2.querySelector === 'function' ? hd2.querySelector('.px-body') : null;
-          headShadow = typeof hd2.querySelector === 'function' ? hd2.querySelector('.px-shadow') : null;
           layoutWire();
         } catch {
           headHandle = null;

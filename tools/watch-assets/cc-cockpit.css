@@ -28,7 +28,8 @@
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 30px max(16px, env(safe-area-inset-left, 0px));
+  /* the bottom pad keeps the stack footer clear of the tour's fixed help button (cc-tour.js) at full scroll */
+  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px));
   color: var(--fg);
   font-family: var(--font-body);
   font-size: 15px;
@@ -70,8 +71,13 @@
 .cc-cockpit-shell .cnt .v.has-tip { border-bottom: 0; }
 .cc-cockpit-shell .ck-meta .dt { font-variant-numeric: tabular-nums; }
 .cc-cockpit-shell .ck-live { display: flex; align-items: center; gap: 6px; margin-left: 6px; color: var(--ck-coral); }
-/* --ck-pulse (0.35..1) and --ck-wave (0..1) are set each frame by the mount; without motion they stay at the still look */
-.cc-cockpit-shell .ck-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ck-coral); box-shadow: 0 0 calc(4px + 8px * var(--ck-pulse, 1)) var(--ck-coral); opacity: var(--ck-pulse, 1); transform: scale(calc(.7 + .3 * var(--ck-pulse, 1))); }
+/* live chips beat on one 1.6 s clock (CSS keyframes, so they run on the compositor and stop under reduced motion) */
+.cc-cockpit-shell .ck-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ck-coral); box-shadow: 0 0 10px var(--ck-coral); animation: cc-ck-beat 1.6s ease-in-out infinite; }
+@keyframes cc-ck-beat {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 12px var(--ck-coral); }
+  50% { opacity: .35; transform: scale(.7); box-shadow: 0 0 3px var(--ck-coral); }
+}
+@keyframes cc-ck-blinkon { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .cc-cockpit-shell .ck-more { position: relative; flex: none; }
 .cc-cockpit-shell .ck-more summary { list-style: none; cursor: pointer; color: #d9dde7; padding: 0 2px; letter-spacing: .08em; }
 .cc-cockpit-shell .ck-more summary::-webkit-details-marker { display: none; }
@@ -95,14 +101,15 @@
 .cc-cockpit-shell .stripl .lg i { font-style: normal; color: var(--ck-sep); margin: 0 8px; }
 .cc-cockpit-shell .stripl .lg b { font-weight: 700; color: var(--cat-color, #d9dde7); }
 .cc-cockpit-shell .stripl .lv { order: 2; flex: none; margin-left: auto; color: var(--ck-coral); display: flex; align-items: center; gap: 7px; }
-.cc-cockpit-shell .stripl .lv::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ck-coral); box-shadow: 0 0 calc(3px + 7px * var(--ck-pulse, 1)) var(--ck-coral); opacity: var(--ck-pulse, 1); }
+.cc-cockpit-shell .stripl .lv::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ck-coral); box-shadow: 0 0 10px var(--ck-coral); animation: cc-ck-beat 1.6s ease-in-out infinite; }
 /* segmented rule: stage groups of per-ticket segments, done at full strength, a scan light sweeping across */
 .cc-cockpit-shell .strip { position: relative; display: flex; gap: 6px; height: 3px; margin: 10px 0 0; overflow: hidden; }
 .cc-cockpit-shell .strip > i { display: flex; gap: 6px; flex: 1 1 0; min-width: 0; background: none !important; }
 .cc-cockpit-shell .strip > i:empty { background: #2a2c35 !important; }
 .cc-cockpit-shell .strip b { flex: 1 1 0; min-width: 2px; background: var(--cat-color, #58627a); opacity: .35; }
 .cc-cockpit-shell .strip b.done { opacity: 1; }
-.cc-cockpit-shell .strip::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0, transparent 84%, rgba(255, 255, 255, .95) 94%, transparent 100%); mix-blend-mode: screen; transform: translateX(calc(var(--ck-scan, -100) * 1%)); pointer-events: none; }
+.cc-cockpit-shell .strip::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0, transparent 84%, rgba(255, 255, 255, .95) 94%, transparent 100%); mix-blend-mode: screen; transform: translateX(-100%); animation: cc-ck-sweep 3.6s linear infinite; pointer-events: none; }
+@keyframes cc-ck-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
 /* ticket columns */
 .cc-cockpit-shell .cols { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 380px minmax(0, 1fr); gap: 0 56px; align-items: stretch; margin-top: 20px; }
@@ -122,10 +129,12 @@
 .cc-cockpit-shell .tk .rt b.g-todo { color: #6f7486; font-size: 12px; }
 .cc-cockpit-shell .tk .rt b.g-review { color: var(--red); font-size: 11px; }
 .cc-cockpit-shell .tk .rt b.g-blocked { color: var(--amber); font-size: 10px; }
-.cc-cockpit-shell .tk .rt b.on { font-size: 8.5px; font-weight: 800; letter-spacing: .1em; color: #121216; background: var(--ck-edge-hi); border-radius: 3px; padding: 3px 6px 2px; opacity: calc(.45 + .55 * var(--ck-pulse, 1)); box-shadow: 0 0 calc(10px * var(--ck-pulse, 0)) rgba(230, 233, 242, .45); }
+.cc-cockpit-shell .tk .rt b.on { font-size: 8.5px; font-weight: 800; letter-spacing: .1em; color: #121216; background: var(--ck-edge-hi); border-radius: 3px; padding: 3px 6px 2px; box-shadow: 0 0 8px rgba(230, 233, 242, .4); animation: cc-ck-blinkon 1.6s ease-in-out infinite; }
 .cc-cockpit-shell .tk .rt .tag { font-size: 8.5px; font-weight: 700; letter-spacing: .16em; color: var(--cat-color, #8d99b3); white-space: nowrap; }
-/* .hot (first card on the right) keeps the plain look; the NOW RUNNING row is .active and breathes with --ck-wave */
-.cc-cockpit-shell .tk.active { border: 2px solid var(--ck-edge-hi); border-left: 4px solid var(--cat-color, #58627a); background: rgba(44, 44, 52, .97); box-shadow: 0 0 0 calc(3px * var(--ck-wave, 0)) rgba(230, 233, 242, .08), 0 0 calc(14px + 12px * var(--ck-wave, 0)) -4px rgba(230, 233, 242, .32); }
+/* .hot (first card on the right) keeps the plain look; the NOW RUNNING row is .active and breathes (a halo layer fading in and out) */
+.cc-cockpit-shell .tk.active { border: 2px solid var(--ck-edge-hi); border-left: 4px solid var(--cat-color, #58627a); background: rgba(44, 44, 52, .97); box-shadow: 0 0 14px -4px rgba(230, 233, 242, .32); }
+.cc-cockpit-shell .tk.active::after { content: ""; position: absolute; inset: -2px -2px -2px -4px; border-radius: 5px; box-shadow: 0 0 0 3px rgba(230, 233, 242, .08), 0 0 26px -4px rgba(230, 233, 242, .4); opacity: 0; pointer-events: none; animation: cc-ck-breathe 1.6s ease-in-out infinite; }
+@keyframes cc-ck-breathe { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
 .cc-cockpit-shell .tk.active .sb { color: #9aa0b2; }
 /* "+n more" closes a truncated column: same frame, dashed and muted, so the row numbers still add up */
 .cc-cockpit-shell .tk.more { border: 1.5px dashed rgba(196, 200, 214, .32); border-left: 4px solid #3a3c47; background: rgba(22, 22, 27, .7); }
@@ -151,18 +160,24 @@
 .cc-cockpit-shell .lab { display: block; border: 1.5px solid #c9ccd6; border-radius: 4px; padding: 10px 18px 9px; font-family: var(--font-mono); font-weight: 700; letter-spacing: .22em; font-size: 24px; color: #f4f5f8; background: #131317; line-height: 1.1; }
 .cc-cockpit-shell .lab small { display: block; font-family: var(--font-mono); font-weight: 700; font-size: 8.5px; letter-spacing: .2em; color: var(--ck-accent); margin-top: 6px; }
 .cc-cockpit-shell .orbwrap { position: relative; height: 450px; }
-/* warm room light around the creature; --ck-glow (0.78..1) follows the bob */
-.cc-cockpit-shell .orbwrap::before { content: ""; position: absolute; left: 50%; top: 56%; width: 600px; height: 470px; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(255, 122, 69, .3), rgba(255, 122, 69, .1) 55%, transparent 100%); pointer-events: none; opacity: var(--ck-glow, .9); }
+/* warm room light around the creature; it swells as the creature rises (same 4 s clock as the bob) */
+.cc-cockpit-shell .orbwrap::before { content: ""; position: absolute; left: 50%; top: 56%; width: 600px; height: 470px; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(255, 122, 69, .3), rgba(255, 122, 69, .1) 55%, transparent 100%); pointer-events: none; opacity: .9; animation: cc-ck-glow 4s ease-in-out infinite; }
+@keyframes cc-ck-glow { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
 .cc-cockpit-shell .orbwrap .lab { position: absolute; left: 0; right: 0; top: 18px; z-index: 3; white-space: nowrap; }
 .cc-cockpit-shell .orbwrap .hd2 { position: absolute; left: 50%; top: 58%; width: calc(12 * var(--cell)); height: calc(10 * var(--cell)); transform: translate(-50%, -50%); }
 /* bloom right behind the sprite: 1.6x the creature box */
-.cc-cockpit-shell .orbwrap .hd2::before { content: ""; position: absolute; left: 50%; top: 42%; width: 160%; height: 160%; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(255, 120, 80, .35), transparent 60%); pointer-events: none; opacity: var(--ck-glow, .9); }
-/* the creature: flat pixels in one colour, square eyes, flat shadow; the 6px bob and the shadow squash are set by the mount */
+.cc-cockpit-shell .orbwrap .hd2::before { content: ""; position: absolute; left: 50%; top: 42%; width: 160%; height: 160%; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(255, 120, 80, .35), transparent 60%); pointer-events: none; opacity: .9; animation: cc-ck-glow 4s ease-in-out infinite; }
+/* the creature: flat pixels in one colour, square eyes, flat shadow; a 4 s 6px bob with the shadow squashing as it rises */
 .cc-cockpit-shell .pxc { position: relative; width: 100%; height: 100%; }
-.cc-cockpit-shell .px-body { position: absolute; left: 0; top: 0; z-index: 1; display: grid; grid-template-columns: repeat(12, var(--cell)); grid-auto-rows: var(--cell); shape-rendering: crispEdges; filter: drop-shadow(0 0 30px rgba(255, 110, 70, .45)); will-change: transform; }
+.cc-cockpit-shell .px-body { position: absolute; left: 0; top: 0; z-index: 1; display: grid; grid-template-columns: repeat(12, var(--cell)); grid-auto-rows: var(--cell); shape-rendering: crispEdges; filter: drop-shadow(0 0 30px rgba(255, 110, 70, .45)); will-change: transform; animation: cc-ck-bob 4s ease-in-out infinite; }
+@keyframes cc-ck-bob { 0%, 100% { transform: translate3d(0, 0, 0); } 50% { transform: translate3d(0, -6px, 0); } }
+@keyframes cc-ck-squash {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: .74; }
+  50% { transform: translateX(-50%) scale(.84); opacity: .52; }
+}
 .cc-cockpit-shell .px-body i.on { background: var(--px-color, #e8795a); }
 .cc-cockpit-shell .px-eye { position: absolute; left: calc(var(--col) * var(--cell)); top: calc(var(--r) * var(--cell)); width: var(--cell); height: var(--cell); background: #140c0a; transform-origin: 50% 50%; animation: cc-ck-blink 4.8s steps(1, end) infinite; }
-.cc-cockpit-shell .px-shadow { position: absolute; left: 50%; top: calc(8.35 * var(--cell)); width: calc(10.5 * var(--cell)); height: calc(1.7 * var(--cell)); border-radius: 50%; background: radial-gradient(closest-side, #050404, #0b0909 70%, rgba(11, 9, 9, .6)); opacity: .74; transform: translateX(-50%); will-change: transform; }
+.cc-cockpit-shell .px-shadow { position: absolute; left: 50%; top: calc(8.35 * var(--cell)); width: calc(10.5 * var(--cell)); height: calc(1.7 * var(--cell)); border-radius: 50%; background: radial-gradient(closest-side, #050404, #0b0909 70%, rgba(11, 9, 9, .6)); opacity: .74; transform: translateX(-50%); will-change: transform; animation: cc-ck-squash 4s ease-in-out infinite; }
 .cc-cockpit-shell .pxc[data-state="thinking"] .px-eye { animation: cc-ck-think 3.2s ease-in-out infinite; }
 .cc-cockpit-shell .pxc[data-state="working"] .px-eye { animation: cc-ck-scaneye 1.8s ease-in-out infinite; }
 .cc-cockpit-shell .pxc[data-state="sleeping"] .px-eye { animation: none; transform: translateY(30%) scaleY(.25); }
@@ -216,8 +231,11 @@
 .cc-cockpit-shell.ck-intro .wc:nth-child(3) .b i u { animation-delay: .24s; }
 .cc-cockpit-shell.ck-intro .wc:nth-child(4) .b i u { animation-delay: .36s; }
 @keyframes cc-ck-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-/* a light runs along every bar; --ck-shine (-100..100) is set each frame by the mount */
-.cc-cockpit-shell .wc .b i u::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0, rgba(255, 255, 255, .55) 50%, transparent 100%); transform: translateX(calc(var(--ck-shine, -100) * 1%)); }
+/* a light runs along every bar, staggered per card */
+.cc-cockpit-shell .wc .b i u::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0, rgba(255, 255, 255, .55) 50%, transparent 100%); transform: translateX(-100%); animation: cc-ck-sweep 2.2s linear infinite; }
+.cc-cockpit-shell .wc:nth-child(2) .b i u::after { animation-delay: -.55s; }
+.cc-cockpit-shell .wc:nth-child(3) .b i u::after { animation-delay: -1.1s; }
+.cc-cockpit-shell .wc:nth-child(4) .b i u::after { animation-delay: -1.65s; }
 .cc-cockpit-shell .wc.new .b i u::after { background: linear-gradient(90deg, transparent 0, rgba(255, 255, 255, .8) 50%, transparent 100%); }
 
 /* ticket stack */

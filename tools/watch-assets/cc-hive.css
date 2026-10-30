@@ -67,7 +67,7 @@
 @keyframes hive-beat{0%,100%{opacity:1}50%{opacity:.35}}
 .hive-shell .hive-cnt .v.is-bump{animation:hive-bump .9s ease-out 1}
 @keyframes hive-bump{0%{text-shadow:0 0 0 transparent}30%{text-shadow:0 0 14px currentColor}100%{text-shadow:0 0 0 transparent}}
-.hive-shell .hive-end{display:flex;align-items:center;gap:16px}
+.hive-shell .hive-end{position:relative;display:flex;align-items:center;gap:16px}
 .hive-shell .hive-link{background:none;border:0;border-radius:4px;padding:0 2px;font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;line-height:20px;color:var(--dim);cursor:pointer}
 .hive-shell .hive-link:hover,.hive-shell .hive-link:focus-visible{color:var(--fg)}
 .hive-shell .hive-menu{position:relative}
@@ -158,7 +158,7 @@
 .hive-shell .hive-slog-row span.hive-fg{color:var(--fg)}
 .hive-shell .hive-slog-row span.hive-dim{color:var(--dim)}
 /* mini bar chart under the command line: thin lane-coloured bars like the target's "forks per second" */
-.hive-shell .hive-bars{display:flex;align-items:flex-end;justify-content:space-between;gap:3px;height:64px;margin-top:10px}
+.hive-shell .hive-bars{display:flex;align-items:flex-end;justify-content:space-between;gap:3px;height:70px;margin-top:10px}
 .hive-shell .hive-bars:has(.hive-muted){height:auto;align-items:center}
 .hive-shell .hive-bars i{flex:1 1 0;max-width:6px;border-radius:1px 1px 0 0;min-height:2px;transform-origin:bottom;animation:hive-rise .7s var(--ease) both}
 .hive-shell .hive-bars[data-mode=status] i:nth-child(4n+1):not(:first-child){margin-left:5px}
@@ -178,8 +178,10 @@
 .hive-shell .hive-hbar>span:first-child,.hive-shell .hive-hbar>span.hive-fg{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hive-shell .hive-hbar>span:last-child{text-align:right}
 .hive-shell .hive-hbar .hive-fg{color:var(--fg)}
-/* done per project: compact two-column list */
-.hive-shell .hive-dpp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 20px}
+/* done per project: compact two-column list under the step line, in the ring colours */
+.hive-shell .hive-panel h2.hive-h-sub{margin:16px 0 10px}
+.hive-shell .hive-dpp{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 20px;margin-top:12px}
+.hive-shell .hive-h-sub+.hive-dpp{margin-top:0}
 .hive-shell .hive-dpp .hive-hbar{gap:6px;margin:0;font-size:11px}
 .hive-shell .hive-dpp .hive-hbar i{height:4px}
 .hive-shell .hive-dpp .hive-hbar>span:first-child{color:var(--muted)}
@@ -192,7 +194,7 @@
 .hive-shell .hive-kv b{font-weight:500;text-align:right}
 .hive-shell .hive-kvs .hive-kv:last-child{margin-bottom:0}
 /* step line: pink glowing steps with a bright segment running along them */
-.hive-shell .hive-step{display:block;width:100%;height:78px;margin-top:18px;overflow:visible}
+.hive-shell .hive-step{display:block;width:100%;height:58px;margin-top:16px;overflow:visible}
 .hive-shell .hive-step path{fill:none;stroke:#ff4d7e;stroke-width:1.5;stroke-linejoin:miter;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 3px rgba(255,77,126,.95)) drop-shadow(0 0 9px rgba(255,61,139,.6))}
 .hive-shell .hive-step path.hive-step-scan{stroke:#ffd6ec;stroke-width:2;stroke-dasharray:60 940;animation:hive-trace 5s linear infinite}
 @keyframes hive-trace{from{stroke-dashoffset:1000}to{stroke-dashoffset:0}}
@@ -206,8 +208,8 @@
 .hive-shell .hive-foot details p{margin:6px 0 0;font-size:11px;line-height:1.5;color:#8d99b3;max-width:900px}
 .hive-shell .has-tip{border-bottom:1px dotted var(--dim);cursor:help;position:relative}
 .hive-shell .has-tip:hover::after,.hive-shell .has-tip:focus::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 6px);z-index:90;width:max-content;max-width:290px;white-space:normal;background:#e9eef8;color:#05060b;font-family:var(--font-body);font-size:12px;line-height:1.35;padding:6px 8px;border-radius:6px;letter-spacing:0;text-transform:none;font-weight:400}
-/* notifications: slide in under LIVE at the right end of the header, clear of the header rule and the stage */
-.hive-shell .hive-toast{position:absolute;right:0;bottom:6px;z-index:5;display:none;gap:6px;align-items:center;padding:0 9px;border:1px solid color-mix(in srgb,var(--green) 60%,transparent);border-radius:999px;background:color-mix(in srgb,var(--green) 10%,var(--bg));box-shadow:0 0 12px color-mix(in srgb,var(--green) 30%,transparent);white-space:nowrap;font-family:var(--font-mono);font-size:10px;line-height:18px;letter-spacing:.08em;color:#e6ecf7;pointer-events:none}
+/* notifications: slide in just under LIVE (anchored to the header's end group), clear of the counters and the rule */
+.hive-shell .hive-toast{position:absolute;right:0;top:calc(100% + 5px);z-index:5;display:none;gap:6px;align-items:center;padding:0 9px;border:1px solid color-mix(in srgb,var(--green) 60%,transparent);border-radius:999px;background:color-mix(in srgb,var(--green) 10%,var(--bg));box-shadow:0 0 12px color-mix(in srgb,var(--green) 30%,transparent);white-space:nowrap;font-family:var(--font-mono);font-size:10px;line-height:18px;letter-spacing:.08em;color:#e6ecf7;pointer-events:none}
 .hive-shell .hive-toast.is-bad{border-color:color-mix(in srgb,var(--red) 70%,transparent);background:color-mix(in srgb,var(--red) 12%,var(--bg));box-shadow:0 0 12px color-mix(in srgb,var(--red) 35%,transparent)}
 .hive-shell .hive-toast img{width:12px;height:12px}
 .hive-shell .hive-toast.is-on{display:inline-flex;animation:hive-toast 3.1s var(--ease) both}
