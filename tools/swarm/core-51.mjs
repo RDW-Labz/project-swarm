@@ -71,7 +71,7 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
   const checksKey = digest(JSON.stringify(checks.map(check => [check.name, check.argv, check.base ?? true])));
   const cached = await bytesAt(root, cacheRel, true);
   if (cached) {
-    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch { /* recompute below */ }
+    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch (error) { console.error('[tools/swarm/core-51.mjs] unusable base-check cache:', error instanceof SyntaxError ? 'invalid JSON' : (error?.name ?? 'failed')); }
   }
   const failures = [];
   const failureLocations = {};
@@ -325,7 +325,7 @@ async function redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit 
     result.status = 'error';
     result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000);
   } finally {
-    if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch { /* best-effort cleanup */ } }
+    if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-51.mjs] base-check worktree cleanup:', error?.code ?? 'failed'); } }
     if (temporary) await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
   }
   return result;
