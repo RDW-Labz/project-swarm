@@ -62,7 +62,11 @@ export async function runDetail(project, runId) {
   let state, manifest = null;
   try { state = await readJson(path.join(dir, 'state.json')); } catch { return null; }
   if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
-  try { manifest = await readJson(path.join(dir, 'manifest.json')); } catch { /* an old run may have no manifest: the graph then has no edges */ }
+  try { manifest = await readJson(path.join(dir, 'manifest.json')); } catch (error) {
+    if (error?.code === 'ENOENT') { /* an old run may have no manifest: the graph then has no edges */ }
+    else if (error instanceof SyntaxError) console.error('[tools/board-run.mjs] corrupt manifest.json (SyntaxError)');
+    else console.error('[tools/board-run.mjs] read manifest.json:', error?.message ?? error);
+  }
   const after = new Map((Array.isArray(manifest?.jobs) ? manifest.jobs : []).map(j => [String(j?.id), Array.isArray(j?.after) ? j.after.map(String) : []]));
   const jobs = (Array.isArray(state.jobs) ? state.jobs : []).filter(j => j && typeof j === 'object' && !Array.isArray(j)).slice(0, MAX_JOBS).map(j => {
     const attempts = Array.isArray(j.attempts) ? j.attempts : [];

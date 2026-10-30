@@ -152,7 +152,7 @@ export async function runBudgets({ root, baseUrl, config, screens = null, env = 
     if (isObj(lh.json) && lh.json.runtimeError) { cannot(`Lighthouse reported an error: ${sanitizeWorkerText(lh.json.runtimeError.message ?? lh.json.runtimeError.code ?? 'runtime error', 120)}`); continue; }
     if (isObj(lh.json) && lh.json.audits?.['http-status-code']?.score === 0) { cannot('the page answered with an error status (Lighthouse http-status-code)'); continue; }
     const finalUrl = isObj(lh.json) ? lh.json.finalDisplayedUrl ?? lh.json.finalUrl : null;
-    if (typeof finalUrl === 'string') { try { if (new URL(finalUrl).host !== new URL(url).host) { cannot('the page redirected to another host'); continue; } } catch { /* an unreadable address is not a reason to refuse */ } }
+    if (typeof finalUrl === 'string') { try { if (new URL(finalUrl).host !== new URL(url).host) { cannot('the page redirected to another host'); continue; } } catch (error) { if (error?.name !== 'TypeError') console.error('[tools/budgets.mjs] redirect host check URL parse:', error?.message ?? error); } }
     const scores = parseLighthouse(lh.json);
     const verdict = evaluateBudgets({ lighthouse: scores, axe: parseAxe(ax.json) }, config);
     results.push({ id: screen.id, url, at, status: verdict.pass ? 'passed' : 'failed', pass: verdict.pass, scores, failures: verdict.failures.slice(0, 20) });

@@ -43,6 +43,72 @@ const SWARM_MJS = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
 const job = (extra = {}) => ({ id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update input.', context: ['input.txt'], outputs: ['input.txt'], ...extra });
 const manifest = (jobExtra = {}, spec = {}) => ({ version: 1, jobs: [job(jobExtra)], ...spec });
 
+const TIMEOUT_HANG_ARM = '.swarm-timeout-hang-armed';
+
+async function pollUntil(deadlineMs, stepMs, ready, label) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    if (await ready()) return;
+    await new Promise(resolve => setTimeout(resolve, stepMs));
+  }
+  assert.fail(label);
+}
+
+function timeoutWorkerScript({ outputText = 'from timeout', transcriptLines = [] } = {}) {
+  const chunks = [];
+  if (outputText != null) {
+    chunks.push(`require('fs').writeFileSync('input.txt',${JSON.stringify(outputText)});`);
+  }
+  for (const line of transcriptLines) {
+    chunks.push(`process.stdout.write(${JSON.stringify(line + '\n')});`);
+  }
+  chunks.push(`const fs=require('fs');const arm=${JSON.stringify(TIMEOUT_HANG_ARM)};`);
+  chunks.push('const tick=setInterval(()=>{if(fs.existsSync(arm)){clearInterval(tick);setInterval(()=>{},1000);}},5);');
+  return chunks.join('');
+}
+
+async function runTimedOutWriter(t, root, { runId, timeoutMs = 5000, jobExtra = {}, outputText = 'from timeout', transcriptLines = [] } = {}) {
+  const id = runId ?? `m2-timeout-${t.name.replace(/\W+/g, '-').slice(0, 48)}`;
+  const script = timeoutWorkerScript({ outputText, transcriptLines });
+  const spawnImpl = (_cmd, _args, options) => spawn(process.execPath, ['-e', script], options);
+  const pending = runManifest(root, manifest({ timeoutMs, ...jobExtra }), { id, spawnImpl });
+  const workspace = path.join(root, '.swarm/workspaces', id, 'writer');
+  const providerPath = path.join(root, '.swarm/runs', id, 'writer/provider.jsonl');
+  if (outputText != null) {
+    await pollUntil(
+      30_000,
+      10,
+      async () => {
+        try {
+          return (await fs.readFile(path.join(workspace, 'input.txt'), 'utf8')) === outputText;
+        } catch {
+          return false;
+        }
+      },
+      `timed-out worker never wrote ${JSON.stringify(outputText)} to ${workspace}/input.txt`,
+    );
+  }
+  if (transcriptLines.length) {
+    await pollUntil(
+      30_000,
+      10,
+      async () => {
+        try {
+          const text = await fs.readFile(providerPath, 'utf8');
+          return transcriptLines.every(line => text.includes(line.trim()));
+        } catch {
+          return false;
+        }
+      },
+      `timed-out worker never persisted its transcript to ${providerPath}`,
+    );
+  }
+  await fs.writeFile(path.join(workspace, TIMEOUT_HANG_ARM), '1');
+  const state = await pending;
+  assert.equal(state.jobs[0].status, 'timeout');
+  return state;
+}
+
 async function fixture(t) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-batch-m2-')));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -54,10 +120,7 @@ async function fixture(t) {
 
 test('#202: integrate --salvage accepts a timed-out job\'s already-written output; without --salvage it refuses', async t => {
   const root = await fixture(t);
-  const timeoutScript = "require('fs').writeFileSync('input.txt','from timeout');setInterval(()=>{},1000);";
-  const spawnImpl = (_cmd, _args, options) => spawn(process.execPath, ['-e', timeoutScript], options);
-  const state = await runManifest(root, manifest({ timeoutMs: 150 }), { spawnImpl });
-  assert.equal(state.jobs[0].status, 'timeout');
+  const state = await runTimedOutWriter(t, root, { runId: 'm2-202-salvage' });
   assert.ok(state.jobs[0].keptWorkspace, 'a timed-out job with a real output change keeps its workspace');
   await assert.rejects(integrateRun(root, state.id), /Only a complete/);
   const result = await integrateRun(root, state.id, { salvage: true });
@@ -69,9 +132,7 @@ test('#202: integrate --salvage accepts a timed-out job\'s already-written outpu
 
 test('#202: --salvage still hash-checks against base (a real conflict still refuses) and cannot be combined with --no-checks', async t => {
   const root = await fixture(t);
-  const timeoutScript = "require('fs').writeFileSync('input.txt','from timeout');setInterval(()=>{},1000);";
-  const spawnImpl = (_cmd, _args, options) => spawn(process.execPath, ['-e', timeoutScript], options);
-  const state = await runManifest(root, manifest({ timeoutMs: 150 }), { spawnImpl });
+  const state = await runTimedOutWriter(t, root, { runId: 'm2-202-salvage-hash' });
   await assert.rejects(integrateRun(root, state.id, { salvage: true, noChecks: true }), /--no-checks and --salvage/);
   await fs.writeFile(path.join(root, 'input.txt'), 'changed since the snapshot');
   await assert.rejects(integrateRun(root, state.id, { salvage: true }), /Integration conflict/);
@@ -155,12 +216,15 @@ test('#202: transcriptLastActivity names a sleep waiting on a backgrounded comma
 
 test('#202: a timed-out job\'s state record carries lastActivity from its own transcript', async t => {
   const root = await fixture(t);
-  const script = "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'pytest -q',run_in_background:true}}]}}));"
-    + "console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'sleep 60'}}]}}));"
-    + 'setInterval(()=>{},1000);';
-  const spawnImpl = (_cmd, _args, options) => spawn(process.execPath, ['-e', script], options);
-  const state = await runManifest(root, manifest({ timeoutMs: 150 }), { spawnImpl });
-  assert.equal(state.jobs[0].status, 'timeout');
+  const transcriptLines = [
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pytest -q', run_in_background: true } }] } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 60' } }] } }),
+  ];
+  const state = await runTimedOutWriter(t, root, {
+    runId: 'm2-202-last-activity',
+    outputText: null,
+    transcriptLines,
+  });
   assert.equal(state.jobs[0].lastActivity, 'sleep waiting on pytest');
 });
 

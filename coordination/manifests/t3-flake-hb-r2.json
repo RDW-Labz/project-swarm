@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakehb2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Flake g-24a1587a part 2: tests/handbuild-hook-hardening.test.mjs:110 ('chat merge hook: valid owner prompt records merge expiry about 60 minutes ahead') sees merge expiry undefined after ~3015 ms under load: the spawned orchestrator hook likely hit its ~3 s timeout before writing state. Make the test assert the hook's exit code and stderr FIRST, so a timeout fails with its real reason. Give the test's hook a time budget through config or env if the hook already reads one; if it does not, do not add one in product code (that is the guard): report it instead. Also say whether the real hook can silently drop a merge approval under load (write or fail loudly expected); that would be a product bug to report, not fix. Owner rule for flaky tests: fix at the root so flakes cannot hide real failures. Each test passes alone and fails under full-suite load (--test-concurrency=3 or more). Replace wall-clock races (fixed sleeps then assert) with deterministic ordering: await a ready signal, an event, a promise the code under test already exposes, or poll a condition with a bounded deadline that fails with a clear message. In your notes, list any other fixed-sleep-then-assert tests you saw in your file. PRODUCT-CODE RULE: you may edit ONLY your declared outputs. If you find the root cause is a product bug in a guard, process-kill/signal, lock or money path, do NOT work around it in the test: fix the test's own ordering only, and report the product bug in your notes (file, function, line, the exact misordering) so the coordinator can queue it for an Opus review. Never add retries, quarantine, skips or longer timeouts as the fix.\n\nRETRY NOTE: attempt 1 (assertOrchestratorPromptHook + pollMergeExpiry helpers, transcript path) was good EXCEPT the bounds: it measured now = Date.now() AFTER the hook returned and asserted exp >= now + CHAT_MERGE_MS - 500, so a hook that takes over 500 ms under load fails again. Redo the same changes, but capture const before = Date.now() immediately before runHook and const after = Date.now() after pollMergeExpiry returns, and assert before + CHAT_MERGE_MS - 1000 <= exp <= after + CHAT_MERGE_MS (exp is set inside that window, so these bounds are load-independent). Do not try to make the hook faster; the hook's 2 s timeouts are a known product bug the coordinator has queued.",
+      "context": [
+        "tools/orchestrator-hook.mjs",
+        "tools/handbuild.mjs"
+      ],
+      "outputs": [
+        "tests/handbuild-hook-hardening.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakehb",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/handbuild-hook-hardening.test.mjs"
+      ]
+    }
+  ]
+}

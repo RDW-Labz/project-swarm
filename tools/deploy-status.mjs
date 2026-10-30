@@ -52,7 +52,11 @@ export async function githubRepo(root) {
       const url = /^\s*url\s*=\s*(.*?)\s*$/.exec(line);
       if (url) return remoteRepo(url[1]);
     }
-  } catch { /* a missing or unreadable git config is not a GitHub remote */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'EACCES') {
+      console.error('[tools/deploy-status.mjs] githubRepo git config:', error?.message ?? error);
+    }
+  }
   return null;
 }
 

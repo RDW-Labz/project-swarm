@@ -180,7 +180,7 @@ test('scheduler releases a grant when its job is no longer pending after claim',
     scheduler.acquire('local', { jobId: 'j-cancelled', local: docsAgency, signal: ctrl.signal }),
     { name: 'AbortError' },
   );
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await scheduler.sharedChain;
   const store = await withLaneStore(s => s, { dir });
   assert.equal(store.slots.local?.length ?? 0, 0);
   await scheduler.close();

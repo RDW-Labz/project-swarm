@@ -120,7 +120,7 @@ async function lessonsCommand(root, verb, args, { installRoot }) {
       tags: flags.tag?.length ? flags.tag : [flags.stage], source: { kind: 'manual' },
     });
     const file = await writeLesson(root, lesson);
-    await import('./history-hooks.mjs').then(hooks => hooks.recordLessonHistory(root, lesson)).catch(() => {});
+    await import('./history-hooks.mjs').then(hooks => hooks.recordLessonHistory(root, lesson)).catch((error) => { console.error('[tools/lessons-commands.mjs] recordLessonHistory:', error?.message ?? error); });
     return out(`wrote ${file}`);
   }
   if (verb === 'mine') {
@@ -167,7 +167,7 @@ async function writeFileSafe(root, segments, text) {
   const tmp = path.join(dir, `.${segments.at(-1)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
   try { await handle.writeFile(text); await handle.close(); await fs.rename(tmp, file); }
-  catch (error) { await handle.close().catch(() => {}); await fs.rm(tmp, { force: true }); throw error; }
+  catch (error) { await handle.close().catch((closeError) => { console.error('[tools/lessons-commands.mjs] writeFileSafe close:', closeError?.message ?? closeError, tmp); }); await fs.rm(tmp, { force: true }); throw error; }
 }
 
 // Fixture file names like job.mjs or lock.mjs coincide with words in this project's own tests; the manifest
@@ -176,7 +176,7 @@ async function coverCoincidentalTests(root, manifest) {
   let files = [];
   try { files = (await fs.readdir(path.join(root, 'tests'))).filter(f => f.endsWith('.test.mjs')).sort(); } catch { return; }
   const texts = new Map();
-  for (const f of files) texts.set(f, await fs.readFile(path.join(root, 'tests', f), 'utf8').catch(() => ''));
+  for (const f of files) texts.set(f, await fs.readFile(path.join(root, 'tests', f), 'utf8').catch((error) => { if (error?.code !== 'ENOENT') console.error('[tools/lessons-commands.mjs] read test file:', error?.message ?? error, f); return ''; }));
   for (const job of manifest.jobs) {
     const stems = [...new Set(job.outputs.map(o => path.basename(o).replace(/\.[^.]+$/, '')))];
     const hits = files.filter(f => stems.some(s => new RegExp(`\\b${s.replace(/[^A-Za-z0-9_-]/g, '')}\\b`).test(texts.get(f)))).slice(0, 100).map(f => `tests/${f}`);

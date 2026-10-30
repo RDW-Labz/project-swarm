@@ -281,7 +281,10 @@ async function withJournalLock(root, name, fn) {
       try {
         return await fn();
       } finally {
-        await fs.unlink(lock).catch(() => {});
+        await fs.unlink(lock).catch(unlinkError => {
+          if (unlinkError?.code === 'ENOENT') return;
+          console.error('[tools/journal.mjs] release journal write lock:', lock, unlinkError?.message ?? unlinkError);
+        });
       }
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;

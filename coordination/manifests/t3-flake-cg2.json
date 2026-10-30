@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakecg2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Flake follow-up (g-24a1587a, same rules): tests/concurrency-guard.test.mjs ~line 162 'wrapper killed outright (SIGKILL) restored by watcher' fails on macOS CI under load (PRs #439, #445, #447). The earlier fix in this file (ready hooks for the Ctrl-C tests) noted remaining fixed-sleep-then-assert patterns: the process watcher test does await sleep(500) before reading childPid (~167), and the restoreIfStale poll uses sleep(50) in a bounded loop (~168). Replace the sleep(500)-then-read with a deterministic signal (the fake wrapper writes its pid or a ready line that the test awaits, or poll for the pid file with a bounded deadline that fails with a clear message), and make every remaining wait in that test condition-based. Keep the earlier Ctrl-C/SIGTERM fixes in this file unchanged. PRODUCT-CODE RULE: edit ONLY the test file; tools/concurrency-guard.mjs is a process-kill path, so if the root cause is a product bug, report it (file, line, misordering) and don't fix it. Never add retries, skips or longer timeouts as the fix.",
+      "context": [
+        "tools/concurrency-guard.mjs"
+      ],
+      "outputs": [
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakecg",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs"
+      ]
+    }
+  ]
+}

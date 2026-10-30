@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3cgboot",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nTrain 3 Opus review (claude-opus-5-5, run 1793372061898-7517f56a) found ONE BLOCKER in the concurrency-guard startup-race fix, tools/concurrency-guard.mjs restoreIfStale (~line 53-68). Process-kill path: fix it exactly and minimally, in the surrounding style. Problem: the childPid branches run even when the marker is stale only because it is from before boot (fromBeforeBoot), although the file itself says a pre-boot pid belongs to no current process. After a power cut / reboot pids are reused, so the first swarm command can: (a) SIGTERM an unrelated live process holding the old childPid, and since the marker then stays, repeat it on every command; (b) if that pid belongs to another user/root, alive() is true on EPERM, kill fails, the marker never clears, machineConcurrency stays raised forever and apply() hits guard-busy forever; (c) if the reused childPid is the pid of a new normal swarm command, that command exits 0 without running. FIX: (1) a marker from before boot is restored directly, never acting on childPid: `if (fromBeforeBoot(marker)) return restore(configFile);` before any childPid logic. (2) Verify child identity: when noteChild records childPid, also record the child's process start time using the same procStart helper tools/busy-marker.mjs uses (import or reuse it; read busy-marker.mjs from context); in restoreIfStale act on childPid (self-exit or SIGTERM) only when the recorded start time matches the current start time of that pid; a mismatch or an unreadable start time means 'not ours': restore. (3) An alive() that is true only because of EPERM (another user's process) is not our child: restore instead of leaving the marker. (4) Bound repeats: persist termSentAt in the marker when SIGTERM is sent; if a later call finds termSentAt older than 30 s and the child still alive and matching, leave it for the watcher but never send SIGTERM a second time from restoreIfStale. Keep the in-boot behaviour the review confirmed correct: the orphan exits only when it is the recorded child and the wrapper is dead; the watcher still SIGTERMs, then SIGKILLs, then restores. Tests (add to tests/concurrency-guard.test.mjs, keeping all existing tests and the earlier ready-hook fixes): a pre-boot marker (`at` before boot) with an alive unrelated childPid restores the value, kills nothing, does not exit (inject alive/kill/exit seams if the module has them, or add minimal injectable parameters with production defaults); a pre-boot marker whose childPid equals process.pid restores and does NOT exit; an in-boot marker whose recorded start time does not match the live pid's start time restores without signalling; an EPERM-alive child restores. ALSO two small follow-ups from the same review (non-sensitive): tools/stress-tests.mjs ~30: spawnSync uses the default 1 MB maxBuffer and has no timeout; set maxBuffer to 64 MB and a timeout (kill the child on timeout, report it as a failure); tools/lane-health.mjs ~408: the persist chain swallows write failures; log non-ENOENT failures once per distinct error code to stderr with fixed text (no file contents). Do not touch any other file.",
+      "context": [
+        "tools/busy-marker.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3cgboot",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs",
+        "tests/busy-marker.test.mjs"
+      ]
+    }
+  ]
+}

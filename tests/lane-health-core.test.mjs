@@ -55,7 +55,10 @@ test('discoverLanes: config keys, local endpoints, and adapters (no hardcoded li
 test('discoverLanes: removed lane prunes state and emits pruned', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-prune-'));
   const env = { PROJECT_SWARM_HOME: path.join(home, 'ps') };
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   let tNow = 1_000_000;
   const events = [];
   const { impl } = fakeFetch();
@@ -127,7 +130,10 @@ test('defaultLaneHealth: CLI --version via exec', async () => {
 
 test('monitor: down then two ok checks returns healthy', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-recover-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   let probe = 'down';
   registerLaneAdapter({
     name: 'recoverLane',
@@ -153,7 +159,10 @@ test('monitor: down then two ok checks returns healthy', async t => {
 
 test('monitor: flapping increases required ok streak', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-flap-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   let tNow = 10_000_000;
   let flip = 0;
   registerLaneAdapter({
@@ -185,7 +194,10 @@ test('monitor: flapping increases required ok streak', async t => {
 
 test('monitor: probation then full routability after 3 checks and 2 jobs', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-prob-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   registerLaneAdapter({
     name: 'probLane',
     kind: 'test',
@@ -215,7 +227,10 @@ test('monitor: probation then full routability after 3 checks and 2 jobs', async
 
 test('monitor: all cheap tier down 30 minutes emits needs-you once', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-tier-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   let tNow = 30_000_000;
   for (const name of ['cursor', 'anthropic', 'openrouter']) {
     registerLaneAdapter({
@@ -248,7 +263,10 @@ test('monitor: all cheap tier down 30 minutes emits needs-you once', async t => 
 test('state file is mode 0600 and written atomically', async t => {
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-persist-'));
   const env = { PROJECT_SWARM_HOME: path.join(home, 'ps') };
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   registerLaneAdapter({
     name: 'persistLane',
     kind: 'test',
@@ -289,7 +307,10 @@ test('injected fetch allows GET only (no POST / model calls)', async t => {
     },
   });
   const home = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'lh-get-'));
-  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
   const monitor = createLaneHealthMonitor({
     home,
     env: { PROJECT_SWARM_HOME: path.join(home, 'ps') },

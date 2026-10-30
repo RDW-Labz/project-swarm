@@ -265,7 +265,9 @@ export async function saveGateCapture(runDir, ticketId, capture, env = process.e
   try {
     await fsPromises.rename(tmpPath, destPath);
   } catch (err) {
-    await fsPromises.unlink(tmpPath).catch(() => {});
+    await fsPromises.unlink(tmpPath).catch((cleanupError) => {
+      if (cleanupError?.code !== 'ENOENT') console.error('[tools/gate-fingerprint.mjs] rename failure tmp unlink:', cleanupError?.message ?? cleanupError);
+    });
     throw err;
   }
 

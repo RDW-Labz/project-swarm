@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t3-stress",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Add a `test:stress` npm script and a small runner that reproduces the load conditions behind the g-24a1587a flake fixes (owner rule: root-cause fixes, no retries, no skips, no longer timeouts).\n\nCreate tools/stress-tests.mjs (new file) and add exactly one script to package.json: \"test:stress\": \"node tools/stress-tests.mjs\". Do not change any other script or field.\n\nThe runner runs the previously load-flaky test files repeatedly with elevated concurrency, using the required isolate import:\n  node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 --test-concurrency=<C> <files...>\nFiles: tests/concurrency-guard.test.mjs, tests/handbuild-hook-hardening.test.mjs, tests/field-lessons-batch-m2.test.mjs, tests/local-lane-review.test.mjs, tests/lane-health-core.test.mjs, tests/lane-health-persist.test.mjs, tests/server-restart-round4.test.mjs, tests/cpu-runner.test.mjs.\n\nDefaults: rounds 5, concurrency 8. Env overrides: STRESS_ROUNDS, STRESS_CONCURRENCY. Fail fast on the first non-zero exit (no retries). Print one line per round: 'stress round <i>/<N> (concurrency <C>): pass|fail (<ms> ms)'. On failures, print the child's stdout/stderr (tail, at most 200 lines each) and exit 1. On success print 'test:stress: N rounds passed'. Keep the file small (no dependencies, node: builtins only), resolve the repo root from import.meta.url so it works from any cwd, and never write inside .swarm/.\n\nVerify before you finish: STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress prints the round line and 'test:stress: 1 rounds passed' with exit code 0. Report the exact commands and outputs in your summary.",
+      "context": [
+        "package.json",
+        "tests/concurrency-guard.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/field-lessons-batch-m2.test.mjs",
+        "tests/local-lane-review.test.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/cpu-runner.test.mjs"
+      ],
+      "outputs": [
+        "package.json",
+        "tools/stress-tests.mjs"
+      ],
+      "timeoutMs": 1500000
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-projects-batch-11b-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Small fixup on tools/projects.mjs, function acquireRegistryLock ONLY. The two catch blocks inside its retry loop (the stale-lock reclaim catch with comment /* another writer won */ and the stat catch with comment /* gone */) currently console.error any non-ENOENT error on EVERY loop iteration. The loop retries every 25ms for up to 10s, so a persistent error (EACCES/EPERM) would print ~400 lines.\n\nChange: declare `let loggedRetryError = false;` once, right before the `for (;;)` loop. In each of those two catches, keep the exact same ENOENT check and message, but only call console.error when `!loggedRetryError`, then set `loggedRetryError = true`. One shared flag for both catches. Keep the comments. Change nothing else at all: same control flow, timing, throws, returns; do not touch any other catch or function. No unused bindings, no `void error`.\n\nThen run: node --test tests/registry-review.test.mjs tests/registry-round2.test.mjs tests/registry-round3.test.mjs tests/board-projects-filter.test.mjs and confirm green.",
+      "context": [
+        "docs/state/silent-failures.md",
+        "tests/registry-review.test.mjs",
+        "tests/registry-round2.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/board-projects-filter.test.mjs"
+      ],
+      "outputs": [
+        "tools/projects.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/bare-status.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/chief-orchestrator-route.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-data.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/forget.test.mjs",
+        "tests/goal-guard.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/helpers/board-accuracy-fixture.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/scratch-inbox.test.mjs",
+        "tests/scratch-strict-broad.test.mjs",
+        "tests/state-guard.test.mjs",
+        "tests/swarm-watch-human-checklist-walkthrough.spec.mjs",
+        "tests/time-auto.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "registry tests are in context; other tests only reach projects.mjs indirectly via board/registry consumers and the full suite runs in CI before merge"
+    }
+  ]
+}

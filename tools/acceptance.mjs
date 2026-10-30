@@ -226,7 +226,11 @@ function readTestSources(root, ticket) {
       const full = path.resolve(root, f);
       const info = lstatSync(full);
       if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
-    } catch { /* missing: nothing covered by it */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/acceptance.mjs] readTestSources lstatSync:', error?.message ?? error);
+      }
+    }
   }
   return sources;
 }
@@ -361,7 +365,12 @@ export async function resolveAcceptanceRoot(root, ticket, { runId = ticket?.runI
       const job = jobBuiltTicket(state, ticket?.id);
       if (!job) continue;
       if (typeof job.workspace === 'string' && job.workspace) {
-        const candidate = await fs.realpath(path.isAbsolute(job.workspace) ? job.workspace : path.resolve(member, job.workspace)).catch(() => null);
+        const candidate = await fs.realpath(path.isAbsolute(job.workspace) ? job.workspace : path.resolve(member, job.workspace)).catch((error) => {
+          if (error?.code !== 'ENOENT') {
+            console.error('[tools/acceptance.mjs] resolveAcceptanceRoot realpath:', error?.message ?? error);
+          }
+          return null;
+        });
         if (candidate && members.includes(candidate)) return candidate;
       }
       return member;

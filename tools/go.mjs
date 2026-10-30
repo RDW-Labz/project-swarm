@@ -236,7 +236,9 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
   for (const file of candidates) {
     const tracked = await gitInRoot(exec, root, ['ls-files', '--error-unmatch', '--', file], { env: gitEnv });
     if (tracked.code !== 0) {
-      try { await fs.access(path.join(root, file)); toCommit.push(file); } catch { /* absent */ }
+      try { await fs.access(path.join(root, file)); toCommit.push(file); } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/go.mjs] access untracked file:', file, error?.message ?? error);
+      }
       continue;
     }
     const diff = await gitInRoot(exec, root, ['diff', '--quiet', 'HEAD', '--', file], { env: gitEnv });
@@ -262,7 +264,9 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
 
   if (commitRes.code !== 0) {
     const reason = firstLine(commitRes.stderr) || 'git commit failed';
-    await gitInRoot(exec, root, ['restore', '--staged', '--', ...toCommit], { env: gitEnv }).catch(() => {});
+    await gitInRoot(exec, root, ['restore', '--staged', '--', ...toCommit], { env: gitEnv }).catch((error) => {
+      console.error('[tools/go.mjs] restore staged after failed commit:', toCommit.join(', '), error?.message ?? error);
+    });
     return { commit: { status: 'failed', reason }, humanLine: `committed nothing: ${reason}` };
   }
 
@@ -279,7 +283,9 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
       sha: sha.slice(0, 8),
       files: toCommit.length,
       text: humanLine,
-    }).catch(() => {});
+    }).catch((error) => {
+      console.error('[tools/go.mjs] integration event lost:', runId, error?.message ?? error);
+    });
   }
   if (warnings.length) return { commit, humanLine, warnings };
   return { commit, humanLine };

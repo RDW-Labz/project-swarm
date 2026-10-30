@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.167.26
+
+Release train 3: silent-failure visibility across the toolbelt, load-flake fixes at the root, and Phase 2 lock tests.
+- Silent catches: the D-fix audit (g-33a7a4ae) now makes more than 200 previously silent catches across roughly 100 tool modules log a bounded message, while expected missing-file and permission cases stay silent; no control flow, fallback or throw changed;
+- Flakes: five load-flaky tests are fixed at the root, not retried or quarantined (concurrency-guard Ctrl-C tests, handbuild chat-merge hook, field lessons salvage, local-lane slot release, lane-health persistence), and lane-health persist writes are serialized and flushed;
+- Stress: new npm run test:stress reruns the previously flaky test files for five rounds at concurrency 8, failing fast with the child output (STRESS_ROUNDS and STRESS_CONCURRENCY override the defaults);
+- Ask: swarm ask --context <empty file> no longer crashes reading costUsd;
+- Cleanup: the visual-qa screenshots atomicWrite helper no longer closes its file handle twice when rename fails;
+- Locks: Phase 2 lock-race tests (24 passing) plus 8 recorded todo bugs in base-check-lock, projects and integration-lock, ready for their product fixes.
+
 ## 1.167.25
 
 Release train 2: money caps, paid-lane safety and verify-job provenance.

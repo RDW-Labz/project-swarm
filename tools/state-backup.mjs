@@ -122,7 +122,7 @@ async function backupIds(root) {
 async function prune(root, keep, protect = []) {
   const complete = [];
   for (const id of await backupIds(root)) {
-    try { await readManifest(root, id); complete.push(id); } catch { /* incomplete: left alone */ }
+    try { await readManifest(root, id); complete.push(id); } catch (error) { if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/state-backup.mjs] readManifest prune:', id, error?.message ?? error); }
   }
   for (const id of complete.slice(Math.max(1, keep))) {
     if (protect.includes(id)) continue;
@@ -174,8 +174,8 @@ export async function listBackups(root) {
         files: m.files.length,
         bytes: m.files.reduce((s, f) => s + (Number(f.bytes) || 0), 0),
       });
-    } catch {
-      // unreadable or incomplete backup: skipped
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/state-backup.mjs] listBackups readManifest:', id, error?.message ?? error);
     }
   }
   return out;

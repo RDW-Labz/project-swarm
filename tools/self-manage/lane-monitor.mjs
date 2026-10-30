@@ -260,7 +260,7 @@ export function createLaneMonitor({
 
   function start() {
     if (timer) return;
-    timer = setIntervalFn(() => { tick().catch(() => {}); }, period);
+    timer = setIntervalFn(() => { tick().catch((error) => { console.error('[tools/self-manage/lane-monitor.mjs] tick interval:', error?.message ?? error); }); }, period);
     timer?.unref?.();
   }
 

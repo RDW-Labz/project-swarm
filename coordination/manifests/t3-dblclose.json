@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3dblclose",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Cleanup g-17304422 (guard against Node behaviour changes, not an observed bug): tools/managers/visual-qa/screenshots.mjs atomicWrite() (~line 193) calls handle.close() on the success path, then fs.rename; if rename throws, the catch calls handle.close() again. Track a local closed flag (set right after the successful close) and skip the catch's close when it is set. Keep everything else, including tmp cleanup and rethrowing the original error, exactly as is; do not touch the kill/stop/killLive code in that file. If atomicWrite is not exported, export it under the same name for tests only if nothing else needs changing; otherwise test through the existing exported caller. Test in NEW tests/visual-qa-atomic-write.test.mjs (first line: import './_isolate-config.mjs';): inject or stub an fs.rename that rejects after a real successful write+close and assert the surfaced error is the rename error, the tmp file is removed, and close ran exactly once. The ignored tests cover behaviour that must not change; the coordinator runs the full suite before ship.",
+      "context": [],
+      "outputs": [
+        "tools/managers/visual-qa/screenshots.mjs",
+        "tests/visual-qa-atomic-write.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/managers/r039-visual-lessons.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3dblclose",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/visual-qa-atomic-write.test.mjs"
+      ]
+    }
+  ]
+}

@@ -30,7 +30,10 @@ export async function runBoardCommand(root, command, args, { env = process.env }
     }
     if (verb === 'add') {
       if (rest.length !== 1) return out(`add needs one folder\n${BOARD_USAGE}`, 2);
-      const real = await fs.realpath(rest[0]).catch(() => null);
+      const real = await fs.realpath(rest[0]).catch((error) => {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR' && error?.code !== 'EACCES') console.error('[tools/board-commands.mjs] realpath projects add:', error?.message ?? error);
+        return null;
+      });
       if (!real) return out(`no such folder: ${rest[0]}`, 1);
       const result = await registerProject(real, { file, env: { ...env, SWARM_PROJECTS_FILE: file } });
       return result ? out(`${result.added ? 'added' : 'already listed'}: ${result.project.name} (${result.project.id})`) : out('that is not a folder', 1);

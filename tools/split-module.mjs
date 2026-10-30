@@ -44,8 +44,8 @@ try {
   for (const n of Object.getOwnPropertyNames(globalThis)) {
     BUILTIN_GLOBALS.add(n);
   }
-} catch {
-  // ignore
+} catch (error) {
+  console.error('[tools/split-module.mjs] enumerate globalThis property names:', error?.message ?? error);
 }
 
 function readText(filePath) {
@@ -929,8 +929,8 @@ function coLocatedSmokeVerifyPath(targetPath) {
 function removeSmokeVerifyTemp(tempPath) {
   try {
     if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-  } catch {
-    // ignore
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/split-module.mjs] removeSmokeVerifyTemp:', error?.message ?? error, tempPath);
   }
 }
 
@@ -974,8 +974,8 @@ function importExportDeclarationRanges(text) {
         ranges.push([node.start, node.end]);
       }
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) console.error('[tools/split-module.mjs] importExportDeclarationRanges parse:', error?.message ?? error);
   }
   return ranges;
 }

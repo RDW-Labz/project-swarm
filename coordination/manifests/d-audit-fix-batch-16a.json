@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-projcmd-batch-16a-fixup",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Tiny privacy fixup on tools/project-commands.mjs, ONE log line only. In pendingForWorktreeRoot, the catch with comment /* no pending cap raise */ logs `error?.message ?? error` for non-ENOENT errors. A JSON.parse SyntaxError message quotes the file's text (spend-request contents). Change that console.error's message argument to `error instanceof SyntaxError ? 'corrupt file (SyntaxError)' : (error?.message ?? error)`. Keep the prefix, the wtRoot argument, the ENOENT check and the comment. Change nothing else. Then run: node --check tools/project-commands.mjs.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/project-commands.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handoff-regenerate.test.mjs",
+        "tests/handoff.test.mjs",
+        "tests/phase10b-cli.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

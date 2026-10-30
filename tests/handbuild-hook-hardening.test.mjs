@@ -73,6 +73,34 @@ async function runHook(root, extra = {}) {
   });
 }
 
+function assertOrchestratorPromptHook(result) {
+  if (result.error) {
+    assert.fail(`orchestrator prompt hook spawn failed: ${result.error.message}`);
+  }
+  assert.equal(
+    result.status,
+    0,
+    `orchestrator prompt hook exit ${result.status}: stderr=${JSON.stringify(result.stderr)} stdout=${JSON.stringify(result.stdout)} signal=${result.signal}`,
+  );
+  assert.equal(result.stderr, '', `orchestrator prompt hook stderr: ${JSON.stringify(result.stderr)}`);
+  assert.equal(result.stdout, '', `orchestrator prompt hook stdout: ${JSON.stringify(result.stdout)}`);
+}
+
+async function pollMergeExpiry(root, prKey, { deadlineMs = 1000, intervalMs = 10 } = {}) {
+  const key = String(prKey);
+  const start = Date.now();
+  for (;;) {
+    const exp = readState(root).merges?.[key];
+    if (Number.isFinite(exp)) return exp;
+    if (Date.now() - start >= deadlineMs) {
+      assert.fail(
+        `merge expiry for PR ${key} not recorded within ${deadlineMs}ms after hook exit (merges[${key}]=${readState(root).merges?.[key]}); orchestrator-hook RECORD_TIMEOUT_MS is 2000 with no env override`,
+      );
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+}
+
 async function journalDeps(root, { now = () => T0, channel } = {}) {
   return {
     ...inboxDeps({ now, channel }),
@@ -111,13 +139,15 @@ test('chat merge hook: valid owner prompt records merge expiry about 60 minutes 
   const home = await fakeClaudeHome(t);
   const { root } = await project(t);
   await installOrchestratorHook(root);
+  const prompt = 'merge 7';
+  const transcript_path = await writeTranscript(home, prompt);
   const before = Date.now();
-  await runHook(root, { prompt: 'merge 7', home });
+  const result = await runHook(root, { prompt, home, transcript_path });
+  assertOrchestratorPromptHook(result);
+  const exp = await pollMergeExpiry(root, '7');
   const after = Date.now();
-  const exp = readState(root).merges?.['7'];
-  assert.ok(Number.isFinite(exp));
-  assert.ok(exp >= before + CHAT_MERGE_MS - 500);
-  assert.ok(exp <= after + CHAT_MERGE_MS + 500);
+  assert.ok(exp >= before + CHAT_MERGE_MS - 1000, `exp=${exp} before=${before}`);
+  assert.ok(exp <= after + CHAT_MERGE_MS, `exp=${exp} after=${after}`);
 });
 
 test('approve unknown hand-build request is refused from every channel', async t => {
