@@ -120,6 +120,44 @@ index 00000000..63afdfd0
 +  ]
 +}
 \ No newline at end of file
+diff --git a/coordination/manifests/review-train4.json b/coordination/manifests/review-train4.json
+new file mode 100644
+index 00000000..9562e0f3
+--- /dev/null
++++ b/coordination/manifests/review-train4.json
+@@ -0,0 +1,32 @@
++{
++  "version": 1,
++  "concurrency": 1,
++  "jobs": [
++    {
++      "id": "reviewtrain4",
++      "agent": "claude",
++      "model": "opus",
++      "tier": "expensive",
++      "tierReason": "owner rule: one Opus review of the combined release diff",
++      "prompt": "Review release train 4 of Project Swarm: branch swarm/train4 against main at 3df9b8bd (1.167.27). The combined code diff is in your context at coordination/review/train4.diff (25 files); the full workspace is present, so open any file you need.\n\nWhat changed:\n(1) MERGE GATE, tools/merge-guard.mjs: `swarm merge` now refuses a release PR (title starts with a semver) unless its `## Reviews` section contains a passing verdict that names the current head commit. The section is parsed; a line counts for the head only if it contains a 7-40 char hex token that prefixes headRefOid; the last matching verdict wins; fail/blocked/pending refuses; non-release PRs are unchanged. Focus: can a release PR bypass the gate (title shape, heading casing, text outside the section, a PASS that names another commit, a later FAIL being ignored, an unparseable body, a null head)? Does it refuse before any `gh pr merge` call? Is a non-release PR correctly exempt?\n(2) GUARDED RUNNER, tools/concurrency-guard.mjs: the watcher now verifies the recorded child process start time AND command line before SIGTERM/SIGKILL; old markers without identity restore without signalling; the SIGTERM path re-reads the marker before writing termSentAt; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 s when the watcher is gone; a self-orphan still exits 143; pre-boot and EPERM behavior from 1.167.27 is unchanged. Focus: any path that can signal a reused or innocent pid, wedge the marker forever, restore the value while the orphan still runs, crash/hang the every-command path, or exit 0 without running.\n(3) STRESS RUNNER, tools/stress-tests.mjs: each round runs in a detached process group and the timeout kills the whole group; fail-fast and tails preserved.\n(4) LANE HEALTH, tools/lane-health.mjs: the once-per-code persist log now includes the code.\n(5) BULK SUPERSEDE, tools/tickets.mjs and tools/scope-commands.mjs: new terminal status `superseded` (moves only from proposed/todo/ready/blocked), and an owner-only `swarm tickets supersede --before <date> [--dry-run] [--yes] [--stage S] [--json]`. Last touch = max tickets.log event timestamp per id, else ledger.createdAt; the dry-run (also the default with no --yes) lists id, status, stage, last touch, basis and title and writes nothing; --yes re-reads under the wave lock, writes once, appends ONE supersede-stale log event, then refreshes the plan. Focus: can an agent session run it without SWARM_OWNER (owner-only bypass)? Can it supersede running/review/done/cancelled tickets, or a ticket not older than the cutoff? Any lost update or partial write? Does the ledger stay approved and the plan consistent? Does adding the status break ready/deliverable/build-plan logic?\n(6) Version 1.167.28 and the CHANGELOG entry.\n\nPass bar (owner): blockers only. Look for: a merge-gate bypass (wrong head, failed review still merging); money/key/secret exposure; data loss (ticket ledger, locks); an innocent process killed or a real orphan left running; a crash/hang on a normal path; a regression; a test weakened, skipped, retried or quarantined to hide a failure; an owner-only bypass; a bulk command writing without --yes or changing non-stale/active tickets. Everything else is a follow-up.\n\nWrite ONLY coordination/review/train4-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
++      "context": [
++        "coordination/review/train4.diff",
++        "tools/merge-guard.mjs",
++        "tests/merge-guard.test.mjs",
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/tickets.mjs",
++        "tests/tickets-supersede.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "package.json",
++        "CHANGELOG.md"
++      ],
++      "outputs": [
++        "coordination/review/train4-review.json"
++      ],
++      "resultFile": "coordination/review/train4-review.json",
++      "timeoutMs": 2700000
++    }
++  ]
++}
 diff --git a/coordination/manifests/t4-bulk-supersede.json b/coordination/manifests/t4-bulk-supersede.json
 new file mode 100644
 index 00000000..d1c3da2f
@@ -866,6 +904,80 @@ index 24a1b715..15c0272a 100644
    });
  
    test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/guard-backup-fixes.test.mjs b/tests/guard-backup-fixes.test.mjs
+index 0361b43a..e892f063 100644
+--- a/tests/guard-backup-fixes.test.mjs
++++ b/tests/guard-backup-fixes.test.mjs
+@@ -65,12 +65,14 @@ test('finding 3: worktree list failure keeps local head branch', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: false,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+@@ -143,12 +145,14 @@ test('finding 6: head ref segments encoded separately', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'release/1.0', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: false,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+@@ -192,12 +196,14 @@ test('finding 7: cross-repository PR skips remote delete', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: true,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+diff --git a/tests/guard-backup-fixes4.test.mjs b/tests/guard-backup-fixes4.test.mjs
+index 56c89206..4fea34c0 100644
+--- a/tests/guard-backup-fixes4.test.mjs
++++ b/tests/guard-backup-fixes4.test.mjs
+@@ -10,7 +10,7 @@ import { holdsSwarmState, recordDeletion, deletionsLogFile } from '../tools/stat
+ import * as lb from '../tools/ledger-backup.mjs';
+ 
+ const PR_JSON =
+-  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+ 
+ function greenPrView(over = {}) {
+   return {
+@@ -21,6 +21,8 @@ function greenPrView(over = {}) {
+     headRefOid: 'abc',
+     statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+     isCrossRepository: false,
++    title: 'Fix the widget',
++    body: '',
+     ...over,
+   };
+ }
 diff --git a/tests/lane-health-persist.test.mjs b/tests/lane-health-persist.test.mjs
 index aaf7d8bd..93979b96 100644
 --- a/tests/lane-health-persist.test.mjs
@@ -1181,6 +1293,46 @@ index 4d170bdc..662e3dd0 100644
 +  assert.ok(r.reasons.includes('review-verdict-missing-for-head: no-head'));
 +  assert.equal(mergeCalls(calls).length, 0);
 +});
+diff --git a/tests/state-guard.test.mjs b/tests/state-guard.test.mjs
+index f7c333d8..221690ec 100644
+--- a/tests/state-guard.test.mjs
++++ b/tests/state-guard.test.mjs
+@@ -157,7 +157,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+   await fs.mkdir(path.join(wtRoot, '.swarm', 'project'), { recursive: true });
+   await fs.writeFile(path.join(wtRoot, '.swarm', 'project', 'tickets.json'), '{}');
+   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\nworktree ${wtRoot}\nbranch refs/heads/feat\n\n`;
+-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+   const prViewBody = {
+     state: 'OPEN',
+     mergeable: 'MERGEABLE',
+@@ -166,6 +166,8 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+     headRefOid: 'abc123',
+     isCrossRepository: false,
+     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
++    title: 'Fix the widget',
++    body: '',
+   };
+   const calls = [];
+   const exec = async (command, args, opts = {}) => {
+@@ -204,7 +206,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+ test('runMerge uses --delete-branch when no state-holding worktree on head branch', async t => {
+   const mergeRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-root2-'));
+   t.after(() => fs.rm(mergeRoot, { recursive: true, force: true }));
+-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+   const prViewBody = {
+     state: 'OPEN',
+     mergeable: 'MERGEABLE',
+@@ -213,6 +215,8 @@ test('runMerge uses --delete-branch when no state-holding worktree on head branc
+     headRefOid: 'abc123',
+     isCrossRepository: false,
+     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
++    title: 'Fix the widget',
++    body: '',
+   };
+   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\n`;
+   const calls = [];
 diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
 index 9c8192a9..5c40ea64 100644
 --- a/tests/t101-release.test.mjs
