@@ -14,22 +14,11 @@ const PR_FIELDS =
 const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
 const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
 const ANY_HEADING_RE = /^##\s/;
-const HEX_TOKEN_RE = /\b[0-9a-f]{7,40}\b/gi;
-const FAIL_WORD_RE = /\b(?:fail(?:ed)?|blocker(?:s)?)\b/i;
-const PASS_WORD_RE = /\bpass(?:ed)?\b/i;
+const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
+const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
+const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
 
-export function releaseReviewGate({ title, body, headRefOid }) {
-  const t = String(title ?? '');
-  if (!RELEASE_TITLE_RE.test(t)) {
-    return { required: false, ok: true };
-  }
-  const head = String(headRefOid ?? '');
-  if (!/^[0-9a-f]{7,}$/i.test(head)) {
-    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
-  }
-  const headLower = head.toLowerCase();
-  const sha8 = headLower.slice(0, 8);
-
+function extractReviewsSectionText(body) {
   const reviewLines = [];
   let inReviews = false;
   for (const line of String(body ?? '').split('\n')) {
@@ -40,30 +29,71 @@ export function releaseReviewGate({ title, body, headRefOid }) {
     if (inReviews && ANY_HEADING_RE.test(line)) break;
     if (inReviews) reviewLines.push(line);
   }
+  return reviewLines.join('\n');
+}
 
-  function lineNamesHead(line) {
-    const tokens = line.match(HEX_TOKEN_RE) ?? [];
-    for (const tok of tokens) {
-      if (headLower.startsWith(tok.toLowerCase())) return true;
+function collectJsonFenceContents(reviewsText) {
+  const blocks = [];
+  const lines = String(reviewsText ?? '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
+    i++;
+    const contentLines = [];
+    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
+      contentLines.push(lines[i]);
+      i++;
     }
-    return false;
+    blocks.push(contentLines.join('\n'));
+  }
+  return blocks;
+}
+
+function blockNamesHead(block, headLower) {
+  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
+  return block.head.toLowerCase() === headLower;
+}
+
+export function releaseReviewGate({ title, body, headRefOid }) {
+  const t = String(title ?? '');
+  if (!RELEASE_TITLE_RE.test(t)) {
+    return { required: false, ok: true };
+  }
+  const head = String(headRefOid ?? '');
+  if (!HEAD_SHA40_RE.test(head)) {
+    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
+  }
+  const headLower = head.toLowerCase();
+  const sha8 = headLower.slice(0, 8);
+
+  const reviewsText = extractReviewsSectionText(body);
+  const rawBlocks = collectJsonFenceContents(reviewsText);
+  const parsedBlocks = [];
+  for (const raw of rawBlocks) {
+    let block;
+    try {
+      block = JSON.parse(raw);
+    } catch {
+      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+    }
+    if (!isObj(block)) {
+      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+    }
+    parsedBlocks.push(block);
   }
 
-  function verdictOf(line) {
-    if (FAIL_WORD_RE.test(line)) return 'fail';
-    if (PASS_WORD_RE.test(line)) return 'pass';
-    return 'pending';
+  let lastVerdictForHead = null;
+  for (const block of parsedBlocks) {
+    if (!blockNamesHead(block, headLower)) continue;
+    const v = block.verdict;
+    if (v === 'pass') lastVerdictForHead = 'pass';
+    else if (v === 'fail') lastVerdictForHead = 'fail';
+    else lastVerdictForHead = 'other';
   }
 
-  let lastVerdict = null;
-  for (const line of reviewLines) {
-    if (lineNamesHead(line)) lastVerdict = verdictOf(line);
-  }
-
-  if (lastVerdict === null) {
+  if (lastVerdictForHead === null) {
     return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
   }
-  if (lastVerdict === 'pass') {
+  if (lastVerdictForHead === 'pass') {
     return { required: true, ok: true };
   }
   return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };

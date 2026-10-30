@@ -94,7 +94,8 @@ function mergeKey(headOid, deleteBranch = true) {
 }
 
 const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
-const HEAD_PREFIX7 = HEAD_SHA.slice(0, 7);
+const OTHER_SHA = '0000000000000000000000000000000000000001';
+const SHA8 = HEAD_SHA.slice(0, 8);
 
 function prView(over = {}) {
   return {
@@ -626,6 +627,18 @@ function reviewsBody(lines) {
   return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
 }
 
+function reviewJsonBlock(obj) {
+  return '```json\n' + JSON.stringify(obj) + '\n```';
+}
+
+function releaseView(over = {}) {
+  return {
+    title: '1.0.0: x',
+    headRefOid: HEAD_SHA,
+    ...over,
+  };
+}
+
 // releaseReviewGate
 
 test('releaseReviewGate: non-release title is not required', () => {
@@ -634,81 +647,84 @@ test('releaseReviewGate: non-release title is not required', () => {
   assert.equal(r.ok, true);
 });
 
-test('releaseReviewGate: semver titles require review section', () => {
+test('releaseReviewGate: semver titles require JSON verdict for head', () => {
   for (const title of ['1.167.26: ship', 'v1.168.0 - ship']) {
     const r = releaseReviewGate({ title, body: '', headRefOid: HEAD_SHA });
     assert.equal(r.required, true);
     assert.equal(r.ok, false);
-    assert.match(r.reason, /^review-verdict-missing-for-head: abcdef12$/);
+    assert.equal(r.reason, `review-verdict-missing-for-head: ${SHA8}`);
   }
 });
 
-// runMerge release-review gate
+// runMerge release-review gate (JSON verdict only)
 
-test('runMerge: release PR merges when Reviews PASS names full head sha', async () => {
+test('runMerge: release PR merges when Reviews has JSON pass for head', async () => {
   const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.167.26: release',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- Opus review: PASS for ${HEAD_SHA}`]),
-    },
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  const merges = mergeCalls(calls);
-  assert.equal(merges.length, 1);
-  assert.ok(merges[0].args.includes('--match-head-commit'));
-  assert.equal(merges[0].args[merges[0].args.indexOf('--match-head-commit') + 1], HEAD_SHA);
-});
-
-test('runMerge: release PR merges with 7-char head prefix PASS', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- review PASS ${HEAD_PREFIX7}`]),
-    },
+    view: releaseView({
+      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
+    }),
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'merged');
   assert.equal(mergeCalls(calls).length, 1);
 });
 
-test('runMerge: release PR merges when PASS uses uppercase SHA', async () => {
+test('runMerge: release PR refuses prose PASS for other sha with head in text (exploit)', async () => {
   const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- PASS for ${HEAD_SHA.toUpperCase()}`]),
-    },
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  assert.equal(mergeCalls(calls).length, 1);
-});
-
-test('runMerge: release PR refuses PASS for different commit', async () => {
-  const other = '0000000000000000000000000000000000000001';
-  const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- PASS for ${other}`]),
-    },
+    view: releaseView({
+      body: reviewsBody([
+        `PASS for ${OTHER_SHA}; head pending`,
+        HEAD_SHA,
+      ]),
+    }),
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test('runMerge: release PR refuses FAIL for head', async () => {
+test('runMerge: release PR refuses prose head fails review with head sha (exploit)', async () => {
   const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- review FAIL ${HEAD_SHA}`]),
-    },
+    view: releaseView({
+      body: reviewsBody([`head fails review (lint passed)`, HEAD_SHA]),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses JSON pass for different 40-char sha', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: OTHER_SHA })]),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses JSON pass with 7-char head field', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA.slice(0, 7) })]),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses JSON verdict PASS uppercase', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody([reviewJsonBlock({ verdict: 'PASS', head: HEAD_SHA })]),
+    }),
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'refused');
@@ -716,62 +732,69 @@ test('runMerge: release PR refuses FAIL for head', async () => {
   assert.equal(mergeCalls(calls).length, 0);
 });
 
-test('runMerge: release PR refuses blockers open for head', async () => {
+test('runMerge: release PR refuses JSON pass outside Reviews section', async () => {
   const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([`- blockers open at ${HEAD_SHA}`]),
-    },
+    view: releaseView({
+      body: `## Summary\n\n${reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })}\n`,
+    }),
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
   assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR refuses malformed JSON block in Reviews', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody(['```json', '{not json', '```']),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR pass then fail for same head refuses (last wins fail)', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody([
+        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
+        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
+      ]),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'refused');
+  assert.ok(r.reasons.includes(`review-verdict-failed-for-head: ${SHA8}`));
+  assert.equal(mergeCalls(calls).length, 0);
+});
+
+test('runMerge: release PR fail then pass for same head merges (last wins pass)', async () => {
+  const { exec, calls } = makeExec(routes({
+    view: releaseView({
+      body: reviewsBody([
+        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
+        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
+      ]),
+    }),
+  }));
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
+  assert.equal(r.status, 'merged');
+  assert.equal(mergeCalls(calls).length, 1);
 });
 
 test('runMerge: release PR refuses with no Reviews section', async () => {
   const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
+    view: releaseView({
       body: '## Summary\n\nno reviews here\n',
-    },
+    }),
   }));
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
   assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
+  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
   assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR ignores PASS only in Checks section', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: `## Checks\n\n- PASS for ${HEAD_SHA}\n`,
-    },
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-missing-for-head:')));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR last matching verdict wins (FAIL then delta PASS)', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: {
-      title: '1.0.0: x',
-      headRefOid: HEAD_SHA,
-      body: reviewsBody([
-        `- FAIL ${HEAD_SHA}`,
-        `- delta PASS ${HEAD_SHA}`,
-      ]),
-    },
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  assert.equal(mergeCalls(calls).length, 1);
 });
 
 test('runMerge: non-release title merges without Reviews section', async () => {
@@ -790,7 +813,7 @@ test('runMerge: non-release title merges without Reviews section', async () => {
 test('runMerge: release PR refuses when headRefOid missing', async () => {
   const view = prView({
     title: '1.0.0: x',
-    body: reviewsBody([`- PASS ${HEAD_SHA}`]),
+    body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
   });
   delete view.headRefOid;
   const { exec, calls } = makeExec(routes({ rawView: json(view) }));
