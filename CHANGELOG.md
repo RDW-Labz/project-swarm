@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.27
+
+Hotfix: the guarded runner identifies its child before it signals anything.
+- Guarded runner: completes the 1.167.26 identity fix: within one boot the recorded child is signalled only when BOTH its process start time and its command line match the live pid; a missing, unreadable or mismatched identity restores the value and clears the marker instead of killing;
+- No silent success: a command that finds itself as the orphaned child of a dead guarded run now fails with exit 143 and a clear stderr error instead of exiting 0; a safe stale marker restores and the command runs;
+- EPERM: an owner or child that is alive only by EPERM belongs to another user, so the marker is restored and cleared instead of wedging the guard;
+- Tests: 42 concurrency-guard tests, including pre-boot reused pid, EPERM owner and child, start-time and command-line mismatches, and the self-orphan failure path.
+
 ## 1.167.26
 
 Release train 3: silent-failure visibility across the toolbelt, load-flake fixes at the root, and Phase 2 lock tests.
