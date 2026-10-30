@@ -3444,10 +3444,14 @@ async function refreshPlan(root) {
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
-function supersedeOwnerRefusal() {
-  if ((process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) && process.env.SWARM_OWNER !== '1') {
-    return 'tickets supersede is owner-only; run from the owner terminal (not inside an agent session)';
+const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
+
+export function supersedeOwnerRefusal({ env = process.env, isTTY = process.stdout.isTTY } = {}) {
+  if (env.SWARM_OWNER === '1') return null;
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.SWARM_WORKER || env.SWARM_JOB_ID || env.SWARM_RUN_ID) {
+    return SUPERSEDE_OWNER_MSG;
   }
+  if (!isTTY) return SUPERSEDE_OWNER_MSG;
   return null;
 }
 
@@ -3455,11 +3459,11 @@ const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.bas
 
 async function supersedeStaleCommand(root, rest, flags) {
   if (rest.length) return bad('tickets supersede does not take positional arguments');
-  const denied = supersedeOwnerRefusal();
-  if (denied) return out(denied, 1);
   if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
   const beforeMs = Date.parse(flags.before);
   if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+  const denied = supersedeOwnerRefusal();
+  if (denied) return out(denied, 1);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   let candidates;
@@ -3478,16 +3482,24 @@ async function supersedeStaleCommand(root, rest, flags) {
     return out(lines.join('\n'));
   }
   try {
-    const result = await withLock(root, async () => {
-      const freshLedger = await readLedger(root);
-      if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
-      const freshCandidates = supersedeCandidates(freshLedger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
-      if (!freshCandidates.length) return { count: 0, ids: [] };
-      return applySupersedeStale(root, { before: flags.before, stage: flags.stage });
-    });
-    if (!result.count) return out('no stale tickets to supersede');
-    await refreshPlan(root);
-    return out(`superseded ${result.count} stale ticket(s)`);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await withLock(root, async () => {
+          const freshLedger = await readLedger(root);
+          if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+          const logEvents = await readTicketLog(root);
+          const freshCandidates = supersedeCandidates(freshLedger, logEvents, { before: flags.before, stage: flags.stage });
+          if (!freshCandidates.length) return { count: 0, ids: [] };
+          return applySupersedeStale(root, { before: flags.before, stage: flags.stage, ledger: freshLedger, logEvents });
+        });
+        if (!result.count) return out('no stale tickets to supersede');
+        await refreshPlan(root);
+        return out(`superseded ${result.count} stale ticket(s)`);
+      } catch (error) {
+        if (error.code !== 'scope-busy' || attempt === 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
   } catch (error) {
     if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
     throw error;
@@ -3938,6 +3950,10 @@ async function setTicketStatus(root, rest, flags) {
     }
   }
   if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
+  if (to === 'superseded') {
+    const denied = supersedeOwnerRefusal();
+    if (denied) return out(denied, 1);
+  }
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
   let holdQuestion;

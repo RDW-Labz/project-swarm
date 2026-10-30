@@ -360,9 +360,9 @@ export function supersedeCandidates(ledger, logEvents, { before, stage } = {}) {
   return out;
 }
 
-export async function applySupersedeStale(root, { before, stage, now = Date.now() } = {}) {
-  const logEvents = await readTicketLog(root);
-  const ledger = await readLedger(root);
+export async function applySupersedeStale(root, { before, stage, now = Date.now(), ledger: ledgerIn, logEvents: logEventsIn } = {}) {
+  const logEvents = logEventsIn ?? await readTicketLog(root);
+  const ledger = ledgerIn ?? await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const candidates = supersedeCandidates(ledger, logEvents, { before, stage });
   if (!candidates.length) return { count: 0, ids: [] };
@@ -374,6 +374,7 @@ export async function applySupersedeStale(root, { before, stage, now = Date.now(
     delete ticket.blockReason;
     delete ticket.holdQuestion;
   }
+  const pruned = pruneCancelledDeps(ledger).pruned;
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, {
@@ -385,6 +386,7 @@ export async function applySupersedeStale(root, { before, stage, now = Date.now(
     source: 'tickets-supersede',
     actor: ticketActor(),
   });
+  await logPrune(root, pruned, { by: 'owner' }, now);
   return { count: ids.length, ids };
 }
 
@@ -559,8 +561,8 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
     delete ticket.blockReason;
     delete ticket.holdQuestion;
   }
-  // A cancelled ticket stops being a dependency: the tickets that waited on it no longer wait.
-  const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
+  // A cancelled or superseded ticket stops being a dependency: the tickets that waited on it no longer wait.
+  const pruned = to === 'cancelled' || to === 'superseded' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, {
@@ -574,7 +576,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
     ...(source ? { source } : {}),
     ...(confirmation ? { confirmation } : {}),
   });
-  await logPrune(root, pruned, { cancelled: id, by }, now);
+  await logPrune(root, pruned, { ...(to === 'cancelled' ? { cancelled: id } : {}), by }, now);
   return ticket;
 }
 
@@ -596,13 +598,13 @@ export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.
 // before: removing a dependency on a cancelled ticket only makes a ticket less blocked, and the seal is renewed over the new set.
 export function pruneCancelledDeps(ledger) {
   const tickets = ledger?.tickets ?? [];
-  const cancelled = new Set(tickets.filter(t => t.status === 'cancelled').map(t => t.id));
+  const dropped = new Set(tickets.filter(t => t.status === 'cancelled' || t.status === 'superseded').map(t => t.id));
   const wasApproved = isApproved(ledger);
   const pruned = [];
   for (const t of tickets) {
-    const removed = (t.dependsOn ?? []).filter(d => cancelled.has(d));
+    const removed = (t.dependsOn ?? []).filter(d => dropped.has(d));
     if (!removed.length) continue;
-    t.dependsOn = t.dependsOn.filter(d => !cancelled.has(d));
+    t.dependsOn = t.dependsOn.filter(d => !dropped.has(d));
     pruned.push({ id: t.id, removed });
   }
   if (pruned.length && wasApproved) {
