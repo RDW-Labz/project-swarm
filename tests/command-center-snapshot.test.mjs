@@ -12,6 +12,16 @@ import { buildCommandCenterSnapshot, buildProjectCockpit } from '../tools/comman
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
 
+const MONEY_FIELD = /usd|spend|cost/i;
+
+function assertNoMoneyFields(value, path = 'snap') {
+  if (value === null || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    assert.ok(!MONEY_FIELD.test(key), `${path}.${key}: money fields must not appear in Command Center output`);
+    assertNoMoneyFields(child, `${path}.${key}`);
+  }
+}
+
 function fakeBoardPayload() {
   return {
     at: '2026-10-26T12:00:00.000Z',
@@ -60,7 +70,7 @@ test('buildCommandCenterSnapshot maps labelled stats and project cards', () => {
   assert.equal(snap.stats.projectsTotal.value, 2);
   assert.equal(snap.stats.agentsLive.source, 'machine.agents.total');
   assert.equal(snap.stats.needsYouCount.value, 1);
-  assert.equal(snap.stats.spendUsd.unit, 'usd');
+  assertNoMoneyFields(snap);
   const alpha = snap.projects.find(p => p.id === 'alpha');
   assert.ok(alpha.liveAgents);
   assert.ok(alpha.percentDone);
