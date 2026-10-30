@@ -14,7 +14,8 @@
     "check": "node tools/check-package.mjs",
     "doctor": "node tools/swarm.mjs doctor",
     "smoke": "node tools/swarm.mjs run examples/smoke.json",
-    "test:stress": "node tools/stress-tests.mjs"
+    "test:stress": "node tools/stress-tests.mjs",
+    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs"
   },
   "repository": {
     "type": "git",

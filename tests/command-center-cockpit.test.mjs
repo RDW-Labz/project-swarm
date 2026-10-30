@@ -13,12 +13,15 @@ import {
   renderCockpit,
   resolveClampPx,
   estimateHeadlineWidthPx,
-  headlineTicketText,
-  COCKPIT_HEADLINE_CLAMP,
+  cockpitSubline,
+  orchestratorHeadState,
+  orchestratorCaption,
+  COCKPIT_TITLE_PX,
   COCKPIT_SHELL_MAX_PX,
   COCKPIT_HEADLINE_ROOT_PX,
   stageRingProgress,
 } from '../tools/watch-assets/cockpit-view.js';
+import { STAGE_COLOURS } from '../tools/watch-assets/cockpit-lists.js';
 
 const NOW = Date.UTC(2026, 9, 26, 20, 40, 0);
 
@@ -50,8 +53,8 @@ function makeElement(tag) {
     textContent: '',
     parentNode: null,
     replaceChildren(...kids) {
-      this.children = kids;
-      this.childNodes = kids;
+      this.children = [...kids];
+      this.childNodes = [...kids];
       for (const k of kids) k.parentNode = this;
     },
     appendChild(child) {
@@ -62,32 +65,22 @@ function makeElement(tag) {
     },
     setAttribute(k, v) { this.attributes[k] = v; },
     getAttribute(k) { return this.attributes[k] ?? null; },
-    querySelector(sel) {
-      const walk = n => {
-        if (!n) return null;
-        if (sel === 'h1' && n.tagName === 'H1') return n;
-        if (sel === '.cockpit-stage-ring' && n.classList?.contains('cockpit-stage-ring')) return n;
-        if (sel === '.headline-num' && n.classList?.contains('headline-num')) return n;
-        for (const c of n.children || []) {
-          const hit = walk(c);
-          if (hit) return hit;
-        }
-        return null;
-      };
-      return walk(this);
-    },
+    /** Selectors used here: a tag name or one class. */
     querySelectorAll(sel) {
+      const test = sel.startsWith('.')
+        ? n => n.classList?.contains(sel.slice(1))
+        : n => n.tagName === sel.toUpperCase();
       const out = [];
       const walk = n => {
-        if (!n) return;
-        if (sel === '.cockpit-stage-ring' && n.classList?.contains('cockpit-stage-ring')) out.push(n);
-        if (sel === '.cockpit-stage-fill' && n.classList?.contains('cockpit-stage-fill')) out.push(n);
-        if (sel === '.cockpit-stage-count' && n.classList?.contains('cockpit-stage-count')) out.push(n);
-        for (const c of n.children || []) walk(c);
+        for (const c of n.children || []) {
+          if (test(c)) out.push(c);
+          walk(c);
+        }
       };
       walk(this);
       return out;
     },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; },
   };
   Object.defineProperty(node, 'className', {
     get() { return [...classList.toString().split(' ')].filter(Boolean).join(' '); },
@@ -181,33 +174,58 @@ function outDetail(session) {
   return cockpitOrchestratorState(session, NOW).detail;
 }
 
-test('headline clamp resolves to 68px at 1440px and text fits one line', () => {
-  installDom();
-  const fontPx = resolveClampPx(COCKPIT_HEADLINE_CLAMP, COCKPIT_SHELL_MAX_PX, COCKPIT_HEADLINE_ROOT_PX);
-  const minRem = 3.5 * COCKPIT_HEADLINE_ROOT_PX;
-  const vw = (4.8 / 100) * COCKPIT_SHELL_MAX_PX;
-  const maxRem = 4.25 * COCKPIT_HEADLINE_ROOT_PX;
-  assert.equal(fontPx, Math.max(minRem, Math.min(vw, maxRem)));
+test('clamp helper still resolves a clamp() size at a viewport width', () => {
+  const fontPx = resolveClampPx('clamp(3.5rem, 4.8vw, 4.25rem)', 1440, COCKPIT_HEADLINE_ROOT_PX);
   assert.equal(fontPx, 68);
+});
 
+test('title block: project name, counts from the ledger, one line at 1440px and 390px', () => {
+  installDom();
   const ledger = makeLedgerFixture();
   const host = document.createElement('div');
   const live = ledger.tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
   const done = live.filter(t => t.status === 'done').length;
   const total = live.length;
-  const view = renderCockpit(host, { ledger }, { now: NOW });
-  assert.equal(view.headlineFontPxAt1440, 68);
+  const view = renderCockpit(host, { ledger, name: 'project-swarm' }, { now: NOW });
+  assert.equal(view.done, done);
+  assert.equal(view.total, total);
   const h1 = host.querySelector('h1');
-  assert.equal(h1.style.fontSize, COCKPIT_HEADLINE_CLAMP);
-  const text = headlineTicketText(done, total) + ' tickets done';
-  const inner = host.querySelector('.headline-num').parentNode;
-  const fullLine = collectText(inner);
-  assert.match(fullLine, new RegExp(`${done} of ${total}`));
-  const contentWidth = COCKPIT_SHELL_MAX_PX - 24;
-  assert.ok(
-    estimateHeadlineWidthPx(fullLine, fontPx) <= contentWidth,
-    `headline width ${estimateHeadlineWidthPx(fullLine, fontPx)} should fit ${contentWidth}`,
-  );
+  assert.equal(h1.textContent, 'PROJECT-SWARM');
+  const sub = host.querySelector('.sub2');
+  assert.equal(sub.textContent, cockpitSubline(done, total));
+  assert.equal(sub.textContent, `${total} TICKETS · ${Math.round((100 * done) / total)}% DONE · ${total - done} LEFT`);
+  // the project name fits one line at the artifact title sizes (54px wide wrap, 34px on a 390px phone)
+  assert.ok(estimateHeadlineWidthPx(h1.textContent, COCKPIT_TITLE_PX.desktop) <= COCKPIT_SHELL_MAX_PX);
+  assert.ok(estimateHeadlineWidthPx(h1.textContent, COCKPIT_TITLE_PX.phone) <= 390 - 32);
+  // the right end of the stage line says when the ledger was read
+  const stripl = host.querySelector('.stripl');
+  assert.match(stripl.children[1].textContent, /LIVE LEDGER · 20:40 UTC$/);
+});
+
+test('title block falls back to short lines without a name, tickets or stages', () => {
+  installDom();
+  const host = document.createElement('div');
+  renderCockpit(host, { ledger: { tickets: [] }, id: 'p-1' }, { now: NOW });
+  assert.equal(host.querySelector('h1').textContent, 'P-1');
+  assert.equal(host.querySelector('.sub2').textContent, 'NO TICKETS IN THE LEDGER');
+  assert.equal(host.querySelector('.stripl').children[0].textContent, 'no stage ledger for this project');
+  assert.equal(host.querySelector('.strip').children.length, 1);
+  const bare = document.createElement('div');
+  renderCockpit(bare, { ledger: { tickets: [] } }, { now: NOW });
+  assert.equal(bare.querySelector('h1').textContent, 'UNNAMED PROJECT');
+});
+
+test('orchestrator label maps to a head state and a caption', () => {
+  assert.equal(orchestratorHeadState('thinking', false), 'thinking');
+  assert.equal(orchestratorHeadState('dispatching', false), 'working');
+  assert.equal(orchestratorHeadState('reviewing', false), 'working');
+  assert.equal(orchestratorHeadState('waiting on you', false), 'idle');
+  assert.equal(orchestratorHeadState('idle', false), 'idle');
+  assert.equal(orchestratorHeadState('idle', true), 'sleeping');
+  assert.equal(orchestratorCaption('thinking', false), 'THINKING');
+  assert.equal(orchestratorCaption('waiting on you', false), 'WAITING ON YOU');
+  assert.equal(orchestratorCaption('idle', true), 'FINISHED · RESTING');
+  assert.match(orchestratorCaption('idle', false), /NO SESSION ACTIVE/);
 });
 
 test('renderCockpit surfaces orchestrator label and detail from session fixture', () => {
@@ -222,14 +240,8 @@ test('renderCockpit surfaces orchestrator label and detail from session fixture'
   const host = document.createElement('div');
   const view = renderCockpit(host, { ledger, sessions: [session] }, { now: NOW });
   assert.equal(view.orchestrator.label, 'dispatching');
-  const nav = host.children.find(c => c.classList.contains('cockpit-nav'));
-  assert.ok(nav, 'cockpit nav');
-  const navText = collectText(nav);
-  assert.match(navText, /orchestrator/i);
-  assert.match(navText, /dispatching/);
-  const tagline = host.children.find(c => c.tagName === 'HEADER')?.children?.find(c => c.classList?.contains('tagline'));
-  assert.ok(tagline);
-  assert.match(collectText(tagline), /Task/);
+  assert.match(String(view.orchestrator.detail), /Task/);
+  assert.equal(orchestratorHeadState(view.orchestrator.label, false), 'working');
 });
 
 test('primary session wins when multiple orchestrator states are live', () => {
@@ -254,9 +266,7 @@ test('primary session wins when multiple orchestrator states are live', () => {
   const host = document.createElement('div');
   const view = renderCockpit(host, { ledger, sessions: [primary, secondary] }, { now: NOW });
   assert.equal(view.orchestrator.label, 'thinking');
-  const navText = collectText(host.children.find(c => c.classList.contains('cockpit-nav')));
-  assert.match(navText, /thinking/);
-  assert.doesNotMatch(navText, /waiting on you/);
+  assert.equal(orchestratorCaption(view.orchestrator.label, false), 'THINKING');
 });
 
 test('stage rings reflect ledgerStats done per stage', () => {
@@ -270,20 +280,16 @@ test('stage rings reflect ledgerStats done per stage', () => {
       { id: 'S2', done: 1, total: 2 },
     ],
   );
+  assert.deepEqual(expected.map(r => r.pct), [67, 50]);
   const host = document.createElement('div');
-  renderCockpit(host, { ledger }, { now: NOW });
-  const stagesWrap = host.children.find(c => c.classList.contains('cockpit-stage-rings'));
-  assert.ok(stagesWrap, 'stage rings container');
-  const rings = stagesWrap.children.filter(c => c.classList.contains('cockpit-stage-ring'));
-  assert.equal(rings.length, 2);
-  const counts = rings.map(r => r.children.find(c => c.classList.contains('cockpit-stage-count')));
-  assert.equal(counts[0].textContent, '2/3');
-  assert.equal(counts[1].textContent, '1/2');
-  const fills = rings.map(r => r.children.find(c => c.classList.contains('cockpit-stage-track'))?.children?.[0]);
-  assert.equal(fills[0].dataset.pct, '67');
-  assert.equal(fills[1].dataset.pct, '50');
-  assert.equal(rings[0].dataset.stage, 'S1');
-  assert.equal(rings[1].dataset.stage, 'S2');
+  const view = renderCockpit(host, { ledger }, { now: NOW });
+  assert.equal(view.rings.length, 2);
+  assert.equal(host.querySelector('.stripl').children[0].textContent, 'S1 2/3  ·  S2 1/2');
+  assert.match(host.querySelector('.stripl').children[1].textContent, /^0 OF 2 STAGES DONE · LIVE LEDGER/);
+  const segs = host.querySelector('.strip').children;
+  assert.equal(segs.length, 2);
+  assert.equal(segs[0].style.background, STAGE_COLOURS[0]);
+  assert.equal(segs[1].style.background, STAGE_COLOURS[1]);
 });
 
 test('stage ring progress is computed independently per stage', () => {
@@ -299,18 +305,15 @@ test('stage ring progress is computed independently per stage', () => {
     ],
   );
   const host = document.createElement('div');
-  renderCockpit(host, { ledger }, { now: NOW });
-  const stagesWrap = host.children.find(c => c.classList.contains('cockpit-stage-rings'));
-  const rings = stagesWrap.children.filter(c => c.classList.contains('cockpit-stage-ring'));
-  assert.equal(rings.length, 3);
-  const fills = rings.map(r => r.children.find(c => c.classList?.contains('cockpit-stage-track'))?.children?.[0]);
-  assert.equal(fills[0].dataset.pct, '100');
-  assert.equal(fills[1].dataset.pct, '0');
-  assert.equal(fills[2].dataset.pct, '33');
-  const counts = rings.map(r => r.children.find(c => c.classList.contains('cockpit-stage-count')));
-  assert.equal(counts[0].textContent, '2/2');
-  assert.equal(counts[1].textContent, '0/2');
-  assert.equal(counts[2].textContent, '1/3');
+  const view = renderCockpit(host, { ledger }, { now: NOW });
+  assert.equal(view.stagesDone, 1);
+  assert.equal(host.querySelector('.stripl').children[0].textContent, 'S1 2/2  ·  S2 0/2  ·  S3 1/3');
+  assert.match(host.querySelector('.stripl').children[1].textContent, /^1 OF 3 STAGES DONE/);
+  const segs = host.querySelector('.strip').children;
+  assert.equal(segs.length, 3);
+  assert.equal(segs[0].style.background, '#4d7cff', 'a finished stage turns blue');
+  assert.equal(segs[1].style.background, STAGE_COLOURS[1]);
+  assert.equal(segs[2].style.background, STAGE_COLOURS[2]);
 });
 
 function makePerStageRatioLedgerFixture() {

@@ -126,6 +126,32 @@ function wireCockpitBreadcrumb(host, onBack) {
   });
 }
 
+/** Cockpit top-bar breadcrumb: `The Hive › PROJECT-NAME`; the Hive block is the back control. */
+function buildBreadcrumb(projectId, data, projects) {
+  const project = projects.find((p) => p && p.id === projectId);
+  const name = (data && data.name) || (project && project.name) || projectId;
+
+  const bar = document.createElement('header');
+  bar.className = 'cc-router-bar';
+  const nav = document.createElement('nav');
+  nav.className = 'crumbs cockpit-nav';
+  nav.setAttribute('aria-label', 'Breadcrumb');
+  const back = document.createElement('button');
+  back.className = 'cc-cockpit-back-btn nav-block';
+  back.type = 'button';
+  back.textContent = 'The Hive';
+  const sep = document.createElement('span');
+  sep.textContent = '›';
+  const current = document.createElement('span');
+  current.setAttribute('aria-current', 'page');
+  current.textContent = String(name);
+  nav.appendChild(back);
+  nav.appendChild(sep);
+  nav.appendChild(current);
+  bar.appendChild(nav);
+  return bar;
+}
+
 /**
  * Mount Hive ↔ Cockpit navigation into `container`.
  * @param {HTMLElement} container
@@ -189,7 +215,11 @@ export function mountCcRouter(container, options = {}) {
     cockpitHost.className = 'cc-cockpit-root';
     container.appendChild(cockpitHost);
     const data = resolveCockpitData(state.projectId, options);
-    renderCockpit(cockpitHost, data, options.cockpitOpts);
+    cockpitHost.appendChild(buildBreadcrumb(state.projectId, data, projects));
+    const cockpitBody = document.createElement('div');
+    cockpitBody.className = 'cc-cockpit-body';
+    cockpitHost.appendChild(cockpitBody);
+    renderCockpit(cockpitBody, data, options.cockpitOpts);
     wireCockpitBreadcrumb(cockpitHost, () => {
       state = ccNavigate(state, { type: 'back' });
       render();

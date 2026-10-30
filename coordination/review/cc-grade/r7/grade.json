@@ -1,0 +1,124 @@
+{
+  "round": "7",
+  "hive": {
+    "scores": {
+      "fidelity": 3.6,
+      "polish": 3.8,
+      "motion": 3.3,
+      "data": 3.8,
+      "phone": 3.4
+    },
+    "overall": 3.6,
+    "fixes": [
+      {
+        "problem": "The composition is taller than the target. The bottom nodes (06, 05) are cut off at the 900px fold, and the lane legend, italic tagline and all three bottom panels sit off-screen. In the target, the whole ring plus all nodes fit above the legend row.",
+        "where": "Whole Hive stage, below the ring",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Size the stage from the viewport, e.g. .cc-hive-stage{height:min(78vh,720px)}. Shrink the ring to about 46% of the stage height and place the nodes on an ellipse radius tied to it, so nodes 05/06 end above about 760px and the legend/tagline row shows at the bottom of the first screen."
+      },
+      {
+        "problem": "The particle streams from nodes into the ring are thin single lines with a few sparks. The target has dense, lane-coloured particle sprays fanning out from each node and converging on the ring.",
+        "where": "Between each node card and the ring",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Per node, emit 30-60 particles in the node's lane colour along a bezier from the card edge to the ring, with ±12px perpendicular jitter, size 1-3px and additive blending (globalCompositeOperation='lighter'). Add a soft radial bloom where each stream meets the ring."
+      },
+      {
+        "problem": "The extra nav row (The Hive / Command Center / Cockpit / Classic / Search / Tour) and the 'A run failed' toast are not in the target. They push the composition down, and the toast covers the area near node 02.",
+        "where": "Below the header rule, top right",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Fold the nav into the header as small mono links next to LIVE (font-size 11px, letter-spacing .2em) or into a hover overflow. Move the toast to bottom-right of the viewport, above the footer, with position:fixed; bottom:24px."
+      },
+      {
+        "problem": "The node card headers use a status label (NEEDS YOU/BUILDING/IDLE) plus an emoji robot and badge icons. The target shows a clean index + name + lane tag. Names are truncated with an ellipsis (forge-recipe-ca…, parts-request-…).",
+        "where": "Node card header bars",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Render the header as `NN name` + a right-aligned lane tag in 9px mono caps. Move the needs-you count into a small pill inside the card body. Raise the card min-width to 260px and reduce the name font size to 12px before truncating."
+      },
+      {
+        "problem": "The footer row duplicates the percentage: a coloured '71%' on the left and '.71' on the right. The target has one label like p(x) on the left and one value on the right.",
+        "where": "Node card bottom progress row",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Replace the left percent with a mono label such as `p(done)` in the lane colour and keep the right `.71` value, matching the target's p(label) / bar / value layout."
+      },
+      {
+        "problem": "The ring's core glow is weaker than the target. The target ring is a saturated pink-to-violet gradient with heavy outer bloom; here the inner rings read grey and busy with coloured dashes.",
+        "where": "Central ring",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Give the main ring a conic-gradient stroke (#ff3d8b→#c86bff→#ff3d8b) with filter: drop-shadow(0 0 18px #ff3d8bcc) drop-shadow(0 0 48px #b04dff66). Make the inner tick ring 30% opacity and drop the multi-coloured dash confetti inside it."
+      },
+      {
+        "problem": "The ring label letters are spaced unevenly and are the same weight as the surroundings. In the target the label sits tight along the arc in small spaced mono.",
+        "where": "Arc text around the ring",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Use an SVG <textPath> on a circle 14px outside the ring with font-size 11px, letter-spacing 0.45em and fill rgba(255,255,255,.75), and animate startOffset slowly (60s linear infinite)."
+      },
+      {
+        "problem": "Phone: the 'A run failed' toast overlaps the first node card, and the nav tabs wrap onto two lines above the ring.",
+        "where": "Hive phone, bottom of first screen",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "At max-width:480px, make the nav a single horizontally scrollable row (overflow-x:auto; white-space:nowrap). Give the toast bottom:calc(env(safe-area-inset-bottom)+12px) and pad the content below it so the toast never covers a card."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "fidelity": 3.0,
+      "polish": 3.4,
+      "motion": 2.4,
+      "data": 3.4,
+      "phone": 3.5
+    },
+    "overall": 3.1,
+    "fixes": [
+      {
+        "problem": "The central figure is a glossy 3D purple box robot. The target is a flat, large pixel-art creature in one warm colour, with blocky square eyes and legs and a flat shadow ellipse.",
+        "where": "Centre of the Cockpit stage",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Render the robot as an SVG/CSS grid of square pixels (e.g. 12x10 cells, 28px each, shape-rendering:crispEdges) in one accent fill, with two dark square eyes and four leg columns. Add a flat dark ellipse shadow underneath and no gradients or 3D shading."
+      },
+      {
+        "problem": "The segmented multi-colour rule under the headline is a single solid green line. The target is a row of short separated segments coloured by category.",
+        "where": "Rule under the subhead, y≈190",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Render one segment per ticket (or per category share) as a flex row with gap:6px. Each segment is height:3px with background:var(--cat-color) from its category, and done segments get full opacity, the rest .35."
+      },
+      {
+        "problem": "The index chips are all the same cyan, and the right tag shows status (RUNNING/READY/DONE) rather than a coloured category tag. The target colour-codes the chip, left border and tag by category.",
+        "where": "Both ticket columns",
+        "file": "tools/watch-assets/cockpit-lists.js",
+        "change": "Derive a category per ticket from real board data (lane/area/type). Set --cat-color on the row and use it for the chip background, the left border and the tag text. Show status as the check/play glyph only."
+      },
+      {
+        "problem": "The dotted path goes to the right-column DONE row (photo upload retries), while NOW RUNNING names T-0615 in the left column. The path should point at the active row.",
+        "where": "Path from the orbit ellipse to the right column",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Compute the path target from the same active ticket as the NOW RUNNING card, and give that row the highlighted border state. If the active row is in the left column, draw the path to that side."
+      },
+      {
+        "problem": "Almost nothing changes between the two frames: only the orbit dots move and the robot's mouth pixels change. The target feels live, with a scanning highlight, a pulsing active row and filling progress.",
+        "where": "Whole stage",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Add @keyframes for (a) a dash-offset march on the dotted path (stroke-dasharray:2 6; animation: dash 1.2s linear infinite), (b) a soft border pulse on the active row, and (c) a 3-4s scan sweep across the segmented rule, plus a gentle 2px idle bob on the robot."
+      },
+      {
+        "problem": "The breadcrumb is merged into a stat/nav bar with pills (THE HIVE, Command Center, Classic). The target has a plain small mono breadcrumb on the left and a meta line on the right.",
+        "where": "Top line",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Render the top line as `SW / THE HIVE / PARTS-REQUEST-APP` in 11px bold mono caps with letter-spacing .12em, and put `N TICKETS / AGENTS / DATE` right-aligned in the same style. Move the view switch into a small overflow."
+      },
+      {
+        "problem": "The NOW RUNNING card is narrower than and offset from the target's NOW LOADING card. The title box 'ORCHESTRATOR' is fine, but the card lacks the target's big title weight and the orange 'GETS >' line.",
+        "where": "Card under the robot",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Align the card width to the title box column (same left/right edges). Set the title to font-size 26px, weight 800, and render the last line as `WORKER > …` with the label in the accent orange (#ff7a45) and 10px mono caps."
+      },
+      {
+        "problem": "Phone: the robot fills most of the screen and pushes NOW RUNNING below the fold. The header wordmark is clipped to 'SWA', and the meta line is truncated ('S19 …').",
+        "where": "Cockpit phone",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "At max-width:480px, cap the robot at max-height:200px, show the full short wordmark 'SW' (or let it wrap), and let the meta line wrap with white-space:normal so the NOW RUNNING card shows near the first screen."
+      }
+    ]
+  },
+  "notes": "Both 1440x900 captures show only the first screen, so the Hive legend/tagline/bottom panels and the Cockpit render-stream cards and motion stack were not visible to grade. Fidelity scores reflect only what is on screen. Hive is close in composition and glow but its streams are thin; Cockpit's largest gaps are the 3D robot versus the pixel creature, the single-colour rule and chips, and near-static motion."
+}

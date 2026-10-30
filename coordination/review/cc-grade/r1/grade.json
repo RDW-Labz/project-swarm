@@ -1,0 +1,102 @@
+{
+  "round": 1,
+  "hive": {
+    "scores": {
+      "layout": 2.6,
+      "hierarchy": 3.0,
+      "data": 1.8,
+      "fidelity": 2.8,
+      "phone": 2.4,
+      "polish": 2.2
+    },
+    "overall": 2.5,
+    "fixes": [
+      {
+        "problem": "Project cards show only the labels 'asks / out / fails' stacked vertically with no values and no meter. They read as broken empty cards, unlike the mockup's dt/dd two-column grid plus p() meter.",
+        "where": "Desktop stage, all five cards on the left; phone stage cards",
+        "file": "tools/watch-assets/hive-panels.js, tools/watch-assets/cc-hive.css",
+        "change": "Render each field as <dl class=\"hive-kv\"><dt>asks</dt><dd class=\"num\">{value}</dd>...</dl>, filling dd from the live project fields (open asks, tickets out, failures). Use an em dash '—' when a value is missing, never blank. Make sure cc-hive.css applies `.hive-kv{display:grid;grid-template-columns:1fr auto;gap:0 8px}` and `.hive-kv dd{margin:0;text-align:right;font-weight:600}`. Append the `.hive-meter` row (label, track, value) from a real per-project ratio such as done/total."
+      },
+      {
+        "problem": "All five project cards sit in the left column, and the right half of the stage is empty. Content is stacked down one edge, and the five streams only fan out to the left.",
+        "where": "Desktop hive stage, right of the opus ring",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Assign side and slot by alternating index: side = i % 2 ? 'right' : 'left', slot = Math.floor(i / 2). Use the mockup's SLOT_TOPS and COLUMN_INSET per side with width:21%, so N projects balance across both columns. Recompute the stream anchors from the right-side card's left edge."
+      },
+      {
+        "problem": "A tour/onboarding popover ('The Hive, Step 1 of 2, Back/Next/Skip tour') sits over the throughput panel and the footer motto on desktop. On phone it covers the second project card and the panels.",
+        "where": "Bottom-right on desktop; lower half of the phone screen",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Don't auto-open the tour on the Command Center. Gate it behind a dismissed flag in localStorage, or open it only from a help button. When it does show, anchor it to its target with a backdrop. On phone, set `position:fixed;inset:auto 8px 8px;max-height:40vh` so it never sits over content without being dismissable. Make 'Next' use the cc-btn style rather than a cyan focus ring by default."
+      },
+      {
+        "problem": "The 'lanes and savings' and 'throughput' panels are empty boxes. Throughput shows a blank chart well and a bare 'decision latency' caption. The session log has no event rows. There is no empty-state text, so the panels look broken.",
+        "where": "Bottom panel row, middle and right panels, plus the top of the session log",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Fill lanes and savings from live lane counts as lane-row bars (name, lane-track/lane-fill, num), plus the stat-lines 'needs you' and 'agents live'. Fill the session log from recent board events with event-tag pills. When a source is empty, render `<p class=\"cc-empty\">No lane activity yet</p>` (muted, 11px) in place of the chart, and hide canvases that have no data instead of showing a blank #0a0a10 box."
+      },
+      {
+        "problem": "The stat tiles are tall (about 70px) with small 18px values and lots of dead space. The 'live' pill is a cramped circle wrapped beside them. The mockup strip is a compact 8vh row with four stats.",
+        "where": "Stat strip under the header on desktop",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Set `.hive-stat-strip{height:8vh;max-height:8vh;align-items:stretch}` and `.hive-stat-strip .cc-stat{padding:4px 10px;display:flex;flex-direction:column;justify-content:center}` with `.val{font-size:22px}`. Give `.cc-live` `border-radius:999px;padding:4px 14px;flex:0 0 auto` so it renders as a pill, not a circle."
+      },
+      {
+        "problem": "On phone, a hard vertical line runs through the opus core and down through the project cards, and a darker square box frames the ring. The stream canvas and the core's overflow box are showing.",
+        "where": "Phone stage, around the opus ring and the first card",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "In phone layout, anchor streams to the card's top-centre as in the mockup's cardAnchor (geom.phone), and draw them only between the ring bottom and the card top. Remove the solid background from `.hive-stage.hive-phone .hive-core-ui` (`background:none;overflow:visible`). Move the 'answer before you spend' label onto the SVG textPath arc, not a free-floating heading above the ring (this also applies on desktop)."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "layout": 1.2,
+      "hierarchy": 1.8,
+      "data": 2.0,
+      "fidelity": 1.3,
+      "phone": 1.8,
+      "polish": 1.4
+    },
+    "overall": 1.6,
+    "fixes": [
+      {
+        "problem": "The page order is inverted. The ticket search and list render at the very top, and the header (breadcrumb, '0 OF 15 TICKETS DONE' hero, BACK) sits at the bottom of the viewport. The app header and nav (brand, Hive/Cockpit tabs) are missing entirely.",
+        "where": "Whole desktop page; hero at y≈690–790 instead of the top",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Build the DOM in mockup order: `.shell > header.band-header` (app-nav with brand and Hive/Cockpit cc-tab links, then header-hero-pack with cockpit-nav breadcrumb, hero h1, tagline, scan-live) followed by `main.panel-cockpit` (band-main, band-bottom, footnote). Use `.shell{display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh}` and `.panel-cockpit{grid-template-rows:minmax(0,1fr) minmax(22vh,24vh) auto}`. Remove any `order` or absolute positioning that pushes the header down."
+      },
+      {
+        "problem": "The stage is a single ticket column hugging the left edge. The centre has only a floating 'waiting on you' label with no mascot or now panel, and the right ticket column is empty. Roughly 60% of the stage is blank.",
+        "where": "Desktop top band, x≈570–1430",
+        "file": "tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Wrap the stage in `.stage-wrap > .stage-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,280px) minmax(0,1fr)}`. Split tickets half and half into #tickets-left and #tickets-right (ceil(n/2)). Put the stage-center in the middle column: entity-label (orchestrator state), mascot-stage, and a now-panel showing the active ticket id, title and progress (k/n). Keep the ticket search hidden on desktop (`.ticket-search{display:none}`) as the mockup does."
+      },
+      {
+        "problem": "The stage stack tile is broken. A tiny green-bordered box with '57%' overflows its own border, and the big panel around it is empty. 57% also contradicts the '0 of 15 tickets done' hero, with no label saying what 57% measures.",
+        "where": "Desktop, right-middle 'STAGE STACK 15 TICKETS' panel",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Render stack-metrics as `display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px`. Each `.metric-tile` (border:2px solid var(--line);border-top-width:4px;padding:8px 6px 10px;text-align:center) gets an `.m-label` (e.g. ready, running, done, blocked) and an `.m-val` (font-size:clamp(1.75rem,2.8vh,2rem);line-height:1). Derive every tile from the same ticket counts as the hero. If a percentage is shown, label it and compute it from the same source."
+      },
+      {
+        "problem": "The bottom band is missing. The loop blocks are absent, the run stream is a single small card floating left with 'running' while the hero says 'ENDED 2M AGO', and there is a large dead gap between the run stream and the hero.",
+        "where": "Desktop middle area, y≈420–640",
+        "file": "tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Use the band-bottom grid `grid-template-columns:minmax(0,1.05fr) minmax(0,1.35fr) minmax(0,.95fr)` with bottom-loops spanning the full width, then a worker stream (2-col stream-grid of stream-card with a 6px accent top border, a stream-id/title/status row, and a stream-bar), a run stream, and the stack block. Reconcile run status with the orchestrator state, so a run shows 'ended' when the board says ended. When there are no runs, render a muted 'No runs yet' line inside the card."
+      },
+      {
+        "problem": "On phone, the Now tab content is blank below the hero, and the tour popover covers the lower screen. The hero font is far larger than the mockup clamp, the breadcrumb wraps over three lines, and 'PROJECT project-swarm' repeats twice. 'LIVE SCAN 0OF15' has no spacing.",
+        "where": "Phone, everything below y≈350; hero and breadcrumb at the top",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Populate #phone-now with stage-center--phone (entity-label, now-panel for the active ticket, then a phone-now-rows list of the next tickets as 44px ticket-rows). Set `@media (max-width:720px){.band-header .cockpit-hero h1{font-size:clamp(1.75rem,8vw,2.25rem)}}`. Render the project name once (drop the duplicate top-right crumb). Build scan-live as `<span class=\"num\">0</span> <span class=\"scan-of\">of</span> <span class=\"num\">15</span>` inside `.scan-live-count{display:inline-flex;gap:8px}`."
+      },
+      {
+        "problem": "The 'Project Cockpit Step 1 of 1' tour popover covers content on both desktop and phone. The BACK pill floats on its own between sections, and ticket ids are bare orange text rather than the mockup's idx chips.",
+        "where": "Bottom-right on desktop and bottom on phone (tour); BACK at the left above the breadcrumb; ticket rows",
+        "file": "tools/watch-assets/cc-cockpit-mount.js, tools/watch-assets/cc-cockpit.css, tools/watch-assets/cockpit-lists.js",
+        "change": "Suppress the auto-opening tour (localStorage dismissed flag, or open only on demand). Move BACK into the app-nav `.nav-actions` as a `.btn-pill` next to the Hive/Cockpit tabs. Render the ticket id inside `.ticket-idx` (border:3px solid var(--cockpit-orange);border-radius:4px;background:rgba(201,120,74,.28)) with the lane modifier class, and use the 4-column ticket-row grid `36px minmax(0,1fr) auto 20px`."
+      }
+    ]
+  },
+  "notes": "Hive is recognisably the mockup (header, ring, streams, panels), but the cards have no values, every card sits on one side, the panels are empty, and a tour popover covers content. Cockpit is far from the mockup: the header renders at the bottom, the stage is one left column with an empty centre, the stack tile overflows, and the data contradicts itself (57% against 0 of 15 done)."
+}
