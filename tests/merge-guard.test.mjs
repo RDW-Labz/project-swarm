@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   checkRollup,
   assertMergeable,
@@ -94,8 +95,7 @@ function mergeKey(headOid, deleteBranch = true) {
 }
 
 const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
-const OTHER_SHA = '0000000000000000000000000000000000000001';
-const SHA8 = HEAD_SHA.slice(0, 8);
+const OTHER_SHA = 'fedcba0987654321fedcba0987654321fedcba09';
 
 function prView(over = {}) {
   return {
@@ -624,201 +624,163 @@ test('runMerge: remote delete encodes each ref segment separately', async () => 
 });
 
 function reviewsBody(lines) {
-  return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
+  return '## Summary\n\nShip it.\n\n## Reviews\n\n' + lines.join('\n') + '\n';
 }
 
-function reviewJsonBlock(obj) {
-  return '```json\n' + JSON.stringify(obj) + '\n```';
-}
+const RECORD_PATH = 'coordination/review/train5-review-run.json';
+const RESULT_PATH = 'coordination/review/train5-review.json';
+const MARKER = '<!-- swarm-review-run: ' + RECORD_PATH + ' -->';
+const FENCE = '```';
+const LONG_FENCE = '````';
+const contentsKey = (path, head = HEAD_SHA) => 'gh api repos/octo/repo/contents/' + path + '?ref=' + head;
+const commitKey = (head = HEAD_SHA) => 'gh api repos/octo/repo/commits/' + head;
+const compareKey = (parent = OTHER_SHA, head = HEAD_SHA) => 'gh api repos/octo/repo/compare/' + parent + '...' + head;
+const contentResponse = (bytes) => json({ encoding: 'base64', content: Buffer.from(bytes).toString('base64') });
+const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const absentRun = { readFile: async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); } };
 
-function releaseView(over = {}) {
-  return {
-    title: '1.0.0: x',
-    headRefOid: HEAD_SHA,
-    ...over,
+function releaseFixture(o = {}) {
+  const result = o.resultBytes ?? JSON.stringify({ verdict: 'pass', head: OTHER_SHA, ...o.result });
+  const record = {
+    train: '5', runId: 'review-5', agent: 'claude', model: 'claude-opus-4-6', verdict: 'pass',
+    head: OTHER_SHA, resultFile: RESULT_PATH, resultHash: hash(result),
+    manifest: 'coordination/manifests/review-5.json', at: T1, ...o.record,
   };
+  const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: reviewsBody([MARKER]), ...o.view };
+  const head = view.headRefOid;
+  const rs = routes({ view });
+  rs[contentsKey(RECORD_PATH, head)] = o.recordResponse ?? contentResponse(o.recordBytes ?? JSON.stringify(record));
+  rs[commitKey(head)] = o.commitResponse ?? json({ parents: [{ sha: OTHER_SHA }] });
+  rs[compareKey(OTHER_SHA, head)] = o.compareResponse ?? json({ files: [
+    { filename: RECORD_PATH, status: 'added' }, { filename: RESULT_PATH, status: 'added' },
+  ] });
+  rs[contentsKey(RESULT_PATH, head)] = o.resultResponse ?? contentResponse(result);
+  return makeExec(rs);
 }
 
-// releaseReviewGate
+async function checkRelease(o = {}, reason, extra = {}) {
+  const { exec, calls } = releaseFixture(o);
+  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP, fs: absentRun, ...extra });
+  assert.equal(r.status, reason ? 'refused' : 'merged');
+  if (reason) assert.ok(r.reasons.includes(reason), JSON.stringify(r));
+  assert.equal(mergeCalls(calls).length, reason ? 0 : 1, 'refusals must precede gh pr merge');
+  return { r, calls };
+}
 
-test('releaseReviewGate: non-release title is not required', () => {
-  const r = releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
+test('releaseReviewGate: non-release title is not required', async () => {
+  const r = await releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
   assert.equal(r.required, false);
   assert.equal(r.ok, true);
 });
 
-test('releaseReviewGate: semver titles require JSON verdict for head', () => {
-  for (const title of ['1.167.26: ship', 'v1.168.0 - ship']) {
-    const r = releaseReviewGate({ title, body: '', headRefOid: HEAD_SHA });
-    assert.equal(r.required, true);
-    assert.equal(r.ok, false);
-    assert.equal(r.reason, `review-verdict-missing-for-head: ${SHA8}`);
+test('runMerge: valid committed review record merges without a local mini run', async () => {
+  const { calls } = await checkRelease();
+  for (const key of [contentsKey(RECORD_PATH), contentsKey(RESULT_PATH), commitKey(), compareKey()]) {
+    assert.ok(calls.some((c) => [c.command, ...c.args].join(' ') === key), key);
   }
 });
 
-// runMerge release-review gate (JSON verdict only)
-
-test('runMerge: release PR merges when Reviews has JSON pass for head', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  assert.equal(mergeCalls(calls).length, 1);
-});
-
-test('runMerge: release PR refuses prose PASS for other sha with head in text (exploit)', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([
-        `PASS for ${OTHER_SHA}; head pending`,
-        HEAD_SHA,
-      ]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses prose head fails review with head sha (exploit)', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([`head fails review (lint passed)`, HEAD_SHA]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses JSON pass for different 40-char sha', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: OTHER_SHA })]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses JSON pass with 7-char head field', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA.slice(0, 7) })]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses JSON verdict PASS uppercase', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([reviewJsonBlock({ verdict: 'PASS', head: HEAD_SHA })]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses JSON pass outside Reviews section', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: `## Summary\n\n${reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })}\n`,
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR refuses malformed JSON block in Reviews', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody(['```json', '{not json', '```']),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR pass then fail for same head refuses (last wins fail)', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([
-        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
-        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
-      ]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-failed-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: release PR fail then pass for same head merges (last wins pass)', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: reviewsBody([
-        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
-        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
-      ]),
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  assert.equal(mergeCalls(calls).length, 1);
-});
-
-test('runMerge: release PR refuses with no Reviews section', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: releaseView({
-      body: '## Summary\n\nno reviews here\n',
-    }),
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
-  assert.equal(mergeCalls(calls).length, 0);
-});
-
-test('runMerge: non-release title merges without Reviews section', async () => {
-  const { exec, calls } = makeExec(routes({
-    view: {
-      title: 'Fix the widget',
-      headRefOid: HEAD_SHA,
-      body: '',
-    },
-  }));
-  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'merged');
-  assert.equal(mergeCalls(calls).length, 1);
-});
-
-test('runMerge: release PR refuses when headRefOid missing', async () => {
-  const view = prView({
-    title: '1.0.0: x',
-    body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
+for (const title of ['v1.168.0 - ship', '  V1.168.0 - ship', ' Release 1.2.3', 'release 1.2.3']) {
+  test('runMerge: release title ' + JSON.stringify(title) + ' requires a record', async () => {
+    await checkRelease({ view: { title, body: '' } }, 'marker-missing');
   });
-  delete view.headRefOid;
-  const { exec, calls } = makeExec(routes({ rawView: json(view) }));
+}
+
+for (const [name, options, reason] of [
+  ['missing marker', { view: { body: reviewsBody(['pass']) } }, 'marker-missing'],
+  ['null body', { view: { body: null } }, 'marker-missing'],
+  ['typed JSON verdict', { view: { body: reviewsBody([FENCE + 'json', JSON.stringify({ verdict: 'pass', head: HEAD_SHA }), FENCE]) } }, 'marker-missing'],
+  ['marker outside Reviews', { view: { body: MARKER + '\n## Reviews\nnone' } }, 'marker-missing'],
+  ['missing record', { recordResponse: fail('404 Not Found') }, 'record-missing'],
+  ['malformed record', { recordBytes: '{bad json' }, 'record-malformed'],
+  ['null record', { recordBytes: 'null' }, 'record-malformed'],
+  ['unparseable contents response', { recordResponse: ok('{bad') }, 'record-malformed'],
+  ['invalid base64', { recordResponse: json({ encoding: 'base64', content: '!!!!' }) }, 'record-malformed'],
+  ['wrong contents encoding', { recordResponse: json({ encoding: 'utf8', content: '{}' }) }, 'record-malformed'],
+  ['code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'record-not-metadata-commit'],
+  ['renamed code in metadata commit', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'record-not-metadata-commit'],
+  ['wrong result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }, { filename: 'coordination/review/other.json' }] }) }, 'record-not-metadata-commit'],
+  ['deleted metadata file', { compareResponse: json({ files: [{ filename: RECORD_PATH, status: 'removed' }, { filename: RESULT_PATH }] }) }, 'record-not-metadata-commit'],
+  ['malformed commit response', { commitResponse: ok('{bad') }, 'record-not-metadata-commit'],
+  ['missing result in compare', { compareResponse: json({ files: [{ filename: RECORD_PATH }] }) }, 'record-not-metadata-commit'],
+  ['multiple parents', { commitResponse: json({ parents: [{ sha: OTHER_SHA }, { sha: HEAD_SHA }] }) }, 'record-not-metadata-commit'],
+  ['no parents', { commitResponse: json({ parents: [] }) }, 'record-not-metadata-commit'],
+  ['commit fetch failure', { commitResponse: fail() }, 'record-not-metadata-commit'],
+  ['compare fetch failure', { compareResponse: fail() }, 'record-not-metadata-commit'],
+  ['compare parse failure', { compareResponse: ok('{bad') }, 'record-not-metadata-commit'],
+  ['head differs from parent', { record: { head: HEAD_SHA } }, 'record-head-mismatch'],
+  ['short record head', { record: { head: OTHER_SHA.slice(0, 7) } }, 'record-head-mismatch'],
+  ['short PR head', { view: { headRefOid: 'abc123' } }, 'record-head-mismatch'],
+  ['record verdict fail', { record: { verdict: 'fail' } }, 'record-verdict-not-pass'],
+  ['uppercase verdict', { record: { verdict: 'PASS' } }, 'record-verdict-not-pass'],
+  ['missing PR head', { view: { headRefOid: null } }, 'record-head-mismatch'],
+  ['wrong model', { record: { model: 'sonnet' } }, 'record-model-not-opus'],
+  ['wrong agent', { record: { agent: 'codex' } }, 'record-run-invalid'],
+  ['empty run id', { record: { runId: '  ' } }, 'record-run-invalid'],
+  ['traversing run id', { record: { runId: '../other' } }, 'record-run-invalid'],
+  ['wrong hash', { record: { resultHash: '0'.repeat(64) } }, 'record-result-hash-mismatch'],
+  ['malformed hash', { record: { resultHash: 'xyz' } }, 'record-result-hash-mismatch'],
+  ['result fetch failure', { resultResponse: fail() }, 'record-result-hash-mismatch'],
+  ['result verdict fail', { result: { verdict: 'fail' } }, 'record-result-verdict'],
+  ['result head mismatch', { result: { head: HEAD_SHA } }, 'record-result-verdict'],
+  ['result short head', { result: { head: OTHER_SHA.slice(0, 7) } }, 'record-result-verdict'],
+  ['result malformed', { resultBytes: '{bad json' }, 'record-result-verdict'],
+  ['result null', { resultBytes: 'null' }, 'record-result-verdict'],
+  ['unsafe result path', { record: { resultFile: 'coordination/review/../code.json' } }, 'record-malformed'],
+]) {
+  test('runMerge: release refuses ' + name + ' before merging', async () => { await checkRelease(options, reason); });
+}
+
+for (const path of ['../train5-review-run.json', '/coordination/review/train5-review-run.json', 'coordination/review/../train5-review-run.json', 'coordination/review/%2e%2e/train5-review-run.json', 'coordination/review/train5-review.json', 'coordination/review/x\\train5-review-run.json']) {
+  test('runMerge: unsafe marker path ' + path + ' refuses', async () => {
+    await checkRelease({ view: { body: reviewsBody(['<!-- swarm-review-run: ' + path + ' -->']) } }, 'record-malformed');
+  });
+}
+
+test('runMerge: uppercase full SHAs and result hash are accepted', async () => {
+  const result = JSON.stringify({ verdict: 'pass', head: OTHER_SHA.toUpperCase() });
+  await checkRelease({ view: { headRefOid: HEAD_SHA.toUpperCase() }, record: { head: OTHER_SHA.toUpperCase(), resultHash: hash(result).toUpperCase() }, resultBytes: result });
+});
+
+test('runMerge: result head may be absent and bytes are hashed without normalization', async () => {
+  await checkRelease({ resultBytes: '{\r\n  \"verdict\": \"pass\"\r\n}\r\n' });
+});
+
+for (const fence of [FENCE, '~~~~', '    ' + LONG_FENCE, '  ~~~~~']) {
+  test('runMerge: ' + JSON.stringify(fence) + ' fences hide headings and fake markers', async () => {
+    const body = [fence + 'markdown', '## Reviews', MARKER, fence, '## Reviews', fence + 'text', '## Other', '<!-- swarm-review-run: bad -->', fence, MARKER, '## End'].join('\r\n');
+    await checkRelease({ view: { body } });
+    await checkRelease({ view: { body: ['## Reviews', fence, MARKER, fence].join('\r\n') } }, 'marker-missing');
+  });
+}
+
+test('runMerge: shorter or different fence delimiter does not close a fence', async () => {
+  await checkRelease({ view: { body: reviewsBody([LONG_FENCE, FENCE, '~~~', MARKER, LONG_FENCE]) } }, 'marker-missing');
+});
+
+test('runMerge: real heading ends Reviews and duplicate markers refuse', async () => {
+  await checkRelease({ view: { body: reviewsBody(['## Other', MARKER]) } }, 'marker-missing');
+  await checkRelease({ view: { body: reviewsBody([MARKER, MARKER]) } }, 'record-malformed');
+});
+
+test('runMerge: non-release title merges without review API calls', async () => {
+  const { exec, calls } = makeExec(routes());
   const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
-  assert.equal(r.status, 'refused');
-  assert.ok(r.reasons.includes('review-verdict-missing-for-head: no-head'));
-  assert.equal(mergeCalls(calls).length, 0);
+  assert.equal(r.status, 'merged');
+  assert.equal(calls.some((c) => c.args[1]?.includes('/contents/')), false);
+});
+
+test('runMerge: existing local run must be complete with matching job agent and model', async () => {
+  const state = { status: 'complete', jobs: [{ agent: 'claude', model: 'claude-opus-4-6' }] };
+  const localFs = (value) => ({ readFile: async (path) => {
+    assert.equal(path, '/repo/.swarm/runs/review-5/state.json');
+    return JSON.stringify(value);
+  } });
+  await checkRelease({}, undefined, { fs: localFs(state) });
+  await checkRelease({}, undefined, { fs: localFs({ ...state, jobs: { review: state.jobs[0] } }) });
+  for (const value of [null, { ...state, status: 'running' }, { ...state, jobs: [] }, { ...state, jobs: [{ agent: 'codex', model: 'claude-opus-4-6' }] }, { ...state, jobs: [{ agent: 'claude', model: 'other-opus' }] }]) {
+    await checkRelease({}, 'record-run-invalid', { fs: localFs(value) });
+  }
+  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => '{bad' } });
+  await checkRelease({}, 'record-run-invalid', { fs: { readFile: async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } } });
 });

@@ -5,23 +5,38 @@ import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 import { holdsSwarmState } from './state-guard.mjs';
 import { projectsFile } from './projects.mjs';
 import os from 'node:os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_FIELDS =
   'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
-const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
+const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
 const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
 const ANY_HEADING_RE = /^##\s/;
-const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
-const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
 const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
+const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
 
+// Strip fenced text before interpreting either headings or markers. A closing
+// fence must use the opener's character and at least its delimiter length.
 function extractReviewsSectionText(body) {
   const reviewLines = [];
   let inReviews = false;
-  for (const line of String(body ?? '').split('\n')) {
+  let fence = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence.char &&
+          delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      continue;
+    }
+    if (delimiter) {
+      fence = { char: delimiter[1][0], length: delimiter[1].length };
+      continue;
+    }
     if (REVIEWS_HEADING_RE.test(line)) {
       inReviews = true;
       continue;
@@ -32,71 +47,125 @@ function extractReviewsSectionText(body) {
   return reviewLines.join('\n');
 }
 
-function collectJsonFenceContents(reviewsText) {
-  const blocks = [];
-  const lines = String(reviewsText ?? '').split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
-    i++;
-    const contentLines = [];
-    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
-      contentLines.push(lines[i]);
-      i++;
-    }
-    blocks.push(contentLines.join('\n'));
-  }
-  return blocks;
+function safeReviewPath(value) {
+  if (typeof value !== 'string' || !value.startsWith('coordination/review/')) return false;
+  return value.split('/').every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..');
 }
 
-function blockNamesHead(block, headLower) {
-  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
-  return block.head.toLowerCase() === headLower;
+function decodeContents(response) {
+  if (!isObj(response) || response.encoding !== 'base64' || typeof response.content !== 'string') {
+    throw new Error('invalid contents response');
+  }
+  const encoded = response.content.replace(/\s/g, '');
+  // Buffer.from silently discards invalid base64 characters; reject those first.
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error('invalid base64');
+  }
+  return Buffer.from(encoded, 'base64');
 }
 
-export function releaseReviewGate({ title, body, headRefOid }) {
-  const t = String(title ?? '');
-  if (!RELEASE_TITLE_RE.test(t)) {
-    return { required: false, ok: true };
-  }
-  const head = String(headRefOid ?? '');
-  if (!HEAD_SHA40_RE.test(head)) {
-    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
-  }
-  const headLower = head.toLowerCase();
-  const sha8 = headLower.slice(0, 8);
-
+export async function releaseReviewGate(
+  { title, body, headRefOid },
+  { gh, repoName, root = '.', fs: fsImpl = fs } = {},
+) {
+  if (!RELEASE_TITLE_RE.test(String(title ?? '').trimStart())) return { required: false, ok: true };
+  const refuse = (reason) => ({ required: true, ok: false, reason });
   const reviewsText = extractReviewsSectionText(body);
-  const rawBlocks = collectJsonFenceContents(reviewsText);
-  const parsedBlocks = [];
-  for (const raw of rawBlocks) {
-    let block;
+  const markers = [...reviewsText.matchAll(/<!--\s*swarm-review-run:\s*([^\r\n]*?)\s*-->/g)];
+  if (!markers.length) return refuse('marker-missing');
+  const recordPath = markers[0][1].trim();
+  if (markers.length !== 1 || !safeReviewPath(recordPath) || !recordPath.endsWith('-review-run.json')) {
+    return refuse('record-malformed');
+  }
+  if (!isSha(headRefOid)) return refuse('record-head-mismatch');
+
+  // Every remote read is pinned to R, the PR head, so the mini's local run
+  // directory is not needed on the machine performing the merge.
+  const api = async (endpoint) => {
     try {
-      block = JSON.parse(raw);
+      const response = await gh(['api', 'repos/' + repoName + '/' + endpoint]);
+      return response.code === 0 ? { ok: true, value: parseJson(response) } : { ok: false };
     } catch {
-      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+      return { ok: false };
     }
-    if (!isObj(block)) {
-      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+  };
+  const contents = (file) => api('contents/' + file + '?ref=' + headRefOid);
+  const fetched = await contents(recordPath);
+  if (!fetched.ok) return refuse('record-missing');
+  let record;
+  try {
+    record = JSON.parse(decodeContents(fetched.value).toString('utf8'));
+  } catch {
+    return refuse('record-malformed');
+  }
+  if (!isObj(record) || !safeReviewPath(record.resultFile) ||
+      typeof record.train !== 'string' || !record.train.trim() ||
+      typeof record.manifest !== 'string' ||
+      !/^coordination\/manifests\/[A-Za-z0-9_.-]+\.json$/.test(record.manifest) ||
+      typeof record.at !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(record.at) ||
+      !Number.isFinite(Date.parse(record.at))) return refuse('record-malformed');
+
+  const commit = await api('commits/' + headRefOid);
+  const parents = commit.value?.parents;
+  if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
+    return refuse('record-not-metadata-commit');
+  }
+  const parent = parents[0].sha;
+  const comparison = await api('compare/' + parent + '...' + headRefOid);
+  const files = comparison.value?.files;
+  if (!comparison.ok || !Array.isArray(files) || files.length !== 2 ||
+      record.resultFile === recordPath ||
+      new Set(files.map((file) => file?.filename)).size !== 2 ||
+      !files.every((file) => isObj(file) &&
+        [recordPath, record.resultFile].includes(file.filename) &&
+        (!file.previous_filename || file.previous_filename === file.filename) &&
+        !['renamed', 'removed', 'copied'].includes(file.status))) {
+    return refuse('record-not-metadata-commit');
+  }
+  if (!isSha(record.head) || record.head.toLowerCase() !== parent.toLowerCase()) {
+    return refuse('record-head-mismatch');
+  }
+  if (record.verdict !== 'pass') return refuse('record-verdict-not-pass');
+  if (typeof record.model !== 'string' || !/opus/i.test(record.model)) return refuse('record-model-not-opus');
+  if (record.agent !== 'claude' || typeof record.runId !== 'string' ||
+      !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(record.runId)) return refuse('record-run-invalid');
+
+  const resultResponse = await contents(record.resultFile);
+  let resultBytes;
+  try {
+    if (!resultResponse.ok) throw new Error('result missing');
+    resultBytes = decodeContents(resultResponse.value);
+    if (typeof record.resultHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.resultHash) ||
+        createHash('sha256').update(resultBytes).digest('hex') !== record.resultHash.toLowerCase()) {
+      return refuse('record-result-hash-mismatch');
     }
-    parsedBlocks.push(block);
+  } catch {
+    return refuse('record-result-hash-mismatch');
+  }
+  let result;
+  try {
+    result = JSON.parse(resultBytes.toString('utf8'));
+  } catch {
+    return refuse('record-result-verdict');
+  }
+  if (!isObj(result) || result.verdict !== 'pass' ||
+      (Object.hasOwn(result, 'head') && (!isSha(result.head) || result.head.toLowerCase() !== parent.toLowerCase()))) {
+    return refuse('record-result-verdict');
   }
 
-  let lastVerdictForHead = null;
-  for (const block of parsedBlocks) {
-    if (!blockNamesHead(block, headLower)) continue;
-    const v = block.verdict;
-    if (v === 'pass') lastVerdictForHead = 'pass';
-    else if (v === 'fail') lastVerdictForHead = 'fail';
-    else lastVerdictForHead = 'other';
-  }
-
-  if (lastVerdictForHead === null) {
-    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
-  }
-  if (lastVerdictForHead === 'pass') {
+  let localRun;
+  try {
+    localRun = JSON.parse(await fsImpl.readFile(path.join(root, '.swarm', 'runs', record.runId, 'state.json'), 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') return refuse('record-run-invalid');
     return { required: true, ok: true };
   }
-  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
+  const jobs = isObj(localRun?.jobs) ? Object.values(localRun.jobs) : localRun?.jobs;
+  if (!isObj(localRun) || localRun.status !== 'complete' || !Array.isArray(jobs) || !jobs.length ||
+      !jobs.every((job) => isObj(job) && job.agent === record.agent && job.model === record.model)) {
+    return refuse('record-run-invalid');
+  }
+  return { required: true, ok: true };
 }
 
 async function realExec(command, args, { cwd } = {}) {
@@ -362,11 +431,11 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
 
   const reasons = [...verdict.reasons];
   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
-  const reviewGate = releaseReviewGate({
+  const reviewGate = await releaseReviewGate({
     title: view.title,
     body: view.body,
     headRefOid: view.headRefOid,
-  });
+  }, { gh, repoName, root, fs: fsImpl });
   if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
   const checks = {
     failing: rollup.failing,
