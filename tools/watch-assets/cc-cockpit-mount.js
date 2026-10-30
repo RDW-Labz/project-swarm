@@ -211,11 +211,12 @@ export function renderProjectCockpit(host, project, deps) {
   moreSum.setAttribute('aria-label', 'Switch view');
   moreSum.setAttribute('title', 'Switch view');
   const tabs = el(doc, 'div', 'tabs');
+  const search = win.location?.search || doc.defaultView?.location?.search || '';
   const ccTab = el(doc, 'a', null, 'Command Center');
-  ccTab.href = '/command-center';
+  ccTab.href = '/command-center' + search;
   ccTab.setAttribute('aria-current', 'page');
   const classicTab = el(doc, 'a', null, 'Classic');
-  classicTab.href = '/classic';
+  classicTab.href = '/classic' + search;
   tabs.appendChild(ccTab);
   tabs.appendChild(classicTab);
   more.appendChild(moreSum);

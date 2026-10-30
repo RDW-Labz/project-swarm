@@ -8,9 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWatchServer } from '../tools/watch-server.mjs';
+import { buildProjectCockpit } from '../tools/command-center-snapshot.mjs';
+import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
-const cockpitMountPath = fileURLToPath(new URL('../tools/watch-assets/cc-cockpit-mount.js', import.meta.url));
 
 const MONEY_KEY = /usd|Usd|USD|cost|Cost|spend|Spend/;
 const DOLLAR_IN_TEXT = /\$\s?\d/;
@@ -87,6 +88,114 @@ async function expectSameAsUnknown(port, reqPath, headers = {}) {
   const res = await request({ port, reqPath, headers });
   assert.equal(res.status, baseline.status);
   assert.equal(res.body, baseline.body);
+}
+
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...c) => c.forEach(x => set.add(x)),
+    remove: (...c) => c.forEach(x => set.delete(x)),
+    contains: c => set.has(c),
+    toString: () => [...set].join(' '),
+  };
+}
+
+function makeElement(tag) {
+  const classList = makeClassList();
+  const node = {
+    tagName: String(tag).toUpperCase(),
+    classList,
+    children: [],
+    attributes: {},
+    style: {},
+    parentNode: null,
+    hidden: false,
+    appendChild(child) {
+      this.children.push(child);
+      child.parentNode = this;
+      return child;
+    },
+    removeChild(child) {
+      const i = this.children.indexOf(child);
+      if (i >= 0) this.children.splice(i, 1);
+      return child;
+    },
+    setAttribute(k, v) { this.attributes[k] = String(v); },
+    getAttribute(k) { return this.attributes[k] ?? null; },
+    addEventListener() {},
+    removeEventListener() {},
+    querySelectorAll(sel) {
+      const out = [];
+      const walk = n => {
+        if (!n?.children) return;
+        for (const c of n.children) {
+          if (c.classList?.contains('tabs')) {
+            for (const child of c.children || []) {
+              if (child.tagName === 'A') out.push(child);
+            }
+          }
+          walk(c);
+        }
+      };
+      walk(this);
+      return sel.includes('.tabs') ? out : out;
+    },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; },
+    getBoundingClientRect() { return { top: 0, left: 0, bottom: 40, right: 120, width: 120, height: 40 }; },
+  };
+  Object.defineProperty(node, 'className', {
+    get() { return classList.toString(); },
+    set(v) { classList.add(...String(v).split(/\s+/).filter(Boolean)); },
+  });
+  return node;
+}
+
+function makeDocument(defaultView) {
+  const document = {
+    hidden: false,
+    defaultView,
+    createElement: tag => {
+      const el = makeElement(tag);
+      el.ownerDocument = document;
+      return el;
+    },
+    createTextNode: text => ({ nodeType: 3, textContent: text }),
+    createElementNS: () => makeElement('svg'),
+    fonts: { ready: Promise.resolve() },
+  };
+  return document;
+}
+
+function assertCockpitViewTabsPreservePageToken() {
+  const fakeLocation = { search: '?t=abc' };
+  const win = {
+    location: fakeLocation,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const document = makeDocument(win);
+  document.defaultView = win;
+  const host = document.createElement('div');
+  const board = fakeBoardPayload();
+  board.projects[0].ledger.tickets = [
+    { id: 'T-1', title: 'One', status: 'done', stage: 'S1' },
+  ];
+  board.projects[0].ledger.scope = { stages: [{ id: 'S1', name: 'Stage one' }] };
+  board.projects[0].orchestrator = { sessions: [] };
+  const project = buildProjectCockpit(board, 'abc');
+  const view = renderProjectCockpit(host, project, {
+    document,
+    window: win,
+    now: () => Date.UTC(2026, 9, 26, 12, 0, 0),
+    glitch: () => false,
+    mountRobotHead: () => ({ setState() {}, destroy() {} }),
+  });
+  const tabs = host.querySelectorAll('.tabs a');
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[0].href, '/command-center?t=abc');
+  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+  assert.equal(tabs[1].href, '/classic?t=abc');
+  view.destroy();
 }
 
 async function startWatchServer({ commandCenter, env } = {}) {
@@ -229,8 +338,7 @@ test('command center HTML and JSON when the flag is on', async () => {
     assertSnapshotNoMoney(body, '/api/command-center');
     assertSnapshotNoMoney(JSON.parse(cockpit.body), '/api/command-center/project');
 
-    const mountSource = await fs.readFile(cockpitMountPath, 'utf8');
-    assert.match(mountSource, /classicTab\.href\s*=\s*['"]\/classic['"]/, 'Cockpit Classic tab points at /classic');
+    assertCockpitViewTabsPreservePageToken();
 
     const missing = await request({
       port: on.port,
