@@ -9,7 +9,95 @@ import os from 'node:os';
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+const PR_FIELDS =
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
+const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
+const ANY_HEADING_RE = /^##\s/;
+const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
+const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
+const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
+
+function extractReviewsSectionText(body) {
+  const reviewLines = [];
+  let inReviews = false;
+  for (const line of String(body ?? '').split('\n')) {
+    if (REVIEWS_HEADING_RE.test(line)) {
+      inReviews = true;
+      continue;
+    }
+    if (inReviews && ANY_HEADING_RE.test(line)) break;
+    if (inReviews) reviewLines.push(line);
+  }
+  return reviewLines.join('\n');
+}
+
+function collectJsonFenceContents(reviewsText) {
+  const blocks = [];
+  const lines = String(reviewsText ?? '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
+    i++;
+    const contentLines = [];
+    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
+      contentLines.push(lines[i]);
+      i++;
+    }
+    blocks.push(contentLines.join('\n'));
+  }
+  return blocks;
+}
+
+function blockNamesHead(block, headLower) {
+  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
+  return block.head.toLowerCase() === headLower;
+}
+
+export function releaseReviewGate({ title, body, headRefOid }) {
+  const t = String(title ?? '');
+  if (!RELEASE_TITLE_RE.test(t)) {
+    return { required: false, ok: true };
+  }
+  const head = String(headRefOid ?? '');
+  if (!HEAD_SHA40_RE.test(head)) {
+    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
+  }
+  const headLower = head.toLowerCase();
+  const sha8 = headLower.slice(0, 8);
+
+  const reviewsText = extractReviewsSectionText(body);
+  const rawBlocks = collectJsonFenceContents(reviewsText);
+  const parsedBlocks = [];
+  for (const raw of rawBlocks) {
+    let block;
+    try {
+      block = JSON.parse(raw);
+    } catch {
+      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+    }
+    if (!isObj(block)) {
+      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+    }
+    parsedBlocks.push(block);
+  }
+
+  let lastVerdictForHead = null;
+  for (const block of parsedBlocks) {
+    if (!blockNamesHead(block, headLower)) continue;
+    const v = block.verdict;
+    if (v === 'pass') lastVerdictForHead = 'pass';
+    else if (v === 'fail') lastVerdictForHead = 'fail';
+    else lastVerdictForHead = 'other';
+  }
+
+  if (lastVerdictForHead === null) {
+    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+  }
+  if (lastVerdictForHead === 'pass') {
+    return { required: true, ok: true };
+  }
+  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
+}
 
 async function realExec(command, args, { cwd } = {}) {
   try {
@@ -274,6 +362,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
 
   const reasons = [...verdict.reasons];
   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
+  const reviewGate = releaseReviewGate({
+    title: view.title,
+    body: view.body,
+    headRefOid: view.headRefOid,
+  });
+  if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
   const checks = {
     failing: rollup.failing,
     pending: [...rollup.pending, ...missing],

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t4-review-gate",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "expensive",
+      "tierReason": "merge-approval guard; gets an Opus review in train 4",
+      "sensitive": true,
+      "prompt": "Add a release-review gate to tools/merge-guard.mjs, used by `swarm merge PR`, and cover it in tests/merge-guard.test.mjs. This is a merge-approval guard: be precise and fail closed.\n\nRequirement (owner order): `swarm merge` must REFUSE a release PR unless its `## Reviews` section contains a PASSING verdict naming the CURRENT head commit (headRefOid). A release PR is a PR whose title starts with a semver, e.g. `1.167.26: ...` or `v1.168.0 - ...` (regex `^v?\\d+\\.\\d+\\.\\d+`). Non-release PRs are unchanged.\n\nImplementation:\n1. Add `title,body` to PR_FIELDS so runMerge fetches them from `gh pr view`.\n2. Add and export a pure helper, e.g. `releaseReviewGate({ title, body, headRefOid })`, returning `{ required, ok, reason }`. Behavior:\n   - required: false (ok: true) when the title does not start with a semver.\n   - Only the body's `## Reviews` section counts: find a line matching /^##\\s+Reviews\\s*$/i and take lines until the next /^##\\s/ heading. Text about reviews elsewhere (e.g. a Checks section) must not count.\n   - A verdict line counts for the current head only if it names the head commit: a hex token of 7 to 40 chars (case-insensitive) that is a prefix of headRefOid (or the full value). Ignore lines that name only another commit.\n   - A matching line is failing if it contains fail/failed/blocker (word, case-insensitive); passing if it contains pass/passed and no failing word. The last matching verdict line wins (so a later delta PASS can close an earlier fail).\n   - Result: no matching line -> `{required:true, ok:false, reason:'review-verdict-missing-for-head: <first 8 chars of headRefOid>'}`; last matching verdict failing or pending -> `review-verdict-failed-for-head: <sha8>`; last matching verdict passing -> ok.\n   - `headRefOid` missing/not a 7+ hex string -> refuse `review-verdict-missing-for-head: no-head` (a release PR cannot pass the gate without a head sha).\n3. In runMerge, after `assertMergeable`/required-checks and before any `gh pr merge`, add the gate result to the refusal path: if `required` and not ok, return status 'refused' with reasons (append the gate reason to the existing reasons list, or return it with the same shape as other refusals). It must refuse BEFORE the merge call, which must never run. Keep the existing refusal JSON shape and messages.\n\nTests (tests/merge-guard.test.mjs): keep every existing test. The shared fixture PR title must stay a NON-release title (e.g. 'Fix the widget') so existing runMerge tests still pass; add focused cases:\n- release title + Reviews section with `- Opus review: PASS for <full head sha>` -> merged (assert the merge call happened with --match-head-commit).\n- short 7-char head prefix + PASS -> merged; uppercase SHA -> merged.\n- PASS for a different commit -> refused with review-verdict-missing-for-head and no merge call.\n- FAIL (or 'blockers open') for the head -> refused with review-verdict-failed-for-head and no merge call.\n- no Reviews section -> refused; PASS only in a Checks section -> refused.\n- earlier FAIL for head then later delta PASS for the same head -> merged (last matching verdict wins).\n- non-release title with no Reviews section -> merged (gate not required).\n- missing headRefOid on a release PR -> refused.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/merge-guard.test.mjs -> all pass. Then node --import ./tests/_isolate-config.mjs --test tests/ship.test.mjs 2>/dev/null || true (report if absent). Report the exact commands and counts.",
+      "context": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/fix-1167-12.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-guard.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused merge-guard file runs here and the full suite runs before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t4-review-gate",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/merge-guard.test.mjs"
+      ]
+    }
+  ]
+}

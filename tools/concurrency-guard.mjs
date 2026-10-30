@@ -15,6 +15,7 @@ const SELF = fileURLToPath(import.meta.url);
 const SWARM = path.join(path.dirname(SELF), 'swarm.mjs');
 export const GUARD_USAGE = 'Usage: swarm with-concurrency N -- COMMAND [ARGS...]   (N is 1 to 2048; the command is a swarm command; the old value is put back when it ends, whatever happens)';
 const MIN = 1, MAX = 2048;
+const TERM_TO_KILL_GRACE_MS = 30_000;
 
 export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
 const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
@@ -28,7 +29,7 @@ function procField(pid, field) {
   } catch { return null; }
 }
 const defaultProcStart = pid => procField(pid, 'lstart=');
-const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
+export const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
 function matchesChild(marker, procIdentity) {
   if (![marker.childProcStart, marker.childCommand].every(value => typeof value === 'string' && value.trim().length > 0)) return false;
   try {
@@ -86,13 +87,29 @@ export function restoreIfStale(configFile, { isAlive = alive, procStart = defaul
       process.stderr.write('[tools/concurrency-guard.mjs] this process is the orphaned command of a dead guarded run; the command was NOT run. machineConcurrency is still raised and will be restored by the watcher or the next command.\n');
       return exit(143);
     }
-    // Send once only, even after 30 seconds: the watcher owns escalation and restore.
-    if (marker.termSentAt === undefined) {
+    // Re-read before signalling and before writing: another restorer may have updated the marker.
+    const currentMarker = () => {
+      const fresh = readJson(markerPath(configFile));
+      return fresh?.pid === marker.pid && fresh?.childPid === child && fresh?.childProcStart === marker.childProcStart && fresh?.childCommand === marker.childCommand ? fresh : null;
+    };
+    const fresh = currentMarker();
+    if (!fresh) return null;
+    if (fresh.termSentAt === undefined) {
       try { kill(child, 'SIGTERM'); } catch (error) {
         if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
         throw error;
       }
-      writeJsonAtomic(markerPath(configFile), { ...marker, termSentAt: now() });
+      const sentAt = now();
+      const latest = currentMarker();
+      if (latest && latest.termSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, termSentAt: sentAt });
+    } else if (fresh.killSentAt === undefined && now() - fresh.termSentAt >= TERM_TO_KILL_GRACE_MS) {
+      try { kill(child, 'SIGKILL'); } catch (error) {
+        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
+        throw error;
+      }
+      const sentAt = now();
+      const latest = currentMarker();
+      if (latest && latest.killSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, killSentAt: sentAt });
     }
     return { restored: false, reason: 'orphaned command still running' };
   } catch { return null; }
@@ -126,10 +143,10 @@ function watch(pid, configFile) {
       if (marker && marker.pid === pid) {
         // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
         const child = marker.childPid;
-        if (Number.isInteger(child) && child > 0 && alive(child)) {
+        if (Number.isInteger(child) && child > 0 && alive(child) && matchesChild(marker, defaultProcIdentity)) {
           termChildOnce(child);
           for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
-          if (alive(child)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
+          if (alive(child) && matchesChild(marker, defaultProcIdentity)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
         }
         restore(configFile);
       }

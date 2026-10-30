@@ -18,7 +18,8 @@ import { backupLedger } from './ledger-backup.mjs';
 // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
 export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
 export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
-export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
+export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled', 'superseded'];
+export const SUPERSEDE_ELIGIBLE = ['proposed', 'todo', 'ready', 'blocked'];
 export const DELIVERABLE_STATUSES = ['todo', 'ready', 'blocked', 'running'];
 export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'rename', 'design', 'contract', 'human'];
 const RISKS = ['low', 'medium', 'high'];
@@ -43,14 +44,15 @@ const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
 const SECRET_NAMES = ['.project-swarm.json', '.env'];
 // A proposed ticket (made from a gallery comment) is not part of the plan: no worker runs it and the approval hash ignores it until the owner approves it (swarm tickets ID --approve).
 const MOVES = {
-  proposed: ['todo', 'cancelled'],
-  todo: ['ready', 'blocked', 'cancelled'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
-  ready: ['running', 'blocked', 'cancelled'],
+  proposed: ['todo', 'cancelled', 'superseded'],
+  todo: ['ready', 'blocked', 'cancelled', 'superseded'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
+  ready: ['running', 'blocked', 'cancelled', 'superseded'],
   running: ['review', 'ready', 'blocked', 'cancelled'],
   review: ['done', 'running', 'blocked', 'cancelled'],
-  blocked: ['ready', 'cancelled'],
+  blocked: ['ready', 'cancelled', 'superseded'],
   done: [],
   cancelled: [],
+  superseded: [],
 };
 
 // Day 0 and other human tickets are done by a person, at any time.
@@ -68,7 +70,7 @@ export function validateSetTransition(ledger, id, to) {
   if (!STATUSES.includes(to)) return { ok: false, message: `status must be one of: ${STATUSES.join(', ')}` };
   const ticket = ledger?.tickets?.find(t => t.id === id);
   if (!ticket) return { ok: false, message: `no ticket ${id}` };
-  if (ticket.status === 'proposed' && to !== 'cancelled') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
+  if (ticket.status === 'proposed' && to !== 'cancelled' && to !== 'superseded') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
   if (!legalMoves(ticket).includes(to)) return { ok: false, message: `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}` };
   if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) return { ok: false, message: `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve` };
   if (to === 'ready') {
@@ -306,6 +308,86 @@ export async function appendLog(root, event) {
   }
 }
 
+export async function readTicketLog(root) {
+  try {
+    const text = await fs.readFile(logPath(root), 'utf8');
+    return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+export function lastTouchForTickets(ledger, logEvents) {
+  const fromLog = new Map();
+  for (const ev of logEvents) {
+    if (typeof ev.id !== 'string') continue;
+    const ms = Date.parse(ev.at ?? '');
+    if (Number.isNaN(ms)) continue;
+    const prev = fromLog.get(ev.id);
+    if (!prev || ms > prev.ms) fromLog.set(ev.id, { ms, at: ev.at, basis: 'log' });
+  }
+  const ledgerMs = Date.parse(ledger?.createdAt ?? '');
+  const fallbackMs = Number.isNaN(ledgerMs) ? 0 : ledgerMs;
+  const fallbackAt = ledger?.createdAt ?? '';
+  return ticket => {
+    const hit = fromLog.get(ticket.id);
+    if (hit) return hit;
+    return { ms: fallbackMs, at: fallbackAt, basis: 'ledger-created' };
+  };
+}
+
+export function supersedeCandidates(ledger, logEvents, { before, stage } = {}) {
+  const beforeMs = Date.parse(before);
+  if (Number.isNaN(beforeMs)) throw fail('supersede-before', `unparseable --before date: ${before}`);
+  const touch = lastTouchForTickets(ledger, logEvents);
+  const out = [];
+  for (const t of ledger?.tickets ?? []) {
+    if (!SUPERSEDE_ELIGIBLE.includes(t.status)) continue;
+    if (stage !== undefined && stage !== null && t.stage !== stage) continue;
+    const lt = touch(t);
+    if (lt.ms >= beforeMs) continue;
+    out.push({
+      id: t.id,
+      status: t.status,
+      stage: t.stage,
+      lastTouch: lt.at,
+      basis: lt.basis,
+      title: t.title,
+    });
+  }
+  out.sort(byId);
+  return out;
+}
+
+export async function applySupersedeStale(root, { before, stage, now = Date.now() } = {}) {
+  const logEvents = await readTicketLog(root);
+  const ledger = await readLedger(root);
+  if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+  const candidates = supersedeCandidates(ledger, logEvents, { before, stage });
+  if (!candidates.length) return { count: 0, ids: [] };
+  const ids = candidates.map(c => c.id);
+  for (const id of ids) {
+    const ticket = ledger.tickets.find(t => t.id === id);
+    if (!ticket || !SUPERSEDE_ELIGIBLE.includes(ticket.status)) continue;
+    ticket.status = 'superseded';
+    delete ticket.blockReason;
+    delete ticket.holdQuestion;
+  }
+  ledger.updatedAt = new Date(now).toISOString();
+  await writeLedger(root, ledger);
+  await appendLog(root, {
+    event: 'supersede-stale',
+    by: 'owner',
+    before,
+    count: ids.length,
+    ids,
+    source: 'tickets-supersede',
+    actor: ticketActor(),
+  });
+  return { count: ids.length, ids };
+}
+
 export function createLedger({ scope, stageTargets, tickets = [], now = Date.now() } = {}) {
   const seen = new Set();
   for (const t of tickets) {
@@ -538,7 +620,7 @@ export function readyTickets(tickets) {
 }
 
 export function wavesOf(tickets) {
-  const active = tickets.filter(t => t.status !== 'cancelled');
+  const active = tickets.filter(t => t.status !== 'cancelled' && t.status !== 'superseded');
   const ids = new Set(active.map(t => t.id));
   const placed = new Set();
   const waves = [];
@@ -583,7 +665,7 @@ export function ledgerStats(ledger) {
     byStage[key].total++;
     if (t.status === 'done') byStage[key].done++;
   }
-  const live = tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const percentDone = live.length ? Math.round(100 * live.filter(t => t.status === 'done').length / live.length) : 0;
   let coveragePct = null;
   if (Array.isArray(ledger?.requirements)) {

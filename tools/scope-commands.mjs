@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS, readTicketLog, supersedeCandidates, applySupersedeStale } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -129,7 +129,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs', '--before']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -3426,6 +3426,56 @@ async function refreshPlan(root) {
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
+function supersedeOwnerRefusal() {
+  if ((process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) && process.env.SWARM_OWNER !== '1') {
+    return 'tickets supersede is owner-only; run from the owner terminal (not inside an agent session)';
+  }
+  return null;
+}
+
+const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
+
+async function supersedeStaleCommand(root, rest, flags) {
+  if (rest.length) return bad('tickets supersede does not take positional arguments');
+  const denied = supersedeOwnerRefusal();
+  if (denied) return out(denied, 1);
+  if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
+  const beforeMs = Date.parse(flags.before);
+  if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  let candidates;
+  try {
+    candidates = supersedeCandidates(ledger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
+  } catch (error) {
+    if (error.code === 'supersede-before') return out(error.message, 1);
+    throw error;
+  }
+  const apply = flags.yes === true && flags['dry-run'] !== true;
+  if (!apply) {
+    if (flags.json) return out(JSON.stringify(candidates));
+    const lines = candidates.map(supersedeRow);
+    lines.push(`${candidates.length} stale ticket(s) would be superseded`);
+    if (flags['dry-run'] !== true && flags.yes !== true) lines.push('Rerun with --yes to supersede these tickets.');
+    return out(lines.join('\n'));
+  }
+  try {
+    const result = await withLock(root, async () => {
+      const freshLedger = await readLedger(root);
+      if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+      const freshCandidates = supersedeCandidates(freshLedger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
+      if (!freshCandidates.length) return { count: 0, ids: [] };
+      return applySupersedeStale(root, { before: flags.before, stage: flags.stage });
+    });
+    if (!result.count) return out('no stale tickets to supersede');
+    await refreshPlan(root);
+    return out(`superseded ${result.count} stale ticket(s)`);
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    throw error;
+  }
+}
+
 // One-time migration for ledgers made before blockReason existed: a blocked ticket with no reason, no attempts, no retry note and
 // dependencies was blocked by its dependencies (its job was skipped). Marking it `deps` lets it unlock by itself; ready ones unlock now.
 async function markDepsCommand(root, ledger, ids, flags) {
@@ -3905,6 +3955,7 @@ async function setTicketStatus(root, rest, flags) {
 
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
+  if (rest[0] === 'supersede') return supersedeStaleCommand(root, rest.slice(1), flags);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['clear-note'] === true || flags['retry-note'] !== undefined) return retryNoteCommand(root, rest, flags);

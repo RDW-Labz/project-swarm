@@ -111,19 +111,29 @@ test('a persist failure is swallowed and does not block the next write', async (
   disk.fs.open = async (...args) => {
     if (fail) {
       fail = false;
-      throw new Error('injected write failure');
+      const err = new Error('injected write failure');
+      err.code = 'EACCES';
+      throw err;
     }
     return open(...args);
   };
-  const monitor = monitorWith(disk);
-  monitor.recordJobResult('lane', false, { jobId: 'failed' });
-  await monitor.flush();
-  monitor.recordJobResult('lane', true, { jobId: 'saved' });
-  const write = await disk.started(0);
-  write.release();
-  await monitor.stop();
-  assert.equal(disk.landed.length, 1);
-  assert.equal(disk.landed[0].lanes.lane.lastJobId, 'saved');
+  const logs = [];
+  const origError = console.error;
+  console.error = (...args) => logs.push(args.join(' '));
+  try {
+    const monitor = monitorWith(disk);
+    monitor.recordJobResult('lane', false, { jobId: 'failed' });
+    await monitor.flush();
+    monitor.recordJobResult('lane', true, { jobId: 'saved' });
+    const write = await disk.started(0);
+    write.release();
+    await monitor.stop();
+    assert.equal(disk.landed.length, 1);
+    assert.equal(disk.landed[0].lanes.lane.lastJobId, 'saved');
+    assert.equal(logs.filter(line => line.includes('state persist failed (EACCES)')).length, 1);
+  } finally {
+    console.error = origError;
+  }
 });
 
 test('stop drains queued writes and prevents writes after it resolves', async () => {

@@ -65,12 +65,14 @@ test('finding 3: worktree list failure keeps local head branch', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
+      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
           isCrossRepository: false,
+          title: 'Fix the widget',
+          body: '',
         }),
         stderr: '',
       },
@@ -143,12 +145,14 @@ test('finding 6: head ref segments encoded separately', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
+      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'release/1.0', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
           isCrossRepository: false,
+          title: 'Fix the widget',
+          body: '',
         }),
         stderr: '',
       },
@@ -192,12 +196,14 @@ test('finding 7: cross-repository PR skips remote delete', async () => {
     const key = [command, ...args].join(' ');
     const routes = {
       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
-      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
+      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
         code: 0,
         stdout: JSON.stringify({
           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
           isCrossRepository: true,
+          title: 'Fix the widget',
+          body: '',
         }),
         stderr: '',
       },

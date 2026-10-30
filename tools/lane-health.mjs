@@ -206,7 +206,7 @@ export function createLaneHealthMonitor({
       const code = error?.code ?? 'UNKNOWN';
       if (code === 'ENOENT' || persistErrorCodes.has(code)) return;
       persistErrorCodes.add(code);
-      console.error('[tools/lane-health.mjs] state persist failed');
+      console.error(`[tools/lane-health.mjs] state persist failed (${code})`);
     });
     return write;
   }

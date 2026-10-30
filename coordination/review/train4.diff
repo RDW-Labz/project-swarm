@@ -1,0 +1,2129 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5a822b5b..892f4fab 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## 1.167.28
++
++Release train 4: release-review merge gate, guarded-runner hardening, and owner-only bulk ticket supersede.
++- Merge gate: swarm merge refuses a release PR (title starts with a semver) unless its Reviews section has a passing verdict naming the current head commit (full or 7+ char prefix; last matching verdict wins; fail, blocker or missing refuses; non-release PRs unchanged);
++- Guarded runner: the watcher verifies the child's process start time and command line before SIGTERM/SIGKILL, so a reused pid is never signalled; old markers without identity restore without signalling; termSentAt is re-read and merged; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 seconds when the watcher is gone; a self-orphan still fails with 143;
++- Stress: test:stress runs each round in a detached process group and kills the whole group on timeout;
++- Lane health: persist failure logs include the error code;
++- Tickets: new owner-only swarm tickets supersede --before <date>. The dry-run lists every candidate (id, status, stage, last touch and its basis, title) and writes nothing; --yes applies one journaled bulk transition to the new terminal status superseded, only from proposed, todo, ready and blocked;
++- Version 1.167.28.
++
+ ## 1.167.27
+ 
+ Hotfix: the guarded runner identifies its child before it signals anything.
+diff --git a/README.md b/README.md
+index 0f9ac936..e765aebc 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.27 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.28 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.27 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.28 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/coordination/manifests/bump-1167-28.json b/coordination/manifests/bump-1167-28.json
+new file mode 100644
+index 00000000..63afdfd0
+--- /dev/null
++++ b/coordination/manifests/bump-1167-28.json
+@@ -0,0 +1,78 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "bump16728",
++      "agent": "auto",
++      "tier": "cheap",
++      "prompt": "Bump the version from 1.167.27 to 1.167.28. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.27 to 1.167.28. In README.md change every 1.167.27 pin (kickoff text, tag name) to 1.167.28. In these tests replace the 1.167.27 current-version pin with 1.167.28 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. Leave historical versions in those tests alone.\n\nIn CHANGELOG.md add a NEW top entry above ## 1.167.27 (keep every existing entry unchanged) exactly in this house style:\n\n## 1.167.28\n\nRelease train 4: release-review merge gate, guarded-runner hardening, and owner-only bulk ticket supersede.\n- Merge gate: swarm merge refuses a release PR (title starts with a semver) unless its Reviews section has a passing verdict naming the current head commit (full or 7+ char prefix; last matching verdict wins; fail, blocker or missing refuses; non-release PRs unchanged);\n- Guarded runner: the watcher verifies the child's process start time and command line before SIGTERM/SIGKILL, so a reused pid is never signalled; old markers without identity restore without signalling; termSentAt is re-read and merged; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 seconds when the watcher is gone; a self-orphan still fails with 143;\n- Stress: test:stress runs each round in a detached process group and kills the whole group on timeout;\n- Lane health: persist failure logs include the error code;\n- Tickets: new owner-only swarm tickets supersede --before <date>. The dry-run lists every candidate (id, status, stage, last touch and its basis, title) and writes nothing; --yes applies one journaled bulk transition to the new terminal status superseded, only from proposed, todo, ready and blocked;\n- Version 1.167.28.\n\nDo not touch any other file.",
++      "context": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "outputs": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "timeoutMs": 1500000,
++      "ignoreTests": [
++        "tests/acceptance-review-skip.test.mjs",
++        "tests/acceptance-review-worktree.test.mjs",
++        "tests/anthropic-lane.test.mjs",
++        "tests/api-workers.test.mjs",
++        "tests/cap-reroute.test.mjs",
++        "tests/codex-envelope.test.mjs",
++        "tests/commit-msg-manifest.test.mjs",
++        "tests/field-lessons-batch-aa-core.test.mjs",
++        "tests/field-lessons-batch-ai-context.test.mjs",
++        "tests/field-lessons-batch-ai-release.test.mjs",
++        "tests/field-lessons-batch-o.test.mjs",
++        "tests/field-lessons-batch-w.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/fixtures/make-practice-project.mjs",
++        "tests/git-hooks.test.mjs",
++        "tests/githook-push-range.test.mjs",
++        "tests/goal.test.mjs",
++        "tests/job-types.test.mjs",
++        "tests/kickoff.test.mjs",
++        "tests/kit-and-interview.test.mjs",
++        "tests/leads.test.mjs",
++        "tests/lessons120-ship.test.mjs",
++        "tests/local-lane-probe.test.mjs",
++        "tests/local-lane-review.test.mjs",
++        "tests/openrouter.test.mjs",
++        "tests/orchestrator-allow.test.mjs",
++        "tests/orchestrator-mode.test.mjs",
++        "tests/repo-map.test.mjs",
++        "tests/review-high-regressions.test.mjs",
++        "tests/router.test.mjs",
++        "tests/s13-blockers.test.mjs",
++        "tests/scope-loop-resume-review.test.mjs",
++        "tests/ship-125.test.mjs",
++        "tests/swarm-produced-hash.test.mjs",
++        "tests/ticket-context.test.mjs",
++        "tests/ticket-target-worktree.test.mjs",
++        "tests/update.test.mjs",
++        "tests/wave-prep-context.test.mjs",
++        "tests/wave-prep-robust.test.mjs"
++      ],
++      "ignoreTestsReason": "release bump; full suite runs before merge"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/review-train4.json b/coordination/manifests/review-train4.json
+new file mode 100644
+index 00000000..9562e0f3
+--- /dev/null
++++ b/coordination/manifests/review-train4.json
+@@ -0,0 +1,32 @@
++{
++  "version": 1,
++  "concurrency": 1,
++  "jobs": [
++    {
++      "id": "reviewtrain4",
++      "agent": "claude",
++      "model": "opus",
++      "tier": "expensive",
++      "tierReason": "owner rule: one Opus review of the combined release diff",
++      "prompt": "Review release train 4 of Project Swarm: branch swarm/train4 against main at 3df9b8bd (1.167.27). The combined code diff is in your context at coordination/review/train4.diff (25 files); the full workspace is present, so open any file you need.\n\nWhat changed:\n(1) MERGE GATE, tools/merge-guard.mjs: `swarm merge` now refuses a release PR (title starts with a semver) unless its `## Reviews` section contains a passing verdict that names the current head commit. The section is parsed; a line counts for the head only if it contains a 7-40 char hex token that prefixes headRefOid; the last matching verdict wins; fail/blocked/pending refuses; non-release PRs are unchanged. Focus: can a release PR bypass the gate (title shape, heading casing, text outside the section, a PASS that names another commit, a later FAIL being ignored, an unparseable body, a null head)? Does it refuse before any `gh pr merge` call? Is a non-release PR correctly exempt?\n(2) GUARDED RUNNER, tools/concurrency-guard.mjs: the watcher now verifies the recorded child process start time AND command line before SIGTERM/SIGKILL; old markers without identity restore without signalling; the SIGTERM path re-reads the marker before writing termSentAt; a SIGTERM-ignoring orphan is escalated to SIGKILL once after 30 s when the watcher is gone; a self-orphan still exits 143; pre-boot and EPERM behavior from 1.167.27 is unchanged. Focus: any path that can signal a reused or innocent pid, wedge the marker forever, restore the value while the orphan still runs, crash/hang the every-command path, or exit 0 without running.\n(3) STRESS RUNNER, tools/stress-tests.mjs: each round runs in a detached process group and the timeout kills the whole group; fail-fast and tails preserved.\n(4) LANE HEALTH, tools/lane-health.mjs: the once-per-code persist log now includes the code.\n(5) BULK SUPERSEDE, tools/tickets.mjs and tools/scope-commands.mjs: new terminal status `superseded` (moves only from proposed/todo/ready/blocked), and an owner-only `swarm tickets supersede --before <date> [--dry-run] [--yes] [--stage S] [--json]`. Last touch = max tickets.log event timestamp per id, else ledger.createdAt; the dry-run (also the default with no --yes) lists id, status, stage, last touch, basis and title and writes nothing; --yes re-reads under the wave lock, writes once, appends ONE supersede-stale log event, then refreshes the plan. Focus: can an agent session run it without SWARM_OWNER (owner-only bypass)? Can it supersede running/review/done/cancelled tickets, or a ticket not older than the cutoff? Any lost update or partial write? Does the ledger stay approved and the plan consistent? Does adding the status break ready/deliverable/build-plan logic?\n(6) Version 1.167.28 and the CHANGELOG entry.\n\nPass bar (owner): blockers only. Look for: a merge-gate bypass (wrong head, failed review still merging); money/key/secret exposure; data loss (ticket ledger, locks); an innocent process killed or a real orphan left running; a crash/hang on a normal path; a regression; a test weakened, skipped, retried or quarantined to hide a failure; an owner-only bypass; a bulk command writing without --yes or changing non-stale/active tickets. Everything else is a follow-up.\n\nWrite ONLY coordination/review/train4-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
++      "context": [
++        "coordination/review/train4.diff",
++        "tools/merge-guard.mjs",
++        "tests/merge-guard.test.mjs",
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/tickets.mjs",
++        "tests/tickets-supersede.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "package.json",
++        "CHANGELOG.md"
++      ],
++      "outputs": [
++        "coordination/review/train4-review.json"
++      ],
++      "resultFile": "coordination/review/train4-review.json",
++      "timeoutMs": 2700000
++    }
++  ]
++}
+diff --git a/coordination/manifests/t4-bulk-supersede.json b/coordination/manifests/t4-bulk-supersede.json
+new file mode 100644
+index 00000000..d1c3da2f
+--- /dev/null
++++ b/coordination/manifests/t4-bulk-supersede.json
+@@ -0,0 +1,156 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t4-bulk-supersede",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "expensive",
++      "tierReason": "owner-only bulk ledger state change; Opus review in train 4",
++      "sensitive": true,
++      "prompt": "Add an owner-only bulk supersede command for stale tickets, with a dry-run, to Project Swarm. Work in tools/scope-commands.mjs (CLI dispatch), tools/tickets.mjs (status model), and a new tests/tickets-supersede.test.mjs. Tests first for the new behavior, then implement.\n\nCommand shape: `swarm tickets supersede --before <date> [--dry-run] [--yes] [--stage S]`.\n- Owner-only: refuse with a clear message when the process is an agent session (`process.env.CLAUDECODE` or `process.env.CLAUDE_CODE_ENTRYPOINT` set) unless `process.env.SWARM_OWNER === '1'` (an explicit owner override for tests/automation). An owner terminal is allowed.\n- --before is required; parse it with Date.parse; refuse an unparseable date. Selection: tickets whose LAST TOUCH is strictly before --before, in the active statuses proposed, todo, ready and blocked only (never running, review, done, cancelled). Optional --stage narrows by stage.\n- Last touch: the maximum `at` timestamp among `.swarm/project/tickets.log` events that carry that ticket id (any event), falling back to the ledger's `createdAt` when a ticket has no event (show which basis was used per ticket in the dry-run).\n- Dry-run (and the default with no --yes): print one row per candidate: id, current status, stage, last-touch date, basis (log or ledger-created), title; then a count line; write NOTHING. Add `--json` support: an array of {id,status,stage,lastTouch,basis,title}. Without --yes or --dry-run, print the same list and 'Rerun with --yes to supersede these tickets.' with exit code 0? Use exit code 1 only for errors, 0 for the listing.\n- Apply with --yes: take the wave lock with the existing `withLock` helper, RE-READ the ledger inside the lock, recompute the candidate set, set each ticket status to the new terminal status `superseded`, write once with `writeLedger`, append ONE log event `{event:'supersede-stale', by:'owner', before, count, ids, source:'tickets-supersede', actor: ticketActor()}`, then `refreshPlan(root)`. Print the count. If the fresh set is empty, say so and write nothing.\n- Status model: add `superseded` to STATUSES; add it as a legal move from proposed, todo, ready and blocked; terminal like cancelled/done (no exits). Do not let running/review reach it. Keep every existing status behavior and validation intact.\n- Do not create a scope change order and do not touch the scope approval state; this is a ticket-ledger owner action, journaled in tickets.log.\n\nTests: create tests/tickets-supersede.test.mjs covering: dry-run lists and writes nothing (ledger and log unchanged); --yes only changes stale active tickets and leaves running/review/done/cancelled alone; log-based last touch vs ledger-created fallback; agent session refused without SWARM_OWNER, allowed with SWARM_OWNER=1; invalid/missing --before refused; superseded is terminal and counted in ledgerStats; one appendLog event with the count. Reuse the fixture/helpers style in tests/scope-commands.test.mjs (read it).\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/scope-commands.test.mjs tests/tickets-supersede.test.mjs -> all pass. Report exact commands and counts.",
++      "context": [
++        "tools/scope-commands.mjs",
++        "tools/tickets.mjs",
++        "tests/scope-commands.test.mjs"
++      ],
++      "outputs": [
++        "tools/scope-commands.mjs",
++        "tools/tickets.mjs",
++        "tests/tickets-supersede.test.mjs"
++      ],
++      "timeoutMs": 2400000,
++      "ignoreTests": [
++        "tests/_watch-fixture.mjs",
++        "tests/acceptance-review-worktree.test.mjs",
++        "tests/acceptance-sync.test.mjs",
++        "tests/auto-approve.test.mjs",
++        "tests/batch-a-eval.test.mjs",
++        "tests/batch-b-eval.test.mjs",
++        "tests/batch-c-eval.test.mjs",
++        "tests/board-accuracy-activity.test.mjs",
++        "tests/board-accuracy-card.test.mjs",
++        "tests/board-accuracy-page.test.mjs",
++        "tests/board-accuracy-untracked.test.mjs",
++        "tests/board-card-ui.test.mjs",
++        "tests/board-idle-ready.test.mjs",
++        "tests/board-inbox.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/board-worktree-own-stats.test.mjs",
++        "tests/budgets.test.mjs",
++        "tests/build-progress-atlas.test.mjs",
++        "tests/build-progress-ledgers.test.mjs",
++        "tests/build-progress-roadmap.test.mjs",
++        "tests/build-progress-untracked-filter.test.mjs",
++        "tests/build-progress.test.mjs",
++        "tests/burst-route.test.mjs",
++        "tests/burst-runner.test.mjs",
++        "tests/change-order-auto-split.test.mjs",
++        "tests/ci-queue.test.mjs",
++        "tests/client-report.test.mjs",
++        "tests/cluster-ledger-api.test.mjs",
++        "tests/command-center-lists.test.mjs",
++        "tests/day0.test.mjs",
++        "tests/dogfood-fixes.test.mjs",
++        "tests/errors.test.mjs",
++        "tests/fix-1167-12.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/fixtures/phase2/ledger-writer.mjs",
++        "tests/gallery-tickets.test.mjs",
++        "tests/gc.test.mjs",
++        "tests/guard-backup-fixes.test.mjs",
++        "tests/guard-backup-fixes2.test.mjs",
++        "tests/guard-backup-fixes4.test.mjs",
++        "tests/guard-backup-fixes5.test.mjs",
++        "tests/handoff.test.mjs",
++        "tests/helpers/board-accuracy-fixture.mjs",
++        "tests/human-progress.test.mjs",
++        "tests/job-sandbox-route.test.mjs",
++        "tests/kit-and-interview.test.mjs",
++        "tests/ledger-backup.test.mjs",
++        "tests/ledger-lease.test.mjs",
++        "tests/ledger-merge.test.mjs",
++        "tests/lesson-34-eval.test.mjs",
++        "tests/lesson-35-eval.test.mjs",
++        "tests/lesson-37-eval.test.mjs",
++        "tests/lesson-38-eval.test.mjs",
++        "tests/lesson-39-eval.test.mjs",
++        "tests/lesson-40-eval.test.mjs",
++        "tests/lessons-28-32-eval.test.mjs",
++        "tests/managers/r036-cli.test.mjs",
++        "tests/mark-deps.test.mjs",
++        "tests/orchestrator-lane.test.mjs",
++        "tests/phase2-ledger-multiprocess.test.mjs",
++        "tests/policy-commit-window.test.mjs",
++        "tests/practice-tooling.test.mjs",
++        "tests/queue-commands.test.mjs",
++        "tests/quotes.test.mjs",
++        "tests/review-recorder-lanes.test.mjs",
++        "tests/review-retry.test.mjs",
++        "tests/s13-live-bugs.test.mjs",
++        "tests/safety-commands.test.mjs",
++        "tests/scope-approve-managers.test.mjs",
++        "tests/scope-delete-tickets.test.mjs",
++        "tests/scope-gate-list.test.mjs",
++        "tests/scope-ingest-acceptance.test.mjs",
++        "tests/scope-ingest-owns-tests.test.mjs",
++        "tests/scope-ingest-paths.test.mjs",
++        "tests/scope-ingest-sensitive.test.mjs",
++        "tests/scope-ingest-waves.test.mjs",
++        "tests/scope-loop.test.mjs",
++        "tests/scope-ownership.test.mjs",
++        "tests/scope-root-files.test.mjs",
++        "tests/scope-set-guard.test.mjs",
++        "tests/scope-spec-gate.test.mjs",
++        "tests/scope-spec-no-runner.test.mjs",
++        "tests/scope-split-guards.test.mjs",
++        "tests/scope-split-lane-size.test.mjs",
++        "tests/scope-split-repair-loop.test.mjs",
++        "tests/scope-sync-delete.test.mjs",
++        "tests/scope-sync-replan.test.mjs",
++        "tests/split-auto-approve.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/split-quality.test.mjs",
++        "tests/split-repair-auto.test.mjs",
++        "tests/split-repair.test.mjs",
++        "tests/splitter-lesson-55.test.mjs",
++        "tests/state-backup.test.mjs",
++        "tests/state-guard.test.mjs",
++        "tests/swarm-watch-human-checklist-walkthrough.spec.mjs",
++        "tests/ticket-check-timeout.test.mjs",
++        "tests/ticket-id-blocks.test.mjs",
++        "tests/ticket-lane-risk.test.mjs",
++        "tests/ticket-owner-note.test.mjs",
++        "tests/ticket-paths-new-files.test.mjs",
++        "tests/ticket-paths-regression.test.mjs",
++        "tests/ticket-paths.test.mjs",
++        "tests/ticket-rename-type.test.mjs",
++        "tests/ticket-replan.test.mjs",
++        "tests/ticket-target-worktree.test.mjs",
++        "tests/tickets-delivered.test.mjs",
++        "tests/tickets.test.mjs",
++        "tests/time-auto.test.mjs",
++        "tests/train2-review-gaps.test.mjs",
++        "tests/ui-check.test.mjs",
++        "tests/verify-provenance.test.mjs",
++        "tests/watch-ui.test.mjs",
++        "tests/wave-prep-robust.test.mjs",
++        "tests/wiring.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused scope-commands and the new supersede tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t4-bulk-supersede",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/scope-commands.test.mjs",
++        "tests/tickets-supersede.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t4-guard-followups.json b/coordination/manifests/t4-guard-followups.json
+new file mode 100644
+index 00000000..b9c615d8
+--- /dev/null
++++ b/coordination/manifests/t4-guard-followups.json
+@@ -0,0 +1,51 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t4-guard-followups",
++      "agent": "codex",
++      "model": "gpt-6.1-sol",
++      "tier": "expensive",
++      "tierReason": "process-kill and lock-adjacent guard changes; Opus review in train 4",
++      "sensitive": true,
++      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\n\nTrain 4 guard follow-ups from the 1.167.27 delta review. Apply them in this order, tests first where behavior changes. Do not change unrelated behavior.\n\n1) WATCHER SIGKILL IDENTITY CHECK (first, another kill path). In tools/concurrency-guard.mjs watch(pid, configFile), the watcher currently reads marker.childPid and SIGTERMs it, waits, then SIGKILLs, with no identity check. Before any signal, verify the marker's recorded identity (childProcStart AND childCommand) matches the live child pid with the same ps probe introduced in 1.167.27. If the identity is missing, unreadable or mismatched, do NOT signal: treat it as not ours, restore the value and remove the marker. If it matches, keep the existing SIGTERM -> wait -> SIGKILL -> restore behavior. Add tests: a reused child pid (identity mismatch) is never signalled and the value is restored; a matching identity is still killed.\n\n2) termSentAt READ-MODIFY-WRITE RACE. In restoreIfStale, the SIGTERM path writes { ...marker, termSentAt } from the marker object read earlier. Re-read the marker immediately before the write and merge that fresh copy (keep every field; if termSentAt is already set, do not send SIGTERM again). Add a test where another writer sets a field between the first read and the write and it survives.\n\n3) UNSTUBBED SELF-EXIT TEST. The self-orphan test stubs the identity probe. Add a real test: spawn a node child that writes its own marker with childPid = process.pid and the identity values from the module's real probe for that pid, then calls restoreIfStale; assert exit 143, the clear stderr message, no command side effect, and the marker left in place. Also assert the marker records childProcStart and childCommand as non-empty strings in the runGuarded recording test.\n\n4) OLD MARKERS WITHOUT IDENTITY (upgrade-only). A marker written by a pre-1.167.27 version has childPid but no childProcStart/childCommand. It must restore the value without signalling or exiting (nobody can prove the pid is ours). Pin that with a test and a short comment.\n\n5) SIGKILL ESCALATION WHEN THE WATCHER IS GONE. If restoreIfStale finds termSentAt already set, the child is still alive and the identity matches, and termSentAt is older than a grace period (30 s), send SIGKILL once and persist killSentAt; never send a second SIGKILL. If the child dies, a later call restores. Add a test with a fake child that ignores SIGTERM and injected now/kill seams.\n\n6) STRESS RUNNER TIMEOUT MUST KILL THE PROCESS GROUP. tools/stress-tests.mjs currently uses spawnSync with a timeout, which kills only the direct node runner, not its test workers. Run the round with node:child_process spawn (detached: true), enforce the timeout with a kill of the process group (process.kill(-pid, 'SIGKILL')) plus the direct child, and report the round as failed with a clear 'timed out' line. Keep: fail-fast on the first failure, the tail output, STRESS_ROUNDS/STRESS_CONCURRENCY, and the exit codes. Add a focused test if practical (a fake hung command path via env), otherwise verify by hand with a one-round low-timeout run and report it.\n\n7) LANE-HEALTH LOG INCLUDES THE CODE. tools/lane-health.mjs logs '[tools/lane-health.mjs] state persist failed' once per code but omits the code. Include the code (fixed text + code, no file contents). Update/add the matching assertion in tests/lane-health-persist.test.mjs if it checks the message.\n\nKeep every existing test. Verify: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs tests/lane-health-core.test.mjs tests/lane-health-persist.test.mjs; plus STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress. Report the exact commands and counts.",
++      "context": [
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "tests/lane-health-persist.test.mjs",
++        "tools/busy-marker.mjs",
++        "tests/lane-health-core.test.mjs"
++      ],
++      "outputs": [
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "tests/lane-health-persist.test.mjs"
++      ],
++      "timeoutMs": 2700000,
++      "ignoreTests": [
++        "tests/s13-blockers.test.mjs",
++        "tests/self-manage-monitor.test.mjs",
++        "tests/split-module.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; the focused guard, stress and lane-health tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t4-guard-followups",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/concurrency-guard.test.mjs",
++        "tests/lane-health-core.test.mjs",
++        "tests/lane-health-persist.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t4-guard-tail.json b/coordination/manifests/t4-guard-tail.json
+new file mode 100644
+index 00000000..e4a5b6ce
+--- /dev/null
++++ b/coordination/manifests/t4-guard-tail.json
+@@ -0,0 +1,50 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t4-guard-tail",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "expensive",
++      "tierReason": "remaining process-kill and timeout follow-ups; Opus review in train 4",
++      "sensitive": true,
++      "prompt": "Finish the remaining train 4 guarded-runner follow-ups (5-7). The watcher identity check, termSentAt merge, real self-exit test and old-marker tests are already integrated; do not redo them. Tests first where practical.\n\n5) SIGKILL ESCALATION WHEN THE WATCHER IS GONE. In tools/concurrency-guard.mjs restoreIfStale: when marker.termSentAt exists, the child is still alive, the identity matches, and termSentAt is OLDER than a 30 second grace period, send SIGKILL once and persist killSentAt in the marker; never send a second SIGKILL (if killSentAt already exists, do nothing). If termSentAt is within the grace period, do nothing. Keep the SIGTERM path and the existing returns. Add tests with injected now/kill/identity seams: older-than-30s -> exactly one SIGKILL and killSentAt persisted; recent termSentAt -> no SIGKILL; a second call after killSentAt -> no repeat; if the child is gone, restore as today. Use the same fresh-marker re-read pattern as the termSentAt write.\n\n6) STRESS RUNNER TIMEOUT KILLS THE PROCESS GROUP. tools/stress-tests.mjs currently uses spawnSync with a timeout, which kills only the direct node runner. Replace the round execution with node:child_process spawn({ detached: true }), collect stdout/stderr with a bounded tail (keep at most 64 MB buffering like today), enforce a per-round timeout (default 15 minutes; allow STRESS_TIMEOUT_MS to override for testing), and on timeout kill the whole process group (process.kill(-child.pid, 'SIGKILL'), falling back to child.kill('SIGKILL') if the group kill throws) then report 'stress round i/N: FAIL (timed out after Xms)' and exit 1 after dumping the tails. Keep fail-fast, the round line, STRESS_ROUNDS/STRESS_CONCURRENCY, and the normal success path. Verify with STRESS_ROUNDS=1 STRESS_TIMEOUT_MS=50 npm run test:stress (must fail fast with the timed-out line and leave no orphan node processes) and then STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress (must pass).\n\n7) LANE-HEALTH LOG INCLUDES THE CODE. In tools/lane-health.mjs the once-per-code persist failure log omits the code. Include it in fixed text, e.g. '[tools/lane-health.mjs] state persist failed (CODE)', never file contents. Update the matching assertion in tests/lane-health-persist.test.mjs if it checks the message.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs tests/lane-health-core.test.mjs tests/lane-health-persist.test.mjs, plus the two stress commands above. Report exact commands and counts.",
++      "context": [
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "tests/lane-health-persist.test.mjs",
++        "tests/lane-health-core.test.mjs"
++      ],
++      "outputs": [
++        "tools/concurrency-guard.mjs",
++        "tests/concurrency-guard.test.mjs",
++        "tools/stress-tests.mjs",
++        "tools/lane-health.mjs",
++        "tests/lane-health-persist.test.mjs"
++      ],
++      "timeoutMs": 1800000,
++      "ignoreTests": [
++        "tests/s13-blockers.test.mjs",
++        "tests/self-manage-monitor.test.mjs",
++        "tests/split-module.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused guard/stress/lane-health tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t4-guard-tail",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/concurrency-guard.test.mjs",
++        "tests/lane-health-core.test.mjs",
++        "tests/lane-health-persist.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t4-review-gate.json b/coordination/manifests/t4-review-gate.json
+new file mode 100644
+index 00000000..60fea0ba
+--- /dev/null
++++ b/coordination/manifests/t4-review-gate.json
+@@ -0,0 +1,44 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t4-review-gate",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "expensive",
++      "tierReason": "merge-approval guard; gets an Opus review in train 4",
++      "sensitive": true,
++      "prompt": "Add a release-review gate to tools/merge-guard.mjs, used by `swarm merge PR`, and cover it in tests/merge-guard.test.mjs. This is a merge-approval guard: be precise and fail closed.\n\nRequirement (owner order): `swarm merge` must REFUSE a release PR unless its `## Reviews` section contains a PASSING verdict naming the CURRENT head commit (headRefOid). A release PR is a PR whose title starts with a semver, e.g. `1.167.26: ...` or `v1.168.0 - ...` (regex `^v?\\d+\\.\\d+\\.\\d+`). Non-release PRs are unchanged.\n\nImplementation:\n1. Add `title,body` to PR_FIELDS so runMerge fetches them from `gh pr view`.\n2. Add and export a pure helper, e.g. `releaseReviewGate({ title, body, headRefOid })`, returning `{ required, ok, reason }`. Behavior:\n   - required: false (ok: true) when the title does not start with a semver.\n   - Only the body's `## Reviews` section counts: find a line matching /^##\\s+Reviews\\s*$/i and take lines until the next /^##\\s/ heading. Text about reviews elsewhere (e.g. a Checks section) must not count.\n   - A verdict line counts for the current head only if it names the head commit: a hex token of 7 to 40 chars (case-insensitive) that is a prefix of headRefOid (or the full value). Ignore lines that name only another commit.\n   - A matching line is failing if it contains fail/failed/blocker (word, case-insensitive); passing if it contains pass/passed and no failing word. The last matching verdict line wins (so a later delta PASS can close an earlier fail).\n   - Result: no matching line -> `{required:true, ok:false, reason:'review-verdict-missing-for-head: <first 8 chars of headRefOid>'}`; last matching verdict failing or pending -> `review-verdict-failed-for-head: <sha8>`; last matching verdict passing -> ok.\n   - `headRefOid` missing/not a 7+ hex string -> refuse `review-verdict-missing-for-head: no-head` (a release PR cannot pass the gate without a head sha).\n3. In runMerge, after `assertMergeable`/required-checks and before any `gh pr merge`, add the gate result to the refusal path: if `required` and not ok, return status 'refused' with reasons (append the gate reason to the existing reasons list, or return it with the same shape as other refusals). It must refuse BEFORE the merge call, which must never run. Keep the existing refusal JSON shape and messages.\n\nTests (tests/merge-guard.test.mjs): keep every existing test. The shared fixture PR title must stay a NON-release title (e.g. 'Fix the widget') so existing runMerge tests still pass; add focused cases:\n- release title + Reviews section with `- Opus review: PASS for <full head sha>` -> merged (assert the merge call happened with --match-head-commit).\n- short 7-char head prefix + PASS -> merged; uppercase SHA -> merged.\n- PASS for a different commit -> refused with review-verdict-missing-for-head and no merge call.\n- FAIL (or 'blockers open') for the head -> refused with review-verdict-failed-for-head and no merge call.\n- no Reviews section -> refused; PASS only in a Checks section -> refused.\n- earlier FAIL for head then later delta PASS for the same head -> merged (last matching verdict wins).\n- non-release title with no Reviews section -> merged (gate not required).\n- missing headRefOid on a release PR -> refused.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/merge-guard.test.mjs -> all pass. Then node --import ./tests/_isolate-config.mjs --test tests/ship.test.mjs 2>/dev/null || true (report if absent). Report the exact commands and counts.",
++      "context": [
++        "tools/merge-guard.mjs",
++        "tests/merge-guard.test.mjs"
++      ],
++      "outputs": [
++        "tools/merge-guard.mjs",
++        "tests/merge-guard.test.mjs"
++      ],
++      "timeoutMs": 1800000,
++      "ignoreTests": [
++        "tests/fix-1167-12.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/guard-backup-fixes.test.mjs",
++        "tests/guard-backup-fixes4.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/state-guard.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; the focused merge-guard file runs here and the full suite runs before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t4-review-gate",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/merge-guard.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/package-lock.json b/package-lock.json
+index f23450e3..624bca9f 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.27",
++  "version": "1.167.28",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.27",
++      "version": "1.167.28",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index f173053d..5dd761fd 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.27",
++  "version": "1.167.28",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/concurrency-guard.test.mjs b/tests/concurrency-guard.test.mjs
+index 7835f271..5edce46d 100644
+--- a/tests/concurrency-guard.test.mjs
++++ b/tests/concurrency-guard.test.mjs
+@@ -12,7 +12,7 @@ import childProcess from 'node:child_process';
+ import { syncBuiltinESMExports } from 'node:module';
+ import { EventEmitter } from 'node:events';
+ import { fileURLToPath } from 'node:url';
+-import { apply, restore, restoreIfStale, runGuarded, markerPath, runWithConcurrency } from '../tools/concurrency-guard.mjs';
++import { apply, restore, restoreIfStale, runGuarded, markerPath, runWithConcurrency, defaultProcIdentity } from '../tools/concurrency-guard.mjs';
+ 
+ const SWARM = fileURLToPath(new URL('../tools/swarm.mjs', import.meta.url));
+ const sleep = ms => new Promise(r => setTimeout(r, ms));
+@@ -122,6 +122,10 @@ test('runGuarded records the child process start time and command line with its
+   assert.equal(marker.childPid, child.pid);
+   assert.equal(marker.childProcStart, 'recorded start');
+   assert.equal(marker.childCommand, 'recorded command');
++  for (const field of ['childProcStart', 'childCommand']) {
++    assert.equal(typeof marker[field], 'string');
++    assert.ok(marker[field].trim().length > 0);
++  }
+   assert.deepEqual(seen, [child.pid]);
+   assert.equal(f.read().machineConcurrency, 4);
+ });
+@@ -193,7 +197,10 @@ test('process: the wrapper killed outright (SIGKILL, a crash) is restored by the
+   const childPid = await (async () => { for (let i = 0; i < 100; i += 1) { try { const c = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).childPid; if (c) return c; } catch { /* not yet */ } await sleep(50); } return null; })();
+   assert.ok(childPid, 'the marker names the command\'s pid');
+   const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
+-  for (const field of ['childProcStart', 'childCommand']) assert.ok(Object.hasOwn(marker, field), `the marker records ${field}, including an unreadable identity`);
++  for (const field of ['childProcStart', 'childCommand']) {
++    assert.equal(typeof marker[field], 'string', `the real probe records ${field}`);
++    assert.ok(marker[field].trim().length > 0, `${field} is non-empty`);
++  }
+   process.kill(p.child.pid, 'SIGKILL');
+   await p.exited;
+   assert.ok(await until(() => { try { return f.read().machineConcurrency === 4; } catch { return false; } }, 30000), 'restored by the watcher');
+@@ -251,6 +258,43 @@ test('Ctrl-C: a command that ends on its own after the terminal signal gets no s
+ 
+ const GUARD = fileURLToPath(new URL('../tools/concurrency-guard.mjs', import.meta.url));
+ 
++for (const matches of [false, true]) {
++  test(`watcher: ${matches ? 'matching identity is terminated and killed' : 'reused child pid is never signalled'} before restore`, async t => {
++    const f = await fixture(t, { machineConcurrency: 16 });
++    const signals = path.join(f.dir, 'signals');
++    const holder = spawn(process.execPath, ['-e', `
++      const fs = require('node:fs');
++      process.on('SIGTERM', () => fs.appendFileSync(process.argv[1], 'SIGTERM\\n'));
++      console.log('ready');
++      setInterval(() => {}, 1000);
++    `, signals], { stdio: ['ignore', 'pipe', 'pipe'] });
++    t.after(() => { holder.kill('SIGKILL'); });
++    await new Promise(resolve => holder.stdout.once('data', resolve));
++    const ended = new Promise(resolve => holder.once('exit', (code, signal) => resolve({ code, signal })));
++    const identity = defaultProcIdentity(holder.pid);
++    if (matches) {
++      for (const field of ['start', 'command']) {
++        assert.equal(typeof identity[field], 'string', `the real ps probe must supply ${field}`);
++        assert.ok(identity[field].trim().length > 0);
++      }
++    }
++    const dead = spawnSync(process.execPath, ['-e', '']).pid;
++    fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: dead, childPid: holder.pid,
++      childProcStart: matches ? identity.start : 'a previous process', childCommand: identity.command }));
++    const watcher = spawn(process.execPath, [GUARD, '--watch', String(dead), f.file], { stdio: 'ignore', env: f.env });
++    t.after(() => { watcher.kill('SIGKILL'); });
++    assert.ok(await until(() => !fs.existsSync(markerPath(f.file)), 20000), 'watcher restored and removed marker');
++    assert.equal(f.read().machineConcurrency, 4);
++    if (matches) {
++      assert.deepEqual(await ended, { code: null, signal: 'SIGKILL' });
++      assert.equal(fs.readFileSync(signals, 'utf8'), 'SIGTERM\n');
++    } else {
++      assert.equal(fs.existsSync(signals), false);
++      assert.doesNotThrow(() => process.kill(holder.pid, 0));
++    }
++  });
++}
++
+ test('restoreIfStale: a stale marker naming this process as childPid exits before running and leaves the marker', async t => {
+   const f = await fixture(t);
+   const dead = spawnSync(process.execPath, ['-e', '']).pid;
+@@ -276,6 +320,31 @@ test('restoreIfStale: a stale marker naming this process as childPid exits befor
+   assert.equal(fs.existsSync(markerPath(f.file)), true);
+ });
+ 
++test('restoreIfStale: the real identity probe makes a self-orphan exit before any command side effect', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  const dead = spawnSync(process.execPath, ['-e', '']).pid;
++  const sideEffect = path.join(f.dir, 'command-ran');
++  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `
++    import fs from 'node:fs';
++    import { defaultProcIdentity, restoreIfStale, markerPath } from ${JSON.stringify(GUARD)};
++    const identity = defaultProcIdentity(process.pid);
++    fs.writeFileSync(markerPath(process.argv[1]), JSON.stringify({ previous: 4, set: 16,
++      pid: Number(process.argv[2]), childPid: process.pid, childProcStart: identity.start, childCommand: identity.command }));
++    restoreIfStale(process.argv[1]);
++    fs.writeFileSync(process.argv[3], 'ran command');
++  `, f.file, String(dead), sideEffect], { env: f.env, encoding: 'utf8' });
++  assert.equal(r.status, 143, r.stderr);
++  assert.match(r.stderr, /this process is the orphaned command of a dead guarded run; the command was NOT run/);
++  assert.match(r.stderr, /machineConcurrency is still raised and will be restored by the watcher or the next command/);
++  assert.equal(fs.existsSync(sideEffect), false);
++  assert.equal(f.read().machineConcurrency, 16);
++  const marker = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  for (const field of ['childProcStart', 'childCommand']) {
++    assert.equal(typeof marker[field], 'string');
++    assert.ok(marker[field].trim().length > 0);
++  }
++});
++
+ test('restoreIfStale: a stale marker with a live orphaned child sends SIGTERM once and does not restore', async t => {
+   const f = await fixture(t);
+   const dead = spawnSync(process.execPath, ['-e', '']).pid;
+@@ -353,7 +422,30 @@ test('restoreIfStale: an EPERM-alive child restores without signalling or exitin
+   assert.equal(fs.existsSync(markerPath(f.file)), false);
+ });
+ 
+-test('restoreIfStale: SIGTERM is persisted and never repeated, including after 30 seconds', async t => {
++for (const alreadySent of [false, true]) {
++  test(`restoreIfStale: a concurrent marker update survives and SIGTERM ${alreadySent ? 'is not repeated' : 'is persisted'}`, async t => {
++    const f = await fixture(t, { machineConcurrency: 16 });
++    const marker = { previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command' };
++    fs.writeFileSync(markerPath(f.file), JSON.stringify(marker));
++    const signals = [];
++    const result = restoreIfStale(f.file, {
++      isAlive: pid => pid === marker.childPid,
++      procIdentity: () => ({ start: 'same', command: 'same command' }),
++      now: () => 1000,
++      kill: (pid, signal) => {
++        if (signal === 0) fs.writeFileSync(markerPath(f.file), JSON.stringify({ ...marker, writerField: 'keep me', ...(alreadySent ? { termSentAt: 900 } : {}) }));
++        else signals.push([pid, signal]);
++      },
++    });
++    assert.deepEqual(result, { restored: false, reason: 'orphaned command still running' });
++    const saved = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++    assert.equal(saved.writerField, 'keep me');
++    assert.equal(saved.termSentAt, alreadySent ? 900 : 1000);
++    assert.deepEqual(signals, alreadySent ? [] : [[marker.childPid, 'SIGTERM']]);
++  });
++}
++
++test('restoreIfStale: SIGTERM is persisted and never repeated; SIGKILL follows after 30 seconds', async t => {
+   const f = await fixture(t, { machineConcurrency: 16 });
+   fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', at: new Date().toISOString() }));
+   const calls = [];
+@@ -366,17 +458,91 @@ test('restoreIfStale: SIGTERM is persisted and never repeated, including after 3
+     kill: (...args) => calls.push(args),
+     now: () => now,
+   };
+-  for (const elapsed of [0, 1000, 31_000]) {
+-    now = sentAt + elapsed;
+-    assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
+-    assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
+-    assert.equal(f.read().machineConcurrency, 16);
+-  }
+-  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM']]);
++  now = sentAt;
++  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
++  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
++  assert.equal(f.read().machineConcurrency, 16);
++
++  now = sentAt + 1000;
++  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
++  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).termSentAt, sentAt);
++  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, undefined);
++
++  now = sentAt + 31_000;
++  assert.deepEqual(restoreIfStale(f.file, deps), { restored: false, reason: 'orphaned command still running' });
++  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, sentAt + 31_000);
++
++  assert.deepEqual(calls.filter(([, signal]) => signal !== 0), [[123457, 'SIGTERM'], [123457, 'SIGKILL']]);
+   deps.isAlive = () => false;
+   assert.deepEqual(restoreIfStale(f.file, deps), { restored: true, to: 4 });
+ });
+ 
++test('restoreIfStale: termSentAt within grace sends no SIGKILL', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  const termSentAt = 5000;
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt, at: new Date().toISOString() }));
++  const signals = [];
++  restoreIfStale(f.file, {
++    isAlive: pid => pid === 123457,
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
++    now: () => termSentAt + 29_999,
++    kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
++  });
++  assert.deepEqual(signals, []);
++  assert.equal(JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8')).killSentAt, undefined);
++});
++
++test('restoreIfStale: after termSentAt grace exactly one SIGKILL and killSentAt persisted', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  const termSentAt = 10_000;
++  const marker = { previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt };
++  fs.writeFileSync(markerPath(f.file), JSON.stringify(marker));
++  const signals = [];
++  const killNow = termSentAt + 30_000;
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: pid => pid === 123457,
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
++    now: () => killNow,
++    kill: (pid, signal) => {
++      if (signal === 0) fs.writeFileSync(markerPath(f.file), JSON.stringify({ ...marker, writerField: 'keep me', termSentAt }));
++      else signals.push([pid, signal]);
++    },
++  }), { restored: false, reason: 'orphaned command still running' });
++  assert.deepEqual(signals, [[123457, 'SIGKILL']]);
++  const saved = JSON.parse(fs.readFileSync(markerPath(f.file), 'utf8'));
++  assert.equal(saved.writerField, 'keep me');
++  assert.equal(saved.killSentAt, killNow);
++});
++
++test('restoreIfStale: killSentAt present never sends a second SIGKILL', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt: 1, killSentAt: 99_999 }));
++  const signals = [];
++  for (let i = 0; i < 3; i += 1) {
++    restoreIfStale(f.file, {
++      isAlive: pid => pid === 123457,
++      procIdentity: () => ({ start: 'same', command: 'same command' }),
++      now: () => 200_000,
++      kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
++    });
++  }
++  assert.deepEqual(signals, []);
++});
++
++test('restoreIfStale: child gone after termSentAt restores without SIGKILL', async t => {
++  const f = await fixture(t, { machineConcurrency: 16 });
++  fs.writeFileSync(markerPath(f.file), JSON.stringify({ previous: 4, set: 16, pid: 123456, childPid: 123457, childProcStart: 'same', childCommand: 'same command', termSentAt: 1, at: new Date().toISOString() }));
++  const signals = [];
++  assert.deepEqual(restoreIfStale(f.file, {
++    isAlive: () => false,
++    procIdentity: () => ({ start: 'same', command: 'same command' }),
++    now: () => 100_000,
++    kill: (pid, signal) => { if (signal !== 0) signals.push([pid, signal]); },
++  }), { restored: true, to: 4 });
++  assert.deepEqual(signals, []);
++  assert.equal(f.read().machineConcurrency, 4);
++});
++
+ for (const childPid of [123457, process.pid]) {
+   for (const command of ['different command', null, '']) {
+     test(`restoreIfStale: matching start but mismatched or unreadable command (${command}) restores for child ${childPid}`, async t => {
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index 9ad941c8..29358ce8 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.27', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.28', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.27');
++  assert.equal(pkg.version, '1.167.28');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.27/);
+-  assert.match(readme, /Install from tag v1\.167\.27/);
++  assert.match(readme, /Use Project Swarm 1\.167\.28/);
++  assert.match(readme, /Install from tag v1\.167\.28/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.28\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index dce9c1a2..728ba14e 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.27', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.27 while 1.46.1 history remains', async () => {
++describe('release: 1.167.28', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.28 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.27');
+-    assert.equal(lock.version, '1.167.27');
+-    assert.equal(lock.packages[''].version, '1.167.27');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
++    assert.equal(pkg.version, '1.167.28');
++    assert.equal(lock.version, '1.167.28');
++    assert.equal(lock.packages[''].version, '1.167.28');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.28\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 1c13f462..96f3653c 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.27');
+-  assert.equal(lock.version, '1.167.27');
+-  assert.equal(lock.packages[''].version, '1.167.27');
++  assert.equal(pkg.version, '1.167.28');
++  assert.equal(lock.version, '1.167.28');
++  assert.equal(lock.packages[''].version, '1.167.28');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.27\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.28\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 466c869d..48a505a2 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.27 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.28 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.27');
+-  assert.equal(lock.version, '1.167.27');
+-  assert.equal(lock.packages[''].version, '1.167.27');
++  assert.equal(pkg.version, '1.167.28');
++  assert.equal(lock.version, '1.167.28');
++  assert.equal(lock.packages[''].version, '1.167.28');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.28\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.27',
++    'README.md': '1.167.28',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.27',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.27',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.27',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.27',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.28',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.28',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.28',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.28',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index 24a1b715..15c0272a 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.27', () => {
+-  test('package.json and package-lock.json are both at 1.167.27', async () => {
++describe('release: 1.167.28', () => {
++  test('package.json and package-lock.json are both at 1.167.28', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.27');
+-    assert.equal(lock.version, '1.167.27');
+-    assert.equal(lock.packages[''].version, '1.167.27');
++    assert.equal(pkg.version, '1.167.28');
++    assert.equal(lock.version, '1.167.28');
++    assert.equal(lock.packages[''].version, '1.167.28');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/guard-backup-fixes.test.mjs b/tests/guard-backup-fixes.test.mjs
+index 0361b43a..e892f063 100644
+--- a/tests/guard-backup-fixes.test.mjs
++++ b/tests/guard-backup-fixes.test.mjs
+@@ -65,12 +65,14 @@ test('finding 3: worktree list failure keeps local head branch', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 1 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: false,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+@@ -143,12 +145,14 @@ test('finding 6: head ref segments encoded separately', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 2 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'release/1.0', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: false,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+@@ -192,12 +196,14 @@ test('finding 7: cross-repository PR skips remote delete', async () => {
+     const key = [command, ...args].join(' ');
+     const routes = {
+       'gh repo view --repo o/r --json defaultBranchRef,nameWithOwner': { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'o/r' }), stderr: '' },
+-      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository': {
++      'gh pr view 3 --repo o/r --json state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body': {
+         code: 0,
+         stdout: JSON.stringify({
+           state: 'OPEN', mergeable: 'MERGEABLE', baseRefName: 'main', headRefName: 'feat', headRefOid: 'abc',
+           statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+           isCrossRepository: true,
++          title: 'Fix the widget',
++          body: '',
+         }),
+         stderr: '',
+       },
+diff --git a/tests/guard-backup-fixes4.test.mjs b/tests/guard-backup-fixes4.test.mjs
+index 56c89206..4fea34c0 100644
+--- a/tests/guard-backup-fixes4.test.mjs
++++ b/tests/guard-backup-fixes4.test.mjs
+@@ -10,7 +10,7 @@ import { holdsSwarmState, recordDeletion, deletionsLogFile } from '../tools/stat
+ import * as lb from '../tools/ledger-backup.mjs';
+ 
+ const PR_JSON =
+-  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+ 
+ function greenPrView(over = {}) {
+   return {
+@@ -21,6 +21,8 @@ function greenPrView(over = {}) {
+     headRefOid: 'abc',
+     statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+     isCrossRepository: false,
++    title: 'Fix the widget',
++    body: '',
+     ...over,
+   };
+ }
+diff --git a/tests/lane-health-persist.test.mjs b/tests/lane-health-persist.test.mjs
+index aaf7d8bd..93979b96 100644
+--- a/tests/lane-health-persist.test.mjs
++++ b/tests/lane-health-persist.test.mjs
+@@ -111,19 +111,29 @@ test('a persist failure is swallowed and does not block the next write', async (
+   disk.fs.open = async (...args) => {
+     if (fail) {
+       fail = false;
+-      throw new Error('injected write failure');
++      const err = new Error('injected write failure');
++      err.code = 'EACCES';
++      throw err;
+     }
+     return open(...args);
+   };
+-  const monitor = monitorWith(disk);
+-  monitor.recordJobResult('lane', false, { jobId: 'failed' });
+-  await monitor.flush();
+-  monitor.recordJobResult('lane', true, { jobId: 'saved' });
+-  const write = await disk.started(0);
+-  write.release();
+-  await monitor.stop();
+-  assert.equal(disk.landed.length, 1);
+-  assert.equal(disk.landed[0].lanes.lane.lastJobId, 'saved');
++  const logs = [];
++  const origError = console.error;
++  console.error = (...args) => logs.push(args.join(' '));
++  try {
++    const monitor = monitorWith(disk);
++    monitor.recordJobResult('lane', false, { jobId: 'failed' });
++    await monitor.flush();
++    monitor.recordJobResult('lane', true, { jobId: 'saved' });
++    const write = await disk.started(0);
++    write.release();
++    await monitor.stop();
++    assert.equal(disk.landed.length, 1);
++    assert.equal(disk.landed[0].lanes.lane.lastJobId, 'saved');
++    assert.equal(logs.filter(line => line.includes('state persist failed (EACCES)')).length, 1);
++  } finally {
++    console.error = origError;
++  }
+ });
+ 
+ test('stop drains queued writes and prevents writes after it resolves', async () => {
+diff --git a/tests/merge-guard.test.mjs b/tests/merge-guard.test.mjs
+index 4d170bdc..1e3d0b49 100644
+--- a/tests/merge-guard.test.mjs
++++ b/tests/merge-guard.test.mjs
+@@ -1,6 +1,12 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+-import { checkRollup, assertMergeable, parsePrArgument, runMerge } from '../tools/merge-guard.mjs';
++import {
++  checkRollup,
++  assertMergeable,
++  parsePrArgument,
++  releaseReviewGate,
++  runMerge,
++} from '../tools/merge-guard.mjs';
+ 
+ const T1 = '2024-01-01T00:00:00Z';
+ const T2 = '2024-01-02T00:00:00Z';
+@@ -68,16 +74,29 @@ function prListKey(baseBranch) {
+   return `gh pr list --repo octo/repo --base ${baseBranch} --state open --json number`;
+ }
+ 
+-const PR_VIEW_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++const PR_VIEW_FIELDS =
++  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+ 
+ const KEY = {
+   repo: 'gh repo view --json defaultBranchRef,nameWithOwner',
+-  view: `gh pr view 123 --json ${PR_VIEW_FIELDS}`,
+   after: 'gh pr view 123 --json state',
+-  merge: 'gh pr merge 123 --squash --delete-branch --match-head-commit abc123',
+-  mergeKeepLocal: 'gh pr merge 123 --squash --match-head-commit abc123',
+ };
+ 
++function prViewKey(fields = PR_VIEW_FIELDS) {
++  return `gh pr view 123 --json ${fields}`;
++}
++
++function mergeKey(headOid, deleteBranch = true) {
++  const parts = ['gh', 'pr', 'merge', '123', '--squash'];
++  if (deleteBranch) parts.push('--delete-branch');
++  parts.push('--match-head-commit', headOid);
++  return parts.join(' ');
++}
++
++const HEAD_SHA = 'abcdef1234567890abcdef1234567890abcdef12';
++const OTHER_SHA = '0000000000000000000000000000000000000001';
++const SHA8 = HEAD_SHA.slice(0, 8);
++
+ function prView(over = {}) {
+   return {
+     state: 'OPEN',
+@@ -87,18 +106,24 @@ function prView(over = {}) {
+     headRefOid: 'abc123',
+     statusCheckRollup: GREEN,
+     isCrossRepository: false,
++    title: 'Fix the widget',
++    body: '',
+     ...over,
+   };
+ }
+ 
+ function routes(o = {}, root = '/repo') {
+   const headBranch = o.view?.headRefName ?? 'feat';
++  const headOid = o.view?.headRefOid ?? 'abc123';
+   const deleteKey = remoteDeleteKey(headBranch);
++  const viewKey = prViewKey();
++  const mergeRoute = mergeKey(headOid, true);
++  const mergeKeepLocalRoute = mergeKey(headOid, false);
+   const base = {
+     [KEY.repo]: json({ defaultBranchRef: { name: 'main' }, nameWithOwner: 'octo/repo' }),
+-    [KEY.view]: o.rawView ?? json(prView(o.view)),
++    [viewKey]: o.rawView ?? json(prView(o.view)),
+     [prListKey(headBranch)]: json(o.list ?? []),
+-    [KEY.merge]: o.merge ?? ok(''),
++    [mergeRoute]: o.merge ?? ok(''),
+     [KEY.after]: json(o.after ?? { state: 'MERGED' }),
+     [PROTECTION]: o.protection ?? fail('404 Not Found'),
+     [REMOTE]: ok(o.remote ?? 'git@github.com:octo/repo.git\n'),
+@@ -111,8 +136,8 @@ function routes(o = {}, root = '/repo') {
+     'git pull --ff-only origin main': ok(''),
+   };
+   if (o.keepLocalHeadBranch) {
+-    base[KEY.mergeKeepLocal] = o.merge ?? ok('');
+-    delete base[KEY.merge];
++    base[mergeKeepLocalRoute] = o.merge ?? ok('');
++    delete base[mergeRoute];
+   }
+   return base;
+ }
+@@ -597,3 +622,203 @@ test('runMerge: remote delete encodes each ref segment separately', async () =>
+   assert.equal(deletes.length, 1);
+   assert.equal(deletes[0].args[3], `repos/octo/repo/git/refs/heads/${encodeRefPath(slashBranch)}`);
+ });
++
++function reviewsBody(lines) {
++  return `## Summary\n\nShip it.\n\n## Reviews\n\n${lines.join('\n')}\n`;
++}
++
++function reviewJsonBlock(obj) {
++  return '```json\n' + JSON.stringify(obj) + '\n```';
++}
++
++function releaseView(over = {}) {
++  return {
++    title: '1.0.0: x',
++    headRefOid: HEAD_SHA,
++    ...over,
++  };
++}
++
++// releaseReviewGate
++
++test('releaseReviewGate: non-release title is not required', () => {
++  const r = releaseReviewGate({ title: 'Fix the widget', body: '', headRefOid: HEAD_SHA });
++  assert.equal(r.required, false);
++  assert.equal(r.ok, true);
++});
++
++test('releaseReviewGate: semver titles require JSON verdict for head', () => {
++  for (const title of ['1.167.26: ship', 'v1.168.0 - ship']) {
++    const r = releaseReviewGate({ title, body: '', headRefOid: HEAD_SHA });
++    assert.equal(r.required, true);
++    assert.equal(r.ok, false);
++    assert.equal(r.reason, `review-verdict-missing-for-head: ${SHA8}`);
++  }
++});
++
++// runMerge release-review gate (JSON verdict only)
++
++test('runMerge: release PR merges when Reviews has JSON pass for head', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'merged');
++  assert.equal(mergeCalls(calls).length, 1);
++});
++
++test('runMerge: release PR refuses prose PASS for other sha with head in text (exploit)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([
++        `PASS for ${OTHER_SHA}; head pending`,
++        HEAD_SHA,
++      ]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses prose head fails review with head sha (exploit)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([`head fails review (lint passed)`, HEAD_SHA]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON pass for different 40-char sha', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: OTHER_SHA })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON pass with 7-char head field', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA.slice(0, 7) })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON verdict PASS uppercase', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([reviewJsonBlock({ verdict: 'PASS', head: HEAD_SHA })]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.some((x) => x.startsWith('review-verdict-failed-for-head:')));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses JSON pass outside Reviews section', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: `## Summary\n\n${reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })}\n`,
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR refuses malformed JSON block in Reviews', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody(['```json', '{not json', '```']),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR pass then fail for same head refuses (last wins fail)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([
++        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
++        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
++      ]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-failed-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: release PR fail then pass for same head merges (last wins pass)', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: reviewsBody([
++        reviewJsonBlock({ verdict: 'fail', head: HEAD_SHA }),
++        reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA }),
++      ]),
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'merged');
++  assert.equal(mergeCalls(calls).length, 1);
++});
++
++test('runMerge: release PR refuses with no Reviews section', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: releaseView({
++      body: '## Summary\n\nno reviews here\n',
++    }),
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes(`review-verdict-missing-for-head: ${SHA8}`));
++  assert.equal(mergeCalls(calls).length, 0);
++});
++
++test('runMerge: non-release title merges without Reviews section', async () => {
++  const { exec, calls } = makeExec(routes({
++    view: {
++      title: 'Fix the widget',
++      headRefOid: HEAD_SHA,
++      body: '',
++    },
++  }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'merged');
++  assert.equal(mergeCalls(calls).length, 1);
++});
++
++test('runMerge: release PR refuses when headRefOid missing', async () => {
++  const view = prView({
++    title: '1.0.0: x',
++    body: reviewsBody([reviewJsonBlock({ verdict: 'pass', head: HEAD_SHA })]),
++  });
++  delete view.headRefOid;
++  const { exec, calls } = makeExec(routes({ rawView: json(view) }));
++  const r = await runMerge('/repo', ['123'], { exec, sleep: SLEEP });
++  assert.equal(r.status, 'refused');
++  assert.ok(r.reasons.includes('review-verdict-missing-for-head: no-head'));
++  assert.equal(mergeCalls(calls).length, 0);
++});
+diff --git a/tests/state-guard.test.mjs b/tests/state-guard.test.mjs
+index f7c333d8..221690ec 100644
+--- a/tests/state-guard.test.mjs
++++ b/tests/state-guard.test.mjs
+@@ -157,7 +157,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+   await fs.mkdir(path.join(wtRoot, '.swarm', 'project'), { recursive: true });
+   await fs.writeFile(path.join(wtRoot, '.swarm', 'project', 'tickets.json'), '{}');
+   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\nworktree ${wtRoot}\nbranch refs/heads/feat\n\n`;
+-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+   const prViewBody = {
+     state: 'OPEN',
+     mergeable: 'MERGEABLE',
+@@ -166,6 +166,8 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+     headRefOid: 'abc123',
+     isCrossRepository: false,
+     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
++    title: 'Fix the widget',
++    body: '',
+   };
+   const calls = [];
+   const exec = async (command, args, opts = {}) => {
+@@ -204,7 +206,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
+ test('runMerge uses --delete-branch when no state-holding worktree on head branch', async t => {
+   const mergeRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-root2-'));
+   t.after(() => fs.rm(mergeRoot, { recursive: true, force: true }));
+-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+   const prViewBody = {
+     state: 'OPEN',
+     mergeable: 'MERGEABLE',
+@@ -213,6 +215,8 @@ test('runMerge uses --delete-branch when no state-holding worktree on head branc
+     headRefOid: 'abc123',
+     isCrossRepository: false,
+     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
++    title: 'Fix the widget',
++    body: '',
+   };
+   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\n`;
+   const calls = [];
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index 9c8192a9..5c40ea64 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.27');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.27\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.28');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.28\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tests/tickets-supersede.test.mjs b/tests/tickets-supersede.test.mjs
+new file mode 100644
+index 00000000..74a274f5
+--- /dev/null
++++ b/tests/tickets-supersede.test.mjs
+@@ -0,0 +1,214 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { runScopeCommand } from '../tools/scope-commands.mjs';
++import {
++  createLedger,
++  writeLedger,
++  readLedger,
++  ledgerPath,
++  logPath,
++  ledgerStats,
++  validateSetTransition,
++  STATUSES,
++} from '../tools/tickets.mjs';
++
++const scope = {
++  name: 'Demo',
++  version: 1,
++  hash: 'deadbeef',
++  stages: [{ id: 'S1', title: 'Core' }, { id: 'S2', title: 'Other' }],
++  requirements: [{ id: 'R-001', text: 'A thing' }],
++};
++
++function ticket(id, status, overrides = {}) {
++  return {
++    id,
++    title: `Title ${id}`,
++    type: 'build',
++    stage: 'S1',
++    scopeRefs: ['R-001'],
++    acceptance: ['ok'],
++    files: ['src/a.mjs'],
++    size: 'S',
++    risk: 'low',
++    status,
++    ...overrides,
++  };
++}
++
++async function projectWithLedger(tickets, { createdAt = '2020-06-01T00:00:00.000Z', logLines = [] } = {}) {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tickets-supersede-')));
++  await fs.mkdir(path.join(root, '.swarm', 'project'), { recursive: true });
++  const ledger = createLedger({ scope, tickets, now: Date.parse(createdAt) });
++  ledger.createdAt = createdAt;
++  await writeLedger(root, ledger);
++  if (logLines.length) {
++    await fs.writeFile(
++      logPath(root),
++      logLines.map(line => JSON.stringify(line)).join('\n') + '\n',
++      'utf8',
++    );
++  }
++  return root;
++}
++
++async function readLog(root) {
++  try {
++    const text = await fs.readFile(logPath(root), 'utf8');
++    return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
++  } catch (error) {
++    if (error.code === 'ENOENT') return [];
++    throw error;
++  }
++}
++
++test('supersede dry-run lists candidates and writes nothing', async () => {
++  const root = await projectWithLedger(
++    [
++      ticket('T-0001', 'todo'),
++      ticket('T-0002', 'running'),
++    ],
++    {
++      createdAt: '2020-01-01T00:00:00.000Z',
++      logLines: [{ at: '2020-02-01T00:00:00.000Z', event: 'transition', id: 'T-0001', from: 'proposed', to: 'todo' }],
++    },
++  );
++  const ledgerBefore = await fs.readFile(ledgerPath(root), 'utf8');
++  const result = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2021-01-01', '--dry-run']);
++  assert.equal(result.exitCode, 0);
++  assert.match(result.stdout, /T-0001/);
++  assert.match(result.stdout, /log/);
++  assert.match(result.stdout, /1 stale ticket/);
++  assert.doesNotMatch(result.stdout, /T-0002/);
++  assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), ledgerBefore);
++  assert.deepEqual(await readLog(root), [{ at: '2020-02-01T00:00:00.000Z', event: 'transition', id: 'T-0001', from: 'proposed', to: 'todo' }]);
++});
++
++test('supersede --yes only changes stale active tickets', async () => {
++  const root = await projectWithLedger(
++    [
++      ticket('T-0001', 'todo'),
++      ticket('T-0002', 'ready'),
++      ticket('T-0003', 'blocked'),
++      ticket('T-0004', 'proposed'),
++      ticket('T-0005', 'running'),
++      ticket('T-0006', 'review'),
++      ticket('T-0007', 'done'),
++      ticket('T-0008', 'cancelled'),
++    ],
++    { createdAt: '2019-01-01T00:00:00.000Z' },
++  );
++  const result = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--yes']);
++  assert.equal(result.exitCode, 0, result.stdout);
++  assert.match(result.stdout, /4 stale ticket/);
++  const ledger = await readLedger(root);
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0001').status, 'superseded');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0002').status, 'superseded');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0003').status, 'superseded');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0004').status, 'superseded');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0005').status, 'running');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0006').status, 'review');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0007').status, 'done');
++  assert.equal(ledger.tickets.find(t => t.id === 'T-0008').status, 'cancelled');
++});
++
++test('last touch from log vs ledger-created fallback', async () => {
++  const root = await projectWithLedger(
++    [
++      ticket('T-0001', 'todo'),
++      ticket('T-0002', 'todo'),
++      ticket('T-0003', 'todo'),
++    ],
++    {
++      createdAt: '2020-01-01T00:00:00.000Z',
++      logLines: [
++        { at: '2024-06-01T00:00:00.000Z', event: 'owner-note', id: 'T-0001' },
++        { at: '2019-05-01T00:00:00.000Z', event: 'transition', id: 'T-0002', from: 'proposed', to: 'todo' },
++      ],
++    },
++  );
++  const dry = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2021-01-01', '--json']);
++  assert.equal(dry.exitCode, 0);
++  const listed = JSON.parse(dry.stdout);
++  assert.deepEqual(listed.map(r => r.id).sort(), ['T-0002', 'T-0003']);
++  assert.equal(listed.find(r => r.id === 'T-0002').basis, 'log');
++  assert.equal(listed.find(r => r.id === 'T-0003').basis, 'ledger-created');
++  assert.doesNotMatch(dry.stdout, /T-0001/);
++});
++
++test('agent session refused unless SWARM_OWNER=1', async () => {
++  const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
++  const prevCode = process.env.CLAUDECODE;
++  const prevOwner = process.env.SWARM_OWNER;
++  process.env.CLAUDECODE = '1';
++  delete process.env.SWARM_OWNER;
++  try {
++    const denied = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01']);
++    assert.equal(denied.exitCode, 1);
++    assert.match(denied.stdout, /owner/i);
++    process.env.SWARM_OWNER = '1';
++    const allowed = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--dry-run']);
++    assert.equal(allowed.exitCode, 0);
++  } finally {
++    if (prevCode === undefined) delete process.env.CLAUDECODE;
++    else process.env.CLAUDECODE = prevCode;
++    if (prevOwner === undefined) delete process.env.SWARM_OWNER;
++    else process.env.SWARM_OWNER = prevOwner;
++  }
++});
++
++test('missing or invalid --before is refused', async () => {
++  const root = await projectWithLedger([ticket('T-0001', 'todo')]);
++  assert.equal((await runScopeCommand(root, 'tickets', ['supersede'])).exitCode, 1);
++  const bad = await runScopeCommand(root, 'tickets', ['supersede', '--before', 'not-a-date']);
++  assert.equal(bad.exitCode, 1);
++  assert.match(bad.stdout, /unparseable|before/i);
++});
++
++test('superseded is terminal and counted in ledgerStats', async () => {
++  assert.ok(STATUSES.includes('superseded'));
++  const root = await projectWithLedger([ticket('T-0001', 'todo'), ticket('T-0002', 'running')], { createdAt: '2020-01-01T00:00:00.000Z' });
++  await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--yes']);
++  const ledger = await readLedger(root);
++  const stats = ledgerStats(ledger);
++  assert.equal(stats.byStatus.superseded, 1);
++  assert.equal(validateSetTransition(ledger, 'T-0001', 'todo').ok, false);
++  assert.equal(validateSetTransition(ledger, 'T-0002', 'superseded').ok, false);
++});
++
++test('apply appends one supersede-stale log event with count', async () => {
++  const root = await projectWithLedger(
++    [ticket('T-0001', 'todo'), ticket('T-0002', 'ready')],
++    { createdAt: '2020-01-01T00:00:00.000Z' },
++  );
++  await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--yes']);
++  const events = await readLog(root);
++  const bulk = events.filter(e => e.event === 'supersede-stale');
++  assert.equal(bulk.length, 1);
++  assert.equal(bulk[0].count, 2);
++  assert.deepEqual(bulk[0].ids.sort(), ['T-0001', 'T-0002']);
++  assert.equal(bulk[0].by, 'owner');
++  assert.equal(bulk[0].source, 'tickets-supersede');
++});
++
++test('default listing prompts for --yes and leaves ledger unchanged', async () => {
++  const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
++  const before = await fs.readFile(ledgerPath(root), 'utf8');
++  const result = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01']);
++  assert.equal(result.exitCode, 0);
++  assert.match(result.stdout, /Rerun with --yes to supersede/);
++  assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), before);
++});
++
++test('--stage narrows candidates', async () => {
++  const root = await projectWithLedger(
++    [ticket('T-0001', 'todo', { stage: 'S1' }), ticket('T-0002', 'todo', { stage: 'S2' })],
++    { createdAt: '2020-01-01T00:00:00.000Z' },
++  );
++  const result = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--stage', 'S2', '--json']);
++  const listed = JSON.parse(result.stdout);
++  assert.deepEqual(listed.map(r => r.id), ['T-0002']);
++});
+diff --git a/tools/concurrency-guard.mjs b/tools/concurrency-guard.mjs
+index 21f4a901..928c40ca 100644
+--- a/tools/concurrency-guard.mjs
++++ b/tools/concurrency-guard.mjs
+@@ -15,6 +15,7 @@ const SELF = fileURLToPath(import.meta.url);
+ const SWARM = path.join(path.dirname(SELF), 'swarm.mjs');
+ export const GUARD_USAGE = 'Usage: swarm with-concurrency N -- COMMAND [ARGS...]   (N is 1 to 2048; the command is a swarm command; the old value is put back when it ends, whatever happens)';
+ const MIN = 1, MAX = 2048;
++const TERM_TO_KILL_GRACE_MS = 30_000;
+ 
+ export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
+ const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+@@ -28,7 +29,7 @@ function procField(pid, field) {
+   } catch { return null; }
+ }
+ const defaultProcStart = pid => procField(pid, 'lstart=');
+-const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
++export const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
+ function matchesChild(marker, procIdentity) {
+   if (![marker.childProcStart, marker.childCommand].every(value => typeof value === 'string' && value.trim().length > 0)) return false;
+   try {
+@@ -86,13 +87,29 @@ export function restoreIfStale(configFile, { isAlive = alive, procStart = defaul
+       process.stderr.write('[tools/concurrency-guard.mjs] this process is the orphaned command of a dead guarded run; the command was NOT run. machineConcurrency is still raised and will be restored by the watcher or the next command.\n');
+       return exit(143);
+     }
+-    // Send once only, even after 30 seconds: the watcher owns escalation and restore.
+-    if (marker.termSentAt === undefined) {
++    // Re-read before signalling and before writing: another restorer may have updated the marker.
++    const currentMarker = () => {
++      const fresh = readJson(markerPath(configFile));
++      return fresh?.pid === marker.pid && fresh?.childPid === child && fresh?.childProcStart === marker.childProcStart && fresh?.childCommand === marker.childCommand ? fresh : null;
++    };
++    const fresh = currentMarker();
++    if (!fresh) return null;
++    if (fresh.termSentAt === undefined) {
+       try { kill(child, 'SIGTERM'); } catch (error) {
+         if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
+         throw error;
+       }
+-      writeJsonAtomic(markerPath(configFile), { ...marker, termSentAt: now() });
++      const sentAt = now();
++      const latest = currentMarker();
++      if (latest && latest.termSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, termSentAt: sentAt });
++    } else if (fresh.killSentAt === undefined && now() - fresh.termSentAt >= TERM_TO_KILL_GRACE_MS) {
++      try { kill(child, 'SIGKILL'); } catch (error) {
++        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
++        throw error;
++      }
++      const sentAt = now();
++      const latest = currentMarker();
++      if (latest && latest.killSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, killSentAt: sentAt });
+     }
+     return { restored: false, reason: 'orphaned command still running' };
+   } catch { return null; }
+@@ -126,10 +143,10 @@ function watch(pid, configFile) {
+       if (marker && marker.pid === pid) {
+         // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
+         const child = marker.childPid;
+-        if (Number.isInteger(child) && child > 0 && alive(child)) {
++        if (Number.isInteger(child) && child > 0 && alive(child) && matchesChild(marker, defaultProcIdentity)) {
+           termChildOnce(child);
+           for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
+-          if (alive(child)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
++          if (alive(child) && matchesChild(marker, defaultProcIdentity)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
+         }
+         restore(configFile);
+       }
+diff --git a/tools/lane-health.mjs b/tools/lane-health.mjs
+index 4ebd736e..af9467ba 100644
+--- a/tools/lane-health.mjs
++++ b/tools/lane-health.mjs
+@@ -206,7 +206,7 @@ export function createLaneHealthMonitor({
+       const code = error?.code ?? 'UNKNOWN';
+       if (code === 'ENOENT' || persistErrorCodes.has(code)) return;
+       persistErrorCodes.add(code);
+-      console.error('[tools/lane-health.mjs] state persist failed');
++      console.error(`[tools/lane-health.mjs] state persist failed (${code})`);
+     });
+     return write;
+   }
+diff --git a/tools/merge-guard.mjs b/tools/merge-guard.mjs
+index ae444880..4b8a1601 100644
+--- a/tools/merge-guard.mjs
++++ b/tools/merge-guard.mjs
+@@ -9,7 +9,95 @@ import os from 'node:os';
+ const execFileP = promisify(execFile);
+ const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
+ const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+-const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
++const PR_FIELDS =
++  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
++const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
++const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
++const ANY_HEADING_RE = /^##\s/;
++const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
++const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
++const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
++
++function extractReviewsSectionText(body) {
++  const reviewLines = [];
++  let inReviews = false;
++  for (const line of String(body ?? '').split('\n')) {
++    if (REVIEWS_HEADING_RE.test(line)) {
++      inReviews = true;
++      continue;
++    }
++    if (inReviews && ANY_HEADING_RE.test(line)) break;
++    if (inReviews) reviewLines.push(line);
++  }
++  return reviewLines.join('\n');
++}
++
++function collectJsonFenceContents(reviewsText) {
++  const blocks = [];
++  const lines = String(reviewsText ?? '').split('\n');
++  for (let i = 0; i < lines.length; i++) {
++    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
++    i++;
++    const contentLines = [];
++    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
++      contentLines.push(lines[i]);
++      i++;
++    }
++    blocks.push(contentLines.join('\n'));
++  }
++  return blocks;
++}
++
++function blockNamesHead(block, headLower) {
++  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
++  return block.head.toLowerCase() === headLower;
++}
++
++export function releaseReviewGate({ title, body, headRefOid }) {
++  const t = String(title ?? '');
++  if (!RELEASE_TITLE_RE.test(t)) {
++    return { required: false, ok: true };
++  }
++  const head = String(headRefOid ?? '');
++  if (!HEAD_SHA40_RE.test(head)) {
++    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
++  }
++  const headLower = head.toLowerCase();
++  const sha8 = headLower.slice(0, 8);
++
++  const reviewsText = extractReviewsSectionText(body);
++  const rawBlocks = collectJsonFenceContents(reviewsText);
++  const parsedBlocks = [];
++  for (const raw of rawBlocks) {
++    let block;
++    try {
++      block = JSON.parse(raw);
++    } catch {
++      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
++    }
++    if (!isObj(block)) {
++      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
++    }
++    parsedBlocks.push(block);
++  }
++
++  let lastVerdictForHead = null;
++  for (const block of parsedBlocks) {
++    if (!blockNamesHead(block, headLower)) continue;
++    const v = block.verdict;
++    if (v === 'pass') lastVerdictForHead = 'pass';
++    else if (v === 'fail') lastVerdictForHead = 'fail';
++    else lastVerdictForHead = 'other';
++  }
++
++  if (lastVerdictForHead === null) {
++    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
++  }
++  if (lastVerdictForHead === 'pass') {
++    return { required: true, ok: true };
++  }
++  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
++}
+ 
+ async function realExec(command, args, { cwd } = {}) {
+   try {
+@@ -274,6 +362,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
+ 
+   const reasons = [...verdict.reasons];
+   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
++  const reviewGate = releaseReviewGate({
++    title: view.title,
++    body: view.body,
++    headRefOid: view.headRefOid,
++  });
++  if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
+   const checks = {
+     failing: rollup.failing,
+     pending: [...rollup.pending, ...missing],
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index cc3700a2..3cd5d123 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
+ import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
+ import readline from 'node:readline';
+ import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText } from './scope.mjs';
+-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
++import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS, readTicketLog, supersedeCandidates, applySupersedeStale } from './tickets.mjs';
+ import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
+ import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
+ import { isSecretLooking } from './ignored-artifacts.mjs';
+@@ -129,7 +129,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
+ const MAX_STAGE_TICKETS = 2000;
+ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+ const LOCK_STALE_MS = 10 * 60 * 1000;
+-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
++const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs', '--before']);
+ const execFileAsync = promisify(execFile);
+ const fail = (code, message) => Object.assign(new Error(message), { code });
+ 
+@@ -3426,6 +3426,56 @@ async function refreshPlan(root) {
+ 
+ const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
+ 
++function supersedeOwnerRefusal() {
++  if ((process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) && process.env.SWARM_OWNER !== '1') {
++    return 'tickets supersede is owner-only; run from the owner terminal (not inside an agent session)';
++  }
++  return null;
++}
++
++const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
++
++async function supersedeStaleCommand(root, rest, flags) {
++  if (rest.length) return bad('tickets supersede does not take positional arguments');
++  const denied = supersedeOwnerRefusal();
++  if (denied) return out(denied, 1);
++  if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
++  const beforeMs = Date.parse(flags.before);
++  if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
++  const ledger = await readLedger(root);
++  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
++  let candidates;
++  try {
++    candidates = supersedeCandidates(ledger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
++  } catch (error) {
++    if (error.code === 'supersede-before') return out(error.message, 1);
++    throw error;
++  }
++  const apply = flags.yes === true && flags['dry-run'] !== true;
++  if (!apply) {
++    if (flags.json) return out(JSON.stringify(candidates));
++    const lines = candidates.map(supersedeRow);
++    lines.push(`${candidates.length} stale ticket(s) would be superseded`);
++    if (flags['dry-run'] !== true && flags.yes !== true) lines.push('Rerun with --yes to supersede these tickets.');
++    return out(lines.join('\n'));
++  }
++  try {
++    const result = await withLock(root, async () => {
++      const freshLedger = await readLedger(root);
++      if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
++      const freshCandidates = supersedeCandidates(freshLedger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
++      if (!freshCandidates.length) return { count: 0, ids: [] };
++      return applySupersedeStale(root, { before: flags.before, stage: flags.stage });
++    });
++    if (!result.count) return out('no stale tickets to supersede');
++    await refreshPlan(root);
++    return out(`superseded ${result.count} stale ticket(s)`);
++  } catch (error) {
++    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
++    throw error;
++  }
++}
++
+ // One-time migration for ledgers made before blockReason existed: a blocked ticket with no reason, no attempts, no retry note and
+ // dependencies was blocked by its dependencies (its job was skipped). Marking it `deps` lets it unlock by itself; ready ones unlock now.
+ async function markDepsCommand(root, ledger, ids, flags) {
+@@ -3905,6 +3955,7 @@ async function setTicketStatus(root, rest, flags) {
+ 
+ export async function runTicketsCommand(root, args) {
+   const { flags, rest } = parseArgs(args);
++  if (rest[0] === 'supersede') return supersedeStaleCommand(root, rest.slice(1), flags);
+   const ledger = await readLedger(root);
+   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+   if (flags['clear-note'] === true || flags['retry-note'] !== undefined) return retryNoteCommand(root, rest, flags);
+diff --git a/tools/stress-tests.mjs b/tools/stress-tests.mjs
+index af6ca4ce..d74df424 100644
+--- a/tools/stress-tests.mjs
++++ b/tools/stress-tests.mjs
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: Apache-2.0
+-import { spawnSync } from 'node:child_process';
++import { spawn } from 'node:child_process';
+ import path from 'node:path';
+ import { fileURLToPath } from 'node:url';
+ 
+@@ -18,6 +18,9 @@ const TEST_FILES = [
+ 
+ const rounds = Math.max(1, parseInt(process.env.STRESS_ROUNDS ?? '5', 10) || 5);
+ const concurrency = Math.max(1, parseInt(process.env.STRESS_CONCURRENCY ?? '8', 10) || 8);
++const timeoutMs = Math.max(1, parseInt(process.env.STRESS_TIMEOUT_MS ?? String(15 * 60 * 1000), 10) || 15 * 60 * 1000);
++
++const MAX_BUFFER = 64 * 1024 * 1024;
+ 
+ function tailLines(text, max = 200) {
+   const lines = String(text ?? '').split('\n');
+@@ -25,22 +28,71 @@ function tailLines(text, max = 200) {
+   return lines.slice(-max).join('\n');
+ }
+ 
++function runRound() {
++  return new Promise(resolve => {
++    const child = spawn(
++      process.execPath,
++      [
++        '--import',
++        path.join(repoRoot, 'tests/_isolate-config.mjs'),
++        '--test',
++        '--test-timeout=600000',
++        `--test-concurrency=${concurrency}`,
++        ...TEST_FILES,
++      ],
++      { cwd: repoRoot, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
++    );
++
++    let stdoutBuf = Buffer.alloc(0);
++    let stderrBuf = Buffer.alloc(0);
++    const appendBounded = (prev, chunk) => {
++      const next = Buffer.concat([prev, chunk]);
++      if (next.length <= MAX_BUFFER) return next;
++      return next.subarray(next.length - MAX_BUFFER);
++    };
++    child.stdout.on('data', chunk => { stdoutBuf = appendBounded(stdoutBuf, chunk); });
++    child.stderr.on('data', chunk => { stderrBuf = appendBounded(stderrBuf, chunk); });
++
++    let settled = false;
++    const finish = (result) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      resolve(result);
++    };
++
++    const timer = setTimeout(() => {
++      try { process.kill(-child.pid, 'SIGKILL'); } catch {
++        try { child.kill('SIGKILL'); } catch { /* gone */ }
++      }
++      finish({ ok: false, timedOut: true, stdout: stdoutBuf.toString('utf8'), stderr: stderrBuf.toString('utf8'), ms: timeoutMs });
++    }, timeoutMs);
++    timer.unref?.();
++
++    child.on('error', error => finish({ ok: false, timedOut: false, stdout: stdoutBuf.toString('utf8'), stderr: stderrBuf.toString('utf8'), error, ms: null }));
++    child.on('exit', (code, signal) => {
++      finish({ ok: code === 0, timedOut: false, stdout: stdoutBuf.toString('utf8'), stderr: stderrBuf.toString('utf8'), code, signal, ms: null });
++    });
++  });
++}
++
+ for (let i = 1; i <= rounds; i++) {
+   const start = Date.now();
+-  const result = spawnSync(
+-    process.execPath,
+-    [
+-      '--import',
+-      path.join(repoRoot, 'tests/_isolate-config.mjs'),
+-      '--test',
+-      '--test-timeout=600000',
+-      `--test-concurrency=${concurrency}`,
+-      ...TEST_FILES,
+-    ],
+-    { cwd: repoRoot, encoding: 'utf8', env: process.env, maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60 * 1000, killSignal: 'SIGKILL' },
+-  );
+-  const ms = Date.now() - start;
+-  const ok = !result.error && result.status === 0;
++  const result = await runRound();
++  const ms = result.ms ?? Date.now() - start;
++  if (result.timedOut) {
++    console.log(`stress round ${i}/${rounds}: FAIL (timed out after ${ms}ms)`);
++    if (result.stdout) {
++      console.error('--- stdout (tail) ---');
++      console.error(tailLines(result.stdout));
++    }
++    if (result.stderr) {
++      console.error('--- stderr (tail) ---');
++      console.error(tailLines(result.stderr));
++    }
++    process.exit(1);
++  }
++  const ok = result.ok;
+   console.log(`stress round ${i}/${rounds} (concurrency ${concurrency}): ${ok ? 'pass' : 'fail'} (${ms} ms)`);
+   if (!ok) {
+     if (result.stdout) {
+diff --git a/tools/tickets.mjs b/tools/tickets.mjs
+index 72a61ac1..9200fd9f 100644
+--- a/tools/tickets.mjs
++++ b/tools/tickets.mjs
+@@ -18,7 +18,8 @@ import { backupLedger } from './ledger-backup.mjs';
+ // Tickets made from outside text (a gallery comment, a production error) are proposals: no worker runs one until the owner approves it.
+ export const PROPOSAL_ORIGINS = ['comment', 'error', 'handoff'];
+ export const unapprovedProposal = t => PROPOSAL_ORIGINS.includes(t?.origin) && t.approvedBy !== 'owner';
+-export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled'];
++export const STATUSES = ['proposed', 'todo', 'ready', 'running', 'review', 'done', 'blocked', 'cancelled', 'superseded'];
++export const SUPERSEDE_ELIGIBLE = ['proposed', 'todo', 'ready', 'blocked'];
+ export const DELIVERABLE_STATUSES = ['todo', 'ready', 'blocked', 'running'];
+ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'rename', 'design', 'contract', 'human'];
+ const RISKS = ['low', 'medium', 'high'];
+@@ -43,14 +44,15 @@ const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
+ const SECRET_NAMES = ['.project-swarm.json', '.env'];
+ // A proposed ticket (made from a gallery comment) is not part of the plan: no worker runs it and the approval hash ignores it until the owner approves it (swarm tickets ID --approve).
+ const MOVES = {
+-  proposed: ['todo', 'cancelled'],
+-  todo: ['ready', 'blocked', 'cancelled'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
+-  ready: ['running', 'blocked', 'cancelled'],
++  proposed: ['todo', 'cancelled', 'superseded'],
++  todo: ['ready', 'blocked', 'cancelled', 'superseded'],  // a human ticket may also go todo -> done (see HUMAN_MOVES)
++  ready: ['running', 'blocked', 'cancelled', 'superseded'],
+   running: ['review', 'ready', 'blocked', 'cancelled'],
+   review: ['done', 'running', 'blocked', 'cancelled'],
+-  blocked: ['ready', 'cancelled'],
++  blocked: ['ready', 'cancelled', 'superseded'],
+   done: [],
+   cancelled: [],
++  superseded: [],
+ };
+ 
+ // Day 0 and other human tickets are done by a person, at any time.
+@@ -68,7 +70,7 @@ export function validateSetTransition(ledger, id, to) {
+   if (!STATUSES.includes(to)) return { ok: false, message: `status must be one of: ${STATUSES.join(', ')}` };
+   const ticket = ledger?.tickets?.find(t => t.id === id);
+   if (!ticket) return { ok: false, message: `no ticket ${id}` };
+-  if (ticket.status === 'proposed' && to !== 'cancelled') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
++  if (ticket.status === 'proposed' && to !== 'cancelled' && to !== 'superseded') return { ok: false, message: `${id} is proposed: approve it with swarm tickets ${id} --approve (or cancel it with --set cancelled)` };
+   if (!legalMoves(ticket).includes(to)) return { ok: false, message: `${id}: ${ticket.status} -> ${to} is not allowed; legal next statuses: ${legalMoves(ticket).join(', ') || 'none'}` };
+   if (unapprovedProposal(ticket) && ['todo', 'ready', 'running'].includes(to)) return { ok: false, message: `${id} came from outside text (a gallery comment, a production error or a handoff check); the owner approves it with swarm tickets ${id} --approve` };
+   if (to === 'ready') {
+@@ -306,6 +308,86 @@ export async function appendLog(root, event) {
+   }
+ }
+ 
++export async function readTicketLog(root) {
++  try {
++    const text = await fs.readFile(logPath(root), 'utf8');
++    return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
++  } catch (error) {
++    if (error.code === 'ENOENT') return [];
++    throw error;
++  }
++}
++
++export function lastTouchForTickets(ledger, logEvents) {
++  const fromLog = new Map();
++  for (const ev of logEvents) {
++    if (typeof ev.id !== 'string') continue;
++    const ms = Date.parse(ev.at ?? '');
++    if (Number.isNaN(ms)) continue;
++    const prev = fromLog.get(ev.id);
++    if (!prev || ms > prev.ms) fromLog.set(ev.id, { ms, at: ev.at, basis: 'log' });
++  }
++  const ledgerMs = Date.parse(ledger?.createdAt ?? '');
++  const fallbackMs = Number.isNaN(ledgerMs) ? 0 : ledgerMs;
++  const fallbackAt = ledger?.createdAt ?? '';
++  return ticket => {
++    const hit = fromLog.get(ticket.id);
++    if (hit) return hit;
++    return { ms: fallbackMs, at: fallbackAt, basis: 'ledger-created' };
++  };
++}
++
++export function supersedeCandidates(ledger, logEvents, { before, stage } = {}) {
++  const beforeMs = Date.parse(before);
++  if (Number.isNaN(beforeMs)) throw fail('supersede-before', `unparseable --before date: ${before}`);
++  const touch = lastTouchForTickets(ledger, logEvents);
++  const out = [];
++  for (const t of ledger?.tickets ?? []) {
++    if (!SUPERSEDE_ELIGIBLE.includes(t.status)) continue;
++    if (stage !== undefined && stage !== null && t.stage !== stage) continue;
++    const lt = touch(t);
++    if (lt.ms >= beforeMs) continue;
++    out.push({
++      id: t.id,
++      status: t.status,
++      stage: t.stage,
++      lastTouch: lt.at,
++      basis: lt.basis,
++      title: t.title,
++    });
++  }
++  out.sort(byId);
++  return out;
++}
++
++export async function applySupersedeStale(root, { before, stage, now = Date.now() } = {}) {
++  const logEvents = await readTicketLog(root);
++  const ledger = await readLedger(root);
++  if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
++  const candidates = supersedeCandidates(ledger, logEvents, { before, stage });
++  if (!candidates.length) return { count: 0, ids: [] };
++  const ids = candidates.map(c => c.id);
++  for (const id of ids) {
++    const ticket = ledger.tickets.find(t => t.id === id);
++    if (!ticket || !SUPERSEDE_ELIGIBLE.includes(ticket.status)) continue;
++    ticket.status = 'superseded';
++    delete ticket.blockReason;
++    delete ticket.holdQuestion;
++  }
++  ledger.updatedAt = new Date(now).toISOString();
++  await writeLedger(root, ledger);
++  await appendLog(root, {
++    event: 'supersede-stale',
++    by: 'owner',
++    before,
++    count: ids.length,
++    ids,
++    source: 'tickets-supersede',
++    actor: ticketActor(),
++  });
++  return { count: ids.length, ids };
++}
++
+ export function createLedger({ scope, stageTargets, tickets = [], now = Date.now() } = {}) {
+   const seen = new Set();
+   for (const t of tickets) {
+@@ -538,7 +620,7 @@ export function readyTickets(tickets) {
+ }
+ 
+ export function wavesOf(tickets) {
+-  const active = tickets.filter(t => t.status !== 'cancelled');
++  const active = tickets.filter(t => t.status !== 'cancelled' && t.status !== 'superseded');
+   const ids = new Set(active.map(t => t.id));
+   const placed = new Set();
+   const waves = [];
+@@ -583,7 +665,7 @@ export function ledgerStats(ledger) {
+     byStage[key].total++;
+     if (t.status === 'done') byStage[key].done++;
+   }
+-  const live = tickets.filter(t => !['cancelled', 'proposed'].includes(t.status));
++  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
+   const percentDone = live.length ? Math.round(100 * live.filter(t => t.status === 'done').length / live.length) : 0;
+   let coveragePct = null;
+   if (Array.isArray(ledger?.requirements)) {

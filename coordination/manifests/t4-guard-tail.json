@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t4-guard-tail",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "expensive",
+      "tierReason": "remaining process-kill and timeout follow-ups; Opus review in train 4",
+      "sensitive": true,
+      "prompt": "Finish the remaining train 4 guarded-runner follow-ups (5-7). The watcher identity check, termSentAt merge, real self-exit test and old-marker tests are already integrated; do not redo them. Tests first where practical.\n\n5) SIGKILL ESCALATION WHEN THE WATCHER IS GONE. In tools/concurrency-guard.mjs restoreIfStale: when marker.termSentAt exists, the child is still alive, the identity matches, and termSentAt is OLDER than a 30 second grace period, send SIGKILL once and persist killSentAt in the marker; never send a second SIGKILL (if killSentAt already exists, do nothing). If termSentAt is within the grace period, do nothing. Keep the SIGTERM path and the existing returns. Add tests with injected now/kill/identity seams: older-than-30s -> exactly one SIGKILL and killSentAt persisted; recent termSentAt -> no SIGKILL; a second call after killSentAt -> no repeat; if the child is gone, restore as today. Use the same fresh-marker re-read pattern as the termSentAt write.\n\n6) STRESS RUNNER TIMEOUT KILLS THE PROCESS GROUP. tools/stress-tests.mjs currently uses spawnSync with a timeout, which kills only the direct node runner. Replace the round execution with node:child_process spawn({ detached: true }), collect stdout/stderr with a bounded tail (keep at most 64 MB buffering like today), enforce a per-round timeout (default 15 minutes; allow STRESS_TIMEOUT_MS to override for testing), and on timeout kill the whole process group (process.kill(-child.pid, 'SIGKILL'), falling back to child.kill('SIGKILL') if the group kill throws) then report 'stress round i/N: FAIL (timed out after Xms)' and exit 1 after dumping the tails. Keep fail-fast, the round line, STRESS_ROUNDS/STRESS_CONCURRENCY, and the normal success path. Verify with STRESS_ROUNDS=1 STRESS_TIMEOUT_MS=50 npm run test:stress (must fail fast with the timed-out line and leave no orphan node processes) and then STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress (must pass).\n\n7) LANE-HEALTH LOG INCLUDES THE CODE. In tools/lane-health.mjs the once-per-code persist failure log omits the code. Include it in fixed text, e.g. '[tools/lane-health.mjs] state persist failed (CODE)', never file contents. Update the matching assertion in tests/lane-health-persist.test.mjs if it checks the message.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs tests/lane-health-core.test.mjs tests/lane-health-persist.test.mjs, plus the two stress commands above. Report exact commands and counts.",
+      "context": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs",
+        "tests/lane-health-persist.test.mjs",
+        "tests/lane-health-core.test.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs",
+        "tools/lane-health.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused guard/stress/lane-health tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t4-guard-tail",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-health-persist.test.mjs"
+      ]
+    }
+  ]
+}
