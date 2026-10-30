@@ -671,7 +671,7 @@ export function renderHive(host, snapshot, deps) {
   tabCockpit.setAttribute('data-tour', 'cockpit');
   tabs.appendChild(tabCockpit);
   const tabClassic = h(doc, 'a', 'hive-tab', 'Classic');
-  tabClassic.href = `/${win.location?.search || ''}`;
+  tabClassic.href = `/classic${win.location?.search || ''}`;
   tabs.appendChild(tabClassic);
   const searchBtn = h(doc, 'button', 'hive-tabbtn');
   searchBtn.type = 'button';

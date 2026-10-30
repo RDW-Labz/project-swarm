@@ -155,6 +155,12 @@ function makeElement(tag, rect = { width: 120, height: 44, left: 0, top: 0 }) {
     get() { return classList.toString(); },
     set(v) { classList.add(...String(v).split(/\s+/).filter(Boolean)); },
   });
+  if (String(tag).toLowerCase() === 'a') {
+    Object.defineProperty(node, 'href', {
+      get() { return node.attributes.href ?? ''; },
+      set(v) { node.attributes.href = String(v); },
+    });
+  }
   return node;
 }
 
@@ -283,6 +289,9 @@ test('Hive shows four labelled counters, one card per project with its ledger nu
   const { host, handle, opened } = await mount(dom, snapshot);
 
   assert.ok(host.querySelector('.hive-shell'));
+  const classicLink = host.querySelectorAll('a.hive-tab').find((a) => a.textContent === 'Classic');
+  assert.ok(classicLink, 'Classic tab link');
+  assert.equal(classicLink.href, '/classic');
   assert.deepEqual(counter(host, 'projects').text, '2');
   assert.equal(counter(host, 'projects').source, 'stats.projectsTotal');
   assert.equal(counter(host, 'agents').text, '4', 'agents from stats.agentsLive');

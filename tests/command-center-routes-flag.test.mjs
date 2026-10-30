@@ -147,18 +147,26 @@ test('command center routes are absent when the flag is off', async () => {
     const home = await request({ port: off.port, reqPath: `/?${off.pageQuery()}` });
     assert.equal(home.status, 200);
     assert.equal(home.body, BOARD_MARK);
+
+    const classicDenied = await request({ port: off.port, reqPath: '/classic' });
+    assert.equal(classicDenied.status, 403);
+    const classic = await request({ port: off.port, reqPath: `/classic?${off.pageQuery()}` });
+    assert.equal(classic.status, 200);
+    assert.equal(classic.body, BOARD_MARK);
   } finally {
     await off.dispose();
   }
 });
 
-test('command center routes are absent when env and option leave the flag unset', async () => {
-  const off = await startWatchServer({ env: {} });
+test('command center routes are on by default when env and option leave the flag unset', async () => {
+  const on = await startWatchServer({ env: {} });
   try {
-    await expectSameAsUnknown(off.port, '/command-center');
-    await expectSameAsUnknown(off.port, '/api/command-center', off.watchAuth);
+    const api = await request({ port: on.port, reqPath: '/api/command-center', headers: on.watchAuth });
+    assert.equal(api.status, 200);
+    const root = await request({ port: on.port, reqPath: `/?${on.pageQuery()}` });
+    assert.match(root.body, /command-center-boot\.js/);
   } finally {
-    await off.dispose();
+    await on.dispose();
   }
 });
 
@@ -166,13 +174,23 @@ test('command center HTML and JSON when the flag is on', async () => {
   const on = await startWatchServer({ commandCenter: true });
   try {
     const deniedPage = await request({ port: on.port, reqPath: '/command-center' });
-    const deniedClassic = await request({ port: on.port, reqPath: '/' });
-    assert.equal(deniedPage.status, deniedClassic.status);
-    assert.equal(deniedPage.body, deniedClassic.body);
+    const deniedRoot = await request({ port: on.port, reqPath: '/' });
+    assert.equal(deniedPage.status, deniedRoot.status);
+    assert.equal(deniedPage.body, deniedRoot.body);
 
     const hive = await request({ port: on.port, reqPath: `/command-center?${on.pageQuery()}` });
     assert.equal(hive.status, 200);
     assert.match(hive.body, /command-center-boot\.js/);
+
+    const dashboardRoot = await request({ port: on.port, reqPath: `/?${on.pageQuery()}` });
+    assert.equal(dashboardRoot.status, 200);
+    assert.match(dashboardRoot.body, /command-center-boot\.js/);
+
+    const classicDenied = await request({ port: on.port, reqPath: '/classic' });
+    assert.equal(classicDenied.status, 403);
+    const classic = await request({ port: on.port, reqPath: `/classic?${on.pageQuery()}` });
+    assert.equal(classic.status, 200);
+    assert.equal(classic.body, BOARD_MARK);
 
     const deniedApi = await request({ port: on.port, reqPath: '/api/command-center' });
     assert.equal(deniedApi.status, 403);
@@ -257,10 +275,6 @@ test('classic board routes stay the same with the flag on or off', async () => {
   const on = await startWatchServer({ commandCenter: true });
   try {
     for (const ctx of [off, on]) {
-      const home = await request({ port: ctx.port, reqPath: `/?${ctx.pageQuery()}` });
-      assert.equal(home.status, 200);
-      assert.equal(home.body, BOARD_MARK);
-
       const projectDenied = await request({ port: ctx.port, reqPath: '/project' });
       assert.equal(projectDenied.status, 403);
       const project = await request({ port: ctx.port, reqPath: `/project?${ctx.pageQuery()}` });
@@ -275,8 +289,14 @@ test('classic board routes stay the same with the flag on or off', async () => {
     }
 
     const offHome = await request({ port: off.port, reqPath: `/?${off.pageQuery()}` });
-    const onHome = await request({ port: on.port, reqPath: `/?${on.pageQuery()}` });
-    assert.equal(offHome.body, onHome.body);
+    assert.equal(offHome.body, BOARD_MARK);
+    const offClassic = await request({ port: off.port, reqPath: `/classic?${off.pageQuery()}` });
+    assert.equal(offClassic.body, BOARD_MARK);
+
+    const onRoot = await request({ port: on.port, reqPath: `/?${on.pageQuery()}` });
+    assert.match(onRoot.body, /command-center-boot\.js/);
+    const onClassic = await request({ port: on.port, reqPath: `/classic?${on.pageQuery()}` });
+    assert.equal(onClassic.body, BOARD_MARK);
   } finally {
     await off.dispose();
     await on.dispose();

@@ -695,8 +695,8 @@ export function createWatchServer(opts) {
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter && !isCommandCenterApi) return sendText(res, method, 404, 'not found');
-    const isHtmlPage = (pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
+    if (pathname !== '/' && pathname !== '/classic' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter && !isCommandCenterApi) return sendText(res, method, 404, 'not found');
+    const isHtmlPage = (pathname === '/' || pathname === '/classic' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
     const cookieName = `swarm_watch_${port}`;
@@ -712,7 +712,11 @@ export function createWatchServer(opts) {
     const pageHeaders = queryOk ? {
       'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
     } : {};
-    if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
+    if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
+    if (pathname === '/') {
+      if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
+      return sendAsset(res, method, indexName, pageHeaders);
+    }
     if (isCommandCenter) return sendAsset(res, method, commandCenterPage, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
