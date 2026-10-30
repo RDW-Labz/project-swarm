@@ -22,26 +22,75 @@ const timeoutMs = Math.max(1, parseInt(process.env.STRESS_TIMEOUT_MS ?? String(1
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 
+/** @type {import('node:child_process').ChildProcess | null} */
+let activeRoundChild = null;
+let activeRoundIndex = 0;
+
+function roundChildEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('NODE_TEST')) delete env[key];
+  }
+  return env;
+}
+
+function roundSpawnSpec() {
+  const override = process.env.STRESS_TEST_COMMAND;
+  if (override) {
+    const argv = JSON.parse(override);
+    if (!Array.isArray(argv) || argv.length === 0) {
+      throw new Error('STRESS_TEST_COMMAND must be a non-empty JSON array');
+    }
+    return { command: argv[0], args: argv.slice(1) };
+  }
+  return {
+    command: process.execPath,
+    args: [
+      '--import',
+      path.join(repoRoot, 'tests/_isolate-config.mjs'),
+      '--test',
+      '--test-timeout=600000',
+      `--test-concurrency=${concurrency}`,
+      ...TEST_FILES,
+    ],
+  };
+}
+
+function killRoundProcessGroup(child) {
+  try { process.kill(-child.pid, 'SIGKILL'); } catch {
+    try { child.kill('SIGKILL'); } catch { /* gone */ }
+  }
+}
+
+function onRunnerSignal(signal) {
+  const exitCode = signal === 'SIGINT' ? 130 : 143;
+  if (!activeRoundChild) {
+    process.exit(exitCode);
+  }
+  console.log(`stress round ${activeRoundIndex}/${rounds}: interrupted by ${signal}; killed the round process group`);
+  killRoundProcessGroup(activeRoundChild);
+  process.exit(exitCode);
+}
+
+process.on('SIGINT', () => onRunnerSignal('SIGINT'));
+process.on('SIGTERM', () => onRunnerSignal('SIGTERM'));
+
 function tailLines(text, max = 200) {
   const lines = String(text ?? '').split('\n');
   if (lines.length <= max) return lines.join('\n');
   return lines.slice(-max).join('\n');
 }
 
-function runRound() {
+function runRound(roundIndex) {
   return new Promise(resolve => {
+    const { command, args } = roundSpawnSpec();
     const child = spawn(
-      process.execPath,
-      [
-        '--import',
-        path.join(repoRoot, 'tests/_isolate-config.mjs'),
-        '--test',
-        '--test-timeout=600000',
-        `--test-concurrency=${concurrency}`,
-        ...TEST_FILES,
-      ],
-      { cwd: repoRoot, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+      command,
+      args,
+      { cwd: repoRoot, env: roundChildEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
+    activeRoundChild = child;
+    activeRoundIndex = roundIndex;
 
     let stdoutBuf = Buffer.alloc(0);
     let stderrBuf = Buffer.alloc(0);
@@ -58,13 +107,12 @@ function runRound() {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (activeRoundChild === child) activeRoundChild = null;
       resolve(result);
     };
 
     const timer = setTimeout(() => {
-      try { process.kill(-child.pid, 'SIGKILL'); } catch {
-        try { child.kill('SIGKILL'); } catch { /* gone */ }
-      }
+      killRoundProcessGroup(child);
       finish({ ok: false, timedOut: true, stdout: stdoutBuf.toString('utf8'), stderr: stderrBuf.toString('utf8'), ms: timeoutMs });
     }, timeoutMs);
     timer.unref?.();
@@ -78,7 +126,7 @@ function runRound() {
 
 for (let i = 1; i <= rounds; i++) {
   const start = Date.now();
-  const result = await runRound();
+  const result = await runRound(i);
   const ms = result.ms ?? Date.now() - start;
   if (result.timedOut) {
     console.log(`stress round ${i}/${rounds}: FAIL (timed out after ${ms}ms)`);
