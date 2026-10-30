@@ -37,9 +37,19 @@ function matchesChild(marker, procIdentity) {
     return marker.childProcStart === identity?.start && marker.childCommand === identity?.command;
   } catch { return false; }
 }
-function termChildOnce(childPid) {
-  if (!Number.isInteger(childPid) || childPid <= 0 || !alive(childPid)) return;
-  try { process.kill(childPid, 'SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
+function signalChild(childPid, signal, { childPgid, kill = process.kill, child } = {}) {
+  if (!Number.isInteger(childPid) || childPid <= 0) return child?.kill(signal);
+  // Only markers from detached children authorize a group signal. Legacy markers
+  // retain their pid-only behavior; never trust an unrelated pgid in a marker.
+  if (childPgid === childPid) {
+    try { return kill(-childPid, signal); } catch (error) {
+      if (error?.code !== 'ESRCH' && error?.code !== 'EPERM') throw error;
+    }
+  }
+  try { return kill(childPid, signal); } catch (error) {
+    if (child && (error?.code === 'ESRCH' || error?.code === 'EPERM')) return child.kill(signal);
+    throw error;
+  }
 }
 
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
@@ -90,12 +100,12 @@ export function restoreIfStale(configFile, { isAlive = alive, procStart = defaul
     // Re-read before signalling and before writing: another restorer may have updated the marker.
     const currentMarker = () => {
       const fresh = readJson(markerPath(configFile));
-      return fresh?.pid === marker.pid && fresh?.childPid === child && fresh?.childProcStart === marker.childProcStart && fresh?.childCommand === marker.childCommand ? fresh : null;
+      return fresh?.pid === marker.pid && fresh?.childPid === child && fresh?.childPgid === marker.childPgid && fresh?.childProcStart === marker.childProcStart && fresh?.childCommand === marker.childCommand ? fresh : null;
     };
     const fresh = currentMarker();
     if (!fresh) return null;
     if (fresh.termSentAt === undefined) {
-      try { kill(child, 'SIGTERM'); } catch (error) {
+      try { signalChild(child, 'SIGTERM', { childPgid: fresh.childPgid, kill }); } catch (error) {
         if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
         throw error;
       }
@@ -103,7 +113,7 @@ export function restoreIfStale(configFile, { isAlive = alive, procStart = defaul
       const latest = currentMarker();
       if (latest && latest.termSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, termSentAt: sentAt });
     } else if (fresh.killSentAt === undefined && now() - fresh.termSentAt >= TERM_TO_KILL_GRACE_MS) {
-      try { kill(child, 'SIGKILL'); } catch (error) {
+      try { signalChild(child, 'SIGKILL', { childPgid: fresh.childPgid, kill }); } catch (error) {
         if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
         throw error;
       }
@@ -144,9 +154,9 @@ function watch(pid, configFile) {
         // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
         const child = marker.childPid;
         if (Number.isInteger(child) && child > 0 && alive(child) && matchesChild(marker, defaultProcIdentity)) {
-          termChildOnce(child);
+          try { signalChild(child, 'SIGTERM', { childPgid: marker.childPgid }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
           for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
-          if (alive(child) && matchesChild(marker, defaultProcIdentity)) { try { process.kill(child, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
+          if (alive(child) && matchesChild(marker, defaultProcIdentity)) { try { signalChild(child, 'SIGKILL', { childPgid: marker.childPgid }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
         }
         restore(configFile);
       }
@@ -161,21 +171,22 @@ function noteChild(configFile, pid, childPid, procIdentity = defaultProcIdentity
     const marker = readJson(markerPath(configFile));
     if (marker?.pid === pid) {
       const identity = procIdentity(childPid);
-      writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childProcStart: identity?.start ?? null, childCommand: identity?.command ?? null });
+      writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childPgid: childPid, childProcStart: identity?.start ?? null, childCommand: identity?.command ?? null });
     }
   } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
 }
 
 /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
-export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart) }) {
+export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, kill = process.kill, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart) }) {
   // The signal handlers go in BEFORE the value changes: a Ctrl-C in the moment between writing the value and starting the command must still reach the restore below
   // (without a handler the wrapper would die on the spot and leave the value to the watcher a few hundred milliseconds later).
   let child = null;
   let pending = null;
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  // Ctrl-C at a terminal reaches the whole foreground group, the command included: it gets a moment to end on its own before the signal is passed on (it would get SIGINT twice).
+  // The detached command is outside the terminal's foreground group. Keep the
+  // 200 ms grace for it to finish, then forward Ctrl-C to its entire group.
   let childExited = false;
-  const passOn = sig => { try { if (!childExited) child?.kill(sig); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] passOn signal to child:', error?.message ?? error); } };
+  const passOn = sig => { try { if (child && !childExited) signalChild(child.pid, sig, { childPgid: child.pid, kill, child }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] passOn signal to child:', error?.message ?? error); } };
   const handlers = signals.map(sig => [sig, () => { pending = pending ?? sig; if (!child) return; if (sig === 'SIGTERM') passOn(sig); else setTimeout(() => passOn(sig), 200).unref(); }]);
   for (const [sig, h] of handlers) process.on(sig, h);
   const dropHandlers = () => { for (const [sig, h] of handlers) process.off(sig, h); };
@@ -191,11 +202,11 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   let code;
   if (pending) code = codes[pending];
   else {
-    child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+    child = spawnImpl(process.execPath, [SWARM, ...args], { detached: true, stdio, env });
     child.on('exit', () => { childExited = true; });
     noteChild(configFile, process.pid, child.pid, procIdentity);
     // A signal that arrived while the command was starting is passed on now.
-    if (pending) { try { child.kill(pending); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] pass pending signal to child:', error?.message ?? error); } }
+    if (pending) passOn(pending);
     code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
   }
   dropHandlers();

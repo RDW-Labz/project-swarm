@@ -13,9 +13,19 @@ import {
   renderCockpitTicketList,
   renderStackSummaryTiles,
   renderReadyEmptyState,
+  renderTicketColumn,
+  renderWorkerCards,
   layoutSummaryTileElement,
   boxesOverlap,
   queueVisibleJobs,
+  cockpitColumns,
+  workerCards,
+  recentDone,
+  shortTitle,
+  agoText,
+  ticketState,
+  stageColour,
+  STAGE_COLOURS,
 } from '../tools/watch-assets/cockpit-lists.js';
 import {
   renderRunStream,
@@ -205,7 +215,7 @@ test('summary tiles keep numeral, label, and footnote boxes disjoint at narrow v
     label: 'Engines with a very long category label that should ellipsize',
     value: '999999',
     footnote: 'peak concurrent workers in the last hour',
-    variant: 'engines',
+    color: '#4d7cff',
   }]);
   const tiles = host.querySelectorAll('.cockpit-metric-tile');
   assert.equal(tiles.length, 1);
@@ -237,4 +247,121 @@ test('run stream item body uses wrap-friendly CSS not ellipsis truncation', () =
   assert.notEqual(style.textOverflow, 'ellipsis');
   assert.notEqual(style.overflow, 'hidden');
   assert.notEqual(style.maxHeight, '0px');
+});
+
+const T = (id, status, extra = {}) => ({ id, title: `Title ${id}`, status, ...extra });
+const readyStub = tickets => tickets.filter(t => t.status === 'ready');
+
+test('cockpit columns: running then ready on the left; review, blocked, newest done on the right', () => {
+  const ledger = {
+    tickets: [
+      T('T-1', 'done', { doneAt: '2026-10-26T10:00:00Z' }),
+      T('T-2', 'done', { doneAt: '2026-10-26T12:00:00Z' }),
+      T('T-3', 'done', { doneAt: '2026-10-26T11:00:00Z' }),
+      T('T-4', 'running'),
+      T('T-5', 'ready'),
+      T('T-6', 'ready'),
+      T('T-7', 'review'),
+      T('T-8', 'blocked'),
+      T('T-9', 'todo'),
+      T('T-10', 'cancelled'),
+      T('T-11', 'proposed'),
+    ],
+  };
+  const cols = cockpitColumns(ledger, readyStub);
+  assert.deepEqual(cols.left.map(e => [e.ticket.id, e.state]), [['T-4', 'running'], ['T-5', 'ready'], ['T-6', 'ready']]);
+  assert.deepEqual(cols.right.map(e => [e.ticket.id, e.state]), [
+    ['T-7', 'review'], ['T-8', 'blocked'], ['T-2', 'done'], ['T-3', 'done'], ['T-1', 'done'],
+  ]);
+  assert.deepEqual(cols.counts, { ready: 2, running: 1, review: 1, blocked: 1, todo: 1, done: 3, cancelled: 1, proposed: 1 });
+});
+
+test('cockpit columns cap each side at eight cards and keep one done slot budget', () => {
+  const tickets = [];
+  for (let i = 1; i <= 12; i += 1) tickets.push(T(`T-${String(i).padStart(2, '0')}`, 'ready'));
+  for (let i = 20; i < 25; i += 1) tickets.push(T(`T-${i}`, 'review'));
+  for (let i = 30; i < 34; i += 1) tickets.push(T(`T-${i}`, 'blocked'));
+  for (let i = 40; i < 44; i += 1) tickets.push(T(`T-${i}`, 'done'));
+  const cols = cockpitColumns({ tickets }, readyStub);
+  assert.equal(cols.left.length, 8);
+  assert.equal(cols.right.length, 8);
+  assert.deepEqual(cols.right.map(e => e.state), ['review', 'review', 'review', 'blocked', 'blocked', 'blocked', 'done', 'done']);
+  assert.equal(cols.counts.ready, 12);
+  assert.equal(cols.counts.review, 5);
+});
+
+test('recent done is newest first by finish time, ids descending when no time is recorded', () => {
+  const stamped = recentDone({ tickets: [T('T-1', 'done', { doneAt: 1000 }), T('T-2', 'done', { doneAt: 3000 }), T('T-3', 'done')] }, 3);
+  assert.deepEqual(stamped.map(t => t.id), ['T-2', 'T-1', 'T-3']);
+  const unstamped = recentDone({ tickets: [T('T-1', 'done'), T('T-3', 'done'), T('T-2', 'done'), T('T-4', 'ready')] }, 2);
+  assert.deepEqual(unstamped.map(t => t.id), ['T-3', 'T-2']);
+});
+
+test('worker cards read the finish time from the ledger and say so when it is missing', () => {
+  const now = Date.parse('2026-10-26T12:00:00Z');
+  const cards = workerCards({
+    tickets: [T('T-1', 'done', { doneAt: '2026-10-26T11:30:00Z', stage: 'S1' }), T('T-2', 'done', { stage: 'S1' })],
+  }, now, 4);
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].id, 'T-1');
+  assert.equal(cards[0].tag, 'NEWEST');
+  assert.equal(cards[0].ago, '30 min ago');
+  assert.equal(cards[0].pct, 98);
+  assert.equal(cards[1].tag, 'DONE');
+  assert.equal(cards[1].ago, '');
+  assert.equal(cards[1].pct, 100);
+
+  const document = makeDocument();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  renderWorkerCards(host, cards);
+  assert.equal(host.children.length, 2);
+  assert.ok(host.children[0].classList.contains('new'));
+  assert.equal(host.children[1].children[1].children[0].children[1].textContent, 'stage S1');
+  renderWorkerCards(host, []);
+  assert.equal(host.children.length, 1);
+  assert.equal(host.children[0].textContent, 'No finished tickets yet.');
+});
+
+test('ticket columns: hot first card on the right, staggered margins, empty line', () => {
+  const document = makeDocument();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const entries = [1, 2, 3, 4, 5].map(i => ({ ticket: T(`T-${i}`, 'review', { stage: 'S2' }), state: 'review' }));
+  renderTicketColumn(host, entries, { side: 'R' });
+  assert.deepEqual(collectTicketIds(host), ['T-1', 'T-2', 'T-3', 'T-4', 'T-5']);
+  assert.ok(host.children[0].classList.contains('hot'));
+  assert.equal(host.children[1].classList.contains('hot'), false);
+  assert.equal(host.children[0].style.marginRight, '0px');
+  assert.equal(host.children[0].style.marginLeft, '36px');
+  assert.equal(host.children[2].style.marginRight, '20px');
+  assert.equal(host.children[0].getAttribute('data-status'), 'review');
+
+  renderTicketColumn(host, entries.slice(0, 3), { side: 'L' });
+  assert.equal(host.children.some(c => c.classList.contains('hot')), false);
+  assert.equal(host.children[1].style.marginLeft, '10px');
+  assert.equal(host.children[1].style.marginRight, '26px');
+
+  renderTicketColumn(host, [], { side: 'R', emptyText: 'Nothing here yet' });
+  assert.equal(host.children.length, 1);
+  assert.equal(host.children[0].getAttribute('data-cockpit-empty'), 'column');
+});
+
+test('ticket card helpers: short names, ages, states and stage colours', () => {
+  assert.equal(shortTitle('Autopilot pauses during integrate or e2e and resumes afterward'), 'autopilot pauses');
+  assert.equal(shortTitle('Make build tickets own their test files in ticket-manifest prompts'), 'build tickets own their test');
+  assert.equal(shortTitle('Per-checkout lock so only one base check runs per worktree at a time'), 'per-checkout lock');
+  assert.equal(shortTitle(''), '');
+  assert.equal(agoText(0), 'just now');
+  assert.equal(agoText(5 * 60000), '5 min ago');
+  assert.equal(agoText(120 * 60000), '2 h ago');
+  assert.equal(agoText(4320 * 60000), '3 d ago');
+  assert.equal(ticketState('running'), 'running');
+  assert.equal(ticketState('done'), 'done');
+  assert.equal(ticketState('blocked'), 'blocked');
+  assert.equal(ticketState('review'), 'review');
+  assert.equal(ticketState('todo'), 'ready');
+  assert.equal(stageColour('S3'), STAGE_COLOURS[3]);
+  assert.equal(stageColour('S10'), STAGE_COLOURS[3]);
+  assert.equal(stageColour(undefined), STAGE_COLOURS[0]);
 });

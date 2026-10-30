@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-guard-group",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "process-kill path change; Opus review in train 5",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are readable and writable. Tests first.\n\nTrain 5, item 1a: the guarded runner must signal the command's process GROUP/descendants, not just the direct child pid. Today tools/concurrency-guard.mjs spawns the child without a new process group and the watcher/forwarding paths signal only childPid, so a child that spawns workers can leave them running when the wrapper dies or is stopped.\n\nDesign (POSIX; macOS/linux are the targets):\n- Spawn the guarded child as its own process-group leader (`detached: true`) so child.pid is also the pgid. Keep stdio as passed.\n- Add a helper that signals the child group: try process.kill(-childPid, signal); on ESRCH/EPERM fall back to process.kill(childPid, signal) (and for the wrapper's in-process child, child.kill(signal)). Use it in the wrapper's passOn/pending paths and in the watcher.\n- Record the group in the marker when noteChild writes the identity (e.g. childPgid = childPid) and keep childProcStart/childCommand. The watcher must still verify the identity (start + command line) BEFORE signalling; then signal the group (SIGTERM, wait, SIGKILL). restoreIfStale's single-SIGTERM and 30s SIGKILL escalation must also target the group when the marker says it was created detached. If an old marker has no childPgid, signal only childPid as today.\n- The wrapper's Ctrl-C behavior: the child is no longer in the terminal foreground group, so the wrapper's existing 200 ms grace + forward is the only signal path. Keep the grace; forward to the group.\n- Do not signal a group when the identity does not match or is missing. Do not change the restore-value semantics.\n\nTests (tests/concurrency-guard.test.mjs):\n1. A real integration test: run `swarm with-concurrency 16 -- <node script>` where the script spawns a grandchild (both write their pids to files) and stays alive; SIGKILL the wrapper; assert the watcher stops BOTH the child and the grandchild (process.kill(pid,0) throws) and the value is restored. Use bounded polls, no fixed long sleeps.\n2. A Ctrl-C test: send SIGINT to a real guarded wrapper whose child spawns a grandchild; both must be dead and the value restored.\n3. Unit tests with fake children: passOn/pending uses the injected spawn impl; if the injected child is detached, the group signal path is used (inject a kill seam or assert the fallback). Keep the existing fake-child tests green.\n4. A matching-identity watcher test still SIGTERMs the group; a mismatched/missing identity signals nothing.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs -> all pass. Also run STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 npm run test:stress. Report counts.",
+      "context": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/busy-marker.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused concurrency-guard tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-guard-group",
+      "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/concurrency-guard.test.mjs"]
+    }
+  ]
+}

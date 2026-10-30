@@ -195,7 +195,7 @@ test('the board serves it read-only behind the token: /api/board carries inbox, 
   assert.equal(data.inbox.total, 5);
   assert.equal((await get('/api/board?t=wrong')).status, 403);
   assert.equal((await get('/api/board')).status, 403);
-  const html = await get(`/?t=${token}`);
+  const html = await get(`/classic?t=${token}`);
   assert.match(html.body, /id="needs"/);
   assert.match(html.body, /id="needsChip"/);
   const js = await get('/assets/board.js');

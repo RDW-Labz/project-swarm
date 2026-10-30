@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-cc-default",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Train 5: make the S10 Command Center the default dashboard while keeping the old board reachable, and cover it with tests.\n\n1) tools/command-center-flag.mjs: commandCenterEnabled is currently opt-in. New semantics: enabled by default; disabled when SWARM_COMMAND_CENTER is the string '0' or config.commandCenter === false; still enabled for '1' or config.commandCenter === true. Keep the function signature and comments.\n\n2) tools/watch-server.mjs: when the Command Center is enabled, serve the Command Center Hive page at `/` (the dashboard root) and serve the classic board index (the existing indexName/board.html) at `/classic`. When it is disabled, `/` serves the classic board as today and `/classic` also serves the classic board (so the link never 404s). Add `/classic` to the route allowlist and to the HTML-page token/cookie handling (it is a page, so the query token works). Keep `/command-center` and `/command-center/project/...` as they are; keep the classic `/project` and `/run` routes unchanged. Do not break the remote-host rules (a remote board is read-only; `/classic` is a page).\n\n3) tools/watch-assets/cc-hive-mount.js: the existing Classic tab currently links to `/` with the search string. Point it at `/classic` with the same search string (so the old board stays reachable from the new dashboard). Keep the other tabs/routes.\n\n4) Tests: update tests/command-center-flag.test.mjs for the new default (enabled with no env/config, disabled for '0' and config false, enabled for '1' and config true). Update tests/command-center-routes-flag.test.mjs (and any watch-server route test that asserts `/` is the classic index) so: enabled -> `/` returns the Command Center page and `/classic` returns the classic board index; disabled -> both return the classic board; `/command-center` still works when enabled; the token-gated page handling works for `/classic`. Add a test asserting the Hive Classic tab href points at /classic. Keep every other assertion.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-flag.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-nav.test.mjs tests/cc-hive-mount.test.mjs tests/command-center-boot.test.mjs -> all pass. Report counts and the exact behavior table (enabled/disabled x / and /classic).",
+      "context": [
+        "tools/command-center-flag.mjs",
+        "tools/watch-server.mjs",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/command-center-flag.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-boot.test.mjs"
+      ],
+      "outputs": [
+        "tools/command-center-flag.mjs",
+        "tools/watch-server.mjs",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/command-center-flag.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/cc-hive-mount.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused command-center and route tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-cc-default",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-flag.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-boot.test.mjs"
+      ]
+    }
+  ]
+}

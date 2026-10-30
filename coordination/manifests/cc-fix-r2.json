@@ -1,0 +1,86 @@
+{
+ "version": 1,
+ "concurrency": 2,
+ "contract": "coordination/review/cc-design-contract.md",
+ "jobs": [
+  {
+   "id": "ccfixhive2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Hive page, grader round 2 (Hive scored 2.6/5; target 4.5).\nFix every item in order; they come from an independent Opus grade of REAL screenshots of the running app (live board data), not the mockup.\nThe approved target look is docs/design/command-center-mockup/ (read hive.html, cockpit.html, shared.css). The grader's suggested CSS and markup are guidance: keep the intent, adapt to the real code.\nUse real data only, never hard-coded sample numbers. When a value or list is empty, render a short muted empty-state line, never a blank box.\nKeep every existing hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project cards, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file).\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nRead coordination/review/cc-design-contract.md for file ownership. If an item needs a file outside your outputs, skip it and name it in your summary.\nYou also own the first-visit tour (tools/watch-assets/cc-tour.js) for BOTH pages: it must never auto-open over content; open it only from a help button or once, remembered via a dismissed flag in localStorage (wrap storage in try/catch).\n\nFIXES:\n1. PROBLEM: The onboarding tour panel ('The Hive / Step 1 of 2 / Back Next Skip tour') opens automatically. It covers the session-log panel and footer on desktop and the project cards on phone.\n   WHERE: Bottom-left of desktop (about 0-308px x 672-890px); bottom half of phone over the second and third project cards\n   FILE: tools/watch-assets/cc-hive-mount.js\n   CHANGE: Do not auto-open the tour on mount. Start it only from an explicit control, or once per browser behind a localStorage 'cc-tour-seen' flag that is set on Skip/Done. Make the screenshot or test harness pass ?tour=0. Dock the panel so it never sits over .hive-panels: position:fixed; right:12px; bottom:12px; max-width:280px. On phone (max-width:720px) make it a bottom sheet whose height is reserved with padding-bottom on .hive-shell.\n2. PROBLEM: The project name in each node header is dark text on the control-yellow header and is almost unreadable. The body shows 'asks / out / fails' with every value as '—' and no p() meter row, so the cards carry no usable data.\n   WHERE: All five node cards (project-swarm, agent-data-business, swarm-practice, parts-request-app, blackbook-app)\n   FILE: tools/watch-assets/cc-hive.css + tools/watch-assets/cc-hive-mount.js\n   CHANGE: Set .hive-node-hd { color:#0a0a0c; font-weight:700; font-size:11px } and remove any opacity or faint colour on the name span. Map real per-project board fields into the kv rows, e.g. asks = needs-you count, out = open/done tickets, fails = failed jobs. Render a real 0 rather than '—' when the field exists and is zero. Add the .hive-meter row (track + .fill width from done/total tickets) as in the mockup. Give dt/dd line-height:1.35 so the three rows don't crowd together.\n3. PROBLEM: The stage is top-heavy. All cards sit in slots 0-2 at the top, the bottom ~40% of the stage is empty, and three particle streams leave the right of the ring pointing at nothing.\n   WHERE: Hive stage, centre/right of the ring (around x 830-870, y 450-510) and the empty band at y 500-700\n   FILE: tools/watch-assets/cc-hive-mount.js\n   CHANGE: Spread the slots over the real node count per side: slotTop = i * (100 / max(nodesOnSide,1)) with height capped at min(CARD_HEIGHT_PCT, 100/nodesOnSide - gap), and centre the column vertically (offset = (100 - used)/2). Build streams only for nodes that have a laid-out box (skip entries where box is null or width is 0) so no orphan streams are drawn.\n4. PROBLEM: The 'ANSWER BEFORE YOU SPEND' label renders as flat text above the ring instead of on the orbit arc. On phone it is clipped by the top edge of the stage. The core 'opus' wordmark is dim grey and smaller than the mockup.\n   WHERE: Above the core ring (desktop y≈295; phone y≈298, cut off)\n   FILE: tools/watch-assets/cc-hive.css + tools/watch-assets/cc-hive-mount.js\n   CHANGE: Render the label through the SVG <textPath href='#hive-orbit-arc'> from the mockup inside .hive-ring-text (position:absolute; inset:-8%; overflow:visible). On phone give .hive-stage.hive-phone .hive-core-ui margin-top:24px so the arc text stays inside the stage. Set .hive-core-name { color: var(--fg); font-size: clamp(28px,5vh,52px) } and show the model version line (.hive-core-ver) from board data when present.\n5. PROBLEM: The bottom panels are thin. 'lanes and savings' has a single 'control' bar whose track is nearly empty and is not labelled with a lane colour. 'throughput' shows only 'No lane activity yet' and a bare 'decision latency' caption with no chart or placeholder.\n   WHERE: Bottom panel row, middle and right panels\n   FILE: tools/watch-assets/hive-panels.js + tools/watch-assets/cc-hive.css\n   CHANGE: Render one .lane-row per lane (safety/route/context/control), coloured from the --hive-(any) tokens and showing 0 when a lane is empty. If there is no latency series, hide the 'decision latency' caption and show one empty-state line ('no decisions timed yet') in .term-prompt style rather than an orphan label. Keep panel heights equal with .hive-panels .cc-panel { min-height:0; justify-content:flex-start }.\n6. PROBLEM: The live indicator is squeezed into a circle instead of a pill. The 'Live board data' banner stretches to a fixed odd width, and the brand is missing the version script from the mockup.\n   WHERE: Top-right of the stat strip ('live'); header banner and brand at top-left\n   FILE: tools/watch-assets/cc-hive.css\n   CHANGE: .hive-stat-strip .cc-live { flex:0 0 auto; border-radius:999px; padding:4px 14px; align-self:center; min-height:44px } so it renders as a pill. .hive-illus { max-width:72ch; width:fit-content }. Append <span class='ver-script num'> with the model version from board data to the brand when it is available, and hide it when it is not.\n\nCOORDINATOR NOTES (verified in code):\nA. Card values: tools/command-center-snapshot.mjs (read-only context) builds per-project card fields with sources, e.g. card.out (agents.jobs.running), card.fails (tickets.byStatus.failed), the Needs you field (card.blocked.needYou) and card.meter (progress.overall). hive-panels.js renderProjectCardMetrics reads project[key] for asks/out/fails, which does not match: trace what object the mount passes and bind asks -> the Needs you field, out -> card.out, fails -> card.fails, and draw the meter from card.meter. Show 0 as 0 (only a truly missing field is an em dash).\nB. Tour: the grader always sees a first visit in a fresh browser, so ANY auto-open is visible. The tour must never open by itself. Add a small \"?\" help button in the header nav that starts it.",
+   "context": [
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r2/grade.json",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-tour.test.mjs",
+    "tools/command-center-snapshot.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-hive.css",
+    "tools/watch-assets/cc-hive-mount.js",
+    "tools/watch-assets/hive-panels.js",
+    "tools/watch-assets/cc-tour.js"
+   ],
+   "timeoutMs": 3000000
+  },
+  {
+   "id": "ccfixcockpit2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "S10 Command Center, Cockpit page, grader round 2 (Cockpit scored 2.8/5; target 4.5).\nFix every item in order; they come from an independent Opus grade of REAL screenshots of the running app (live board data), not the mockup.\nThe approved target look is docs/design/command-center-mockup/ (read hive.html, cockpit.html, shared.css). The grader's suggested CSS and markup are guidance: keep the intent, adapt to the real code.\nUse real data only, never hard-coded sample numbers. When a value or list is empty, render a short muted empty-state line, never a blank box.\nKeep every existing hook other code and tests rely on: #command-center-root, .hive-shell, [data-project-id] on Hive project cards, .cc-cockpit-shell, #cc-cockpit-main, and the stylesheet links in command-center.html (you cannot edit that file).\nReal browsers: never call array methods on .children/.childNodes/getElementsByTagName/getElementsByClassName/querySelectorAll results; use Array.from (tests/watch-assets-dom-collections.test.mjs enforces it).\nRead coordination/review/cc-design-contract.md for file ownership. If an item needs a file outside your outputs, skip it and name it in your summary.\nThe tour (cc-tour.js) belongs to the parallel Hive job; do not edit it.\n\nFIXES:\n1. PROBLEM: The Stage Stack metric tiles are broken. The tiles are about 36px wide with digits overlapping ('15' and '0' drawn on top of each other), labels are missing, and the panel is mostly empty.\n   WHERE: Bottom-right 'STAGE STACK / 15 TICKETS' panel (x≈1040-1160, y≈780-830)\n   FILE: tools/watch-assets/cc-cockpit.css + tools/watch-assets/cockpit-lists.js\n   CHANGE: Use the mockup grid: .band-bottom .stack-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px } and .metric-tile { min-width:0; padding:8px 6px 10px; border:2px solid var(--line); border-top-width:4px; text-align:center; overflow:hidden }. Emit one <span class='m-label'> (e.g. done / active / ready) and one <span class='m-val num'> per tile. Remove any absolute positioning or fixed width/height on the tiles.\n2. PROBLEM: In the run stream card, the status 'ended' wraps one letter per line (e / n / d / e / d), the '0/1 jobs' line is clipped at the bottom, and the card fills only about half its column.\n   WHERE: Bottom-middle '// RUN STREAM / ORCHESTRATOR ACTIVITY' card (x≈460-740, y≈745-880)\n   FILE: tools/watch-assets/cockpit-lists.js + tools/watch-assets/cc-cockpit.css\n   CHANGE: Build the mockup .stream-top (display:flex; justify-content:space-between; gap:8px) with .stream-id { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } and .stream-status { flex:none; white-space:nowrap }. Do not render the status twice. Make .band-bottom .stream-grid { grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-rows:minmax(0,1fr) } so the card fills the column, and keep .stream-bar at margin-top:auto inside the card.\n3. PROBLEM: The stage is packed at the top. Both ticket columns end by y≈470 and the lower ~40% of the stage is empty. The centre shows only a bare orbit ellipse with no mascot.\n   WHERE: Main stage band (y≈200-660), centre column between 'waiting on you' and NOW LOADING\n   FILE: tools/watch-assets/cc-cockpit.css + tools/watch-assets/cockpit-view.js\n   CHANGE: .ticket-col { justify-content:space-evenly; min-height:0 } and .ticket-row { flex:1 1 0; max-height:44px }, so rows spread over the stage height as in the mockup. Render the .mascot-stage block (shadow + orbit + .mascot-pixel SVG) from cockpit-view.js and keep .mascot-orbit inside it rather than standalone. Alternatively, reduce the band-main row so the bottom band gets the freed height.\n4. PROBLEM: Every ticket row ends with a literal letter 'o' in place of a status mark, which looks like debug text.\n   WHERE: Right edge of every ticket row on desktop and phone (after READY)\n   FILE: tools/watch-assets/cockpit-lists.js\n   CHANGE: Replace the text glyph with the mockup .ticket-mark element: an empty <span class='ticket-mark' aria-hidden='true'> for pending, <span class='ticket-mark ticket-mark--live'> (8px green dot) for the active ticket, and the inline check SVG (.ticket-check) for done. Put the state in aria-label on the row instead.\n5. PROBLEM: The desktop header chrome doesn't match the mockup. An uppercase 'BACK' pill sits beside small mixed-case 'Hive'/'Cockpit' pills with different heights. 'ORCHESTRATOR waiting on you' stops at about x=1263 instead of aligning with the right edge. The hero digits have very wide mono gaps ('0  OF  15').\n   WHERE: Top band: nav pills top-right, crumb row y≈83, hero headline\n   FILE: tools/watch-assets/cc-cockpit.css + tools/watch-assets/cockpit-view.js\n   CHANGE: Use one pill class for all three nav buttons (min-height:44px; padding:0 14px; font:0.72rem var(--mono); text-transform:uppercase) and mark the current one with .btn-pill--accent. Set .cockpit-nav { display:flex; justify-content:space-between; width:100% } so the orchestrator block is flush right with LIVE SCAN. In .headline-num use letter-spacing:-0.04em and drop the extra spaces between the number spans and 'OF'.\n6. PROBLEM: On phone the two loop cards sit side by side at about 180px each with 9px wrapped text, and the ticket list has no search field, unlike the mockup.\n   WHERE: Phone NOW tab: SWARM LOOP / DELIVERY LOOP pair (y≈405-515) and the ticket list below\n   FILE: tools/watch-assets/cc-cockpit.css + tools/watch-assets/cockpit-view.js\n   CHANGE: @media (max-width:720px) { .phone-now-loops { grid-template-columns:1fr } .phone-now-loops .loop-steps { font-size:0.62rem } }. Render the .ticket-search label + input (min-height:44px) above the phone ticket rows, and filter rows by toggling data-hidden.",
+   "context": [
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css",
+    "tools/watch-assets/command-center-data.js",
+    "tools/watch-assets/command-center-boot.js",
+    "coordination/review/cc-design-contract.md",
+    "coordination/review/cc-grade/r2/grade.json",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs"
+   ],
+   "outputs": [
+    "tools/watch-assets/cc-cockpit.css",
+    "tools/watch-assets/cc-cockpit-mount.js",
+    "tools/watch-assets/cockpit-view.js",
+    "tools/watch-assets/cockpit-lists.js"
+   ],
+   "timeoutMs": 3000000
+  }
+ ],
+ "checks": [
+  {
+   "name": "cc-units",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/cc-hive-mount.test.mjs",
+    "tests/cc-cockpit-mount.test.mjs",
+    "tests/command-center-lists.test.mjs",
+    "tests/watch-assets-dom-collections.test.mjs",
+    "tests/command-center-boot.test.mjs",
+    "tests/command-center-routes-flag.test.mjs",
+    "tests/watch-assets-browser-safe.test.mjs",
+    "tests/command-center-hive-panels.test.mjs",
+    "tests/command-center-hive.test.mjs",
+    "tests/command-center-cockpit.test.mjs",
+    "tests/command-center-nav.test.mjs",
+    "tests/command-center-snapshot.test.mjs",
+    "tests/command-center-tour.test.mjs"
+   ]
+  }
+ ]
+}

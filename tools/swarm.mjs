@@ -255,6 +255,47 @@ export function inSourceTestHits(writes) {
 
 
 
+// Only the coordinator calls this after the final job outcome is known. Worker
+// reports supply neither the attestation nor its hash.
+export async function writeReviewRecord(root, state, job, workspaceRoot, { warn = console.warn } = {}) {
+  if (job.status !== 'complete') return;
+  const resultFile = job.outputs?.find(file =>
+    /^coordination\/review\/[A-Za-z0-9_.-]+-review\.json$/.test(file));
+  if (!resultFile) return;
+  const recordFile = `.swarm/runs/${state.id}/review-record.json`;
+  const temporary = `${recordFile}.${crypto.randomUUID()}.tmp`;
+  try {
+    const resultPath = path.join(workspaceRoot, resultFile);
+    let bytes = await fs.readFile(resultPath);
+    try {
+      const parsed = JSON.parse(bytes.toString('utf8'));
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        parsed.head = state.baseCommit;
+        const stamped = `${JSON.stringify(parsed)}\n`;
+        const resultTemporary = `${resultPath}.${crypto.randomUUID()}.tmp`;
+        await fs.writeFile(resultTemporary, stamped, { flag: 'wx', mode: 0o600 });
+        await fs.chmod(resultTemporary, 0o600);
+        await fs.rename(resultTemporary, resultPath);
+        bytes = Buffer.from(stamped);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    const resultHash = crypto.createHash('sha256').update(bytes).digest('hex');
+    await jsonWrite(root, temporary, {
+      version: 1, runId: state.id, jobId: job.id, agent: job.agent,
+      model: job.model ?? job.actualModel,
+      manifest: `.swarm/runs/${state.id}/manifest.json`, head: state.baseCommit,
+      status: 'complete', resultFile, resultHash, finishedAt: job.finishedAt,
+      stateFile: `.swarm/runs/${state.id}/state.json`,
+    });
+    await fs.rename(path.join(root, temporary), path.join(root, recordFile));
+  } catch {
+    await fs.rm(path.join(root, temporary), { force: true }).catch(() => {});
+    warn('review-record-write-failed');
+  }
+}
+
 // Human jobs never reach the worker pipeline: the run keeps every job that does not depend on one, and the
 // rest waits in .swarm/project/human-jobs.json until the owner has done them (see tools/human-jobs.mjs).
 export async function runManifest(root, manifest, options = {}) {
@@ -1280,6 +1321,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
           record.durationMs = now() - Date.parse(record.startedAt);
         }
         if (result?.hostDead && !signal.aborted) retry = true;
+        if (!retry) await writeReviewRecord(root, state, record, workspaceRoot);
         await queueSave();
       } catch (error) {
         if (error.keptWorkspace) record.keptWorkspace = error.keptWorkspace;

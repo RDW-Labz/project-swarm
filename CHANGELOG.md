@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.167.29
+
+Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
+- Kill paths: the guarded runner spawns the command in its own process group, signals the group (with a child-pid fallback) from the wrapper and the watcher only after the start-time and command-line identity match, and the watcher escalates once to SIGKILL; test:stress now kills the current round's process group on Ctrl-C (exit 130) or SIGTERM (143);
+- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, keeps the approval hash stable when a stale proposed ticket is superseded, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines;
+- Owner-only: the supersede gate now refuses Claude, Codex and Cursor agent/worker sessions (and non-TTY callers) unless SWARM_OWNER=1, and the same gate covers tickets --set superseded;
+- Merge gate: a release PR now needs a committed review-run record (coordination/review/<train>-review-run.json) at the PR head, a metadata-only commit whose parent is the reviewed code head; the record names the run id, agent claude, an opus model, verdict pass, the full 40-character head and the sha256 of the committed review result, and merge verifies it from GitHub before any gh pr merge; Reviews parsing is fence-aware;
+- D-fix: silent-catch visibility in scope-commands and server-restart (batches 27a and 27b);
+- Version 1.167.29.
+
 ## 1.167.28
 
 Release train 4: release-review merge gate, guarded-runner hardening, and owner-only bulk ticket supersede.

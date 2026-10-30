@@ -5,98 +5,162 @@ import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 import { holdsSwarmState } from './state-guard.mjs';
 import { projectsFile } from './projects.mjs';
 import os from 'node:os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PR_FIELDS =
   'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
-const RELEASE_TITLE_RE = /^v?\d+\.\d+\.\d+/;
-const REVIEWS_HEADING_RE = /^##\s+Reviews\s*$/i;
-const ANY_HEADING_RE = /^##\s/;
-const JSON_FENCE_OPEN_RE = /^\s*```json\s*$/i;
-const JSON_FENCE_CLOSE_RE = /^\s*```\s*$/;
+const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
 const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
+const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
 
-function extractReviewsSectionText(body) {
-  const reviewLines = [];
-  let inReviews = false;
-  for (const line of String(body ?? '').split('\n')) {
-    if (REVIEWS_HEADING_RE.test(line)) {
-      inReviews = true;
+// Strip fenced text before interpreting selectors. A closing
+// fence must use the opener's character and at least its delimiter length.
+function unfencedBodyText(body) {
+  const lines = [];
+  let fence = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence.char &&
+          delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
       continue;
     }
-    if (inReviews && ANY_HEADING_RE.test(line)) break;
-    if (inReviews) reviewLines.push(line);
-  }
-  return reviewLines.join('\n');
-}
-
-function collectJsonFenceContents(reviewsText) {
-  const blocks = [];
-  const lines = String(reviewsText ?? '').split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (!JSON_FENCE_OPEN_RE.test(lines[i])) continue;
-    i++;
-    const contentLines = [];
-    while (i < lines.length && !JSON_FENCE_CLOSE_RE.test(lines[i])) {
-      contentLines.push(lines[i]);
-      i++;
+    if (delimiter) {
+      fence = { char: delimiter[1][0], length: delimiter[1].length };
+      continue;
     }
-    blocks.push(contentLines.join('\n'));
+    lines.push(line);
   }
-  return blocks;
+  return lines.join('\n');
 }
 
-function blockNamesHead(block, headLower) {
-  if (typeof block.head !== 'string' || !HEAD_SHA40_RE.test(block.head)) return false;
-  return block.head.toLowerCase() === headLower;
+function safeReviewPath(value) {
+  if (typeof value !== 'string' || !value.startsWith('coordination/review/') || !value.endsWith('-review.json')) return false;
+  return value.split('/').every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..');
 }
 
-export function releaseReviewGate({ title, body, headRefOid }) {
-  const t = String(title ?? '');
-  if (!RELEASE_TITLE_RE.test(t)) {
-    return { required: false, ok: true };
+function decodeContents(response) {
+  if (!isObj(response) || response.encoding !== 'base64' || typeof response.content !== 'string') {
+    throw new Error('invalid contents response');
   }
-  const head = String(headRefOid ?? '');
-  if (!HEAD_SHA40_RE.test(head)) {
-    return { required: true, ok: false, reason: 'review-verdict-missing-for-head: no-head' };
+  const encoded = response.content.replace(/\s/g, '');
+  // Buffer.from silently discards invalid base64 characters; reject those first.
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error('invalid base64');
   }
-  const headLower = head.toLowerCase();
-  const sha8 = headLower.slice(0, 8);
+  return Buffer.from(encoded, 'base64');
+}
 
-  const reviewsText = extractReviewsSectionText(body);
-  const rawBlocks = collectJsonFenceContents(reviewsText);
-  const parsedBlocks = [];
-  for (const raw of rawBlocks) {
-    let block;
+export async function releaseReviewGate(
+  { title, body, headRefOid },
+  { gh, repoName, root = '.', fs: fsImpl = fs } = {},
+) {
+  if (!RELEASE_TITLE_RE.test(String(title ?? '').trimStart())) return { required: false, ok: true };
+  const refuse = (reason) => ({ required: true, ok: false, reason });
+  const markers = [...unfencedBodyText(body).matchAll(/^[\t ]*<!--[\t ]*swarm-review:[\t ]*([^\r\n]*?)[\t ]*-->[\t ]*$/gm)];
+  if (!markers.length) return refuse('marker-missing');
+  const resultFile = markers[0][1].trim();
+  if (markers.length !== 1 || !safeReviewPath(resultFile)) return refuse('selector-malformed');
+  if (!isSha(headRefOid)) return refuse('result-not-metadata-commit');
+
+  // R must contain only the integrated result; its sole parent H is the code
+  // head reviewed by the local run. Pin all GitHub reads to these commits.
+  const api = async (endpoint) => {
     try {
-      block = JSON.parse(raw);
+      const response = await gh(['api', 'repos/' + repoName + '/' + endpoint]);
+      return response.code === 0 ? { ok: true, value: parseJson(response) } : { ok: false };
     } catch {
-      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+      return { ok: false };
     }
-    if (!isObj(block)) {
-      return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
-    }
-    parsedBlocks.push(block);
+  };
+  const commit = await api('commits/' + headRefOid);
+  const parents = commit.value?.parents;
+  if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
+    return refuse('result-not-metadata-commit');
+  }
+  const reviewedHead = parents[0].sha;
+  const comparison = await api('compare/' + reviewedHead + '...' + headRefOid);
+  const files = comparison.value?.files;
+  if (!comparison.ok || !Array.isArray(files) || files.length !== 1 ||
+      !isObj(files[0]) || files[0].filename !== resultFile ||
+      (files[0].previous_filename && files[0].previous_filename !== resultFile) ||
+      ['renamed', 'removed', 'copied'].includes(files[0].status)) {
+    return refuse('result-not-metadata-commit');
   }
 
-  let lastVerdictForHead = null;
-  for (const block of parsedBlocks) {
-    if (!blockNamesHead(block, headLower)) continue;
-    const v = block.verdict;
-    if (v === 'pass') lastVerdictForHead = 'pass';
-    else if (v === 'fail') lastVerdictForHead = 'fail';
-    else lastVerdictForHead = 'other';
+  const runsDir = path.join(root, '.swarm', 'runs');
+  let entries;
+  try {
+    entries = await fsImpl.readdir(runsDir, { withFileTypes: true });
+  } catch {
+    return refuse('review-run-record-missing');
   }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const record = JSON.parse(await fsImpl.readFile(path.join(runsDir, entry.name, 'review-record.json'), 'utf8'));
+      if (isObj(record) && record.head === reviewedHead && record.resultFile === resultFile) {
+        candidates.push({ record, runId: entry.name });
+      }
+    } catch {
+      // Unrelated runs and runs without readable records cannot attest a review.
+    }
+  }
+  if (!candidates.length) return refuse('review-run-record-missing');
+  const opusRuns = candidates.filter(({ record }) =>
+    record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
+  if (!opusRuns.length) return refuse('review-run-model-not-opus');
 
-  if (lastVerdictForHead === null) {
-    return { required: true, ok: false, reason: `review-verdict-missing-for-head: ${sha8}` };
+  const matching = [];
+  for (const { record, runId } of opusRuns) {
+    // Bind the state path to the directory containing the runner's record.
+    if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
+        typeof record.jobId !== 'string' || !record.jobId ||
+        record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
+        typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
+    try {
+      const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
+      const jobs = isObj(state?.jobs) ? Object.values(state.jobs) : state?.jobs;
+      if (!isObj(state) || state.status !== 'complete' || state.baseCommit !== reviewedHead ||
+          !Array.isArray(jobs) || !jobs.some((job) =>
+            isObj(job) && job.id === record.jobId && job.status === 'complete' &&
+            job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
+      matching.push(record);
+    } catch {
+      // Missing, malformed, or unreadable local state fails closed.
+    }
   }
-  if (lastVerdictForHead === 'pass') {
-    return { required: true, ok: true };
+  if (!matching.length) return refuse('review-run-state-mismatch');
+  matching.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+  const record = matching[0];
+
+  const fetched = await api('contents/' + resultFile + '?ref=' + headRefOid);
+  let resultBytes;
+  try {
+    if (!fetched.ok) throw new Error('result missing');
+    resultBytes = decodeContents(fetched.value);
+    if (typeof record.resultHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.resultHash) ||
+        createHash('sha256').update(resultBytes).digest('hex') !== record.resultHash.toLowerCase()) {
+      return refuse('result-hash-mismatch');
+    }
+  } catch {
+    return refuse('result-hash-mismatch');
   }
-  return { required: true, ok: false, reason: `review-verdict-failed-for-head: ${sha8}` };
+  let result;
+  try {
+    result = JSON.parse(resultBytes.toString('utf8'));
+  } catch {
+    return refuse('result-verdict');
+  }
+  if (!isObj(result) || result.verdict !== 'pass') return refuse('result-verdict');
+  if (Object.hasOwn(result, 'head') && result.head !== reviewedHead) return refuse('result-head-mismatch');
+  return { required: true, ok: true };
 }
 
 async function realExec(command, args, { cwd } = {}) {
@@ -362,11 +426,11 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
 
   const reasons = [...verdict.reasons];
   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
-  const reviewGate = releaseReviewGate({
+  const reviewGate = await releaseReviewGate({
     title: view.title,
     body: view.body,
     headRefOid: view.headRefOid,
-  });
+  }, { gh, repoName, root, fs: fsImpl });
   if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
   const checks = {
     failing: rollup.failing,

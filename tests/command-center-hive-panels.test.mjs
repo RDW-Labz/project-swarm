@@ -227,6 +227,47 @@ test('savings panel renders injected figures with matching fill widths', async (
   assert.equal(fills[1].style.width, '59.00%');
 });
 
+test('agoText counts minutes, hours and days like the artifact', async () => {
+  HivePanels = await loadHivePanels();
+  const { agoText } = HivePanels;
+  assert.equal(agoText(20_000), 'just now');
+  assert.equal(agoText(30 * 60_000), '30 min ago');
+  assert.equal(agoText(89 * 60_000), '89 min ago');
+  assert.equal(agoText(3 * 3_600_000), '3 h ago');
+  assert.equal(agoText(2 * 86_400_000), '2 d ago');
+});
+
+test('stepPath draws one riser per hour and scales to the busiest hour', async () => {
+  HivePanels = await loadHivePanels();
+  const { stepPath } = HivePanels;
+  const d = stepPath([0, 4, 2, 0]);
+  assert.match(d, /^M0,64 /, 'first hour starts at the baseline');
+  assert.match(d, /L75,64 L75,8 /, 'busiest hour rises to the top (y 8)');
+  assert.match(d, /L150,8 L150,36 /);
+  assert.match(d, /L225,36 L225,64 /);
+  assert.match(d, /L300,64$/, 'path closes flat at the right edge');
+  assert.match(stepPath([0, 0]), /^M0,64 L150,64 L150,64 L300,64$/, 'no completions: a flat line');
+});
+
+test('session log rows carry the kind colour, ledger id, title and age; empty is one muted line', async () => {
+  HivePanels = await loadHivePanels();
+  const { renderSessionLog } = HivePanels;
+  const host = makeElement('div');
+  renderSessionLog(host, [
+    { kind: 'review', id: 'T-1', title: 'Look at it' },
+    { kind: 'done', id: 'T-2', title: 'Done thing', at: new Date(NOW - 5 * 60_000).toISOString() },
+  ], NOW);
+  assert.equal(host.children.length, 2);
+  assert.equal(host.children[0].attributes['data-kind'], 'review');
+  assert.equal(host.children[0].children[0].style.color, 'var(--red)');
+  assert.equal(host.children[1].children[0].style.color, 'var(--blue)');
+  const text = collectText(host);
+  assert.match(text, /T-2 Done thing 5 min ago/);
+  const empty = makeElement('div');
+  renderSessionLog(empty, [], NOW);
+  assert.equal(collectText(empty), 'no ledger events yet');
+});
+
 test('sparklinePoints maps min and max samples to chart height bounds', async () => {
   HivePanels = await loadHivePanels();
   const { sparklinePoints } = HivePanels;

@@ -35,8 +35,10 @@ async function startServer(t, options = {}) {
   const assetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'watch-token-urls-'));
   await Promise.all([
     fs.writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>board</title>'),
+    fs.writeFile(path.join(assetDir, 'board.html'), '<!doctype html><title>board</title>'),
     fs.writeFile(path.join(assetDir, 'project.html'), '<!doctype html><title>project</title>'),
     fs.writeFile(path.join(assetDir, 'run.html'), '<!doctype html><title>run</title>'),
+    fs.writeFile(path.join(assetDir, 'command-center.html'), '<!doctype html><title>command-center</title>'),
   ]);
   const board = {
     snapshot: async () => ({ projects: [] }),
@@ -138,7 +140,7 @@ test('/api/health is token-free on loopback only', async (t) => {
 
 test('HTML page query tokens are exchanged for a protected cookie and privacy headers', async (t) => {
   const { port, token } = await startServer(t);
-  const page = await request(port, `/?keep=yes&t=${token}#ignored`);
+  const page = await request(port, `/classic?keep=yes&t=${token}#ignored`);
   assert.equal(page.status, 200);
   assert.match(page.headers['set-cookie']?.[0] ?? '', new RegExp(`^swarm_watch_${port}=${token}; HttpOnly; SameSite=Strict; Path=/$`));
   assert.equal(page.headers['referrer-policy'], 'no-referrer');
@@ -148,7 +150,13 @@ test('HTML page query tokens are exchanged for a protected cookie and privacy he
   assert.equal((await request(port, '/api/snapshot', { Cookie: cookie })).status, 200);
   assert.equal((await request(port, '/project?id=p1', { Cookie: cookie })).status, 200);
 
-  const secure = await request(port, `/?t=${token}`, { 'x-forwarded-proto': 'https' });
+  const root = await request(port, `/?t=${token}`);
+  assert.equal(root.status, 200);
+  assert.match(root.body, /<title>command-center<\/title>/);
+  assert.match(root.headers['set-cookie']?.[0] ?? '', new RegExp(`^swarm_watch_${port}=${token}; HttpOnly; SameSite=Strict; Path=/$`));
+  assert.equal((await request(port, '/?t=wrong')).status, 403);
+
+  const secure = await request(port, `/classic?t=${token}`, { 'x-forwarded-proto': 'https' });
   assert.match(secure.headers['set-cookie']?.[0] ?? '', /; Secure$/);
   const head = await request(port, `/run?id=p1&run=r1&t=${token}`, {}, 'HEAD');
   assert.equal(head.status, 200);

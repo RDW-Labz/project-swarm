@@ -139,7 +139,9 @@ function machineSlots(override) {
   try {
     const config = loadLocalConfig();
     configured = config?.machineConcurrency ?? config?.machine?.concurrency ?? config?.lanes?.machineConcurrency;
-  } catch { /* an absent or invalid local config uses the safe fallback */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] local config unreadable; using the default:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
   return Number.isInteger(configured) && configured > 0 ? configured : 8;
 }
 
@@ -679,7 +681,9 @@ function wavePrepContextBytes(context, root) {
   if (!root) return 0;
   let total = 0;
   for (const file of context ?? []) {
-    try { total += statSync(path.join(root, file)).size; } catch { /* missing */ }
+    try { total += statSync(path.join(root, file)).size; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] context size:', error?.code ?? 'unknown');
+    }
   }
   return total;
 }
@@ -833,7 +837,9 @@ function envLineFor(root) {
 // The quality checks (typecheck, lint, optional build) this project's profile and package.json give.
 export async function qualityFor(root, profile) {
   let pkg = null;
-  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json unreadable; quality checks use the defaults:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
   return deriveQualityChecks({ pkg, hasTsconfig: existsSync(path.join(root, 'tsconfig.json')), manager: packageManagerOf(profile) ?? 'npm', config: profile?.quality ?? {} });
 }
 
@@ -1962,10 +1968,14 @@ async function toolConfigWarnings(root, tickets) {
     const dir = near(file) ?? '.';
     if (infoFor.has(dir)) return infoFor.get(dir);
     let scripts = {}, configText = '';
-    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* no package.json */ }
+    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json scripts unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     const names = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'cypress.config.ts', 'cypress.config.js'];
     for (const value of Object.values(scripts)) for (const m of String(value).matchAll(/--config[ =]+(\S+)/g)) names.push(m[1].replace(/^['"]|['"]$/g, ''));
-    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch { /* absent */ } }
+    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] e2e config unreadable:', error?.code ?? 'unknown');
+    } }
     const value = { scripts, configText };
     infoFor.set(dir, value);
     return value;
@@ -2005,7 +2015,9 @@ async function cmdNew(root, { flags }, deps = {}) {
   if (!built.ok) {
     // Keep what was typed, so fixing one line does not mean answering everything again.
     const saved = '.swarm/project/scope-answers.json';
-    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch { /* the message below still says what to fix */ }
+    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not keep the scope answers:', error?.code ?? error?.name ?? 'unknown');
+    }
     return out(`The scope was not written:\n${built.errors.map(e => `  - ${e}`).join('\n')}\nYour answers are kept in ${saved}: fix them there and run swarm scope new --answers ${saved}`, 1);
   }
   await writeFileSafe(root, rel(path.relative(root, target)), built.text, { exclusive: true });
@@ -2026,7 +2038,7 @@ async function cmdCheck(root, { rest }) {
   const result = checkScope(scope);
   const lines = [`${file}: ${scope.requirements.length} requirements, ${scope.stages.length} stages, ${result.findings.length} findings`];
   for (const f of result.findings) lines.push(`  ${f.level} ${f.code}${f.id ? ` ${f.id}` : ''}: ${f.message} -> ${f.fix}`);
-  const led = await readLedger(root).catch(() => null);
+  const led = await readLedger(root).catch(error => { console.error('[tools/scope-commands.mjs] could not read the ticket ledger:', error instanceof SyntaxError ? 'corrupt ledger (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown')); return null; });
   if (led) lines.push(...await toolConfigWarnings(root, led.tickets));
   const items = day0Checklist(scope);
   if (items.length) lines.push(`Day 0: ${items.length} outside services need an owner: ${items.map(i => i.service).join(', ')}`);
@@ -2553,7 +2565,9 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
-  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
+  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch (error) {
+    console.error('[tools/scope-commands.mjs] state backup after approve failed:', error?.code ?? error?.name ?? 'unknown');
+  }
   return out([...(autoApproveLines.length ? [...autoApproveLines, ''] : []), waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
@@ -2966,7 +2980,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     const projectChecks = await readProjectChecks(root);
     let projectPkg = null;
     let projectFiles = [];
-    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] project package.json unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
     const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
@@ -3262,7 +3278,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         const tests = ticketTests(t).filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f));
         const hashTests = [...new Set([...(t.tests ?? []), ...tests])];
         const sources = new Map();
-        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch { /* missing: nothing covered by it */ } }
+        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] test source unreadable:', t.id, error?.code ?? 'unknown');
+        } }
         const cov = coverage({ ...t, tests }, sources);
         const hash = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? []), ...hashTests]);
         // A verdict belongs to the text of the line it judged: after the acceptance text was edited an old verdict for the same number is dropped.
@@ -3341,7 +3359,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     await refreshPlan(root);
-    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(() => {});
+    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(error => { console.error('[tools/scope-commands.mjs] recordStageHistory:', error?.code ?? error?.name ?? 'unknown'); });
     return out([`${done.length} ticket(s) marked done`,
       ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
@@ -3426,10 +3444,14 @@ async function refreshPlan(root) {
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
-function supersedeOwnerRefusal() {
-  if ((process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) && process.env.SWARM_OWNER !== '1') {
-    return 'tickets supersede is owner-only; run from the owner terminal (not inside an agent session)';
+const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
+
+export function supersedeOwnerRefusal({ env = process.env, isTTY = process.stdout.isTTY } = {}) {
+  if (env.SWARM_OWNER === '1') return null;
+  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.SWARM_WORKER || env.SWARM_JOB_ID || env.SWARM_RUN_ID) {
+    return SUPERSEDE_OWNER_MSG;
   }
+  if (!isTTY) return SUPERSEDE_OWNER_MSG;
   return null;
 }
 
@@ -3437,11 +3459,11 @@ const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.bas
 
 async function supersedeStaleCommand(root, rest, flags) {
   if (rest.length) return bad('tickets supersede does not take positional arguments');
-  const denied = supersedeOwnerRefusal();
-  if (denied) return out(denied, 1);
   if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
   const beforeMs = Date.parse(flags.before);
   if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+  const denied = supersedeOwnerRefusal();
+  if (denied) return out(denied, 1);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   let candidates;
@@ -3460,16 +3482,24 @@ async function supersedeStaleCommand(root, rest, flags) {
     return out(lines.join('\n'));
   }
   try {
-    const result = await withLock(root, async () => {
-      const freshLedger = await readLedger(root);
-      if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
-      const freshCandidates = supersedeCandidates(freshLedger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
-      if (!freshCandidates.length) return { count: 0, ids: [] };
-      return applySupersedeStale(root, { before: flags.before, stage: flags.stage });
-    });
-    if (!result.count) return out('no stale tickets to supersede');
-    await refreshPlan(root);
-    return out(`superseded ${result.count} stale ticket(s)`);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await withLock(root, async () => {
+          const freshLedger = await readLedger(root);
+          if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+          const logEvents = await readTicketLog(root);
+          const freshCandidates = supersedeCandidates(freshLedger, logEvents, { before: flags.before, stage: flags.stage });
+          if (!freshCandidates.length) return { count: 0, ids: [] };
+          return applySupersedeStale(root, { before: flags.before, stage: flags.stage, ledger: freshLedger, logEvents });
+        });
+        if (!result.count) return out('no stale tickets to supersede');
+        await refreshPlan(root);
+        return out(`superseded ${result.count} stale ticket(s)`);
+      } catch (error) {
+        if (error.code !== 'scope-busy' || attempt === 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
   } catch (error) {
     if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
     throw error;
@@ -3529,7 +3559,9 @@ async function editTicketFiles(root, ledger, rest, flags) {
       try {
         scopeText = await readText(resolveInside(root, fresh.scope?.file ?? DEFAULT_SCOPE_FILE)) ?? '';
         if (scopeText) scope = parseScope(scopeText);
-      } catch { /* the ticket ledger remains editable when its scope is unavailable */ }
+      } catch (error) {
+        console.error('[tools/scope-commands.mjs] ticket scope unreadable; the ledger stays editable:', error instanceof SyntaxError ? 'corrupt scope (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown'));
+      }
       const allowedRootFiles = await rootFilesForProject(root, { scope, scopeText, notes: rootFileNotes });
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
@@ -3825,7 +3857,9 @@ async function doneReviewRefusals(root, ledger, ticket) {
           const full = path.join(root, f);
           const info = lstatSync(full);
           if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
-        } catch { /* missing */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] acceptance test source unreadable:', ticket.id, error?.code ?? 'unknown');
+        }
       }
       const hashTests = [...new Set([...(ticket.tests ?? []), ...tests])];
       const hash = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? []), ...hashTests]);
@@ -3916,6 +3950,10 @@ async function setTicketStatus(root, rest, flags) {
     }
   }
   if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
+  if (to === 'superseded') {
+    const denied = supersedeOwnerRefusal();
+    if (denied) return out(denied, 1);
+  }
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
   let holdQuestion;
@@ -4091,7 +4129,7 @@ async function withLock(root, fn) {
     try { handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
+      const stat = await fs.lstat(lock).catch(error => { if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] scope lock stat:', error?.code ?? 'unknown'); return null; });
       if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
       else throw fail('scope-busy', 'another swarm go --scope is starting a wave; try again in a minute');
     }
@@ -4178,7 +4216,9 @@ export async function revertWave(root, ids) {
   for (const id of ids) {
     const ledger = await readLedger(root);
     if (ledger?.tickets.find(t => t.id === id)?.status !== 'running') continue;
-    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch { /* a ticket that cannot move stays for the owner */ }
+    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not move ticket back after a wave that did not start:', id, error?.code ?? error?.name ?? 'unknown');
+    }
   }
   if (back.length) await refreshPlan(root);
   return back;

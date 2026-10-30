@@ -128,8 +128,8 @@ export function effectiveTargetWorktree(ledger, ticket) {
 }
 
 export function ticketSetHash(tickets) {
-  // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
-  const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+  // Proposed and superseded tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
+  const picked = [...tickets].filter(t => t.status !== 'proposed' && t.status !== 'superseded' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
   return createHash('sha256').update(canon(picked)).digest('hex');
 }
 
@@ -308,24 +308,50 @@ export async function appendLog(root, event) {
   }
 }
 
+const CORRUPT_LOG_LINE_MSG = '[tools/tickets.mjs] readTicketLog: skipping corrupt log line';
+
 export async function readTicketLog(root) {
   try {
     const text = await fs.readFile(logPath(root), 'utf8');
-    return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    let loggedCorrupt = false;
+    const events = [];
+    for (const line of text.split('\n').filter(Boolean)) {
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+        if (!loggedCorrupt) {
+          console.error(CORRUPT_LOG_LINE_MSG);
+          loggedCorrupt = true;
+        }
+      }
+    }
+    return events;
   } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
 }
 
+function ticketIdsFromLogEvent(ev) {
+  const ids = [];
+  if (typeof ev.id === 'string') ids.push(ev.id);
+  if (typeof ev.ticket === 'string') ids.push(ev.ticket);
+  if (Array.isArray(ev.ids) && ev.ids.every(s => typeof s === 'string')) ids.push(...ev.ids);
+  if (Array.isArray(ev.tickets) && ev.tickets.every(s => typeof s === 'string')) ids.push(...ev.tickets);
+  return ids;
+}
+
+function recordTouch(fromLog, id, at) {
+  const ms = Date.parse(at ?? '');
+  if (Number.isNaN(ms)) return;
+  const prev = fromLog.get(id);
+  if (!prev || ms > prev.ms) fromLog.set(id, { ms, at, basis: 'log' });
+}
+
 export function lastTouchForTickets(ledger, logEvents) {
   const fromLog = new Map();
   for (const ev of logEvents) {
-    if (typeof ev.id !== 'string') continue;
-    const ms = Date.parse(ev.at ?? '');
-    if (Number.isNaN(ms)) continue;
-    const prev = fromLog.get(ev.id);
-    if (!prev || ms > prev.ms) fromLog.set(ev.id, { ms, at: ev.at, basis: 'log' });
+    for (const id of ticketIdsFromLogEvent(ev)) recordTouch(fromLog, id, ev.at);
   }
   const ledgerMs = Date.parse(ledger?.createdAt ?? '');
   const fallbackMs = Number.isNaN(ledgerMs) ? 0 : ledgerMs;
@@ -360,9 +386,9 @@ export function supersedeCandidates(ledger, logEvents, { before, stage } = {}) {
   return out;
 }
 
-export async function applySupersedeStale(root, { before, stage, now = Date.now() } = {}) {
-  const logEvents = await readTicketLog(root);
-  const ledger = await readLedger(root);
+export async function applySupersedeStale(root, { before, stage, now = Date.now(), ledger: ledgerIn, logEvents: logEventsIn } = {}) {
+  const logEvents = logEventsIn ?? await readTicketLog(root);
+  const ledger = ledgerIn ?? await readLedger(root);
   if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
   const candidates = supersedeCandidates(ledger, logEvents, { before, stage });
   if (!candidates.length) return { count: 0, ids: [] };
@@ -374,6 +400,7 @@ export async function applySupersedeStale(root, { before, stage, now = Date.now(
     delete ticket.blockReason;
     delete ticket.holdQuestion;
   }
+  const pruned = pruneCancelledDeps(ledger).pruned;
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, {
@@ -385,6 +412,7 @@ export async function applySupersedeStale(root, { before, stage, now = Date.now(
     source: 'tickets-supersede',
     actor: ticketActor(),
   });
+  await logPrune(root, pruned, { by: 'owner' }, now);
   return { count: ids.length, ids };
 }
 
@@ -559,8 +587,8 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
     delete ticket.blockReason;
     delete ticket.holdQuestion;
   }
-  // A cancelled ticket stops being a dependency: the tickets that waited on it no longer wait.
-  const pruned = to === 'cancelled' ? pruneCancelledDeps(ledger).pruned : [];
+  // A cancelled or superseded ticket stops being a dependency: the tickets that waited on it no longer wait.
+  const pruned = to === 'cancelled' || to === 'superseded' ? pruneCancelledDeps(ledger).pruned : [];
   ledger.updatedAt = new Date(now).toISOString();
   await writeLedger(root, ledger);
   await appendLog(root, {
@@ -574,7 +602,7 @@ export async function transition(root, id, to, { by = 'system', note, now = Date
     ...(source ? { source } : {}),
     ...(confirmation ? { confirmation } : {}),
   });
-  await logPrune(root, pruned, { cancelled: id, by }, now);
+  await logPrune(root, pruned, { ...(to === 'cancelled' ? { cancelled: id } : {}), by }, now);
   return ticket;
 }
 
@@ -596,13 +624,13 @@ export async function logPrune(root, pruned, { cancelled, by } = {}, now = Date.
 // before: removing a dependency on a cancelled ticket only makes a ticket less blocked, and the seal is renewed over the new set.
 export function pruneCancelledDeps(ledger) {
   const tickets = ledger?.tickets ?? [];
-  const cancelled = new Set(tickets.filter(t => t.status === 'cancelled').map(t => t.id));
+  const dropped = new Set(tickets.filter(t => t.status === 'cancelled' || t.status === 'superseded').map(t => t.id));
   const wasApproved = isApproved(ledger);
   const pruned = [];
   for (const t of tickets) {
-    const removed = (t.dependsOn ?? []).filter(d => cancelled.has(d));
+    const removed = (t.dependsOn ?? []).filter(d => dropped.has(d));
     if (!removed.length) continue;
-    t.dependsOn = t.dependsOn.filter(d => !cancelled.has(d));
+    t.dependsOn = t.dependsOn.filter(d => !dropped.has(d));
     pruned.push({ id: t.id, removed });
   }
   if (pruned.length && wasApproved) {
@@ -685,7 +713,7 @@ export function renderBuildPlan(ledger, scope) {
   const name = scope?.name ?? ledger?.scope?.name ?? 'untitled';
   const version = scope?.version ?? ledger?.scope?.version ?? 1;
   const cell = s => String(s ?? '').replace(/\s+/g, ' ').split('|').join('/');
-  const live = tickets.filter(t => t.status !== 'cancelled');
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const out = ['# Build plan', '', `Scope: ${cell(name)} (version ${version})`, `Progress: ${stats.percentDone}% done of ${live.length} live tickets`];
   if (stats.coveragePct !== null) out.push(`Requirement coverage: ${stats.coveragePct}%`);
   out.push(`Tickets: ${stats.total} total (${STATUSES.map(s => `${s} ${stats.byStatus[s] ?? 0}`).join(', ')})`);

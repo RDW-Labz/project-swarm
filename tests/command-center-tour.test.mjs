@@ -6,6 +6,7 @@ import {
   TOUR_STEPS,
   completionKey,
   hasCompleted,
+  maybeStartFirstVisit,
   startTour,
 } from '../tools/watch-assets/cc-tour.js';
 
@@ -261,6 +262,34 @@ test('tour overlay controls are focusable and Tab moves focus in order', () => {
   assert.equal(doc.activeElement, back);
 
   handle.close();
+});
+
+test('a real browser storage never opens the tour by itself; only the help button starts it', () => {
+  const doc = makeFakeDoc();
+  installTourTargets(doc);
+  const storage = makeStorage();
+  assert.equal(maybeStartFirstVisit({ doc, storage, userId: 'visitor' }), null);
+  assert.equal(findOverlay(doc), null, 'no overlay on first visit');
+  assert.equal(hasCompleted(storage, 'visitor'), false, 'opening the page does not mark the tour done');
+
+  const fab = doc.body.children.find((c) => c.classList.contains('cc-tour-fab'));
+  assert.ok(fab, 'help button is present');
+  fab.click();
+  const overlay = findOverlay(doc);
+  assert.ok(overlay, 'help button starts the tour');
+  tourButtons(overlay).skip.click();
+  assert.equal(findOverlay(doc), null);
+  assert.equal(hasCompleted(storage, 'visitor'), true);
+});
+
+test('?tour=0 keeps both the tour and its corner help button out of the page', () => {
+  const doc = makeFakeDoc();
+  installTourTargets(doc);
+  const storage = makeStorage();
+  const location = { search: '?tour=0' };
+  doc.defaultView = { location };
+  assert.equal(maybeStartFirstVisit({ doc, storage, userId: 'visitor' }), null);
+  assert.equal(doc.body.children.find((c) => c.classList.contains('cc-tour-fab')), undefined);
 });
 
 test('Escape dismisses tour, removes overlay, and restores prior focus', () => {
