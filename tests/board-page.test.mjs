@@ -376,7 +376,7 @@ test('the board: every data route needs the token, only GET, wrong host refused;
   }
   assert.equal((await get(port, '/api/board', { method: 'POST', headers: { 'x-watch-token': token } })).status, 405);
   assert.equal((await get(port, '/api/board', { host: 'evil.example:80', headers: { 'x-watch-token': token } })).status, 421);
-  const page = await get(port, `/?t=${token}`);
+  const page = await get(port, `/classic?t=${token}`);
   assert.match(page.body, /Every project on this machine/);
   const projectPage = await get(port, `/project?id=${A.id}&t=${token}`);
   assert.equal(projectPage.status, 200);
