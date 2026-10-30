@@ -16,9 +16,15 @@ import {
   validateSetTransition,
   readyTickets,
   pruneCancelledDeps,
+  approveLedger,
   applySupersedeStale,
   transition,
   STATUSES,
+  renderBuildPlan,
+  ticketSetHash,
+  isApproved,
+  readTicketLog,
+  lastTouchForTickets,
 } from '../tools/tickets.mjs';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -366,4 +372,95 @@ test('applySupersedeStale on a fresh ledger object does not re-read and lose con
   const after = await readLedger(root);
   assert.equal(after.tickets.find(t => t.id === 'T-0001').status, 'superseded');
   assert.equal(after.tickets.find(t => t.id === 'T-0100').status, 'ready');
+});
+
+test('renderBuildPlan live count and requirement refs match ledgerStats (excludes proposed and superseded)', () => {
+  const planScope = {
+    name: 'Demo',
+    version: 1,
+    stages: [{ id: 'S1', title: 'Core' }],
+    requirements: [{ id: 'R-001', text: 'A thing' }],
+  };
+  const ledger = createLedger({
+    scope,
+    tickets: [
+      ticket('T-0001', 'done'),
+      ticket('T-0002', 'superseded'),
+      ticket('T-0003', 'proposed', { origin: 'comment' }),
+      ticket('T-0004', 'todo'),
+    ],
+  });
+  ledger.requirements = [{ id: 'R-001', text: 'A thing' }];
+  const stats = ledgerStats(ledger);
+  const md = renderBuildPlan(ledger, planScope);
+  const liveCount = 2;
+  assert.equal(stats.percentDone, 50);
+  assert.match(md, new RegExp(`Progress: ${stats.percentDone}% done of ${liveCount} live tickets`));
+  const reqLines = md.split('\n').filter(l => l.startsWith('| R-001 |'));
+  assert.equal(reqLines.length, 1);
+  assert.match(reqLines[0], /\| R-001 \| A thing \| T-0001, T-0004 \| partial \|/);
+  assert.doesNotMatch(reqLines[0], /T-0002/);
+  assert.match(md, /\| T-0002 \| .* \| superseded \|/);
+});
+
+test('superseding a proposed ticket does not lapse approval or change ticketsHash', () => {
+  const proposed = ticket('T-0001', 'proposed', { origin: 'comment' });
+  const todo = ticket('T-0002', 'todo');
+  const ledger = createLedger({ scope, tickets: [proposed, todo] });
+  const approved = approveLedger(ledger, { by: 'owner', now: 0 });
+  const hashBefore = approved.approved.ticketsHash;
+  assert.equal(isApproved(approved), true);
+  assert.equal(ticketSetHash(approved.tickets), hashBefore);
+  const superseded = {
+    ...approved,
+    tickets: approved.tickets.map(t => (t.id === 'T-0001' ? { ...t, status: 'superseded' } : t)),
+  };
+  assert.equal(ticketSetHash(superseded.tickets), hashBefore);
+  assert.equal(isApproved(superseded), true);
+});
+
+test('readTicketLog skips a corrupt line and lastTouchForTickets still uses valid events', async () => {
+  const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
+  const corrupt = '{not json}\n';
+  const valid1 = JSON.stringify({ at: '2021-01-01T00:00:00.000Z', event: 'transition', id: 'T-0001', from: 'proposed', to: 'todo' });
+  const valid2 = JSON.stringify({ at: '2024-01-01T00:00:00.000Z', event: 'owner-note', id: 'T-0001' });
+  await fs.writeFile(logPath(root), valid1 + '\n' + corrupt + valid2 + '\n', 'utf8');
+  const events = await readTicketLog(root);
+  assert.equal(events.length, 2);
+  const ledger = await readLedger(root);
+  const touch = lastTouchForTickets(ledger, events);
+  assert.equal(touch(ledger.tickets[0]).at, '2024-01-01T00:00:00.000Z');
+  assert.equal(touch(ledger.tickets[0]).basis, 'log');
+});
+
+test('lastTouchForTickets reads ticket, ids, and tickets log shapes', () => {
+  const ledger = createLedger({
+    scope,
+    tickets: [ticket('T-0001', 'todo'), ticket('T-0002', 'todo'), ticket('T-0003', 'todo')],
+    now: Date.parse('2020-01-01T00:00:00.000Z'),
+  });
+  ledger.createdAt = '2020-01-01T00:00:00.000Z';
+  const logEvents = [
+    { at: '2022-01-01T00:00:00.000Z', event: 'x', ticket: 'T-0001' },
+    { at: '2023-01-01T00:00:00.000Z', event: 'y', ids: ['T-0002'] },
+    { at: '2024-01-01T00:00:00.000Z', event: 'prune-deps', tickets: ['T-0003'] },
+    { at: '2025-01-01T00:00:00.000Z', event: 'bad', ids: 'T-0002' },
+  ];
+  const touch = lastTouchForTickets(ledger, logEvents);
+  assert.equal(touch(ledger.tickets.find(t => t.id === 'T-0001')).at, '2022-01-01T00:00:00.000Z');
+  assert.equal(touch(ledger.tickets.find(t => t.id === 'T-0002')).at, '2023-01-01T00:00:00.000Z');
+  assert.equal(touch(ledger.tickets.find(t => t.id === 'T-0003')).at, '2024-01-01T00:00:00.000Z');
+});
+
+test('lastTouchForTickets falls back to ledger createdAt when a ticket has no log event', () => {
+  const ledger = createLedger({
+    scope,
+    tickets: [ticket('T-0001', 'todo')],
+    now: Date.parse('2019-06-01T00:00:00.000Z'),
+  });
+  ledger.createdAt = '2019-06-01T00:00:00.000Z';
+  const touch = lastTouchForTickets(ledger, []);
+  const lt = touch(ledger.tickets[0]);
+  assert.equal(lt.at, '2019-06-01T00:00:00.000Z');
+  assert.equal(lt.basis, 'ledger-created');
 });

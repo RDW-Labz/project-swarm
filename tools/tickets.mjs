@@ -128,8 +128,8 @@ export function effectiveTargetWorktree(ledger, ticket) {
 }
 
 export function ticketSetHash(tickets) {
-  // Proposed tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
-  const picked = [...tickets].filter(t => t.status !== 'proposed' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+  // Proposed and superseded tickets, and comment tickets the owner has not approved (cancelled or hand-edited), are outside what was approved.
+  const picked = [...tickets].filter(t => t.status !== 'proposed' && t.status !== 'superseded' && !unapprovedProposal(t)).sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
   return createHash('sha256').update(canon(picked)).digest('hex');
 }
 
@@ -308,24 +308,50 @@ export async function appendLog(root, event) {
   }
 }
 
+const CORRUPT_LOG_LINE_MSG = '[tools/tickets.mjs] readTicketLog: skipping corrupt log line';
+
 export async function readTicketLog(root) {
   try {
     const text = await fs.readFile(logPath(root), 'utf8');
-    return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    let loggedCorrupt = false;
+    const events = [];
+    for (const line of text.split('\n').filter(Boolean)) {
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+        if (!loggedCorrupt) {
+          console.error(CORRUPT_LOG_LINE_MSG);
+          loggedCorrupt = true;
+        }
+      }
+    }
+    return events;
   } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
 }
 
+function ticketIdsFromLogEvent(ev) {
+  const ids = [];
+  if (typeof ev.id === 'string') ids.push(ev.id);
+  if (typeof ev.ticket === 'string') ids.push(ev.ticket);
+  if (Array.isArray(ev.ids) && ev.ids.every(s => typeof s === 'string')) ids.push(...ev.ids);
+  if (Array.isArray(ev.tickets) && ev.tickets.every(s => typeof s === 'string')) ids.push(...ev.tickets);
+  return ids;
+}
+
+function recordTouch(fromLog, id, at) {
+  const ms = Date.parse(at ?? '');
+  if (Number.isNaN(ms)) return;
+  const prev = fromLog.get(id);
+  if (!prev || ms > prev.ms) fromLog.set(id, { ms, at, basis: 'log' });
+}
+
 export function lastTouchForTickets(ledger, logEvents) {
   const fromLog = new Map();
   for (const ev of logEvents) {
-    if (typeof ev.id !== 'string') continue;
-    const ms = Date.parse(ev.at ?? '');
-    if (Number.isNaN(ms)) continue;
-    const prev = fromLog.get(ev.id);
-    if (!prev || ms > prev.ms) fromLog.set(ev.id, { ms, at: ev.at, basis: 'log' });
+    for (const id of ticketIdsFromLogEvent(ev)) recordTouch(fromLog, id, ev.at);
   }
   const ledgerMs = Date.parse(ledger?.createdAt ?? '');
   const fallbackMs = Number.isNaN(ledgerMs) ? 0 : ledgerMs;
@@ -687,7 +713,7 @@ export function renderBuildPlan(ledger, scope) {
   const name = scope?.name ?? ledger?.scope?.name ?? 'untitled';
   const version = scope?.version ?? ledger?.scope?.version ?? 1;
   const cell = s => String(s ?? '').replace(/\s+/g, ' ').split('|').join('/');
-  const live = tickets.filter(t => t.status !== 'cancelled');
+  const live = tickets.filter(t => !['cancelled', 'proposed', 'superseded'].includes(t.status));
   const out = ['# Build plan', '', `Scope: ${cell(name)} (version ${version})`, `Progress: ${stats.percentDone}% done of ${live.length} live tickets`];
   if (stats.coveragePct !== null) out.push(`Requirement coverage: ${stats.coveragePct}%`);
   out.push(`Tickets: ${stats.total} total (${STATUSES.map(s => `${s} ${stats.byStatus[s] ?? 0}`).join(', ')})`);
