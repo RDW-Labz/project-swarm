@@ -265,7 +265,22 @@ export async function writeReviewRecord(root, state, job, workspaceRoot, { warn 
   const recordFile = `.swarm/runs/${state.id}/review-record.json`;
   const temporary = `${recordFile}.${crypto.randomUUID()}.tmp`;
   try {
-    const bytes = await fs.readFile(path.join(workspaceRoot, resultFile));
+    const resultPath = path.join(workspaceRoot, resultFile);
+    let bytes = await fs.readFile(resultPath);
+    try {
+      const parsed = JSON.parse(bytes.toString('utf8'));
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        parsed.head = state.baseCommit;
+        const stamped = `${JSON.stringify(parsed)}\n`;
+        const resultTemporary = `${resultPath}.${crypto.randomUUID()}.tmp`;
+        await fs.writeFile(resultTemporary, stamped, { flag: 'wx', mode: 0o600 });
+        await fs.chmod(resultTemporary, 0o600);
+        await fs.rename(resultTemporary, resultPath);
+        bytes = Buffer.from(stamped);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
     const resultHash = crypto.createHash('sha256').update(bytes).digest('hex');
     await jsonWrite(root, temporary, {
       version: 1, runId: state.id, jobId: job.id, agent: job.agent,

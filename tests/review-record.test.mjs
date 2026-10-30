@@ -24,17 +24,65 @@ async function fixture(t) {
   return { root, state, workspace, job, resultFile, bytes, recordFile };
 }
 
+function stampedResultBytes(baseCommit, body = { verdict: 'pass' }) {
+  return Buffer.from(`${JSON.stringify({ ...body, head: baseCommit })}\n`);
+}
+
 test('runner writes review record from completed job and exact workspace bytes', async (t) => {
   const f = await fixture(t);
+  const stampedBytes = stampedResultBytes(f.state.baseCommit);
   await writeReviewRecord(f.root, f.state, f.job, f.workspace);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.workspace, f.resultFile), 'utf8')), {
+    verdict: 'pass', head: f.state.baseCommit,
+  });
   assert.deepEqual(JSON.parse(await fs.readFile(f.recordFile, 'utf8')), {
     version: 1, runId: f.state.id, jobId: f.job.id, agent: f.job.agent, model: f.job.model,
     manifest: '.swarm/runs/review-5/manifest.json', head: f.state.baseCommit,
     status: 'complete', resultFile: f.resultFile,
-    resultHash: createHash('sha256').update(f.bytes).digest('hex'),
+    resultHash: createHash('sha256').update(stampedBytes).digest('hex'),
     finishedAt: f.job.finishedAt, stateFile: '.swarm/runs/review-5/state.json',
   });
   assert.deepEqual(await fs.readdir(path.dirname(f.recordFile)), ['review-record.json']);
+});
+
+test('runner stamps missing head on result JSON before hashing', async (t) => {
+  const f = await fixture(t);
+  const stampedBytes = stampedResultBytes(f.state.baseCommit);
+  await writeReviewRecord(f.root, f.state, f.job, f.workspace);
+  assert.equal(
+    JSON.parse(await fs.readFile(f.recordFile, 'utf8')).resultHash,
+    createHash('sha256').update(stampedBytes).digest('hex'),
+  );
+});
+
+test('runner overwrites wrong head on result JSON before hashing', async (t) => {
+  const f = await fixture(t);
+  const wrongHead = 'b'.repeat(40);
+  await fs.writeFile(
+    path.join(f.workspace, f.resultFile),
+    `${JSON.stringify({ verdict: 'pass', head: wrongHead })}\n`,
+  );
+  const stampedBytes = stampedResultBytes(f.state.baseCommit);
+  await writeReviewRecord(f.root, f.state, f.job, f.workspace);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.workspace, f.resultFile), 'utf8')), {
+    verdict: 'pass', head: f.state.baseCommit,
+  });
+  assert.equal(
+    JSON.parse(await fs.readFile(f.recordFile, 'utf8')).resultHash,
+    createHash('sha256').update(stampedBytes).digest('hex'),
+  );
+});
+
+test('runner hashes non-object result JSON without stamping', async (t) => {
+  const f = await fixture(t);
+  const bytes = Buffer.from('[1,2]\n');
+  await fs.writeFile(path.join(f.workspace, f.resultFile), bytes);
+  await writeReviewRecord(f.root, f.state, f.job, f.workspace);
+  assert.deepEqual(await fs.readFile(path.join(f.workspace, f.resultFile)), bytes);
+  assert.equal(
+    JSON.parse(await fs.readFile(f.recordFile, 'utf8')).resultHash,
+    createHash('sha256').update(bytes).digest('hex'),
+  );
 });
 
 test('runner uses actualModel when no requested model exists', async (t) => {
