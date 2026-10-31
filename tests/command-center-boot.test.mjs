@@ -17,6 +17,27 @@ const dataModulePath = fileURLToPath(new URL('../tools/watch-assets/command-cent
 
 const NOW = Date.UTC(2026, 10, 26, 20, 0, 0);
 
+const COCKPIT_WARM_MODULES = [
+  './cc-cockpit-mount.js',
+  './cockpit-view.js',
+  './cockpit-lists.js',
+  './cockpit-orchestrator.js',
+  './cc-ledger-browser.js',
+  './cc-glitch.js',
+  './cc-tour.js',
+];
+
+function cockpitWarmHrefs() {
+  const bootUrl = new URL('../tools/watch-assets/command-center-boot.js', import.meta.url);
+  return COCKPIT_WARM_MODULES.map((rel) => new URL(rel, bootUrl).href);
+}
+
+function modulepreloadHrefs(head) {
+  return (head.children || [])
+    .filter((node) => node.rel === 'modulepreload')
+    .map((node) => node.href);
+}
+
 function loadCommandCenterData() {
   const src = fs.readFileSync(dataModulePath, 'utf8');
   const box = { self: {} };
@@ -530,10 +551,7 @@ function walkForText(node, text) {
 
 test('browser idle preload inserts modulepreload for cockpit without loading cockpit on Hive', async () => {
   const rt = makeRuntime();
-  const cockpitMountHref = new URL(
-    './cc-cockpit-mount.js',
-    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
-  ).href;
+  const expectedHrefs = cockpitWarmHrefs();
   let idleFn;
   const oldIdle = globalThis.requestIdleCallback;
   globalThis.requestIdleCallback = (fn) => {
@@ -545,11 +563,7 @@ test('browser idle preload inserts modulepreload for cockpit without loading coc
     assert.ok(rt.root.querySelector('.hive-node'), 'Hive is visible before any cockpit switch');
     assert.equal(rt.root.querySelector('.cc-cockpit-shell'), null);
     idleFn?.();
-    const link = rt.dom.document.head.children.find((node) => node.rel === 'modulepreload');
-    assert.ok(link, 'modulepreload link is appended while Hive idles');
-    assert.equal(link.href, cockpitMountHref);
-    assert.equal(link.as, undefined);
-    assert.equal(link.crossOrigin, undefined);
+    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
     handle.destroy();
   } finally {
     globalThis.requestIdleCallback = oldIdle;
@@ -558,10 +572,7 @@ test('browser idle preload inserts modulepreload for cockpit without loading coc
 
 test('prompt cockpit warm adds modulepreload within 300ms without waiting for idle', async () => {
   const rt = makeRuntime();
-  const cockpitMountHref = new URL(
-    './cc-cockpit-mount.js',
-    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
-  ).href;
+  const expectedHrefs = cockpitWarmHrefs();
   const oldIdle = globalThis.requestIdleCallback;
   globalThis.requestIdleCallback = () => 1;
   try {
@@ -584,17 +595,13 @@ test('prompt cockpit warm adds modulepreload within 300ms without waiting for id
     });
     await handle.whenReady;
     assert.ok(rt.root.querySelector('.hive-node'));
-    assert.equal(
-      rt.dom.document.head.children.find((node) => node.rel === 'modulepreload'),
-      undefined,
+    assert.equal(modulepreloadHrefs(rt.dom.document.head).length, 0,
       'modulepreload is not inserted until the warm timer fires',
     );
     const warm = rt.timeouts.find((timer) => timer.ms === 300);
     assert.ok(warm, 'schedules a 300ms cockpit warm after the first Hive render');
     warm.fn();
-    const link = rt.dom.document.head.children.find((node) => node.rel === 'modulepreload');
-    assert.ok(link, 'modulepreload link is appended after the warm timer');
-    assert.equal(link.href, cockpitMountHref);
+    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
     handle.destroy();
   } finally {
     globalThis.requestIdleCallback = oldIdle;

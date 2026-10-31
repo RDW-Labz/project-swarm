@@ -306,10 +306,22 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   }
   assert.doesNotMatch(staticImports(boot).join('\n'), /cc-router/, 'legacy router imports the robot-backed layout');
   assert.match(boot, /import\('\.\/cc-cockpit-mount\.js'\)/);
-  assert.match(boot, /cockpitPreload\.rel\s*=\s*['"]modulepreload['"]/);
-  assert.match(boot, /cockpitPreload\.href\s*=\s*new URL\('\.\/cc-cockpit-mount\.js',\s*import\.meta\.url\)\.href/);
+  assert.match(boot, /COCKPIT_WARM_MODULES/);
+  for (const rel of [
+    './cc-cockpit-mount.js',
+    './cockpit-view.js',
+    './cockpit-lists.js',
+    './cockpit-orchestrator.js',
+    './cc-ledger-browser.js',
+    './cc-glitch.js',
+    './cc-tour.js',
+  ]) {
+    assert.match(boot, new RegExp(rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(boot, /link\.rel\s*=\s*['"]modulepreload['"]/);
+  assert.match(boot, /new URL\(rel,\s*import\.meta\.url\)\.href/);
   assert.match(boot, /setTimeoutFn\(\(\)\s*=>\s*\{[\s\S]*preloadCockpit\(\)[\s\S]*\},\s*300\)/);
-  assert.doesNotMatch(boot, /cockpitPreload\.as\s*=/);
+  assert.doesNotMatch(boot, /modulepreload[\s\S]*\.as\s*=/);
   assert.match(hive, /import\('\.\/robot-head\.js'\)/);
   assert.match(boot, /import\('\.\/command-palette\.js'\)/);
   assert.match(html, /command-center-boot\.js/);
@@ -360,16 +372,24 @@ test('hover-prefetched Cockpit data paints before a slow navigation refresh', as
   finishRefresh({ id: 'alpha', name: 'Fresh' });
 });
 
-test('browser path modulepreloads cockpit from boot URL without import before Hive navigation', async t => {
+test('browser path modulepreloads cockpit graph from boot URL without import before Hive navigation', async t => {
   process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
   const oldData = globalThis.CommandCenterData;
   globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
   t.after(() => { globalThis.CommandCenterData = oldData; });
   const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
-  const cockpitMountHref = new URL(
+  const expectedHrefs = [
     './cc-cockpit-mount.js',
+    './cockpit-view.js',
+    './cockpit-lists.js',
+    './cockpit-orchestrator.js',
+    './cc-ledger-browser.js',
+    './cc-glitch.js',
+    './cc-tour.js',
+  ].map((rel) => new URL(
+    rel,
     new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
-  ).href;
+  ).href);
   const links = [];
   const document = {
     hidden: false,
@@ -407,11 +427,13 @@ test('browser path modulepreloads cockpit from boot URL without import before Hi
   t.after(() => handle.destroy());
   await handle.whenReady;
   assert.equal(location.pathname, '/command-center');
-  assert.equal(links.length, 1);
-  assert.equal(links[0].rel, 'modulepreload');
-  assert.equal(links[0].href, cockpitMountHref);
-  assert.equal(links[0].as, undefined);
-  assert.equal(links[0].crossOrigin, undefined);
+  assert.equal(links.length, expectedHrefs.length);
+  assert.deepEqual(links.map((link) => link.href), expectedHrefs);
+  for (const link of links) {
+    assert.equal(link.rel, 'modulepreload');
+    assert.equal(link.as, undefined);
+    assert.equal(link.crossOrigin, undefined);
+  }
 });
 
 test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and refreshes on return', async t => {

@@ -6,6 +6,16 @@ import { ccNavigate, ccPathFromState, ccStateFromPath } from './cc-hive-stage.js
 
 const REFRESH_MS = 5000;
 const ROOT_TOUR_ATTR = 'data-tour';
+/** ES module graph warmed on Hive idle/hover without evaluating Cockpit code. */
+const COCKPIT_WARM_MODULES = [
+  './cc-cockpit-mount.js',
+  './cockpit-view.js',
+  './cockpit-lists.js',
+  './cockpit-orchestrator.js',
+  './cc-ledger-browser.js',
+  './cc-glitch.js',
+  './cc-tour.js',
+];
 
 function resolveCommandCenterData() {
   if (globalThis.CommandCenterData && typeof globalThis.CommandCenterData.parseCommandCenterSnapshot === 'function') {
@@ -183,7 +193,8 @@ export function mountCommandCenter(root, deps = {}) {
   let projectsForPalette = [];
   let idleTour = null;
   let parkedHive = null;
-  let cockpitPreload = null;
+  let cockpitPreloadedHrefs = null;
+  let cockpitPreloadLinks = [];
   let cockpitWarmTimer = null;
   let cockpitWarmScheduled = false;
   const projectCache = new Map();
@@ -205,12 +216,19 @@ export function mountCommandCenter(root, deps = {}) {
     if (deps.loadCockpit) {
       cockpitModule ||= loadCockpit().catch(error => { cockpitModule = null; throw error; });
       void cockpitModule.catch(() => {});
-    } else if (!cockpitPreload && document.createElement) {
+    } else if (document.createElement) {
       // Warm the ES module graph without evaluating Cockpit code on the Hive.
-      cockpitPreload = document.createElement('link');
-      cockpitPreload.rel = 'modulepreload';
-      cockpitPreload.href = new URL('./cc-cockpit-mount.js', import.meta.url).href;
-      (document.head || document.documentElement)?.appendChild(cockpitPreload);
+      cockpitPreloadedHrefs ||= new Set();
+      for (const rel of COCKPIT_WARM_MODULES) {
+        const href = new URL(rel, import.meta.url).href;
+        if (cockpitPreloadedHrefs.has(href)) continue;
+        cockpitPreloadedHrefs.add(href);
+        const link = document.createElement('link');
+        link.rel = 'modulepreload';
+        link.href = href;
+        cockpitPreloadLinks.push(link);
+        (document.head || document.documentElement)?.appendChild(link);
+      }
     }
     if (projectId && !projectRequests.has(projectId)) {
       const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
@@ -450,7 +468,9 @@ export function mountCommandCenter(root, deps = {}) {
       destroyView();
       parkedHive?.handle.destroy();
       parkedHive = null;
-      cockpitPreload?.remove();
+      for (const link of cockpitPreloadLinks) link.remove?.();
+      cockpitPreloadLinks = [];
+      cockpitPreloadedHrefs = null;
       clearHost(root);
     },
     refresh: () => refresh(false),
