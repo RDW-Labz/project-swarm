@@ -10,11 +10,11 @@ import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
-import { projectFamilyRoots } from './board-data.mjs';
+import { projectFamilyRoots, createBoardInputDetector } from './board-data.mjs';
 import { runDetail, RUN_ID } from './board-run.mjs';
 import { listPeers } from './board-peers.mjs';
 import { commandCenterEnabled } from './command-center-flag.mjs';
-import { buildCommandCenterSnapshot, buildProjectCockpit } from './command-center-snapshot.mjs';
+import { buildCommandCenterSnapshot, buildProjectCockpit, patchCommandCenterSnapshot } from './command-center-snapshot.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -548,6 +548,11 @@ export function createWatchServer(opts) {
   let commandCenterCache = null;
   let snapshotPending = null;
   const snapshotTtlMs = 60000;
+  const ccStreams = new Set();
+  const inputDetector = createBoardInputDetector({ env });
+  let inputProjects = [];
+  const dirtyProjects = new Set();
+  let changesPending = null;
   let server = null;
   let port = 0;
   let url = null;
@@ -631,18 +636,81 @@ export function createWatchServer(opts) {
   function rebuildCommandCenterSnapshot() {
     if (snapshotPending) return snapshotPending;
     snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
+      if (changesPending) await changesPending.catch(() => {});
       const snapshot = await board.snapshot({ local: false, redact: true });
       const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const model = buildCommandCenterSnapshot(payload);
       const entry = {
         payload,
-        encoded: representation(JSON.stringify(buildCommandCenterSnapshot(payload)), 'application/json'),
+        model,
+        encoded: representation(JSON.stringify(model), 'application/json'),
         at: now(),
       };
+      const localProjects = (payload.projects ?? []).filter(p => p.root && (!p.machine || p.machine === os.hostname()));
+      const extraRoots = localProjects.map(p => p.root);
+      inputProjects = (await Promise.all(localProjects.map(async p => {
+        const roots = await projectFamilyRoots(p.root, { ownOnly: Boolean(p.parentId || p.worktree), env, extraRoots });
+        return roots.map(root => ({ id: p.id, root }));
+      }))).flat();
+      const currentIds = new Set((payload.projects ?? []).map(p => p.id));
+      for (const id of dirtyProjects) if (!currentIds.has(id)) dirtyProjects.delete(id);
+      for (const id of await inputDetector.scan(inputProjects)) dirtyProjects.add(id);
       // A build finishing after shutdown must not keep the snapshot alive.
       if (!closed) commandCenterCache = entry;
       return entry;
     }).finally(() => { snapshotPending = null; });
     return snapshotPending;
+  }
+
+  function writeCommandCenterEvent(res, chunk) {
+    // Bound slow readers rather than letting an abandoned tab retain a queue.
+    if (res.writableLength > MAX_STREAM_BUFFER_BYTES) { ccStreams.delete(res); res.end(); return; }
+    try { res.write(chunk); } catch { ccStreams.delete(res); res.destroy(); }
+  }
+
+  function updateCommandCenterChanges() {
+    if (changesPending) return changesPending;
+    changesPending = (async () => {
+      if (!commandCenterCache || snapshotPending || closed) return;
+      for (const id of await inputDetector.scan(inputProjects)) dirtyProjects.add(id);
+      if (!dirtyProjects.size) return;
+      const ids = [...dirtyProjects];
+      const entry = commandCenterCache;
+      const rows = await Promise.all(ids.map(async id => {
+        const detail = await board.project(id);
+        if (!detail) throw new Error('project unavailable');
+        const old = entry.payload.projects.find(p => p.id === id);
+        // The classic project API carries ticket rows plus a separate summary.
+        return { ...old, ...detail, tickets: Array.isArray(detail.tickets) ? detail.ticketCounts ?? old.tickets : detail.tickets ?? old.tickets };
+      }));
+      if (closed || commandCenterCache !== entry) return;
+      for (const row of rows) {
+        const index = entry.payload.projects.findIndex(p => p.id === row.id);
+        entry.payload.projects[index] = stripMoney(row);
+      }
+      const agents = entry.payload.machine?.agents;
+      if (agents) agents.total = entry.payload.projects.reduce((total, p) => total + (p.agents?.total ?? 0), 0);
+      entry.payload.at = new Date(now()).toISOString();
+      patchCommandCenterSnapshot(entry.model, entry.payload, ids);
+      entry.encoded = representation(JSON.stringify(entry.model), 'application/json');
+      for (const id of ids) dirtyProjects.delete(id);
+      const event = sse('cc-change', { kind: 'cc-change', projects: ids, at: entry.payload.at });
+      for (const res of ccStreams) writeCommandCenterEvent(res, event);
+    })().finally(() => { changesPending = null; });
+    return changesPending;
+  }
+
+  function openCommandCenterEvents(res, method) {
+    const headers = { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' };
+    if (method === 'HEAD') return send(res, method, 200, headers, '');
+    if (closed) return sendText(res, method, 503, 'shutting down');
+    if (ccStreams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    res.writeHead(200, headers);
+    res.socket?.setTimeout(0);
+    res.socket?.setKeepAlive(true);
+    ccStreams.add(res);
+    res.on('close', () => { ccStreams.delete(res); lastActivity = now(); });
+    writeCommandCenterEvent(res, ': connected\n\n');
   }
 
   async function commandCenterResponse(pathname, q) {
@@ -665,8 +733,11 @@ export function createWatchServer(opts) {
       // a single refresh runs. A failure leaves it available for the next retry.
       if (!snapshotPending) void rebuildCommandCenterSnapshot().catch(() => {});
     }
+    if (changesPending) await changesPending.catch(() => {});
     if (!pathname.endsWith('/project')) return entry;
-    const result = buildProjectCockpit(entry.payload, String(q.id ?? ''));
+    const id = String(q.id ?? '');
+    const cockpit = buildProjectCockpit(entry.payload, id);
+    const result = cockpit && { ...cockpit, card: entry.model.projects.find(p => p.id === id), stats: entry.model.stats, hive: entry.model.hive, at: entry.model.at };
     return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
   }
 
@@ -795,7 +866,7 @@ export function createWatchServer(opts) {
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
     const commandCenterPath = commandCenter && board ? parseCommandCenterPath(pathname) : null;
     const isCommandCenter = commandCenterPath !== null;
-    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project');
+    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project' || pathname === '/api/command-center/events');
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
     const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
@@ -843,6 +914,7 @@ export function createWatchServer(opts) {
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
     }
     if (isCommandCenterApi) {
+      if (pathname === '/api/command-center/events') return openCommandCenterEvents(res, method);
       const q = Object.fromEntries(u.searchParams);
       delete q.t;
       const { encoded } = await commandCenterResponse(pathname, q);
@@ -927,6 +999,10 @@ export function createWatchServer(opts) {
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
     streamManager.close();
+    for (const res of ccStreams) res.end();
+    ccStreams.clear();
+    inputProjects = [];
+    dirtyProjects.clear();
     commandCenterCache = null;
     if (server && server.listening) {
       await new Promise((resolve) => {
@@ -941,7 +1017,9 @@ export function createWatchServer(opts) {
     if (ticking || closed) return;
     ticking = true;
     try {
+      if (commandCenter && board) await updateCommandCenterChanges();
       const t = now();
+      if (ccStreams.size > 0) lastActivity = t;
       if (streamManager.size > 0) {
         await streamManager.pushUpdates();
       } else {
@@ -988,7 +1066,10 @@ export function createWatchServer(opts) {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
-    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
+    heartbeatTimer = setIntervalFn(() => {
+      streamManager.writeHeartbeats();
+      for (const res of ccStreams) writeCommandCenterEvent(res, ': ping\n\n');
+    }, Math.max(1, heartbeatMs));
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
     // Warm once without delaying listen or retrying in an idle loop. A cold
     // request can join this attempt; a later request can retry a failed build.

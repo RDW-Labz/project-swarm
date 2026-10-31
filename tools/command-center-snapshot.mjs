@@ -201,6 +201,26 @@ export function buildCommandCenterSnapshot(board, options = {}) {
   return { at, stats, projects: cards, hive: buildHiveExtras(board, projects, nowMs) };
 }
 
+/** Update only changed cards; aggregates are cheap reductions over the cached rows. */
+export function patchCommandCenterSnapshot(snapshot, board, ids) {
+  const changed = new Set(ids);
+  const projects = board.projects ?? [];
+  for (let i = 0; i < projects.length; i++) {
+    const p = projects[i];
+    if (!changed.has(p.id) || p.parentId) continue;
+    const index = snapshot.projects.findIndex(card => card.id === p.id);
+    const card = buildProjectCard(p, i);
+    if (index >= 0) snapshot.projects[index] = card;
+    else snapshot.projects.push(card);
+  }
+  snapshot.at = board.at;
+  if (snapshot.stats.agentsLive) snapshot.stats.agentsLive.value = board.machine?.agents?.total ?? 0;
+  const needs = needsYouTotal(projects);
+  if (needs !== null) snapshot.stats.needsYouCount = field('Needs you', needs, 'count', 'projects[].card.blocked.needYou', 'Owner inbox items summed across projects.');
+  snapshot.hive = buildHiveExtras(board, projects.filter(p => !p.parentId), Date.parse(board.at));
+  return snapshot;
+}
+
 function ledgerFromProject(project) {
   if (project?.ledger && Array.isArray(project.ledger.tickets)) return project.ledger;
   const tickets = [];

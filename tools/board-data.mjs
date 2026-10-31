@@ -28,6 +28,101 @@ import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
+import { historyFile as boardHistoryFile } from './history.mjs';
+
+/** Metadata only on idle ticks. Directory listings also catch atomic replacement/new runs.
+ * Families are resolved by the server once per full snapshot, never in this loop. */
+export function createBoardInputDetector({ env = process.env, lanesFile = path.join(lanesDir(env), 'lanes.json'), historyFile = boardHistoryFile(env) } = {}) {
+  const previous = new Map();
+  let shared = new Map();
+  const sharedProjects = new Map();
+  async function stamp(file) {
+    try { const s = await fs.stat(file); return `${s.mtimeMs}:${s.size}`; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return '-'; throw error; }
+  }
+  async function tree(dir, depth = 2) {
+    const rows = [[dir, await stamp(dir)]];
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return rows; throw error; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.isSymbolicLink()) continue;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory() && depth > 0) rows.push(...await tree(file, depth - 1));
+      else if (entry.isFile()) rows.push([file, await stamp(file)]);
+    }
+    return rows;
+  }
+  async function projectStamp(root) {
+    const base = path.join(root, '.swarm');
+    const files = ['orchestrator/events.ndjson', 'orchestrator/state.json', 'orchestrator/inbox.json', 'orchestrator/inbox.ndjson', 'inbox.json', 'inbox.ndjson', 'state.json'];
+    const rows = await Promise.all(files.map(async file => [file, await stamp(path.join(base, file))]));
+    for (const dir of ['project', 'inbox', 'handbuild']) rows.push(...await tree(path.join(base, dir)));
+    const runs = path.join(base, 'runs');
+    let entries = [];
+    try { entries = await fs.readdir(runs, { withFileTypes: true }); }
+    catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
+    rows.push(...await Promise.all(entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
+      .map(async e => [e.name, await stamp(path.join(runs, e.name, 'state.json'))])));
+    return JSON.stringify(rows);
+  }
+  return {
+    async scan(projects) {
+      const changed = new Set();
+      const nextPrevious = new Map();
+      const rootRequests = new Map();
+      await Promise.all(projects.map(async p => {
+        if (!p.root) return;
+        const key = `${p.id}:${p.root}`;
+        if (!rootRequests.has(p.root)) rootRequests.set(p.root, projectStamp(p.root));
+        const value = await rootRequests.get(p.root);
+        if (previous.has(key) && previous.get(key) !== value) changed.add(p.id);
+        nextPrevious.set(key, value);
+      }));
+      // Shared stores are parsed only when their metadata changes, then partitioned
+      // by project. A slot release must not rebuild every project on the board.
+      const nextShared = new Map();
+      const nextSharedProjects = new Map(sharedProjects);
+      for (const file of [lanesFile, historyFile]) {
+        const value = await stamp(file);
+        nextShared.set(file, value);
+        if (shared.get(file) === value) continue;
+        const byProject = new Map(projects.map(p => [p.id, []]));
+        const append = (id, value) => { if (byProject.has(id)) byProject.get(id).push(value); };
+        const body = await fs.readFile(file, 'utf8').catch(error => {
+          if (error.code === 'ENOENT') return ''; throw error;
+        });
+        if (file === lanesFile) {
+          const lanes = body ? JSON.parse(body) : {};
+          for (const [lane, slots] of Object.entries(lanes.slots ?? {})) for (const slot of slots ?? []) append(slot.project, { lane, slot });
+          for (const item of Object.values(lanes.demand ?? {})) append(item.project, item);
+        } else {
+          for (const line of body.split('\n')) {
+            try { const item = JSON.parse(line); append(item.projectId, item); } catch { /* partial append */ }
+          }
+        }
+        const next = new Map([...byProject].map(([id, rows]) => [id, JSON.stringify(rows)]));
+        const old = sharedProjects.get(file);
+        for (const [id, value] of next) if (old?.has(id) && old.get(id) !== value) changed.add(id);
+        nextSharedProjects.set(file, next);
+      }
+      // Commit fingerprints together so a partial/failed read cannot swallow a change.
+      previous.clear();
+      for (const [key, value] of nextPrevious) previous.set(key, value);
+      shared = nextShared;
+      for (const [key, value] of nextSharedProjects) sharedProjects.set(key, value);
+      return [...changed];
+    },
+  };
+}
+
+function commandCenterLedger(ledger) {
+  return { tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').map(t => ({
+    id: txt(t.id, 80), title: txt(t.title, 140), status: txt(t.status, 20),
+    stage: txt(t.stage, 40),
+    ...Object.fromEntries(['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'].filter(k => typeof t[k] === 'string' && Number.isFinite(Date.parse(t[k]))).map(k => [k, t[k]])),
+  })) };
+}
 
 const DAY = 86400000;
 export const UNTRACKED_HEADLINE_MS = 7 * DAY;
@@ -955,6 +1050,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     version: installedVersion,
     pinnedVersion,
     stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
+    ledger: commandCenterLedger(ledger),
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     liveCount: activeLiveRuns.length,
     agents, cost,
@@ -1296,6 +1392,11 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     activity,
     idleWithReady: liveIds.size === 0 && readyTickets > 0,
     tickets, ticketCounts: ticketsOf(ledger, scope),
+    ledger: commandCenterLedger(ledger),
+    agents: agentsOf(runs, liveRunIds, now),
+    orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [] }; } })(),
+    runStream: runs.slice(-20).reverse().map(({ id, state }) => ({ id, title: txt(state.status, 30), body: `${(state.jobs ?? []).filter(job => job.status === 'complete').length}/${(state.jobs ?? []).length} jobs` })),
+    live: runs.filter(run => liveRunIds.has(run.id) && activeRunState(run.state)).map(({ id, state }) => ({ runId: id, status: state.status, jobs: (state.jobs ?? []).length, done: (state.jobs ?? []).filter(job => job.status === 'complete').length })),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };

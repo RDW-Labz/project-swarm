@@ -200,6 +200,10 @@ export function mountCommandCenter(root, deps = {}) {
   let cockpitWarmTimer = null;
   let cockpitWarmScheduled = false;
   let warmProjectId = null;
+  let hiveBody = null;
+  let events = null;
+  let patchPending = null;
+  const changedProjects = new Set();
   const projectCache = new Map();
   const projectRequests = new Map();
   const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
@@ -236,7 +240,7 @@ export function mountCommandCenter(root, deps = {}) {
     }
     if (projectId && !projectRequests.has(projectId)) {
       const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
-        .then(body => { if (body?.id === projectId) projectCache.set(projectId, body); return body; })
+        .then(body => { if (body?.id === projectId && !(Date.parse(projectCache.get(projectId)?.at) > Date.parse(body.at))) projectCache.set(projectId, body); return body; })
         .finally(() => projectRequests.delete(projectId));
       projectRequests.set(projectId, pending);
       void pending.catch(() => {});
@@ -333,7 +337,9 @@ export function mountCommandCenter(root, deps = {}) {
           });
           viewKind = 'cockpit'; viewProjectId = projectId;
         }
-        const body = await request;
+        let body = await request;
+        const latest = projectCache.get(projectId);
+        if (Date.parse(latest?.at) > Date.parse(body?.at)) body = latest;
         if (destroyed || sequence !== refreshSequence) return;
         if (!body || typeof body !== 'object' || body.id !== projectId) {
           throw new Error('Project cockpit response was missing or invalid');
@@ -360,9 +366,11 @@ export function mountCommandCenter(root, deps = {}) {
         return;
       }
 
-      const body = await fetchJson('/api/command-center');
+      let body = await fetchJson('/api/command-center');
+      if (Date.parse(hiveBody?.at) > Date.parse(body?.at)) body = hiveBody;
       if (destroyed || sequence !== refreshSequence) return;
       const snapshot = CommandCenterData.parseCommandCenterSnapshot(body);
+      hiveBody = body;
       if (!Array.isArray(snapshot.projects) || snapshot.projects.length === 0) {
         destroyView();
         showShellMessage(
@@ -439,24 +447,84 @@ export function mountCommandCenter(root, deps = {}) {
   };
   document.addEventListener?.('keydown', onPaletteKey);
 
+  async function patchProjects() {
+    if (patchPending || destroyed || document.hidden) return patchPending;
+    patchPending = (async () => {
+      while (changedProjects.size && !destroyed && !document.hidden) {
+        const ids = [...changedProjects];
+        changedProjects.clear();
+        const bodies = await Promise.all(ids.map(id => fetchJson(`/api/command-center/project?id=${encodeURIComponent(id)}`)));
+        if (destroyed || document.hidden) return;
+        for (const body of bodies) {
+          if (!body?.id || !ids.includes(body.id)) continue;
+          projectCache.set(body.id, body);
+          if (viewKind === 'cockpit' && viewProjectId === body.id) viewHandle?.update?.(body);
+          if (!hiveBody || !body.card) continue;
+          hiveBody = { ...hiveBody,
+            projects: hiveBody.projects.map(p => p.id === body.id ? body.card : p),
+            at: body.at, stats: body.stats, hive: body.hive,
+          };
+        }
+        if (hiveBody) {
+          const snapshot = resolveCommandCenterData()?.parseCommandCenterSnapshot(hiveBody);
+          // Use the existing in-place update contract; preserve the stage and its
+          // motion/visibility lifecycle, including a Hive parked behind Cockpit.
+          if (snapshot && viewKind === 'hive') viewHandle?.update?.(snapshot, hiveBody);
+          if (snapshot && parkedHive) parkedHive.handle.update(snapshot, hiveBody);
+        }
+      }
+    })().catch(() => { /* the five-second poll reconciles a failed patch */ })
+      .finally(() => { patchPending = null; });
+    return patchPending;
+  }
+
+  function syncEvents() {
+    if (destroyed || document.hidden) {
+      events?.close();
+      events = null;
+      changedProjects.clear();
+      return;
+    }
+    const EventSource = deps.EventSource || globalThis.EventSource;
+    if (events || typeof EventSource !== 'function') return;
+    // The page exchanged its bootstrap token for an HttpOnly same-origin cookie.
+    // EventSource uses that cookie; credentials never enter its URL.
+    events = new EventSource('/api/command-center/events');
+    events.addEventListener('cc-change', event => {
+      if (destroyed || document.hidden) return;
+      try {
+        const change = JSON.parse(event.data);
+        if (change.kind !== 'cc-change' || !Array.isArray(change.projects)) return;
+        for (const id of change.projects) if (typeof id === 'string' && id.length) changedProjects.add(id);
+        void patchProjects();
+      } catch { /* malformed events leave polling available */ }
+    });
+    // Native EventSource reconnects automatically; polling remains active while
+    // disconnected and in browsers without EventSource.
+  }
+
   function syncPolling() {
     if (refreshTimer != null) clearIntervalFn(refreshTimer);
     refreshTimer = document.hidden ? null : setIntervalFn(() => refresh(true), REFRESH_MS);
   }
   const onVisibility = () => {
     syncPolling();
+    syncEvents();
     if (!document.hidden) void refresh(false);
   };
   document.addEventListener?.('visibilitychange', onVisibility);
   syncPolling();
 
-  const whenReady = refresh(false);
+  const whenReady = refresh(false).then(() => syncEvents());
 
   return {
     whenReady,
     destroy() {
       destroyed = true;
       refreshSequence++;
+      events?.close();
+      events = null;
+      changedProjects.clear();
       if (refreshTimer != null) clearIntervalFn(refreshTimer);
       refreshTimer = null;
       if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
