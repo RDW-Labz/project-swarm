@@ -308,6 +308,7 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   assert.match(boot, /import\('\.\/cc-cockpit-mount\.js'\)/);
   assert.match(boot, /cockpitPreload\.rel\s*=\s*['"]modulepreload['"]/);
   assert.match(boot, /cockpitPreload\.href\s*=\s*new URL\('\.\/cc-cockpit-mount\.js',\s*import\.meta\.url\)\.href/);
+  assert.match(boot, /setTimeoutFn\(\(\)\s*=>\s*\{[\s\S]*preloadCockpit\(\)[\s\S]*\},\s*300\)/);
   assert.doesNotMatch(boot, /cockpitPreload\.as\s*=/);
   assert.match(hive, /import\('\.\/robot-head\.js'\)/);
   assert.match(boot, /import\('\.\/command-palette\.js'\)/);
@@ -428,6 +429,7 @@ test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and re
   const root = { replaceChildren() {}, setAttribute() {} };
   const location = { pathname: '/command-center' };
   const timers = new Map();
+  const timeouts = [];
   let timerId = 0;
   let calls = 0;
   let cockpitLoads = 0;
@@ -448,12 +450,16 @@ test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and re
     loadTour: async () => { tourLoads++; return { maybeStartFirstVisit() {} }; },
     loadPalette: async () => { paletteLoads++; return { createCommandPalette: () => ({ bind() {}, unbind() {} }) }; },
     setInterval: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, ms }); return id; },
-    clearInterval: id => timers.delete(id), requestAnimationFrame() {}, cancelAnimationFrame() {}, matchMedia() {},
+    clearInterval: id => timers.delete(id),
+    setTimeout: (fn, ms) => { const id = ++timerId; timeouts.push({ id, fn, ms }); return id; },
+    clearTimeout: () => {},
+    requestAnimationFrame() {}, cancelAnimationFrame() {}, matchMedia() {},
   });
   t.after(() => handle.destroy());
   await handle.whenReady;
   assert.equal(cockpitLoads + tourLoads + paletteLoads, 0);
   assert.equal(calls, 1);
+  assert.ok(timeouts.some((timer) => timer.ms === 300), 'Hive entry schedules prompt cockpit warm');
   assert.deepEqual(hiveDeps.rawSnapshot, { projects: [{ id: 'alpha' }] });
   assert.equal(timers.size, 1);
   const timer = [...timers.values()][0];

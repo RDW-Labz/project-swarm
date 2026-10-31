@@ -373,6 +373,14 @@ function makeRuntime() {
   };
   const clearInterval = () => {};
 
+  const timeouts = [];
+  const setTimeout = (fn, ms) => {
+    const id = timeouts.length + 1;
+    timeouts.push({ id, fn, ms });
+    return id;
+  };
+  const clearTimeout = () => {};
+
   const storage = {
     _data: new Map(),
     getItem(k) { return this._data.get(k) ?? null; },
@@ -392,6 +400,9 @@ function makeRuntime() {
     fetchCalls: () => fetchCalls,
     setInterval,
     intervals,
+    setTimeout,
+    timeouts,
+    clearTimeout,
     storage,
     hiveSnapshot,
     cockpit,
@@ -411,6 +422,8 @@ async function mountWithRuntime(rt) {
     now: () => NOW,
     setInterval: rt.setInterval,
     clearInterval: () => {},
+    setTimeout: rt.setTimeout,
+    clearTimeout: rt.clearTimeout,
     requestAnimationFrame: rt.dom.requestAnimationFrame,
     cancelAnimationFrame: rt.dom.cancelAnimationFrame,
     matchMedia: rt.dom.matchMedia,
@@ -537,6 +550,51 @@ test('browser idle preload inserts modulepreload for cockpit without loading coc
     assert.equal(link.href, cockpitMountHref);
     assert.equal(link.as, undefined);
     assert.equal(link.crossOrigin, undefined);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
+
+test('prompt cockpit warm adds modulepreload within 300ms without waiting for idle', async () => {
+  const rt = makeRuntime();
+  const cockpitMountHref = new URL(
+    './cc-cockpit-mount.js',
+    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
+  ).href;
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  try {
+    await ensureHivePanels(rt.dom.document);
+    const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
+    const handle = mountCommandCenter(rt.root, {
+      document: rt.dom.document,
+      fetchJson: rt.fetchJson,
+      location: rt.location,
+      history: rt.history,
+      now: () => NOW,
+      setInterval: rt.setInterval,
+      clearInterval: () => {},
+      setTimeout: rt.setTimeout,
+      clearTimeout: rt.clearTimeout,
+      requestAnimationFrame: rt.dom.requestAnimationFrame,
+      cancelAnimationFrame: rt.dom.cancelAnimationFrame,
+      matchMedia: rt.dom.matchMedia,
+      storage: rt.storage,
+    });
+    await handle.whenReady;
+    assert.ok(rt.root.querySelector('.hive-node'));
+    assert.equal(
+      rt.dom.document.head.children.find((node) => node.rel === 'modulepreload'),
+      undefined,
+      'modulepreload is not inserted until the warm timer fires',
+    );
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    assert.ok(warm, 'schedules a 300ms cockpit warm after the first Hive render');
+    warm.fn();
+    const link = rt.dom.document.head.children.find((node) => node.rel === 'modulepreload');
+    assert.ok(link, 'modulepreload link is appended after the warm timer');
+    assert.equal(link.href, cockpitMountHref);
     handle.destroy();
   } finally {
     globalThis.requestIdleCallback = oldIdle;

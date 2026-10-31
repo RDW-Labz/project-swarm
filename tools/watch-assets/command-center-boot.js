@@ -144,6 +144,8 @@ async function ensureBrowserGlobals(document) {
  *   now?: () => number,
  *   setInterval?: typeof setInterval,
  *   clearInterval?: typeof clearInterval,
+ *   setTimeout?: typeof setTimeout,
+ *   clearTimeout?: typeof clearTimeout,
  *   requestAnimationFrame?: typeof requestAnimationFrame,
  *   cancelAnimationFrame?: typeof cancelAnimationFrame,
  *   matchMedia?: typeof matchMedia,
@@ -158,6 +160,8 @@ export function mountCommandCenter(root, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
   const setIntervalFn = deps.setInterval || globalThis.setInterval.bind(globalThis);
   const clearIntervalFn = deps.clearInterval || globalThis.clearInterval.bind(globalThis);
+  const setTimeoutFn = deps.setTimeout || globalThis.setTimeout.bind(globalThis);
+  const clearTimeoutFn = deps.clearTimeout || globalThis.clearTimeout.bind(globalThis);
   const requestAnimationFrame = deps.requestAnimationFrame || globalThis.requestAnimationFrame.bind(globalThis);
   const cancelAnimationFrame = deps.cancelAnimationFrame || globalThis.cancelAnimationFrame.bind(globalThis);
   const matchMedia = deps.matchMedia || globalThis.matchMedia.bind(globalThis);
@@ -180,11 +184,22 @@ export function mountCommandCenter(root, deps = {}) {
   let idleTour = null;
   let parkedHive = null;
   let cockpitPreload = null;
+  let cockpitWarmTimer = null;
+  let cockpitWarmScheduled = false;
   const projectCache = new Map();
   const projectRequests = new Map();
   const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
   const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
   const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
+  function schedulePromptCockpitWarm() {
+    if (destroyed || cockpitWarmScheduled) return;
+    cockpitWarmScheduled = true;
+    cockpitWarmTimer = setTimeoutFn(() => {
+      cockpitWarmTimer = null;
+      preloadCockpit();
+    }, 300);
+  }
+
   function preloadCockpit(projectId) {
     if (destroyed) return;
     if (deps.loadCockpit) {
@@ -365,6 +380,7 @@ export function mountCommandCenter(root, deps = {}) {
         viewProjectId = null;
       }
       applyTourMarkers(root, 'hive');
+      schedulePromptCockpitWarm();
       await startTourIfNeeded();
     } catch (err) {
       if (destroyed || sequence !== refreshSequence) return;
@@ -422,6 +438,9 @@ export function mountCommandCenter(root, deps = {}) {
       if (refreshTimer != null) clearIntervalFn(refreshTimer);
       refreshTimer = null;
       if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
+      idleTour = null;
+      if (cockpitWarmTimer != null) clearTimeoutFn(cockpitWarmTimer);
+      cockpitWarmTimer = null;
       document.removeEventListener?.('visibilitychange', onVisibility);
       document.removeEventListener?.('keydown', onPaletteKey);
       if (palette) palette.unbind();
