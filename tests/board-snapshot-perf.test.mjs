@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { boardSnapshot, historyEventsOf } from '../tools/board-data.mjs';
 import { createWatchServer } from '../tools/watch-server.mjs';
 import { ledgerPath } from '../tools/tickets.mjs';
@@ -173,7 +175,7 @@ function request(server, route, etag) {
   });
 }
 
-async function startServer(t, f, now = Date.now) {
+async function startServer(t, f, now = Date.now, transform = snapshot => snapshot) {
   const assetDir = path.join(f.base, 'assets');
   await fs.mkdir(assetDir);
   let builds = 0;
@@ -182,7 +184,7 @@ async function startServer(t, f, now = Date.now) {
     getRunSnapshot: async () => null, getPlanSnapshot: async () => null,
     getGallery: async () => ({}), commandList: [], contextCommands: () => [],
     env: f.options.env,
-    board: { snapshot: async () => { builds++; return boardSnapshot({ ...f.options, now: now() }); } },
+    board: { snapshot: async () => { builds++; return transform(await boardSnapshot({ ...f.options, now: now() })); } },
   });
   await server.listen();
   t.after(() => server.close());
@@ -219,6 +221,112 @@ test('six-second HTTP cache preserves ETags, shares concurrent requests and neve
   const responses = await Promise.all(Array.from({ length: 6 }, () => request(s.server, '/api/command-center')));
   assert.ok(responses.every(res => res.status === 200));
   assert.equal(s.builds(), before + 1, 'expired concurrent requests must share the rebuild');
+});
+
+test('HTTP snapshot cache evicts the least recently used query after four entries', async t => {
+  const f = await fixture(t, { projectCount: 1, ticketCount: 4 });
+  const s = await startServer(t, f);
+  for (let i = 0; i < 4; i++) await request(s.server, `/api/command-center?view=${i}`);
+  await request(s.server, '/api/command-center?view=0');
+  assert.equal(s.builds(), 4);
+  await request(s.server, '/api/command-center?view=4');
+  await request(s.server, '/api/command-center?view=0');
+  assert.equal(s.builds(), 5, 'recently touched entry must survive eviction');
+  await request(s.server, '/api/command-center?view=1');
+  assert.equal(s.builds(), 6, 'oldest entry must have been evicted');
+});
+
+test('HTTP snapshot byte budget serves oversized cockpits without retaining them', async t => {
+  const f = await fixture(t, { projectCount: 1, ticketCount: 1 });
+  const s = await startServer(t, f, Date.now, snapshot => ({
+    ...snapshot,
+    projects: snapshot.projects.map(project => ({
+      ...project, ledger: { tickets: f.ledgers[0].tickets, history: 'x'.repeat(9 * 1024 * 1024) },
+    })),
+  }));
+  for (let i = 0; i < 2; i++) {
+    const response = await request(s.server, '/api/command-center/project?id=p0');
+    assert.equal(response.status, 200);
+    const cockpit = JSON.parse(response.body);
+    assert.equal(cockpit.total, 1);
+    assert.equal(cockpit.ledger.history.length, 9 * 1024 * 1024);
+  }
+  assert.equal(s.builds(), 2, 'representations larger than 8 MiB must bypass retention');
+});
+
+test('memory budget: 120 polling revisions retain bounded aggregates and HTTP representations', { timeout: 180000 }, async t => {
+  if (!global.gc) {
+    // A separate, capped heap makes retention measurable without depending on
+    // the test runner's GC schedule or changing global V8 flags in other tests.
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      '--expose-gc', '--max-old-space-size=256', '--import', './tests/_isolate-config.mjs',
+      '--test', '--test-name-pattern=memory budget', fileURLToPath(import.meta.url),
+    ], { timeout: 170000, maxBuffer: 1024 * 1024, env: childEnv });
+    assert.match(stdout, /"polls":120/, 'memory worker must execute all polling revisions');
+    t.diagnostic(stdout.trim());
+    return;
+  }
+  const f = await fixture(t, { ticketCount: 600, runs: 1 });
+  for (let p = 0; p < f.projects.length; p++) {
+    f.ledgers[p].history = Array.from({ length: 1024 }, (_, i) => ({
+      ticketId: `T-${i % 600}`, status: 'ready', detail: `${p}-${i}-${'history '.repeat(64)}`,
+    }));
+    await f.writeLedger(p);
+  }
+  const root = f.projects[0].root;
+  f.options.liveRuns = [{ root, runId: 'run-0' }];
+  const stateFile = path.join(root, '.swarm', 'runs', 'run-0', 'state.json');
+  // Keep simulated polls away from the separate local-midnight invalidation.
+  let clock = new Date().setHours(12, 0, 0, 0);
+  const s = await startServer(t, f, () => clock, snapshot => ({
+    ...snapshot,
+    // Adapters may supply full ledgers. HTTP validation must keep only roots,
+    // even when each response carries fresh large parsed history arrays.
+    projects: snapshot.projects.map((project, i) => ({ ...project, ledger: structuredClone(f.ledgers[i]) })),
+  }));
+  const cpu = process.cpuUsage();
+  const start = performance.now();
+  let baseline = 0;
+  let maxHeap = 0;
+  let maxRetainedHeap = 0;
+  let maxExternal = 0;
+  for (let revision = 0; revision < 120; revision++) {
+    clock += 5000;
+    f.projects[0].revision = revision;
+    f.ledgers[0].tickets[0].status = revision % 2 ? 'done' : 'ready';
+    await f.writeLedger(0);
+    await fs.writeFile(stateFile, JSON.stringify({
+      status: 'running', startedAt: new Date(clock).toISOString(), revision,
+      detail: `${revision}:${'run state '.repeat(50000)}`, jobs: [],
+    }));
+    f.profile.length = 0;
+    const response = await request(s.server, `/api/command-center?poll=${revision}`);
+    assert.equal(response.status, 200);
+    const result = JSON.parse(response.body);
+    assert.equal(result.projects.length, 9);
+    assert.equal(result.projects.find(p => p.id === 'p0').ticketCounts.done, revision % 2);
+    // File edits and changing registry metadata must not evict unchanged projects.
+    if (revision % 12 !== 0) assert.deepEqual(
+      f.profile.filter(e => e.kind === 'project' && !e.cached).map(e => e.id), ['p0']);
+    maxHeap = Math.max(maxHeap, process.memoryUsage().heapUsed);
+    global.gc();
+    const memory = process.memoryUsage();
+    if (revision === 19) baseline = memory.heapUsed;
+    if (revision >= 20) maxRetainedHeap = Math.max(maxRetainedHeap, memory.heapUsed);
+    maxExternal = Math.max(maxExternal, memory.external);
+    assert.ok(memory.heapUsed < 200 * 1024 * 1024, `revision ${revision}: heap ${memory.heapUsed} exceeds 200 MiB`);
+  }
+  assert.ok(maxRetainedHeap - baseline < 32 * 1024 * 1024,
+    `retained heap grew ${(maxRetainedHeap - baseline) / 1024 / 1024} MiB after warmup`);
+  assert.ok(maxHeap < 200 * 1024 * 1024, `peak sampled heap ${maxHeap} exceeds 200 MiB`);
+  const usage = process.cpuUsage(cpu);
+  t.diagnostic(JSON.stringify({ polls: 120, projects: 9, tickets: 5400,
+    maxHeapMiB: maxHeap / 1024 / 1024, retainedHeapMiB: maxRetainedHeap / 1024 / 1024,
+    retainedGrowthMiB: (maxRetainedHeap - baseline) / 1024 / 1024,
+    maxExternalMiB: maxExternal / 1024 / 1024,
+    cpuMs: (usage.user + usage.system) / 1000, elapsedMs: performance.now() - start }));
 });
 
 test('nine-project server stays below 5% CPU while polled every five seconds', { timeout: 60000 }, async t => {

@@ -3,6 +3,7 @@
 // Everything is read from the project's own folder (its run states, ticket ledger, lessons) and nothing is ever mixed across projects:
 // each function takes ONE project and reads only under its root. The machine-wide numbers are sums of the per-project numbers.
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
 import { readLedger, ledgerPath, logPath, readyTickets as ticketsReadyToRun } from './tickets.mjs';
@@ -44,8 +45,17 @@ const callbackId = fn => {
   return callbackIds.get(fn);
 };
 
-function remember(cache, key, value, limit = 256) {
-  if (!cache.has(key) && cache.size >= limit) cache.delete(cache.keys().next().value);
+// Revisions belong in validators, never keys. Touch on access/replacement so
+// inactive projects cannot crowd out the current board.
+const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+function touch(cache, key) {
+  const value = cache.get(key);
+  if (value !== undefined) { cache.delete(key); cache.set(key, value); }
+  return value;
+}
+function remember(cache, key, value, limit = 32) {
+  cache.delete(key);
+  if (cache.size >= limit) cache.delete(cache.keys().next().value);
   cache.set(key, value);
   return value;
 }
@@ -130,7 +140,7 @@ export async function boardSnapshotInputIdentity({ projects = [], env = process.
     for (const member of await projectFamilyRoots(root, { env, extraRoots })) roots.add(member);
   }
   const files = [historyFile, registryFile].filter(Boolean);
-  return JSON.stringify(await Promise.all([
+  return fingerprint(await Promise.all([
     ...[...roots].sort().map(root => projectFilesIdentity(root)),
     ...files.map(file => fileIdentity(file)),
   ]));
@@ -144,7 +154,7 @@ function cacheTimeValid(entry, now) {
 }
 
 async function cachedAggregate(key, identity, now, build) {
-  const hit = aggregateCache.get(key);
+  const hit = touch(aggregateCache, key);
   if (hit?.identity === identity && cacheTimeValid(hit, now)) return structuredClone(await hit.value);
   const entry = { identity, at: now, value: Promise.resolve().then(build) };
   remember(aggregateCache, key, entry);
@@ -563,8 +573,17 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
   return out;
 }
 
-// Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
+// One parsed state per file, bounded by count and source bytes. Oversized states
+// can still be read for this request without living in the cache.
 const stateCache = new Map();
+const STATE_CACHE_ENTRIES = 512;
+const STATE_CACHE_BYTES = 16 * 1024 * 1024;
+let stateCacheBytes = 0;
+function forgetState(file) {
+  const hit = stateCache.get(file);
+  if (hit) stateCacheBytes -= hit.bytes;
+  stateCache.delete(file);
+}
 export async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
@@ -576,12 +595,19 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
       if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
       const file = path.join(dir, id, 'state.json');
       const stat = await fs.stat(file);
-      let hit = stateCache.get(file);
+      let hit = touch(stateCache, file);
       if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs || hit.ctimeMs !== stat.ctimeMs || hit.ino !== stat.ino) {
-        const state = JSON.parse(await fs.readFile(file, 'utf8'));
-        hit = { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
-        if (stateCache.size > 20000) stateCache.clear();
-        stateCache.set(file, hit);
+        const source = await fs.readFile(file, 'utf8');
+        const state = JSON.parse(source);
+        forgetState(file);
+        hit = { bytes: Buffer.byteLength(source), size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
+        if (hit.bytes <= STATE_CACHE_BYTES) {
+          while (stateCache.size >= STATE_CACHE_ENTRIES || stateCacheBytes + hit.bytes > STATE_CACHE_BYTES) {
+            forgetState(stateCache.keys().next().value);
+          }
+          stateCache.set(file, hit);
+          stateCacheBytes += hit.bytes;
+        }
       }
       if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
     } catch (error) {
@@ -985,10 +1011,14 @@ export async function projectOverview(project, liveRuns, options = {}) {
     ...roots.map(root => projectFilesIdentity(root)),
     ...(historyFile ? [fileIdentity(historyFile)] : []),
   ]));
-  const key = JSON.stringify([project, liveRuns, roots, options.slots, options.worktree, env,
+  const key = path.resolve(project.root);
+  // Keep only the current context/aggregate. Changing live state and registry
+  // metadata previously allocated another large key and aggregate each poll.
+  const context = fingerprint([project, liveRuns, roots, options.slots, options.worktree, env,
     callbackId(summary), callbackId(deployStatus), prState]);
-  const identity = await identityOf();
-  const hit = overviewCache.get(key);
+  const validatedIdentityOf = async () => fingerprint([context, await identityOf()]);
+  const identity = await validatedIdentityOf();
+  const hit = touch(overviewCache, key);
   if (hit?.identity === identity && cacheTimeValid(hit, now)) {
     options.profile?.({ kind: 'project', id: project.id, cached: true });
     return structuredClone(await hit.value);
@@ -999,7 +1029,7 @@ export async function projectOverview(project, liveRuns, options = {}) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const before = entry.identity;
       const value = await buildProjectOverview(project, liveRuns, { ...options, now, familyRoots: roots });
-      const after = await identityOf();
+      const after = await validatedIdentityOf();
       if (before === after) return value;
       entry.identity = after;
     }
@@ -1252,8 +1282,8 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   try {
     const identity = await boardSnapshotInputIdentity({ projects: inputProjects, env, historyFile });
     const laneIdentity = await fileIdentity(lanesDir(env), true);
-    inboxSnapshot = await cachedAggregate(`inbox:${JSON.stringify([inputProjects, env])}`,
-      JSON.stringify([identity, laneIdentity, heldWorkers]), now,
+    inboxSnapshot = await cachedAggregate(`inbox:${lanesDir(env)}`,
+      fingerprint([inputProjects, env, identity, laneIdentity, heldWorkers]), now,
       () => boardInbox({ projects: inputProjects, now, env }));
   } catch (error) {
     console.error('[tools/board-data.mjs] boardSnapshot boardInbox:', error?.message ?? error);
@@ -1320,7 +1350,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   {
     const files = [...transcripts].sort();
     const identity = JSON.stringify(await Promise.all(files.map(file => fileIdentity(file))));
-    const c = files.length ? await cachedAggregate(`usage:${JSON.stringify(files)}`, identity, now,
+    const c = files.length ? await cachedAggregate(`usage:${lanesDir(env)}`, fingerprint([files, identity]), now,
       () => combinedUsage(files, { now })) : { todayListUsd: 0, allListUsd: 0 };
     machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd;
   }
@@ -1490,8 +1520,8 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
 
 // Backfill for the history log from what is on disk (runs, spend, lessons, stages): events carry keys, so running it again adds nothing new.
 export async function historyEventsOf(project) {
-  const identity = JSON.stringify(await projectFilesIdentity(project.root));
-  return cachedAggregate(`history:${JSON.stringify(project)}`, identity, Date.now(), () => buildHistoryEvents(project));
+  const identity = fingerprint([project, await projectFilesIdentity(project.root)]);
+  return cachedAggregate(`history:${path.resolve(project.root)}`, identity, Date.now(), () => buildHistoryEvents(project));
 }
 
 async function buildHistoryEvents(project) {

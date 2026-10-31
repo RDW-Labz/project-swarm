@@ -544,6 +544,17 @@ export function createWatchServer(opts) {
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
   const commandCenterCache = new Map();
+  const snapshotCacheEntries = 4;
+  const snapshotCacheBytes = 8 * 1024 * 1024;
+  const entryBytes = entry => (entry.encoded?.body.length ?? 0) + (entry.encoded?.gzip?.length ?? 0);
+  function trimSnapshotCache() {
+    let bytes = [...commandCenterCache.values()].reduce((sum, entry) => sum + entryBytes(entry), 0);
+    while (commandCenterCache.size > snapshotCacheEntries || bytes > snapshotCacheBytes) {
+      const key = commandCenterCache.keys().next().value;
+      bytes -= entryBytes(commandCenterCache.get(key));
+      commandCenterCache.delete(key);
+    }
+  }
   // The dashboard polls every five seconds. Validate files before reusing a
   // representation so the longer TTL never hides a ticket/run change.
   const snapshotTtlMs = 6000;
@@ -631,20 +642,25 @@ export function createWatchServer(opts) {
     const options = { ...q, local: q.local === '1', redact: true };
     const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
     let entry = commandCenterCache.get(key);
+    if (entry) { commandCenterCache.delete(key); commandCenterCache.set(key, entry); }
     if (entry?.pending) return entry.pending;
     if (entry && now() >= entry.at && now() - entry.at < snapshotTtlMs) {
       const identity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
+      if (entry.pending) return entry.pending;
       if (identity === entry.inputIdentity) return entry;
     }
     if (!entry) {
       // Bound memory even when clients supply many distinct query arguments.
-      if (commandCenterCache.size >= 128) commandCenterCache.delete(commandCenterCache.keys().next().value);
       entry = {};
       commandCenterCache.set(key, entry);
+      trimSnapshotCache();
     }
     entry.pending = (async () => {
       const snapshot = await board.snapshot(options);
-      entry.projects = (snapshot?.projects ?? []).filter(project => typeof project.root === 'string');
+      // Validation only needs roots. Project objects can carry entire parsed
+      // ledgers/history arrays, so never retain a board snapshot here.
+      entry.projects = (snapshot?.projects ?? []).filter(project => typeof project.root === 'string')
+        .map(project => ({ root: project.root }));
       const inputIdentity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
       const revision = snapshot?.version == null && snapshot?.at == null
         ? null : JSON.stringify([snapshot.version, snapshot.at, inputIdentity]);
@@ -657,10 +673,14 @@ export function createWatchServer(opts) {
       }
       entry.at = now();
       entry.inputIdentity = inputIdentity;
+      trimSnapshotCache();
       return entry;
     })();
     try { return await entry.pending; }
-    finally { entry.pending = null; }
+    catch (error) {
+      if (commandCenterCache.get(key) === entry) commandCenterCache.delete(key);
+      throw error;
+    } finally { entry.pending = null; }
   }
 
   async function payload() {
@@ -920,6 +940,7 @@ export function createWatchServer(opts) {
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
     streamManager.close();
+    commandCenterCache.clear();
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
