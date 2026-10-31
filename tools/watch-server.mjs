@@ -569,7 +569,7 @@ export function createWatchServer(opts) {
     ownerActions,
     env = process.env,
     commandCenter = commandCenterEnabled(env),
-    snapshotMaxStaleMs = 120000,
+    snapshotMaxStaleMs = 300000,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
@@ -667,7 +667,6 @@ export function createWatchServer(opts) {
 
   function rebuildCommandCenterSnapshot() {
     if (snapshotPending) return snapshotPending;
-    changesSinceFullRebuild = false;
     snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
       if (changesPending) await changesPending.catch(() => {});
       const snapshot = await board.snapshot({ local: false, redact: true });
@@ -691,6 +690,8 @@ export function createWatchServer(opts) {
         dirtyProjects.add(id);
         changesSinceFullRebuild = true;
       }
+      // The catch-up scan belongs to this snapshot; later detector ticks re-arm refresh.
+      changesSinceFullRebuild = false;
       // A build finishing after shutdown must not keep the snapshot alive.
       if (!closed) commandCenterCache = entry;
       return entry;

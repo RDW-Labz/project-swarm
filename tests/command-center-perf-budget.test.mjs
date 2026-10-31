@@ -304,6 +304,23 @@ test('one snapshot shares Hive, Cockpit and arbitrary queries through idle TTL e
   assert.equal((await f.get('/api/command-center', { 'x-watch-token': '' })).status, 403);
 });
 
+test('the default idle backstop waits five minutes before a full rebuild', async t => {
+  const f = await fixture(t);
+  const initial = await f.get('/api/command-center');
+  f.revise();
+  for (const elapsed of [60000, 60000, 179999]) {
+    f.advance(elapsed);
+    assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(f.reads(), 1, 'idle requests wait for the default five-minute backstop');
+  }
+  f.advance(1);
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'All 2');
+  assert.equal(f.reads(), 2);
+  t.diagnostic(`full builds: cold=1, idle through 299999ms=1, default deep refresh at 300000ms=${f.reads()}`);
+});
+
 test('a watched ticket change triggers a full rebuild at TTL expiry, then idle requests wait for the backstop', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-input-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -340,7 +357,7 @@ test('a watched ticket change triggers a full rebuild at TTL expiry, then idle r
   assert.equal(builds, 2, 'the first request at the TTL starts exactly one rebuild after a detected change');
   f.advance(60000);
   await f.get('/api/command-center');
-  assert.equal(builds, 2, 'starting the rebuild clears the detected-change flag');
+  assert.equal(builds, 2, 'finishing the rebuild clears the detected-change flag');
   f.advance(59999);
   await f.get('/api/command-center/project?id=alpha');
   assert.equal(builds, 2, 'unchanged watched inputs stay idle until the backstop');
@@ -351,36 +368,48 @@ test('a watched ticket change triggers a full rebuild at TTL expiry, then idle r
   t.diagnostic('full builds: cold=1, live patch=1, changed TTL=2, next idle TTL=2, next deep refresh=3');
 });
 
-test('a change found by the rebuild scan survives until the next TTL cycle', async t => {
+test('a rebuild scan consumes catch-up changes without re-arming the next idle TTL', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-scan-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const ticketsFile = path.join(root, '.swarm/project/tickets.json');
   await mkdir(path.dirname(ticketsFile), { recursive: true });
-  await writeFile(ticketsFile, JSON.stringify({ tickets: [] }));
+  const tickets = title => writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title, status: 'ready' }] }));
+  await tickets('Initial ticket');
+  const project = async () => ({ id: 'alpha', root, name: 'Live patch', ledger: JSON.parse(await readFile(ticketsFile, 'utf8')) });
   let builds = 0;
-  const f = await fixture(t, { snapshotMaxStaleMs: 90000, board: {
+  let projectReads = 0;
+  const f = await fixture(t, { snapshotMaxStaleMs: 300000, board: {
     async snapshot() {
       const revision = ++builds;
-      const ledger = JSON.parse(await readFile(ticketsFile, 'utf8'));
-      if (revision === 2) {
-        await writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title: 'Changed during rebuild', status: 'ready' }] }));
-      }
-      return { at: '2026-10-30T12:00:00Z', projects: [{ id: 'alpha', root, name: 'Full ' + revision, ledger }] };
+      if (revision === 2) await tickets('Caught up during rebuild');
+      return { at: '2026-10-30T12:00:00Z', projects: [{ ...await project(), name: 'Full ' + revision }] };
     },
+    async project() { projectReads++; return project(); },
   } });
   await f.get('/api/command-center');
-  f.advance(90000);
+  f.advance(300000);
   await waitForResponse(() => f.get('/api/command-center'),
     response => JSON.parse(response.body).projects[0].name === 'Full 2');
   assert.equal(builds, 2, 'the configured deep backstop starts one rebuild');
-  f.advance(60000);
+  // Flush the catch-up patch without another input change.
+  f.timers.find(timer => timer.ms === 1000).fn();
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Live patch');
+  assert.equal(projectReads, 1);
+  for (const elapsed of [59999, 1, 60000]) {
+    f.advance(elapsed);
+    await f.get('/api/command-center');
+    // Let a wrongly scheduled background rebuild enter board.snapshot().
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(builds, 2, 'catch-up changes must not trigger another rebuild at or after the next 60 second TTL');
+  }
+  t.diagnostic(`full builds: cold=1, deep refresh=2, idle at next TTL and 120000ms=${builds}`);
+  await tickets('Changed after rebuild scan');
+  f.timers.find(timer => timer.ms === 1000).fn();
   await waitForResponse(() => f.get('/api/command-center'),
     response => JSON.parse(response.body).projects[0].name === 'Full 3');
-  assert.equal(builds, 3, 'a change during the rebuild is retained for the next TTL, before the backstop');
-  f.advance(60000);
-  await f.get('/api/command-center');
-  assert.equal(builds, 3, 'the next rebuild consumes the change without repeating idle rebuilds');
-  t.diagnostic('full builds: cold=1, configured deep refresh=2, rebuild-scan change at next TTL=3, next idle TTL=3');
+  assert.equal(builds, 3, 'a later detector tick re-arms refresh before the deep backstop');
+  t.diagnostic(`full builds after a later watched input change: ${builds}`);
 });
 
 test('explicit local-only requests preserve query semantics and redaction without retaining another snapshot', async t => {
@@ -470,7 +499,7 @@ test('startup warm is non-blocking, shares cold requests and is ready before the
 test('failed startup warm retries on demand; failed refresh keeps stale data and validators', async t => {
   let reads = 0;
   let fail = true;
-  const f = await fixture(t, { board: { snapshot: async () => {
+  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: { snapshot: async () => {
     reads++;
     if (fail) throw new Error('fixture build failed');
     return { at: '2026-10-30T12:00:00Z', projects: [] };

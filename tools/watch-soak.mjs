@@ -75,7 +75,8 @@ const PROFILES = {
 };
 
 const SAMPLE_INTERVAL_MS = 30_000;
-const RSS_GROWTH_KB_MAX = 512;
+// Allow the one-time build peak while bounding a real leak (~1 MB/minute over an hour).
+const RSS_GROWTH_KB_MAX = 65536;
 const HEAP_GROWTH_BYTES_MAX = 2 * 1024 * 1024;
 const CPU_AVG_MAX = 5;
 
