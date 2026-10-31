@@ -32,6 +32,746 @@ index 86d44573..9cc0e3be 100644
  link this project, run doctor, validate and run the read-only and writing smoke
  jobs, inspect and integrate the reviewed writing output. Read the installed
  SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/coordination/manifests/bump-1167-30.json b/coordination/manifests/bump-1167-30.json
+new file mode 100644
+index 00000000..f113953d
+--- /dev/null
++++ b/coordination/manifests/bump-1167-30.json
+@@ -0,0 +1,78 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "bump16730",
++      "agent": "auto",
++      "tier": "cheap",
++      "prompt": "Bump the version from 1.167.29 to 1.167.30. In package.json and package-lock.json (both places in the lock: the top version and packages[\"\"].version) change 1.167.29 to 1.167.30. In README.md change every 1.167.29 pin (kickoff text, tag name) to 1.167.30. In these tests replace the 1.167.29 current-version pin with 1.167.30 where it is the current-version pin (assertions, test titles, the pin map in the AH release test): tests/t101-release.test.mjs, tests/field-lesson-t80-cli.test.mjs, tests/field-lessons-batch-x.test.mjs, tests/field-lessons-batch-ab-release.test.mjs, tests/field-lessons-batch-ag-release.test.mjs, tests/field-lessons-batch-ah-release.test.mjs. Leave historical versions in those tests alone.\n\nIn CHANGELOG.md add a NEW top entry above ## 1.167.29 (keep every existing entry unchanged) exactly in this house style:\n\n## 1.167.30\n\nRelease train 6: a fast Command Center and a hardened owner-only gate.\n- Command Center performance: gzip/brotli, ETag/304 and real cache headers (fonts immutable, JS/CSS revalidated) replace no-store, and the Command Center snapshot is cached for 2 s; Cockpit, the tour and the palette lazy-load with the Cockpit module graph and the first project's data warmed during Hive idle; the robot is deferred; ambient animation is capped at 30 fps (robot 15 fps) and goes static after 5 s idle, pausing when hidden, off-screen or under reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real 9-project board: usable 3518 to 195 ms desktop and 5251 to 943 ms on a 1.6 Mbps/100 ms phone profile; Hive to Cockpit 3114 to 131 ms and 4099 to 111 ms; idle page CPU 91.8 to 3.4 percent and 95.8 to 3.2 percent; Hive payload 497 to 157 KB and 434 to 81 KB; API calls 23 to 12 per minute;\n- Owner gate: the tickets supersede and --set superseded owner check no longer accepts SWARM_OWNER=1, refuses any agent/worker env marker first, walks the process ancestry to refuse agent shells and ptys, and requires both stdin and stdout to be TTYs; a test-only hook replaces the env override in tests; tools/watch-perf.mjs and npm run perf:cc measure the Command Center against a real board URL;\n- Version 1.167.30.\n\nDo not touch any other file.",
++      "context": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "outputs": [
++        "package.json",
++        "package-lock.json",
++        "README.md",
++        "CHANGELOG.md",
++        "tests/t101-release.test.mjs",
++        "tests/field-lesson-t80-cli.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-ab-release.test.mjs",
++        "tests/field-lessons-batch-ag-release.test.mjs",
++        "tests/field-lessons-batch-ah-release.test.mjs"
++      ],
++      "timeoutMs": 1500000,
++      "ignoreTests": [
++        "tests/acceptance-review-skip.test.mjs",
++        "tests/acceptance-review-worktree.test.mjs",
++        "tests/anthropic-lane.test.mjs",
++        "tests/api-workers.test.mjs",
++        "tests/cap-reroute.test.mjs",
++        "tests/codex-envelope.test.mjs",
++        "tests/commit-msg-manifest.test.mjs",
++        "tests/field-lessons-batch-aa-core.test.mjs",
++        "tests/field-lessons-batch-ai-context.test.mjs",
++        "tests/field-lessons-batch-ai-release.test.mjs",
++        "tests/field-lessons-batch-o.test.mjs",
++        "tests/field-lessons-batch-w.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/fixtures/make-practice-project.mjs",
++        "tests/git-hooks.test.mjs",
++        "tests/githook-push-range.test.mjs",
++        "tests/goal.test.mjs",
++        "tests/job-types.test.mjs",
++        "tests/kickoff.test.mjs",
++        "tests/kit-and-interview.test.mjs",
++        "tests/leads.test.mjs",
++        "tests/lessons120-ship.test.mjs",
++        "tests/local-lane-probe.test.mjs",
++        "tests/local-lane-review.test.mjs",
++        "tests/openrouter.test.mjs",
++        "tests/orchestrator-allow.test.mjs",
++        "tests/orchestrator-mode.test.mjs",
++        "tests/repo-map.test.mjs",
++        "tests/review-high-regressions.test.mjs",
++        "tests/router.test.mjs",
++        "tests/s13-blockers.test.mjs",
++        "tests/scope-loop-resume-review.test.mjs",
++        "tests/ship-125.test.mjs",
++        "tests/swarm-produced-hash.test.mjs",
++        "tests/ticket-context.test.mjs",
++        "tests/ticket-target-worktree.test.mjs",
++        "tests/update.test.mjs",
++        "tests/wave-prep-context.test.mjs",
++        "tests/wave-prep-robust.test.mjs"
++      ],
++      "ignoreTestsReason": "release bump; full suite runs before merge"
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/review-train6.json b/coordination/manifests/review-train6.json
+new file mode 100644
+index 00000000..5a1ec39e
+--- /dev/null
++++ b/coordination/manifests/review-train6.json
+@@ -0,0 +1,24 @@
++{
++  "version": 1,
++  "concurrency": 1,
++  "jobs": [
++    {
++      "id": "reviewtrain6",
++      "agent": "claude",
++      "model": "opus",
++      "tier": "expensive",
++      "tierReason": "owner rule: one Opus review of the train 6 combined diff",
++      "prompt": "Review release train 6 of Project Swarm: branch swarm/train6 against main at 2a8dda74 (1.167.29). The combined diff is in context at coordination/review/train6.diff (every changed source file); tools/watch-perf.mjs, the perf budget test, package.json and CHANGELOG are also in context. Judge from these; the workspace files are not readable in your sandbox.\n\nWhat changed:\n(1) OWNER GATE, tools/scope-commands.mjs: supersedeOwnerRefusal no longer accepts SWARM_OWNER=1; agent/worker env markers are checked first; it walks the process ancestry (ps ppid/comm) and refuses if any ancestor is claude, codex, cursor-agent, opencode or chatgpt; both stdin and stdout must be TTYs; a test-only setSupersedeOwnerCheck hook replaces the env override in tests, and both `tickets supersede` and `tickets --set superseded` use it.\n(2) COMMAND CENTER PERF, tools/watch-server.mjs + tools/watch-assets: gzip/brotli, ETag/304, cache headers (fonts immutable, JS/CSS revalidated, HTML/JSON no-cache) replace no-store; a 2 s snapshot cache; the Cockpit/tour/palette lazy-load, the Cockpit module graph and first-project data warm during Hive idle, the robot is deferred; ambient animation caps at 30 fps (robot 15), goes static after 5 s idle, pauses hidden/off-screen/reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real board: usable 3518->195 ms desktop and 5251->943 ms phone 4G; switch 3114->131 ms and 4099->111 ms; idle page CPU 91.8->3.4% and 95.8->3.2%; Hive payload 497->157 KB and 434->81 KB; API 23->12/min.\n(3) tools/watch-perf.mjs + npm run perf:cc: the measurement harness.\n\nPass bar (owner): blockers only. Look hard at the owner gate: can an agent/worker or a pty still get through (env override, ancestry gaps, TTY spoof, direct --set superseded), can an innocent owner be refused? For the perf/serve changes: any security header/CSP/cookie/token regression (the exact security-headers test was fixed after the first cache attempt), cache poisoning or cross-query leakage, stale/wrong snapshot caching, a data or visual regression, a lazy-load that breaks the Hive/Cockpit, an animation/pause bug, a hidden secret or token in the perf script or logs, or a budget test that can pass while slow. Everything else is a follow-up.\n\nThe runner stamps the reviewed head into your result; do NOT add or change a head field. Write ONLY coordination/review/train6-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
++      "context": [
++        "coordination/review/train6.diff",
++        "tools/watch-perf.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "coordination/review/train6-review.json"
++      ],
++      "resultFile": "coordination/review/train6-review.json",
++      "timeoutMs": 3000000
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-cockpit-datawarm.json b/coordination/manifests/t6-cockpit-datawarm.json
+new file mode 100644
+index 00000000..9653574c
+--- /dev/null
++++ b/coordination/manifests/t6-cockpit-datawarm.json
+@@ -0,0 +1,42 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-cockpit-datawarm",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 6 perf: the phone Cockpit switch is now 241 ms with all JS cached; the remaining fetch is /api/command-center/project (1.5 KB, one 4G round trip). After the Hive render, warm the first project's Cockpit data too so the switch renders from cache. In command-center-boot.js, where the boot calls schedulePromptCockpitWarm() after the Hive render (~line 403), pass the first project id from the snapshot; store it and have the 300 ms timer call preloadCockpit(warmProjectId) so the existing projectCache fill path runs. Keep the hover/idle behavior and deps.loadCockpit test path. Update tests/command-center-boot.test.mjs and tests/command-center-perf-budget.test.mjs: the warm timer prefetches the first project's data into the cache (and the switch uses cached data without a blocking fetch), with a fake fetch. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 1200000,
++      "ignoreTests": [
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-cockpit-datawarm",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-cockpit-graph.json b/coordination/manifests/t6-cockpit-graph.json
+new file mode 100644
+index 00000000..3da3c701
+--- /dev/null
++++ b/coordination/manifests/t6-cockpit-graph.json
+@@ -0,0 +1,42 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-cockpit-graph",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 6 perf: the phone Cockpit switch still fetches its module graph (25 KB) because command-center-boot.js modulepreloads only cc-cockpit-mount.js; Chromium fetches the entry module but not its imports. In preloadCockpit (browser path), add one modulepreload link per Cockpit graph module so the whole graph is warm during the 300 ms Hive idle warm-up: cc-cockpit-mount.js, cockpit-view.js, cockpit-lists.js, cockpit-orchestrator.js, cc-ledger-browser.js, cc-glitch.js, cc-tour.js (relative to import.meta.url; skip any already-added URL). Keep the deps.loadCockpit test path and the existing link/hover/idle behavior. Update tests/command-center-boot.test.mjs and tests/command-center-perf-budget.test.mjs to assert the warm list of modulepreload hrefs (not just the entry) and that Hive still does not evaluate the cockpit module. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 1200000,
++      "ignoreTests": [
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-cockpit-graph",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-cockpit-graph2.json b/coordination/manifests/t6-cockpit-graph2.json
+new file mode 100644
+index 00000000..58c2bce4
+--- /dev/null
++++ b/coordination/manifests/t6-cockpit-graph2.json
+@@ -0,0 +1,42 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-cockpit-graph2",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 6 perf: the phone Cockpit switch still fetched orchestrator-view.js and robot-head.js (6.7 KB) because the COCKPIT_WARM_MODULES list in command-center-boot.js omits them; the Cockpit view imports cockpit-orchestrator -> orchestrator-view -> robot-head. Add './orchestrator-view.js' and './robot-head.js' to COCKPIT_WARM_MODULES (and their robot module deps only if the tests show the switch still fetches them). Keep prefetching as modulepreload (no evaluation) and the lazy Cockpit/robot execution. Update tests/command-center-boot.test.mjs and tests/command-center-perf-budget.test.mjs so the warm list includes them. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 1200000,
++      "ignoreTests": [
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-cockpit-graph2",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-cockpit-preload.json b/coordination/manifests/t6-cockpit-preload.json
+new file mode 100644
+index 00000000..60e2c59a
+--- /dev/null
++++ b/coordination/manifests/t6-cockpit-preload.json
+@@ -0,0 +1,42 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-cockpit-preload",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 6 perf: the phone (4G) Hive-to-Cockpit switch is 863 ms because the lazy cockpit module graph is still fetched on click. command-center-boot.js preloadCockpit currently appends a plain `rel=preload as=script crossOrigin=anonymous` link for /assets/cc-cockpit-mount.js; that does not reliably warm the ES module graph. Change it (only when deps.loadCockpit is not injected, i.e. the browser path) to a `rel=modulepreload` link whose href is the module URL resolved from this module, so the browser fetches cc-cockpit-mount.js and its imports while Hive idles: e.g. `cockpitPreload.rel = 'modulepreload'; delete as/crossOrigin; cockpitPreload.href = new URL('./cc-cockpit-mount.js', import.meta.url).href;`. Keep the hover/idle calls and the deps.loadCockpit test path. Update the boot/perf budget tests to assert the modulepreload href and that Hive still does not import/evaluate the cockpit module before a switch. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 1200000,
++      "ignoreTests": [
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-cockpit-preload",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-cockpit-warm.json b/coordination/manifests/t6-cockpit-warm.json
+new file mode 100644
+index 00000000..336868b9
+--- /dev/null
++++ b/coordination/manifests/t6-cockpit-warm.json
+@@ -0,0 +1,42 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-cockpit-warm",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Train 6 perf: the Cockpit modulepreload never runs on the phone because command-center-boot.js schedules it inside requestIdleCallback after the Hive render, and the continuously animating page never becomes idle. Start the warm-up promptly: after the first Hive render (where the boot currently calls renderHiveView / sets up the idle tour), schedule preloadCockpit() with a 300 ms setTimeout (use the injectable/global setTimeout, clear on destroy, guard once), in addition to the existing idle/hover calls. Keep the deps.loadCockpit test path. Verify the modulepreload link is added within 300 ms in a unit test that simulates setInterval/setTimeout callbacks (the boot has injected timer deps); update tests/command-center-boot.test.mjs and tests/command-center-perf-budget.test.mjs accordingly. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-assets/command-center-boot.js",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 1200000,
++      "ignoreTests": [
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-cockpit-warm",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-owner-gate.json b/coordination/manifests/t6-owner-gate.json
+new file mode 100644
+index 00000000..7f6a228a
+--- /dev/null
++++ b/coordination/manifests/t6-owner-gate.json
+@@ -0,0 +1,97 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-owner-gate",
++      "agent": "codex",
++      "model": "gpt-6.1-sol",
++      "tier": "expensive",
++      "tierReason": "owner-only security gate; Opus review in train 6",
++      "sensitive": true,
++      "prompt": "FILE ACCESS: declared outputs are writable. Tests first. Harden the owner-only gate for `swarm tickets supersede` and `tickets --set superseded` in tools/scope-commands.mjs (supersedeOwnerRefusal ~line 3449). The review's exploit: any agent can export SWARM_OWNER=1, or allocate a pty, and get through, because the gate trusts an env string and isTTY.\n\nNew rules:\n1) Remove the SWARM_OWNER=1 production bypass entirely. No environment string makes an agent session the owner.\n2) Agent/worker markers always refuse, checked first: CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, SWARM_WORKER, SWARM_JOB_ID, SWARM_RUN_ID (present today; keep them).\n3) Add process-ancestry detection: walk the parent process chain from this process (default: `ps -o ppid= -p <pid>` and `ps -o comm= -p <pid>`, up to 32 hops, stop at pid 1) and refuse if any ancestor's command basename (lowercased) is a known agent: claude, codex, cursor-agent, opencode, chatgpt. This closes the pty trick: a pty created inside an agent still has the agent in its ancestry. Keep the helper injectable (`ancestry` array or a `processInfo` dep) for tests.\n4) Still require isTTY (both stdin and stdout) after the ancestry/marker checks.\n5) Keep one test-only seam so the existing success-path command tests can run without a real owner terminal: a module-scoped `setSupersedeOwnerCheck(fn)` / reset hook used by both the bulk command and the `--set superseded` path (production always calls the real gate; the hook is for tests only, no env bypass). Tests must reset it.\n\nUpdate tests/tickets-supersede.test.mjs: SWARM_OWNER=1 with an agent marker still refuses; isTTY true with ancestry ['bash','codex'] refuses; isTTY true with clean ancestry allows; no TTY refuses; the bulk command and `--set superseded` both refuse through the real gate and allow through the test hook. Keep every other test. Verify: node --import ./tests/_isolate-config.mjs --test tests/tickets-supersede.test.mjs tests/scope-commands.test.mjs tests/tickets.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/scope-commands.mjs",
++        "tests/tickets-supersede.test.mjs",
++        "tests/scope-commands.test.mjs"
++      ],
++      "outputs": [
++        "tools/scope-commands.mjs",
++        "tests/tickets-supersede.test.mjs"
++      ],
++      "timeoutMs": 2400000,
++      "ignoreTests": [
++        "tests/acceptance-sync.test.mjs",
++        "tests/batch-a-eval.test.mjs",
++        "tests/batch-b-eval.test.mjs",
++        "tests/batch-c-eval.test.mjs",
++        "tests/change-order-auto-split.test.mjs",
++        "tests/dogfood-fixes.test.mjs",
++        "tests/errors.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/gallery-tickets.test.mjs",
++        "tests/kit-and-interview.test.mjs",
++        "tests/lesson-34-eval.test.mjs",
++        "tests/lesson-35-eval.test.mjs",
++        "tests/lesson-37-eval.test.mjs",
++        "tests/lesson-38-eval.test.mjs",
++        "tests/lesson-39-eval.test.mjs",
++        "tests/lesson-40-eval.test.mjs",
++        "tests/lessons-28-32-eval.test.mjs",
++        "tests/mark-deps.test.mjs",
++        "tests/review-recorder-lanes.test.mjs",
++        "tests/review-retry.test.mjs",
++        "tests/s13-live-bugs.test.mjs",
++        "tests/scope-approve-managers.test.mjs",
++        "tests/scope-delete-tickets.test.mjs",
++        "tests/scope-gate-list.test.mjs",
++        "tests/scope-ingest-acceptance.test.mjs",
++        "tests/scope-ingest-owns-tests.test.mjs",
++        "tests/scope-ingest-paths.test.mjs",
++        "tests/scope-ingest-sensitive.test.mjs",
++        "tests/scope-ingest-waves.test.mjs",
++        "tests/scope-loop.test.mjs",
++        "tests/scope-ownership.test.mjs",
++        "tests/scope-root-files.test.mjs",
++        "tests/scope-set-guard.test.mjs",
++        "tests/scope-spec-gate.test.mjs",
++        "tests/scope-spec-no-runner.test.mjs",
++        "tests/scope-split-guards.test.mjs",
++        "tests/scope-split-lane-size.test.mjs",
++        "tests/scope-split-repair-loop.test.mjs",
++        "tests/scope-sync-delete.test.mjs",
++        "tests/scope-sync-replan.test.mjs",
++        "tests/split-auto-approve.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/split-repair-auto.test.mjs",
++        "tests/split-repair.test.mjs",
++        "tests/splitter-lesson-55.test.mjs",
++        "tests/ticket-check-timeout.test.mjs",
++        "tests/ticket-id-blocks.test.mjs",
++        "tests/ticket-lane-risk.test.mjs",
++        "tests/ticket-owner-note.test.mjs",
++        "tests/ticket-paths-new-files.test.mjs",
++        "tests/ticket-paths-regression.test.mjs",
++        "tests/tickets-delivered.test.mjs",
++        "tests/train2-review-gaps.test.mjs",
++        "tests/ui-check.test.mjs",
++        "tests/verify-provenance.test.mjs",
++        "tests/wave-prep-robust.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused ticket/scope tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-owner-gate",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/tickets-supersede.test.mjs",
++        "tests/scope-commands.test.mjs",
++        "tests/tickets.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-perf-client.json b/coordination/manifests/t6-perf-client.json
+new file mode 100644
+index 00000000..81215d86
+--- /dev/null
++++ b/coordination/manifests/t6-perf-client.json
+@@ -0,0 +1,81 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-perf-client",
++      "agent": "codex",
++      "model": "gpt-6.1-sol",
++      "tier": "expensive",
++      "tierReason": "top-priority Command Center performance; Opus review in train 6",
++      "sensitive": false,
++      "prompt": "FILE ACCESS: declared outputs are writable. Tests first. Train 6 performance part 2: the client still burns CPU and the page switch is slow. Current numbers on the branch (fixture server, real 9-project board, desktop headless Chromium, 45 s idle): usable 1140 ms (was 3518), Hive payload 194 KB (was 497 KB; JS 100 KB, CSS 27 KB), Hive to Cockpit 1093 ms (was 3114), back 72 ms, idle page CPU 96.5% (target under 5%), idle API 12/min. Keep the look identical.\n\n1) ANIMATIONS/CPU (main): find every requestAnimationFrame/setInterval/canvas loop in the Command Center assets (cc-hive-mount.js, cc-hive-stage.js, hive-panels.js, cc-cockpit-mount.js, cc-cockpit-orbit.js, cockpit-view.js, robot-head.js and its modules). Make idle cheap without changing the look:\n- Cap ambient animation work to a frame budget (e.g. 30 fps max, and drop to 10 fps or a static frame after 5 s with no pointer/keyboard input while still showing the composed look).\n- Reduce expensive per-frame work: avoid shadowBlur/glow recomputation per particle, batch canvas draws, use offscreen canvases, avoid layout reads in rAF.\n- Pause all loops when document.hidden or the element is off-screen (IntersectionObserver), resume on visible; honor prefers-reduced-motion (static).\n- Do not run the 3D robot or heavy canvases on the Hive unless visible and needed; if the Hive does not visually use the 3D robot, defer it entirely; lazy-load it on the Cockpit after the shell renders.\n- The target is under 5% idle CPU on this MacBook with the dashboard open and idle. Measure with a fixture server and headless Chromium (the existing perf harness style); report the frame budget and measured CPU.\n2) PAGE SWITCH: render the Cockpit shell and its data immediately on click/navigation (under 150 ms), then load/decorate the robot and secondary visuals asynchronously (preload the cockpit chunk on pointerenter/idle; never await the robot before showing the shell/data). Keep the Hive back path fast.\n3) Only re-render what changed: on each poll, compare the new snapshot with the previous one and update only changed text/width/class values; do not rebuild the DOM. Keep all data bindings.\n4) Update tests/command-center-perf-budget.test.mjs (and/or add a browser perf test) to lock in: animation frame budget/pause-on-hidden/reduced-motion, no Hive robot load, lazy Cockpit decoration, poll interval, and asset gzip budgets. Keep every existing command-center/cc/watch-assets test green. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs tests/cc-hive-mount.test.mjs tests/cc-cockpit-mount.test.mjs tests/command-center-boot.test.mjs tests/command-center-hive.test.mjs tests/command-center-cockpit.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report before/after idle CPU and switch time from your own fixture run. You have read/write access to cc-router.js and the robot modules; the Hive initial static import graph must not pull the robot modules.",
++      "context": [
++        "tests/cc-cockpit-mount.test.mjs",
++        "tests/cc-hive-mount.test.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tools/watch-assets/cc-cockpit-mount.js",
++        "tools/watch-assets/cc-cockpit-orbit.js",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tools/watch-assets/cc-hive-stage.js",
++        "tools/watch-assets/cc-router.js",
++        "tools/watch-assets/cockpit-view.js",
++        "tools/watch-assets/command-center-boot.js",
++        "tools/watch-assets/hive-panels.js",
++        "tools/watch-assets/robot-avatar.js",
++        "tools/watch-assets/robot-color.js",
++        "tools/watch-assets/robot-faces.js",
++        "tools/watch-assets/robot-geometry.js",
++        "tools/watch-assets/robot-head.js",
++        "tools/watch-assets/robot-light.js",
++        "tools/watch-assets/robot-render.js",
++        "tools/watch-assets/robot-sim.js",
++        "tools/watch-assets/robot-ticker.js"
++      ],
++      "outputs": [
++        "tests/command-center-perf-budget.test.mjs",
++        "tools/watch-assets/cc-cockpit-mount.js",
++        "tools/watch-assets/cc-cockpit-orbit.js",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tools/watch-assets/cc-hive-stage.js",
++        "tools/watch-assets/cc-router.js",
++        "tools/watch-assets/cockpit-view.js",
++        "tools/watch-assets/command-center-boot.js",
++        "tools/watch-assets/hive-panels.js",
++        "tools/watch-assets/robot-head.js",
++        "tools/watch-assets/robot-render.js",
++        "tools/watch-assets/robot-ticker.js"
++      ],
++      "timeoutMs": 3600000,
++      "ignoreTests": [
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-cockpit.test.mjs",
++        "tests/command-center-hive-panels.test.mjs",
++        "tests/command-center-hive.test.mjs",
++        "tests/command-center-nav.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-palette.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs",
++        "tests/watch-ui.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused CC/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-perf-client",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/cc-hive-mount.test.mjs",
++        "tests/cc-cockpit-mount.test.mjs",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-hive.test.mjs",
++        "tests/command-center-cockpit.test.mjs",
++        "tests/command-center-routes-flag.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-perf-script.json b/coordination/manifests/t6-perf-script.json
+new file mode 100644
+index 00000000..1936496d
+--- /dev/null
++++ b/coordination/manifests/t6-perf-script.json
+@@ -0,0 +1,16 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-perf-script",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "cheap",
++      "prompt": "Add tools/watch-perf.mjs to the repo: the Command Center performance harness used to produce the train 6 before/after numbers, so the mini can run it after updating. It must be dependency-free except the repo's playwright devDependency (import { chromium } from 'playwright').\n\nUsage: `node tools/watch-perf.mjs URL [--out FILE] [--profile desktop|phone] [--server-pid PID] [--idle SECONDS] [--wait-ms MS]`.\n\nBehavior: open the URL with Chromium (headless), desktop 1440x900 or phone 390x844 with a 1.6 Mbps/100 ms 4G throttle for phone; wait for [data-project-id]; measure time-to-usable (navigation start to the selector plus two rAFs); click the first project node and measure Hive->Cockpit (to .cc-cockpit-shell plus two rAFs); navigate/back to Hive and measure; capture encoded bytes per request grouped (total/api/html/js/css/fonts) for each segment; capture Cache-Control for js/css/fonts; sleep --idle seconds (default 45) and measure page CPU from CDP Performance TaskDuration delta and server CPU from `ps -o time= -p PID` cumulative CPU delta (if --server-pid given); count API requests and bytes during idle; collect page console errors; write the JSON to --out (default stdout) and print a short human summary. Exit 1 on navigation/timeout errors. No browser dependency beyond playwright; do not hard-code the machine's token or paths; accept the full URL with ?t=.\n\nAlso add a `perf:cc` npm script in package.json: `node tools/watch-perf.mjs`.\n\nVerify: node --check tools/watch-perf.mjs; node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs tests/command-center-boot.test.mjs -> all pass. Do not run the harness against a live server in the job (no browser in the worker). Report the file/usage and counts.",
++      "context": ["package.json"],
++      "outputs": ["tools/watch-perf.mjs", "package.json"],
++      "timeoutMs": 1800000
++    }
++  ],
++  "checks": [ { "name": "t6-perf-script", "argv": ["node", "--check", "tools/watch-perf.mjs"] } ]
++}
+diff --git a/coordination/manifests/t6-perf-server.json b/coordination/manifests/t6-perf-server.json
+new file mode 100644
+index 00000000..0992a321
+--- /dev/null
++++ b/coordination/manifests/t6-perf-server.json
+@@ -0,0 +1,85 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-perf-server",
++      "agent": "codex",
++      "model": "gpt-6.1-sol",
++      "tier": "expensive",
++      "tierReason": "top-priority Command Center performance; Opus review in train 6",
++      "sensitive": false,
++      "prompt": "FILE ACCESS: declared outputs are writable. Tests first where practical. Top-priority train 6 work: make the Command Center fast WITHOUT changing its look.\n\nMeasured before (MacBook, real 9-project board, desktop headless Chromium): usable 3518 ms; Hive load 497 KB over 33 requests (JS 328 KB, CSS 98 KB, fonts 63 KB, API 7.5 KB); Hive to Cockpit 3114 ms (only 2 API calls); Cockpit back 64 ms; idle page CPU 92% and server CPU 97%; 17 API calls in 45 s (about 23/min, 128 KB); every asset has Cache-Control: no-store. Phone profile (390x844, 1.6 Mbps/100 ms): usable 5251 ms, cockpit 4099 ms, idle CPU 96%.\nTargets: usable under 1 s, page switch under 150 ms, idle CPU under 5%, including the phone remote. Keep the design identical.\n\nPart 1 - serving (tools/watch-server.mjs):\n- Remove the blanket Cache-Control: no-store. Send ETag (strong, from file mtime+size or a hash) and Last-Modified for assets and pages; answer If-None-Match/If-Modified-Since with 304. Cache-Control: fonts and vendor assets `public, max-age=31536000, immutable`; JS/CSS `public, max-age=300, must-revalidate`; HTML and JSON `no-cache`; always `Vary: Accept-Encoding`.\n- Compress text responses (JS, CSS, HTML, JSON, SVG) with gzip or brotli when the request accepts it; skip already-compressed binaries. This alone should cut the 328 KB JS dramatically.\n- Cache the /api/command-center snapshot and /api/command-center/project per board revision (the board snapshot has an at/version field; use it) for a short TTL (2 s) and support ETag/304 so repeated polls cost little server CPU. Do not cache across different query args (local/redact) incorrectly.\n- Keep the token/auth semantics and remote read-only rules exactly.\n\nPart 2 - boot/loading (command-center-boot.js, command-center.html, cc-hive-mount.js, cc-cockpit-mount.js, cockpit-view.js; you have read/write access to all of them):\n- Do not import the Cockpit page modules, the robot renderer, the tour or the command palette on the Hive initial load. Dynamically import the Cockpit modules on the first Cockpit navigation, render the cockpit shell/data first, and load the robot/3D modules after (or on idle). Keep the Hive rendering exactly as now. Keep exports/tests working; the boot must remain testable with injected deps.\n- Raise the visible poll interval to 5000 ms and stop polling when document.hidden; resume immediately on visibilitychange. Keep the existing poll callback behavior.\n\nPart 3 - tests: add focused tests for: 304 on ETag, gzip when accepted and not when not, cache headers per asset type, snapshot cache key/ETag, lazy Cockpit/robot imports (Hive initial import graph excludes them), poll interval/pause. Keep every existing command-center and watch-assets test green (the full suite runs before merge). Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-flag.test.mjs tests/watch-assets.test.mjs tests/watch-assets-browser-safe.test.mjs tests/command-center-perf-budget.test.mjs -> all pass (create the perf budget test with static budgets if the job can; otherwise a focused server test). Report the payload/caching changes and counts.",
++      "context": [
++        "tools/watch-server.mjs",
++        "tools/watch-assets/command-center-boot.js",
++        "tools/watch-assets/command-center.html",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tools/watch-assets/cc-cockpit-mount.js",
++        "tools/watch-assets/cockpit-view.js"
++      ],
++      "outputs": [
++        "tools/watch-server.mjs",
++        "tools/watch-assets/command-center-boot.js",
++        "tools/watch-assets/command-center.html",
++        "tools/watch-assets/cc-hive-mount.js",
++        "tools/watch-assets/cc-cockpit-mount.js",
++        "tools/watch-assets/cockpit-view.js",
++        "tests/command-center-perf-budget.test.mjs"
++      ],
++      "timeoutMs": 3600000,
++      "ignoreTests": [
++        "tests/board-inbox.test.mjs",
++        "tests/board-live-chip.test.mjs",
++        "tests/board-live.test.mjs",
++        "tests/board-nav.test.mjs",
++        "tests/board-no-money.test.mjs",
++        "tests/board-owner-actions.test.mjs",
++        "tests/board-owner-routes.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/board-run-federation.test.mjs",
++        "tests/browser/command-center.smoke.mjs",
++        "tests/cc-cockpit-mount.test.mjs",
++        "tests/cc-hive-mount.test.mjs",
++        "tests/classic-routes.spec.mjs",
++        "tests/command-center-cockpit.test.mjs",
++        "tests/command-center-nav.test.mjs",
++        "tests/command-center-routes.spec.mjs",
++        "tests/command-center-snapshot.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/remote.test.mjs",
++        "tests/server-record-version.test.mjs",
++        "tests/server-restart-review.test.mjs",
++        "tests/server-restart-round2.test.mjs",
++        "tests/server-restart.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs",
++        "tests/watch-leftovers.test.mjs",
++        "tests/watch-review-fixes.test.mjs",
++        "tests/watch-server-vendor-assets.test.mjs",
++        "tests/watch-server.test.mjs",
++        "tests/watch-token-urls.test.mjs",
++        "tests/watch-ui.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused boot/routes/assets/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-perf-server",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/command-center-boot.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-flag.test.mjs",
++        "tests/watch-assets.test.mjs",
++        "tests/watch-assets-browser-safe.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
+diff --git a/coordination/manifests/t6-server-headers.json b/coordination/manifests/t6-server-headers.json
+new file mode 100644
+index 00000000..9e328aa4
+--- /dev/null
++++ b/coordination/manifests/t6-server-headers.json
+@@ -0,0 +1,66 @@
++{
++  "version": 1,
++  "jobs": [
++    {
++      "id": "t6-server-headers",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "expensive",
++      "tierReason": "security headers on the caching path; Opus review in train 6",
++      "sensitive": true,
++      "prompt": "Train 6 regression from the perf caching work: two watch-server tests are red. Fix the server so caching/compression never drops the security posture. Failing tests: tests/watch-server.test.mjs 'every response carries the security headers with the exact CSP' and tests/watch-token-urls.test.mjs 'HTML page query tokens are exchanged for a protected cookie and privacy headers'. Likely cause: the new ETag/304 and compressed paths return early before SECURITY headers, the exact CSP, and the page cookie/privacy headers, or the 304 response omits headers the tests require. Fix tools/watch-server.mjs: every response (200, 304, compressed, assets, JSON, pages) must carry the SECURITY headers with the exact CSP; the HTML page token exchange must set the protected cookie and privacy headers on the page response including the cached/304 path (if a 304 cannot carry a new cookie, the test expects the page's cookie/privacy contract; preserve it). Do not weaken the headers; do not change the token/auth semantics. Add/keep focused assertions. Verify: node --import ./tests/_isolate-config.mjs --test tests/watch-server.test.mjs tests/watch-token-urls.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-perf-budget.test.mjs -> all pass. Report counts.",
++      "context": [
++        "tools/watch-server.mjs",
++        "tests/watch-server.test.mjs",
++        "tests/watch-token-urls.test.mjs"
++      ],
++      "outputs": [
++        "tools/watch-server.mjs"
++      ],
++      "timeoutMs": 1800000,
++      "ignoreTests": [
++        "tests/board-inbox.test.mjs",
++        "tests/board-live-chip.test.mjs",
++        "tests/board-live.test.mjs",
++        "tests/board-nav.test.mjs",
++        "tests/board-no-money.test.mjs",
++        "tests/board-owner-actions.test.mjs",
++        "tests/board-owner-routes.test.mjs",
++        "tests/board-page.test.mjs",
++        "tests/board-run-federation.test.mjs",
++        "tests/browser/command-center.smoke.mjs",
++        "tests/classic-routes.spec.mjs",
++        "tests/command-center-perf-budget.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-snapshot.test.mjs",
++        "tests/fixtures/ledgers/roadmap-ledger.json",
++        "tests/remote.test.mjs",
++        "tests/server-record-version.test.mjs",
++        "tests/server-restart-review.test.mjs",
++        "tests/server-restart-round2.test.mjs",
++        "tests/server-restart.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/watch-leftovers.test.mjs",
++        "tests/watch-review-fixes.test.mjs",
++        "tests/watch-server-vendor-assets.test.mjs",
++        "tests/watch-ui.test.mjs"
++      ],
++      "ignoreTestsReason": "unrelated reference tests; focused watch-server/token/perf tests run here, full suite before merge"
++    }
++  ],
++  "checks": [
++    {
++      "name": "t6-server-headers",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/watch-server.test.mjs",
++        "tests/watch-token-urls.test.mjs",
++        "tests/command-center-routes-flag.test.mjs",
++        "tests/command-center-perf-budget.test.mjs"
++      ]
++    }
++  ]
++}
+\ No newline at end of file
 diff --git a/package-lock.json b/package-lock.json
 index d98179eb..c95307d1 100644
 --- a/package-lock.json
@@ -1282,6 +2022,51 @@ index 3fe3c669..8409b3d7 100644
      );
      let stdout = '';
      child.stdout.on('data', chunk => { stdout += chunk; });
+diff --git a/tests/watch-perf.test.mjs b/tests/watch-perf.test.mjs
+new file mode 100644
+index 00000000..3ec8b891
+--- /dev/null
++++ b/tests/watch-perf.test.mjs
+@@ -0,0 +1,39 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFile } from 'node:fs/promises';
++import { fileURLToPath } from 'node:url';
++import { redactUrl } from '../tools/watch-perf.mjs';
++
++test('redactUrl replaces ?t= token value', () => {
++  assert.equal(
++    redactUrl('https://watch.example/command-center?t=secret-token&x=1'),
++    'https://watch.example/command-center?t=…&x=1',
++  );
++});
++
++test('redactUrl replaces &t= token value', () => {
++  assert.equal(
++    redactUrl('https://watch.example/command-center?x=1&t=secret-token'),
++    'https://watch.example/command-center?x=1&t=…',
++  );
++});
++
++test('redactUrl handles multiple query params and trailing segment', () => {
++  assert.equal(
++    redactUrl('https://watch.example/cc?t=aaa&tour=0&mode=1'),
++    'https://watch.example/cc?t=…&tour=0&mode=1',
++  );
++});
++
++test('redactUrl leaves URLs without t= unchanged', () => {
++  const plain = 'https://watch.example/command-center?tour=0';
++  assert.equal(redactUrl(plain), plain);
++});
++
++test('watch-perf result JSON uses redactUrl for url field', async () => {
++  const source = await readFile(fileURLToPath(new URL('../tools/watch-perf.mjs', import.meta.url)), 'utf8');
++  assert.match(source, /url:\s*redactUrl\(opts\.url\)/);
++  assert.doesNotMatch(source, /url:\s*opts\.url/);
++});
 diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
 index 099738a9..5510bff1 100644
 --- a/tools/scope-commands.mjs
@@ -3106,18 +3891,31 @@ index 062d8524..d3c67b47 100644
  export function subscribe(fn      )             {
 diff --git a/tools/watch-perf.mjs b/tools/watch-perf.mjs
 new file mode 100644
-index 00000000..98c4d56a
+index 00000000..ad4d93ba
 --- /dev/null
 +++ b/tools/watch-perf.mjs
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,356 @@
 +#!/usr/bin/env node
 +// SPDX-License-Identifier: Apache-2.0
 +import { chromium } from 'playwright';
 +import { writeFile } from 'node:fs/promises';
 +import { execFile } from 'node:child_process';
 +import { promisify } from 'node:util';
++import { pathToFileURL } from 'node:url';
 +
 +const execFileAsync = promisify(execFile);
++
++/** Redact watch-board token from `t=` query param (never log or persist raw token). */
++export function redactUrl(url) {
++  if (typeof url !== 'string' || url === '') return url;
++  return url.replace(/([?&])t=([^&#]*)/gi, '$1t=…');
++}
++
++function redactErrorText(text, rawUrl) {
++  let s = String(text ?? '');
++  if (rawUrl) s = s.split(rawUrl).join(redactUrl(rawUrl));
++  return s.replace(/([?&])t=([^&#]*)/gi, '$1t=…');
++}
 +
 +const PROFILES = {
 +  desktop: { width: 1440, height: 900, throttle: null },
@@ -3409,7 +4207,7 @@ index 00000000..98c4d56a
 +    const serverCpuAfter = opts.serverPid != null ? await readServerCpu(opts.serverPid) : null;
 +
 +    const result = {
-+      url: opts.url,
++      url: redactUrl(opts.url),
 +      profile: opts.profile,
 +      viewport: { width: profile.width, height: profile.height },
 +      timings: {
@@ -3432,7 +4230,7 @@ index 00000000..98c4d56a
 +        apiRequests: idleApi.requests,
 +        apiBytes: idleApi.bytes,
 +      },
-+      consoleErrors,
++      consoleErrors: consoleErrors.map((line) => redactErrorText(line, opts.url)),
 +    };
 +
 +    const json = `${JSON.stringify(result, null, 2)}\n`;
@@ -3443,14 +4241,16 @@ index 00000000..98c4d56a
 +    }
 +    console.error(summarize(result));
 +  } catch (err) {
-+    console.error(err.message || err);
++    console.error(redactErrorText(err.message || err, opts?.url));
 +    process.exit(1);
 +  } finally {
 +    if (browser) await browser.close();
 +  }
 +}
 +
-+await main();
++if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
++  await main();
++}
 diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
 index 2b80bc80..0a44c62c 100644
 --- a/tools/watch-server.mjs
