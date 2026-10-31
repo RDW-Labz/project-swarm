@@ -462,7 +462,10 @@ async function readJson(response) {
           if (done) break;
           prefix = Buffer.concat([prefix, Buffer.from(value.subarray(0, 4096 - prefix.length))]);
         }
-      } catch { /* Preserve the HTTP status even when its error body is unreadable. */ }
+      } catch (error) {
+        console.error('[tools/api-adapters.mjs] provider error body unreadable:', error?.code ?? error?.name ?? 'failed');
+        /* Preserve the HTTP status even when its error body is unreadable. */
+      }
       finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
     }
     const header = response.headers?.get('retry-after');

@@ -3,7 +3,9 @@ import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { createWatchServer, watchAssetCacheControl } from '../tools/watch-server.mjs';
@@ -255,8 +257,8 @@ async function waitForResponse(get, predicate) {
   assert.fail('snapshot did not refresh within five seconds');
 }
 
-test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, then serves stale and refreshes', async t => {
-  const f = await fixture(t);
+test('one snapshot shares Hive, Cockpit and arbitrary queries through idle TTL expiry until a deep refresh', async t => {
+  const f = await fixture(t, { snapshotMaxStaleMs: 120000 });
   const responses = await Promise.all(Array.from({ length: 6 }, () => f.get('/api/command-center')));
   assert.equal(f.reads(), 1);
   const tag = responses[0].headers.etag;
@@ -278,6 +280,15 @@ test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, th
   f.advance(1);
   const stale = await f.get('/api/command-center', { 'if-none-match': tag });
   assert.equal(stale.status, 304, 'the first expired request still uses the old validator');
+  assert.equal(f.reads(), 1, 'idle TTL expiry does not start a full rebuild');
+  assert.deepEqual((await f.get('/api/command-center')).body, responses[0].body);
+  assert.equal((await f.get('/api/command-center/project?id=alpha', { 'if-none-match': project.headers.etag })).status, 304);
+  assert.equal(f.reads(), 1, 'idle TTL expiry does not rebuild');
+  f.advance(59999);
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
+  assert.equal(f.reads(), 1, 'idle requests do not rebuild before the deep refresh boundary');
+  f.advance(1);
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
   const changed = await waitForResponse(() => f.get('/api/command-center', { 'if-none-match': tag }),
     response => response.status === 200);
   assert.notEqual(changed.headers.etag, tag);
@@ -288,8 +299,117 @@ test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, th
   assert.notEqual(freshProject.headers.etag, project.headers.etag);
   f.advance(59999);
   await f.get('/api/command-center');
-  assert.equal(f.reads(), 2, 'one rebuild per stale period');
+  assert.equal(f.reads(), 2, 'exactly one deep rebuild renews the snapshot age');
+  t.diagnostic('full builds: cold=1, idle at 60000/119999ms=1, deep refresh at 120000ms=2');
   assert.equal((await f.get('/api/command-center', { 'x-watch-token': '' })).status, 403);
+});
+
+test('the default idle backstop waits five minutes before a full rebuild', async t => {
+  const f = await fixture(t);
+  const initial = await f.get('/api/command-center');
+  f.revise();
+  for (const elapsed of [60000, 60000, 179999]) {
+    f.advance(elapsed);
+    assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(f.reads(), 1, 'idle requests wait for the default five-minute backstop');
+  }
+  f.advance(1);
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'All 2');
+  assert.equal(f.reads(), 2);
+  t.diagnostic(`full builds: cold=1, idle through 299999ms=1, default deep refresh at 300000ms=${f.reads()}`);
+});
+
+test('a watched ticket change triggers a full rebuild at TTL expiry, then idle requests wait for the backstop', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-input-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ticketsFile = path.join(root, '.swarm/project/tickets.json');
+  await mkdir(path.dirname(ticketsFile), { recursive: true });
+  const tickets = title => writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title, status: 'ready' }] }));
+  await tickets('Initial ticket');
+  let builds = 0;
+  let projectReads = 0;
+  const project = async () => {
+    const ledger = JSON.parse(await readFile(ticketsFile, 'utf8'));
+    return { id: 'alpha', root, name: ledger.tickets[0].title, ledger };
+  };
+  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: {
+    async snapshot() {
+      builds++;
+      return { at: '2026-10-30T12:00:00Z', projects: [{ ...await project(), name: 'Full ' + builds }] };
+    },
+    async project() { projectReads++; return project(); },
+  } });
+  await f.get('/api/command-center');
+  assert.equal(builds, 1);
+  f.advance(59999);
+  await tickets('Changed watched ticket');
+  f.timers.find(timer => timer.ms === 1000).fn();
+  const patched = await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Changed watched ticket');
+  assert.equal(projectReads, 1, 'the one-second detector applies the existing live patch');
+  assert.equal(builds, 1, 'a live patch before TTL expiry does not rebuild');
+  f.advance(1);
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': patched.headers.etag })).status, 304);
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Full 2');
+  assert.equal(builds, 2, 'the first request at the TTL starts exactly one rebuild after a detected change');
+  f.advance(60000);
+  await f.get('/api/command-center');
+  assert.equal(builds, 2, 'finishing the rebuild clears the detected-change flag');
+  f.advance(59999);
+  await f.get('/api/command-center/project?id=alpha');
+  assert.equal(builds, 2, 'unchanged watched inputs stay idle until the backstop');
+  f.advance(1);
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Full 3');
+  assert.equal(builds, 3);
+  t.diagnostic('full builds: cold=1, live patch=1, changed TTL=2, next idle TTL=2, next deep refresh=3');
+});
+
+test('a rebuild scan consumes catch-up changes without re-arming the next idle TTL', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-scan-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const ticketsFile = path.join(root, '.swarm/project/tickets.json');
+  await mkdir(path.dirname(ticketsFile), { recursive: true });
+  const tickets = title => writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title, status: 'ready' }] }));
+  await tickets('Initial ticket');
+  const project = async () => ({ id: 'alpha', root, name: 'Live patch', ledger: JSON.parse(await readFile(ticketsFile, 'utf8')) });
+  let builds = 0;
+  let projectReads = 0;
+  const f = await fixture(t, { snapshotMaxStaleMs: 300000, board: {
+    async snapshot() {
+      const revision = ++builds;
+      if (revision === 2) await tickets('Caught up during rebuild');
+      return { at: '2026-10-30T12:00:00Z', projects: [{ ...await project(), name: 'Full ' + revision }] };
+    },
+    async project() { projectReads++; return project(); },
+  } });
+  await f.get('/api/command-center');
+  f.advance(300000);
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Full 2');
+  assert.equal(builds, 2, 'the configured deep backstop starts one rebuild');
+  // Flush the catch-up patch without another input change.
+  f.timers.find(timer => timer.ms === 1000).fn();
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Live patch');
+  assert.equal(projectReads, 1);
+  for (const elapsed of [59999, 1, 60000]) {
+    f.advance(elapsed);
+    await f.get('/api/command-center');
+    // Let a wrongly scheduled background rebuild enter board.snapshot().
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(builds, 2, 'catch-up changes must not trigger another rebuild at or after the next 60 second TTL');
+  }
+  t.diagnostic(`full builds: cold=1, deep refresh=2, idle at next TTL and 120000ms=${builds}`);
+  await tickets('Changed after rebuild scan');
+  f.timers.find(timer => timer.ms === 1000).fn();
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Full 3');
+  assert.equal(builds, 3, 'a later detector tick re-arms refresh before the deep backstop');
+  t.diagnostic(`full builds after a later watched input change: ${builds}`);
 });
 
 test('explicit local-only requests preserve query semantics and redaction without retaining another snapshot', async t => {
@@ -316,14 +436,14 @@ test('stale Hive and Cockpit return without waiting for a single background rebu
   const building = new Promise(resolve => { entered = resolve; });
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
-  const f = await fixture(t, { board: { snapshot: async () => {
+  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: { snapshot: async () => {
     const revision = ++reads;
     if (revision > 1) { entered(); await gate; }
     return { at: '2026-10-30T12:00:00Z', projects: [{ id: 'alpha', name: 'Revision ' + revision, ledger: { tickets: [] } }] };
   } } });
   const initial = await f.get('/api/command-center');
   const cockpit = await f.get('/api/command-center/project?id=alpha');
-  f.advance(60000);
+  f.advance(120000);
   const start = performance.now();
   let timeout;
   const deadline = new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('stale response waited for rebuild')), 1500); });
@@ -343,7 +463,7 @@ test('stale Hive and Cockpit return without waiting for a single background rebu
     response => JSON.parse(response.body).projects[0].name === 'Revision 2');
   await f.get('/api/command-center/project?id=alpha');
   assert.equal(reads, 2);
-  f.advance(60000);
+  f.advance(120000);
   const nextStale = await f.get('/api/command-center');
   assert.equal(JSON.parse(nextStale.body).projects[0].name, 'Revision 2');
   await waitForResponse(() => f.get('/api/command-center'),
@@ -379,7 +499,7 @@ test('startup warm is non-blocking, shares cold requests and is ready before the
 test('failed startup warm retries on demand; failed refresh keeps stale data and validators', async t => {
   let reads = 0;
   let fail = true;
-  const f = await fixture(t, { board: { snapshot: async () => {
+  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: { snapshot: async () => {
     reads++;
     if (fail) throw new Error('fixture build failed');
     return { at: '2026-10-30T12:00:00Z', projects: [] };
@@ -391,7 +511,7 @@ test('failed startup warm retries on demand; failed refresh keeps stale data and
   const initial = await f.get('/api/command-center');
   assert.equal(initial.status, 200);
   fail = true;
-  f.advance(60000);
+  f.advance(120000);
   assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
   await new Promise(resolve => setTimeout(resolve, 30));
   fail = false;

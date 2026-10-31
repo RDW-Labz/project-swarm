@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.167.32
+
+Release train 8: a live Command Center change feed, bounded live detection, change-driven snapshot rebuilds, and review/guard follow-ups.
+- Live feed: the watch server stats each project's small board inputs about once a second (tickets, orchestrator events and state, run state files, inbox, lanes and history) and identifies the affected project without a full build. A token/cookie-authenticated SSE endpoint (/api/command-center/events, the same security headers, no token in logs or URLs) sends a compact change event; the cached snapshot's changed project card and aggregate counters are patched in place, and the client patches the Hive card, Cockpit and header counters through the per-project route without a full snapshot fetch. The 5 s poll stays as a fallback; hidden tabs pause and reduced motion is honored. Fixture change-to-screen: median 1002 ms desktop and 1001 ms phone-4G; no full snapshot fetch during updates;
+- Bounded detection: each second the detector scans the project's own root plus only family worktrees active in the last ten minutes (441 roots to 6 on this Mac); full snapshots still read the complete family;
+- Snapshot CPU: the 60 s cache is change-driven. A watched change refreshes after the TTL; with no change the server serves the cached entry and does one deep full rebuild every five minutes for inputs the live feed does not watch. The one-hour dashboard soak held server RSS and browser heap flat (steady-state medians), with no SSE or file-watcher growth and the interval CPU under the 5% gate;
+- Harnesses: tools/watch-soak.mjs (server RSS and interval CPU from ps cputime, browser heap via CDP, EventSource and file-watcher counts, API count; flat/leak verdict, exit 1 on a leak) and tools/watch-live-latency.mjs (reversible inbox/tickets change to the DOM, per-run and median, desktop and phone 4G profiles, tokens redacted); tests for both;
+- Merge gate: the local review record is now bound to its run manifest and named job (a review job that declares exactly the result file), not any completed Opus job;
+- Stress: an invalid STRESS_TEST_COMMAND fails with a clear message and exit 2; SIGINT/SIGTERM kill the round process group, wait for the child to exit (bounded) and then exit 130 or 143;
+- Tabs: the Hive Command Center and Cockpit tab links keep location.search; the routes test sends the rendered links to the running server; no-window hrefs are asserted;
+- Docs: corrected the stale 1.167.29 merge-gate text, documented the 1.167.28 to 1.167.29 ledger re-approval and with-concurrency's detached process group;
+- Version 1.167.32.
+
 ## 1.167.31
 
 Release train 7: a warm cached board snapshot and D-fix batch 27c.
@@ -19,9 +32,9 @@ Release train 6: a fast Command Center and a hardened owner-only gate.
 
 Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
 - Kill paths: the guarded runner spawns the command in its own process group, signals the group (with a child-pid fallback) from the wrapper and the watcher only after the start-time and command-line identity match, and the watcher escalates once to SIGKILL; test:stress now kills the current round's process group on Ctrl-C (exit 130) or SIGTERM (143);
-- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, keeps the approval hash stable when a stale proposed ticket is superseded, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines;
+- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, `ticketSetHash` now omits superseded tickets and proposed or unapproved tickets so the hash matches the live set only, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines; after upgrading from 1.167.28, a ledger that was approved while it still contained superseded tickets reads as not approved until you run `swarm scope approve --yes` once with no ticket changes;
 - Owner-only: the supersede gate now refuses Claude, Codex and Cursor agent/worker sessions (and non-TTY callers) unless SWARM_OWNER=1, and the same gate covers tickets --set superseded;
-- Merge gate: a release PR now needs a committed review-run record (coordination/review/<train>-review-run.json) at the PR head, a metadata-only commit whose parent is the reviewed code head; the record names the run id, agent claude, an opus model, verdict pass, the full 40-character head and the sha256 of the committed review result, and merge verifies it from GitHub before any gh pr merge; Reviews parsing is fence-aware;
+- Merge gate: a release PR carries only a machine marker in the body that names the review result JSON; `swarm merge` reads the runner's local record at `.swarm/runs/<runId>/review-record.json`, requires the run complete and its review job on claude with opus, requires a metadata-only result commit at the PR head whose sole parent is the reviewed code head, and verifies the committed result JSON's sha256, verdict pass and full 40-character head before any `gh pr merge`; there is no committed review-run record under coordination/review/; Reviews parsing is fence-aware;
 - D-fix: silent-catch visibility in scope-commands and server-restart (batches 27a and 27b);
 - Version 1.167.29.
 

@@ -25,6 +25,7 @@ const MAX_BUFFER = 64 * 1024 * 1024;
 /** @type {import('node:child_process').ChildProcess | null} */
 let activeRoundChild = null;
 let activeRoundIndex = 0;
+let runnerInterrupted = false;
 
 function roundChildEnv() {
   const env = { ...process.env };
@@ -36,12 +37,18 @@ function roundChildEnv() {
 
 function roundSpawnSpec() {
   const override = process.env.STRESS_TEST_COMMAND;
-  if (override) {
-    const argv = JSON.parse(override);
-    if (!Array.isArray(argv) || argv.length === 0) {
-      throw new Error('STRESS_TEST_COMMAND must be a non-empty JSON array');
+  if (override !== undefined) {
+    try {
+      const argv = JSON.parse(override);
+      if (!Array.isArray(argv) || argv.length === 0
+        || !argv.every(arg => typeof arg === 'string') || argv[0].trim() === '') {
+        throw new Error('invalid command');
+      }
+      return { command: argv[0], args: argv.slice(1) };
+    } catch {
+      console.error('test:stress: STRESS_TEST_COMMAND must be a non-empty JSON array of strings');
+      process.exit(2);
     }
-    return { command: argv[0], args: argv.slice(1) };
   }
   return {
     command: process.execPath,
@@ -63,13 +70,21 @@ function killRoundProcessGroup(child) {
 }
 
 function onRunnerSignal(signal) {
+  if (runnerInterrupted) return;
+  runnerInterrupted = true;
   const exitCode = signal === 'SIGINT' ? 130 : 143;
   if (!activeRoundChild) {
     process.exit(exitCode);
   }
+  const child = activeRoundChild;
   console.log(`stress round ${activeRoundIndex}/${rounds}: interrupted by ${signal}; killed the round process group`);
-  killRoundProcessGroup(activeRoundChild);
-  process.exit(exitCode);
+  // Keep the fallback alive only until the child is reaped or two seconds pass.
+  const timer = setTimeout(() => process.exit(exitCode), 2_000);
+  child.once('exit', () => {
+    clearTimeout(timer);
+    process.exit(exitCode);
+  });
+  killRoundProcessGroup(child);
 }
 
 process.on('SIGINT', () => onRunnerSignal('SIGINT'));
@@ -108,7 +123,8 @@ function runRound(roundIndex) {
       settled = true;
       clearTimeout(timer);
       if (activeRoundChild === child) activeRoundChild = null;
-      resolve(result);
+      // Signal shutdown owns the exit; do not report failure or start another round.
+      if (!runnerInterrupted) resolve(result);
     };
 
     const timer = setTimeout(() => {

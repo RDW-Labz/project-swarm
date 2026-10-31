@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-soak-cpu-metric",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "tierReason": "make the owner-gate CPU number a true interval average, not a decaying ps average",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 8 soak gate: the server now does a full rebuild only when a watched input changed or every snapshotMaxStaleMs (5 min), and the 10-minute soak's RSS/heap are bounded and its true CPU cost is about 2.5%, but tools/watch-soak.mjs scores 16.6% because it samples `ps -o %cpu`, which on macOS is a decaying average over up to a minute: one 3 s build shows up in several 30 s samples and inflates the mean. Measure the interval CPU instead.\n\nIn tools/watch-soak.mjs:\n- Import `parsePsTime` from ./watch-perf.mjs.\n- Sample `ps -o rss=,time= -p PID` (cumulative CPU time; parse with parsePsTime). Keep serverRssKb. For the FIRST sample store the baseline (`serverCpuSeconds`) and set `serverCpuPercent: null` (a warm-up sample, excluded from the average by summarizeSoak's filter). For every later sample compute `serverCpuPercent = max(0, (cpuSeconds - prevCpuSeconds) / elapsedWallSeconds * 100)`, where elapsedWallSeconds comes from the previous/current sample `at` timestamps (or Date.now deltas). This is the true average CPU over the interval, so a 3 s build in a 30 s interval reads ~10%, not 100% for five samples.\n- Keep the JSON fields: each sample keeps serverRssKb, serverCpuPercent (null on the first), pageHeapBytes, eventSourceConnections, tcpConnections, watcherHandles, apiRequestCount; the summary keeps cpu first/last/average/slope and the 5% threshold. Update the sample/verdict docs if needed. Redact tokens as before.\n- Export a small pure helper `intervalCpuPercent(prevCpuSeconds, nextCpuSeconds, elapsedMs)` and unit-test it in tests/command-center-soak.test.mjs: 1.5 CPU-seconds over 30 s is 5%, 0.3 over 30 s is 1%, negative/zero elapsed or missing values return null, and a 3 CPU-second build in 30 s is 10%. Keep the existing short-soak fixture test green (its fixture server CPU still reads flat).\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs tests/command-center-live.test.mjs tests/watch-server.test.mjs -> all pass. Report the helper test numbers.",
+      "context": [
+        "tools/watch-soak.mjs",
+        "tools/watch-perf.mjs",
+        "tests/command-center-soak.test.mjs",
+        "tests/command-center-live.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-soak.mjs",
+        "tests/command-center-soak.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-accuracy-untracked.test.mjs",
+        "tests/board-card-ui.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated board/server reference tests; focused soak/live suite runs here, full suite before merge",
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t8-soak-cpu-metric",
+      "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-soak.test.mjs", "tests/command-center-live-latency.test.mjs", "tests/command-center-live.test.mjs", "tests/watch-server.test.mjs"]
+    }
+  ]
+}
