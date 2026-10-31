@@ -4,8 +4,8 @@
 // (drawO / sizeO / frameO) with the same drawing and timing. The loop stops when the tab is hidden and does not run under reduced motion.
 
 const TAU = Math.PI * 2;
-const FRAME_MS = 33;
 const DOT_COLOURS = ['#2fe0a0', '#4d7cff', '#ff4d7e'];
+import { mountAmbientMotion } from './cc-hive-stage.js';
 
 /**
  * @param {{
@@ -37,10 +37,7 @@ export function mountOrbit(opts) {
   let OW = 0;
   let OH = 0;
   let ot = 0;
-  let last = 0;
   let CN = null;
-  let rafId = null;
-  let running = false;
   let destroyed = false;
 
   function draw(dt) {
@@ -137,39 +134,8 @@ export function mountOrbit(opts) {
     draw(0);
   }
 
-  function tick(ts) {
-    rafId = null;
-    if (destroyed || !running) return;
-    if (doc && doc.hidden) {
-      running = false;
-      return;
-    }
-    rafId = raf(tick);
-    if (ts - last < FRAME_MS) return;
-    const dt = Math.min(0.1, (ts - last) / 1000);
-    last = ts;
-    draw(dt);
-  }
-
-  function start() {
-    if (destroyed || running || reduce || !raf) return;
-    running = true;
-    last = 0;
-    rafId = raf(tick);
-  }
-
-  function stop() {
-    running = false;
-    if (rafId != null && caf) caf(rafId);
-    rafId = null;
-  }
-
-  const onVisibility = () => {
-    if (doc && doc.hidden) stop();
-    else start();
-  };
-  if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', onVisibility);
-  start();
+  const motion = mountAmbientMotion({ element: back, doc, win, raf, caf, draw,
+    media: opts.reducedMotion != null ? { matches: reduce } : win.matchMedia?.('(prefers-reduced-motion: reduce)') });
 
   return {
     resize,
@@ -177,8 +143,7 @@ export function mountOrbit(opts) {
     size: () => ({ width: OW, height: OH }),
     destroy() {
       destroyed = true;
-      stop();
-      if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', onVisibility);
+      motion.destroy();
     },
   };
 }

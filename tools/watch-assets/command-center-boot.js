@@ -2,7 +2,7 @@
 /** Command Center page boot: Hive ↔ Project Cockpit, polling, palette, first-visit tour. */
 
 import { renderHive } from './cc-hive-mount.js';
-import { ccNavigate, ccPathFromState, ccStateFromPath, mountCcRouter } from './cc-router.js';
+import { ccNavigate, ccPathFromState, ccStateFromPath } from './cc-hive-stage.js';
 
 const REFRESH_MS = 5000;
 const ROOT_TOUR_ATTR = 'data-tour';
@@ -178,12 +178,41 @@ export function mountCommandCenter(root, deps = {}) {
   let paletteModule = null;
   let projectsForPalette = [];
   let idleTour = null;
+  let parkedHive = null;
+  let cockpitPreload = null;
+  const projectCache = new Map();
+  const projectRequests = new Map();
   const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
   const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
   const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
+  function preloadCockpit(projectId) {
+    if (destroyed) return;
+    if (deps.loadCockpit) {
+      cockpitModule ||= loadCockpit().catch(error => { cockpitModule = null; throw error; });
+      void cockpitModule.catch(() => {});
+    } else if (!cockpitPreload && document.createElement) {
+      // Warm the chunk bytes without evaluating its legacy orchestrator dependencies on the Hive.
+      cockpitPreload = document.createElement('link');
+      cockpitPreload.rel = 'preload'; cockpitPreload.as = 'script';
+      cockpitPreload.crossOrigin = 'anonymous'; cockpitPreload.href = '/assets/cc-cockpit-mount.js';
+      (document.head || document.documentElement)?.appendChild(cockpitPreload);
+    }
+    if (projectId && !projectRequests.has(projectId)) {
+      const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
+        .then(body => { if (body?.id === projectId) projectCache.set(projectId, body); return body; })
+        .finally(() => projectRequests.delete(projectId));
+      projectRequests.set(projectId, pending);
+      void pending.catch(() => {});
+    }
+  }
 
-  function destroyView() {
-    if (viewHandle && typeof viewHandle.destroy === 'function') {
+  function destroyView(parkHive = false) {
+    if (parkHive && viewKind === 'hive' && viewHandle?.suspend && root.removeChild) {
+      const nodes = Array.from(root.childNodes || root.children || []);
+      viewHandle.suspend();
+      for (const node of nodes) root.removeChild(node);
+      parkedHive = { nodes, handle: viewHandle };
+    } else if (viewHandle && typeof viewHandle.destroy === 'function') {
       viewHandle.destroy();
     }
     viewHandle = null;
@@ -233,7 +262,7 @@ export function mountCommandCenter(root, deps = {}) {
       } catch { /* optional decoration in a partial DOM */ }
     };
     if (typeof globalThis.requestIdleCallback === 'function') {
-      idleTour = globalThis.requestIdleCallback(() => { idleTour = null; void start(); });
+      idleTour = globalThis.requestIdleCallback(() => { idleTour = null; preloadCockpit(); void start(); });
     } else {
       await start();
     }
@@ -255,15 +284,28 @@ export function mountCommandCenter(root, deps = {}) {
         const projectId = navState.projectId;
         const url = `/api/command-center/project?id=${encodeURIComponent(projectId)}`;
         // Fetch data and code together, then paint the shell before optional decorations load.
-        const [body, cockpit] = await Promise.all([fetchJson(url), cockpitModule ||= loadCockpit()]);
+        const request = projectRequests.get(projectId) || fetchJson(url);
+        void request.catch(() => {});
+        const cockpit = await (cockpitModule ||= loadCockpit());
+        // Hover-prefetched project data can paint immediately; the current response follows independently.
+        const cached = projectCache.get(projectId);
+        if (cached && !destroyed && sequence === refreshSequence && (viewKind !== 'cockpit' || viewProjectId !== projectId)) {
+          destroyView(true); clearHost(root);
+          viewHandle = cockpit.renderProjectCockpit(root, cached, {
+            document, now, onBack: goBack, requestAnimationFrame, cancelAnimationFrame, matchMedia,
+          });
+          viewKind = 'cockpit'; viewProjectId = projectId;
+        }
+        const body = await request;
         if (destroyed || sequence !== refreshSequence) return;
         if (!body || typeof body !== 'object' || body.id !== projectId) {
           throw new Error('Project cockpit response was missing or invalid');
         }
+        projectCache.set(projectId, body);
         if (viewKind === 'cockpit' && viewProjectId === projectId && viewHandle?.update) {
           viewHandle.update(body);
         } else {
-          destroyView();
+          destroyView(true);
           clearHost(root);
           viewHandle = cockpit.renderProjectCockpit(root, body, {
             document,
@@ -304,6 +346,7 @@ export function mountCommandCenter(root, deps = {}) {
         cancelAnimationFrame,
         matchMedia,
         onOpenProject: openProject,
+        preloadCockpit,
       };
 
       if (viewKind === 'hive' && viewHandle?.update) {
@@ -311,7 +354,13 @@ export function mountCommandCenter(root, deps = {}) {
       } else {
         destroyView();
         clearHost(root);
-        viewHandle = renderHiveView(root, snapshot, hiveDeps);
+        if (parkedHive) {
+          viewHandle = parkedHive.handle;
+          for (const node of parkedHive.nodes) root.appendChild(node);
+          parkedHive = null;
+          viewHandle.update(snapshot, body);
+          viewHandle.resume();
+        } else viewHandle = renderHiveView(root, snapshot, hiveDeps);
         viewKind = 'hive';
         viewProjectId = null;
       }
@@ -320,6 +369,8 @@ export function mountCommandCenter(root, deps = {}) {
     } catch (err) {
       if (destroyed || sequence !== refreshSequence) return;
       destroyView();
+      parkedHive?.handle.destroy();
+      parkedHive = null;
       const detail = err && err.message ? String(err.message) : 'Unknown error';
       showShellMessage(
         root,
@@ -378,6 +429,9 @@ export function mountCommandCenter(root, deps = {}) {
       if (popHandler) globalThis.removeEventListener?.('popstate', popHandler);
       popHandler = null;
       destroyView();
+      parkedHive?.handle.destroy();
+      parkedHive = null;
+      cockpitPreload?.remove();
       clearHost(root);
     },
     refresh: () => refresh(false),

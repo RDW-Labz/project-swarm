@@ -6,6 +6,7 @@
  */
 
 import { glitch, glitchFailure } from './cc-glitch.js';
+import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
 
 const TAU = Math.PI * 2;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -99,6 +100,30 @@ function createHiveRenderer(canvas, makeCanvas) {
   let dpr = 1;
   let grads = null;
   const sprites = new Map();
+  const sparkSprites = new Map();
+
+  // Preserve the original circle + 9px shadow, rasterized once per particle size/colour.
+  function sparkSprite(col, radius) {
+    const key = `${col}|${radius}|${dpr}`;
+    if (sparkSprites.has(key)) return sparkSprites.get(key);
+    const c = makeCanvas();
+    const pad = Math.ceil(radius * 3 + 24);
+    c.width = c.height = pad * 2 * dpr;
+    const context = c.getContext('2d');
+    if (!context) return null;
+    context.setTransform?.(dpr, 0, 0, dpr, 0, 0);
+    context.globalCompositeOperation = 'lighter';
+    context.fillStyle = context.shadowColor = col;
+    context.shadowBlur = 9;
+    context.beginPath(); context.arc(pad, pad, radius, 0, TAU); context.fill();
+    const halo = sprite('#ffffff');
+    const size = radius * 1.4;
+    if (halo) { context.globalAlpha = 0.9; context.drawImage(halo, pad - size * 2, pad - size * 2, size * 4, size * 4); }
+    const out = { canvas: c, pad };
+    if (sparkSprites.size >= 128) sparkSprites.delete(sparkSprites.keys().next().value);
+    sparkSprites.set(key, out);
+    return out;
+  }
 
   function sprite(col) {
     if (sprites.has(col)) return sprites.get(col);
@@ -340,18 +365,13 @@ function createHiveRenderer(canvas, makeCanvas) {
       }
       ctx.fill();
       // sparks: 3-4 px with a real shadow bloom (only a handful per stream, so the blur stays cheap)
-      ctx.shadowColor = s.col;
-      ctx.shadowBlur = 9;
       ctx.fillStyle = s.col;
       for (const [p, [x, y], fade] of alive) {
         if (!p.big) continue;
         ctx.globalAlpha = fade;
-        ctx.beginPath();
-        ctx.arc(x, y, p.size * 0.5, 0, TAU);
-        ctx.fill();
-        glow('#ffffff', x, y, p.size * 0.7, fade * 0.9);
+        const dot = sparkSprite(s.col, p.size * 0.5);
+        if (dot) ctx.drawImage(dot.canvas, x - dot.pad, y - dot.pad, dot.pad * 2, dot.pad * 2);
       }
-      ctx.shadowBlur = 0;
       const pulse = 0.6 + 0.18 * Math.sin(time * 2.2 + i) + s.spark * 0.6;
       glow(s.col, k.tx, k.ty, 16, pulse);
       if (s.spark > 0) glow('#ffb62e', k.sx, k.sy, 14, s.spark);
@@ -429,7 +449,7 @@ function createHiveRenderer(canvas, makeCanvas) {
     },
     setNodes,
     setActivity({ agents }) { speed = 1 + Math.min(20, Math.max(0, agents || 0)) * 0.025; },
-    frameMs: () => 15,
+    frameMs: () => 1000 / 30,
     frame(dt) { update(dt); draw(); },
     drawStill() { draw(); },
     spawn(i) { if (streams[i]) streams[i].boost = 1.5; },
@@ -530,11 +550,9 @@ export function renderHive(host, snapshot, deps) {
 
   const listeners = [];
   const timers = [];
-  let rafId = 0;
-  let lastFrame = 0;
   let userPaused = false;
   let destroyed = false;
-  let hiveVisible = true;
+  let suspended = false;
   let parsedRef = snapshot;
   let rawRef = deps.rawSnapshot || null;
   let hasSuppliedRaw = deps.rawSnapshot != null;
@@ -550,6 +568,7 @@ export function renderHive(host, snapshot, deps) {
   let stageGeom = [];
   let robotApi = null;
   let robotPromise = null;
+  let motion = null;
 
   function loadRobots() {
     if (!robotPromise) {
@@ -571,11 +590,12 @@ export function renderHive(host, snapshot, deps) {
   const reduced = () => Boolean(reducedMq && reducedMq.matches);
   const hidden = () => Boolean(doc.hidden);
   const isPhone = () => (win.innerWidth ?? 1200) <= PHONE_MAX;
-  const shouldAnimate = () => !(reduced() || hidden() || userPaused);
+  const shouldAnimate = () => !(reduced() || hidden() || userPaused || suspended);
 
   function addListener(target, type, handler, options) {
-    target.addEventListener(type, handler, options);
-    listeners.push({ target, type, handler, options });
+    const activeHandler = (...args) => { if (!suspended) handler(...args); };
+    target.addEventListener(type, activeHandler, options);
+    listeners.push({ target, type, handler: activeHandler, options });
   }
 
   function later(fn, ms) {
@@ -605,10 +625,12 @@ export function renderHive(host, snapshot, deps) {
 
   /* ---- robot heads (real heads in a browser, a monogram where there is no animation loop, e.g. tests) ---- */
   function mountHead(hostEl, o) {
+    if (hostEl._ccHead) { hostEl._ccHead.setState?.(o.state); return hostEl._ccHead; }
     if (typeof win.requestAnimationFrame === 'function') {
       let handle = null;
       let removed = false;
-      void loadRobots().then(api => {
+      let observer = null;
+      const mount = () => void loadRobots().then(api => {
         if (!api || removed || destroyed) return;
         while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
         handle = api.mountRobotHead(hostEl, {
@@ -624,7 +646,18 @@ export function renderHive(host, snapshot, deps) {
         while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
         monogram();
       });
-      return { destroy() { removed = true; handle?.destroy(); } };
+      // Lane heads are optional and below the fold. Only request their graph when one is visible.
+      if (typeof win.IntersectionObserver === 'function') {
+        observer = new win.IntersectionObserver(entries => {
+          if (!doc.hidden && entries.some(entry => entry.isIntersecting)) { observer.disconnect(); mount(); }
+        });
+        observer.observe(hostEl);
+      } else mount();
+      hostEl._ccHead = {
+        setState(state) { o = { ...o, state }; handle?.setState?.(state); },
+        destroy() { removed = true; observer?.disconnect(); handle?.destroy(); },
+      };
+      return hostEl._ccHead;
     }
     function monogram() {
       const mono = h(doc, 'span', 'hive-bot hive-bot--mono', String(o.label || '·').charAt(0).toUpperCase());
@@ -632,7 +665,8 @@ export function renderHive(host, snapshot, deps) {
       hostEl.appendChild(mono);
     }
     monogram();
-    return { destroy() {} };
+    hostEl._ccHead = { destroy() {} };
+    return hostEl._ccHead;
   }
 
   function destroyHeads(list) {
@@ -848,21 +882,24 @@ export function renderHive(host, snapshot, deps) {
     for (const k of Object.keys(next)) {
       const el = counterEls[k];
       const changed = el.textContent !== '' && el.textContent !== next[k][0];
-      el.textContent = next[k][0];
-      el.style.color = next[k][1];
+      if (el.textContent !== next[k][0]) el.textContent = next[k][0];
+      if (el.style.color !== next[k][1]) el.style.color = next[k][1];
       if (changed) bump(el);
     }
   }
 
   function paintCore(v) {
-    coreState.textContent = v.agents > 0 ? 'building' : 'waiting';
+    const state = v.agents > 0 ? 'building' : 'waiting';
+    if (coreState.textContent !== state) coreState.textContent = state;
     const parts = [`${plural(v.agents, 'agent', 'agents')} live`];
     if (v.doneLast24h !== null) parts.push(`${v.doneLast24h} done in 24 h`);
-    coreExtra.textContent = parts.join(' · ');
+    const text = parts.join(' · ');
+    if (coreExtra.textContent !== text) coreExtra.textContent = text;
   }
 
   function paintFoot(v) {
-    footGen.textContent = formatGenerated(v.at);
+    const text = formatGenerated(v.at);
+    if (footGen.textContent !== text) footGen.textContent = text;
   }
 
   function setPauseUi() {
@@ -966,26 +1003,48 @@ export function renderHive(host, snapshot, deps) {
       }
     };
     card.addEventListener('click', open);
+    const preload = () => deps.preloadCockpit?.(p.id);
+    card.addEventListener('pointerenter', preload, { passive: true });
+    card.addEventListener('focus', preload);
     card.addEventListener('keydown', onKey);
-    cardCleanups.push(() => {
+    card._ccCleanup = () => {
       card.removeEventListener('click', open);
       card.removeEventListener('keydown', onKey);
-    });
+      card.removeEventListener('pointerenter', preload);
+      card.removeEventListener('focus', preload);
+    };
+    cardCleanups.push(card._ccCleanup);
     return card;
   }
 
   function paintCards(v) {
     const sig = JSON.stringify(v.projects.map((p) => [p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents, p.raw && p.raw.fails && p.raw.fails.value]));
     const first = v.projects[0];
-    tabCockpit.href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
+    const href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
+    if (tabCockpit.getAttribute?.('href') !== href) tabCockpit.href = href;
     if (sig === cardSig) return false;
     cardSig = sig;
-    clearCards();
+    const staging = h(doc, 'div');
     v.projects.forEach((p, i) => {
       const card = buildCard(p, i);
-      stage.appendChild(card);
-      cardEls.push(card);
+      staging.appendChild(card);
     });
+    // Reconcile through a small adapter: cards share the stage with the canvas and ring layers.
+    const oldCards = cardEls;
+    const adapter = {
+      get children() { return cardEls; },
+      appendChild(card) { stage.appendChild(card); cardEls.push(card); },
+      removeChild(card) { stage.removeChild(card); cardEls = cardEls.filter(el => el !== card); },
+      ...(stage.insertBefore ? { insertBefore(card, before) {
+        stage.insertBefore(card, before); cardEls = cardEls.filter(el => el !== card);
+        cardEls.splice(before ? cardEls.indexOf(before) : cardEls.length, 0, card);
+      } } : {}),
+    };
+    reconcileDom(adapter, staging);
+    cardEls = Array.from(adapter.children);
+    // Reused cards retain their original handlers; discard handlers created for detached render output.
+    for (const card of [...oldCards, ...Array.from(staging.children)]) if (!cardEls.includes(card)) card._ccCleanup?.();
+    cardCleanups = cardEls.map(card => card._ccCleanup);
     return true;
   }
 
@@ -1041,33 +1100,8 @@ export function renderHive(host, snapshot, deps) {
     stageApi.drawStill();
   }
 
-  function scheduleFrame() {
-    deps.cancelAnimationFrame(rafId);
-    rafId = deps.requestAnimationFrame(tick);
-  }
-
-  function tick(now) {
-    if (destroyed) return;
-    if (!shouldAnimate()) {
-      rafId = 0;
-      drawStillFrame();
-      return;
-    }
-    if (hiveVisible && now - lastFrame >= stageApi.frameMs()) {
-      const dt = Math.min(0.1, (now - lastFrame) / 1000);
-      lastFrame = now;
-      stageApi.frame(dt);
-    }
-    rafId = deps.requestAnimationFrame(tick);
-  }
-
   function restart() {
-    if (shouldAnimate()) scheduleFrame();
-    else {
-      deps.cancelAnimationFrame(rafId);
-      rafId = 0;
-      drawStillFrame();
-    }
+    motion?.sync();
   }
 
   /* ---- paint from a snapshot ---- */
@@ -1114,14 +1148,17 @@ export function renderHive(host, snapshot, deps) {
     const psig = JSON.stringify([view.projects.map((p) => [p.id, p.counts, p.pct]), view.events, view.throughput, view.lanes, view.prs, view.totals, view.needs, view.spend, view.doneLast24h, view.machines, view.projectsTotal, minute]);
     if (psig !== panelSig) {
       panelSig = psig;
-      destroyHeads(panelHeads);
       const out = panels.renderHiveDashboard(panelsRoot, view, {
         nowMs: deps.now(),
         mountHead,
+        reconcile: reconcileDom,
       });
-      panelHeads = out.heads || [];
+      const nextHeads = out.heads || [];
+      destroyHeads(panelHeads.filter(head => !nextHeads.includes(head)));
+      panelHeads = nextHeads;
     }
-    layout();
+    if (rebuilt || !stageGeom.length) { layout(); if (motion) drawStillFrame(); }
+    stageApi.setActivity({ agents: view.agents });
     if (rebuilt) setPauseUi();
     reactToChange(prevView, view);
   }
@@ -1151,6 +1188,8 @@ export function renderHive(host, snapshot, deps) {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
     openProject(first.id);
   });
+  addListener(tabCockpit, 'pointerenter', () => deps.preloadCockpit?.());
+  addListener(stage, 'pointerover', () => deps.preloadCockpit?.(), { passive: true });
   addListener(searchBtn, 'click', () => {
     if (typeof win.KeyboardEvent !== 'function' || typeof doc.dispatchEvent !== 'function') return;
     const mac = /mac|iphone|ipad/i.test(String(win.navigator?.platform || ''));
@@ -1193,11 +1232,7 @@ export function renderHive(host, snapshot, deps) {
   });
   addListener(doc, 'visibilitychange', () => {
     setPauseUi();
-    if (hidden()) {
-      deps.cancelAnimationFrame(rafId);
-      rafId = 0;
-      drawStillFrame();
-    } else restart();
+    restart();
   });
   if (reducedMq?.addEventListener) addListener(reducedMq, 'change', () => { setPauseUi(); restart(); });
   addListener(win, 'resize', () => {
@@ -1206,18 +1241,18 @@ export function renderHive(host, snapshot, deps) {
     restart();
     if (!shouldAnimate()) drawStillFrame();
   });
-  if (typeof win.IntersectionObserver === 'function') {
-    const io = new win.IntersectionObserver((entries) => { hiveVisible = entries[0].isIntersecting; });
-    io.observe(stage);
-    listeners.push({ target: { removeEventListener() { io.disconnect(); } }, type: '', handler: null });
-  }
-
   paint();
   setPauseUi();
   loadRaw();
-  restart();
+  drawStillFrame();
+  motion = mountAmbientMotion({ element: shell, visibilityElement: stage, doc, win, media: reducedMq,
+    raf: deps.requestAnimationFrame, caf: deps.cancelAnimationFrame,
+    onVisibility: setPauseUi,
+    paused: () => !shouldAnimate(), draw: dt => stageApi.frame(dt) });
 
   return {
+    suspend() { suspended = true; motion?.sync(); robotApi?.setAnimationPaused(true); },
+    resume() { suspended = false; motion?.sync(); setPauseUi(); },
     update(nextSnapshot, rawSnapshot) {
       parsedRef = nextSnapshot;
       if (rawSnapshot !== undefined) {
@@ -1230,15 +1265,14 @@ export function renderHive(host, snapshot, deps) {
     },
     destroy() {
       destroyed = true;
-      deps.cancelAnimationFrame(rafId);
-      rafId = 0;
+      motion?.destroy();
       if (typeof win.clearTimeout === 'function') for (const id of timers) win.clearTimeout(id);
       timers.length = 0;
       clearCards();
       destroyHeads(panelHeads);
       for (const l of listeners) l.target.removeEventListener(l.type, l.handler, l.options);
       listeners.length = 0;
-      while (host.firstChild) host.removeChild(host.firstChild);
+      if (shell.parentNode) shell.parentNode.removeChild(shell);
     },
   };
 }

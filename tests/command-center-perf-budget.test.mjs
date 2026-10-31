@@ -11,6 +11,132 @@ import { createWatchServer, watchAssetCacheControl } from '../tools/watch-server
 const assets = new URL('../tools/watch-assets/', import.meta.url);
 const source = name => readFile(new URL(name, assets), 'utf8');
 
+test('ambient work caps at 30 fps, sleeps after 5 seconds, and pauses hidden, offscreen and reduced motion', async () => {
+  const { mountAmbientMotion } = await import('../tools/watch-assets/cc-hive-stage.js');
+  const events = new Map();
+  const frames = new Map();
+  let id = 0;
+  let draws = 0;
+  let intersect;
+  const media = { matches: false, addEventListener(_name, fn) { this.change = fn; }, removeEventListener() {} };
+  const doc = { hidden: false, addEventListener: (n, fn) => events.set(n, fn), removeEventListener: n => events.delete(n) };
+  const win = { IntersectionObserver: class { constructor(fn) { intersect = fn; } observe() {} disconnect() {} } };
+  const motion = mountAmbientMotion({ element: {}, doc, win, media,
+    raf: fn => { frames.set(++id, fn); return id; }, caf: n => frames.delete(n), draw: () => draws++ });
+  const step = ts => { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(ts)); };
+  for (let ts = 0; ts <= 1000; ts += 5) step(ts);
+  assert.ok(draws <= 31, `${draws} draws in one second`);
+  step(5001);
+  assert.equal(frames.size, 0, 'idle has no pending animation callback');
+  events.get('pointermove')();
+  assert.equal(frames.size, 1);
+  intersect([{ isIntersecting: false }]);
+  assert.equal(frames.size, 0);
+  intersect([{ isIntersecting: true }]);
+  assert.equal(frames.size, 1);
+  doc.hidden = true; events.get('visibilitychange')();
+  assert.equal(frames.size, 0);
+  doc.hidden = false; events.get('visibilitychange')();
+  assert.equal(frames.size, 1);
+  media.matches = true; media.change();
+  assert.equal(frames.size, 0);
+  motion.destroy();
+  assert.equal(events.size, 0);
+});
+
+// Optional real-browser measurement. Keep this in the fixture test so no production server or board is needed.
+test('desktop Chromium nine-project idle CPU and navigation fixture', { skip: !process.env.SWARM_CC_BROWSER_PERF }, async t => {
+  const { chromium } = await import('playwright');
+  const board = { at: '2026-10-30T12:00:00Z', machine: { agents: { total: 9 } }, projects: Array.from({ length: 9 }, (_, i) => ({
+    id: `project-${i}`, name: `Project ${i}`, machine: 'fixture', agents: { total: 1 },
+    ledger: { tickets: Array.from({ length: 40 }, (_, j) => ({ id: `T-${j}`, title: `Ticket ${j}`, stage: 'S1', status: j < 20 ? 'done' : j === 20 ? 'running' : 'ready' })) },
+    orchestrator: { sessions: [] },
+  })) };
+  const srv = createWatchServer({ root: fileURLToPath(assets), assetDir: fileURLToPath(assets),
+    deltaFile: fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url)), commandCenter: true, board: { snapshot: async () => board } });
+  const { port } = await srv.listen();
+  t.after(() => srv.close());
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.SWARM_CC_CHROMIUM ? { executablePath: process.env.SWARM_CC_CHROMIUM } : {}) });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors = [];
+  const robotRequests = [];
+  page.on('request', request => { if (/\/robot-[^/]+\.js/.test(request.url())) robotRequests.push(request.url()); });
+  page.on('pageerror', err => errors.push(err.message));
+  await page.goto(`http://127.0.0.1:${port}/command-center?t=${srv.token}&tour=0`);
+  await page.waitForSelector('.hive-node');
+  const session = await browser.newBrowserCDPSession();
+  const cpu = async () => (await session.send('SystemInfo.getProcessInfo')).processInfo.filter(p => p.type === 'renderer').reduce((sum, p) => sum + p.cpuTime, 0);
+  const before = await cpu();
+  const started = performance.now();
+  await new Promise(resolve => setTimeout(resolve, 45000));
+  const idleCpu = ((await cpu()) - before) / ((performance.now() - started) / 1000) * 100;
+  const runningAnimations = await page.evaluate(() => document.getAnimations().filter(a => a.playState === 'running').map(a => ({ name: a.animationName, target: a.effect?.target?.className })));
+  const visibleLaneHeads = await page.evaluate(() => [...document.querySelectorAll('[data-lane]')].some(node => {
+    const rect = node.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight;
+  }));
+  if (!visibleLaneHeads) assert.deepEqual(robotRequests, [], 'Hive without visible lane heads never loads the 3D robot graph');
+  assert.deepEqual(runningAnimations, [], 'idle CSS also holds its composed frame');
+  const switchMs = await page.evaluate(async () => {
+    const started = performance.now();
+    document.querySelector('.hive-node').click();
+    while (!document.querySelector('.cc-cockpit-shell h1')) await new Promise(requestAnimationFrame);
+    return performance.now() - started;
+  });
+  const backMs = await page.evaluate(async () => {
+    const started = performance.now(); document.querySelector('.cc-cockpit-back-btn').click();
+    while (!document.querySelector('.hive-node')) await new Promise(requestAnimationFrame);
+    return performance.now() - started;
+  });
+  t.diagnostic(JSON.stringify({ idleCpuPercent: idleCpu, switchMs, backMs, runningAnimations, visibleLaneHeads, errors }));
+  const reconciliation = await page.evaluate(async () => {
+    const { renderProjectCockpit } = await import('/assets/cc-cockpit-mount.js');
+    const token = new URL(location.href).searchParams.get('t');
+    const project = await fetch('/api/command-center/project?id=project-0', { headers: { 'x-watch-token': token } }).then(r => r.json());
+    const host = document.createElement('div'); document.body.appendChild(host);
+    const decoration = [];
+    const view = renderProjectCockpit(host, project, { document, now: () => Date.parse('2026-10-30T12:00:00Z'), matchMedia: () => ({ matches: true }),
+      setTimeout: (fn, ms) => { decoration.push({ fn, ms }); return decoration.length; }, clearTimeout() {} });
+    const shellBeforeDecoration = Boolean(host.querySelector('h1')) && !host.querySelector('.pxc');
+    decoration.filter(timer => timer.ms === 0).forEach(timer => timer.fn());
+    await Promise.resolve();
+    const title = host.querySelector('h1');
+    const card = host.querySelector('[data-ticket-id]');
+    const observer = new MutationObserver(() => {});
+    observer.observe(host, { attributes: true, childList: true, characterData: true, subtree: true });
+    view.update(structuredClone(project));
+    const unchangedMutations = observer.takeRecords().length;
+    const changed = structuredClone(project); changed.name = 'Renamed project';
+    view.update(changed);
+    const result = { shellBeforeDecoration, decorated: Boolean(host.querySelector('.pxc')), unchangedMutations, titleRetained: title === host.querySelector('h1'), cardRetained: card === host.querySelector('[data-ticket-id]'), title: title.textContent };
+    changed.ledger.tickets.find(ticket => ticket.id === card.dataset.ticketId).title = 'Updated ticket title';
+    view.update(changed);
+    result.changedCardRetained = card === host.querySelector(`[data-ticket-id="${card.dataset.ticketId}"]`);
+    result.changedTitleBound = card.getAttribute('data-title') === 'Updated ticket title'
+      && card.textContent.toLowerCase().includes('updated ticket title');
+    observer.disconnect(); view.destroy(); host.remove();
+    return result;
+  });
+  assert.deepEqual(reconciliation, { shellBeforeDecoration: true, decorated: true, unchangedMutations: 0, titleRetained: true, cardRetained: true, title: 'RENAMED PROJECT', changedCardRetained: true, changedTitleBound: true });
+  assert.equal(robotRequests.some(url => /robot-(render|geometry|sim)\.js/.test(url)), false, 'Cockpit shell and pixel decoration never await the 3D graph');
+  await page.evaluate(async () => {
+    const { mountRobotHead } = await import('/assets/robot-head.js');
+    const host = document.createElement('div'); host.id = 'perf-visible-head';
+    host.style.cssText = 'position:fixed;top:10px;left:10px;width:56px;height:56px'; document.body.appendChild(host);
+    window.perfVisibleHead = mountRobotHead(host, { state: 'working' });
+  });
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('#perf-visible-head canvas'); return canvas && canvas.width !== 300;
+  });
+  await page.evaluate(() => { window.perfVisibleHead.setState('error'); window.perfVisibleHead.destroy(); document.querySelector('#perf-visible-head').remove(); delete window.perfVisibleHead; });
+  assert.deepEqual(errors, []);
+  if (!process.env.SWARM_CC_PERF_BASELINE) {
+    assert.ok(idleCpu < 5, `idle renderer CPU ${idleCpu.toFixed(2)}%`);
+    assert.ok(switchMs < 150, `Cockpit shell ${switchMs.toFixed(2)}ms`);
+  }
+});
+
 function request(port, pathname, headers = {}, method = 'GET') {
   return new Promise((resolve, reject) => {
     const req = http.request({ hostname: '127.0.0.1', port, path: pathname, method, headers }, res => {
@@ -178,6 +304,7 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   for (const text of [boot, hive]) {
     assert.doesNotMatch(staticImports(text).join('\n'), /cockpit|robot|cc-tour|command-palette/);
   }
+  assert.doesNotMatch(staticImports(boot).join('\n'), /cc-router/, 'legacy router imports the robot-backed layout');
   assert.match(boot, /import\('\.\/cc-cockpit-mount\.js'\)/);
   assert.match(hive, /import\('\.\/robot-head\.js'\)/);
   assert.match(boot, /import\('\.\/command-palette\.js'\)/);
@@ -186,7 +313,47 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   const zipped = gzipSync(boot).length + gzipSync(hive).length;
   assert.ok(bytes < 80000, `entry source ${bytes} exceeds 80 KB`);
   assert.ok(zipped < 22000, `entry gzip ${zipped} exceeds 22 KB`);
+  const support = await Promise.all(['cc-hive-stage.js', 'hive-panels.js'].map(source));
+  const suppliedHiveGzip = zipped + support.reduce((sum, text) => sum + gzipSync(text).length, 0);
+  assert.ok(suppliedHiveGzip < 45000, `Hive entry, runtime and panels gzip ${suppliedHiveGzip} exceeds 45 KB`);
+  const robotHead = await source('robot-head.js');
+  assert.deepEqual(staticImports(robotHead), [], 'robot facade must defer its 3D graph until an actual mount');
   t.diagnostic(`2 supplied Hive entry modules: ${bytes} bytes -> ${zipped} gzip bytes; graph dependencies excluded from this budget`);
+  t.diagnostic(`Hive entries + shared runtime + panels: ${suppliedHiveGzip} gzip bytes (45 KB budget)`);
+});
+
+test('hover-prefetched Cockpit data paints before a slow navigation refresh', async t => {
+  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
+  const oldData = globalThis.CommandCenterData;
+  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
+  t.after(() => { globalThis.CommandCenterData = oldData; });
+  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
+  const location = { pathname: '/command-center' };
+  let hiveDeps;
+  let projectCalls = 0;
+  let finishRefresh;
+  const rendered = [];
+  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
+    document: { hidden: false, addEventListener() {}, removeEventListener() {} }, location,
+    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
+    fetchJson: async url => {
+      if (!url.includes('/project')) return { projects: [{ id: 'alpha' }] };
+      if (++projectCalls === 1) return { id: 'alpha', name: 'Prefetched' };
+      return new Promise(resolve => { finishRefresh = resolve; });
+    },
+    renderHive: (_root, _data, deps) => { hiveDeps = deps; return { destroy() {} }; },
+    loadCockpit: async () => ({ renderProjectCockpit: (_root, project) => { rendered.push(project); return { update() {}, destroy() {} }; } }),
+    loadTour: async () => ({ maybeStartFirstVisit() {} }),
+    setInterval: () => 1, clearInterval() {}, requestAnimationFrame() {}, cancelAnimationFrame() {}, matchMedia() {},
+  });
+  t.after(() => handle.destroy());
+  await handle.whenReady;
+  hiveDeps.preloadCockpit('alpha');
+  await new Promise(resolve => setImmediate(resolve));
+  hiveDeps.onOpenProject('alpha');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(rendered, [{ id: 'alpha', name: 'Prefetched' }], 'shell and cached data render while the new response is unresolved');
+  finishRefresh({ id: 'alpha', name: 'Fresh' });
 });
 
 test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and refreshes on return', async t => {
@@ -259,7 +426,7 @@ test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and re
   assert.equal(events.size, 0);
 });
 
-test('Hive paints before loading robots, shares its raw response, and destroys deferred heads', async t => {
+test('Hive loads robot code only for a visible lane head, shares its raw response, and destroys deferred heads', async t => {
   const { renderHive } = await import('../tools/watch-assets/cc-hive-mount.js');
   const events = new Map();
   const node = tag => ({
@@ -278,9 +445,14 @@ test('Hive paints before loading robots, shares its raw response, and destroys d
   let destroys = 0;
   let rawFetches = 0;
   const paused = [];
+  const observers = [];
   const win = {
     innerWidth: 1200, requestAnimationFrame() {}, requestIdleCallback: fn => { idle = fn; },
     fetch: () => { rawFetches++; }, addEventListener() {}, removeEventListener() {},
+    IntersectionObserver: class {
+      constructor(callback) { this.callback = callback; observers.push(this); }
+      observe() {} disconnect() {}
+    },
   };
   const document = {
     hidden: false, defaultView: win, body: node('body'), createElement: node,
@@ -309,6 +481,10 @@ test('Hive paints before loading robots, shares its raw response, and destroys d
   assert.equal(root.children.length, 1);
   assert.equal(robotLoads, 0);
   assert.equal(rawFetches, 0);
+  assert.equal(idle, undefined, 'offscreen heads do not even schedule a robot import');
+  observers[0].callback([{ isIntersecting: false }]);
+  assert.equal(robotLoads, 0);
+  observers[0].callback([{ isIntersecting: true }]);
   idle();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(robotLoads, 1);
