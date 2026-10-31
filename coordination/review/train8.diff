@@ -50,77 +50,6 @@ index 02ca2d5a..4ec86472 100644
  link this project, run doctor, validate and run the read-only and writing smoke
  jobs, inspect and integrate the reviewed writing output. Read the installed
  SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
-diff --git a/coordination/manifests/d-audit-fix-batch-27d.json b/coordination/manifests/d-audit-fix-batch-27d.json
-new file mode 100644
-index 00000000..fec413ee
---- /dev/null
-+++ b/coordination/manifests/d-audit-fix-batch-27d.json
-@@ -0,0 +1,65 @@
-+{
-+  "version": 1,
-+  "concurrency": 1,
-+  "jobs": [
-+    {
-+      "id": "d-fix-batch-27d",
-+      "agent": "cursor",
-+      "model": "composer-2.5",
-+      "tier": "mid",
-+      "prompt": "Goal g-33a7a4ae, D-fix batch 27d (logging-only visibility round). Edit ONLY tools/api-adapters.mjs. This is a money-sensitive file (paid API lanes, spend caps, provider keys), so an Opus review follows. Visibility only: do NOT change control flow, return values, fallbacks, throws, exports, HTTP requests, response parsing, quota classification, spend/ledger behavior, or tests. No refactors or reformatting.\n\nAudit: docs/state/silent-failures.md. These line numbers are CURRENT on origin/swarm/train8 (e18fcfb, 1.167.31). Locate each catch by the quoted code; bind the error exactly as described. Keep the same error handling and thrown AdapterError after the change.\n\nPer-catch specification (file order):\n\n1. line 465: in the `if (!response.ok)` path, `try { ... while (prefix.length < 4096) { const { done, value } = await reader.read(); ... } } catch { /* Preserve the HTTP status even when its error body is unreadable. */ }`. LOG-ALWAYS with fixed safe detail: bind error and `console.error('[tools/api-adapters.mjs] provider error body unreadable:', error?.code ?? error?.name ?? 'failed');`. Never log the body, prefix, headers, request URL, key, or error.message. The existing HTTP status, retry-after parsing and quotaExhausted classification must stay exactly as they are; prefix remains whatever bytes were read.\n\n2. line 466: `finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }` in the same error path. LEAVE (cleanup).\n\n3. line 481: `finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }` after the successful response body read. LEAVE (cleanup).\n\n4. line 776: `for (const text of result.texts) { try { const parsed = JSON.parse(text); ... candidates.push(...) } catch { /* an invalid candidate is simply not a candidate */ } }` in best-of-N. LEAVE (an invalid candidate is filtered; the next line fails when none are valid).\n\nDo not touch any other catch. Forbidden shortcuts: `catch (e) { e; }`, `.catch((_e) => ...)` with no real log, `void error`, unused binding.\n\nAfter editing: run `node --import ./tests/_isolate-config.mjs --test tests/adapters.test.mjs tests/api-workers.test.mjs tests/best-of-adapter.test.mjs tests/openrouter.test.mjs tests/paid-lane-pause.test.mjs tests/multi-edit.test.mjs`. If a test fails because it asserts empty stderr on the newly logged error-body path, STOP and return blocked with the test name; do not edit a test. Final summary: one line per numbered catch saying changed (with the exact log text) or LEFT, plus the test result.",
-+      "context": [
-+        "docs/state/silent-failures.md",
-+        "tests/adapters.test.mjs",
-+        "tests/api-workers.test.mjs",
-+        "tests/best-of-adapter.test.mjs",
-+        "tests/openrouter.test.mjs",
-+        "tests/paid-lane-pause.test.mjs",
-+        "tests/multi-edit.test.mjs"
-+      ],
-+      "outputs": [
-+        "tools/api-adapters.mjs"
-+      ],
-+      "timeoutMs": 2400000,
-+      "ignoreTests": [
-+        "tests/anthropic-lane.test.mjs",
-+        "tests/field-lessons-batch-aa-core.test.mjs",
-+        "tests/field-lessons-batch-n.test.mjs",
-+        "tests/field-lessons-batch-o.test.mjs",
-+        "tests/field-lessons-batch-x.test.mjs",
-+        "tests/field-lessons-batch-y-adapters.test.mjs",
-+        "tests/gpu-lineup.test.mjs",
-+        "tests/kickoff.test.mjs",
-+        "tests/lanes-run.test.mjs",
-+        "tests/local-lane-cache-context.test.mjs",
-+        "tests/local-lane-review.test.mjs",
-+        "tests/local-lane.test.mjs",
-+        "tests/reports-run.test.mjs",
-+        "tests/review-structured-verdict.test.mjs",
-+        "tests/split-module.test.mjs",
-+        "tests/t2-daily-limit-per-request.test.mjs",
-+        "tests/t2-delta-followups.test.mjs",
-+        "tests/t2-lambda-hosted.test.mjs",
-+        "tests/worker-skills.test.mjs"
-+      ],
-+      "ignoreTestsReason": "Logging-only error-path visibility; focused adapter tests are in context and run by the worker and integrate; the full suite runs in CI."
-+    }
-+  ],
-+  "checks": [
-+    {
-+      "name": "api-adapters-units",
-+      "argv": [
-+        "node",
-+        "--import",
-+        "./tests/_isolate-config.mjs",
-+        "--test",
-+        "tests/adapters.test.mjs",
-+        "tests/api-workers.test.mjs",
-+        "tests/best-of-adapter.test.mjs",
-+        "tests/openrouter.test.mjs",
-+        "tests/paid-lane-pause.test.mjs",
-+        "tests/multi-edit.test.mjs"
-+      ]
-+    }
-+  ]
-+}
 diff --git a/docs/lanes.md b/docs/lanes.md
 index b9625f31..bbf0c7e3 100644
 --- a/docs/lanes.md
@@ -167,7 +96,7 @@ index 1b619ce8..11db593a 100644
        "devDependencies": {
          "acorn": "8.18.0",
 diff --git a/package.json b/package.json
-index 9955c6de..e21f7aa9 100644
+index 9955c6de..3c90a65c 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
@@ -178,6 +107,15 @@ index 9955c6de..e21f7aa9 100644
    "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
    "private": true,
    "type": "module",
+@@ -15,7 +15,7 @@
+     "doctor": "node tools/swarm.mjs doctor",
+     "smoke": "node tools/swarm.mjs run examples/smoke.json",
+     "test:stress": "node tools/stress-tests.mjs",
+-    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs",
++    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs",
+     "perf:cc": "node tools/watch-perf.mjs"
+   },
+   "repository": {
 diff --git a/tests/cc-cockpit-mount.test.mjs b/tests/cc-cockpit-mount.test.mjs
 index c437ebfe..efc80fbd 100644
 --- a/tests/cc-cockpit-mount.test.mjs
@@ -212,10 +150,10 @@ index c437ebfe..efc80fbd 100644
 +});
 diff --git a/tests/command-center-live-latency.test.mjs b/tests/command-center-live-latency.test.mjs
 new file mode 100644
-index 00000000..c8e1e982
+index 00000000..aee24418
 --- /dev/null
 +++ b/tests/command-center-live-latency.test.mjs
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,108 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -271,9 +209,28 @@ index 00000000..c8e1e982
 +  return { server, root, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
 +}
 +
++function isPlaywrightChromiumMissing(err) {
++  const msg = String(err?.message ?? err);
++  return msg.includes("Executable doesn't exist")
++    || msg.includes('Looks like Playwright was just installed')
++    || msg.includes('browserType.launch');
++}
++
++async function withPlaywrightChromium(t, fn) {
++  try {
++    return await fn();
++  } catch (err) {
++    if (isPlaywrightChromiumMissing(err)) {
++      t.skip('playwright chromium not installed');
++      return;
++    }
++    throw err;
++  }
++}
++
 +test('Command Center live latency updates hive counters within 3s without full snapshot refetch', { timeout: 120_000 }, async (t) => {
 +  const { url, root, token } = await fixtureServer(t);
-+  const result = await measureLiveLatency({
++  const result = await withPlaywrightChromium(t, () => measureLiveLatency({
 +    url,
 +    profile: 'desktop',
 +    projectRoot: root,
@@ -281,7 +238,8 @@ index 00000000..c8e1e982
 +    builtin: 'inbox',
 +    runs: 2,
 +    waitMs: 60_000,
-+  });
++  }));
++  if (result == null) return;
 +  assert.ok(result.medianMs < 3000, `median latency ${result.medianMs}ms`);
 +  assert.equal(result.fullSnapshotFetchesDuringUpdates, 0, 'SSE patch must not trigger full /api/command-center refetch');
 +  assert.ok(!JSON.stringify(result).includes(token));
@@ -291,7 +249,7 @@ index 00000000..c8e1e982
 +
 +test('watch-live-latency supports phone profile for remote-style boards', { timeout: 120_000 }, async (t) => {
 +  const { url, root } = await fixtureServer(t);
-+  const result = await measureLiveLatency({
++  const result = await withPlaywrightChromium(t, () => measureLiveLatency({
 +    url,
 +    profile: 'phone',
 +    projectRoot: root,
@@ -299,7 +257,8 @@ index 00000000..c8e1e982
 +    builtin: 'inbox',
 +    runs: 1,
 +    waitMs: 90_000,
-+  });
++  }));
++  if (result == null) return;
 +  assert.equal(result.profile, 'phone');
 +  assert.ok(result.medianMs < 5000, `phone median ${result.medianMs}ms`);
 +});
@@ -1105,10 +1064,10 @@ index 39ef7fe9..ef67a9b7 100644
        reqPath: '/api/command-center/project?id=missing',
 diff --git a/tests/command-center-soak.test.mjs b/tests/command-center-soak.test.mjs
 new file mode 100644
-index 00000000..ac488ae1
+index 00000000..9712b0c4
 --- /dev/null
 +++ b/tests/command-center-soak.test.mjs
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,198 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -1162,6 +1121,25 @@ index 00000000..ac488ae1
 +  t.after(() => server.close());
 +  const { url } = await server.listen();
 +  return { server, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
++}
++
++function isPlaywrightChromiumMissing(err) {
++  const msg = String(err?.message ?? err);
++  return msg.includes("Executable doesn't exist")
++    || msg.includes('Looks like Playwright was just installed')
++    || msg.includes('browserType.launch');
++}
++
++async function withPlaywrightChromium(t, fn) {
++  try {
++    return await fn();
++  } catch (err) {
++    if (isPlaywrightChromiumMissing(err)) {
++      t.skip('playwright chromium not installed');
++      return;
++    }
++    throw err;
++  }
 +}
 +
 +test('watch-soak CLI usage rejects missing URL', async () => {
@@ -1264,13 +1242,14 @@ index 00000000..ac488ae1
 +
 +test('short Command Center soak reports flat verdict and bounded connections', { timeout: 120_000 }, async (t) => {
 +  const { url } = await fixtureServer(t);
-+  const result = await runSoak({
++  const result = await withPlaywrightChromium(t, () => runSoak({
 +    url,
 +    durationMs: 20_000,
 +    profile: 'desktop',
 +    serverPid: process.pid,
 +    waitMs: 60_000,
-+  });
++  }));
++  if (result == null) return;
 +  assert.equal(result.verdict, 'flat', result.reasons.join('; '));
 +  assert.equal(result.sampleCount, 2);
 +  assert.equal(result.samples[0].serverCpuPercent, null, 'first CPU sample is a warm-up baseline');
