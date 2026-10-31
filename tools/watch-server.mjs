@@ -569,6 +569,7 @@ export function createWatchServer(opts) {
     ownerActions,
     env = process.env,
     commandCenter = commandCenterEnabled(env),
+    snapshotMaxStaleMs = 120000,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
@@ -577,6 +578,7 @@ export function createWatchServer(opts) {
   // Cockpit responses are derived on demand and never retained in a map.
   let commandCenterCache = null;
   let snapshotPending = null;
+  let changesSinceFullRebuild = false;
   const snapshotTtlMs = 60000;
   const ccStreams = new Set();
   const inputDetector = createBoardInputDetector({ env });
@@ -665,6 +667,7 @@ export function createWatchServer(opts) {
 
   function rebuildCommandCenterSnapshot() {
     if (snapshotPending) return snapshotPending;
+    changesSinceFullRebuild = false;
     snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
       if (changesPending) await changesPending.catch(() => {});
       const snapshot = await board.snapshot({ local: false, redact: true });
@@ -684,7 +687,10 @@ export function createWatchServer(opts) {
       }))).flat();
       const currentIds = new Set((payload.projects ?? []).map(p => p.id));
       for (const id of dirtyProjects) if (!currentIds.has(id)) dirtyProjects.delete(id);
-      for (const id of await inputDetector.scan(inputProjects)) dirtyProjects.add(id);
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
       // A build finishing after shutdown must not keep the snapshot alive.
       if (!closed) commandCenterCache = entry;
       return entry;
@@ -702,7 +708,10 @@ export function createWatchServer(opts) {
     if (changesPending) return changesPending;
     changesPending = (async () => {
       if (!commandCenterCache || snapshotPending || closed) return;
-      for (const id of await inputDetector.scan(inputProjects)) dirtyProjects.add(id);
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
       if (!dirtyProjects.size) return;
       const ids = [...dirtyProjects];
       const entry = commandCenterCache;
@@ -760,8 +769,11 @@ export function createWatchServer(opts) {
       entry = await rebuildCommandCenterSnapshot();
     } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
       // Keep the previous snapshot available, including its validators, while
-      // a single refresh runs. A failure leaves it available for the next retry.
-      if (!snapshotPending) void rebuildCommandCenterSnapshot().catch(() => {});
+      // a single refresh runs. Idle inputs get a deeper refresh at the backstop.
+      // A failure leaves the cached entry and its validators available.
+      if (!snapshotPending && (changesSinceFullRebuild || now() - entry.at >= snapshotMaxStaleMs)) {
+        void rebuildCommandCenterSnapshot().catch(() => {});
+      }
     }
     if (changesPending) await changesPending.catch(() => {});
     if (!pathname.endsWith('/project')) return entry;
