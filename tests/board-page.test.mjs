@@ -251,6 +251,7 @@ test('the HTTP board local=1 skips peer discovery after token verification', asy
     listPeers: async () => { calls += 1; throw new Error('peer discovery should be skipped'); },
     versionInfo: async () => ({ version: '1.155.0' }),
   });
+  calls = 0;
   const data = JSON.parse((await get(board.port, '/api/board?local=1', { headers: { 'x-watch-token': board.token } })).body);
   assert.equal(calls, 0);
   assert.equal(data.projects.every(p => p.machine === os.hostname()), true);
@@ -362,6 +363,7 @@ async function boardServer(t, { A, B, home }, apiOptions = {}) {
   const api = createBoardApi({ env, now: () => NOW, live: async () => [{ runId: 'run-a1', root: A.root, startedAt: iso(NOW) }], cacheMs: 0, ...apiOptions });
   const server = createWatchServer({ root: home, assetDir: realAssets, deltaFile, idleMs: 600000, getRunSnapshot: async () => null, getPlanSnapshot: async () => ({ present: false }), getGallery: async () => ({ schema: 1, screens: [] }), getBoard: async () => ({ runs: [] }), board: api, indexName: 'board.html', commandList: [], contextCommands: () => [] });
   await server.listen();
+  await get(Number(new URL(server.url).port), '/api/command-center', { headers: { 'x-watch-token': server.token } }).catch(() => {});
   t.after(async () => { await server.close(); await api.close(); });
   return { server, api, port: Number(new URL(server.url).port), token: server.token };
 }
