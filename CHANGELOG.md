@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.31
+
+Release train 7: a warm cached board snapshot and D-fix batch 27c.
+- Board snapshot: /api/command-center and its project route now share one board snapshot cache with a 60 second TTL, stale-while-revalidate (a stale response is served at once while one background rebuild runs) and a nonblocking startup warm. This replaces the OOM-prone per-project caches. On the real nine-project board with a dashboard open the server CPU fell from 44.6 percent to 0.87 percent; usable is about 233 ms and Hive to Cockpit about 49 ms; security headers, tokens, cookies, ETag/304 and the response shape are unchanged;
+- tools/watch-perf.mjs accepts ps time as m:ss.ss, h:mm:ss.ss or plain seconds, and still redacts the watch token;
+- D-fix: silent-catch visibility in swarm/core-51 (batch 27c);
+- Version 1.167.31.
+
 ## 1.167.30
 
 Release train 6: a fast Command Center and a hardened owner-only gate.
