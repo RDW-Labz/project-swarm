@@ -83,6 +83,74 @@ test('interval CPU measures CPU seconds once over elapsed wall time', () => {
   assert.equal(summary.verdict, 'flat');
 });
 
+const MiB = 1024 * 1024;
+const memorySamples = (rssMb, heapMb = rssMb.map(() => 10)) => rssMb.map((rss, i) => ({
+  serverRssKb: rss * 1024,
+  pageHeapBytes: heapMb[i] * MiB,
+  serverCpuPercent: 0,
+  eventSourceConnections: 1,
+  watcherHandles: 1,
+  apiRequestCount: 1,
+}));
+
+test('soak memory medians ignore warm-up and isolated final RSS and heap spikes', () => {
+  const summary = summarizeSoak(memorySamples(
+    [95, 260, 100, 101, 99, 100, 100, 260],
+    [5, 30, 10, 11, 9, 10, 10, 30],
+  ));
+  assert.equal(summary.verdict, 'flat', summary.reasons.join('; '));
+  assert.deepEqual(summary.reasons, []);
+  assert.deepEqual(summary.memory.serverRssKb, {
+    first: 95 * 1024,
+    last: 260 * 1024,
+    average: (95 + 260 + 100 + 101 + 99 + 100 + 100 + 260) / 8 * 1024,
+    slopePerSample: (260 - 95) * 1024 / 7,
+    steadyBaselineKb: 100 * 1024,
+    steadyTailKb: 100 * 1024,
+    steadyGrowthKb: 0,
+  });
+  assert.equal(summary.memory.pageHeapBytes.first, 5 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.last, 30 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.average, 115 / 8 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.slopePerSample, 25 * MiB / 7);
+  assert.equal(summary.memory.pageHeapBytes.steadyBaselineBytes, 10 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.steadyTailBytes, 10 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 0);
+});
+
+test('soak flags sustained RSS growth above the steady-state limit', () => {
+  // A 10 MiB step must continue past 160 MiB to exceed the 64 MiB median-growth limit.
+  const summary = summarizeSoak(memorySamples([95, 260,
+    ...Array.from({ length: 17 }, (_, i) => 100 + i * 10),
+  ]));
+  assert.equal(summary.verdict, 'leak');
+  assert.equal(summary.memory.serverRssKb.steadyBaselineKb, 110 * 1024);
+  assert.equal(summary.memory.serverRssKb.steadyTailKb, 250 * 1024);
+  assert.equal(summary.memory.serverRssKb.steadyGrowthKb, 140 * 1024);
+  assert.deepEqual(summary.reasons, [`memory growth rss=${140 * 1024}kb heap=0b`]);
+});
+
+test('soak flags sustained browser heap growth independently of RSS', () => {
+  const summary = summarizeSoak(memorySamples(
+    Array(9).fill(100), [30, 30, 10, 11, 12, 13, 14, 15, 16],
+  ));
+  assert.equal(summary.verdict, 'leak');
+  assert.equal(summary.memory.pageHeapBytes.steadyBaselineBytes, 11 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.steadyTailBytes, 15 * MiB);
+  assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 4 * MiB);
+  assert.deepEqual(summary.reasons, [`memory growth rss=0kb heap=${4 * MiB}b`]);
+});
+
+test('short soaks fall back to available endpoints after warm-up', () => {
+  for (const count of [0, 1, 2, 4]) {
+    const summary = summarizeSoak(memorySamples([95, 260, 100, 101].slice(0, count)));
+    const growth = count === 2 ? 165 * 1024 : count === 4 ? 1024 : 0;
+    assert.equal(summary.verdict, count === 2 ? 'leak' : 'flat');
+    assert.equal(summary.memory.serverRssKb.steadyGrowthKb, growth);
+    assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 0);
+  }
+});
+
 test('short Command Center soak reports flat verdict and bounded connections', { timeout: 120_000 }, async (t) => {
   const { url } = await fixtureServer(t);
   const result = await runSoak({

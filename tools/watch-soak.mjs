@@ -154,6 +154,15 @@ function seriesStats(values) {
   return { first, last, average, slopePerSample };
 }
 
+function steadyMemoryStats(values, steadyValues) {
+  // Short runs can end before warm-up finishes; retain their available endpoints.
+  const available = steadyValues.length ? steadyValues : values;
+  const medianOfThree = (window) => [...window].sort((a, b) => a - b)[1];
+  const baseline = available.length >= 6 ? medianOfThree(available.slice(0, 3)) : available[0] ?? null;
+  const tail = available.length >= 6 ? medianOfThree(available.slice(-3)) : available.at(-1) ?? null;
+  return { baseline, tail, growth: baseline == null ? 0 : Math.round(tail - baseline) };
+}
+
 function monotonicGrowth(values) {
   if (values.length < 2) return false;
   let grew = 0;
@@ -180,14 +189,30 @@ export function summarizeSoak(samples) {
   const watchers = samples.map((s) => s.watcherHandles);
   const apiRequests = samples.map((s) => s.apiRequestCount);
 
+  // Page load and the first build are warm-up, regardless of telemetry availability.
+  const steadySamples = samples.slice(2);
+  const rssTrend = steadyMemoryStats(rssKb,
+    steadySamples.map((s) => s.serverRssKb).filter((v) => v != null));
+  const heapTrend = steadyMemoryStats(heap,
+    steadySamples.map((s) => s.pageHeapBytes).filter((v) => v != null));
   const memory = {
-    serverRssKb: seriesStats(rssKb),
-    pageHeapBytes: seriesStats(heap),
+    serverRssKb: {
+      ...seriesStats(rssKb),
+      steadyBaselineKb: rssTrend.baseline,
+      steadyTailKb: rssTrend.tail,
+      steadyGrowthKb: rssTrend.growth,
+    },
+    pageHeapBytes: {
+      ...seriesStats(heap),
+      steadyBaselineBytes: heapTrend.baseline,
+      steadyTailBytes: heapTrend.tail,
+      steadyGrowthBytes: heapTrend.growth,
+    },
   };
   const cpuStats = seriesStats(cpu);
 
-  const rssGrowth = rssKb.length > 1 ? rssKb.at(-1) - rssKb[0] : 0;
-  const heapGrowth = heap.length > 1 ? heap.at(-1) - heap[0] : 0;
+  const rssGrowth = rssTrend.growth;
+  const heapGrowth = heapTrend.growth;
   const cpuOk = cpuStats.average == null || cpuStats.average < CPU_AVG_MAX;
   const memoryOk = rssGrowth <= RSS_GROWTH_KB_MAX && heapGrowth <= HEAP_GROWTH_BYTES_MAX;
   const connectionsOk = !monotonicGrowth(connections);
