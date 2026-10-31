@@ -264,11 +264,11 @@ test('snapshot caches coalesce reads, separate effective query options, and vali
   assert.equal((await f.get('/api/command-center/project?id=alpha', { 'if-none-match': project.headers.etag })).status, 304);
   assert.equal((await f.get('/api/command-center/project?id=missing')).status, 404);
   assert.equal(f.reads(), 4);
-  f.advance(2001);
+  f.advance(6001);
   assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
   assert.equal(f.reads(), 5);
   f.revise();
-  f.advance(2001);
+  f.advance(6001);
   const changed = await f.get('/api/command-center', { 'if-none-match': tag });
   assert.equal(changed.status, 200);
   assert.notEqual(changed.headers.etag, tag);
