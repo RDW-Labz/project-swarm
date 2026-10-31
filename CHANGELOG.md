@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.30
+
+Release train 6: a fast Command Center and a hardened owner-only gate.
+- Command Center performance: gzip/brotli, ETag/304 and real cache headers (fonts immutable, JS/CSS revalidated) replace no-store, and the Command Center snapshot is cached for 2 s; Cockpit, the tour and the palette lazy-load with the Cockpit module graph and the first project's data warmed during Hive idle; the robot is deferred; ambient animation is capped at 30 fps (robot 15 fps) and goes static after 5 s idle, pausing when hidden, off-screen or under reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real 9-project board: usable 3518 to 195 ms desktop and 5251 to 943 ms on a 1.6 Mbps/100 ms phone profile; Hive to Cockpit 3114 to 131 ms and 4099 to 111 ms; idle page CPU 91.8 to 3.4 percent and 95.8 to 3.2 percent; Hive payload 497 to 157 KB and 434 to 81 KB; API calls 23 to 12 per minute;
+- Owner gate: the tickets supersede and --set superseded owner check no longer accepts SWARM_OWNER=1, refuses any agent/worker env marker first, walks the process ancestry to refuse agent shells and ptys, and requires both stdin and stdout to be TTYs; a test-only hook replaces the env override in tests; tools/watch-perf.mjs and npm run perf:cc measure the Command Center against a real board URL;
+- Version 1.167.30.
+
 ## 1.167.29
 
 Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
