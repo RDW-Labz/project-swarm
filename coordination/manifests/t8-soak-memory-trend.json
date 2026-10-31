@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-soak-memory-trend",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "tierReason": "make the owner-gate memory verdict a trend, not first/last single samples",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 8 soak gate: the 10-minute run showed RSS oscillating 94-262 MB with a flat browser heap and no monotonic trend (V8 keeps a high-water mark after a deep build and GC later), so first-sample-to-last-sample growth is a coin flip and can label a flat server a leak. Make the memory verdict a trend over the steady-state samples.\n\nIn tools/watch-soak.mjs summarizeSoak:\n- Keep the existing first/last/average/slope fields for serverRssKb and pageHeapBytes.\n- Add steady-state memory stats: drop the first 2 samples (warm-up: page load and the first build), then baseline = median of the first 3 remaining rss samples and tail = median of the last 3 remaining rss samples. rssGrowth = round(tail - baseline); memoryOk uses this rssGrowth <= RSS_GROWTH_KB_MAX (65536 KB) instead of last-first. Do the same for the browser heap with HEAP_GROWTH_BYTES_MAX (2 MB) using medians. If there are too few samples for 3+3, fall back to last-first over the samples that exist (short --seconds runs must still work).\n- Report the baseline/tail/growth values in the memory object (e.g. serverRssKb.steadyBaselineKb, steadyTailKb, steadyGrowthKb; pageHeapBytes analogous) and use them in the leak reason text. Keep the verdict/exit behavior and the CPU metric unchanged.\n- Keep monotonic Growth checks for connections/watchers unchanged.\n\nTests in tests/command-center-soak.test.mjs: export summarizeSoak if needed and add cases: (a) samples with a flat RSS around 100 MB and one 260 MB spike in the last sample plus a 95 MB first sample -> verdict flat (median ignores the spike); (b) a steady climb (100,110,...,160) with the tail median clearly above the baseline -> leak with the memory reason; (c) a short 4-sample run still yields a verdict. Keep the short-soak fixture test green.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs -> all pass.",
+      "context": [
+        "tools/watch-soak.mjs",
+        "tests/command-center-soak.test.mjs",
+        "tests/command-center-live-latency.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-soak.mjs",
+        "tests/command-center-soak.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/command-center-live.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "harness-only change; focused soak tests run here, full suite before merge",
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t8-soak-memory-trend",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-soak.test.mjs",
+        "tests/command-center-live-latency.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-soak-latency",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Train 8 tests (owner order): add committed harnesses and tests for the Command Center live feed.\n1) tools/watch-soak.mjs: open a board URL in Chromium (playwright devDependency), desktop viewport, keep the dashboard open for --minutes (default 60, allow --seconds for tests), sample every 30 s: server RSS and CPU from `ps -o rss=,%cpu= -p SERVERPID`, the browser page heap (CDP Runtime.getHeapUsage or Performance.getMetrics), the number of open SSE/EventSource connections and the server's file-watcher handles (count via lsof -p PID with --server-pid; macOS), and the API request count. Write a JSON summary with first/last/average/slope for memory and CPU, the connection/watcher counts over time, and a verdict (flat: RSS and heap growth below a small threshold, CPU average below 5%, no monotonic connection/watcher growth). Exit non-zero on a leak. Redact tokens in any URL output.\n2) tools/watch-live-latency.mjs: open a board URL, make a reversible change to a test project's ledger/state (arguments --project-root and --change-cmd/--revert-cmd, or a built-in tickets set/revert on a test project), measure the time from the change until the Hive card/needs-you counter updates in the DOM, repeat a few times; print the per-run and median latency; redact tokens; support --profile phone (390x844, 4G throttle) so the same harness runs against the mini's remote board URL and token.\n3) Add tests: a short soak (--seconds 20) against a fixture board asserts no leak verdict and bounded connections/watchers; a live-latency test against the fixture server with a temp project asserts an update in under 3 s and no full snapshot fetch; keep the existing CC/server tests green. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs tests/command-center-live.test.mjs tests/watch-server.test.mjs -> all pass. Report counts and the harness usage.",
+      "context": ["tools/watch-perf.mjs", "tools/watch-server.mjs", "tests/command-center-live.test.mjs"],
+      "outputs": ["tools/watch-soak.mjs", "tools/watch-live-latency.mjs", "tests/command-center-soak.test.mjs", "tests/command-center-live-latency.test.mjs"],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [ { "name": "t8-soak-latency", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-soak.test.mjs", "tests/command-center-live-latency.test.mjs", "tests/command-center-live.test.mjs", "tests/watch-server.test.mjs"] } ]
+}

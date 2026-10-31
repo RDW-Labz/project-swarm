@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-soak-fix",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "live feed CPU blocker found by the 1-hour soak; re-run the owner gate after",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Blocker found by the train 8 1-hour soak: the Command Center live input detector scans project FAMILY roots every second. On this machine project-swarm has 313 linked worktrees and parts-request-app 117, so scan() walks 441 roots (each tree(.swarm/project), tree(.swarm/inbox), tree(.swarm/handbuild), and every run state.json) every tick: one scan takes 86-162 ms, the server averaged 32.9% CPU with a dashboard open (limit 5%), and RSS swung 67-361 MB. The full board snapshot still needs all family roots; only the LIVE detector must be bounded.\n\nFix in tools/watch-server.mjs (keep tools/board-data.mjs projectFamilyRoots unchanged for the snapshot):\n1. Export an async helper `selectLiveFamilyRoots(root, { env = process.env, extraRoots = [], now = Date.now, windowMs = LIVE_FAMILY_WINDOW_MS, familyRoots = null } = {})`. Resolve roots with projectFamilyRoots(root, { env, extraRoots }) unless familyRoots is given. Always keep the project's own root. For every OTHER root (a linked worktree/scratch family member), keep it only if it has recent activity: stat these (all cheap, no recursive tree): `<root>/.swarm/runs` directory mtime, the newest run directory by name (ids sort by time) plus its state.json mtime, `<root>/.swarm/project` directory mtime, `<root>/.swarm/inbox` directory mtime, and `<root>/.swarm/orchestrator/events.ndjson` mtime. Keep when any mtime is >= now - windowMs. Missing paths are just not recent (never throw). Use LIVE_FAMILY_WINDOW_MS = 10 * 60 * 1000 so an idle worktree is dropped from the 1 s scan and a newly started run is picked up at the next full rebuild (<=60 s, the existing poll fallback).\n2. In rebuildCommandCenterSnapshot, replace the per-project `projectFamilyRoots(...)` mapping for inputProjects with selectLiveFamilyRoots(p.root, { env, extraRoots }) (do NOT change the snapshot's own board.snapshot call or its spend/run data). The returned inputProjects must be the bounded list, not 441.\n3. Add tests in tests/command-center-live.test.mjs: (a) selectLiveFamilyRoots with a fake familyRoots list [own, fresh, idle1, idle2] keeps own and fresh and drops the idle roots (create temp dirs; write .swarm/runs/<id>/state.json; set the idle ones' mtimes to now - 1 hour with fs.utimes; assert ids); (b) an idle root whose newest run state.json is touched to now is kept; (c) a missing/invalid extra root does not throw; (d) the existing live-family ownership behavior and latency tests stay green. Keep every existing command-center-live test green.\n\nPerformance evidence to report: the bounded root count for this machine (call selectLiveFamilyRoots for /Users/bean/project-swarm and report how many roots remain vs 313), plus the focused checks.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-live.test.mjs tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs tests/watch-server.test.mjs -> all pass.",
+      "context": [
+        "tools/watch-server.mjs",
+        "tools/board-data.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-soak.test.mjs",
+        "tools/watch-soak.mjs"
+      ],
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tests/command-center-live.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-accuracy-untracked.test.mjs",
+        "tests/board-card-ui.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-live-latency.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused live/soak/latency suite runs here, full suite before merge",
+      "timeoutMs": 3600000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t8-soak-fix",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-soak.test.mjs",
+        "tests/command-center-live-latency.test.mjs",
+        "tests/watch-server.test.mjs"
+      ]
+    }
+  ]
+}

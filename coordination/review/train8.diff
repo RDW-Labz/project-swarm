@@ -1,0 +1,3104 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 088c944f..baff7341 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,18 @@
+ # Changelog
+ 
++## 1.167.32
++
++Release train 8: a live Command Center change feed, bounded live detection, change-driven snapshot rebuilds, and review/guard follow-ups.
++- Live feed: the watch server stats each project's small board inputs about once a second (tickets, orchestrator events and state, run state files, inbox, lanes and history) and identifies the affected project without a full build. A token/cookie-authenticated SSE endpoint (/api/command-center/events, the same security headers, no token in logs or URLs) sends a compact change event; the cached snapshot's changed project card and aggregate counters are patched in place, and the client patches the Hive card, Cockpit and header counters through the per-project route without a full snapshot fetch. The 5 s poll stays as a fallback; hidden tabs pause and reduced motion is honored. Fixture change-to-screen: median 1002 ms desktop and 1001 ms phone-4G; no full snapshot fetch during updates;
++- Bounded detection: each second the detector scans the project's own root plus only family worktrees active in the last ten minutes (441 roots to 6 on this Mac); full snapshots still read the complete family;
++- Snapshot CPU: the 60 s cache is change-driven. A watched change refreshes after the TTL; with no change the server serves the cached entry and does one deep full rebuild every five minutes for inputs the live feed does not watch. The one-hour dashboard soak held server RSS and browser heap flat (steady-state medians), with no SSE or file-watcher growth and the interval CPU under the 5% gate;
++- Harnesses: tools/watch-soak.mjs (server RSS and interval CPU from ps cputime, browser heap via CDP, EventSource and file-watcher counts, API count; flat/leak verdict, exit 1 on a leak) and tools/watch-live-latency.mjs (reversible inbox/tickets change to the DOM, per-run and median, desktop and phone 4G profiles, tokens redacted); tests for both;
++- Merge gate: the local review record is now bound to its run manifest and named job (a review job that declares exactly the result file), not any completed Opus job;
++- Stress: an invalid STRESS_TEST_COMMAND fails with a clear message and exit 2; SIGINT/SIGTERM kill the round process group, wait for the child to exit (bounded) and then exit 130 or 143;
++- Tabs: the Hive Command Center and Cockpit tab links keep location.search; the routes test sends the rendered links to the running server; no-window hrefs are asserted;
++- Docs: corrected the stale 1.167.29 merge-gate text, documented the 1.167.28 to 1.167.29 ledger re-approval and with-concurrency's detached process group;
++- Version 1.167.32.
++
+ ## 1.167.31
+ 
+ Release train 7: a warm cached board snapshot and D-fix batch 27c.
+@@ -19,9 +32,9 @@ Release train 6: a fast Command Center and a hardened owner-only gate.
+ 
+ Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
+ - Kill paths: the guarded runner spawns the command in its own process group, signals the group (with a child-pid fallback) from the wrapper and the watcher only after the start-time and command-line identity match, and the watcher escalates once to SIGKILL; test:stress now kills the current round's process group on Ctrl-C (exit 130) or SIGTERM (143);
+-- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, keeps the approval hash stable when a stale proposed ticket is superseded, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines;
++- Ledger: supersede writes once under the scope lock from the fresh ledger, prunes superseded tickets from dependents' dependsOn and logs the prune, `ticketSetHash` now omits superseded tickets and proposed or unapproved tickets so the hash matches the live set only, the build plan counts the same live set as ledgerStats, and last-touch reads id/ticket/ids/tickets log shapes while skipping corrupt lines; after upgrading from 1.167.28, a ledger that was approved while it still contained superseded tickets reads as not approved until you run `swarm scope approve --yes` once with no ticket changes;
+ - Owner-only: the supersede gate now refuses Claude, Codex and Cursor agent/worker sessions (and non-TTY callers) unless SWARM_OWNER=1, and the same gate covers tickets --set superseded;
+-- Merge gate: a release PR now needs a committed review-run record (coordination/review/<train>-review-run.json) at the PR head, a metadata-only commit whose parent is the reviewed code head; the record names the run id, agent claude, an opus model, verdict pass, the full 40-character head and the sha256 of the committed review result, and merge verifies it from GitHub before any gh pr merge; Reviews parsing is fence-aware;
++- Merge gate: a release PR carries only a machine marker in the body that names the review result JSON; `swarm merge` reads the runner's local record at `.swarm/runs/<runId>/review-record.json`, requires the run complete and its review job on claude with opus, requires a metadata-only result commit at the PR head whose sole parent is the reviewed code head, and verifies the committed result JSON's sha256, verdict pass and full 40-character head before any `gh pr merge`; there is no committed review-run record under coordination/review/; Reviews parsing is fence-aware;
+ - D-fix: silent-catch visibility in scope-commands and server-restart (batches 27a and 27b);
+ - Version 1.167.29.
+ 
+diff --git a/README.md b/README.md
+index 02ca2d5a..4ec86472 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.31 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.32 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.31 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.32 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/coordination/manifests/d-audit-fix-batch-27d.json b/coordination/manifests/d-audit-fix-batch-27d.json
+new file mode 100644
+index 00000000..fec413ee
+--- /dev/null
++++ b/coordination/manifests/d-audit-fix-batch-27d.json
+@@ -0,0 +1,65 @@
++{
++  "version": 1,
++  "concurrency": 1,
++  "jobs": [
++    {
++      "id": "d-fix-batch-27d",
++      "agent": "cursor",
++      "model": "composer-2.5",
++      "tier": "mid",
++      "prompt": "Goal g-33a7a4ae, D-fix batch 27d (logging-only visibility round). Edit ONLY tools/api-adapters.mjs. This is a money-sensitive file (paid API lanes, spend caps, provider keys), so an Opus review follows. Visibility only: do NOT change control flow, return values, fallbacks, throws, exports, HTTP requests, response parsing, quota classification, spend/ledger behavior, or tests. No refactors or reformatting.\n\nAudit: docs/state/silent-failures.md. These line numbers are CURRENT on origin/swarm/train8 (e18fcfb, 1.167.31). Locate each catch by the quoted code; bind the error exactly as described. Keep the same error handling and thrown AdapterError after the change.\n\nPer-catch specification (file order):\n\n1. line 465: in the `if (!response.ok)` path, `try { ... while (prefix.length < 4096) { const { done, value } = await reader.read(); ... } } catch { /* Preserve the HTTP status even when its error body is unreadable. */ }`. LOG-ALWAYS with fixed safe detail: bind error and `console.error('[tools/api-adapters.mjs] provider error body unreadable:', error?.code ?? error?.name ?? 'failed');`. Never log the body, prefix, headers, request URL, key, or error.message. The existing HTTP status, retry-after parsing and quotaExhausted classification must stay exactly as they are; prefix remains whatever bytes were read.\n\n2. line 466: `finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }` in the same error path. LEAVE (cleanup).\n\n3. line 481: `finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }` after the successful response body read. LEAVE (cleanup).\n\n4. line 776: `for (const text of result.texts) { try { const parsed = JSON.parse(text); ... candidates.push(...) } catch { /* an invalid candidate is simply not a candidate */ } }` in best-of-N. LEAVE (an invalid candidate is filtered; the next line fails when none are valid).\n\nDo not touch any other catch. Forbidden shortcuts: `catch (e) { e; }`, `.catch((_e) => ...)` with no real log, `void error`, unused binding.\n\nAfter editing: run `node --import ./tests/_isolate-config.mjs --test tests/adapters.test.mjs tests/api-workers.test.mjs tests/best-of-adapter.test.mjs tests/openrouter.test.mjs tests/paid-lane-pause.test.mjs tests/multi-edit.test.mjs`. If a test fails because it asserts empty stderr on the newly logged error-body path, STOP and return blocked with the test name; do not edit a test. Final summary: one line per numbered catch saying changed (with the exact log text) or LEFT, plus the test result.",
++      "context": [
++        "docs/state/silent-failures.md",
++        "tests/adapters.test.mjs",
++        "tests/api-workers.test.mjs",
++        "tests/best-of-adapter.test.mjs",
++        "tests/openrouter.test.mjs",
++        "tests/paid-lane-pause.test.mjs",
++        "tests/multi-edit.test.mjs"
++      ],
++      "outputs": [
++        "tools/api-adapters.mjs"
++      ],
++      "timeoutMs": 2400000,
++      "ignoreTests": [
++        "tests/anthropic-lane.test.mjs",
++        "tests/field-lessons-batch-aa-core.test.mjs",
++        "tests/field-lessons-batch-n.test.mjs",
++        "tests/field-lessons-batch-o.test.mjs",
++        "tests/field-lessons-batch-x.test.mjs",
++        "tests/field-lessons-batch-y-adapters.test.mjs",
++        "tests/gpu-lineup.test.mjs",
++        "tests/kickoff.test.mjs",
++        "tests/lanes-run.test.mjs",
++        "tests/local-lane-cache-context.test.mjs",
++        "tests/local-lane-review.test.mjs",
++        "tests/local-lane.test.mjs",
++        "tests/reports-run.test.mjs",
++        "tests/review-structured-verdict.test.mjs",
++        "tests/split-module.test.mjs",
++        "tests/t2-daily-limit-per-request.test.mjs",
++        "tests/t2-delta-followups.test.mjs",
++        "tests/t2-lambda-hosted.test.mjs",
++        "tests/worker-skills.test.mjs"
++      ],
++      "ignoreTestsReason": "Logging-only error-path visibility; focused adapter tests are in context and run by the worker and integrate; the full suite runs in CI."
++    }
++  ],
++  "checks": [
++    {
++      "name": "api-adapters-units",
++      "argv": [
++        "node",
++        "--import",
++        "./tests/_isolate-config.mjs",
++        "--test",
++        "tests/adapters.test.mjs",
++        "tests/api-workers.test.mjs",
++        "tests/best-of-adapter.test.mjs",
++        "tests/openrouter.test.mjs",
++        "tests/paid-lane-pause.test.mjs",
++        "tests/multi-edit.test.mjs"
++      ]
++    }
++  ]
++}
+diff --git a/docs/lanes.md b/docs/lanes.md
+index b9625f31..bbf0c7e3 100644
+--- a/docs/lanes.md
++++ b/docs/lanes.md
+@@ -68,6 +68,8 @@ Several projects can run at once. Each lane already has a machine-wide limit (ev
+ - **Separate:** each project's spend caps (`projectMaxUsd`, `--max-usd`, lane daily caps) and its own `--concurrency` stay as they were; the machine limit only adds a ceiling and the sharing. A project is told apart by the id of its folder (the same id the Swarm Watch board uses).
+ - **See it:** the Swarm Watch board shows "Workers held": how many of the limit are in use, which project holds how many and in which lane, and which projects are waiting ([watch.md](watch.md)).
+ 
++`swarm with-concurrency N -- COMMAND` runs COMMAND in its own detached process group. The wrapper stays in the terminal's foreground process group and forwards SIGINT (after a 200 ms grace), SIGTERM and SIGHUP to the command's whole group. Stdio stays attached so output is live, but the command is not the terminal's foreground process group, so terminal job control and terminal-generated signals hit the wrapper and are forwarded. On exit, the previous `machineConcurrency` value is restored.
++
+ ## Rate limits and quota pauses
+ 
+ Lane limits are machine-wide. Every run on this machine shares one lane file next to the shared install: `~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR` when that is set. The file holds each lane's in-flight count and any rate-limit or quota pause. A lock keeps the counts exact, and a slot whose process has died is cleared on the next claim. A 429 or a quota pause in one run pauses that lane for every other run, including a lead's child runs and runs in other repositories. Deleting a project's `.swarm/` does not reset it. A run's own `concurrency` is still only that run's global cap.
+diff --git a/docs/scope.md b/docs/scope.md
+index df289969..6c75e741 100644
+--- a/docs/scope.md
++++ b/docs/scope.md
+@@ -8,7 +8,7 @@ Phase 13. You write one scope file. The swarm splits it into small tickets, you
+ 2. `swarm scope check` flags missing acceptance, duplicate ids and vague words. It also lists the outside services that need an owner on day 0 (Stripe, domain, email, app stores).
+ 3. `swarm scope split` writes `docs/scope/split/manifest.json`: one job per stage. Run it with `swarm run docs/scope/split/manifest.json`.
+ 4. `swarm scope split --ingest RUN` reads the ticket lists from that run, assigns ids, adds the day 0 human tickets, runs the integrity checks and writes the ledger (`.swarm/project/tickets.json`), not approved. A bad file refuses the whole ingest and names the problem.
+-5. `swarm scope approve` prints a short summary (stages, waves, estimate, risks). `swarm scope approve --yes` records your approval and writes `docs/scope/build-plan.md`. It refuses when coverage is below 100%, a ticket has no requirement, two parallel tickets write the same file, or the scope file changed after the split.
++5. `swarm scope approve` prints a short summary (stages, waves, estimate, risks). `swarm scope approve --yes` records your approval and writes `docs/scope/build-plan.md`. It refuses when coverage is below 100%, a ticket has no requirement, two parallel tickets write the same file, or the scope file changed after the split. **Ledger upgrade (1.167.29):** `ticketSetHash` no longer counts superseded tickets or proposed tickets that were never approved into the set, so the hash matches the live tickets only. A ledger approved under 1.167.28 that still lists superseded tickets reads as not approved after you upgrade; run `swarm scope approve --yes` once with no ticket changes to seal it again.
+ 6. `swarm go --scope [--max-jobs N] [--max-waves N]` builds the project, wave after wave, until the tickets are done or something needs you. Each wave does what used to be done by hand: it builds a manifest from the ready tickets (dependencies done), marks them running, runs it, integrates and commits it on the current branch (`Scope wave N`, or your `--commit-message`), then `swarm scope sync RUN` and `swarm scope sync RUN --integrated`, and it runs the security and acceptance reviews that step asks for (up to three rounds per run) before the next wave. It refuses an unapproved ledger, a ticket set edited since approval, or a scope file that is missing or changed since approval. Only one wave starts at a time (a lock). `--max-jobs` must be a positive whole number; `--max-waves` (1 to 500, default 50) bounds the loop and a second run continues where it stopped (exit 75). `--max-usd` and `--max-tokens` (or the profile's budget, else the `swarm go` default) cap each wave's run and each review run; with the project cap and `--max-waves` they bound the spend: at most waves times one wave plus its reviews, and no new run once the project total reaches the cap.
+    - **Safety:** it refuses to start on `main`, `master` or a detached HEAD (`--allow-main-branch` overrides), and only one loop runs per project (never beside autopilot). The default branch is refused too, and the branch is checked again before each commit. Flags that make no sense for waves (`--concurrency`, `--leads`, `--batch`, `--timeout`, `--merge-method`, `--tag-timeout`, `--require-section`, `--exempt`) are refused. A wave commits only its own files and refuses when something else is staged. Ctrl-C or `swarm stop --all` ends it: the cancelled run's tickets stay running and nothing is synced, salvaged or reviewed after it.
+    - **It stops, and says why, when:** every ticket is done (`complete`, exit 0); only human tickets are left (`waiting-human`, exit 0: `swarm tickets T-9001 --set done`); nothing is ready but tickets wait in review or are blocked (`stuck`); the project cap or a spend cap refuses the next run (`cap`; the wave's tickets go back to ready); `swarm stop --all` ran (`stopped`); a run is paused by a quota (`paused`, exit 75: `swarm resume RUN`; its tickets stay running); a wave's integrate fails its checks (`failed`: the next wave would build on unmerged code); four waves in a row finish no ticket (`no-progress`); or `--max-waves` is reached.
+diff --git a/package-lock.json b/package-lock.json
+index 1b619ce8..11db593a 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.31",
++  "version": "1.167.32",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.31",
++      "version": "1.167.32",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index 9955c6de..e21f7aa9 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.31",
++  "version": "1.167.32",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/cc-cockpit-mount.test.mjs b/tests/cc-cockpit-mount.test.mjs
+index c437ebfe..efc80fbd 100644
+--- a/tests/cc-cockpit-mount.test.mjs
++++ b/tests/cc-cockpit-mount.test.mjs
+@@ -359,3 +359,27 @@ test('stage strip colours follow the segment order', () => {
+   view.destroy();
+   globalThis.document = prevDocument;
+ });
++
++test('renderProjectCockpit view tabs use bare paths without window or defaultView location', () => {
++  const project = buildProjectCockpit(fakeBoard(), 'alpha');
++  const document = makeDocument();
++  document.defaultView = null;
++  const host = document.createElement('div');
++  document.body.appendChild(host);
++  const prevDocument = globalThis.document;
++  globalThis.document = document;
++  const view = renderProjectCockpit(host, project, {
++    document,
++    window: {},
++    now: () => NOW,
++    glitch: () => false,
++    mountRobotHead: () => ({ setState() {}, destroy() {} }),
++  });
++  const tabs = host.querySelectorAll('.tabs a');
++  assert.equal(tabs.length, 2);
++  assert.equal(tabs[0].href, '/command-center');
++  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
++  assert.equal(tabs[1].href, '/classic');
++  view.destroy();
++  globalThis.document = prevDocument;
++});
+diff --git a/tests/command-center-live-latency.test.mjs b/tests/command-center-live-latency.test.mjs
+new file mode 100644
+index 00000000..c8e1e982
+--- /dev/null
++++ b/tests/command-center-live-latency.test.mjs
+@@ -0,0 +1,87 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { createWatchServer } from '../tools/watch-server.mjs';
++import { measureLiveLatency } from '../tools/watch-live-latency.mjs';
++
++const repo = fileURLToPath(new URL('../', import.meta.url));
++const json = async (file, body) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(body)); };
++const read = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
++
++async function fixtureServer(t) {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-live-lat-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const root = path.join(dir, 'alpha');
++  const inbox = () => path.join(root, '.swarm/inbox/state.json');
++  await json(path.join(root, '.swarm/project/tickets.json'), { tickets: [{ id: 'T1', title: 'Build', status: 'running' }] });
++  await json(inbox(), { needsYou: 0 });
++  await json(path.join(root, '.swarm/runs/123/state.json'), { status: 'running', jobs: [{ status: 'running' }] });
++  async function project(id) {
++    const ledger = await read(path.join(root, '.swarm/project/tickets.json'));
++    const need = await read(inbox());
++    const state = await read(path.join(root, '.swarm/runs/123/state.json'));
++    const byStatus = {};
++    for (const ticket of ledger.tickets) byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1;
++    return {
++      id: 'alpha', name: 'alpha', root, machine: os.hostname(),
++      ledger,
++      tickets: { byStatus },
++      agents: { total: state.status === 'running' ? 1 : 0 },
++      card: { now: { buildingTickets: byStatus.running ?? 0 }, blocked: { needYou: need.needsYou } },
++    };
++  }
++  const server = createWatchServer({
++    root: dir,
++    commandCenter: true,
++    assetDir: path.join(repo, 'tools/watch-assets'),
++    deltaFile: path.join(repo, 'tools/watch-delta.mjs'),
++    getRunSnapshot: async () => null,
++    board: {
++      async snapshot() {
++        return { at: new Date().toISOString(), machine: { agents: { total: 1 } }, projects: [await project('alpha')] };
++      },
++      async project(id) { return project(id); },
++    },
++  });
++  t.after(() => server.close());
++  const { url } = await server.listen();
++  return { server, root, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
++}
++
++test('Command Center live latency updates hive counters within 3s without full snapshot refetch', { timeout: 120_000 }, async (t) => {
++  const { url, root, token } = await fixtureServer(t);
++  const result = await measureLiveLatency({
++    url,
++    profile: 'desktop',
++    projectRoot: root,
++    projectId: 'alpha',
++    builtin: 'inbox',
++    runs: 2,
++    waitMs: 60_000,
++  });
++  assert.ok(result.medianMs < 3000, `median latency ${result.medianMs}ms`);
++  assert.equal(result.fullSnapshotFetchesDuringUpdates, 0, 'SSE patch must not trigger full /api/command-center refetch');
++  assert.ok(!JSON.stringify(result).includes(token));
++  assert.ok(result.url.includes('t=…') || !result.url.includes(token));
++  t.diagnostic(`live latency ms=${result.latenciesMs.join(', ')} median=${result.medianMs}`);
++});
++
++test('watch-live-latency supports phone profile for remote-style boards', { timeout: 120_000 }, async (t) => {
++  const { url, root } = await fixtureServer(t);
++  const result = await measureLiveLatency({
++    url,
++    profile: 'phone',
++    projectRoot: root,
++    projectId: 'alpha',
++    builtin: 'inbox',
++    runs: 1,
++    waitMs: 90_000,
++  });
++  assert.equal(result.profile, 'phone');
++  assert.ok(result.medianMs < 5000, `phone median ${result.medianMs}ms`);
++});
+diff --git a/tests/command-center-live.test.mjs b/tests/command-center-live.test.mjs
+new file mode 100644
+index 00000000..6adc494e
+--- /dev/null
++++ b/tests/command-center-live.test.mjs
+@@ -0,0 +1,318 @@
++// SPDX-License-Identifier: Apache-2.0
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { createWatchServer, selectLiveFamilyRoots, LIVE_FAMILY_WINDOW_MS } from '../tools/watch-server.mjs';
++import { createBoardInputDetector } from '../tools/board-data.mjs';
++import { buildCommandCenterSnapshot, patchCommandCenterSnapshot } from '../tools/command-center-snapshot.mjs';
++
++const repo = fileURLToPath(new URL('../', import.meta.url));
++const json = async (file, body) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(body)); };
++const read = async file => JSON.parse(await fs.readFile(file, 'utf8'));
++const settle = () => new Promise(resolve => setImmediate(resolve));
++
++async function liveFamilyFixture(t) {
++  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cc-live-family-')));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const now = Date.now();
++  const old = new Date(now - 60 * 60 * 1000);
++  const roots = ['own', 'fresh', 'idle1', 'idle2'].map(id => path.join(dir, id));
++  for (const root of roots) {
++    await json(path.join(root, '.swarm/runs/100/state.json'), { status: 'done' });
++    await json(path.join(root, '.swarm/runs/200/state.json'), { status: 'done' });
++    await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
++    await fs.mkdir(path.join(root, '.swarm/inbox'), { recursive: true });
++    await fs.mkdir(path.join(root, '.swarm/orchestrator'), { recursive: true });
++    await fs.writeFile(path.join(root, '.swarm/orchestrator/events.ndjson'), '');
++    for (const relative of ['runs/100/state.json', 'runs/100', 'runs/200/state.json', 'runs/200', 'runs', 'project', 'inbox', 'orchestrator/events.ndjson']) {
++      await fs.utimes(path.join(root, '.swarm', relative), old, old);
++    }
++  }
++  await fs.utimes(path.join(roots[1], '.swarm/runs/200/state.json'), new Date(now), new Date(now));
++  return { dir, roots, now };
++}
++
++test('live family selection keeps own and recent roots while dropping idle family roots', async t => {
++  const { roots, now } = await liveFamilyFixture(t);
++  assert.equal(LIVE_FAMILY_WINDOW_MS, 10 * 60 * 1000);
++  const selected = await selectLiveFamilyRoots(roots[0], { familyRoots: roots, now: () => now });
++  assert.deepEqual(selected.map(root => path.basename(root)), ['own', 'fresh']);
++  assert.deepEqual(await selectLiveFamilyRoots(roots[0], { familyRoots: roots.slice(1), now: () => now }), selected,
++    'own root is kept even when missing from the supplied family');
++});
++
++test('touching the newest run state keeps an otherwise idle family root live', async t => {
++  const { roots, now } = await liveFamilyFixture(t);
++  const state = path.join(roots[2], '.swarm/runs/200/state.json');
++  await fs.utimes(state, new Date(now), new Date(now));
++  const selected = await selectLiveFamilyRoots(roots[0], { familyRoots: roots, now: () => now });
++  assert.deepEqual(selected.map(root => path.basename(root)), ['own', 'fresh', 'idle1']);
++});
++
++test('missing and invalid extra roots do not break live family selection', async t => {
++  const { dir, roots, now } = await liveFamilyFixture(t);
++  const invalid = path.join(dir, 'not-a-directory');
++  await fs.writeFile(invalid, '');
++  const extraRoots = [path.join(dir, 'missing'), invalid];
++  await assert.doesNotReject(selectLiveFamilyRoots(roots[0], { env: {}, extraRoots, now: () => now }));
++  assert.deepEqual(await selectLiveFamilyRoots(roots[0], { familyRoots: [roots[0], ...extraRoots], now: () => now }), [roots[0]]);
++});
++
++test('ticket, inbox and run changes push within one tick and refresh only that cached project', { timeout: 15000 }, async t => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-live-'));
++  const logs = [];
++  t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
++  t.mock.method(console, 'error', (...args) => logs.push(args.join(' ')));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const roots = ['alpha', 'beta'].map(id => path.join(dir, id));
++  const tickets = root => path.join(root, '.swarm/project/tickets.json');
++  const inbox = root => path.join(root, '.swarm/inbox/state.json');
++  const run = root => path.join(root, '.swarm/runs/123/state.json');
++  for (const root of roots) {
++    await json(tickets(root), { tickets: [{ id: 'T1', title: 'Build', status: 'running' }] });
++    await json(inbox(root), { needsYou: 0 });
++    await json(run(root), { status: 'running', jobs: [{ status: 'running' }] });
++  }
++  let builds = 0;
++  const projectReads = [];
++  async function project(id) {
++    const root = roots[id === 'alpha' ? 0 : 1];
++    const ledger = await read(tickets(root));
++    const need = await read(inbox(root));
++    const state = await read(run(root));
++    const byStatus = {};
++    for (const ticket of ledger.tickets) byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1;
++    return { id, name: id, root, machine: os.hostname(), ledger,
++      tickets: { byStatus }, agents: { total: state.status === 'running' ? 1 : 0 },
++      card: { now: { buildingTickets: byStatus.running ?? 0 }, blocked: { needYou: need.needsYou } } };
++  }
++  const server = createWatchServer({ root: dir, commandCenter: true,
++    assetDir: path.join(repo, 'tools/watch-assets'), deltaFile: path.join(repo, 'tools/watch-delta.mjs'),
++    getRunSnapshot: async () => null,
++    board: {
++      async snapshot() { builds++; return { at: new Date().toISOString(), machine: { agents: { total: 2 } }, projects: await Promise.all(['alpha', 'beta'].map(project)) }; },
++      async project(id) { projectReads.push(id); return project(id); },
++    },
++  });
++  t.after(() => server.close());
++  const { url, port } = await server.listen();
++  const origin = new URL(url).origin;
++  const auth = { 'x-watch-token': server.token };
++  const full = () => fetch(`${origin}/api/command-center`, { headers: auth });
++  const cold = await (await full()).json();
++  assert.equal(builds, 1);
++  const page = await fetch(`${origin}/command-center?t=${server.token}`);
++  const cookie = page.headers.get('set-cookie').split(';')[0];
++  assert.match(cookie, new RegExp(`^swarm_watch_${port}=`));
++  for (const suffix of ['', `?t=${server.token}`]) {
++    assert.equal((await fetch(`${origin}/api/command-center/events${suffix}`)).status, 403);
++  }
++  assert.equal((await fetch(`${origin}/api/command-center/events`, { headers: { cookie: cookie.replace(server.token, 'wrong') } })).status, 403);
++  assert.equal((await fetch(`${origin}/api/command-center/events`, { method: 'POST', headers: auth })).status, 405);
++  const head = await fetch(`${origin}/api/command-center/events`, { method: 'HEAD', headers: auth });
++  assert.equal(head.status, 200);
++  const controller = new AbortController();
++  t.after(() => controller.abort());
++  const response = await fetch(`${origin}/api/command-center/events`, { headers: { cookie }, signal: controller.signal });
++  assert.equal(response.status, 200);
++  assert.match(response.headers.get('content-type'), /^text\/event-stream/);
++  assert.equal(response.headers.get('cache-control'), 'no-store');
++  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
++  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
++  assert.match(response.headers.get('content-security-policy'), /connect-src 'self'/);
++  assert.equal(response.headers.get('content-encoding'), null);
++  assert.equal(new URL(response.url).search, '');
++  const reader = response.body.getReader();
++  let buffer = '';
++  let transcript = '';
++  async function nextChange() {
++    while (true) {
++      const end = buffer.indexOf('\n\n');
++      if (end >= 0) {
++        const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
++        if (frame.startsWith('event: cc-change\n')) return JSON.parse(frame.split('\ndata: ')[1]);
++      } else {
++        const chunk = await reader.read();
++        assert.equal(chunk.done, false);
++        const text = new TextDecoder().decode(chunk.value);
++        buffer += text; transcript += text;
++      }
++    }
++  }
++  const latencies = [];
++  async function change(write) {
++    const start = performance.now();
++    await write();
++    const event = await nextChange();
++    const latency = performance.now() - start;
++    latencies.push(Math.round(latency));
++    assert.ok(latency < 1800, `event took ${latency}ms`);
++    assert.deepEqual(event.projects, ['alpha']);
++    assert.equal(event.kind, 'cc-change');
++    assert.ok(Number.isFinite(Date.parse(event.at)));
++    return (await full()).json();
++  }
++  const done = await change(() => json(tickets(roots[0]), { tickets: [{ id: 'T1', title: 'Build', status: 'done', doneAt: new Date().toISOString() }] }));
++  assert.equal(done.projects[0].ticketCounts.done, 1);
++  assert.equal(done.hive.doneLast24h, 1);
++  assert.deepEqual(done.projects[1], cold.projects[1]);
++  const needs = await change(() => json(inbox(roots[0]), { needsYou: 2 }));
++  assert.equal(needs.stats.needsYouCount.value, 2);
++  assert.equal(needs.projects[0].needsYou.value, 2);
++  const failed = await change(() => json(run(roots[0]), { status: 'failed', jobs: [{ status: 'failed' }] }));
++  assert.equal(failed.stats.agentsLive.value, 1);
++  assert.equal(failed.projects[0].liveAgents.value, 0);
++  assert.equal(builds, 1, 'changes do not rebuild the full board');
++  assert.deepEqual(projectReads, ['alpha', 'alpha', 'alpha']);
++  const cockpit = await (await fetch(`${origin}/api/command-center/project?id=alpha`, { headers: auth })).json();
++  assert.equal(cockpit.ledger.tickets[0].status, 'done');
++  assert.equal(cockpit.card.needsYou.value, 2);
++  assert.equal(cockpit.hive.doneLast24h, 1);
++  assert.ok(!transcript.includes(server.token));
++  assert.ok(!logs.join('\n').includes(server.token));
++  assert.ok(!JSON.stringify(failed).includes(server.token));
++  t.diagnostic(`ticket/inbox/run event latency ms: ${latencies.join(', ')}; full builds: ${builds}`);
++  controller.abort();
++});
++
++test('shared lane/history changes identify their project and partial reads are retried', async t => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-shared-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const lanesFile = path.join(dir, 'lanes.json');
++  const historyFile = path.join(dir, 'history.ndjson');
++  await json(lanesFile, { slots: {} });
++  await fs.writeFile(historyFile, '');
++  const detector = createBoardInputDetector({ lanesFile, historyFile });
++  const projects = ['a', 'b'].map(id => ({ id, root: path.join(dir, id) }));
++  assert.deepEqual(await detector.scan(projects), []);
++  await json(lanesFile, { slots: { codex: [{ project: 'a', pid: 123 }] } });
++  assert.deepEqual(await detector.scan(projects), ['a']);
++  await fs.appendFile(historyFile, JSON.stringify({ projectId: 'b', kind: 'run', at: new Date().toISOString() }) + '\n');
++  assert.deepEqual(await detector.scan(projects), ['b']);
++  await fs.writeFile(lanesFile, '{');
++  await json(path.join(projects[0].root, '.swarm/project/tickets.json'), { tickets: [{ id: 'T', status: 'done' }] });
++  await assert.rejects(detector.scan(projects), SyntaxError);
++  await json(lanesFile, { slots: { codex: [{ project: 'a', pid: 123 }] } });
++  assert.deepEqual(await detector.scan(projects), ['a']);
++  assert.deepEqual(await detector.scan(projects), []);
++});
++
++test('metadata detects creation, atomic replacement, deletion and project-family ownership', async t => {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-inputs-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const detector = createBoardInputDetector();
++  const projects = [{ id: 'parent', root: dir }, { id: 'child', root: dir }];
++  assert.deepEqual(await detector.scan(projects), []);
++  const file = path.join(dir, '.swarm/runs/new/state.json');
++  await json(file, { status: 'running' });
++  assert.deepEqual((await detector.scan(projects)).sort(), ['child', 'parent']);
++  assert.deepEqual(await detector.scan(projects), []);
++  await json(`${file}.tmp`, { status: 'failed' });
++  await fs.rename(`${file}.tmp`, file);
++  assert.deepEqual((await detector.scan(projects)).sort(), ['child', 'parent']);
++  await fs.rm(file);
++  assert.deepEqual((await detector.scan(projects)).sort(), ['child', 'parent']);
++});
++
++test('incremental snapshot preserves unrelated cards and clears stale throughput/events', () => {
++  const board = { at: new Date().toISOString(), projects: [
++    { id: 'a', card: { blocked: { needYou: 1 } }, ledger: { tickets: [{ id: 'T', status: 'done', doneAt: new Date().toISOString() }] } },
++    { id: 'b', card: { blocked: { needYou: 0 } } },
++  ] };
++  const snapshot = buildCommandCenterSnapshot(board);
++  const unchanged = snapshot.projects[1];
++  board.projects[0].ledger.tickets[0].status = 'running';
++  board.projects[0].card.blocked.needYou = 0;
++  patchCommandCenterSnapshot(snapshot, board, ['a']);
++  assert.equal(snapshot.projects[1], unchanged);
++  assert.equal(snapshot.stats.needsYouCount.value, 0);
++  assert.equal(snapshot.hive.doneLast24h, undefined);
++  assert.equal(snapshot.hive.events, undefined);
++});
++
++test('SSE client patches cards, counters and cockpit without fetching a full snapshot; visibility and polling survive', async t => {
++  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
++  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++  const oldData = globalThis.CommandCenterData;
++  globalThis.CommandCenterData = { parseCommandCenterSnapshot: body => body };
++  t.after(() => { globalThis.CommandCenterData = oldData; });
++  const listeners = new Map();
++  const document = { hidden: false, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) };
++  let clears = 0;
++  const root = { replaceChildren: () => clears++, setAttribute() {} };
++  const sources = [];
++  class EventSource {
++    constructor(url) { this.url = url; this.handlers = new Map(); sources.push(this); }
++    addEventListener(name, fn) { this.handlers.set(name, fn); }
++    close() { this.closed = true; }
++    send(ids) { this.handlers.get('cc-change')({ data: JSON.stringify({ kind: 'cc-change', projects: ids }) }); }
++  }
++  const requests = [];
++  let pendingFull = null;
++  let needs = 0;
++  const card = id => ({ id, name: id, needsYou: { value: needs } });
++  const full = () => ({ at: new Date().toISOString(), projects: [card('a'), card('b')], stats: { needsYouCount: { value: needs } }, hive: { doneLast24h: needs } });
++  const project = id => ({ id, ledger: { tickets: [] }, card: card(id), stats: full().stats, hive: full().hive, at: full().at });
++  const patches = [];
++  let mountedBody;
++  const cockpitPatches = [];
++  const intervals = new Map();
++  const location = { pathname: '/command-center', search: '?t=secret-bootstrap-token' };
++  const mount = mountCommandCenter(root, { document, location, EventSource,
++    history: { pushState(_a, _b, value) { location.pathname = value; } },
++    fetchJson: async url => { requests.push(url); return url === '/api/command-center' ? pendingFull ?? full() : project(new URL(url, 'http://local').searchParams.get('id')); },
++    renderHive: (_root, _snapshot, deps) => { mountedBody = deps.rawSnapshot; return { update: (parsed, raw) => patches.push(structuredClone(raw)), destroy() {} }; },
++    loadCockpit: async () => ({ renderProjectCockpit: () => ({ update: body => cockpitPatches.push(body), destroy() {} }) }),
++    loadTour: async () => ({ maybeStartFirstVisit() {} }),
++    setTimeout: () => 1, clearTimeout() {}, setInterval: (fn, ms) => { intervals.set(ms, fn); return ms; }, clearInterval: id => intervals.delete(id),
++    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, matchMedia: () => ({ matches: true }),
++  });
++  t.after(() => mount.destroy());
++  await mount.whenReady;
++  assert.equal(sources[0].url, '/api/command-center/events');
++  const initialClears = clears;
++  needs = 3;
++  sources[0].send(['a']);
++  await settle();
++  assert.deepEqual(requests, ['/api/command-center', '/api/command-center/project?id=a']);
++  assert.equal(clears, initialClears);
++  assert.equal(patches.at(-1).projects[0].needsYou.value, 3);
++  assert.equal(mountedBody.projects[0].needsYou.value, 0, 'patches preserve the previous render data for comparison');
++  assert.equal(patches.at(-1).stats.needsYouCount.value, 3);
++  assert.equal(patches.at(-1).hive.doneLast24h, 3);
++  assert.equal(patches.at(-1).projects[1].needsYou.value, 0);
++  let finishPoll;
++  const stale = { ...full(), at: '2000-01-01T00:00:00.000Z' };
++  pendingFull = new Promise(resolve => { finishPoll = resolve; });
++  const poll = intervals.get(5000)();
++  needs = 5;
++  sources[0].send(['a']);
++  await settle();
++  finishPoll(stale);
++  await poll;
++  pendingFull = null;
++  assert.equal(patches.at(-1).stats.needsYouCount.value, 5, 'a delayed poll cannot overwrite a newer event patch');
++  location.pathname = '/command-center/project/a';
++  await mount.refresh();
++  needs = 4;
++  sources[0].send(['a']);
++  await settle();
++  assert.equal(cockpitPatches.at(-1).card.needsYou.value, 4);
++  assert.equal(requests.filter(url => url === '/api/command-center').length, 2);
++  await intervals.get(5000)();
++  assert.equal(cockpitPatches.at(-1).card.needsYou.value, 4, 'poll remains available without SSE');
++  document.hidden = true;
++  listeners.get('visibilitychange')();
++  assert.equal(sources[0].closed, true);
++  assert.equal(intervals.size, 0);
++  document.hidden = false;
++  listeners.get('visibilitychange')();
++  await settle();
++  assert.equal(sources.length, 2);
++  mount.destroy();
++  assert.equal(sources[1].closed, true);
++  assert.ok(requests.every(url => !url.includes('secret-bootstrap-token')));
++});
+diff --git a/tests/command-center-perf-budget.test.mjs b/tests/command-center-perf-budget.test.mjs
+index 057abe05..c1f5c74c 100644
+--- a/tests/command-center-perf-budget.test.mjs
++++ b/tests/command-center-perf-budget.test.mjs
+@@ -3,7 +3,9 @@ import './_isolate-config.mjs';
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import http from 'node:http';
+-import { readFile } from 'node:fs/promises';
++import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
+ import { fileURLToPath } from 'node:url';
+ import { gzipSync, gunzipSync } from 'node:zlib';
+ import { createWatchServer, watchAssetCacheControl } from '../tools/watch-server.mjs';
+@@ -255,8 +257,8 @@ async function waitForResponse(get, predicate) {
+   assert.fail('snapshot did not refresh within five seconds');
+ }
+ 
+-test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, then serves stale and refreshes', async t => {
+-  const f = await fixture(t);
++test('one snapshot shares Hive, Cockpit and arbitrary queries through idle TTL expiry until a deep refresh', async t => {
++  const f = await fixture(t, { snapshotMaxStaleMs: 120000 });
+   const responses = await Promise.all(Array.from({ length: 6 }, () => f.get('/api/command-center')));
+   assert.equal(f.reads(), 1);
+   const tag = responses[0].headers.etag;
+@@ -278,6 +280,15 @@ test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, th
+   f.advance(1);
+   const stale = await f.get('/api/command-center', { 'if-none-match': tag });
+   assert.equal(stale.status, 304, 'the first expired request still uses the old validator');
++  assert.equal(f.reads(), 1, 'idle TTL expiry does not start a full rebuild');
++  assert.deepEqual((await f.get('/api/command-center')).body, responses[0].body);
++  assert.equal((await f.get('/api/command-center/project?id=alpha', { 'if-none-match': project.headers.etag })).status, 304);
++  assert.equal(f.reads(), 1, 'idle TTL expiry does not rebuild');
++  f.advance(59999);
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
++  assert.equal(f.reads(), 1, 'idle requests do not rebuild before the deep refresh boundary');
++  f.advance(1);
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
+   const changed = await waitForResponse(() => f.get('/api/command-center', { 'if-none-match': tag }),
+     response => response.status === 200);
+   assert.notEqual(changed.headers.etag, tag);
+@@ -288,10 +299,119 @@ test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, th
+   assert.notEqual(freshProject.headers.etag, project.headers.etag);
+   f.advance(59999);
+   await f.get('/api/command-center');
+-  assert.equal(f.reads(), 2, 'one rebuild per stale period');
++  assert.equal(f.reads(), 2, 'exactly one deep rebuild renews the snapshot age');
++  t.diagnostic('full builds: cold=1, idle at 60000/119999ms=1, deep refresh at 120000ms=2');
+   assert.equal((await f.get('/api/command-center', { 'x-watch-token': '' })).status, 403);
+ });
+ 
++test('the default idle backstop waits five minutes before a full rebuild', async t => {
++  const f = await fixture(t);
++  const initial = await f.get('/api/command-center');
++  f.revise();
++  for (const elapsed of [60000, 60000, 179999]) {
++    f.advance(elapsed);
++    assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
++    await new Promise(resolve => setTimeout(resolve, 30));
++    assert.equal(f.reads(), 1, 'idle requests wait for the default five-minute backstop');
++  }
++  f.advance(1);
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'All 2');
++  assert.equal(f.reads(), 2);
++  t.diagnostic(`full builds: cold=1, idle through 299999ms=1, default deep refresh at 300000ms=${f.reads()}`);
++});
++
++test('a watched ticket change triggers a full rebuild at TTL expiry, then idle requests wait for the backstop', async t => {
++  const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-input-'));
++  t.after(() => rm(root, { recursive: true, force: true }));
++  const ticketsFile = path.join(root, '.swarm/project/tickets.json');
++  await mkdir(path.dirname(ticketsFile), { recursive: true });
++  const tickets = title => writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title, status: 'ready' }] }));
++  await tickets('Initial ticket');
++  let builds = 0;
++  let projectReads = 0;
++  const project = async () => {
++    const ledger = JSON.parse(await readFile(ticketsFile, 'utf8'));
++    return { id: 'alpha', root, name: ledger.tickets[0].title, ledger };
++  };
++  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: {
++    async snapshot() {
++      builds++;
++      return { at: '2026-10-30T12:00:00Z', projects: [{ ...await project(), name: 'Full ' + builds }] };
++    },
++    async project() { projectReads++; return project(); },
++  } });
++  await f.get('/api/command-center');
++  assert.equal(builds, 1);
++  f.advance(59999);
++  await tickets('Changed watched ticket');
++  f.timers.find(timer => timer.ms === 1000).fn();
++  const patched = await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Changed watched ticket');
++  assert.equal(projectReads, 1, 'the one-second detector applies the existing live patch');
++  assert.equal(builds, 1, 'a live patch before TTL expiry does not rebuild');
++  f.advance(1);
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': patched.headers.etag })).status, 304);
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Full 2');
++  assert.equal(builds, 2, 'the first request at the TTL starts exactly one rebuild after a detected change');
++  f.advance(60000);
++  await f.get('/api/command-center');
++  assert.equal(builds, 2, 'finishing the rebuild clears the detected-change flag');
++  f.advance(59999);
++  await f.get('/api/command-center/project?id=alpha');
++  assert.equal(builds, 2, 'unchanged watched inputs stay idle until the backstop');
++  f.advance(1);
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Full 3');
++  assert.equal(builds, 3);
++  t.diagnostic('full builds: cold=1, live patch=1, changed TTL=2, next idle TTL=2, next deep refresh=3');
++});
++
++test('a rebuild scan consumes catch-up changes without re-arming the next idle TTL', async t => {
++  const root = await mkdtemp(path.join(os.tmpdir(), 'cc-rebuild-scan-'));
++  t.after(() => rm(root, { recursive: true, force: true }));
++  const ticketsFile = path.join(root, '.swarm/project/tickets.json');
++  await mkdir(path.dirname(ticketsFile), { recursive: true });
++  const tickets = title => writeFile(ticketsFile, JSON.stringify({ tickets: [{ id: 'T1', title, status: 'ready' }] }));
++  await tickets('Initial ticket');
++  const project = async () => ({ id: 'alpha', root, name: 'Live patch', ledger: JSON.parse(await readFile(ticketsFile, 'utf8')) });
++  let builds = 0;
++  let projectReads = 0;
++  const f = await fixture(t, { snapshotMaxStaleMs: 300000, board: {
++    async snapshot() {
++      const revision = ++builds;
++      if (revision === 2) await tickets('Caught up during rebuild');
++      return { at: '2026-10-30T12:00:00Z', projects: [{ ...await project(), name: 'Full ' + revision }] };
++    },
++    async project() { projectReads++; return project(); },
++  } });
++  await f.get('/api/command-center');
++  f.advance(300000);
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Full 2');
++  assert.equal(builds, 2, 'the configured deep backstop starts one rebuild');
++  // Flush the catch-up patch without another input change.
++  f.timers.find(timer => timer.ms === 1000).fn();
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Live patch');
++  assert.equal(projectReads, 1);
++  for (const elapsed of [59999, 1, 60000]) {
++    f.advance(elapsed);
++    await f.get('/api/command-center');
++    // Let a wrongly scheduled background rebuild enter board.snapshot().
++    await new Promise(resolve => setTimeout(resolve, 30));
++    assert.equal(builds, 2, 'catch-up changes must not trigger another rebuild at or after the next 60 second TTL');
++  }
++  t.diagnostic(`full builds: cold=1, deep refresh=2, idle at next TTL and 120000ms=${builds}`);
++  await tickets('Changed after rebuild scan');
++  f.timers.find(timer => timer.ms === 1000).fn();
++  await waitForResponse(() => f.get('/api/command-center'),
++    response => JSON.parse(response.body).projects[0].name === 'Full 3');
++  assert.equal(builds, 3, 'a later detector tick re-arms refresh before the deep backstop');
++  t.diagnostic(`full builds after a later watched input change: ${builds}`);
++});
++
+ test('explicit local-only requests preserve query semantics and redaction without retaining another snapshot', async t => {
+   const f = await fixture(t);
+   const shared = await f.get('/api/command-center');
+@@ -316,14 +436,14 @@ test('stale Hive and Cockpit return without waiting for a single background rebu
+   const building = new Promise(resolve => { entered = resolve; });
+   const gate = new Promise(resolve => { release = resolve; });
+   t.after(() => release());
+-  const f = await fixture(t, { board: { snapshot: async () => {
++  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: { snapshot: async () => {
+     const revision = ++reads;
+     if (revision > 1) { entered(); await gate; }
+     return { at: '2026-10-30T12:00:00Z', projects: [{ id: 'alpha', name: 'Revision ' + revision, ledger: { tickets: [] } }] };
+   } } });
+   const initial = await f.get('/api/command-center');
+   const cockpit = await f.get('/api/command-center/project?id=alpha');
+-  f.advance(60000);
++  f.advance(120000);
+   const start = performance.now();
+   let timeout;
+   const deadline = new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('stale response waited for rebuild')), 1500); });
+@@ -343,7 +463,7 @@ test('stale Hive and Cockpit return without waiting for a single background rebu
+     response => JSON.parse(response.body).projects[0].name === 'Revision 2');
+   await f.get('/api/command-center/project?id=alpha');
+   assert.equal(reads, 2);
+-  f.advance(60000);
++  f.advance(120000);
+   const nextStale = await f.get('/api/command-center');
+   assert.equal(JSON.parse(nextStale.body).projects[0].name, 'Revision 2');
+   await waitForResponse(() => f.get('/api/command-center'),
+@@ -379,7 +499,7 @@ test('startup warm is non-blocking, shares cold requests and is ready before the
+ test('failed startup warm retries on demand; failed refresh keeps stale data and validators', async t => {
+   let reads = 0;
+   let fail = true;
+-  const f = await fixture(t, { board: { snapshot: async () => {
++  const f = await fixture(t, { snapshotMaxStaleMs: 120000, board: { snapshot: async () => {
+     reads++;
+     if (fail) throw new Error('fixture build failed');
+     return { at: '2026-10-30T12:00:00Z', projects: [] };
+@@ -391,7 +511,7 @@ test('failed startup warm retries on demand; failed refresh keeps stale data and
+   const initial = await f.get('/api/command-center');
+   assert.equal(initial.status, 200);
+   fail = true;
+-  f.advance(60000);
++  f.advance(120000);
+   assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
+   await new Promise(resolve => setTimeout(resolve, 30));
+   fail = false;
+diff --git a/tests/command-center-routes-flag.test.mjs b/tests/command-center-routes-flag.test.mjs
+index 39ef7fe9..ef67a9b7 100644
+--- a/tests/command-center-routes-flag.test.mjs
++++ b/tests/command-center-routes-flag.test.mjs
+@@ -8,8 +8,9 @@ import os from 'node:os';
+ import path from 'node:path';
+ import { fileURLToPath } from 'node:url';
+ import { createWatchServer } from '../tools/watch-server.mjs';
+-import { buildProjectCockpit } from '../tools/command-center-snapshot.mjs';
++import { buildProjectCockpit, buildCommandCenterSnapshot } from '../tools/command-center-snapshot.mjs';
+ import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
++import { renderHive } from '../tools/watch-assets/cc-hive-mount.js';
+ 
+ const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
+ 
+@@ -96,10 +97,53 @@ function makeClassList() {
+     add: (...c) => c.forEach(x => set.add(x)),
+     remove: (...c) => c.forEach(x => set.delete(x)),
+     contains: c => set.has(c),
++    toggle: (c, force) => {
++      if (force === true) set.add(c);
++      else if (force === false) set.delete(c);
++      else if (set.has(c)) set.delete(c);
++      else set.add(c);
++    },
+     toString: () => [...set].join(' '),
+   };
+ }
+ 
++const SELECTOR_TOKEN = /^(?:([a-zA-Z][\w-]*)|#([\w-]+)|\.([\w-]+)|\[([\w-]+)(?:="([^"]*)")?\])/;
++
++function parseCompound(text) {
++  const out = { tag: null, id: null, classes: [], attrs: [] };
++  let rest = text;
++  while (rest) {
++    const m = rest.match(SELECTOR_TOKEN);
++    if (!m) throw new Error(`unsupported selector: ${text}`);
++    if (m[1]) out.tag = m[1].toUpperCase();
++    else if (m[2]) out.id = m[2];
++    else if (m[3]) out.classes.push(m[3]);
++    else out.attrs.push([m[4], m[5]]);
++    rest = rest.slice(m[0].length);
++  }
++  return out;
++}
++
++function matchesCompound(node, c) {
++  if (!node || !node.classList || typeof node.getAttribute !== 'function') return false;
++  if (c.tag && node.tagName !== c.tag) return false;
++  if (c.id && node.id !== c.id) return false;
++  if (!c.classes.every(k => node.classList.contains(k))) return false;
++  return c.attrs.every(([k, v]) => {
++    const got = node.getAttribute(k);
++    return v === undefined ? got != null : got === v;
++  });
++}
++
++function matchesChain(node, chain) {
++  if (!matchesCompound(node, chain[chain.length - 1])) return false;
++  let i = chain.length - 2;
++  for (let p = node.parentNode; p && i >= 0; p = p.parentNode) {
++    if (matchesCompound(p, chain[i])) i -= 1;
++  }
++  return i < 0;
++}
++
+ function makeElement(tag) {
+   const classList = makeClassList();
+   const node = {
+@@ -107,7 +151,9 @@ function makeElement(tag) {
+     classList,
+     children: [],
+     attributes: {},
+-    style: {},
++    style: {
++      setProperty(name, value) { this[name] = value; },
++    },
+     parentNode: null,
+     hidden: false,
+     appendChild(child) {
+@@ -124,24 +170,38 @@ function makeElement(tag) {
+     getAttribute(k) { return this.attributes[k] ?? null; },
+     addEventListener() {},
+     removeEventListener() {},
++    dispatchEvent() {},
++    contains() { return false; },
++    open: false,
+     querySelectorAll(sel) {
++      const chain = sel.trim().split(/\s+/).map(parseCompound);
+       const out = [];
+       const walk = n => {
+-        if (!n?.children) return;
+-        for (const c of n.children) {
+-          if (c.classList?.contains('tabs')) {
+-            for (const child of c.children || []) {
+-              if (child.tagName === 'A') out.push(child);
+-            }
+-          }
++        for (const c of n.children || []) {
++          if (matchesChain(c, chain)) out.push(c);
+           walk(c);
+         }
+       };
+       walk(this);
+-      return sel.includes('.tabs') ? out : out;
++      return out;
+     },
+     querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; },
+     getBoundingClientRect() { return { top: 0, left: 0, bottom: 40, right: 120, width: 120, height: 40 }; },
++    offsetWidth: 270,
++    offsetHeight: 132,
++    getContext() {
++      return {
++        setTransform() {},
++        clearRect() {},
++        scale() {},
++        save() {},
++        restore() {},
++        beginPath() {},
++        arc() {},
++        fill() {},
++        stroke() {},
++      };
++    },
+   };
+   Object.defineProperty(node, 'className', {
+     get() { return classList.toString(); },
+@@ -154,6 +214,8 @@ function makeDocument(defaultView) {
+   const document = {
+     hidden: false,
+     defaultView,
++    addEventListener() {},
++    removeEventListener() {},
+     createElement: tag => {
+       const el = makeElement(tag);
+       el.ownerDocument = document;
+@@ -162,12 +224,13 @@ function makeDocument(defaultView) {
+     createTextNode: text => ({ nodeType: 3, textContent: text }),
+     createElementNS: () => makeElement('svg'),
+     fonts: { ready: Promise.resolve() },
++    body: makeElement('body'),
+   };
+   return document;
+ }
+ 
+-function assertCockpitViewTabsPreservePageToken() {
+-  const fakeLocation = { search: '?t=abc' };
++function renderCockpitTabsHarness(pageQuery) {
++  const fakeLocation = { search: `?${pageQuery}` };
+   const win = {
+     location: fakeLocation,
+     addEventListener() {},
+@@ -191,13 +254,102 @@ function assertCockpitViewTabsPreservePageToken() {
+     mountRobotHead: () => ({ setState() {}, destroy() {} }),
+   });
+   const tabs = host.querySelectorAll('.tabs a');
+-  assert.equal(tabs.length, 2);
+-  assert.equal(tabs[0].href, '/command-center?t=abc');
+-  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+-  assert.equal(tabs[1].href, '/classic?t=abc');
+-  view.destroy();
++  return { view, tabs, tokenSuffix: fakeLocation.search };
+ }
+ 
++test('cockpit view tabs preserve the page token in hrefs', async () => {
++  const on = await startWatchServer({ commandCenter: true });
++  try {
++    const { view, tabs, tokenSuffix } = renderCockpitTabsHarness(on.pageQuery());
++    assert.equal(tabs.length, 2);
++    assert.equal(tabs[0].href, `/command-center${tokenSuffix}`);
++    assert.equal(tabs[0].getAttribute('aria-current'), 'page');
++    assert.equal(tabs[1].href, `/classic${tokenSuffix}`);
++
++    const ccPage = await request({ port: on.port, reqPath: tabs[0].href });
++    assert.equal(ccPage.status, 200);
++    assert.match(ccPage.body, /command-center-boot\.js/);
++
++    const classicPage = await request({ port: on.port, reqPath: tabs[1].href });
++    assert.equal(classicPage.status, 200);
++    assert.equal(classicPage.body, BOARD_MARK);
++
++    view.destroy();
++  } finally {
++    await on.dispose();
++  }
++});
++
++test('hive view tabs preserve the page token in hrefs', async () => {
++  const on = await startWatchServer({ commandCenter: true });
++  const prevPanels = globalThis.HivePanels;
++  globalThis.HivePanels = {
++    deriveHiveView: (snap) => ({
++      at: snap.at,
++      agents: 0,
++      doneLast24h: null,
++      needs: 0,
++      projects: (snap.projects || []).map((p) => ({
++        id: p.id,
++        name: p.name || p.id,
++        cat: 'live',
++        counts: null,
++        pct: 0,
++        needs: 0,
++        agents: 0,
++        tag: 'live',
++        color: '#336699',
++        raw: p,
++        counted: 0,
++      })),
++      events: [],
++      throughput: null,
++      lanes: [],
++      prs: [],
++      totals: {},
++      spend: null,
++      machines: 0,
++      projectsTotal: (snap.projects || []).length,
++    }),
++    renderHiveDashboard: () => ({ heads: [] }),
++  };
++  try {
++    const tokenSuffix = `?${on.pageQuery()}`;
++    const win = {
++      location: { search: tokenSuffix },
++      innerWidth: 1200,
++      devicePixelRatio: 1,
++      addEventListener() {},
++      removeEventListener() {},
++      setTimeout(fn, ms) { return setTimeout(fn, ms); },
++    };
++    const document = makeDocument(win);
++    document.defaultView = win;
++    const host = document.createElement('div');
++    const snapshot = buildCommandCenterSnapshot(fakeBoardPayload(), {
++      now: Date.UTC(2026, 9, 26, 12, 0, 0),
++    });
++    const handle = renderHive(host, snapshot, {
++      document,
++      now: () => Date.UTC(2026, 9, 26, 12, 0, 0),
++      requestAnimationFrame: () => 1,
++      cancelAnimationFrame: () => {},
++      matchMedia: () => ({ matches: true }),
++      onOpenProject: () => {},
++    });
++    const tabs = host.querySelectorAll('.hive-nav a.hive-tab');
++    assert.equal(tabs.length, 3);
++    assert.equal(tabs[0].href, `/command-center${tokenSuffix}`);
++    assert.equal(tabs[0].getAttribute('aria-current'), 'page');
++    assert.equal(tabs[1].href, `/command-center/project/abc${tokenSuffix}`);
++    assert.equal(tabs[2].href, `/classic${tokenSuffix}`);
++    handle.destroy();
++  } finally {
++    globalThis.HivePanels = prevPanels;
++    await on.dispose();
++  }
++});
++
+ async function startWatchServer({ commandCenter, env } = {}) {
+   const assetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-routes-flag-'));
+   await fs.writeFile(path.join(assetDir, 'board.html'), BOARD_MARK);
+@@ -338,8 +490,6 @@ test('command center HTML and JSON when the flag is on', async () => {
+     assertSnapshotNoMoney(body, '/api/command-center');
+     assertSnapshotNoMoney(JSON.parse(cockpit.body), '/api/command-center/project');
+ 
+-    assertCockpitViewTabsPreservePageToken();
+-
+     const missing = await request({
+       port: on.port,
+       reqPath: '/api/command-center/project?id=missing',
+diff --git a/tests/command-center-soak.test.mjs b/tests/command-center-soak.test.mjs
+new file mode 100644
+index 00000000..ac488ae1
+--- /dev/null
++++ b/tests/command-center-soak.test.mjs
+@@ -0,0 +1,178 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { spawn } from 'node:child_process';
++import { createWatchServer } from '../tools/watch-server.mjs';
++import { intervalCpuPercent, runSoak, summarizeSoak } from '../tools/watch-soak.mjs';
++
++const repo = fileURLToPath(new URL('../', import.meta.url));
++const json = async (file, body) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(body)); };
++const read = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
++
++async function fixtureServer(t) {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-soak-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const root = path.join(dir, 'alpha');
++  await json(path.join(root, '.swarm/project/tickets.json'), { tickets: [{ id: 'T1', title: 'Build', status: 'running' }] });
++  await json(path.join(root, '.swarm/inbox/state.json'), { needsYou: 0 });
++  await json(path.join(root, '.swarm/runs/123/state.json'), { status: 'running', jobs: [{ status: 'running' }] });
++  async function project(id) {
++    const ledger = await read(path.join(root, '.swarm/project/tickets.json'));
++    const need = await read(path.join(root, '.swarm/inbox/state.json'));
++    const state = await read(path.join(root, '.swarm/runs/123/state.json'));
++    const byStatus = {};
++    for (const ticket of ledger.tickets) byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1;
++    return {
++      id: 'alpha', name: 'alpha', root, machine: os.hostname(),
++      ledger,
++      tickets: { byStatus },
++      agents: { total: state.status === 'running' ? 1 : 0 },
++      card: { now: { buildingTickets: byStatus.running ?? 0 }, blocked: { needYou: need.needsYou } },
++    };
++  }
++  const server = createWatchServer({
++    root: dir,
++    commandCenter: true,
++    assetDir: path.join(repo, 'tools/watch-assets'),
++    deltaFile: path.join(repo, 'tools/watch-delta.mjs'),
++    getRunSnapshot: async () => null,
++    board: {
++      async snapshot() {
++        return { at: new Date().toISOString(), machine: { agents: { total: 1 } }, projects: [await project('alpha')] };
++      },
++      async project(id) { return project(id); },
++    },
++  });
++  t.after(() => server.close());
++  const { url } = await server.listen();
++  return { server, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
++}
++
++test('watch-soak CLI usage rejects missing URL', async () => {
++  const child = spawn(process.execPath, ['tools/watch-soak.mjs'], { cwd: repo });
++  const code = await new Promise((resolve) => child.on('close', resolve));
++  assert.notEqual(code, 0);
++});
++
++test('interval CPU measures CPU seconds once over elapsed wall time', () => {
++  assert.equal(intervalCpuPercent(0, 1.5, 30_000), 5);
++  assert.equal(intervalCpuPercent(0, 0.3, 30_000), 1);
++  assert.equal(intervalCpuPercent(10, 13, 30_000), 10);
++  assert.equal(intervalCpuPercent(13, 13, 30_000), 0);
++  assert.equal(intervalCpuPercent(13, 10, 30_000), 0);
++  for (const args of [
++    [0, 1, 0], [0, 1, -1],
++    [null, 1, 30_000], [0, null, 30_000], [0, 1, null],
++    [undefined, 1, 30_000], [0, undefined, 30_000], [0, 1, undefined],
++    [NaN, 1, 30_000], [0, Infinity, 30_000], [0, 1, Infinity],
++  ]) {
++    assert.equal(intervalCpuPercent(...args), null);
++  }
++  // One build is charged to its interval; warm-up contributes no CPU value.
++  const cpuSeconds = [10, 13, 13, 13, 13];
++  const summary = summarizeSoak(cpuSeconds.map((cpu, i) => ({
++    serverCpuPercent: intervalCpuPercent(cpuSeconds[i - 1], cpu, 30_000),
++  })));
++  assert.deepEqual(summary.cpu, { first: 10, last: 0, average: 2.5, slopePerSample: -10 / 3 });
++  assert.equal(summary.thresholds.cpuAverageMax, 5);
++  assert.equal(summary.verdict, 'flat');
++});
++
++const MiB = 1024 * 1024;
++const memorySamples = (rssMb, heapMb = rssMb.map(() => 10)) => rssMb.map((rss, i) => ({
++  serverRssKb: rss * 1024,
++  pageHeapBytes: heapMb[i] * MiB,
++  serverCpuPercent: 0,
++  eventSourceConnections: 1,
++  watcherHandles: 1,
++  apiRequestCount: 1,
++}));
++
++test('soak memory medians ignore warm-up and isolated final RSS and heap spikes', () => {
++  const summary = summarizeSoak(memorySamples(
++    [95, 260, 100, 101, 99, 100, 100, 260],
++    [5, 30, 10, 11, 9, 10, 10, 30],
++  ));
++  assert.equal(summary.verdict, 'flat', summary.reasons.join('; '));
++  assert.deepEqual(summary.reasons, []);
++  assert.deepEqual(summary.memory.serverRssKb, {
++    first: 95 * 1024,
++    last: 260 * 1024,
++    average: (95 + 260 + 100 + 101 + 99 + 100 + 100 + 260) / 8 * 1024,
++    slopePerSample: (260 - 95) * 1024 / 7,
++    steadyBaselineKb: 100 * 1024,
++    steadyTailKb: 100 * 1024,
++    steadyGrowthKb: 0,
++  });
++  assert.equal(summary.memory.pageHeapBytes.first, 5 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.last, 30 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.average, 115 / 8 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.slopePerSample, 25 * MiB / 7);
++  assert.equal(summary.memory.pageHeapBytes.steadyBaselineBytes, 10 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.steadyTailBytes, 10 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 0);
++});
++
++test('soak flags sustained RSS growth above the steady-state limit', () => {
++  // A 10 MiB step must continue past 160 MiB to exceed the 64 MiB median-growth limit.
++  const summary = summarizeSoak(memorySamples([95, 260,
++    ...Array.from({ length: 17 }, (_, i) => 100 + i * 10),
++  ]));
++  assert.equal(summary.verdict, 'leak');
++  assert.equal(summary.memory.serverRssKb.steadyBaselineKb, 110 * 1024);
++  assert.equal(summary.memory.serverRssKb.steadyTailKb, 250 * 1024);
++  assert.equal(summary.memory.serverRssKb.steadyGrowthKb, 140 * 1024);
++  assert.deepEqual(summary.reasons, [`memory growth rss=${140 * 1024}kb heap=0b`]);
++});
++
++test('soak flags sustained browser heap growth independently of RSS', () => {
++  const summary = summarizeSoak(memorySamples(
++    Array(9).fill(100), [30, 30, 10, 11, 12, 13, 14, 15, 16],
++  ));
++  assert.equal(summary.verdict, 'leak');
++  assert.equal(summary.memory.pageHeapBytes.steadyBaselineBytes, 11 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.steadyTailBytes, 15 * MiB);
++  assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 4 * MiB);
++  assert.deepEqual(summary.reasons, [`memory growth rss=0kb heap=${4 * MiB}b`]);
++});
++
++test('short soaks fall back to available endpoints after warm-up', () => {
++  for (const count of [0, 1, 2, 4]) {
++    const summary = summarizeSoak(memorySamples([95, 260, 100, 101].slice(0, count)));
++    const growth = count === 2 ? 165 * 1024 : count === 4 ? 1024 : 0;
++    assert.equal(summary.verdict, count === 2 ? 'leak' : 'flat');
++    assert.equal(summary.memory.serverRssKb.steadyGrowthKb, growth);
++    assert.equal(summary.memory.pageHeapBytes.steadyGrowthBytes, 0);
++  }
++});
++
++test('short Command Center soak reports flat verdict and bounded connections', { timeout: 120_000 }, async (t) => {
++  const { url } = await fixtureServer(t);
++  const result = await runSoak({
++    url,
++    durationMs: 20_000,
++    profile: 'desktop',
++    serverPid: process.pid,
++    waitMs: 60_000,
++  });
++  assert.equal(result.verdict, 'flat', result.reasons.join('; '));
++  assert.equal(result.sampleCount, 2);
++  assert.equal(result.samples[0].serverCpuPercent, null, 'first CPU sample is a warm-up baseline');
++  const [first, last] = result.samples;
++  for (const sample of result.samples) {
++    // Process telemetry can be unavailable when ps is restricted.
++    assert.ok(sample.serverCpuSeconds === null || Number.isFinite(sample.serverCpuSeconds));
++  }
++  assert.equal(last.serverCpuPercent, intervalCpuPercent(first.serverCpuSeconds,
++    last.serverCpuSeconds, Date.parse(last.at) - Date.parse(first.at)));
++  assert.equal(result.cpu.average, last.serverCpuPercent, 'warm-up is excluded from the CPU summary');
++  assert.ok(result.connections.last != null && result.connections.last <= 4, `connections=${result.connections.last}`);
++  assert.ok(result.watchers.last == null || result.watchers.last <= 200, `watchers=${result.watchers.last}`);
++  assert.ok(!result.url.includes('t=') || result.url.includes('t=…'), 'url must redact token');
++  t.diagnostic(`soak samples=${result.sampleCount} connections=${JSON.stringify(result.connections.series)} watchers=${JSON.stringify(result.watchers.series)}`);
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index aa6b047d..94e2cec4 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.31', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.32', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.31');
++  assert.equal(pkg.version, '1.167.32');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.31/);
+-  assert.match(readme, /Install from tag v1\.167\.31/);
++  assert.match(readme, /Use Project Swarm 1\.167\.32/);
++  assert.match(readme, /Install from tag v1\.167\.32/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.31\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index acd77b7c..afd99acb 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.31', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.31 while 1.46.1 history remains', async () => {
++describe('release: 1.167.32', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.32 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.31');
+-    assert.equal(lock.version, '1.167.31');
+-    assert.equal(lock.packages[''].version, '1.167.31');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.31\n/);
++    assert.equal(pkg.version, '1.167.32');
++    assert.equal(lock.version, '1.167.32');
++    assert.equal(lock.packages[''].version, '1.167.32');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 580bf9ee..16c2d74b 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.31');
+-  assert.equal(lock.version, '1.167.31');
+-  assert.equal(lock.packages[''].version, '1.167.31');
++  assert.equal(pkg.version, '1.167.32');
++  assert.equal(lock.version, '1.167.32');
++  assert.equal(lock.packages[''].version, '1.167.32');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.31\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.32\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 800a4abd..52a5d436 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.31 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.32 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.31');
+-  assert.equal(lock.version, '1.167.31');
+-  assert.equal(lock.packages[''].version, '1.167.31');
++  assert.equal(pkg.version, '1.167.32');
++  assert.equal(lock.version, '1.167.32');
++  assert.equal(lock.packages[''].version, '1.167.32');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.31\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.31',
++    'README.md': '1.167.32',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.31',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.31',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.31',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.31',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.32',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.32',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.32',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.32',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index d04b6ab9..9f89173e 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.31', () => {
+-  test('package.json and package-lock.json are both at 1.167.31', async () => {
++describe('release: 1.167.32', () => {
++  test('package.json and package-lock.json are both at 1.167.32', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.31');
+-    assert.equal(lock.version, '1.167.31');
+-    assert.equal(lock.packages[''].version, '1.167.31');
++    assert.equal(pkg.version, '1.167.32');
++    assert.equal(lock.version, '1.167.32');
++    assert.equal(lock.packages[''].version, '1.167.32');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/merge-guard.test.mjs b/tests/merge-guard.test.mjs
+index ba0d6ab3..83774289 100644
+--- a/tests/merge-guard.test.mjs
++++ b/tests/merge-guard.test.mjs
+@@ -652,24 +652,41 @@ async function releaseFixture(t, o = {}) {
+     jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }],
+     ...o.state,
+   };
+-  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes) => {
++  const defaultManifestJob = (recordValue, runOpts = {}) => ({
++    id: recordValue?.jobId ?? 'review', agent: 'claude', model: 'claude-opus-4-6',
++    resultFile: RESULT_PATH, outputs: [RESULT_PATH], ...o.manifestJob, ...runOpts.manifestJob,
++  });
++  const defaultManifest = (recordValue, runOpts = {}) =>
++    runOpts.manifest ?? o.manifest ?? { jobs: [defaultManifestJob(recordValue, runOpts)] };
++  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes, runOpts = {}) => {
+     const dir = path.join(root, '.swarm/runs', id);
+     await fs.mkdir(dir, { recursive: true });
+     await fs.writeFile(path.join(dir, 'review-record.json'), recordBytes ?? JSON.stringify(recordValue));
+     if (stateValue !== undefined) await fs.writeFile(path.join(dir, 'state.json'), stateBytes ?? JSON.stringify(stateValue));
++    if (!runOpts.noManifest) {
++      await fs.writeFile(
++        path.join(dir, 'manifest.json'),
++        runOpts.manifestBytes ?? JSON.stringify(defaultManifest(recordValue, runOpts)),
++      );
++    }
+   };
+   // A newer unrelated sibling must never supply the selected review or its hash.
+   await writeRun('sibling', {
+     ...record, runId: 'sibling', head: HEAD_SHA, resultFile: 'coordination/review/other-review.json',
+     resultHash: '0'.repeat(64), finishedAt: T2, stateFile: '.swarm/runs/sibling/state.json',
+   }, { ...state, baseCommit: HEAD_SHA });
+-  if (!o.noRecord) await writeRun('review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes);
++  if (!o.noRecord) {
++    await writeRun(
++      'review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes,
++      { noManifest: o.noManifest, manifest: o.manifest, manifestBytes: o.manifestBytes, manifestJob: o.manifestJob },
++    );
++  }
+   for (const sibling of o.siblings ?? []) {
+     const id = sibling.id;
+     await writeRun(id, {
+       ...record, runId: id, manifest: '.swarm/runs/' + id + '/manifest.json',
+       stateFile: '.swarm/runs/' + id + '/state.json', ...sibling.record,
+-    }, { ...state, ...sibling.state });
++    }, { ...state, ...sibling.state }, undefined, undefined, sibling);
+   }
+   const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: MARKER, ...o.view };
+   const head = view.headRefOid;
+@@ -741,6 +758,16 @@ for (const [name, options, reason] of [
+   ['unsafe state path', { record: { stateFile: '../state.json' } }, 'review-run-state-mismatch'],
+   ['another run state path', { record: { stateFile: '.swarm/runs/sibling/state.json' } }, 'review-run-state-mismatch'],
+   ['mismatched run id', { record: { runId: 'sibling' } }, 'review-run-state-mismatch'],
++  ['missing manifest', { noManifest: true }, 'review-run-state-mismatch'],
++  ['malformed manifest', { manifestBytes: '{bad' }, 'review-run-state-mismatch'],
++  ['manifest job missing', { manifest: { jobs: [] } }, 'review-run-state-mismatch'],
++  ['manifest job id mismatch', { manifestJob: { id: 'other' } }, 'review-run-state-mismatch'],
++  ['manifest job not a review', { manifest: { jobs: [{ id: 'review', agent: 'claude', model: 'claude-opus-4-6', type: 'build' }] } }, 'review-run-state-mismatch'],
++  ['manifest resultFile mismatch', { manifestJob: { resultFile: 'coordination/review/other-review.json', outputs: ['coordination/review/other-review.json'] } }, 'review-run-state-mismatch'],
++  ['manifest outputs missing result file', { manifestJob: { outputs: ['src/example.mjs'] } }, 'review-run-state-mismatch'],
++  ['manifest extra outputs', { manifestJob: { outputs: [RESULT_PATH, 'src/example.mjs'] } }, 'review-run-state-mismatch'],
++  ['unsafe manifest path', { record: { manifest: '../manifest.json' } }, 'review-run-state-mismatch'],
++  ['another run manifest path', { record: { manifest: '.swarm/runs/sibling/manifest.json' } }, 'review-run-state-mismatch'],
+   ['code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'result-not-metadata-commit'],
+   ['committed record in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: RECORD_PATH }] }) }, 'result-not-metadata-commit'],
+   ['renamed code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'result-not-metadata-commit'],
+diff --git a/tests/stress-interrupt.test.mjs b/tests/stress-interrupt.test.mjs
+index 1c39c547..943a966c 100644
+--- a/tests/stress-interrupt.test.mjs
++++ b/tests/stress-interrupt.test.mjs
+@@ -37,6 +37,89 @@ function hangCommand(pidFile) {
+   ]);
+ }
+ 
++test('stress-tests.mjs rejects invalid STRESS_TEST_COMMAND without spawning a round', { timeout: 30_000 }, async t => {
++  const invalidCommands = [
++    '[malformed', '', 'null', '{}', '"node"', '42', '[]',
++    '[null]', '[42]', '[""]', '["   "]', JSON.stringify([process.execPath, 42]),
++  ];
++  for (const command of invalidCommands) {
++    await t.test(JSON.stringify(command), async () => {
++      const child = spawn(process.execPath, ['--input-type=module', '-e', `
++        import childProcess from 'node:child_process';
++        import { syncBuiltinESMExports } from 'node:module';
++        childProcess.spawn = () => {
++          console.error('unexpected round child spawn');
++          process.exit(99);
++        };
++        syncBuiltinESMExports();
++        await import(${JSON.stringify(stressScript)});
++      `], {
++        cwd: repoRoot,
++        env: { ...process.env, STRESS_ROUNDS: '1', STRESS_TEST_COMMAND: command },
++        stdio: ['ignore', 'pipe', 'pipe'],
++      });
++      let stdout = '';
++      let stderr = '';
++      child.stdout.on('data', chunk => { stdout += chunk; });
++      child.stderr.on('data', chunk => { stderr += chunk; });
++      const [code, signal] = await once(child, 'close');
++      assert.equal(code, 2, stderr);
++      assert.equal(signal, null);
++      assert.equal(stdout, '', 'invalid input must not start a round');
++      assert.equal(stderr, 'test:stress: STRESS_TEST_COMMAND must be a non-empty JSON array of strings\n');
++    });
++  }
++});
++
++test('stress-tests.mjs waits for round exit with a bounded signal fallback', { timeout: 15_000 }, async t => {
++  for (const [signal, exitCode, emitsExit] of [
++    ['SIGINT', 130, true], ['SIGTERM', 143, true], ['SIGINT', 130, false],
++  ]) {
++    await t.test(`${signal}, child ${emitsExit ? 'exits' : 'never exits'}`, async () => {
++      const child = spawn(process.execPath, ['--input-type=module', '-e', `
++        import childProcess from 'node:child_process';
++        import { EventEmitter } from 'node:events';
++        import { syncBuiltinESMExports } from 'node:module';
++        const round = new EventEmitter();
++        round.pid = 12345;
++        round.stdout = new EventEmitter();
++        round.stderr = new EventEmitter();
++        process.kill = (pid, signal) => {
++          if (pid !== -round.pid || signal !== 'SIGKILL') throw new Error('wrong group kill');
++          console.log('round group killed');
++          ${emitsExit ? `setTimeout(() => {
++            console.log('round child exiting');
++            round.emit('exit', null, 'SIGKILL');
++          }, 100);` : ''}
++          return true;
++        };
++        childProcess.spawn = () => {
++          setImmediate(() => process.emit(${JSON.stringify(signal)}));
++          return round;
++        };
++        syncBuiltinESMExports();
++        await import(${JSON.stringify(stressScript)});
++      `], {
++        cwd: repoRoot,
++        env: { ...process.env, STRESS_ROUNDS: '2', STRESS_TEST_COMMAND: hangCommand('unused') },
++        stdio: ['ignore', 'pipe', 'pipe'],
++      });
++      let stdout = '';
++      let stderr = '';
++      const started = Date.now();
++      child.stdout.on('data', chunk => { stdout += chunk; });
++      child.stderr.on('data', chunk => { stderr += chunk; });
++      const [code] = await once(child, 'close');
++      const elapsed = Date.now() - started;
++      assert.equal(code, exitCode, stderr);
++      assert.equal(stdout, `stress round 1/2: interrupted by ${signal}; killed the round process group\nround group killed\n${emitsExit ? 'round child exiting\n' : ''}`);
++      assert.equal(stderr, '');
++      if (!emitsExit) assert.ok(elapsed >= 1_900, `fallback exited too soon: ${elapsed}ms`);
++      assert.ok(elapsed < 5_000, `shutdown exceeded its bound: ${elapsed}ms`);
++    });
++  }
++});
++
+ async function runInterruptCase(signal, expectedExitCode) {
+   const pidFile = path.join(os.tmpdir(), `stress-interrupt-${process.pid}-${Date.now()}.pid`);
+   const runner = spawn(process.execPath, [stressScript], {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index 20188840..e16256d6 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.31');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.31\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.32');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/api-adapters.mjs b/tools/api-adapters.mjs
+index 8118510a..7211fbf5 100644
+--- a/tools/api-adapters.mjs
++++ b/tools/api-adapters.mjs
+@@ -462,7 +462,10 @@ async function readJson(response) {
+           if (done) break;
+           prefix = Buffer.concat([prefix, Buffer.from(value.subarray(0, 4096 - prefix.length))]);
+         }
+-      } catch { /* Preserve the HTTP status even when its error body is unreadable. */ }
++      } catch (error) {
++        console.error('[tools/api-adapters.mjs] provider error body unreadable:', error?.code ?? error?.name ?? 'failed');
++        /* Preserve the HTTP status even when its error body is unreadable. */
++      }
+       finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+     }
+     const header = response.headers?.get('retry-after');
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index d0267c19..b8c3e2d2 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -28,6 +28,101 @@ import { splitQuality } from './split-quality.mjs';
+ import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
+ import { handledForProject } from './handled.mjs';
+ import { overviewPinnedVersion } from './pins.mjs';
++import { historyFile as boardHistoryFile } from './history.mjs';
++
++/** Metadata only on idle ticks. Directory listings also catch atomic replacement/new runs.
++ * Families are resolved by the server once per full snapshot, never in this loop. */
++export function createBoardInputDetector({ env = process.env, lanesFile = path.join(lanesDir(env), 'lanes.json'), historyFile = boardHistoryFile(env) } = {}) {
++  const previous = new Map();
++  let shared = new Map();
++  const sharedProjects = new Map();
++  async function stamp(file) {
++    try { const s = await fs.stat(file); return `${s.mtimeMs}:${s.size}`; }
++    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return '-'; throw error; }
++  }
++  async function tree(dir, depth = 2) {
++    const rows = [[dir, await stamp(dir)]];
++    let entries;
++    try { entries = await fs.readdir(dir, { withFileTypes: true }); }
++    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return rows; throw error; }
++    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
++      if (entry.isSymbolicLink()) continue;
++      const file = path.join(dir, entry.name);
++      if (entry.isDirectory() && depth > 0) rows.push(...await tree(file, depth - 1));
++      else if (entry.isFile()) rows.push([file, await stamp(file)]);
++    }
++    return rows;
++  }
++  async function projectStamp(root) {
++    const base = path.join(root, '.swarm');
++    const files = ['orchestrator/events.ndjson', 'orchestrator/state.json', 'orchestrator/inbox.json', 'orchestrator/inbox.ndjson', 'inbox.json', 'inbox.ndjson', 'state.json'];
++    const rows = await Promise.all(files.map(async file => [file, await stamp(path.join(base, file))]));
++    for (const dir of ['project', 'inbox', 'handbuild']) rows.push(...await tree(path.join(base, dir)));
++    const runs = path.join(base, 'runs');
++    let entries = [];
++    try { entries = await fs.readdir(runs, { withFileTypes: true }); }
++    catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
++    rows.push(...await Promise.all(entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
++      .map(async e => [e.name, await stamp(path.join(runs, e.name, 'state.json'))])));
++    return JSON.stringify(rows);
++  }
++  return {
++    async scan(projects) {
++      const changed = new Set();
++      const nextPrevious = new Map();
++      const rootRequests = new Map();
++      await Promise.all(projects.map(async p => {
++        if (!p.root) return;
++        const key = `${p.id}:${p.root}`;
++        if (!rootRequests.has(p.root)) rootRequests.set(p.root, projectStamp(p.root));
++        const value = await rootRequests.get(p.root);
++        if (previous.has(key) && previous.get(key) !== value) changed.add(p.id);
++        nextPrevious.set(key, value);
++      }));
++      // Shared stores are parsed only when their metadata changes, then partitioned
++      // by project. A slot release must not rebuild every project on the board.
++      const nextShared = new Map();
++      const nextSharedProjects = new Map(sharedProjects);
++      for (const file of [lanesFile, historyFile]) {
++        const value = await stamp(file);
++        nextShared.set(file, value);
++        if (shared.get(file) === value) continue;
++        const byProject = new Map(projects.map(p => [p.id, []]));
++        const append = (id, value) => { if (byProject.has(id)) byProject.get(id).push(value); };
++        const body = await fs.readFile(file, 'utf8').catch(error => {
++          if (error.code === 'ENOENT') return ''; throw error;
++        });
++        if (file === lanesFile) {
++          const lanes = body ? JSON.parse(body) : {};
++          for (const [lane, slots] of Object.entries(lanes.slots ?? {})) for (const slot of slots ?? []) append(slot.project, { lane, slot });
++          for (const item of Object.values(lanes.demand ?? {})) append(item.project, item);
++        } else {
++          for (const line of body.split('\n')) {
++            try { const item = JSON.parse(line); append(item.projectId, item); } catch { /* partial append */ }
++          }
++        }
++        const next = new Map([...byProject].map(([id, rows]) => [id, JSON.stringify(rows)]));
++        const old = sharedProjects.get(file);
++        for (const [id, value] of next) if (old?.has(id) && old.get(id) !== value) changed.add(id);
++        nextSharedProjects.set(file, next);
++      }
++      // Commit fingerprints together so a partial/failed read cannot swallow a change.
++      previous.clear();
++      for (const [key, value] of nextPrevious) previous.set(key, value);
++      shared = nextShared;
++      for (const [key, value] of nextSharedProjects) sharedProjects.set(key, value);
++      return [...changed];
++    },
++  };
++}
++
++function commandCenterLedger(ledger) {
++  return { tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').map(t => ({
++    id: txt(t.id, 80), title: txt(t.title, 140), status: txt(t.status, 20),
++    stage: txt(t.stage, 40),
++    ...Object.fromEntries(['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'].filter(k => typeof t[k] === 'string' && Number.isFinite(Date.parse(t[k]))).map(k => [k, t[k]])),
++  })) };
++}
+ 
+ const DAY = 86400000;
+ export const UNTRACKED_HEADLINE_MS = 7 * DAY;
+@@ -955,6 +1050,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+     version: installedVersion,
+     pinnedVersion,
+     stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
++    ledger: commandCenterLedger(ledger),
+     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
+     liveCount: activeLiveRuns.length,
+     agents, cost,
+@@ -1296,6 +1392,11 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+     activity,
+     idleWithReady: liveIds.size === 0 && readyTickets > 0,
+     tickets, ticketCounts: ticketsOf(ledger, scope),
++    ledger: commandCenterLedger(ledger),
++    agents: agentsOf(runs, liveRunIds, now),
++    orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [] }; } })(),
++    runStream: runs.slice(-20).reverse().map(({ id, state }) => ({ id, title: txt(state.status, 30), body: `${(state.jobs ?? []).filter(job => job.status === 'complete').length}/${(state.jobs ?? []).length} jobs` })),
++    live: runs.filter(run => liveRunIds.has(run.id) && activeRunState(run.state)).map(({ id, state }) => ({ runId: id, status: state.status, jobs: (state.jobs ?? []).length, done: (state.jobs ?? []).filter(job => job.status === 'complete').length })),
+     runs: runs.slice().reverse().map(({ id, state }) => {
+       const jobs = state.jobs ?? [];
+       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
+diff --git a/tools/command-center-snapshot.mjs b/tools/command-center-snapshot.mjs
+index e40c7f46..fd8d2218 100644
+--- a/tools/command-center-snapshot.mjs
++++ b/tools/command-center-snapshot.mjs
+@@ -201,6 +201,26 @@ export function buildCommandCenterSnapshot(board, options = {}) {
+   return { at, stats, projects: cards, hive: buildHiveExtras(board, projects, nowMs) };
+ }
+ 
++/** Update only changed cards; aggregates are cheap reductions over the cached rows. */
++export function patchCommandCenterSnapshot(snapshot, board, ids) {
++  const changed = new Set(ids);
++  const projects = board.projects ?? [];
++  for (let i = 0; i < projects.length; i++) {
++    const p = projects[i];
++    if (!changed.has(p.id) || p.parentId) continue;
++    const index = snapshot.projects.findIndex(card => card.id === p.id);
++    const card = buildProjectCard(p, i);
++    if (index >= 0) snapshot.projects[index] = card;
++    else snapshot.projects.push(card);
++  }
++  snapshot.at = board.at;
++  if (snapshot.stats.agentsLive) snapshot.stats.agentsLive.value = board.machine?.agents?.total ?? 0;
++  const needs = needsYouTotal(projects);
++  if (needs !== null) snapshot.stats.needsYouCount = field('Needs you', needs, 'count', 'projects[].card.blocked.needYou', 'Owner inbox items summed across projects.');
++  snapshot.hive = buildHiveExtras(board, projects.filter(p => !p.parentId), Date.parse(board.at));
++  return snapshot;
++}
++
+ function ledgerFromProject(project) {
+   if (project?.ledger && Array.isArray(project.ledger.tickets)) return project.ledger;
+   const tickets = [];
+diff --git a/tools/merge-guard.mjs b/tools/merge-guard.mjs
+index 127fdb49..8b41d8f3 100644
+--- a/tools/merge-guard.mjs
++++ b/tools/merge-guard.mjs
+@@ -117,12 +117,30 @@ export async function releaseReviewGate(
+     record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
+   if (!opusRuns.length) return refuse('review-run-model-not-opus');
+ 
++  const expectedManifestPath = (runId) => '.swarm/runs/' + runId + '/manifest.json';
++  const manifestJobsList = (manifest) => {
++    const jobs = manifest?.jobs;
++    return isObj(jobs) ? Object.values(jobs) : jobs;
++  };
++  const manifestAttestsReview = (record, runId, resultFile, manifestJob) => {
++    if (!isObj(manifestJob) || manifestJob.id !== record.jobId) return false;
++    const reviewJob = manifestJob.type === 'review' || manifestJob.resultFile === resultFile;
++    if (!reviewJob) return false;
++    if (manifestJob.resultFile !== resultFile) return false;
++    if (!Array.isArray(manifestJob.outputs) || manifestJob.outputs.length !== 1 ||
++        manifestJob.outputs[0] !== resultFile) return false;
++    if (manifestJob.agent !== record.agent) return false;
++    if ((manifestJob.model ?? manifestJob.actualModel) !== record.model) return false;
++    return true;
++  };
++
+   const matching = [];
+   for (const { record, runId } of opusRuns) {
+     // Bind the state path to the directory containing the runner's record.
+     if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
+         typeof record.jobId !== 'string' || !record.jobId ||
+         record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
++        record.manifest !== expectedManifestPath(runId) ||
+         typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
+     try {
+       const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
+@@ -131,6 +149,12 @@ export async function releaseReviewGate(
+           !Array.isArray(jobs) || !jobs.some((job) =>
+             isObj(job) && job.id === record.jobId && job.status === 'complete' &&
+             job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
++      const manifest = JSON.parse(await fsImpl.readFile(path.join(root, record.manifest), 'utf8'));
++      const manifestJobs = manifestJobsList(manifest);
++      const manifestJob = Array.isArray(manifestJobs)
++        ? manifestJobs.find((job) => isObj(job) && job.id === record.jobId)
++        : undefined;
++      if (!manifestAttestsReview(record, runId, resultFile, manifestJob)) continue;
+       matching.push(record);
+     } catch {
+       // Missing, malformed, or unreadable local state fails closed.
+diff --git a/tools/stress-tests.mjs b/tools/stress-tests.mjs
+index b4918333..0fd09818 100644
+--- a/tools/stress-tests.mjs
++++ b/tools/stress-tests.mjs
+@@ -25,6 +25,7 @@ const MAX_BUFFER = 64 * 1024 * 1024;
+ /** @type {import('node:child_process').ChildProcess | null} */
+ let activeRoundChild = null;
+ let activeRoundIndex = 0;
++let runnerInterrupted = false;
+ 
+ function roundChildEnv() {
+   const env = { ...process.env };
+@@ -36,12 +37,18 @@ function roundChildEnv() {
+ 
+ function roundSpawnSpec() {
+   const override = process.env.STRESS_TEST_COMMAND;
+-  if (override) {
+-    const argv = JSON.parse(override);
+-    if (!Array.isArray(argv) || argv.length === 0) {
+-      throw new Error('STRESS_TEST_COMMAND must be a non-empty JSON array');
++  if (override !== undefined) {
++    try {
++      const argv = JSON.parse(override);
++      if (!Array.isArray(argv) || argv.length === 0
++        || !argv.every(arg => typeof arg === 'string') || argv[0].trim() === '') {
++        throw new Error('invalid command');
++      }
++      return { command: argv[0], args: argv.slice(1) };
++    } catch {
++      console.error('test:stress: STRESS_TEST_COMMAND must be a non-empty JSON array of strings');
++      process.exit(2);
+     }
+-    return { command: argv[0], args: argv.slice(1) };
+   }
+   return {
+     command: process.execPath,
+@@ -63,13 +70,21 @@ function killRoundProcessGroup(child) {
+ }
+ 
+ function onRunnerSignal(signal) {
++  if (runnerInterrupted) return;
++  runnerInterrupted = true;
+   const exitCode = signal === 'SIGINT' ? 130 : 143;
+   if (!activeRoundChild) {
+     process.exit(exitCode);
+   }
++  const child = activeRoundChild;
+   console.log(`stress round ${activeRoundIndex}/${rounds}: interrupted by ${signal}; killed the round process group`);
+-  killRoundProcessGroup(activeRoundChild);
+-  process.exit(exitCode);
++  // Keep the fallback alive only until the child is reaped or two seconds pass.
++  const timer = setTimeout(() => process.exit(exitCode), 2_000);
++  child.once('exit', () => {
++    clearTimeout(timer);
++    process.exit(exitCode);
++  });
++  killRoundProcessGroup(child);
+ }
+ 
+ process.on('SIGINT', () => onRunnerSignal('SIGINT'));
+@@ -108,7 +123,8 @@ function runRound(roundIndex) {
+       settled = true;
+       clearTimeout(timer);
+       if (activeRoundChild === child) activeRoundChild = null;
+-      resolve(result);
++      // Signal shutdown owns the exit; do not report failure or start another round.
++      if (!runnerInterrupted) resolve(result);
+     };
+ 
+     const timer = setTimeout(() => {
+diff --git a/tools/watch-assets/cc-hive-mount.js b/tools/watch-assets/cc-hive-mount.js
+index 51d82284..da55d329 100644
+--- a/tools/watch-assets/cc-hive-mount.js
++++ b/tools/watch-assets/cc-hive-mount.js
+@@ -726,7 +726,7 @@ export function renderHive(host, snapshot, deps) {
+   const tabs = nav;
+   const tabHive = h(doc, 'a', 'hive-tab', 'Command Center');
+   tabHive.setAttribute('aria-current', 'page');
+-  tabHive.href = '/command-center';
++  tabHive.href = `/command-center${win.location?.search || ''}`;
+   tabs.appendChild(tabHive);
+   const tabCockpit = h(doc, 'a', 'hive-tab', 'Cockpit');
+   tabCockpit.setAttribute('data-tour', 'cockpit');
+@@ -1020,7 +1020,9 @@ export function renderHive(host, snapshot, deps) {
+   function paintCards(v) {
+     const sig = JSON.stringify(v.projects.map((p) => [p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents, p.raw && p.raw.fails && p.raw.fails.value]));
+     const first = v.projects[0];
+-    const href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
++    const href = first
++      ? `/command-center/project/${encodeURIComponent(first.id)}${win.location?.search || ''}`
++      : '#';
+     if (tabCockpit.getAttribute?.('href') !== href) tabCockpit.href = href;
+     if (sig === cardSig) return false;
+     cardSig = sig;
+diff --git a/tools/watch-assets/command-center-boot.js b/tools/watch-assets/command-center-boot.js
+index 338fd53d..3dcb6c67 100644
+--- a/tools/watch-assets/command-center-boot.js
++++ b/tools/watch-assets/command-center-boot.js
+@@ -200,6 +200,10 @@ export function mountCommandCenter(root, deps = {}) {
+   let cockpitWarmTimer = null;
+   let cockpitWarmScheduled = false;
+   let warmProjectId = null;
++  let hiveBody = null;
++  let events = null;
++  let patchPending = null;
++  const changedProjects = new Set();
+   const projectCache = new Map();
+   const projectRequests = new Map();
+   const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
+@@ -236,7 +240,7 @@ export function mountCommandCenter(root, deps = {}) {
+     }
+     if (projectId && !projectRequests.has(projectId)) {
+       const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
+-        .then(body => { if (body?.id === projectId) projectCache.set(projectId, body); return body; })
++        .then(body => { if (body?.id === projectId && !(Date.parse(projectCache.get(projectId)?.at) > Date.parse(body.at))) projectCache.set(projectId, body); return body; })
+         .finally(() => projectRequests.delete(projectId));
+       projectRequests.set(projectId, pending);
+       void pending.catch(() => {});
+@@ -333,7 +337,9 @@ export function mountCommandCenter(root, deps = {}) {
+           });
+           viewKind = 'cockpit'; viewProjectId = projectId;
+         }
+-        const body = await request;
++        let body = await request;
++        const latest = projectCache.get(projectId);
++        if (Date.parse(latest?.at) > Date.parse(body?.at)) body = latest;
+         if (destroyed || sequence !== refreshSequence) return;
+         if (!body || typeof body !== 'object' || body.id !== projectId) {
+           throw new Error('Project cockpit response was missing or invalid');
+@@ -360,9 +366,11 @@ export function mountCommandCenter(root, deps = {}) {
+         return;
+       }
+ 
+-      const body = await fetchJson('/api/command-center');
++      let body = await fetchJson('/api/command-center');
++      if (Date.parse(hiveBody?.at) > Date.parse(body?.at)) body = hiveBody;
+       if (destroyed || sequence !== refreshSequence) return;
+       const snapshot = CommandCenterData.parseCommandCenterSnapshot(body);
++      hiveBody = body;
+       if (!Array.isArray(snapshot.projects) || snapshot.projects.length === 0) {
+         destroyView();
+         showShellMessage(
+@@ -439,24 +447,84 @@ export function mountCommandCenter(root, deps = {}) {
+   };
+   document.addEventListener?.('keydown', onPaletteKey);
+ 
++  async function patchProjects() {
++    if (patchPending || destroyed || document.hidden) return patchPending;
++    patchPending = (async () => {
++      while (changedProjects.size && !destroyed && !document.hidden) {
++        const ids = [...changedProjects];
++        changedProjects.clear();
++        const bodies = await Promise.all(ids.map(id => fetchJson(`/api/command-center/project?id=${encodeURIComponent(id)}`)));
++        if (destroyed || document.hidden) return;
++        for (const body of bodies) {
++          if (!body?.id || !ids.includes(body.id)) continue;
++          projectCache.set(body.id, body);
++          if (viewKind === 'cockpit' && viewProjectId === body.id) viewHandle?.update?.(body);
++          if (!hiveBody || !body.card) continue;
++          hiveBody = { ...hiveBody,
++            projects: hiveBody.projects.map(p => p.id === body.id ? body.card : p),
++            at: body.at, stats: body.stats, hive: body.hive,
++          };
++        }
++        if (hiveBody) {
++          const snapshot = resolveCommandCenterData()?.parseCommandCenterSnapshot(hiveBody);
++          // Use the existing in-place update contract; preserve the stage and its
++          // motion/visibility lifecycle, including a Hive parked behind Cockpit.
++          if (snapshot && viewKind === 'hive') viewHandle?.update?.(snapshot, hiveBody);
++          if (snapshot && parkedHive) parkedHive.handle.update(snapshot, hiveBody);
++        }
++      }
++    })().catch(() => { /* the five-second poll reconciles a failed patch */ })
++      .finally(() => { patchPending = null; });
++    return patchPending;
++  }
++
++  function syncEvents() {
++    if (destroyed || document.hidden) {
++      events?.close();
++      events = null;
++      changedProjects.clear();
++      return;
++    }
++    const EventSource = deps.EventSource || globalThis.EventSource;
++    if (events || typeof EventSource !== 'function') return;
++    // The page exchanged its bootstrap token for an HttpOnly same-origin cookie.
++    // EventSource uses that cookie; credentials never enter its URL.
++    events = new EventSource('/api/command-center/events');
++    events.addEventListener('cc-change', event => {
++      if (destroyed || document.hidden) return;
++      try {
++        const change = JSON.parse(event.data);
++        if (change.kind !== 'cc-change' || !Array.isArray(change.projects)) return;
++        for (const id of change.projects) if (typeof id === 'string' && id.length) changedProjects.add(id);
++        void patchProjects();
++      } catch { /* malformed events leave polling available */ }
++    });
++    // Native EventSource reconnects automatically; polling remains active while
++    // disconnected and in browsers without EventSource.
++  }
++
+   function syncPolling() {
+     if (refreshTimer != null) clearIntervalFn(refreshTimer);
+     refreshTimer = document.hidden ? null : setIntervalFn(() => refresh(true), REFRESH_MS);
+   }
+   const onVisibility = () => {
+     syncPolling();
++    syncEvents();
+     if (!document.hidden) void refresh(false);
+   };
+   document.addEventListener?.('visibilitychange', onVisibility);
+   syncPolling();
+ 
+-  const whenReady = refresh(false);
++  const whenReady = refresh(false).then(() => syncEvents());
+ 
+   return {
+     whenReady,
+     destroy() {
+       destroyed = true;
+       refreshSequence++;
++      events?.close();
++      events = null;
++      changedProjects.clear();
+       if (refreshTimer != null) clearIntervalFn(refreshTimer);
+       refreshTimer = null;
+       if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
+diff --git a/tools/watch-live-latency.mjs b/tools/watch-live-latency.mjs
+new file mode 100644
+index 00000000..f0d81c50
+--- /dev/null
++++ b/tools/watch-live-latency.mjs
+@@ -0,0 +1,353 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: Apache-2.0
++import { readFile, writeFile } from 'node:fs/promises';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { pathToFileURL } from 'node:url';
++import path from 'node:path';
++import fs from 'node:fs';
++import { redactUrl } from './watch-perf.mjs';
++
++const execFileAsync = promisify(execFile);
++
++function ensurePlaywrightBrowsersPath() {
++  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return;
++  const home = process.env.SWARM_REAL_HOME;
++  if (!home) return;
++  for (const candidate of [
++    path.join(home, 'Library', 'Caches', 'ms-playwright'),
++    path.join(home, '.cache', 'ms-playwright'),
++  ]) {
++    if (fs.existsSync(candidate)) {
++      process.env.PLAYWRIGHT_BROWSERS_PATH = candidate;
++      return;
++    }
++  }
++}
++
++function findBundledHeadlessShell(browsersPath) {
++  let entries;
++  try {
++    entries = fs.readdirSync(browsersPath).filter((name) => name.startsWith('chromium_headless_shell-'));
++  } catch {
++    return null;
++  }
++  for (const dir of entries.sort().reverse()) {
++    for (const leaf of ['chrome-headless-shell-mac-arm64/chrome-headless-shell', 'chrome-headless-shell-linux64/chrome-headless-shell']) {
++      const full = path.join(browsersPath, dir, leaf);
++      if (fs.existsSync(full)) return full;
++    }
++  }
++  return null;
++}
++
++function chromiumLaunchOptions() {
++  ensurePlaywrightBrowsersPath();
++  if (process.env.SWARM_CC_CHROMIUM) {
++    return { headless: true, executablePath: process.env.SWARM_CC_CHROMIUM };
++  }
++  const shell = process.env.PLAYWRIGHT_BROWSERS_PATH
++    ? findBundledHeadlessShell(process.env.PLAYWRIGHT_BROWSERS_PATH)
++    : null;
++  if (shell) return { headless: true, executablePath: shell };
++  return { headless: true };
++}
++
++async function launchChromium() {
++  ensurePlaywrightBrowsersPath();
++  const { chromium } = await import('playwright');
++  return chromium.launch(chromiumLaunchOptions());
++}
++
++const PROFILES = {
++  desktop: { width: 1440, height: 900, throttle: null },
++  phone: {
++    width: 390,
++    height: 844,
++    throttle: {
++      offline: false,
++      latency: 100,
++      downloadThroughput: Math.floor((1.6 * 1_000_000) / 8),
++      uploadThroughput: Math.floor((750 * 1_000) / 8),
++      connectionType: 'cellular4g',
++    },
++  },
++};
++
++function usage() {
++  return `Usage: node tools/watch-live-latency.mjs URL [--project-root DIR] [--project-id ID] [--change-cmd CMD] [--revert-cmd CMD] [--builtin inbox|tickets] [--runs N] [--profile desktop|phone] [--out FILE] [--wait-ms MS]`;
++}
++
++function parseArgs(argv) {
++  const positional = [];
++  const opts = {
++    out: null,
++    profile: 'desktop',
++    projectRoot: null,
++    projectId: null,
++    changeCmd: null,
++    revertCmd: null,
++    builtin: null,
++    runs: 3,
++    waitMs: 120_000,
++  };
++  for (let i = 0; i < argv.length; i++) {
++    const arg = argv[i];
++    if (arg === '--out') {
++      opts.out = argv[++i];
++      continue;
++    }
++    if (arg === '--profile') {
++      opts.profile = argv[++i];
++      if (!PROFILES[opts.profile]) throw new Error(`unknown profile ${opts.profile}`);
++      continue;
++    }
++    if (arg === '--project-root') {
++      opts.projectRoot = argv[++i];
++      continue;
++    }
++    if (arg === '--project-id') {
++      opts.projectId = argv[++i];
++      continue;
++    }
++    if (arg === '--change-cmd') {
++      opts.changeCmd = argv[++i];
++      continue;
++    }
++    if (arg === '--revert-cmd') {
++      opts.revertCmd = argv[++i];
++      continue;
++    }
++    if (arg === '--builtin') {
++      opts.builtin = argv[++i];
++      continue;
++    }
++    if (arg === '--runs') {
++      opts.runs = Number.parseInt(argv[++i], 10);
++      if (!Number.isFinite(opts.runs) || opts.runs < 1) throw new Error('--runs requires a positive integer');
++      continue;
++    }
++    if (arg === '--wait-ms') {
++      opts.waitMs = Number.parseInt(argv[++i], 10);
++      continue;
++    }
++    if (arg.startsWith('-')) throw new Error(`unknown flag ${arg}`);
++    positional.push(arg);
++  }
++  const url = positional[0];
++  if (!url) throw new Error(usage());
++  if (positional.length > 1) throw new Error(usage());
++  return { url, ...opts };
++}
++
++function median(values) {
++  const sorted = [...values].sort((a, b) => a - b);
++  const mid = Math.floor(sorted.length / 2);
++  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
++}
++
++async function runShell(cmd, cwd) {
++  await execFileAsync(process.env.SHELL || '/bin/sh', ['-c', cmd], { cwd });
++}
++
++async function readJson(file) {
++  return JSON.parse(await readFile(file, 'utf8'));
++}
++
++async function writeJson(file, body) {
++  await writeFile(file, `${JSON.stringify(body)}\n`, 'utf8');
++}
++
++export function buildBuiltinHandlers({ projectRoot, kind }) {
++  if (!projectRoot) throw new Error('--project-root is required for --builtin');
++  if (kind === 'inbox') {
++    const inbox = path.join(projectRoot, '.swarm/inbox/state.json');
++    return {
++      async prepare() {
++        const state = await readJson(inbox);
++        const base = Number(state.needsYou ?? 0);
++        return { inbox, base, next: base + 1 };
++      },
++      async apply(ctx) {
++        await writeJson(ctx.inbox, { needsYou: ctx.next });
++        return ctx.next;
++      },
++      async revert(ctx) {
++        await writeJson(ctx.inbox, { needsYou: ctx.base });
++      },
++      selectorValue: (ctx) => ctx.next,
++    };
++  }
++  if (kind === 'tickets') {
++    const tickets = path.join(projectRoot, '.swarm/project/tickets.json');
++    return {
++      async prepare() {
++        const ledger = await readJson(tickets);
++        const ticket = ledger.tickets?.[0];
++        if (!ticket) throw new Error('no tickets in ledger');
++        return { tickets, ticketId: ticket.id, baseStatus: ticket.status, nextStatus: ticket.status === 'running' ? 'done' : 'running' };
++      },
++      async apply(ctx) {
++        const ledger = await readJson(ctx.tickets);
++        ledger.tickets = ledger.tickets.map((t) => (
++          t.id === ctx.ticketId ? { ...t, status: ctx.nextStatus, doneAt: ctx.nextStatus === 'done' ? new Date().toISOString() : undefined } : t
++        ));
++        await writeJson(ctx.tickets, ledger);
++        return ctx.nextStatus;
++      },
++      async revert(ctx) {
++        const ledger = await readJson(ctx.tickets);
++        ledger.tickets = ledger.tickets.map((t) => (
++          t.id === ctx.ticketId ? { ...t, status: ctx.baseStatus, doneAt: undefined } : t
++        ));
++        await writeJson(ctx.tickets, ledger);
++      },
++      selectorValue: () => null,
++    };
++  }
++  throw new Error(`unknown builtin ${kind}`);
++}
++
++export async function waitForLiveUpdate(page, { projectId, statValue, timeoutMs }) {
++  await page.waitForFunction(({ projectId, statValue }) => {
++    if (statValue == null) return false;
++    const counters = document.querySelector('[data-k="need you"]')
++      || document.querySelector('[data-stat-key="needsYouCount"] .command-center-stat-value');
++    if (counters && counters.textContent.trim() === String(statValue)) return true;
++    if (projectId) {
++      const card = document.querySelector(`[data-project-id="${projectId}"]`);
++      const legacy = card?.querySelector('.num.needs-you');
++      if (legacy && legacy.textContent.trim() === String(statValue)) return true;
++      const pill = card?.querySelector('.hive-pill--need');
++      if (statValue > 0 && pill && pill.textContent.includes(String(statValue))) return true;
++      if (statValue === 0 && card && !pill) return true;
++    }
++    return false;
++  }, { projectId, statValue }, { timeout: timeoutMs });
++}
++
++export async function measureLiveLatency(opts) {
++  const profile = PROFILES[opts.profile];
++  const latencies = [];
++  let fullSnapshotFetches = 0;
++  let fullSnapshotFetchesDuringUpdates = 0;
++  let browser;
++
++  const useBuiltin = opts.builtin != null;
++  const builtin = useBuiltin
++    ? buildBuiltinHandlers({ projectRoot: opts.projectRoot, kind: opts.builtin })
++    : null;
++  if (!useBuiltin && (!opts.changeCmd || !opts.revertCmd)) {
++    throw new Error('provide --change-cmd and --revert-cmd or --builtin');
++  }
++
++  try {
++    browser = await launchChromium();
++    const context = await browser.newContext({
++      viewport: { width: profile.width, height: profile.height },
++    });
++    const page = await context.newPage();
++    const cdp = await context.newCDPSession(page);
++    if (profile.throttle) {
++      await cdp.send('Network.emulateNetworkConditions', profile.throttle);
++    }
++
++    const trackFullSnapshot = (request) => {
++      try {
++        const u = new URL(request.url());
++        if (u.pathname === '/api/command-center' && request.method() === 'GET') fullSnapshotFetches += 1;
++      } catch {
++        /* ignore */
++      }
++    };
++    page.on('request', trackFullSnapshot);
++
++    await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: opts.waitMs });
++    await page.waitForSelector('[data-project-id], [data-stat-key], [data-k="need you"]', { timeout: opts.waitMs });
++    await page.waitForFunction(() => {
++      const stat = document.querySelector('[data-k="need you"]')
++        || document.querySelector('[data-stat-key="needsYouCount"] .command-center-stat-value');
++      return stat && stat.textContent.trim().length > 0;
++    }, null, { timeout: opts.waitMs });
++
++    const bootFullFetches = fullSnapshotFetches;
++    fullSnapshotFetches = 0;
++
++    let ctx = useBuiltin ? await builtin.prepare() : null;
++    for (let run = 0; run < opts.runs; run += 1) {
++      const fetchBefore = fullSnapshotFetches;
++      const started = performance.now();
++      if (useBuiltin) {
++        const expected = await builtin.apply(ctx);
++        ctx.expected = expected;
++        await waitForLiveUpdate(page, {
++          projectId: opts.projectId,
++          statValue: opts.builtin === 'inbox' ? expected : null,
++          timeoutMs: opts.waitMs,
++        });
++      } else {
++        await runShell(opts.changeCmd, opts.projectRoot || process.cwd());
++        await waitForLiveUpdate(page, {
++          projectId: opts.projectId,
++          statValue: null,
++          timeoutMs: opts.waitMs,
++        });
++      }
++      latencies.push(Math.round(performance.now() - started));
++      fullSnapshotFetchesDuringUpdates += fullSnapshotFetches - fetchBefore;
++      if (useBuiltin) {
++        await builtin.revert(ctx);
++        await waitForLiveUpdate(page, {
++          projectId: opts.projectId,
++          statValue: ctx.base,
++          timeoutMs: opts.waitMs,
++        });
++        ctx = await builtin.prepare();
++      } else if (opts.revertCmd) {
++        await runShell(opts.revertCmd, opts.projectRoot || process.cwd());
++        await page.waitForTimeout(500);
++      }
++    }
++
++    return {
++      url: redactUrl(opts.url),
++      profile: opts.profile,
++      runs: opts.runs,
++      latenciesMs: latencies,
++      medianMs: Math.round(median(latencies)),
++      bootFullSnapshotFetches: bootFullFetches,
++      fullSnapshotFetchesAfterReady: fullSnapshotFetches,
++      fullSnapshotFetchesDuringUpdates,
++    };
++  } finally {
++    if (browser) await browser.close();
++  }
++}
++
++async function main() {
++  let opts;
++  try {
++    opts = parseArgs(process.argv.slice(2));
++  } catch (err) {
++    console.error(err.message || err);
++    process.exit(1);
++  }
++
++  try {
++    const result = await measureLiveLatency(opts);
++    const json = `${JSON.stringify(result, null, 2)}\n`;
++    if (opts.out) {
++      await writeFile(opts.out, json, 'utf8');
++    } else {
++      process.stdout.write(json);
++    }
++    console.error(`live latency median=${result.medianMs}ms runs=${result.latenciesMs.join(',')} fullAfterReady=${result.fullSnapshotFetchesAfterReady}`);
++  } catch (err) {
++    console.error(String(err.message || err).replace(/([?&])t=([^&#]*)/gi, '$1t=…'));
++    process.exit(1);
++  }
++}
++
++if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
++  await main();
++}
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index 74583dac..10c72032 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -2,7 +2,7 @@
+ import http from 'node:http';
+ import os from 'node:os';
+ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+-import { readdir, readFile, stat } from 'node:fs/promises';
++import { readdir, readFile, realpath, stat } from 'node:fs/promises';
+ import path from 'node:path';
+ import { gzipSync } from 'node:zlib';
+ import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+@@ -10,11 +10,11 @@ import { stripMoney } from './watch-cli.mjs';
+ import { versionInfo } from './server-version.mjs';
+ import { screenshotPath } from './watch-gallery.mjs';
+ import { listProjects, projectsFile } from './projects.mjs';
+-import { projectFamilyRoots } from './board-data.mjs';
++import { projectFamilyRoots, createBoardInputDetector } from './board-data.mjs';
+ import { runDetail, RUN_ID } from './board-run.mjs';
+ import { listPeers } from './board-peers.mjs';
+ import { commandCenterEnabled } from './command-center-flag.mjs';
+-import { buildCommandCenterSnapshot, buildProjectCockpit } from './command-center-snapshot.mjs';
++import { buildCommandCenterSnapshot, buildProjectCockpit, patchCommandCenterSnapshot } from './command-center-snapshot.mjs';
+ 
+ const TYPES = {
+   '.html': 'text/html; charset=utf-8',
+@@ -40,6 +40,36 @@ const SECURITY = {
+ };
+ 
+ const IDLE_FINISHED_MS = 10000;
++export const LIVE_FAMILY_WINDOW_MS = 10 * 60 * 1000;
++
++/** Bound the one-second detector; full snapshots still read the complete family. */
++export async function selectLiveFamilyRoots(root, {
++  env = process.env,
++  extraRoots = [],
++  now = Date.now,
++  windowMs = LIVE_FAMILY_WINDOW_MS,
++  familyRoots = null,
++} = {}) {
++  const roots = familyRoots ?? await projectFamilyRoots(root, { env, extraRoots });
++  const own = await realpath(root).catch(() => path.resolve(root));
++  const candidates = [...new Set([own, ...roots])];
++  const cutoff = now() - windowMs;
++  async function recent(file) {
++    try { return (await stat(file)).mtimeMs >= cutoff; }
++    catch { return false; }
++  }
++  const keep = await Promise.all(candidates.map(async member => {
++    if (member === own) return true;
++    const base = path.join(member, '.swarm');
++    const runs = path.join(base, 'runs');
++    const entries = await readdir(runs, { withFileTypes: true }).catch(() => []);
++    const newest = entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort().at(-1);
++    const files = [runs, path.join(base, 'project'), path.join(base, 'inbox'), path.join(base, 'orchestrator/events.ndjson')];
++    if (newest) files.push(path.join(runs, newest), path.join(runs, newest, 'state.json'));
++    return (await Promise.all(files.map(recent))).some(Boolean);
++  }));
++  return candidates.filter((_, index) => keep[index]);
++}
+ 
+ export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
+ 
+@@ -539,6 +569,7 @@ export function createWatchServer(opts) {
+     ownerActions,
+     env = process.env,
+     commandCenter = commandCenterEnabled(env),
++    snapshotMaxStaleMs = 300000,
+   } = opts;
+ 
+   const token = fixedToken ?? randomBytes(24).toString('hex');
+@@ -547,7 +578,13 @@ export function createWatchServer(opts) {
+   // Cockpit responses are derived on demand and never retained in a map.
+   let commandCenterCache = null;
+   let snapshotPending = null;
++  let changesSinceFullRebuild = false;
+   const snapshotTtlMs = 60000;
++  const ccStreams = new Set();
++  const inputDetector = createBoardInputDetector({ env });
++  let inputProjects = [];
++  const dirtyProjects = new Set();
++  let changesPending = null;
+   let server = null;
+   let port = 0;
+   let url = null;
+@@ -631,13 +668,30 @@ export function createWatchServer(opts) {
+   function rebuildCommandCenterSnapshot() {
+     if (snapshotPending) return snapshotPending;
+     snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
++      if (changesPending) await changesPending.catch(() => {});
+       const snapshot = await board.snapshot({ local: false, redact: true });
+       const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
++      const model = buildCommandCenterSnapshot(payload);
+       const entry = {
+         payload,
+-        encoded: representation(JSON.stringify(buildCommandCenterSnapshot(payload)), 'application/json'),
++        model,
++        encoded: representation(JSON.stringify(model), 'application/json'),
+         at: now(),
+       };
++      const localProjects = (payload.projects ?? []).filter(p => p.root && (!p.machine || p.machine === os.hostname()));
++      const extraRoots = localProjects.map(p => p.root);
++      inputProjects = (await Promise.all(localProjects.map(async p => {
++        const roots = await selectLiveFamilyRoots(p.root, { env, extraRoots });
++        return roots.map(root => ({ id: p.id, root }));
++      }))).flat();
++      const currentIds = new Set((payload.projects ?? []).map(p => p.id));
++      for (const id of dirtyProjects) if (!currentIds.has(id)) dirtyProjects.delete(id);
++      for (const id of await inputDetector.scan(inputProjects)) {
++        dirtyProjects.add(id);
++        changesSinceFullRebuild = true;
++      }
++      // The catch-up scan belongs to this snapshot; later detector ticks re-arm refresh.
++      changesSinceFullRebuild = false;
+       // A build finishing after shutdown must not keep the snapshot alive.
+       if (!closed) commandCenterCache = entry;
+       return entry;
+@@ -645,6 +699,60 @@ export function createWatchServer(opts) {
+     return snapshotPending;
+   }
+ 
++  function writeCommandCenterEvent(res, chunk) {
++    // Bound slow readers rather than letting an abandoned tab retain a queue.
++    if (res.writableLength > MAX_STREAM_BUFFER_BYTES) { ccStreams.delete(res); res.end(); return; }
++    try { res.write(chunk); } catch { ccStreams.delete(res); res.destroy(); }
++  }
++
++  function updateCommandCenterChanges() {
++    if (changesPending) return changesPending;
++    changesPending = (async () => {
++      if (!commandCenterCache || snapshotPending || closed) return;
++      for (const id of await inputDetector.scan(inputProjects)) {
++        dirtyProjects.add(id);
++        changesSinceFullRebuild = true;
++      }
++      if (!dirtyProjects.size) return;
++      const ids = [...dirtyProjects];
++      const entry = commandCenterCache;
++      const rows = await Promise.all(ids.map(async id => {
++        const detail = await board.project(id);
++        if (!detail) throw new Error('project unavailable');
++        const old = entry.payload.projects.find(p => p.id === id);
++        // The classic project API carries ticket rows plus a separate summary.
++        return { ...old, ...detail, tickets: Array.isArray(detail.tickets) ? detail.ticketCounts ?? old.tickets : detail.tickets ?? old.tickets };
++      }));
++      if (closed || commandCenterCache !== entry) return;
++      for (const row of rows) {
++        const index = entry.payload.projects.findIndex(p => p.id === row.id);
++        entry.payload.projects[index] = stripMoney(row);
++      }
++      const agents = entry.payload.machine?.agents;
++      if (agents) agents.total = entry.payload.projects.reduce((total, p) => total + (p.agents?.total ?? 0), 0);
++      entry.payload.at = new Date(now()).toISOString();
++      patchCommandCenterSnapshot(entry.model, entry.payload, ids);
++      entry.encoded = representation(JSON.stringify(entry.model), 'application/json');
++      for (const id of ids) dirtyProjects.delete(id);
++      const event = sse('cc-change', { kind: 'cc-change', projects: ids, at: entry.payload.at });
++      for (const res of ccStreams) writeCommandCenterEvent(res, event);
++    })().finally(() => { changesPending = null; });
++    return changesPending;
++  }
++
++  function openCommandCenterEvents(res, method) {
++    const headers = { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' };
++    if (method === 'HEAD') return send(res, method, 200, headers, '');
++    if (closed) return sendText(res, method, 503, 'shutting down');
++    if (ccStreams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
++    res.writeHead(200, headers);
++    res.socket?.setTimeout(0);
++    res.socket?.setKeepAlive(true);
++    ccStreams.add(res);
++    res.on('close', () => { ccStreams.delete(res); lastActivity = now(); });
++    writeCommandCenterEvent(res, ': connected\n\n');
++  }
++
+   async function commandCenterResponse(pathname, q) {
+     // Preserve the explicit local-only view without retaining another snapshot
+     // or allowing query strings to grow cache keys. Normal dashboard requests
+@@ -662,11 +770,17 @@ export function createWatchServer(opts) {
+       entry = await rebuildCommandCenterSnapshot();
+     } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
+       // Keep the previous snapshot available, including its validators, while
+-      // a single refresh runs. A failure leaves it available for the next retry.
+-      if (!snapshotPending) void rebuildCommandCenterSnapshot().catch(() => {});
++      // a single refresh runs. Idle inputs get a deeper refresh at the backstop.
++      // A failure leaves the cached entry and its validators available.
++      if (!snapshotPending && (changesSinceFullRebuild || now() - entry.at >= snapshotMaxStaleMs)) {
++        void rebuildCommandCenterSnapshot().catch(() => {});
++      }
+     }
++    if (changesPending) await changesPending.catch(() => {});
+     if (!pathname.endsWith('/project')) return entry;
+-    const result = buildProjectCockpit(entry.payload, String(q.id ?? ''));
++    const id = String(q.id ?? '');
++    const cockpit = buildProjectCockpit(entry.payload, id);
++    const result = cockpit && { ...cockpit, card: entry.model.projects.find(p => p.id === id), stats: entry.model.stats, hive: entry.model.hive, at: entry.model.at };
+     return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
+   }
+ 
+@@ -795,7 +909,7 @@ export function createWatchServer(opts) {
+     const isBoard = pathname === '/board' && typeof getBoard === 'function';
+     const commandCenterPath = commandCenter && board ? parseCommandCenterPath(pathname) : null;
+     const isCommandCenter = commandCenterPath !== null;
+-    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project');
++    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project' || pathname === '/api/command-center/events');
+     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
+     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
+     const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
+@@ -843,6 +957,7 @@ export function createWatchServer(opts) {
+       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
+     }
+     if (isCommandCenterApi) {
++      if (pathname === '/api/command-center/events') return openCommandCenterEvents(res, method);
+       const q = Object.fromEntries(u.searchParams);
+       delete q.t;
+       const { encoded } = await commandCenterResponse(pathname, q);
+@@ -927,6 +1042,10 @@ export function createWatchServer(opts) {
+     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+     heartbeatTimer = null;
+     streamManager.close();
++    for (const res of ccStreams) res.end();
++    ccStreams.clear();
++    inputProjects = [];
++    dirtyProjects.clear();
+     commandCenterCache = null;
+     if (server && server.listening) {
+       await new Promise((resolve) => {
+@@ -941,7 +1060,9 @@ export function createWatchServer(opts) {
+     if (ticking || closed) return;
+     ticking = true;
+     try {
++      if (commandCenter && board) await updateCommandCenterChanges();
+       const t = now();
++      if (ccStreams.size > 0) lastActivity = t;
+       if (streamManager.size > 0) {
+         await streamManager.pushUpdates();
+       } else {
+@@ -988,7 +1109,10 @@ export function createWatchServer(opts) {
+       tick();
+     }, 1000);
+     if (timer && typeof timer.unref === 'function') timer.unref();
+-    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
++    heartbeatTimer = setIntervalFn(() => {
++      streamManager.writeHeartbeats();
++      for (const res of ccStreams) writeCommandCenterEvent(res, ': ping\n\n');
++    }, Math.max(1, heartbeatMs));
+     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+     // Warm once without delaying listen or retrying in an idle loop. A cold
+     // request can join this attempt; a later request can retry a failed build.
+diff --git a/tools/watch-soak.mjs b/tools/watch-soak.mjs
+new file mode 100644
+index 00000000..1eeaa876
+--- /dev/null
++++ b/tools/watch-soak.mjs
+@@ -0,0 +1,433 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: Apache-2.0
++import { writeFile } from 'node:fs/promises';
++import fs from 'node:fs';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { pathToFileURL } from 'node:url';
++import path from 'node:path';
++import { parsePsTime, redactUrl } from './watch-perf.mjs';
++
++const execFileAsync = promisify(execFile);
++
++function ensurePlaywrightBrowsersPath() {
++  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return;
++  const home = process.env.SWARM_REAL_HOME;
++  if (!home) return;
++  for (const candidate of [
++    path.join(home, 'Library', 'Caches', 'ms-playwright'),
++    path.join(home, '.cache', 'ms-playwright'),
++  ]) {
++    if (fs.existsSync(candidate)) {
++      process.env.PLAYWRIGHT_BROWSERS_PATH = candidate;
++      return;
++    }
++  }
++}
++
++function findBundledHeadlessShell(browsersPath) {
++  let entries;
++  try {
++    entries = fs.readdirSync(browsersPath).filter((name) => name.startsWith('chromium_headless_shell-'));
++  } catch {
++    return null;
++  }
++  for (const dir of entries.sort().reverse()) {
++    for (const leaf of ['chrome-headless-shell-mac-arm64/chrome-headless-shell', 'chrome-headless-shell-linux64/chrome-headless-shell']) {
++      const full = path.join(browsersPath, dir, leaf);
++      if (fs.existsSync(full)) return full;
++    }
++  }
++  return null;
++}
++
++function chromiumLaunchOptions() {
++  ensurePlaywrightBrowsersPath();
++  if (process.env.SWARM_CC_CHROMIUM) {
++    return { headless: true, executablePath: process.env.SWARM_CC_CHROMIUM };
++  }
++  const shell = process.env.PLAYWRIGHT_BROWSERS_PATH
++    ? findBundledHeadlessShell(process.env.PLAYWRIGHT_BROWSERS_PATH)
++    : null;
++  if (shell) return { headless: true, executablePath: shell };
++  return { headless: true };
++}
++
++async function launchChromium() {
++  ensurePlaywrightBrowsersPath();
++  const { chromium } = await import('playwright');
++  return chromium.launch(chromiumLaunchOptions());
++}
++
++const PROFILES = {
++  desktop: { width: 1440, height: 900, throttle: null },
++  phone: {
++    width: 390,
++    height: 844,
++    throttle: {
++      offline: false,
++      latency: 100,
++      downloadThroughput: Math.floor((1.6 * 1_000_000) / 8),
++      uploadThroughput: Math.floor((750 * 1_000) / 8),
++      connectionType: 'cellular4g',
++    },
++  },
++};
++
++const SAMPLE_INTERVAL_MS = 30_000;
++// Allow the one-time build peak while bounding a real leak (~1 MB/minute over an hour).
++const RSS_GROWTH_KB_MAX = 65536;
++const HEAP_GROWTH_BYTES_MAX = 2 * 1024 * 1024;
++const CPU_AVG_MAX = 5;
++
++function usage() {
++  return `Usage: node tools/watch-soak.mjs URL [--minutes N] [--seconds N] [--out FILE] [--profile desktop|phone] [--server-pid PID] [--wait-ms MS]`;
++}
++
++function parseArgs(argv) {
++  const positional = [];
++  const opts = {
++    out: null,
++    profile: 'desktop',
++    serverPid: null,
++    minutes: 60,
++    seconds: null,
++    waitMs: 120_000,
++  };
++  for (let i = 0; i < argv.length; i++) {
++    const arg = argv[i];
++    if (arg === '--out') {
++      opts.out = argv[++i];
++      if (!opts.out) throw new Error('--out requires a path');
++      continue;
++    }
++    if (arg === '--profile') {
++      opts.profile = argv[++i];
++      if (!PROFILES[opts.profile]) throw new Error(`unknown profile ${opts.profile}`);
++      continue;
++    }
++    if (arg === '--server-pid') {
++      const raw = argv[++i];
++      opts.serverPid = Number.parseInt(raw, 10);
++      if (!Number.isFinite(opts.serverPid)) throw new Error('--server-pid requires a number');
++      continue;
++    }
++    if (arg === '--minutes') {
++      opts.minutes = Number.parseFloat(argv[++i]);
++      if (!Number.isFinite(opts.minutes)) throw new Error('--minutes requires a number');
++      continue;
++    }
++    if (arg === '--seconds') {
++      opts.seconds = Number.parseFloat(argv[++i]);
++      if (!Number.isFinite(opts.seconds)) throw new Error('--seconds requires a number');
++      continue;
++    }
++    if (arg === '--wait-ms') {
++      opts.waitMs = Number.parseInt(argv[++i], 10);
++      if (!Number.isFinite(opts.waitMs)) throw new Error('--wait-ms requires a number');
++      continue;
++    }
++    if (arg.startsWith('-')) throw new Error(`unknown flag ${arg}`);
++    positional.push(arg);
++  }
++  const url = positional[0];
++  if (!url) throw new Error(usage());
++  if (positional.length > 1) throw new Error(usage());
++  const durationMs = opts.seconds != null
++    ? Math.max(0, opts.seconds * 1000)
++    : Math.max(0, opts.minutes * 60 * 1000);
++  return { url, durationMs, ...opts };
++}
++
++function sleep(ms) {
++  return new Promise((resolve) => setTimeout(resolve, ms));
++}
++
++function seriesStats(values) {
++  if (!values.length) {
++    return { first: null, last: null, average: null, slopePerSample: null };
++  }
++  const first = values[0];
++  const last = values.at(-1);
++  const average = values.reduce((a, b) => a + b, 0) / values.length;
++  const slopePerSample = values.length > 1 ? (last - first) / (values.length - 1) : 0;
++  return { first, last, average, slopePerSample };
++}
++
++function steadyMemoryStats(values, steadyValues) {
++  // Short runs can end before warm-up finishes; retain their available endpoints.
++  const available = steadyValues.length ? steadyValues : values;
++  const medianOfThree = (window) => [...window].sort((a, b) => a - b)[1];
++  const baseline = available.length >= 6 ? medianOfThree(available.slice(0, 3)) : available[0] ?? null;
++  const tail = available.length >= 6 ? medianOfThree(available.slice(-3)) : available.at(-1) ?? null;
++  return { baseline, tail, growth: baseline == null ? 0 : Math.round(tail - baseline) };
++}
++
++function monotonicGrowth(values) {
++  if (values.length < 2) return false;
++  let grew = 0;
++  for (let i = 1; i < values.length; i++) {
++    if (values[i] > values[i - 1]) grew += 1;
++    else if (values[i] < values[i - 1]) return false;
++  }
++  return grew > 0 && grew === values.length - 1;
++}
++
++/** Average CPU over one wall-clock interval; missing baselines are warm-up samples. */
++export function intervalCpuPercent(prevCpuSeconds, nextCpuSeconds, elapsedMs) {
++  if (!Number.isFinite(prevCpuSeconds) || !Number.isFinite(nextCpuSeconds)
++    || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
++  return Math.max(0, (nextCpuSeconds - prevCpuSeconds) / (elapsedMs / 1000) * 100);
++}
++
++export function summarizeSoak(samples) {
++  const rssKb = samples.map((s) => s.serverRssKb).filter((v) => v != null);
++  // The first sample only establishes cumulative CPU time and is excluded here.
++  const cpu = samples.map((s) => s.serverCpuPercent).filter((v) => v != null);
++  const heap = samples.map((s) => s.pageHeapBytes).filter((v) => v != null);
++  const connections = samples.map((s) => s.eventSourceConnections);
++  const watchers = samples.map((s) => s.watcherHandles);
++  const apiRequests = samples.map((s) => s.apiRequestCount);
++
++  // Page load and the first build are warm-up, regardless of telemetry availability.
++  const steadySamples = samples.slice(2);
++  const rssTrend = steadyMemoryStats(rssKb,
++    steadySamples.map((s) => s.serverRssKb).filter((v) => v != null));
++  const heapTrend = steadyMemoryStats(heap,
++    steadySamples.map((s) => s.pageHeapBytes).filter((v) => v != null));
++  const memory = {
++    serverRssKb: {
++      ...seriesStats(rssKb),
++      steadyBaselineKb: rssTrend.baseline,
++      steadyTailKb: rssTrend.tail,
++      steadyGrowthKb: rssTrend.growth,
++    },
++    pageHeapBytes: {
++      ...seriesStats(heap),
++      steadyBaselineBytes: heapTrend.baseline,
++      steadyTailBytes: heapTrend.tail,
++      steadyGrowthBytes: heapTrend.growth,
++    },
++  };
++  const cpuStats = seriesStats(cpu);
++
++  const rssGrowth = rssTrend.growth;
++  const heapGrowth = heapTrend.growth;
++  const cpuOk = cpuStats.average == null || cpuStats.average < CPU_AVG_MAX;
++  const memoryOk = rssGrowth <= RSS_GROWTH_KB_MAX && heapGrowth <= HEAP_GROWTH_BYTES_MAX;
++  const connectionsOk = !monotonicGrowth(connections);
++  const watchersOk = !monotonicGrowth(watchers);
++  const flat = memoryOk && cpuOk && connectionsOk && watchersOk;
++
++  return {
++    memory,
++    cpu: cpuStats,
++    connections: { series: connections, ...seriesStats(connections) },
++    watchers: { series: watchers, ...seriesStats(watchers) },
++    apiRequests: { series: apiRequests, ...seriesStats(apiRequests) },
++    thresholds: {
++      rssGrowthKbMax: RSS_GROWTH_KB_MAX,
++      heapGrowthBytesMax: HEAP_GROWTH_BYTES_MAX,
++      cpuAverageMax: CPU_AVG_MAX,
++    },
++    verdict: flat ? 'flat' : 'leak',
++    reasons: [
++      ...(memoryOk ? [] : [`memory growth rss=${rssGrowth}kb heap=${heapGrowth}b`]),
++      ...(cpuOk ? [] : [`cpu average ${cpuStats.average?.toFixed(2)}%`]),
++      ...(connectionsOk ? [] : ['monotonic EventSource connection growth']),
++      ...(watchersOk ? [] : ['monotonic file-watcher handle growth']),
++    ],
++  };
++}
++
++async function readServerRssCpu(pid) {
++  try {
++    const { stdout } = await execFileAsync('ps', ['-o', 'rss=,time=', '-p', String(pid)]);
++    const line = stdout.trim();
++    const match = /^(\d+)\s+(\S+)$/.exec(line);
++    if (!match) return { rssKb: null, cpuSeconds: null };
++    return { rssKb: Number.parseInt(match[1], 10), cpuSeconds: parsePsTime(match[2]) };
++  } catch {
++    return { rssKb: null, cpuSeconds: null };
++  }
++}
++
++async function readWatcherHandles(pid) {
++  try {
++    const { stdout } = await execFileAsync('lsof', ['-nP', `-p${pid}`]);
++    return stdout.split('\n').filter((line) => line.includes('.swarm/')).length;
++  } catch {
++    return null;
++  }
++}
++
++async function readPageHeap(cdp) {
++  try {
++    const usage = await cdp.send('Runtime.getHeapUsage');
++    if (usage && Number.isFinite(usage.usedSize)) return usage.usedSize;
++  } catch {
++    /* fall through */
++  }
++  try {
++    const { metrics } = await cdp.send('Performance.getMetrics');
++    const hit = metrics.find((m) => m.name === 'JSHeapUsedSize');
++    return hit ? hit.value : null;
++  } catch {
++    return null;
++  }
++}
++
++async function countServerTcpConnections(pid) {
++  try {
++    const { stdout } = await execFileAsync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP']);
++    return stdout.split('\n').filter((line) => line.includes('ESTABLISHED')).length;
++  } catch {
++    return null;
++  }
++}
++
++export async function runSoak(opts) {
++  const profile = PROFILES[opts.profile];
++  const samples = [];
++  let apiRequestCount = 0;
++  let browser;
++  const startedAt = Date.now();
++
++  try {
++    browser = await launchChromium();
++    const context = await browser.newContext({
++      viewport: { width: profile.width, height: profile.height },
++    });
++    await context.addInitScript(() => {
++      const Native = globalThis.EventSource;
++      if (typeof Native !== 'function') return;
++      let open = 0;
++      globalThis.__swarmCcEventSourcesOpen = () => open;
++      globalThis.EventSource = class extends Native {
++        constructor(...args) {
++          super(...args);
++          open += 1;
++          this.addEventListener('error', () => {
++            if (!this.__swarmCountedClosed) {
++              this.__swarmCountedClosed = true;
++              open = Math.max(0, open - 1);
++            }
++          });
++        }
++        close() {
++          if (!this.__swarmCountedClosed) {
++            this.__swarmCountedClosed = true;
++            open = Math.max(0, open - 1);
++          }
++          return super.close();
++        }
++      };
++    });
++    const page = await context.newPage();
++    const cdp = await context.newCDPSession(page);
++    await cdp.send('Runtime.enable');
++    await cdp.send('Performance.enable');
++    if (profile.throttle) {
++      await cdp.send('Network.emulateNetworkConditions', profile.throttle);
++    }
++
++    page.on('response', (response) => {
++      try {
++        const path = new URL(response.url()).pathname;
++        if (path.startsWith('/api/')) apiRequestCount += 1;
++      } catch {
++        /* ignore */
++      }
++    });
++
++    await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: opts.waitMs });
++    await page.waitForSelector('[data-project-id], [data-stat-key], [data-k="need you"]', { timeout: opts.waitMs });
++    await page.waitForTimeout(Math.min(5000, Math.max(1000, opts.durationMs / 4)));
++
++    async function takeSample() {
++      const server = opts.serverPid != null ? await readServerRssCpu(opts.serverPid) : { rssKb: null, cpuSeconds: null };
++      const at = new Date().toISOString();
++      const previous = samples.at(-1);
++      const cpuPercent = intervalCpuPercent(previous?.serverCpuSeconds, server.cpuSeconds,
++        Date.parse(at) - Date.parse(previous?.at));
++      const heap = await readPageHeap(cdp);
++      const eventSources = await page.evaluate(() => (
++        typeof globalThis.__swarmCcEventSourcesOpen === 'function' ? globalThis.__swarmCcEventSourcesOpen() : 0
++      ));
++      const tcpConnections = opts.serverPid != null ? await countServerTcpConnections(opts.serverPid) : null;
++      const watcherHandles = opts.serverPid != null ? await readWatcherHandles(opts.serverPid) : null;
++      return {
++        at,
++        serverRssKb: server.rssKb,
++        serverCpuSeconds: server.cpuSeconds,
++        serverCpuPercent: cpuPercent,
++        pageHeapBytes: heap,
++        eventSourceConnections: eventSources,
++        tcpConnections,
++        watcherHandles,
++        apiRequestCount,
++      };
++    }
++
++    samples.push(await takeSample());
++    let elapsed = 0;
++    while (elapsed + SAMPLE_INTERVAL_MS <= opts.durationMs) {
++      await sleep(SAMPLE_INTERVAL_MS);
++      elapsed += SAMPLE_INTERVAL_MS;
++      samples.push(await takeSample());
++    }
++    const remaining = opts.durationMs - elapsed;
++    if (remaining > 0 && samples.length === 1) {
++      await sleep(remaining);
++      samples.push(await takeSample());
++    }
++
++    const summary = summarizeSoak(samples);
++    const result = {
++      url: redactUrl(opts.url),
++      profile: opts.profile,
++      durationSeconds: opts.durationMs / 1000,
++      sampleIntervalSeconds: SAMPLE_INTERVAL_MS / 1000,
++      sampleCount: samples.length,
++      samples,
++      ...summary,
++      elapsedMs: Date.now() - startedAt,
++    };
++    return result;
++  } finally {
++    if (browser) await browser.close();
++  }
++}
++
++async function main() {
++  let opts;
++  try {
++    opts = parseArgs(process.argv.slice(2));
++  } catch (err) {
++    console.error(err.message || err);
++    process.exit(1);
++  }
++
++  try {
++    const result = await runSoak(opts);
++    const json = `${JSON.stringify(result, null, 2)}\n`;
++    if (opts.out) {
++      await writeFile(opts.out, json, 'utf8');
++    } else {
++      process.stdout.write(json);
++    }
++    if (result.verdict !== 'flat') {
++      process.exitCode = 1;
++      console.error(`soak verdict=${result.verdict} ${result.reasons.join('; ')}`);
++    } else {
++      console.error(`soak verdict=flat samples=${result.sampleCount} connections=${result.connections.last} watchers=${result.watchers.last}`);
++    }
++  } catch (err) {
++    console.error(String(err.message || err).replace(/([?&])t=([^&#]*)/gi, '$1t=…'));
++    process.exit(1);
++  }
++}
++
++if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
++  await main();
++}
