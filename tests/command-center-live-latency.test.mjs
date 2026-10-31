@@ -53,9 +53,28 @@ async function fixtureServer(t) {
   return { server, root, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
 }
 
+function isPlaywrightChromiumMissing(err) {
+  const msg = String(err?.message ?? err);
+  return msg.includes("Executable doesn't exist")
+    || msg.includes('Looks like Playwright was just installed')
+    || msg.includes('browserType.launch');
+}
+
+async function withPlaywrightChromium(t, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isPlaywrightChromiumMissing(err)) {
+      t.skip('playwright chromium not installed');
+      return;
+    }
+    throw err;
+  }
+}
+
 test('Command Center live latency updates hive counters within 3s without full snapshot refetch', { timeout: 120_000 }, async (t) => {
   const { url, root, token } = await fixtureServer(t);
-  const result = await measureLiveLatency({
+  const result = await withPlaywrightChromium(t, () => measureLiveLatency({
     url,
     profile: 'desktop',
     projectRoot: root,
@@ -63,7 +82,8 @@ test('Command Center live latency updates hive counters within 3s without full s
     builtin: 'inbox',
     runs: 2,
     waitMs: 60_000,
-  });
+  }));
+  if (result == null) return;
   assert.ok(result.medianMs < 3000, `median latency ${result.medianMs}ms`);
   assert.equal(result.fullSnapshotFetchesDuringUpdates, 0, 'SSE patch must not trigger full /api/command-center refetch');
   assert.ok(!JSON.stringify(result).includes(token));
@@ -73,7 +93,7 @@ test('Command Center live latency updates hive counters within 3s without full s
 
 test('watch-live-latency supports phone profile for remote-style boards', { timeout: 120_000 }, async (t) => {
   const { url, root } = await fixtureServer(t);
-  const result = await measureLiveLatency({
+  const result = await withPlaywrightChromium(t, () => measureLiveLatency({
     url,
     profile: 'phone',
     projectRoot: root,
@@ -81,7 +101,8 @@ test('watch-live-latency supports phone profile for remote-style boards', { time
     builtin: 'inbox',
     runs: 1,
     waitMs: 90_000,
-  });
+  }));
+  if (result == null) return;
   assert.equal(result.profile, 'phone');
   assert.ok(result.medianMs < 5000, `phone median ${result.medianMs}ms`);
 });

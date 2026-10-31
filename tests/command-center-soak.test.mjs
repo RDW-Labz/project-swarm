@@ -53,6 +53,25 @@ async function fixtureServer(t) {
   return { server, url: `${new URL(url).origin}/command-center?t=${server.token}&tour=0`, token: server.token };
 }
 
+function isPlaywrightChromiumMissing(err) {
+  const msg = String(err?.message ?? err);
+  return msg.includes("Executable doesn't exist")
+    || msg.includes('Looks like Playwright was just installed')
+    || msg.includes('browserType.launch');
+}
+
+async function withPlaywrightChromium(t, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isPlaywrightChromiumMissing(err)) {
+      t.skip('playwright chromium not installed');
+      return;
+    }
+    throw err;
+  }
+}
+
 test('watch-soak CLI usage rejects missing URL', async () => {
   const child = spawn(process.execPath, ['tools/watch-soak.mjs'], { cwd: repo });
   const code = await new Promise((resolve) => child.on('close', resolve));
@@ -153,13 +172,14 @@ test('short soaks fall back to available endpoints after warm-up', () => {
 
 test('short Command Center soak reports flat verdict and bounded connections', { timeout: 120_000 }, async (t) => {
   const { url } = await fixtureServer(t);
-  const result = await runSoak({
+  const result = await withPlaywrightChromium(t, () => runSoak({
     url,
     durationMs: 20_000,
     profile: 'desktop',
     serverPid: process.pid,
     waitMs: 60_000,
-  });
+  }));
+  if (result == null) return;
   assert.equal(result.verdict, 'flat', result.reasons.join('; '));
   assert.equal(result.sampleCount, 2);
   assert.equal(result.samples[0].serverCpuPercent, null, 'first CPU sample is a warm-up baseline');
