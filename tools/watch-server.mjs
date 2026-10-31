@@ -10,7 +10,7 @@ import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
-import { projectFamilyRoots } from './board-data.mjs';
+import { projectFamilyRoots, boardSnapshotInputIdentity } from './board-data.mjs';
 import { runDetail, RUN_ID } from './board-run.mjs';
 import { listPeers } from './board-peers.mjs';
 import { commandCenterEnabled } from './command-center-flag.mjs';
@@ -544,7 +544,9 @@ export function createWatchServer(opts) {
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
   const commandCenterCache = new Map();
-  const snapshotTtlMs = 2000;
+  // The dashboard polls every five seconds. Validate files before reusing a
+  // representation so the longer TTL never hides a ticket/run change.
+  const snapshotTtlMs = 6000;
   let server = null;
   let port = 0;
   let url = null;
@@ -630,7 +632,10 @@ export function createWatchServer(opts) {
     const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
     let entry = commandCenterCache.get(key);
     if (entry?.pending) return entry.pending;
-    if (entry && now() - entry.at < snapshotTtlMs) return entry;
+    if (entry && now() >= entry.at && now() - entry.at < snapshotTtlMs) {
+      const identity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
+      if (identity === entry.inputIdentity) return entry;
+    }
     if (!entry) {
       // Bound memory even when clients supply many distinct query arguments.
       if (commandCenterCache.size >= 128) commandCenterCache.delete(commandCenterCache.keys().next().value);
@@ -639,8 +644,10 @@ export function createWatchServer(opts) {
     }
     entry.pending = (async () => {
       const snapshot = await board.snapshot(options);
+      entry.projects = (snapshot?.projects ?? []).filter(project => typeof project.root === 'string');
+      const inputIdentity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
       const revision = snapshot?.version == null && snapshot?.at == null
-        ? null : JSON.stringify([snapshot.version, snapshot.at]);
+        ? null : JSON.stringify([snapshot.version, snapshot.at, inputIdentity]);
       if (!entry.encoded || revision == null || revision !== entry.revision) {
         const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
         const result = pathname.endsWith('/project')
@@ -649,6 +656,7 @@ export function createWatchServer(opts) {
         entry.revision = revision;
       }
       entry.at = now();
+      entry.inputIdentity = inputIdentity;
       return entry;
     })();
     try { return await entry.pending; }
