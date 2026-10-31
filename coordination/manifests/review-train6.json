@@ -12,9 +12,7 @@
       "context": [
         "coordination/review/train6.diff",
         "tools/watch-perf.mjs",
-        "tests/command-center-perf-budget.test.mjs",
-        "package.json",
-        "CHANGELOG.md"
+        "tests/command-center-perf-budget.test.mjs"
       ],
       "outputs": [
         "coordination/review/train6-review.json"
