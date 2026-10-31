@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createWatchServer } from '../tools/watch-server.mjs';
+import { createWatchServer, selectLiveFamilyRoots, LIVE_FAMILY_WINDOW_MS } from '../tools/watch-server.mjs';
 import { createBoardInputDetector } from '../tools/board-data.mjs';
 import { buildCommandCenterSnapshot, patchCommandCenterSnapshot } from '../tools/command-center-snapshot.mjs';
 
@@ -13,6 +13,53 @@ const repo = fileURLToPath(new URL('../', import.meta.url));
 const json = async (file, body) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(body)); };
 const read = async file => JSON.parse(await fs.readFile(file, 'utf8'));
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+async function liveFamilyFixture(t) {
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cc-live-family-')));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const now = Date.now();
+  const old = new Date(now - 60 * 60 * 1000);
+  const roots = ['own', 'fresh', 'idle1', 'idle2'].map(id => path.join(dir, id));
+  for (const root of roots) {
+    await json(path.join(root, '.swarm/runs/100/state.json'), { status: 'done' });
+    await json(path.join(root, '.swarm/runs/200/state.json'), { status: 'done' });
+    await fs.mkdir(path.join(root, '.swarm/project'), { recursive: true });
+    await fs.mkdir(path.join(root, '.swarm/inbox'), { recursive: true });
+    await fs.mkdir(path.join(root, '.swarm/orchestrator'), { recursive: true });
+    await fs.writeFile(path.join(root, '.swarm/orchestrator/events.ndjson'), '');
+    for (const relative of ['runs/100/state.json', 'runs/100', 'runs/200/state.json', 'runs/200', 'runs', 'project', 'inbox', 'orchestrator/events.ndjson']) {
+      await fs.utimes(path.join(root, '.swarm', relative), old, old);
+    }
+  }
+  await fs.utimes(path.join(roots[1], '.swarm/runs/200/state.json'), new Date(now), new Date(now));
+  return { dir, roots, now };
+}
+
+test('live family selection keeps own and recent roots while dropping idle family roots', async t => {
+  const { roots, now } = await liveFamilyFixture(t);
+  assert.equal(LIVE_FAMILY_WINDOW_MS, 10 * 60 * 1000);
+  const selected = await selectLiveFamilyRoots(roots[0], { familyRoots: roots, now: () => now });
+  assert.deepEqual(selected.map(root => path.basename(root)), ['own', 'fresh']);
+  assert.deepEqual(await selectLiveFamilyRoots(roots[0], { familyRoots: roots.slice(1), now: () => now }), selected,
+    'own root is kept even when missing from the supplied family');
+});
+
+test('touching the newest run state keeps an otherwise idle family root live', async t => {
+  const { roots, now } = await liveFamilyFixture(t);
+  const state = path.join(roots[2], '.swarm/runs/200/state.json');
+  await fs.utimes(state, new Date(now), new Date(now));
+  const selected = await selectLiveFamilyRoots(roots[0], { familyRoots: roots, now: () => now });
+  assert.deepEqual(selected.map(root => path.basename(root)), ['own', 'fresh', 'idle1']);
+});
+
+test('missing and invalid extra roots do not break live family selection', async t => {
+  const { dir, roots, now } = await liveFamilyFixture(t);
+  const invalid = path.join(dir, 'not-a-directory');
+  await fs.writeFile(invalid, '');
+  const extraRoots = [path.join(dir, 'missing'), invalid];
+  await assert.doesNotReject(selectLiveFamilyRoots(roots[0], { env: {}, extraRoots, now: () => now }));
+  assert.deepEqual(await selectLiveFamilyRoots(roots[0], { familyRoots: [roots[0], ...extraRoots], now: () => now }), [roots[0]]);
+});
 
 test('ticket, inbox and run changes push within one tick and refresh only that cached project', { timeout: 15000 }, async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-live-'));

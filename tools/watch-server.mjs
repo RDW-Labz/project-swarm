@@ -2,7 +2,7 @@
 import http from 'node:http';
 import os from 'node:os';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
@@ -40,6 +40,36 @@ const SECURITY = {
 };
 
 const IDLE_FINISHED_MS = 10000;
+export const LIVE_FAMILY_WINDOW_MS = 10 * 60 * 1000;
+
+/** Bound the one-second detector; full snapshots still read the complete family. */
+export async function selectLiveFamilyRoots(root, {
+  env = process.env,
+  extraRoots = [],
+  now = Date.now,
+  windowMs = LIVE_FAMILY_WINDOW_MS,
+  familyRoots = null,
+} = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(root, { env, extraRoots });
+  const own = await realpath(root).catch(() => path.resolve(root));
+  const candidates = [...new Set([own, ...roots])];
+  const cutoff = now() - windowMs;
+  async function recent(file) {
+    try { return (await stat(file)).mtimeMs >= cutoff; }
+    catch { return false; }
+  }
+  const keep = await Promise.all(candidates.map(async member => {
+    if (member === own) return true;
+    const base = path.join(member, '.swarm');
+    const runs = path.join(base, 'runs');
+    const entries = await readdir(runs, { withFileTypes: true }).catch(() => []);
+    const newest = entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort().at(-1);
+    const files = [runs, path.join(base, 'project'), path.join(base, 'inbox'), path.join(base, 'orchestrator/events.ndjson')];
+    if (newest) files.push(path.join(runs, newest), path.join(runs, newest, 'state.json'));
+    return (await Promise.all(files.map(recent))).some(Boolean);
+  }));
+  return candidates.filter((_, index) => keep[index]);
+}
 
 export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
 
@@ -649,7 +679,7 @@ export function createWatchServer(opts) {
       const localProjects = (payload.projects ?? []).filter(p => p.root && (!p.machine || p.machine === os.hostname()));
       const extraRoots = localProjects.map(p => p.root);
       inputProjects = (await Promise.all(localProjects.map(async p => {
-        const roots = await projectFamilyRoots(p.root, { ownOnly: Boolean(p.parentId || p.worktree), env, extraRoots });
+        const roots = await selectLiveFamilyRoots(p.root, { env, extraRoots });
         return roots.map(root => ({ id: p.id, root }));
       }))).flat();
       const currentIds = new Set((payload.projects ?? []).map(p => p.id));
