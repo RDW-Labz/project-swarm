@@ -37,6 +37,89 @@ function hangCommand(pidFile) {
   ]);
 }
 
+test('stress-tests.mjs rejects invalid STRESS_TEST_COMMAND without spawning a round', { timeout: 30_000 }, async t => {
+  const invalidCommands = [
+    '[malformed', '', 'null', '{}', '"node"', '42', '[]',
+    '[null]', '[42]', '[""]', '["   "]', JSON.stringify([process.execPath, 42]),
+  ];
+  for (const command of invalidCommands) {
+    await t.test(JSON.stringify(command), async () => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', `
+        import childProcess from 'node:child_process';
+        import { syncBuiltinESMExports } from 'node:module';
+        childProcess.spawn = () => {
+          console.error('unexpected round child spawn');
+          process.exit(99);
+        };
+        syncBuiltinESMExports();
+        await import(${JSON.stringify(stressScript)});
+      `], {
+        cwd: repoRoot,
+        env: { ...process.env, STRESS_ROUNDS: '1', STRESS_TEST_COMMAND: command },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      const [code, signal] = await once(child, 'close');
+      assert.equal(code, 2, stderr);
+      assert.equal(signal, null);
+      assert.equal(stdout, '', 'invalid input must not start a round');
+      assert.equal(stderr, 'test:stress: STRESS_TEST_COMMAND must be a non-empty JSON array of strings\n');
+    });
+  }
+});
+
+test('stress-tests.mjs waits for round exit with a bounded signal fallback', { timeout: 15_000 }, async t => {
+  for (const [signal, exitCode, emitsExit] of [
+    ['SIGINT', 130, true], ['SIGTERM', 143, true], ['SIGINT', 130, false],
+  ]) {
+    await t.test(`${signal}, child ${emitsExit ? 'exits' : 'never exits'}`, async () => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', `
+        import childProcess from 'node:child_process';
+        import { EventEmitter } from 'node:events';
+        import { syncBuiltinESMExports } from 'node:module';
+        const round = new EventEmitter();
+        round.pid = 12345;
+        round.stdout = new EventEmitter();
+        round.stderr = new EventEmitter();
+        process.kill = (pid, signal) => {
+          if (pid !== -round.pid || signal !== 'SIGKILL') throw new Error('wrong group kill');
+          console.log('round group killed');
+          ${emitsExit ? `setTimeout(() => {
+            console.log('round child exiting');
+            round.emit('exit', null, 'SIGKILL');
+          }, 100);` : ''}
+          return true;
+        };
+        childProcess.spawn = () => {
+          setImmediate(() => process.emit(${JSON.stringify(signal)}));
+          return round;
+        };
+        syncBuiltinESMExports();
+        await import(${JSON.stringify(stressScript)});
+      `], {
+        cwd: repoRoot,
+        env: { ...process.env, STRESS_ROUNDS: '2', STRESS_TEST_COMMAND: hangCommand('unused') },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      const started = Date.now();
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      const [code] = await once(child, 'close');
+      const elapsed = Date.now() - started;
+      assert.equal(code, exitCode, stderr);
+      assert.equal(stdout, `stress round 1/2: interrupted by ${signal}; killed the round process group\nround group killed\n${emitsExit ? 'round child exiting\n' : ''}`);
+      assert.equal(stderr, '');
+      if (!emitsExit) assert.ok(elapsed >= 1_900, `fallback exited too soon: ${elapsed}ms`);
+      assert.ok(elapsed < 5_000, `shutdown exceeded its bound: ${elapsed}ms`);
+    });
+  }
+});
+
 async function runInterruptCase(signal, expectedExitCode) {
   const pidFile = path.join(os.tmpdir(), `stress-interrupt-${process.pid}-${Date.now()}.pid`);
   const runner = spawn(process.execPath, [stressScript], {
