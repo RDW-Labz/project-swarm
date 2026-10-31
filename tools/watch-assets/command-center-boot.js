@@ -2,10 +2,7 @@
 /** Command Center page boot: Hive ↔ Project Cockpit, polling, palette, first-visit tour. */
 
 import { renderHive } from './cc-hive-mount.js';
-import { renderProjectCockpit } from './cc-cockpit-mount.js';
 import { ccNavigate, ccPathFromState, ccStateFromPath, mountCcRouter } from './cc-router.js';
-import { createCommandPalette } from './command-palette.js';
-import { maybeStartFirstVisit } from './cc-tour.js';
 
 const REFRESH_MS = 5000;
 const ROOT_TOUR_ATTR = 'data-tour';
@@ -43,7 +40,7 @@ function defaultFetchJson(url, deps) {
   const authValue = readWatchToken(loc);
   return fetchImpl(url, {
     method: 'GET',
-    cache: 'no-store',
+    cache: 'no-cache',
     headers: { 'x-watch-token': authValue },
   }).then((res) => {
     if (!res || !res.ok) {
@@ -165,6 +162,7 @@ export function mountCommandCenter(root, deps = {}) {
   const cancelAnimationFrame = deps.cancelAnimationFrame || globalThis.cancelAnimationFrame.bind(globalThis);
   const matchMedia = deps.matchMedia || globalThis.matchMedia.bind(globalThis);
   const storage = deps.storage || defaultStorage();
+  const renderHiveView = deps.renderHive || renderHive;
 
   let navState = ccStateFromPath(location?.pathname || '/command-center');
   let viewHandle = null;
@@ -174,6 +172,15 @@ export function mountCommandCenter(root, deps = {}) {
   let refreshTimer = null;
   let tourStarted = false;
   let popHandler = null;
+  let destroyed = false;
+  let refreshSequence = 0;
+  let cockpitModule = null;
+  let paletteModule = null;
+  let projectsForPalette = [];
+  let idleTour = null;
+  const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
+  const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
+  const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
 
   function destroyView() {
     if (viewHandle && typeof viewHandle.destroy === 'function') {
@@ -185,9 +192,11 @@ export function mountCommandCenter(root, deps = {}) {
   }
 
   function syncPalette(projects) {
+    projectsForPalette = projects;
+    if (!paletteModule) return;
     const items = paletteItemsFromProjects(projects);
     if (palette) palette.unbind();
-    palette = createCommandPalette({
+    palette = paletteModule.createCommandPalette({
       doc: document,
       items,
       platform: globalThis.navigator?.platform,
@@ -213,21 +222,26 @@ export function mountCommandCenter(root, deps = {}) {
     void refresh(false);
   }
 
-  function startTourIfNeeded() {
+  async function startTourIfNeeded() {
     if (tourStarted) return;
     tourStarted = true;
-    try {
-      maybeStartFirstVisit({
-        doc: document,
-        storage,
-        userId: 'anonymous',
-      });
-    } catch {
-      // Tour is optional when the shell DOM is not fully featured (tests, partial loads).
+    const start = async () => {
+      if (destroyed) return;
+      try {
+        const { maybeStartFirstVisit } = await loadTour();
+        if (!destroyed) maybeStartFirstVisit({ doc: document, storage, userId: 'anonymous' });
+      } catch { /* optional decoration in a partial DOM */ }
+    };
+    if (typeof globalThis.requestIdleCallback === 'function') {
+      idleTour = globalThis.requestIdleCallback(() => { idleTour = null; void start(); });
+    } else {
+      await start();
     }
   }
 
   async function refresh(isPoll) {
+    if (destroyed || (isPoll && document.hidden)) return;
+    const sequence = ++refreshSequence;
     const CommandCenterData = resolveCommandCenterData();
     if (!CommandCenterData) {
       showShellMessage(root, document, 'Command Center data layer is not loaded yet.');
@@ -240,7 +254,9 @@ export function mountCommandCenter(root, deps = {}) {
       if (navState.view === 'cockpit') {
         const projectId = navState.projectId;
         const url = `/api/command-center/project?id=${encodeURIComponent(projectId)}`;
-        const body = await fetchJson(url);
+        // Fetch data and code together, then paint the shell before optional decorations load.
+        const [body, cockpit] = await Promise.all([fetchJson(url), cockpitModule ||= loadCockpit()]);
+        if (destroyed || sequence !== refreshSequence) return;
         if (!body || typeof body !== 'object' || body.id !== projectId) {
           throw new Error('Project cockpit response was missing or invalid');
         }
@@ -249,20 +265,24 @@ export function mountCommandCenter(root, deps = {}) {
         } else {
           destroyView();
           clearHost(root);
-          viewHandle = renderProjectCockpit(root, body, {
+          viewHandle = cockpit.renderProjectCockpit(root, body, {
             document,
             now,
             onBack: goBack,
+            requestAnimationFrame,
+            cancelAnimationFrame,
+            matchMedia,
           });
           viewKind = 'cockpit';
           viewProjectId = projectId;
         }
         applyTourMarkers(root, 'cockpit');
-        startTourIfNeeded();
+        await startTourIfNeeded();
         return;
       }
 
       const body = await fetchJson('/api/command-center');
+      if (destroyed || sequence !== refreshSequence) return;
       const snapshot = CommandCenterData.parseCommandCenterSnapshot(body);
       if (!Array.isArray(snapshot.projects) || snapshot.projects.length === 0) {
         destroyView();
@@ -279,6 +299,7 @@ export function mountCommandCenter(root, deps = {}) {
       const hiveDeps = {
         document,
         now,
+        rawSnapshot: body,
         requestAnimationFrame,
         cancelAnimationFrame,
         matchMedia,
@@ -286,17 +307,18 @@ export function mountCommandCenter(root, deps = {}) {
       };
 
       if (viewKind === 'hive' && viewHandle?.update) {
-        viewHandle.update(snapshot);
+        viewHandle.update(snapshot, body);
       } else {
         destroyView();
         clearHost(root);
-        viewHandle = renderHive(root, snapshot, hiveDeps);
+        viewHandle = renderHiveView(root, snapshot, hiveDeps);
         viewKind = 'hive';
         viewProjectId = null;
       }
       applyTourMarkers(root, 'hive');
-      startTourIfNeeded();
+      await startTourIfNeeded();
     } catch (err) {
+      if (destroyed || sequence !== refreshSequence) return;
       destroyView();
       const detail = err && err.message ? String(err.message) : 'Unknown error';
       showShellMessage(
@@ -313,17 +335,44 @@ export function mountCommandCenter(root, deps = {}) {
   };
   globalThis.addEventListener?.('popstate', popHandler);
 
-  refreshTimer = setIntervalFn(() => {
-    void refresh(true);
-  }, REFRESH_MS);
+  const onPaletteKey = async (event) => {
+    if (palette || event.key?.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+    event.preventDefault?.();
+    try {
+      paletteModule = await loadPalette();
+      if (destroyed) return;
+      syncPalette(projectsForPalette);
+      const KeyboardEvent = document.defaultView?.KeyboardEvent || globalThis.KeyboardEvent;
+      if (KeyboardEvent) document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'k', ctrlKey: event.ctrlKey, metaKey: event.metaKey, bubbles: true,
+      }));
+    } catch { /* search can be retried */ }
+  };
+  document.addEventListener?.('keydown', onPaletteKey);
+
+  function syncPolling() {
+    if (refreshTimer != null) clearIntervalFn(refreshTimer);
+    refreshTimer = document.hidden ? null : setIntervalFn(() => refresh(true), REFRESH_MS);
+  }
+  const onVisibility = () => {
+    syncPolling();
+    if (!document.hidden) void refresh(false);
+  };
+  document.addEventListener?.('visibilitychange', onVisibility);
+  syncPolling();
 
   const whenReady = refresh(false);
 
   return {
     whenReady,
     destroy() {
+      destroyed = true;
+      refreshSequence++;
       if (refreshTimer != null) clearIntervalFn(refreshTimer);
       refreshTimer = null;
+      if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
+      document.removeEventListener?.('visibilitychange', onVisibility);
+      document.removeEventListener?.('keydown', onPaletteKey);
       if (palette) palette.unbind();
       palette = null;
       if (popHandler) globalThis.removeEventListener?.('popstate', popHandler);

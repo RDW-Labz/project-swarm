@@ -5,9 +5,7 @@
  * comes from the live snapshot (/api/command-center) and nothing is simulated.
  */
 
-import { mountRobotHead, setAnimationPaused } from './robot-head.js';
 import { glitch, glitchFailure } from './cc-glitch.js';
-import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
 
 const TAU = Math.PI * 2;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -538,7 +536,8 @@ export function renderHive(host, snapshot, deps) {
   let destroyed = false;
   let hiveVisible = true;
   let parsedRef = snapshot;
-  let rawRef = null;
+  let rawRef = deps.rawSnapshot || null;
+  let hasSuppliedRaw = deps.rawSnapshot != null;
   let rawBusy = false;
   let view = null;
   let prevView = null;
@@ -549,6 +548,24 @@ export function renderHive(host, snapshot, deps) {
   let cardCleanups = [];
   let counterEls = null;
   let stageGeom = [];
+  let robotApi = null;
+  let robotPromise = null;
+
+  function loadRobots() {
+    if (!robotPromise) {
+      robotPromise = new Promise(resolve => {
+        const load = () => resolve(destroyed ? null : (deps.loadRobot || (() => import('./robot-head.js')))());
+        // The Hive shell, cards and data paint before the optional 3D renderer is requested.
+        if (typeof win.requestIdleCallback === 'function') win.requestIdleCallback(load);
+        else later(load, 0);
+      }).then(api => {
+        robotApi = api;
+        if (!destroyed) api?.setAnimationPaused(userPaused || reduced() || hidden());
+        return api;
+      });
+    }
+    return robotPromise;
+  }
 
   const reducedMq = deps.matchMedia('(prefers-reduced-motion: reduce)');
   const reduced = () => Boolean(reducedMq && reducedMq.matches);
@@ -589,8 +606,12 @@ export function renderHive(host, snapshot, deps) {
   /* ---- robot heads (real heads in a browser, a monogram where there is no animation loop, e.g. tests) ---- */
   function mountHead(hostEl, o) {
     if (typeof win.requestAnimationFrame === 'function') {
-      try {
-        return mountRobotHead(hostEl, {
+      let handle = null;
+      let removed = false;
+      void loadRobots().then(api => {
+        if (!api || removed || destroyed) return;
+        while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
+        handle = api.mountRobotHead(hostEl, {
           state: o.state,
           size: o.size || 28,
           color: o.color,
@@ -598,13 +619,19 @@ export function renderHive(host, snapshot, deps) {
           id: o.id,
           label: o.label,
         });
-      } catch {
+      }).catch(() => {
+        if (removed || destroyed) return;
         while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
-      }
+        monogram();
+      });
+      return { destroy() { removed = true; handle?.destroy(); } };
     }
-    const mono = h(doc, 'span', 'hive-bot hive-bot--mono', String(o.label || '·').charAt(0).toUpperCase());
-    mono.setAttribute('aria-hidden', 'true');
-    hostEl.appendChild(mono);
+    function monogram() {
+      const mono = h(doc, 'span', 'hive-bot hive-bot--mono', String(o.label || '·').charAt(0).toUpperCase());
+      mono.setAttribute('aria-hidden', 'true');
+      hostEl.appendChild(mono);
+    }
+    monogram();
     return { destroy() {} };
   }
 
@@ -842,7 +869,7 @@ export function renderHive(host, snapshot, deps) {
     const motionOff = userPaused || reduced() || hidden();
     if (doc.body?.classList) doc.body.classList.toggle('motion-off', motionOff);
     try {
-      setAnimationPaused(motionOff);
+      robotApi?.setAnimationPaused(motionOff);
     } catch {
       // heads are optional
     }
@@ -1101,9 +1128,9 @@ export function renderHive(host, snapshot, deps) {
 
   /* ---- full-body fetch while the shared parser drops card fields ---- */
   function loadRaw() {
-    if (typeof win.fetch !== 'function' || rawBusy || parsedRef.hive) return;
+    if (hasSuppliedRaw || hidden() || typeof win.fetch !== 'function' || rawBusy || parsedRef.hive) return;
     rawBusy = true;
-    win.fetch(RAW_URL, { method: 'GET', cache: 'no-store', headers: { 'x-watch-token': readWatchToken(win) } })
+    win.fetch(RAW_URL, { method: 'GET', cache: 'no-cache', headers: { 'x-watch-token': readWatchToken(win) } })
       .then((res) => (res && res.ok ? res.json() : null))
       .then((body) => {
         rawBusy = false;
@@ -1139,7 +1166,9 @@ export function renderHive(host, snapshot, deps) {
     if (t && typeof t.closest === 'function' && t.closest('.cc-tour-overlay')) return;
     if (!menu.contains(t)) closeMenu();
   });
-  addListener(tourBtn, 'click', () => {
+  addListener(tourBtn, 'click', async () => {
+    const { hasCompleted, isTourDisabledByQuery, startTour } = await import('./cc-tour.js');
+    if (destroyed) return;
     if (isTourDisabledByQuery(win.location)) return;
     const storage = { getItem: (k) => { try { return win.localStorage?.getItem(k) ?? null; } catch { return null; } }, setItem: (k, v) => { try { win.localStorage?.setItem(k, v); } catch { /* ignore */ } } };
     startTour({ doc, storage, userId: 'anonymous', replay: hasCompleted(storage, 'anonymous') });
@@ -1189,8 +1218,12 @@ export function renderHive(host, snapshot, deps) {
   restart();
 
   return {
-    update(nextSnapshot) {
+    update(nextSnapshot, rawSnapshot) {
       parsedRef = nextSnapshot;
+      if (rawSnapshot !== undefined) {
+        rawRef = rawSnapshot;
+        hasSuppliedRaw = true;
+      }
       paint();
       restart();
       loadRaw();

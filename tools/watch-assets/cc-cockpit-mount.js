@@ -19,7 +19,6 @@ import {
   shortTitle,
 } from './cockpit-lists.js';
 import { glitch as defaultGlitch } from './cc-glitch.js';
-import { completionKey } from './cc-tour.js';
 
 const TOUR_USER = 'anonymous';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -62,8 +61,9 @@ function nowMs(deps) {
   return typeof n === 'function' ? n() : (typeof n === 'number' ? n : Date.now());
 }
 
-function suppressCockpitAutoTour() {
+async function suppressCockpitAutoTour() {
   try {
+    const { completionKey } = await import('./cc-tour.js');
     globalThis.localStorage?.setItem(completionKey(TOUR_USER), '1');
   } catch {
     // ignore storage failures (tests, private mode)
@@ -459,14 +459,21 @@ export function renderProjectCockpit(host, project, deps) {
   let frame = null;
   function tick(ts) {
     frame = null;
-    if (destroyed) return;
-    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
+    if (destroyed || doc.hidden) return;
+    placeDots(typeof ts === 'number' ? ts : Date.now());
     frame = raf(tick);
   }
   function startMotion() {
-    if (reducedMotion || !raf || frame != null || destroyed) return;
+    if (reducedMotion || doc.hidden || !raf || frame != null || destroyed || !wire) return;
     frame = raf(tick);
   }
+  const onVisibility = () => {
+    if (doc.hidden) {
+      if (frame != null && caf) caf(frame);
+      frame = null;
+    } else startMotion();
+  };
+  doc.addEventListener?.('visibilitychange', onVisibility);
 
   // Orchestrator creature: mounted once per project, then only its state follows the orchestrator.
   let headHandle = null;
@@ -666,6 +673,7 @@ export function renderProjectCockpit(host, project, deps) {
       backBtn.removeEventListener('click', onBackClick);
       logo.removeEventListener('mouseenter', onLogoHover);
       if (typeof win.removeEventListener === 'function') win.removeEventListener('resize', onResize);
+      doc.removeEventListener?.('visibilitychange', onVisibility);
       if (headHandle) headHandle.destroy();
       headHandle = null;
       while (host.firstChild) host.removeChild(host.firstChild);
