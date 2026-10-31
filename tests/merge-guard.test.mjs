@@ -652,24 +652,41 @@ async function releaseFixture(t, o = {}) {
     jobs: [{ id: 'review', status: 'complete', agent: 'claude', model: 'claude-opus-4-6' }],
     ...o.state,
   };
-  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes) => {
+  const defaultManifestJob = (recordValue, runOpts = {}) => ({
+    id: recordValue?.jobId ?? 'review', agent: 'claude', model: 'claude-opus-4-6',
+    resultFile: RESULT_PATH, outputs: [RESULT_PATH], ...o.manifestJob, ...runOpts.manifestJob,
+  });
+  const defaultManifest = (recordValue, runOpts = {}) =>
+    runOpts.manifest ?? o.manifest ?? { jobs: [defaultManifestJob(recordValue, runOpts)] };
+  const writeRun = async (id, recordValue, stateValue, recordBytes, stateBytes, runOpts = {}) => {
     const dir = path.join(root, '.swarm/runs', id);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, 'review-record.json'), recordBytes ?? JSON.stringify(recordValue));
     if (stateValue !== undefined) await fs.writeFile(path.join(dir, 'state.json'), stateBytes ?? JSON.stringify(stateValue));
+    if (!runOpts.noManifest) {
+      await fs.writeFile(
+        path.join(dir, 'manifest.json'),
+        runOpts.manifestBytes ?? JSON.stringify(defaultManifest(recordValue, runOpts)),
+      );
+    }
   };
   // A newer unrelated sibling must never supply the selected review or its hash.
   await writeRun('sibling', {
     ...record, runId: 'sibling', head: HEAD_SHA, resultFile: 'coordination/review/other-review.json',
     resultHash: '0'.repeat(64), finishedAt: T2, stateFile: '.swarm/runs/sibling/state.json',
   }, { ...state, baseCommit: HEAD_SHA });
-  if (!o.noRecord) await writeRun('review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes);
+  if (!o.noRecord) {
+    await writeRun(
+      'review-5', record, o.noState ? undefined : state, o.recordBytes, o.stateBytes,
+      { noManifest: o.noManifest, manifest: o.manifest, manifestBytes: o.manifestBytes, manifestJob: o.manifestJob },
+    );
+  }
   for (const sibling of o.siblings ?? []) {
     const id = sibling.id;
     await writeRun(id, {
       ...record, runId: id, manifest: '.swarm/runs/' + id + '/manifest.json',
       stateFile: '.swarm/runs/' + id + '/state.json', ...sibling.record,
-    }, { ...state, ...sibling.state });
+    }, { ...state, ...sibling.state }, undefined, undefined, sibling);
   }
   const view = { title: '1.0.0: x', headRefOid: HEAD_SHA, body: MARKER, ...o.view };
   const head = view.headRefOid;
@@ -741,6 +758,16 @@ for (const [name, options, reason] of [
   ['unsafe state path', { record: { stateFile: '../state.json' } }, 'review-run-state-mismatch'],
   ['another run state path', { record: { stateFile: '.swarm/runs/sibling/state.json' } }, 'review-run-state-mismatch'],
   ['mismatched run id', { record: { runId: 'sibling' } }, 'review-run-state-mismatch'],
+  ['missing manifest', { noManifest: true }, 'review-run-state-mismatch'],
+  ['malformed manifest', { manifestBytes: '{bad' }, 'review-run-state-mismatch'],
+  ['manifest job missing', { manifest: { jobs: [] } }, 'review-run-state-mismatch'],
+  ['manifest job id mismatch', { manifestJob: { id: 'other' } }, 'review-run-state-mismatch'],
+  ['manifest job not a review', { manifest: { jobs: [{ id: 'review', agent: 'claude', model: 'claude-opus-4-6', type: 'build' }] } }, 'review-run-state-mismatch'],
+  ['manifest resultFile mismatch', { manifestJob: { resultFile: 'coordination/review/other-review.json', outputs: ['coordination/review/other-review.json'] } }, 'review-run-state-mismatch'],
+  ['manifest outputs missing result file', { manifestJob: { outputs: ['src/example.mjs'] } }, 'review-run-state-mismatch'],
+  ['manifest extra outputs', { manifestJob: { outputs: [RESULT_PATH, 'src/example.mjs'] } }, 'review-run-state-mismatch'],
+  ['unsafe manifest path', { record: { manifest: '../manifest.json' } }, 'review-run-state-mismatch'],
+  ['another run manifest path', { record: { manifest: '.swarm/runs/sibling/manifest.json' } }, 'review-run-state-mismatch'],
   ['code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: 'src/code.mjs' }] }) }, 'result-not-metadata-commit'],
   ['committed record in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH }, { filename: RECORD_PATH }] }) }, 'result-not-metadata-commit'],
   ['renamed code in result commit', { compareResponse: json({ files: [{ filename: RESULT_PATH, previous_filename: 'src/code.mjs', status: 'renamed' }] }) }, 'result-not-metadata-commit'],

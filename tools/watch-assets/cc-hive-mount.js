@@ -726,7 +726,7 @@ export function renderHive(host, snapshot, deps) {
   const tabs = nav;
   const tabHive = h(doc, 'a', 'hive-tab', 'Command Center');
   tabHive.setAttribute('aria-current', 'page');
-  tabHive.href = '/command-center';
+  tabHive.href = `/command-center${win.location?.search || ''}`;
   tabs.appendChild(tabHive);
   const tabCockpit = h(doc, 'a', 'hive-tab', 'Cockpit');
   tabCockpit.setAttribute('data-tour', 'cockpit');
@@ -1020,7 +1020,9 @@ export function renderHive(host, snapshot, deps) {
   function paintCards(v) {
     const sig = JSON.stringify(v.projects.map((p) => [p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents, p.raw && p.raw.fails && p.raw.fails.value]));
     const first = v.projects[0];
-    const href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
+    const href = first
+      ? `/command-center/project/${encodeURIComponent(first.id)}${win.location?.search || ''}`
+      : '#';
     if (tabCockpit.getAttribute?.('href') !== href) tabCockpit.href = href;
     if (sig === cardSig) return false;
     cardSig = sig;

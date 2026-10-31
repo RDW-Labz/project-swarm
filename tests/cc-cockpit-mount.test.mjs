@@ -359,3 +359,27 @@ test('stage strip colours follow the segment order', () => {
   view.destroy();
   globalThis.document = prevDocument;
 });
+
+test('renderProjectCockpit view tabs use bare paths without window or defaultView location', () => {
+  const project = buildProjectCockpit(fakeBoard(), 'alpha');
+  const document = makeDocument();
+  document.defaultView = null;
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, {
+    document,
+    window: {},
+    now: () => NOW,
+    glitch: () => false,
+    mountRobotHead: () => ({ setState() {}, destroy() {} }),
+  });
+  const tabs = host.querySelectorAll('.tabs a');
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[0].href, '/command-center');
+  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+  assert.equal(tabs[1].href, '/classic');
+  view.destroy();
+  globalThis.document = prevDocument;
+});

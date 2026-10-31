@@ -8,8 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWatchServer } from '../tools/watch-server.mjs';
-import { buildProjectCockpit } from '../tools/command-center-snapshot.mjs';
+import { buildProjectCockpit, buildCommandCenterSnapshot } from '../tools/command-center-snapshot.mjs';
 import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
+import { renderHive } from '../tools/watch-assets/cc-hive-mount.js';
 
 const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url));
 
@@ -96,8 +97,51 @@ function makeClassList() {
     add: (...c) => c.forEach(x => set.add(x)),
     remove: (...c) => c.forEach(x => set.delete(x)),
     contains: c => set.has(c),
+    toggle: (c, force) => {
+      if (force === true) set.add(c);
+      else if (force === false) set.delete(c);
+      else if (set.has(c)) set.delete(c);
+      else set.add(c);
+    },
     toString: () => [...set].join(' '),
   };
+}
+
+const SELECTOR_TOKEN = /^(?:([a-zA-Z][\w-]*)|#([\w-]+)|\.([\w-]+)|\[([\w-]+)(?:="([^"]*)")?\])/;
+
+function parseCompound(text) {
+  const out = { tag: null, id: null, classes: [], attrs: [] };
+  let rest = text;
+  while (rest) {
+    const m = rest.match(SELECTOR_TOKEN);
+    if (!m) throw new Error(`unsupported selector: ${text}`);
+    if (m[1]) out.tag = m[1].toUpperCase();
+    else if (m[2]) out.id = m[2];
+    else if (m[3]) out.classes.push(m[3]);
+    else out.attrs.push([m[4], m[5]]);
+    rest = rest.slice(m[0].length);
+  }
+  return out;
+}
+
+function matchesCompound(node, c) {
+  if (!node || !node.classList || typeof node.getAttribute !== 'function') return false;
+  if (c.tag && node.tagName !== c.tag) return false;
+  if (c.id && node.id !== c.id) return false;
+  if (!c.classes.every(k => node.classList.contains(k))) return false;
+  return c.attrs.every(([k, v]) => {
+    const got = node.getAttribute(k);
+    return v === undefined ? got != null : got === v;
+  });
+}
+
+function matchesChain(node, chain) {
+  if (!matchesCompound(node, chain[chain.length - 1])) return false;
+  let i = chain.length - 2;
+  for (let p = node.parentNode; p && i >= 0; p = p.parentNode) {
+    if (matchesCompound(p, chain[i])) i -= 1;
+  }
+  return i < 0;
 }
 
 function makeElement(tag) {
@@ -107,7 +151,9 @@ function makeElement(tag) {
     classList,
     children: [],
     attributes: {},
-    style: {},
+    style: {
+      setProperty(name, value) { this[name] = value; },
+    },
     parentNode: null,
     hidden: false,
     appendChild(child) {
@@ -124,24 +170,38 @@ function makeElement(tag) {
     getAttribute(k) { return this.attributes[k] ?? null; },
     addEventListener() {},
     removeEventListener() {},
+    dispatchEvent() {},
+    contains() { return false; },
+    open: false,
     querySelectorAll(sel) {
+      const chain = sel.trim().split(/\s+/).map(parseCompound);
       const out = [];
       const walk = n => {
-        if (!n?.children) return;
-        for (const c of n.children) {
-          if (c.classList?.contains('tabs')) {
-            for (const child of c.children || []) {
-              if (child.tagName === 'A') out.push(child);
-            }
-          }
+        for (const c of n.children || []) {
+          if (matchesChain(c, chain)) out.push(c);
           walk(c);
         }
       };
       walk(this);
-      return sel.includes('.tabs') ? out : out;
+      return out;
     },
     querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; },
     getBoundingClientRect() { return { top: 0, left: 0, bottom: 40, right: 120, width: 120, height: 40 }; },
+    offsetWidth: 270,
+    offsetHeight: 132,
+    getContext() {
+      return {
+        setTransform() {},
+        clearRect() {},
+        scale() {},
+        save() {},
+        restore() {},
+        beginPath() {},
+        arc() {},
+        fill() {},
+        stroke() {},
+      };
+    },
   };
   Object.defineProperty(node, 'className', {
     get() { return classList.toString(); },
@@ -154,6 +214,8 @@ function makeDocument(defaultView) {
   const document = {
     hidden: false,
     defaultView,
+    addEventListener() {},
+    removeEventListener() {},
     createElement: tag => {
       const el = makeElement(tag);
       el.ownerDocument = document;
@@ -162,12 +224,13 @@ function makeDocument(defaultView) {
     createTextNode: text => ({ nodeType: 3, textContent: text }),
     createElementNS: () => makeElement('svg'),
     fonts: { ready: Promise.resolve() },
+    body: makeElement('body'),
   };
   return document;
 }
 
-function assertCockpitViewTabsPreservePageToken() {
-  const fakeLocation = { search: '?t=abc' };
+function renderCockpitTabsHarness(pageQuery) {
+  const fakeLocation = { search: `?${pageQuery}` };
   const win = {
     location: fakeLocation,
     addEventListener() {},
@@ -191,12 +254,101 @@ function assertCockpitViewTabsPreservePageToken() {
     mountRobotHead: () => ({ setState() {}, destroy() {} }),
   });
   const tabs = host.querySelectorAll('.tabs a');
-  assert.equal(tabs.length, 2);
-  assert.equal(tabs[0].href, '/command-center?t=abc');
-  assert.equal(tabs[0].getAttribute('aria-current'), 'page');
-  assert.equal(tabs[1].href, '/classic?t=abc');
-  view.destroy();
+  return { view, tabs, tokenSuffix: fakeLocation.search };
 }
+
+test('cockpit view tabs preserve the page token in hrefs', async () => {
+  const on = await startWatchServer({ commandCenter: true });
+  try {
+    const { view, tabs, tokenSuffix } = renderCockpitTabsHarness(on.pageQuery());
+    assert.equal(tabs.length, 2);
+    assert.equal(tabs[0].href, `/command-center${tokenSuffix}`);
+    assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+    assert.equal(tabs[1].href, `/classic${tokenSuffix}`);
+
+    const ccPage = await request({ port: on.port, reqPath: tabs[0].href });
+    assert.equal(ccPage.status, 200);
+    assert.match(ccPage.body, /command-center-boot\.js/);
+
+    const classicPage = await request({ port: on.port, reqPath: tabs[1].href });
+    assert.equal(classicPage.status, 200);
+    assert.equal(classicPage.body, BOARD_MARK);
+
+    view.destroy();
+  } finally {
+    await on.dispose();
+  }
+});
+
+test('hive view tabs preserve the page token in hrefs', async () => {
+  const on = await startWatchServer({ commandCenter: true });
+  const prevPanels = globalThis.HivePanels;
+  globalThis.HivePanels = {
+    deriveHiveView: (snap) => ({
+      at: snap.at,
+      agents: 0,
+      doneLast24h: null,
+      needs: 0,
+      projects: (snap.projects || []).map((p) => ({
+        id: p.id,
+        name: p.name || p.id,
+        cat: 'live',
+        counts: null,
+        pct: 0,
+        needs: 0,
+        agents: 0,
+        tag: 'live',
+        color: '#336699',
+        raw: p,
+        counted: 0,
+      })),
+      events: [],
+      throughput: null,
+      lanes: [],
+      prs: [],
+      totals: {},
+      spend: null,
+      machines: 0,
+      projectsTotal: (snap.projects || []).length,
+    }),
+    renderHiveDashboard: () => ({ heads: [] }),
+  };
+  try {
+    const tokenSuffix = `?${on.pageQuery()}`;
+    const win = {
+      location: { search: tokenSuffix },
+      innerWidth: 1200,
+      devicePixelRatio: 1,
+      addEventListener() {},
+      removeEventListener() {},
+      setTimeout(fn, ms) { return setTimeout(fn, ms); },
+    };
+    const document = makeDocument(win);
+    document.defaultView = win;
+    const host = document.createElement('div');
+    const snapshot = buildCommandCenterSnapshot(fakeBoardPayload(), {
+      now: Date.UTC(2026, 9, 26, 12, 0, 0),
+    });
+    const handle = renderHive(host, snapshot, {
+      document,
+      now: () => Date.UTC(2026, 9, 26, 12, 0, 0),
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: () => {},
+      matchMedia: () => ({ matches: true }),
+      onOpenProject: () => {},
+    });
+    const tabs = host.querySelectorAll('.hive-nav a.hive-tab');
+    assert.equal(tabs.length, 3);
+    assert.equal(tabs[0].href, `/command-center${tokenSuffix}`);
+    assert.equal(tabs[0].getAttribute('aria-current'), 'page');
+    assert.equal(tabs[1].href, `/command-center/project/abc${tokenSuffix}`);
+    assert.equal(tabs[2].href, `/classic${tokenSuffix}`);
+    handle.destroy();
+  } finally {
+    globalThis.HivePanels = prevPanels;
+    await on.dispose();
+  }
+});
 
 async function startWatchServer({ commandCenter, env } = {}) {
   const assetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-routes-flag-'));
@@ -337,8 +489,6 @@ test('command center HTML and JSON when the flag is on', async () => {
 
     assertSnapshotNoMoney(body, '/api/command-center');
     assertSnapshotNoMoney(JSON.parse(cockpit.body), '/api/command-center/project');
-
-    assertCockpitViewTabsPreservePageToken();
 
     const missing = await request({
       port: on.port,

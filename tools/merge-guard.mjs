@@ -117,12 +117,30 @@ export async function releaseReviewGate(
     record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
   if (!opusRuns.length) return refuse('review-run-model-not-opus');
 
+  const expectedManifestPath = (runId) => '.swarm/runs/' + runId + '/manifest.json';
+  const manifestJobsList = (manifest) => {
+    const jobs = manifest?.jobs;
+    return isObj(jobs) ? Object.values(jobs) : jobs;
+  };
+  const manifestAttestsReview = (record, runId, resultFile, manifestJob) => {
+    if (!isObj(manifestJob) || manifestJob.id !== record.jobId) return false;
+    const reviewJob = manifestJob.type === 'review' || manifestJob.resultFile === resultFile;
+    if (!reviewJob) return false;
+    if (manifestJob.resultFile !== resultFile) return false;
+    if (!Array.isArray(manifestJob.outputs) || manifestJob.outputs.length !== 1 ||
+        manifestJob.outputs[0] !== resultFile) return false;
+    if (manifestJob.agent !== record.agent) return false;
+    if ((manifestJob.model ?? manifestJob.actualModel) !== record.model) return false;
+    return true;
+  };
+
   const matching = [];
   for (const { record, runId } of opusRuns) {
     // Bind the state path to the directory containing the runner's record.
     if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
         typeof record.jobId !== 'string' || !record.jobId ||
         record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
+        record.manifest !== expectedManifestPath(runId) ||
         typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
     try {
       const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
@@ -131,6 +149,12 @@ export async function releaseReviewGate(
           !Array.isArray(jobs) || !jobs.some((job) =>
             isObj(job) && job.id === record.jobId && job.status === 'complete' &&
             job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
+      const manifest = JSON.parse(await fsImpl.readFile(path.join(root, record.manifest), 'utf8'));
+      const manifestJobs = manifestJobsList(manifest);
+      const manifestJob = Array.isArray(manifestJobs)
+        ? manifestJobs.find((job) => isObj(job) && job.id === record.jobId)
+        : undefined;
+      if (!manifestAttestsReview(record, runId, resultFile, manifestJob)) continue;
       matching.push(record);
     } catch {
       // Missing, malformed, or unreadable local state fails closed.
