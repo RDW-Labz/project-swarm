@@ -10,7 +10,7 @@ import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
-import { projectFamilyRoots, boardSnapshotInputIdentity } from './board-data.mjs';
+import { projectFamilyRoots } from './board-data.mjs';
 import { runDetail, RUN_ID } from './board-run.mjs';
 import { listPeers } from './board-peers.mjs';
 import { commandCenterEnabled } from './command-center-flag.mjs';
@@ -543,21 +543,11 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const commandCenterCache = new Map();
-  const snapshotCacheEntries = 4;
-  const snapshotCacheBytes = 8 * 1024 * 1024;
-  const entryBytes = entry => (entry.encoded?.body.length ?? 0) + (entry.encoded?.gzip?.length ?? 0);
-  function trimSnapshotCache() {
-    let bytes = [...commandCenterCache.values()].reduce((sum, entry) => sum + entryBytes(entry), 0);
-    while (commandCenterCache.size > snapshotCacheEntries || bytes > snapshotCacheBytes) {
-      const key = commandCenterCache.keys().next().value;
-      bytes -= entryBytes(commandCenterCache.get(key));
-      commandCenterCache.delete(key);
-    }
-  }
-  // The dashboard polls every five seconds. Validate files before reusing a
-  // representation so the longer TTL never hides a ticket/run change.
-  const snapshotTtlMs = 6000;
+  // One board and Hive representation, independent of project ids or query keys.
+  // Cockpit responses are derived on demand and never retained in a map.
+  let commandCenterCache = null;
+  let snapshotPending = null;
+  const snapshotTtlMs = 60000;
   let server = null;
   let port = 0;
   let url = null;
@@ -638,49 +628,46 @@ export function createWatchServer(opts) {
     }, a.body, a);
   }
 
-  async function commandCenterResponse(pathname, q) {
-    const options = { ...q, local: q.local === '1', redact: true };
-    const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
-    let entry = commandCenterCache.get(key);
-    if (entry) { commandCenterCache.delete(key); commandCenterCache.set(key, entry); }
-    if (entry?.pending) return entry.pending;
-    if (entry && now() >= entry.at && now() - entry.at < snapshotTtlMs) {
-      const identity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
-      if (entry.pending) return entry.pending;
-      if (identity === entry.inputIdentity) return entry;
-    }
-    if (!entry) {
-      // Bound memory even when clients supply many distinct query arguments.
-      entry = {};
-      commandCenterCache.set(key, entry);
-      trimSnapshotCache();
-    }
-    entry.pending = (async () => {
-      const snapshot = await board.snapshot(options);
-      // Validation only needs roots. Project objects can carry entire parsed
-      // ledgers/history arrays, so never retain a board snapshot here.
-      entry.projects = (snapshot?.projects ?? []).filter(project => typeof project.root === 'string')
-        .map(project => ({ root: project.root }));
-      const inputIdentity = await boardSnapshotInputIdentity({ projects: entry.projects, env, registryFile: projectsFile(env) });
-      const revision = snapshot?.version == null && snapshot?.at == null
-        ? null : JSON.stringify([snapshot.version, snapshot.at, inputIdentity]);
-      if (!entry.encoded || revision == null || revision !== entry.revision) {
-        const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
-        const result = pathname.endsWith('/project')
-          ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
-        entry.encoded = result ? representation(JSON.stringify(result), 'application/json') : null;
-        entry.revision = revision;
-      }
-      entry.at = now();
-      entry.inputIdentity = inputIdentity;
-      trimSnapshotCache();
+  function rebuildCommandCenterSnapshot() {
+    if (snapshotPending) return snapshotPending;
+    snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
+      const snapshot = await board.snapshot({ local: false, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const entry = {
+        payload,
+        encoded: representation(JSON.stringify(buildCommandCenterSnapshot(payload)), 'application/json'),
+        at: now(),
+      };
+      // A build finishing after shutdown must not keep the snapshot alive.
+      if (!closed) commandCenterCache = entry;
       return entry;
-    })();
-    try { return await entry.pending; }
-    catch (error) {
-      if (commandCenterCache.get(key) === entry) commandCenterCache.delete(key);
-      throw error;
-    } finally { entry.pending = null; }
+    }).finally(() => { snapshotPending = null; });
+    return snapshotPending;
+  }
+
+  async function commandCenterResponse(pathname, q) {
+    // Preserve the explicit local-only view without retaining another snapshot
+    // or allowing query strings to grow cache keys. Normal dashboard requests
+    // always share the single default board below.
+    if (q.local === '1') {
+      const snapshot = await board.snapshot({ ...q, local: true, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const result = pathname.endsWith('/project')
+        ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
+      return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
+    }
+    let entry = commandCenterCache;
+    if (!entry) {
+      // Startup warming and all cold requests share the same build.
+      entry = await rebuildCommandCenterSnapshot();
+    } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
+      // Keep the previous snapshot available, including its validators, while
+      // a single refresh runs. A failure leaves it available for the next retry.
+      if (!snapshotPending) void rebuildCommandCenterSnapshot().catch(() => {});
+    }
+    if (!pathname.endsWith('/project')) return entry;
+    const result = buildProjectCockpit(entry.payload, String(q.id ?? ''));
+    return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
   }
 
   async function payload() {
@@ -940,7 +927,7 @@ export function createWatchServer(opts) {
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
     streamManager.close();
-    commandCenterCache.clear();
+    commandCenterCache = null;
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -1003,6 +990,9 @@ export function createWatchServer(opts) {
     if (timer && typeof timer.unref === 'function') timer.unref();
     heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+    // Warm once without delaying listen or retrying in an idle loop. A cold
+    // request can join this attempt; a later request can retry a failed build.
+    if (commandCenter && board) void rebuildCommandCenterSnapshot().catch(() => {});
     return { url, port };
   }
 

@@ -71,40 +71,39 @@ async function fixture(t, { projectCount = 9, ticketCount = 400, runs = 0 } = {}
   };
 }
 
-test('snapshot budget: unchanged projects reuse aggregates and a ticket edit rebuilds only its project', async t => {
+test('plain nine-project snapshots have bounded build time and read current inputs each time', async t => {
   const f = await fixture(t);
+  // Unrelated artifacts must not be recursively fingerprinted just to render
+  // the board. Real workspaces can have enormous trees beneath .swarm.
+  const artifacts = path.join(f.projects[0].root, '.swarm', 'artifacts');
+  await fs.mkdir(artifacts, { recursive: true });
+  const readdir = fs.readdir;
+  let artifactReads = 0;
+  fs.readdir = async (dir, ...args) => {
+    if (String(dir).startsWith(artifacts)) artifactReads++;
+    return readdir.call(fs, dir, ...args);
+  };
+  t.after(() => { fs.readdir = readdir; });
   const cold = await f.build();
   assert.ok(cold.ms < 3000, `cold snapshot ${cold.ms.toFixed(1)}ms exceeds 3s`);
   assert.equal(cold.snapshot.projects.length, 9);
   assert.ok(cold.snapshot.projects.every(p => p.tickets.total === 400));
-  // The board enriches cards, removes transcript paths and appends worktree
-  // labels. None of that may mutate the stored project value.
   cold.snapshot.projects[0].card.next.ready = -1;
-  f.profile.length = 0;
-  const warm = await f.build();
-  assert.ok(warm.ms < 100, `unchanged snapshot ${warm.ms.toFixed(1)}ms exceeds 100ms`);
-  assert.ok(warm.snapshot.projects.every(p => p.card.next.ready === 400));
-  assert.equal(f.profile.filter(e => e.kind === 'project' && e.cached).length, 9);
-  assert.deepEqual([...f.summaryCalls.values()], new Array(9).fill(1));
+  const repeat = await f.build();
+  assert.ok(repeat.ms < 3000, `repeat snapshot ${repeat.ms.toFixed(1)}ms exceeds 3s`);
+  assert.ok(repeat.snapshot.projects.every(p => p.card.next.ready === 400));
+  assert.deepEqual([...f.summaryCalls.values()], new Array(9).fill(2));
 
   f.ledgers[3].tickets[0].status = 'done';
   await f.writeLedger(3);
-  f.profile.length = 0;
   const changed = await f.build();
   const project = changed.snapshot.projects.find(p => p.id === 'p3');
   assert.equal(project.tickets.byStatus.done, 1);
   assert.equal(project.card.next.ready, 399);
-  assert.deepEqual(f.profile.filter(e => e.kind === 'project' && !e.cached).map(e => e.id), ['p3']);
-  assert.equal(f.summaryCalls.get(f.projects[3].root), 2);
-  assert.ok([...f.summaryCalls].every(([root, n]) => root === f.projects[3].root || n === 1));
-
-  // Global history invalidates every dependent progress summary immediately.
-  await fs.appendFile(f.options.historyFile, '{}\n');
-  const before = [...f.summaryCalls.values()].reduce((a, b) => a + b, 0);
-  await f.build();
-  assert.equal([...f.summaryCalls.values()].reduce((a, b) => a + b, 0), before + 9);
-  t.diagnostic(JSON.stringify({ coldMs: cold.ms, warmMs: warm.ms, changedMs: changed.ms,
-    coldCpuMs: cold.cpuMs, warmCpuMs: warm.cpuMs }));
+  assert.deepEqual([...f.summaryCalls.values()], new Array(9).fill(3));
+  assert.equal(artifactReads, 0, 'snapshot never walks unrelated .swarm artifacts');
+  t.diagnostic(JSON.stringify({ coldMs: cold.ms, repeatMs: repeat.ms, changedMs: changed.ms,
+    coldCpuMs: cold.cpuMs, repeatCpuMs: repeat.cpuMs }));
 });
 
 test('run edits, new/deleted runs and same-size atomic ledger replacements invalidate immediately', async t => {
@@ -116,7 +115,7 @@ test('run edits, new/deleted runs and same-size atomic ledger replacements inval
   await fs.writeFile(file, JSON.stringify(state));
   let result = await f.build();
   assert.equal(result.snapshot.projects.find(p => p.id === 'p0').recentFailure, true);
-  assert.equal(f.summaryCalls.get(f.projects[1].root), 1);
+  assert.equal(f.summaryCalls.get(f.projects[1].root), 2);
 
   const newDir = path.join(f.projects[0].root, '.swarm', 'runs', 'new-run');
   await fs.mkdir(newDir);
@@ -141,7 +140,7 @@ test('run edits, new/deleted runs and same-size atomic ledger replacements inval
   assert.equal(result.snapshot.projects.find(p => p.id === 'p1').tickets.byStatus.blocked, undefined);
 });
 
-test('history aggregates invalidate on ticket completion and do not share mutable rows', async t => {
+test('plain history reads ticket completions and does not share mutable rows', async t => {
   const f = await fixture(t, { projectCount: 1, ticketCount: 2 });
   const first = await historyEventsOf(f.projects[0]);
   first.push({ kind: 'poison' });
@@ -191,80 +190,63 @@ async function startServer(t, f, now = Date.now, transform = snapshot => snapsho
   return { server, builds: () => builds };
 }
 
-test('six-second HTTP cache preserves ETags, shares concurrent requests and never hides ticket edits', async t => {
+async function waitForFresh(server, expectedDone) {
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
+    const response = await request(server, '/api/command-center');
+    assert.equal(response.status, 200);
+    if (JSON.parse(response.body).projects.find(p => p.id === 'p0').ticketCounts.done === expectedDone) return response;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.fail('snapshot rebuild did not finish in five seconds');
+}
+
+test('HTTP cache keeps response bytes and validators across Hive, Cockpit and changing queries', async t => {
   const f = await fixture(t, { projectCount: 2, ticketCount: 20 });
   let now = Date.now();
   const s = await startServer(t, f, () => now);
+  const start = performance.now();
   const first = await request(s.server, '/api/command-center');
+  const coldMs = performance.now() - start;
   assert.equal(first.status, 200);
   assert.equal(first.headers['x-content-type-options'], 'nosniff');
   assert.match(first.headers['content-security-policy'], /frame-ancestors 'none'/);
-  now += 5000;
-  const warm = await request(s.server, '/api/command-center', first.headers.etag);
-  assert.equal(warm.status, 304);
-  assert.equal(s.builds(), 1, 'a five-second poll must reuse the HTTP representation');
+  const cockpit = await request(s.server, '/api/command-center/project?id=p0');
   f.ledgers[0].tickets[0].status = 'done';
   await f.writeLedger(0);
-  const changed = await request(s.server, '/api/command-center', first.headers.etag);
-  assert.equal(changed.status, 200);
-  assert.equal(JSON.parse(changed.body).projects.find(p => p.id === 'p0').ticketCounts.done, 1);
+  now += 59999;
+  const warmStart = performance.now();
+  const warm = await request(s.server, '/api/command-center?poll=1', first.headers.etag);
+  const warmMs = performance.now() - warmStart;
+  assert.equal(warm.status, 304);
+  assert.equal(s.builds(), 1);
+  now += 1;
+  const stale = await request(s.server, '/api/command-center', first.headers.etag);
+  assert.equal(stale.status, 304);
+  const changed = await waitForFresh(s.server, 1);
   assert.notEqual(changed.headers.etag, first.headers.etag);
-  assert.equal(s.builds(), 2);
-  const cockpit = await request(s.server, '/api/command-center/project?id=p0');
-  assert.equal(JSON.parse(cockpit.body).done, 1);
-  f.ledgers[0].tickets[1].status = 'done';
-  await f.writeLedger(0);
   const cockpitChanged = await request(s.server, '/api/command-center/project?id=p0', cockpit.headers.etag);
-  assert.equal(JSON.parse(cockpitChanged.body).done, 2);
-  now += 6001;
-  const before = s.builds();
-  const responses = await Promise.all(Array.from({ length: 6 }, () => request(s.server, '/api/command-center')));
-  assert.ok(responses.every(res => res.status === 200));
-  assert.equal(s.builds(), before + 1, 'expired concurrent requests must share the rebuild');
-});
-
-test('HTTP snapshot cache evicts the least recently used query after four entries', async t => {
-  const f = await fixture(t, { projectCount: 1, ticketCount: 4 });
-  const s = await startServer(t, f);
-  for (let i = 0; i < 4; i++) await request(s.server, `/api/command-center?view=${i}`);
-  await request(s.server, '/api/command-center?view=0');
-  assert.equal(s.builds(), 4);
-  await request(s.server, '/api/command-center?view=4');
-  await request(s.server, '/api/command-center?view=0');
-  assert.equal(s.builds(), 5, 'recently touched entry must survive eviction');
-  await request(s.server, '/api/command-center?view=1');
-  assert.equal(s.builds(), 6, 'oldest entry must have been evicted');
-});
-
-test('HTTP snapshot byte budget serves oversized cockpits without retaining them', async t => {
-  const f = await fixture(t, { projectCount: 1, ticketCount: 1 });
-  const s = await startServer(t, f, Date.now, snapshot => ({
-    ...snapshot,
-    projects: snapshot.projects.map(project => ({
-      ...project, ledger: { tickets: f.ledgers[0].tickets, history: 'x'.repeat(9 * 1024 * 1024) },
-    })),
-  }));
-  for (let i = 0; i < 2; i++) {
-    const response = await request(s.server, '/api/command-center/project?id=p0');
-    assert.equal(response.status, 200);
-    const cockpit = JSON.parse(response.body);
-    assert.equal(cockpit.total, 1);
-    assert.equal(cockpit.ledger.history.length, 9 * 1024 * 1024);
+  assert.equal(JSON.parse(cockpitChanged.body).done, 1);
+  assert.notEqual(cockpitChanged.headers.etag, cockpit.headers.etag);
+  for (let i = 0; i < 30; i++) {
+    const response = await request(s.server, `/api/command-center?poll=${i}`);
+    assert.equal(response.body, changed.body);
   }
-  assert.equal(s.builds(), 2, 'representations larger than 8 MiB must bypass retention');
+  assert.equal(s.builds(), 2, 'all endpoints and query strings use a single board snapshot');
+  t.diagnostic(JSON.stringify({ coldHttpMs: coldMs, warmHttpMs: warmMs }));
 });
 
-test('memory budget: 120 polling revisions retain bounded aggregates and HTTP representations', { timeout: 180000 }, async t => {
+test('memory budget: 120 snapshot revisions keep one snapshot and bounded heap', { timeout: 180000 }, async t => {
   if (!global.gc) {
-    // A separate, capped heap makes retention measurable without depending on
-    // the test runner's GC schedule or changing global V8 flags in other tests.
+    // Measure retained memory under explicit GC and a capped heap, independent
+    // of the parent test runner's GC schedule.
     const childEnv = { ...process.env };
     delete childEnv.NODE_TEST_CONTEXT;
     const { stdout } = await promisify(execFile)(process.execPath, [
       '--expose-gc', '--max-old-space-size=256', '--import', './tests/_isolate-config.mjs',
       '--test', '--test-name-pattern=memory budget', fileURLToPath(import.meta.url),
     ], { timeout: 170000, maxBuffer: 1024 * 1024, env: childEnv });
-    assert.match(stdout, /"polls":120/, 'memory worker must execute all polling revisions');
+    assert.match(stdout, /"polls":120/, 'memory worker must execute all revisions');
     t.diagnostic(stdout.trim());
     return;
   }
@@ -278,14 +260,14 @@ test('memory budget: 120 polling revisions retain bounded aggregates and HTTP re
   const root = f.projects[0].root;
   f.options.liveRuns = [{ root, runId: 'run-0' }];
   const stateFile = path.join(root, '.swarm', 'runs', 'run-0', 'state.json');
-  // Keep simulated polls away from the separate local-midnight invalidation.
   let clock = new Date().setHours(12, 0, 0, 0);
   const s = await startServer(t, f, () => clock, snapshot => ({
     ...snapshot,
-    // Adapters may supply full ledgers. HTTP validation must keep only roots,
-    // even when each response carries fresh large parsed history arrays.
+    // Adapters may supply full ledgers: retain only the latest board, even
+    // when every build carries fresh large parsed history arrays.
     projects: snapshot.projects.map((project, i) => ({ ...project, ledger: structuredClone(f.ledgers[i]) })),
   }));
+  await request(s.server, '/api/command-center');
   const cpu = process.cpuUsage();
   const start = performance.now();
   let baseline = 0;
@@ -293,23 +275,27 @@ test('memory budget: 120 polling revisions retain bounded aggregates and HTTP re
   let maxRetainedHeap = 0;
   let maxExternal = 0;
   for (let revision = 0; revision < 120; revision++) {
-    clock += 5000;
+    clock += 60000;
     f.projects[0].revision = revision;
-    f.ledgers[0].tickets[0].status = revision % 2 ? 'done' : 'ready';
+    f.ledgers[0].tickets[0].status = revision % 2 ? 'ready' : 'done';
     await f.writeLedger(0);
     await fs.writeFile(stateFile, JSON.stringify({
       status: 'running', startedAt: new Date(clock).toISOString(), revision,
       detail: `${revision}:${'run state '.repeat(50000)}`, jobs: [],
     }));
     f.profile.length = 0;
-    const response = await request(s.server, `/api/command-center?poll=${revision}`);
-    assert.equal(response.status, 200);
+    const before = s.builds();
+    const stale = await request(s.server, `/api/command-center?poll=${revision}`);
+    assert.equal(stale.status, 200);
+    const response = await waitForFresh(s.server, 1 - revision % 2);
     const result = JSON.parse(response.body);
     assert.equal(result.projects.length, 9);
-    assert.equal(result.projects.find(p => p.id === 'p0').ticketCounts.done, revision % 2);
-    // File edits and changing registry metadata must not evict unchanged projects.
-    if (revision % 12 !== 0) assert.deepEqual(
-      f.profile.filter(e => e.kind === 'project' && !e.cached).map(e => e.id), ['p0']);
+    assert.equal(result.projects.find(p => p.id === 'p0').ticketCounts.done, 1 - revision % 2);
+    assert.equal(s.builds(), before + 1, 'each revision has exactly one board rebuild');
+    // Exercise Cockpit ids and query variants without keeping representations.
+    const cockpit = await request(s.server, `/api/command-center/project?id=p${revision % 9}&poll=${revision}`);
+    assert.equal(cockpit.status, 200);
+    assert.equal(JSON.parse(cockpit.body).ledger.history.length, 1024);
     maxHeap = Math.max(maxHeap, process.memoryUsage().heapUsed);
     global.gc();
     const memory = process.memoryUsage();
@@ -321,8 +307,9 @@ test('memory budget: 120 polling revisions retain bounded aggregates and HTTP re
   assert.ok(maxRetainedHeap - baseline < 32 * 1024 * 1024,
     `retained heap grew ${(maxRetainedHeap - baseline) / 1024 / 1024} MiB after warmup`);
   assert.ok(maxHeap < 200 * 1024 * 1024, `peak sampled heap ${maxHeap} exceeds 200 MiB`);
+  assert.equal(s.builds(), 121, 'startup plus exactly one rebuild for every revision');
   const usage = process.cpuUsage(cpu);
-  t.diagnostic(JSON.stringify({ polls: 120, projects: 9, tickets: 5400,
+  t.diagnostic(JSON.stringify({ polls: 120, builds: s.builds(), projects: 9, tickets: 5400,
     maxHeapMiB: maxHeap / 1024 / 1024, retainedHeapMiB: maxRetainedHeap / 1024 / 1024,
     retainedGrowthMiB: (maxRetainedHeap - baseline) / 1024 / 1024,
     maxExternalMiB: maxExternal / 1024 / 1024,

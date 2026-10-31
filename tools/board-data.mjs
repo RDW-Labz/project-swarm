@@ -3,11 +3,10 @@
 // Everything is read from the project's own folder (its run states, ticket ledger, lessons) and nothing is ever mixed across projects:
 // each function takes ONE project and reads only under its root. The machine-wide numbers are sums of the per-project numbers.
 import fs from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
-import { readLedger, ledgerPath, logPath, readyTickets as ticketsReadyToRun } from './tickets.mjs';
-import { mainWorktreeRoot as discoverMainWorktreeRoot, projectSummary, worktreeFamily as discoverWorktreeFamily } from './project-spend.mjs';
+import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
+import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
 import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
 import { sanitizeWorkerText } from './worker-text.mjs';
@@ -31,136 +30,6 @@ import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
 
 const DAY = 86400000;
-// Cache derived data, not a timed copy of the board. Every lookup checks the inputs,
-// including missing files and directory membership (new/deleted runs and ledgers).
-const overviewCache = new Map();
-const aggregateCache = new Map();
-const gitCache = new Map();
-const scopeInputs = new Map();
-const callbackIds = new WeakMap();
-let nextCallbackId = 0;
-const callbackId = fn => {
-  if (typeof fn !== 'function') return null;
-  if (!callbackIds.has(fn)) callbackIds.set(fn, ++nextCallbackId);
-  return callbackIds.get(fn);
-};
-
-// Revisions belong in validators, never keys. Touch on access/replacement so
-// inactive projects cannot crowd out the current board.
-const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-function touch(cache, key) {
-  const value = cache.get(key);
-  if (value !== undefined) { cache.delete(key); cache.set(key, value); }
-  return value;
-}
-function remember(cache, key, value, limit = 32) {
-  cache.delete(key);
-  if (cache.size >= limit) cache.delete(cache.keys().next().value);
-  cache.set(key, value);
-  return value;
-}
-
-async function fileIdentity(file, tree = false) {
-  try {
-    const info = await fs.lstat(file);
-    const own = [file, info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
-    if (tree && info.isDirectory()) {
-      const entries = (await fs.readdir(file)).sort();
-      return [own, await Promise.all(entries.map(name => fileIdentity(path.join(file, name), true)))];
-    }
-    return own;
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [file, 'missing'];
-    // A permission/I/O failure must never validate an old snapshot.
-    throw error;
-  }
-}
-
-async function gitDirectories(root) {
-  const entry = path.join(root, '.git');
-  let dir = entry;
-  try {
-    if ((await fs.lstat(entry)).isFile()) {
-      const pointer = await fs.readFile(entry, 'utf8');
-      const match = /^gitdir:\s*(.+)\s*$/m.exec(pointer);
-      if (match) dir = path.resolve(root, match[1].trim());
-    }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  let common = dir;
-  try { common = path.resolve(dir, (await fs.readFile(path.join(dir, 'commondir'), 'utf8')).trim()); }
-  catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
-  return { entry, dir, common };
-}
-
-async function gitIdentity(root, family = false) {
-  const { entry, dir, common } = await gitDirectories(root);
-  return JSON.stringify(await Promise.all([
-    fileIdentity(entry), fileIdentity(path.join(dir, 'HEAD')), fileIdentity(path.join(dir, 'commondir')),
-    fileIdentity(path.join(common, 'config')),
-    ...(family ? [fileIdentity(path.join(common, 'worktrees'), true)] : []),
-  ]));
-}
-
-async function mainWorktreeRoot(root) {
-  const key = `main:${path.resolve(root)}`;
-  const identity = await gitIdentity(root);
-  const hit = gitCache.get(key);
-  if (hit?.identity === identity) return hit.value;
-  const value = await discoverMainWorktreeRoot(root);
-  remember(gitCache, key, { identity, value });
-  return value;
-}
-
-async function worktreeFamily(root, options) {
-  const key = `family:${path.resolve(root)}:${JSON.stringify(options)}`;
-  const identity = await gitIdentity(root, true);
-  const hit = gitCache.get(key);
-  if (hit?.identity === identity) return hit.value;
-  const value = await discoverWorktreeFamily(root, options);
-  remember(gitCache, key, { identity, value });
-  return value;
-}
-
-async function projectFilesIdentity(root) {
-  return Promise.all([
-    fileIdentity(path.join(root, '.swarm'), true),
-    fileIdentity(ledgerPath(root)), fileIdentity(logPath(root)),
-    fileIdentity(path.join(root, '.project-swarm.json')),
-    fileIdentity(path.join(root, 'docs', 'scope'), true),
-    ...[...(scopeInputs.get(root) ?? [])].map(file => fileIdentity(file)),
-    gitIdentity(root, true),
-  ]);
-}
-
-/** Cheap validator shared by the board data cache and the HTTP representation cache. */
-export async function boardSnapshotInputIdentity({ projects = [], env = process.env, historyFile, registryFile } = {}) {
-  const extraRoots = projects.map(project => project.root).filter(Boolean);
-  const roots = new Set();
-  for (const root of extraRoots) {
-    for (const member of await projectFamilyRoots(root, { env, extraRoots })) roots.add(member);
-  }
-  const files = [historyFile, registryFile].filter(Boolean);
-  return fingerprint(await Promise.all([
-    ...[...roots].sort().map(root => projectFilesIdentity(root)),
-    ...files.map(file => fileIdentity(file)),
-  ]));
-}
-
-// These fields have moving time windows even if no file changes. Rebuild at least
-// once a minute, and at local midnight; never reuse a value after a clock reversal.
-function cacheTimeValid(entry, now) {
-  return entry && now >= entry.at && now - entry.at < 60000
-    && startOfLocalDay(now) === startOfLocalDay(entry.at);
-}
-
-async function cachedAggregate(key, identity, now, build) {
-  const hit = touch(aggregateCache, key);
-  if (hit?.identity === identity && cacheTimeValid(hit, now)) return structuredClone(await hit.value);
-  const entry = { identity, at: now, value: Promise.resolve().then(build) };
-  remember(aggregateCache, key, entry);
-  try { return structuredClone(await entry.value); }
-  catch (error) { if (aggregateCache.get(key) === entry) aggregateCache.delete(key); throw error; }
-}
 export const UNTRACKED_HEADLINE_MS = 7 * DAY;
 const UNTRACKED_WARNING = 'untracked work: no ledger ticket';
 const LIVE_RUN = new Set(['queued', 'pending', 'running', 'active', 'in_progress', 'in-progress', 'live']);
@@ -573,17 +442,6 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
   return out;
 }
 
-// One parsed state per file, bounded by count and source bytes. Oversized states
-// can still be read for this request without living in the cache.
-const stateCache = new Map();
-const STATE_CACHE_ENTRIES = 512;
-const STATE_CACHE_BYTES = 16 * 1024 * 1024;
-let stateCacheBytes = 0;
-function forgetState(file) {
-  const hit = stateCache.get(file);
-  if (hit) stateCacheBytes -= hit.bytes;
-  stateCache.delete(file);
-}
 export async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
@@ -595,21 +453,11 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
       if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
       const file = path.join(dir, id, 'state.json');
       const stat = await fs.stat(file);
-      let hit = touch(stateCache, file);
-      if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs || hit.ctimeMs !== stat.ctimeMs || hit.ino !== stat.ino) {
-        const source = await fs.readFile(file, 'utf8');
-        const state = JSON.parse(source);
-        forgetState(file);
-        hit = { bytes: Buffer.byteLength(source), size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
-        if (hit.bytes <= STATE_CACHE_BYTES) {
-          while (stateCache.size >= STATE_CACHE_ENTRIES || stateCacheBytes + hit.bytes > STATE_CACHE_BYTES) {
-            forgetState(stateCache.keys().next().value);
-          }
-          stateCache.set(file, hit);
-          stateCacheBytes += hit.bytes;
-        }
+      const state = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (state && typeof state === 'object' && !Array.isArray(state)
+        && (state.jobs === undefined || Array.isArray(state.jobs))) {
+        runs.push({ id, state, mtimeMs: stat.mtimeMs });
       }
-      if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
     } catch (error) {
       const code = error?.code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR' && error?.name !== 'SyntaxError') console.error('[tools/board-data.mjs] readRunStates run folder:', error?.message ?? error);
@@ -832,9 +680,7 @@ async function scopeFor(root, ledger) {
   const file = path.resolve(root, relative);
   const base = path.resolve(root);
   if (file !== base && !file.startsWith(`${base}${path.sep}`)) return null;
-  // A ledger may name a scope document outside docs/scope. Remember that input
-  // too, so editing it invalidates the overview without touching the ledger.
-  if (!pathInside(file, path.join(root, 'docs', 'scope'))) remember(scopeInputs, root, new Set([file]));
+  // A ledger may name a scope document elsewhere inside its project root.
   try { return parseScope(await fs.readFile(file, 'utf8')); } catch { return null; }
 }
 
@@ -1002,51 +848,7 @@ async function buildWatchCard({
 }
 
 // One project's lane on the board. `liveRuns` are the alive runs of THIS project only.
-export async function projectOverview(project, liveRuns, options = {}) {
-  const { now = Date.now(), env = process.env, historyFile, summary = projectSummary, deployStatus, prState } = options;
-  const roots = options.familyRoots ?? await projectFamilyRoots(project.root, {
-    ownOnly: options.worktree || Boolean(await mainWorktreeRoot(project.root)), env, extraRoots: options.extraRoots,
-  });
-  const identityOf = async () => JSON.stringify(await Promise.all([
-    ...roots.map(root => projectFilesIdentity(root)),
-    ...(historyFile ? [fileIdentity(historyFile)] : []),
-  ]));
-  const key = path.resolve(project.root);
-  // Keep only the current context/aggregate. Changing live state and registry
-  // metadata previously allocated another large key and aggregate each poll.
-  const context = fingerprint([project, liveRuns, roots, options.slots, options.worktree, env,
-    callbackId(summary), callbackId(deployStatus), prState]);
-  const validatedIdentityOf = async () => fingerprint([context, await identityOf()]);
-  const identity = await validatedIdentityOf();
-  const hit = touch(overviewCache, key);
-  if (hit?.identity === identity && cacheTimeValid(hit, now)) {
-    options.profile?.({ kind: 'project', id: project.id, cached: true });
-    return structuredClone(await hit.value);
-  }
-  const started = performance.now();
-  const entry = { identity, at: now };
-  entry.value = (async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const before = entry.identity;
-      const value = await buildProjectOverview(project, liveRuns, { ...options, now, familyRoots: roots });
-      const after = await validatedIdentityOf();
-      if (before === after) return value;
-      entry.identity = after;
-    }
-    throw new Error(`Project inputs kept changing during snapshot: ${project.id}`);
-  })();
-  remember(overviewCache, key, entry);
-  try {
-    const value = await entry.value;
-    options.profile?.({ kind: 'project', id: project.id, cached: false, ms: performance.now() - started });
-    return structuredClone(value);
-  } catch (error) {
-    if (overviewCache.get(key) === entry) overviewCache.delete(key);
-    throw error;
-  }
-}
-
-async function buildProjectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [], prState = undefined } = {}) {
+export async function projectOverview(project, liveRuns, { now = Date.now(), summary = projectSummary, historyFile = undefined, deployStatus = null, slots = null, worktree = false, env = process.env, familyRoots = null, extraRoots = [], prState = undefined } = {}) {
   const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
   const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
   const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
@@ -1280,11 +1082,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   }
   let inboxSnapshot = { items: [] };
   try {
-    const identity = await boardSnapshotInputIdentity({ projects: inputProjects, env, historyFile });
-    const laneIdentity = await fileIdentity(lanesDir(env), true);
-    inboxSnapshot = await cachedAggregate(`inbox:${lanesDir(env)}`,
-      fingerprint([inputProjects, env, identity, laneIdentity, heldWorkers]), now,
-      () => boardInbox({ projects: inputProjects, now, env }));
+    inboxSnapshot = await boardInbox({ projects: inputProjects, now, env });
   } catch (error) {
     console.error('[tools/board-data.mjs] boardSnapshot boardInbox:', error?.message ?? error);
   }
@@ -1348,10 +1146,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
   // One session can be in two projects' logs: the machine totals count each message once over all transcripts.
   {
-    const files = [...transcripts].sort();
-    const identity = JSON.stringify(await Promise.all(files.map(file => fileIdentity(file))));
-    const c = files.length ? await cachedAggregate(`usage:${lanesDir(env)}`, fingerprint([files, identity]), now,
-      () => combinedUsage(files, { now })) : { todayListUsd: 0, allListUsd: 0 };
+    const c = await combinedUsage([...transcripts], { now });
     machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd;
   }
   for (const o of overviews) if (o.orchestrator) delete o.orchestrator.transcripts;
@@ -1520,11 +1315,6 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
 
 // Backfill for the history log from what is on disk (runs, spend, lessons, stages): events carry keys, so running it again adds nothing new.
 export async function historyEventsOf(project) {
-  const identity = fingerprint([project, await projectFilesIdentity(project.root)]);
-  return cachedAggregate(`history:${path.resolve(project.root)}`, identity, Date.now(), () => buildHistoryEvents(project));
-}
-
-async function buildHistoryEvents(project) {
   const events = [];
   const base = { project: project.name, projectId: project.id };
   events.push({ ...base, kind: 'project', key: `project:${project.id}`, at: project.addedAt, title: `Project ${project.name} registered` });
