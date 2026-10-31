@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-perf-redact",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "tierReason": "token redaction in the perf harness; Opus review blocker",
+      "sensitive": true,
+      "prompt": "Fix the Opus blocker in tools/watch-perf.mjs: it writes the board URL verbatim into its result (`url: ...`), and the real board URL carries the watch token in ?t=, so the token leaks into any saved JSON or printed summary. Add a redactUrl(url) helper that replaces the t= query value with \u2026 (e.g. ?t=abc&x=1 -> ?t=\u2026&x=1) and use it for: the result.url, every URL printed to the summary/stderr, and any error text that includes the URL. The harness must never print or write the token. Export redactUrl for tests and guard the CLI body so importing the module does not run a measurement (e.g. `if (import.meta.url === pathToFileURL(process.argv[1]).href)` or a main() guard). Add tests/watch-perf.test.mjs asserting redactUrl on ?t=, &t=, multiple params, no token, and that the CLI source does not write the raw URL (a focused unit test). Verify: node --check tools/watch-perf.mjs; node --import ./tests/_isolate-config.mjs --test tests/watch-perf.test.mjs tests/command-center-perf-budget.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/watch-perf.mjs"
+      ],
+      "outputs": [
+        "tools/watch-perf.mjs",
+        "tests/watch-perf.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "focused perf redaction and budget tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t6-perf-redact",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/watch-perf.test.mjs",
+        "tests/command-center-perf-budget.test.mjs"
+      ]
+    }
+  ]
+}

@@ -17,6 +17,29 @@ const dataModulePath = fileURLToPath(new URL('../tools/watch-assets/command-cent
 
 const NOW = Date.UTC(2026, 10, 26, 20, 0, 0);
 
+const COCKPIT_WARM_MODULES = [
+  './cc-cockpit-mount.js',
+  './cockpit-view.js',
+  './cockpit-lists.js',
+  './cockpit-orchestrator.js',
+  './orchestrator-view.js',
+  './robot-head.js',
+  './cc-ledger-browser.js',
+  './cc-glitch.js',
+  './cc-tour.js',
+];
+
+function cockpitWarmHrefs() {
+  const bootUrl = new URL('../tools/watch-assets/command-center-boot.js', import.meta.url);
+  return COCKPIT_WARM_MODULES.map((rel) => new URL(rel, bootUrl).href);
+}
+
+function modulepreloadHrefs(head) {
+  return (head.children || [])
+    .filter((node) => node.rel === 'modulepreload')
+    .map((node) => node.href);
+}
+
 function loadCommandCenterData() {
   const src = fs.readFileSync(dataModulePath, 'utf8');
   const box = { self: {} };
@@ -373,6 +396,14 @@ function makeRuntime() {
   };
   const clearInterval = () => {};
 
+  const timeouts = [];
+  const setTimeout = (fn, ms) => {
+    const id = timeouts.length + 1;
+    timeouts.push({ id, fn, ms });
+    return id;
+  };
+  const clearTimeout = () => {};
+
   const storage = {
     _data: new Map(),
     getItem(k) { return this._data.get(k) ?? null; },
@@ -392,6 +423,9 @@ function makeRuntime() {
     fetchCalls: () => fetchCalls,
     setInterval,
     intervals,
+    setTimeout,
+    timeouts,
+    clearTimeout,
     storage,
     hiveSnapshot,
     cockpit,
@@ -411,6 +445,8 @@ async function mountWithRuntime(rt) {
     now: () => NOW,
     setInterval: rt.setInterval,
     clearInterval: () => {},
+    setTimeout: rt.setTimeout,
+    clearTimeout: rt.clearTimeout,
     requestAnimationFrame: rt.dom.requestAnimationFrame,
     cancelAnimationFrame: rt.dom.cancelAnimationFrame,
     matchMedia: rt.dom.matchMedia,
@@ -514,3 +550,122 @@ function walkForText(node, text) {
   }
   return null;
 }
+
+test('browser idle preload inserts modulepreload for cockpit without loading cockpit on Hive', async () => {
+  const rt = makeRuntime();
+  const expectedHrefs = cockpitWarmHrefs();
+  let idleFn;
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = (fn) => {
+    idleFn = fn;
+    return 1;
+  };
+  try {
+    const handle = await mountWithRuntime(rt);
+    assert.ok(rt.root.querySelector('.hive-node'), 'Hive is visible before any cockpit switch');
+    assert.equal(rt.root.querySelector('.cc-cockpit-shell'), null);
+    idleFn?.();
+    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
+
+test('prompt cockpit warm adds modulepreload within 300ms without waiting for idle', async () => {
+  const rt = makeRuntime();
+  const expectedHrefs = cockpitWarmHrefs();
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  try {
+    await ensureHivePanels(rt.dom.document);
+    const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
+    const handle = mountCommandCenter(rt.root, {
+      document: rt.dom.document,
+      fetchJson: rt.fetchJson,
+      location: rt.location,
+      history: rt.history,
+      now: () => NOW,
+      setInterval: rt.setInterval,
+      clearInterval: () => {},
+      setTimeout: rt.setTimeout,
+      clearTimeout: rt.clearTimeout,
+      requestAnimationFrame: rt.dom.requestAnimationFrame,
+      cancelAnimationFrame: rt.dom.cancelAnimationFrame,
+      matchMedia: rt.dom.matchMedia,
+      storage: rt.storage,
+    });
+    await handle.whenReady;
+    assert.ok(rt.root.querySelector('.hive-node'));
+    assert.equal(modulepreloadHrefs(rt.dom.document.head).length, 0,
+      'modulepreload is not inserted until the warm timer fires',
+    );
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    assert.ok(warm, 'schedules a 300ms cockpit warm after the first Hive render');
+    warm.fn();
+    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
+
+test('prompt cockpit warm prefetches first project data into cache', async () => {
+  const rt = makeRuntime();
+  const projectFetches = [];
+  const baseFetch = rt.fetchJson;
+  rt.fetchJson = async (url) => {
+    if (String(url).includes('/api/command-center/project')) projectFetches.push(url);
+    return baseFetch(url);
+  };
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  try {
+    const handle = await mountWithRuntime(rt);
+    assert.equal(projectFetches.length, 0, 'Hive boot only loads the board snapshot');
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    assert.ok(warm);
+    warm.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(projectFetches.length, 1);
+    assert.match(projectFetches[0], /id=alpha/);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
+
+test('warm timer cached project paints cockpit without waiting on navigation fetch', async () => {
+  const rt = makeRuntime();
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  let finishNavFetch;
+  let navFetchStarted = false;
+  const baseFetch = rt.fetchJson;
+  rt.fetchJson = async (url) => {
+    if (String(url).includes('/api/command-center/project')) {
+      if (navFetchStarted) {
+        return new Promise((resolve) => { finishNavFetch = resolve; });
+      }
+      return baseFetch(url);
+    }
+    return baseFetch(url);
+  };
+  try {
+    const handle = await mountWithRuntime(rt);
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    warm.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    navFetchStarted = true;
+    const card = rt.root.querySelector('.hive-node');
+    card.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(rt.root.querySelector('.cc-cockpit-shell'), 'cached warm data paints before nav fetch completes');
+    assert.ok(finishNavFetch, 'navigation still awaits a fresh project response');
+    finishNavFetch(rt.cockpit);
+    await new Promise((resolve) => setImmediate(resolve));
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});

@@ -19,7 +19,7 @@ import {
   shortTitle,
 } from './cockpit-lists.js';
 import { glitch as defaultGlitch } from './cc-glitch.js';
-import { completionKey } from './cc-tour.js';
+import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
 
 const TOUR_USER = 'anonymous';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -62,8 +62,9 @@ function nowMs(deps) {
   return typeof n === 'function' ? n() : (typeof n === 'number' ? n : Date.now());
 }
 
-function suppressCockpitAutoTour() {
+async function suppressCockpitAutoTour() {
   try {
+    const { completionKey } = await import('./cc-tour.js');
     globalThis.localStorage?.setItem(completionKey(TOUR_USER), '1');
   } catch {
     // ignore storage failures (tests, private mode)
@@ -166,12 +167,12 @@ export function renderProjectCockpit(host, project, deps) {
   };
   const raf = deps.requestAnimationFrame || (typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame.bind(win) : null);
   const caf = deps.cancelAnimationFrame || (typeof win.cancelAnimationFrame === 'function' ? win.cancelAnimationFrame.bind(win) : null);
-  let reducedMotion = false;
+  let reducedMq = null;
   try {
     const mm = typeof deps.matchMedia === 'function' ? deps.matchMedia : (typeof win.matchMedia === 'function' ? win.matchMedia.bind(win) : null);
-    reducedMotion = Boolean(mm && mm('(prefers-reduced-motion: reduce)').matches);
+    reducedMq = mm && mm('(prefers-reduced-motion: reduce)');
   } catch {
-    reducedMotion = false;
+    reducedMq = null;
   }
 
   while (host.firstChild) host.removeChild(host.firstChild);
@@ -318,10 +319,6 @@ export function renderProjectCockpit(host, project, deps) {
   wstream.appendChild(wHead);
   wstream.appendChild(wgrid);
 
-  // the orchestrator run is one line at the foot of the NOW card (no separate run-stream block)
-  const runLine = el(doc, 'div', 'ck-runs');
-  runLine.setAttribute('aria-label', 'Orchestrator run');
-
   const stack = el(doc, 'footer', 'stack');
   stack.setAttribute('aria-label', 'Ticket stack');
   const stackLeft = el(doc, 'div');
@@ -354,6 +351,17 @@ export function renderProjectCockpit(host, project, deps) {
 
   let destroyed = false;
   let activeId = null;
+  let motion = null;
+  const patchPanel = (target, render) => {
+    const staging = doc.createElement('div');
+    const result = render(staging);
+    const attrs = staging.attributes?.[Symbol.iterator]
+      ? [...staging.attributes].map(a => [a.name, a.value]) : Object.entries(staging.attributes || {});
+    for (const [name, value] of attrs) if (target.getAttribute(name) !== value) target.setAttribute(name, value);
+    reconcileDom(target, staging);
+    return result;
+  };
+  const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
 
   /** The card of the NOW RUNNING ticket, in whichever column it sits. */
   function activeRow() {
@@ -456,16 +464,8 @@ export function renderProjectCockpit(host, project, deps) {
   // The creature bob, glow, live chips, scan and stream shine are CSS keyframes (cc-cockpit.css), so they run on the
   // compositor without restyling the page each frame; this loop only moves what depends on measured geometry.
   // Reduced motion never starts it and CSS drops the keyframes.
-  let frame = null;
-  function tick(ts) {
-    frame = null;
-    if (destroyed) return;
-    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
-    frame = raf(tick);
-  }
   function startMotion() {
-    if (reducedMotion || !raf || frame != null || destroyed) return;
-    frame = raf(tick);
+    motion?.sync();
   }
 
   // Orchestrator creature: mounted once per project, then only its state follows the orchestrator.
@@ -486,7 +486,7 @@ export function renderProjectCockpit(host, project, deps) {
       headHandle = null;
       headKey = key;
       headMounted = null;
-      loadCreature().then((api) => {
+      const decorate = () => loadCreature().then((api) => {
         if (!api || destroyed || headKey !== key || headHandle) return;
         try {
           clear(hd2);
@@ -498,10 +498,14 @@ export function renderProjectCockpit(host, project, deps) {
           });
           headMounted = headWanted.state;
           layoutWire();
+          motion?.sync();
         } catch {
           headHandle = null;
         }
       });
+      // Paint the shell and data before secondary visuals. Tests may inject an immediate mount.
+      if (typeof deps.mountRobotHead === 'function') void decorate();
+      else later(() => { if (!destroyed) void decorate(); }, 0);
       return;
     }
     if (headHandle && headMounted !== state) {
@@ -511,61 +515,71 @@ export function renderProjectCockpit(host, project, deps) {
   }
 
   function paintCounters(items) {
-    clear(cnt);
-    for (const c of items) {
-      const cell = el(doc, 'div');
-      cell.appendChild(el(doc, 'div', 'l', c.label));
-      const v = el(doc, 'div', 'v has-tip', String(c.value));
-      v.setAttribute('tabindex', '0');
-      v.setAttribute('data-k', c.label);
-      v.setAttribute('data-tip', c.tip);
-      if (c.color) v.style.color = c.color;
-      cell.appendChild(v);
-      cnt.appendChild(cell);
-    }
+    patchPanel(cnt, cnt => {
+      for (const c of items) {
+        const cell = el(doc, 'div');
+        cell.appendChild(el(doc, 'div', 'l', c.label));
+        const v = el(doc, 'div', 'v has-tip', String(c.value));
+        v.setAttribute('tabindex', '0');
+        v.setAttribute('data-k', c.label);
+        v.setAttribute('data-tip', c.tip);
+        if (c.color) v.style.color = c.color;
+        cell.appendChild(v);
+        cnt.appendChild(cell);
+      }
+    });
   }
 
   function paintNow(columns, model, runs) {
-    clear(nowHost);
-    const name = model.name;
-    const lead = columns.left[0] && ['running', 'ready'].includes(columns.left[0].state) ? columns.left[0] : null;
-    if (lead) {
-      const t = lead.ticket;
-      const running = lead.state === 'running';
-      const k = el(doc, 'div', 'k');
-      k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
-      k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
-      nowHost.appendChild(k);
-      const full = String(t.title || t.id).replace(/"/g, '');
-      nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
-      nowHost.appendChild(el(doc, 'div', 't', t.id));
-      const d = el(doc, 'div', 'd', full);
-      d.setAttribute('title', full);
-      d.setAttribute('data-title', full);
-      nowHost.appendChild(d);
-    } else {
-      const k = el(doc, 'div', 'k');
-      k.appendChild(el(doc, 'span', null, 'STATUS'));
-      k.appendChild(el(doc, 'span'));
-      nowHost.appendChild(k);
-      nowHost.appendChild(el(doc, 'div', 'p', name));
-      nowHost.appendChild(el(doc, 'div', 't', model.total > 0 && model.done >= model.total ? 'All done' : 'Idle'));
-      nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
-    }
-    const running = columns.counts.running;
-    const w = el(doc, 'div', 'd w');
-    w.appendChild(el(doc, 'em', null, 'WORKER >'));
-    w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
-    nowHost.appendChild(w);
-    renderRunLine(runLine, runs);
-    nowHost.appendChild(runLine);
+    patchPanel(nowHost, nowHost => {
+      clear(nowHost);
+      const name = model.name;
+      const lead = columns.left[0] && ['running', 'ready'].includes(columns.left[0].state) ? columns.left[0] : null;
+      if (lead) {
+        const t = lead.ticket;
+        const running = lead.state === 'running';
+        const k = el(doc, 'div', 'k');
+        k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
+        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
+        nowHost.appendChild(k);
+        const full = String(t.title || t.id).replace(/"/g, '');
+        nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
+        nowHost.appendChild(el(doc, 'div', 't', t.id));
+        const d = el(doc, 'div', 'd', full);
+        d.setAttribute('title', full);
+        d.setAttribute('data-title', full);
+        nowHost.appendChild(d);
+      } else {
+        const k = el(doc, 'div', 'k');
+        k.appendChild(el(doc, 'span', null, 'STATUS'));
+        k.appendChild(el(doc, 'span'));
+        nowHost.appendChild(k);
+        nowHost.appendChild(el(doc, 'div', 'p', name));
+        nowHost.appendChild(el(doc, 'div', 't', model.total > 0 && model.done >= model.total ? 'All done' : 'Idle'));
+        nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
+      }
+      const running = columns.counts.running;
+      const w = el(doc, 'div', 'd w');
+      w.appendChild(el(doc, 'em', null, 'WORKER >'));
+      w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
+      nowHost.appendChild(w);
+      const nextRunLine = el(doc, 'div', 'ck-runs');
+      nextRunLine.setAttribute('aria-label', 'Orchestrator run');
+      renderRunLine(nextRunLine, runs);
+      nowHost.appendChild(nextRunLine);
+    });
   }
 
   let projectRef = project;
   let firstPaint = true;
+  let paintSignature = '';
 
   function paint(at) {
     const p = projectRef;
+    const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
+      p?.done, p?.total, p?.runStream, Math.floor(at / 60000)]);
+    if (signature === paintSignature) return;
+    paintSignature = signature;
     const ledger = p?.ledger ?? { tickets: [] };
     const model = renderCockpit(titleHost, {
       ledger,
@@ -586,30 +600,31 @@ export function renderProjectCockpit(host, project, deps) {
     const lead = columns.left[0];
     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
 
-    crumbProject.textContent = model.name;
+    text(crumbProject, model.name);
     paintCounters(headerCounters(p, counts));
-    metaDate.textContent = utcDate(at);
+    text(metaDate, utcDate(at));
 
-    if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L', activeId, categoryOf: cats.of });
-    else renderReadyEmptyState(colL, ledger, readyTickets);
-    renderTicketColumn(colR, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' });
+    patchPanel(colL, col => columns.left.length
+      ? renderTicketColumn(col, columns.left, { side: 'L', activeId, categoryOf: cats.of })
+      : renderReadyEmptyState(col, ledger, readyTickets));
+    patchPanel(colR, col => renderTicketColumn(col, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' }));
     const rowsR = columns.right.length + (columns.more ? 1 : 0);
     colL.classList.toggle?.('spread', columns.left.length >= SPREAD_MIN_ROWS);
     colR.classList.toggle?.('spread', rowsR >= SPREAD_MIN_ROWS);
 
-    lab.setAttribute('data-orchestrator', orch.label);
-    labSub.textContent = orchestratorCaption(orch.label, allDone);
+    if (lab.getAttribute('data-orchestrator') !== orch.label) lab.setAttribute('data-orchestrator', orch.label);
+    text(labSub, orchestratorCaption(orch.label, allDone));
     syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
     paintNow(columns, model, runStreamItems(p, orch));
 
     const cards = workerCards(ledger, at, 4);
-    renderWorkerCards(wgrid, cards);
-    wCount.textContent = cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE';
+    patchPanel(wgrid, host => renderWorkerCards(host, cards));
+    text(wCount, cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE');
 
-    stackN.textContent = model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS';
-    stackSub.textContent = cats.field && cats.names.length
+    text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
+    text(stackSub, cats.field && cats.names.length
       ? cats.names.join(' / ')
-      : 'no lane or type recorded on these tickets';
+      : 'no lane or type recorded on these tickets');
     const tiles = [
       ['ready', counts.ready],
       ...(counts.running ? [['running', counts.running]] : []),
@@ -620,8 +635,8 @@ export function renderProjectCockpit(host, project, deps) {
     ].map(([label, value, key]) => ({ label, value, color: TILE_COLOURS[key || label], footnote: `${value} ${label}` }));
     const big = Math.max(...tiles.map(t => t.value));
     for (const t of tiles) t.hi = big > 0 && t.value === big;
-    renderStackSummaryTiles(tilesHost, tiles);
-    footNote.textContent = `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
+    patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
+    text(footNote, `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
 
     layoutWire();
     if (firstPaint) {
@@ -651,6 +666,8 @@ export function renderProjectCockpit(host, project, deps) {
   } catch {
     // keep the shell and the back control usable if a panel cannot paint (partial DOM)
   }
+  motion = mountAmbientMotion({ element: shell, doc, win, raf, caf, media: reducedMq,
+    draw: (_dt, ts) => placeDots(ts) });
 
   return {
     update(nextProject) {
@@ -661,8 +678,7 @@ export function renderProjectCockpit(host, project, deps) {
       destroyed = true;
       for (const id of timers) clearTimer(id);
       timers.clear();
-      if (frame != null && caf) caf(frame);
-      frame = null;
+      motion?.destroy();
       backBtn.removeEventListener('click', onBackClick);
       logo.removeEventListener('mouseenter', onLogoHover);
       if (typeof win.removeEventListener === 'function') win.removeEventListener('resize', onResize);

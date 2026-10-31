@@ -1,6 +1,6 @@
 {
   "name": "project-swarm",
-  "version": "1.167.29",
+  "version": "1.167.30",
   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
   "private": true,
   "type": "module",
@@ -15,7 +15,8 @@
     "doctor": "node tools/swarm.mjs doctor",
     "smoke": "node tools/swarm.mjs run examples/smoke.json",
     "test:stress": "node tools/stress-tests.mjs",
-    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs"
+    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs",
+    "perf:cc": "node tools/watch-perf.mjs"
   },
   "repository": {
     "type": "git",

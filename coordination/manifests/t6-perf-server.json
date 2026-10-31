@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-perf-server",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "top-priority Command Center performance; Opus review in train 6",
+      "sensitive": false,
+      "prompt": "FILE ACCESS: declared outputs are writable. Tests first where practical. Top-priority train 6 work: make the Command Center fast WITHOUT changing its look.\n\nMeasured before (MacBook, real 9-project board, desktop headless Chromium): usable 3518 ms; Hive load 497 KB over 33 requests (JS 328 KB, CSS 98 KB, fonts 63 KB, API 7.5 KB); Hive to Cockpit 3114 ms (only 2 API calls); Cockpit back 64 ms; idle page CPU 92% and server CPU 97%; 17 API calls in 45 s (about 23/min, 128 KB); every asset has Cache-Control: no-store. Phone profile (390x844, 1.6 Mbps/100 ms): usable 5251 ms, cockpit 4099 ms, idle CPU 96%.\nTargets: usable under 1 s, page switch under 150 ms, idle CPU under 5%, including the phone remote. Keep the design identical.\n\nPart 1 - serving (tools/watch-server.mjs):\n- Remove the blanket Cache-Control: no-store. Send ETag (strong, from file mtime+size or a hash) and Last-Modified for assets and pages; answer If-None-Match/If-Modified-Since with 304. Cache-Control: fonts and vendor assets `public, max-age=31536000, immutable`; JS/CSS `public, max-age=300, must-revalidate`; HTML and JSON `no-cache`; always `Vary: Accept-Encoding`.\n- Compress text responses (JS, CSS, HTML, JSON, SVG) with gzip or brotli when the request accepts it; skip already-compressed binaries. This alone should cut the 328 KB JS dramatically.\n- Cache the /api/command-center snapshot and /api/command-center/project per board revision (the board snapshot has an at/version field; use it) for a short TTL (2 s) and support ETag/304 so repeated polls cost little server CPU. Do not cache across different query args (local/redact) incorrectly.\n- Keep the token/auth semantics and remote read-only rules exactly.\n\nPart 2 - boot/loading (command-center-boot.js, command-center.html, cc-hive-mount.js, cc-cockpit-mount.js, cockpit-view.js; you have read/write access to all of them):\n- Do not import the Cockpit page modules, the robot renderer, the tour or the command palette on the Hive initial load. Dynamically import the Cockpit modules on the first Cockpit navigation, render the cockpit shell/data first, and load the robot/3D modules after (or on idle). Keep the Hive rendering exactly as now. Keep exports/tests working; the boot must remain testable with injected deps.\n- Raise the visible poll interval to 5000 ms and stop polling when document.hidden; resume immediately on visibilitychange. Keep the existing poll callback behavior.\n\nPart 3 - tests: add focused tests for: 304 on ETag, gzip when accepted and not when not, cache headers per asset type, snapshot cache key/ETag, lazy Cockpit/robot imports (Hive initial import graph excludes them), poll interval/pause. Keep every existing command-center and watch-assets test green (the full suite runs before merge). Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-flag.test.mjs tests/watch-assets.test.mjs tests/watch-assets-browser-safe.test.mjs tests/command-center-perf-budget.test.mjs -> all pass (create the perf budget test with static budgets if the job can; otherwise a focused server test). Report the payload/caching changes and counts.",
+      "context": [
+        "tools/watch-server.mjs",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/watch-assets/command-center.html",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-view.js"
+      ],
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/watch-assets/command-center.html",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tests/command-center-perf-budget.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-assets-browser-safe.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused boot/routes/assets/perf tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t6-perf-server",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-flag.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/watch-assets-browser-safe.test.mjs",
+        "tests/command-center-perf-budget.test.mjs"
+      ]
+    }
+  ]
+}

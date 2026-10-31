@@ -11,6 +11,121 @@ const ORBIT_TEXT = '  ONE LEDGER  ·  MANY WORKERS  ·  NOTHING GUESSED  ·  EVE
 const MAX_PARTS = 400;
 const MAX_INNER = 160;
 
+/** Shared ambient budget: at most 30 fps, a composed static frame after 5s without input.
+ * No callbacks are scheduled while idle, hidden, offscreen or under reduced motion.
+ * CSS animations freeze at their current phase too, preserving the composed picture.
+ */
+export function mountAmbientMotion({ element, visibilityElement = element, doc = globalThis.document, win = globalThis,
+  raf = win.requestAnimationFrame?.bind(win), caf = win.cancelAnimationFrame?.bind(win),
+  media = win.matchMedia?.('(prefers-reduced-motion: reduce)'), draw, frameMs = 1000 / 30,
+  paused = () => false, onVisibility = () => {}, freezeCss = true }) {
+  let frame = null;
+  let timer = null;
+  let last = null;
+  let activeSince = null;
+  let visible = true;
+  let idle = false;
+  let destroyed = false;
+  const frozen = new Set();
+  const canRun = () => !destroyed && !doc?.hidden && visible && !media?.matches && !paused() && !idle;
+  function syncCss(moving) {
+    if (!freezeCss) return;
+    if (moving) {
+      for (const animation of frozen) animation.play();
+      frozen.clear();
+    } else {
+      for (const animation of element?.getAnimations?.({ subtree: true }) || []) {
+        if (animation.playState === 'running') { animation.pause(); frozen.add(animation); }
+      }
+    }
+  }
+  function stop() {
+    if (frame != null) caf?.(frame);
+    if (timer != null) win.clearTimeout?.(timer);
+    frame = timer = null;
+    last = null;
+  }
+  function tick(ts) {
+    frame = null;
+    if (activeSince == null) activeSince = ts;
+    if (ts - activeSince >= 5000) idle = true;
+    if (!canRun()) { stop(); syncCss(false); return; }
+    if (last == null || ts - last >= frameMs) {
+      const dt = last == null ? 0 : Math.min(0.1, (ts - last) / 1000);
+      last = ts;
+      draw(dt, ts);
+    }
+    frame = raf?.(tick) ?? null;
+  }
+  function sync() {
+    const moving = canRun();
+    syncCss(moving);
+    if (!moving) { stop(); return; }
+    if (frame == null && raf) frame = raf(tick);
+    if (timer == null && win.setTimeout) {
+      timer = win.setTimeout(() => { timer = null; idle = true; sync(); }, 5000);
+      timer?.unref?.();
+    }
+  }
+  function wake() { idle = false; activeSince = null; if (timer != null) win.clearTimeout?.(timer); timer = null; sync(); }
+  const visibility = () => { onVisibility(); sync(); };
+  const events = [['pointermove', wake], ['pointerdown', wake], ['keydown', wake], ['visibilitychange', visibility]];
+  for (const [name, fn] of events) doc?.addEventListener?.(name, fn, { passive: true });
+  media?.addEventListener?.('change', sync);
+  const observer = win.IntersectionObserver ? new win.IntersectionObserver(entries => {
+    visible = entries[entries.length - 1].isIntersecting; sync();
+  }) : null;
+  if (visibilityElement) observer?.observe(visibilityElement);
+  sync();
+  return { sync, wake, destroy() {
+    destroyed = true; stop(); observer?.disconnect();
+    for (const [name, fn] of events) doc?.removeEventListener?.(name, fn);
+    media?.removeEventListener?.('change', sync);
+    for (const animation of frozen) if (animation.playState === 'paused') animation.play();
+    frozen.clear();
+  } };
+}
+
+/** Reconcile detached render output. Existing elements, focus and event handlers survive polls. */
+export function reconcileDom(target, next) {
+  const attrs = node => node.attributes?.[Symbol.iterator]
+    ? [...node.attributes].map(a => [a.name, a.value]) : Object.entries(node.attributes || {});
+  function patch(current, wanted) {
+    if (current.nodeType === 3) {
+      if (current.textContent !== wanted.textContent) current.textContent = wanted.textContent;
+      return;
+    }
+    for (const [name, value] of attrs(wanted)) if (current.getAttribute(name) !== value) current.setAttribute(name, value);
+    for (const [name] of attrs(current)) if (wanted.getAttribute(name) == null) current.removeAttribute?.(name);
+    if (wanted.getAttribute?.('data-cc-visual') != null) return;
+    // Small DOM test doubles expose style and className separately from attributes.
+    if (!current.nodeType) {
+      if (current.className !== wanted.className) current.className = wanted.className;
+      Object.assign(current.style || {}, wanted.style);
+      if (current.textContent !== wanted.textContent) current.textContent = wanted.textContent;
+    }
+    reconcileDom(current, wanted);
+  }
+  const children = node => Array.from(node.nodeType ? node.childNodes : node.children || []);
+  const wanted = children(next);
+  const old = children(target);
+  const key = node => node?.getAttribute?.('data-ticket-id') || node?.getAttribute?.('data-project-id');
+  for (let i = 0; i < wanted.length; i++) {
+    const item = wanted[i];
+    let current = children(target)[i];
+    const id = key(item);
+    if (id && key(current) !== id) {
+      const match = old.find(n => key(n) === id && children(target).includes(n));
+      if (match && target.insertBefore) { target.insertBefore(match, current || null); current = match; }
+      else if (!match && current && target.insertBefore) { target.insertBefore(item, current); continue; }
+    }
+    if (current && current.nodeType === item.nodeType && current.tagName === item.tagName && (!id || key(current) === id)) patch(current, item);
+    else if (current && target.replaceChild) target.replaceChild(item, current);
+    else { if (current) target.removeChild(current); target.appendChild(item); }
+  }
+  for (const extra of children(target).slice(wanted.length)) target.removeChild(extra);
+}
+
 /** Card centres on an ellipse around the ring, first card at the top, clockwise. */
 export function cardPositions(w, h, n) {
   const rx = Math.min(w * 0.38, 500);
@@ -266,4 +381,89 @@ export function createHiveStage(deps) {
     frameMs() { return activity.agents > 0 ? 33 : 50; },
     get size() { return { w: W, h: H, ringR: RING_R }; },
   };
+}
+
+// Navigation shared by boot and the legacy router, without importing legacy visual dependencies.
+/**
+ * Navigation state:
+ * - `{ view: 'hive' }` — project ring overview
+ * - `{ view: 'cockpit', projectId: string }` — single-project cockpit for that id
+ *
+ * Actions:
+ * - `{ type: 'select-project', projectId: string }` — from hive, open cockpit for projectId
+ * - `{ type: 'back' }` — from cockpit, return to hive in one transition
+ *
+ * @typedef {{ view: 'hive' }} CcHiveState
+ * @typedef {{ view: 'cockpit', projectId: string }} CcCockpitState
+ * @typedef {CcHiveState | CcCockpitState} CcNavState
+ * @typedef {{ type: 'select-project', projectId: string } | { type: 'back' }} CcNavAction
+ */
+
+export const CC_INITIAL_STATE = Object.freeze({ view: 'hive' });
+
+const CC_BASE_PATH = '/command-center';
+
+/**
+ * Map a URL pathname to command-center navigation state (deep-link entry).
+ * @param {string} pathname
+ * @returns {CcNavState}
+ */
+export function ccStateFromPath(pathname) {
+  if (typeof pathname !== 'string') return { view: 'hive' };
+  const raw = pathname.trim();
+  if (!raw.startsWith(CC_BASE_PATH)) return { view: 'hive' };
+
+  const suffix = raw.slice(CC_BASE_PATH.length);
+  if (suffix === '' || suffix === '/') return { view: 'hive' };
+
+  const projectMatch = /^\/project\/([^/]+)\/?$/.exec(suffix);
+  if (projectMatch) {
+    const projectId = projectMatch[1];
+    if (typeof projectId === 'string' && projectId.length > 0) {
+      return { view: 'cockpit', projectId };
+    }
+  }
+
+  return { view: 'hive' };
+}
+
+/**
+ * Pathname for a navigation state (inverse of {@link ccStateFromPath} for valid states).
+ * @param {CcNavState | null | undefined} state
+ * @returns {string}
+ */
+export function ccPathFromState(state) {
+  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
+  if (
+    current.view === 'cockpit'
+    && typeof current.projectId === 'string'
+    && current.projectId.length > 0
+  ) {
+    return `${CC_BASE_PATH}/project/${current.projectId}`;
+  }
+  return CC_BASE_PATH;
+}
+
+/**
+ * Pure reducer for command-center view transitions.
+ * @param {CcNavState | null | undefined} state
+ * @param {CcNavAction} action
+ * @returns {CcNavState}
+ */
+export function ccNavigate(state, action) {
+  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
+  if (!action || typeof action !== 'object') return current;
+
+  if (action.type === 'select-project') {
+    const projectId = action.projectId;
+    if (typeof projectId !== 'string' || projectId.length === 0) return current;
+    return { view: 'cockpit', projectId };
+  }
+
+  if (action.type === 'back') {
+    if (current.view === 'cockpit') return { view: 'hive' };
+    return current;
+  }
+
+  return current;
 }

@@ -1220,6 +1220,8 @@
   /** Three panels: session log + hourly bars, all projects + who built, what the ledger shows. Returns the robot-head handles it mounted. */
   function renderHiveDashboard(root, view, options) {
     var opts = options || {};
+    var liveRoot = root;
+    if (opts.reconcile) { root = document.createElement('div'); }
     var nowMs = typeof opts.nowMs === 'number' ? opts.nowMs : Date.now();
     var heads = [];
     var pendingHeads = [];
@@ -1297,6 +1299,7 @@
         var col = laneColor(lane.name);
         var host = el('span', 'hive-lh');
         host.setAttribute('data-lane', lane.name);
+        host.setAttribute('data-cc-visual', 'lane');
         var state = lane.running > 0 ? 'working' : 'sleeping';
         if (typeof opts.mountHead === 'function') {
           pendingHeads.push({ host: host, spec: { state: state, size: 30, color: col, id: 'lane-' + lane.name, label: lane.name + ' lane, ' + (state === 'working' ? 'working' : 'resting') } });
@@ -1370,9 +1373,14 @@
     root.appendChild(log);
     root.appendChild(all);
     root.appendChild(led);
+    if (opts.reconcile) { opts.reconcile(liveRoot, root); root = liveRoot; }
     // Heads mount after everything is in the page so their off-screen tracking sees real layout.
     for (var pi = 0; pi < pendingHeads.length; pi += 1) {
-      var handle = opts.mountHead(pendingHeads[pi].host, pendingHeads[pi].spec);
+      var pending = pendingHeads[pi];
+      var liveHost = opts.reconcile && root.querySelectorAll
+        ? Array.from(root.querySelectorAll('[data-lane]')).find(function (node) { return node.getAttribute('data-lane') === pending.host.getAttribute('data-lane'); })
+        : pending.host;
+      var handle = liveHost && opts.mountHead(liveHost, pending.spec);
       if (handle) { heads.push(handle); }
     }
     return { heads: heads };

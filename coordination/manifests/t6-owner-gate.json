@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-owner-gate",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "owner-only security gate; Opus review in train 6",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: declared outputs are writable. Tests first. Harden the owner-only gate for `swarm tickets supersede` and `tickets --set superseded` in tools/scope-commands.mjs (supersedeOwnerRefusal ~line 3449). The review's exploit: any agent can export SWARM_OWNER=1, or allocate a pty, and get through, because the gate trusts an env string and isTTY.\n\nNew rules:\n1) Remove the SWARM_OWNER=1 production bypass entirely. No environment string makes an agent session the owner.\n2) Agent/worker markers always refuse, checked first: CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, SWARM_WORKER, SWARM_JOB_ID, SWARM_RUN_ID (present today; keep them).\n3) Add process-ancestry detection: walk the parent process chain from this process (default: `ps -o ppid= -p <pid>` and `ps -o comm= -p <pid>`, up to 32 hops, stop at pid 1) and refuse if any ancestor's command basename (lowercased) is a known agent: claude, codex, cursor-agent, opencode, chatgpt. This closes the pty trick: a pty created inside an agent still has the agent in its ancestry. Keep the helper injectable (`ancestry` array or a `processInfo` dep) for tests.\n4) Still require isTTY (both stdin and stdout) after the ancestry/marker checks.\n5) Keep one test-only seam so the existing success-path command tests can run without a real owner terminal: a module-scoped `setSupersedeOwnerCheck(fn)` / reset hook used by both the bulk command and the `--set superseded` path (production always calls the real gate; the hook is for tests only, no env bypass). Tests must reset it.\n\nUpdate tests/tickets-supersede.test.mjs: SWARM_OWNER=1 with an agent marker still refuses; isTTY true with ancestry ['bash','codex'] refuses; isTTY true with clean ancestry allows; no TTY refuses; the bulk command and `--set superseded` both refuse through the real gate and allow through the test hook. Keep every other test. Verify: node --import ./tests/_isolate-config.mjs --test tests/tickets-supersede.test.mjs tests/scope-commands.test.mjs tests/tickets.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tests/tickets-supersede.test.mjs",
+        "tests/scope-commands.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-commands.mjs",
+        "tests/tickets-supersede.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-sync.test.mjs",
+        "tests/batch-a-eval.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/batch-c-eval.test.mjs",
+        "tests/change-order-auto-split.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/errors.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/lesson-34-eval.test.mjs",
+        "tests/lesson-35-eval.test.mjs",
+        "tests/lesson-37-eval.test.mjs",
+        "tests/lesson-38-eval.test.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs",
+        "tests/mark-deps.test.mjs",
+        "tests/review-recorder-lanes.test.mjs",
+        "tests/review-retry.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-approve-managers.test.mjs",
+        "tests/scope-delete-tickets.test.mjs",
+        "tests/scope-gate-list.test.mjs",
+        "tests/scope-ingest-acceptance.test.mjs",
+        "tests/scope-ingest-owns-tests.test.mjs",
+        "tests/scope-ingest-paths.test.mjs",
+        "tests/scope-ingest-sensitive.test.mjs",
+        "tests/scope-ingest-waves.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/scope-ownership.test.mjs",
+        "tests/scope-root-files.test.mjs",
+        "tests/scope-set-guard.test.mjs",
+        "tests/scope-spec-gate.test.mjs",
+        "tests/scope-spec-no-runner.test.mjs",
+        "tests/scope-split-guards.test.mjs",
+        "tests/scope-split-lane-size.test.mjs",
+        "tests/scope-split-repair-loop.test.mjs",
+        "tests/scope-sync-delete.test.mjs",
+        "tests/scope-sync-replan.test.mjs",
+        "tests/split-auto-approve.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-repair-auto.test.mjs",
+        "tests/split-repair.test.mjs",
+        "tests/splitter-lesson-55.test.mjs",
+        "tests/ticket-check-timeout.test.mjs",
+        "tests/ticket-id-blocks.test.mjs",
+        "tests/ticket-lane-risk.test.mjs",
+        "tests/ticket-owner-note.test.mjs",
+        "tests/ticket-paths-new-files.test.mjs",
+        "tests/ticket-paths-regression.test.mjs",
+        "tests/tickets-delivered.test.mjs",
+        "tests/train2-review-gaps.test.mjs",
+        "tests/ui-check.test.mjs",
+        "tests/verify-provenance.test.mjs",
+        "tests/wave-prep-robust.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused ticket/scope tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t6-owner-gate",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/tickets-supersede.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/tickets.test.mjs"
+      ]
+    }
+  ]
+}

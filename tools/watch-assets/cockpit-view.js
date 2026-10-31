@@ -3,6 +3,7 @@
 import { ledgerStats } from './cc-ledger-browser.js';
 import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
 import { STAGE_COLOURS, cockpitCategories, setCssVar } from './cockpit-lists.js';
+import { reconcileDom } from './cc-hive-stage.js';
 
 /** Artifact title sizes: the project name is 54px on desktop and 34px at 900px and below; the page wrap is 1320px. */
 export const COCKPIT_TITLE_PX = { desktop: 54, phone: 34 };
@@ -174,6 +175,8 @@ function utcClock(ms) {
 export function renderCockpit(host, data, opts) {
   const now = (opts && opts.now) || Date.now();
   const doc = host.ownerDocument || globalThis.document;
+  const liveHost = host;
+  host = doc.createElement('div');
   const mk = (tag, cls, text) => {
     const n = doc.createElement(tag);
     if (cls) n.className = cls;
@@ -249,6 +252,7 @@ export function renderCockpit(host, data, opts) {
     strip.appendChild(seg);
   });
   host.appendChild(strip);
+  reconcileDom(liveHost, host);
 
   return {
     name,

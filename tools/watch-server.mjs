@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import http from 'node:http';
 import os from 'node:os';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
 import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
@@ -19,7 +20,12 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
   '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.webp': 'image/webp',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
@@ -29,7 +35,8 @@ const SECURITY = {
   'Content-Security-Policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Cache-Control': 'no-store',
+  'Cache-Control': 'no-cache',
+  Vary: 'Accept-Encoding',
 };
 
 const IDLE_FINISHED_MS = 10000;
@@ -264,9 +271,57 @@ function watchCookie(header, expectedName) {
   return matches.length === 1 ? matches[0][1] : null;
 }
 
-function send(res, method, status, headers, body) {
-  res.writeHead(status, { ...SECURITY, ...headers });
-  res.end(method === 'HEAD' ? undefined : body);
+const COMPRESSIBLE = /^(?:text\/(?!event-stream)|application\/(?:json|javascript)|image\/svg\+xml)/;
+
+function acceptsGzip(header = '') {
+  const encodings = String(header).toLowerCase().split(',').map(part => {
+    const [name, ...params] = part.trim().split(';');
+    const quality = params.find(p => p.trim().startsWith('q='));
+    return [name, quality ? Number(quality.trim().slice(2)) : 1];
+  });
+  const explicit = encodings.find(([name]) => name === 'gzip');
+  return (explicit || encodings.find(([name]) => name === '*') || ['', 0])[1] > 0;
+}
+
+function representation(body, type) {
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  return {
+    body: bytes,
+    etag: `"${createHash('sha256').update(bytes).digest('hex')}"`,
+    gzip: COMPRESSIBLE.test(type) && bytes.length ? gzipSync(bytes) : null,
+  };
+}
+
+export function watchAssetCacheControl(name) {
+  if (name.startsWith('vendor/') || /\.(?:woff2?|ttf|otf)$/.test(name)) return 'public, max-age=31536000, immutable';
+  return /\.(?:m?js|css)$/.test(name) ? 'public, max-age=300, must-revalidate' : 'no-cache';
+}
+
+function send(res, method, status, headers, body, encoded = null) {
+  const out = { ...SECURITY, ...headers };
+  const req = res.req;
+  let bytes = body;
+  if (status === 200 && COMPRESSIBLE.test(out['Content-Type'] || '') && acceptsGzip(req?.headers['accept-encoding'])) {
+    bytes = encoded?.gzip ?? gzipSync(body);
+    out['Content-Encoding'] = 'gzip';
+    // Strong validators identify the selected wire representation.
+    if (out.ETag) out.ETag = out.ETag.slice(0, -1) + '-gzip"';
+  }
+  if (status === 200 && out.ETag && (method === 'GET' || method === 'HEAD')) {
+    const match = req?.headers['if-none-match'];
+    const since = req?.headers['if-modified-since'];
+    const unchanged = match !== undefined
+      ? String(match).split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === out.ETag)
+      : since && out['Last-Modified'] && Number.isFinite(Date.parse(since)) && Date.parse(since) >= Date.parse(out['Last-Modified']);
+    if (unchanged) {
+      delete out['Content-Length'];
+      res.writeHead(304, out);
+      return res.end();
+    }
+  }
+  if (bytes != null && status !== 304) out['Content-Length'] = Buffer.byteLength(bytes);
+  res.writeHead(status, out);
+  res.end(method === 'HEAD' || status === 304 ? undefined : bytes);
 }
 
 function sendText(res, method, status, msg) {
@@ -488,6 +543,8 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
+  const commandCenterCache = new Map();
+  const snapshotTtlMs = 2000;
   let server = null;
   let port = 0;
   let url = null;
@@ -536,8 +593,7 @@ export function createWatchServer(opts) {
       if (entry.name === 'LICENSE' || entry.name.startsWith('LICENSE-')) continue;
       const ext = path.extname(entry.name);
       if (!Object.hasOwn(TYPES, ext)) continue;
-      const body = await readFile(full);
-      assets.set(key, { type: TYPES[ext], body });
+      assets.set(key, await loadAsset(full, key, TYPES[ext]));
     }
   }
 
@@ -548,18 +604,55 @@ export function createWatchServer(opts) {
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       if (!Object.hasOwn(TYPES, ext)) continue;
-      const body = await readFile(path.join(assetDir, entry.name));
-      assets.set(entry.name, { type: TYPES[ext], body });
+      assets.set(entry.name, await loadAsset(path.join(assetDir, entry.name), entry.name, TYPES[ext]));
     }
     await loadVendorAssets(path.join(assetDir, 'vendor'), 'vendor');
-    const delta = await readFile(deltaFile);
-    assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
+    assets.set('watch-delta.mjs', await loadAsset(deltaFile, 'watch-delta.mjs', TYPES['.js']));
+  }
+
+  async function loadAsset(file, name, type) {
+    const [body, info] = await Promise.all([readFile(file), stat(file)]);
+    const cacheControl = watchAssetCacheControl(name);
+    return { ...representation(body, type), type, lastModified: info.mtime.toUTCString(), cacheControl };
   }
 
   function sendAsset(res, method, name, headers = {}) {
-    const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
+    const a = assets.get(name);
     if (!a) return sendText(res, method, 404, 'not found');
-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length, ...headers }, a.body);
+    send(res, method, 200, {
+      'Content-Type': a.type, ETag: a.etag, 'Last-Modified': a.lastModified,
+      'Cache-Control': a.cacheControl, ...headers,
+    }, a.body, a);
+  }
+
+  async function commandCenterResponse(pathname, q) {
+    const options = { ...q, local: q.local === '1', redact: true };
+    const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
+    let entry = commandCenterCache.get(key);
+    if (entry?.pending) return entry.pending;
+    if (entry && now() - entry.at < snapshotTtlMs) return entry;
+    if (!entry) {
+      // Bound memory even when clients supply many distinct query arguments.
+      if (commandCenterCache.size >= 128) commandCenterCache.delete(commandCenterCache.keys().next().value);
+      entry = {};
+      commandCenterCache.set(key, entry);
+    }
+    entry.pending = (async () => {
+      const snapshot = await board.snapshot(options);
+      const revision = snapshot?.version == null && snapshot?.at == null
+        ? null : JSON.stringify([snapshot.version, snapshot.at]);
+      if (!entry.encoded || revision == null || revision !== entry.revision) {
+        const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+        const result = pathname.endsWith('/project')
+          ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
+        entry.encoded = result ? representation(JSON.stringify(result), 'application/json') : null;
+        entry.revision = revision;
+      }
+      entry.at = now();
+      return entry;
+    })();
+    try { return await entry.pending; }
+    finally { entry.pending = null; }
   }
 
   async function payload() {
@@ -709,9 +802,15 @@ export function createWatchServer(opts) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    const pageHeaders = queryOk ? {
-      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
-    } : {};
+    const pagePrivacyCache = isHtmlPage && (pathname === '/classic' || isWatchClassicPagePath(pathname))
+      ? { 'Cache-Control': 'no-store' }
+      : {};
+    const pageHeaders = {
+      ...pagePrivacyCache,
+      ...(queryOk ? {
+        'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+      } : {}),
+    };
     if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/') {
       if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
@@ -731,13 +830,11 @@ export function createWatchServer(opts) {
     if (isCommandCenterApi) {
       const q = Object.fromEntries(u.searchParams);
       delete q.t;
-      const localOnly = q.local === '1';
-      const payload = { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() };
-      if (pathname === '/api/command-center/project') {
-        const cockpit = buildProjectCockpit(payload, String(q.id ?? ''));
-        return cockpit ? sendJson(res, method, cockpit) : sendText(res, method, 404, 'not found');
-      }
-      return sendJson(res, method, buildCommandCenterSnapshot(payload));
+      const { encoded } = await commandCenterResponse(pathname, q);
+      if (!encoded) return sendText(res, method, 404, 'not found');
+      return send(res, method, 200, {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', ETag: encoded.etag,
+      }, encoded.body, encoded);
     }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
@@ -836,6 +933,7 @@ export function createWatchServer(opts) {
           await close();
           return;
         }
+        if (!streamEverClosed) return;
         const run = (await getRunSnapshot()) ?? null;
         const finished = !!run && (run.status === 'complete' || run.status === 'failed');
         if (finished && streamEverClosed && t - noStreamSince >= IDLE_FINISHED_MS) {
