@@ -802,9 +802,15 @@ export function createWatchServer(opts) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    const pageHeaders = queryOk ? {
-      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
-    } : {};
+    const pagePrivacyCache = isHtmlPage && (pathname === '/classic' || isWatchClassicPagePath(pathname))
+      ? { 'Cache-Control': 'no-store' }
+      : {};
+    const pageHeaders = {
+      ...pagePrivacyCache,
+      ...(queryOk ? {
+        'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+      } : {}),
+    };
     if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
     if (pathname === '/') {
       if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
