@@ -47,7 +47,7 @@ import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane,
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
 import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, integrationTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
@@ -3445,14 +3445,56 @@ async function refreshPlan(root) {
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
 const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
+const SUPERSEDE_AGENT_COMMANDS = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt']);
+const SUPERSEDE_AGENT_MARKERS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID'];
 
-export function supersedeOwnerRefusal({ env = process.env, isTTY = process.stdout.isTTY } = {}) {
-  if (env.SWARM_OWNER === '1') return null;
-  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.SWARM_WORKER || env.SWARM_JOB_ID || env.SWARM_RUN_ID) {
-    return SUPERSEDE_OWNER_MSG;
+function supersedeProcessInfo(pid) {
+  const options = { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'pipe'] };
+  return {
+    ppid: Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], options).trim()),
+    comm: execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], options).trim(),
+  };
+}
+
+export function supersedeOwnerRefusal({
+  env = process.env,
+  isTTY = process.stdin.isTTY && process.stdout.isTTY,
+  ancestry,
+  processInfo = supersedeProcessInfo,
+} = {}) {
+  if (SUPERSEDE_AGENT_MARKERS.some(marker => env[marker] !== undefined)) return SUPERSEDE_OWNER_MSG;
+  const isAgent = command => SUPERSEDE_AGENT_COMMANDS.has(path.basename(command.trim()).toLowerCase());
+  if (ancestry !== undefined) {
+    if (ancestry.some(isAgent)) return SUPERSEDE_OWNER_MSG;
+  } else {
+    // A terminal allocated inside an agent still has that agent in its parent chain.
+    // Refuse if the chain cannot be inspected completely within the hop limit.
+    let pid = process.pid;
+    const seen = new Set();
+    try {
+      for (let hop = 0; hop < 32 && pid > 1; hop += 1) {
+        if (seen.has(pid)) return SUPERSEDE_OWNER_MSG;
+        seen.add(pid);
+        const { ppid, comm } = processInfo(pid);
+        if (typeof comm !== 'string' || !comm.trim() || isAgent(comm)) return SUPERSEDE_OWNER_MSG;
+        if (!Number.isInteger(ppid) || ppid < 1) return SUPERSEDE_OWNER_MSG;
+        pid = ppid;
+      }
+      if (pid !== 1) return SUPERSEDE_OWNER_MSG;
+    } catch {
+      return SUPERSEDE_OWNER_MSG;
+    }
   }
   if (!isTTY) return SUPERSEDE_OWNER_MSG;
   return null;
+}
+
+let supersedeOwnerCheck = supersedeOwnerRefusal;
+
+// Test-only injection; calling without an argument restores the production gate.
+export function setSupersedeOwnerCheck(fn = supersedeOwnerRefusal) {
+  if (typeof fn !== 'function') throw new TypeError('supersede owner check must be a function');
+  supersedeOwnerCheck = fn;
 }
 
 const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
@@ -3462,7 +3504,7 @@ async function supersedeStaleCommand(root, rest, flags) {
   if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
   const beforeMs = Date.parse(flags.before);
   if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
-  const denied = supersedeOwnerRefusal();
+  const denied = supersedeOwnerCheck();
   if (denied) return out(denied, 1);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
@@ -3949,11 +3991,11 @@ async function setTicketStatus(root, rest, flags) {
       return out(msg, 1);
     }
   }
-  if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
   if (to === 'superseded') {
-    const denied = supersedeOwnerRefusal();
+    const denied = supersedeOwnerCheck();
     if (denied) return out(denied, 1);
   }
+  if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
   let holdQuestion;

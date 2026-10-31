@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { runScopeCommand, supersedeOwnerRefusal } from '../tools/scope-commands.mjs';
+import { runScopeCommand, supersedeOwnerRefusal, setSupersedeOwnerCheck } from '../tools/scope-commands.mjs';
 import {
   createLedger,
   writeLedger,
@@ -80,13 +80,11 @@ async function readLog(root) {
 }
 
 async function runSupersede(root, args) {
-  const prevOwner = process.env.SWARM_OWNER;
-  process.env.SWARM_OWNER = '1';
+  setSupersedeOwnerCheck(() => null);
   try {
     return await runScopeCommand(root, 'tickets', ['supersede', ...args]);
   } finally {
-    if (prevOwner === undefined) delete process.env.SWARM_OWNER;
-    else process.env.SWARM_OWNER = prevOwner;
+    setSupersedeOwnerCheck();
   }
 }
 
@@ -166,29 +164,101 @@ test('last touch from log vs ledger-created fallback', async () => {
 
 const ownerGateMsg = /owner-only.*agent or worker session/i;
 
-test('supersedeOwnerRefusal blocks agent env, missing TTY, and allows owner override', () => {
-  assert.match(supersedeOwnerRefusal({ env: { CLAUDECODE: '1' }, isTTY: true }), ownerGateMsg);
-  assert.match(supersedeOwnerRefusal({ env: { SWARM_WORKER: '1' }, isTTY: true }), ownerGateMsg);
-  assert.match(supersedeOwnerRefusal({ env: { SWARM_JOB_ID: 'j1' }, isTTY: true }), ownerGateMsg);
-  assert.match(supersedeOwnerRefusal({ env: {}, isTTY: false }), ownerGateMsg);
-  assert.equal(supersedeOwnerRefusal({ env: { CLAUDECODE: '1', SWARM_OWNER: '1' }, isTTY: false }), null);
-  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true }), null);
+test('supersedeOwnerRefusal checks every agent marker first, even with SWARM_OWNER=1', () => {
+  for (const marker of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID']) {
+    for (const value of ['1', '']) {
+      let inspected = false;
+      assert.match(supersedeOwnerRefusal({
+        env: { [marker]: value, SWARM_OWNER: '1' }, isTTY: true,
+        processInfo: () => { inspected = true; return { ppid: 1, comm: 'bash' }; },
+      }), ownerGateMsg, marker);
+      assert.equal(inspected, false, 'markers must be checked before ancestry');
+    }
+  }
 });
 
-test('agent session refused unless SWARM_OWNER=1', async () => {
+test('supersedeOwnerRefusal rejects agent ancestry despite a TTY or SWARM_OWNER=1', () => {
+  for (const command of ['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt', '/opt/bin/CoDeX']) {
+    assert.match(supersedeOwnerRefusal({
+      env: { SWARM_OWNER: '1' }, isTTY: true, ancestry: ['bash', command],
+    }), ownerGateMsg, command);
+  }
+});
+
+test('supersedeOwnerRefusal allows clean ancestry only with a TTY', () => {
+  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true, ancestry: ['node', '/bin/bash'] }), null);
+  assert.match(supersedeOwnerRefusal({ env: { SWARM_OWNER: '1' }, isTTY: false, ancestry: ['bash'] }), ownerGateMsg);
+});
+
+test('supersedeOwnerRefusal requires both stdin and stdout TTY by default', () => {
+  const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  try {
+    for (const [input, output] of [[false, true], [true, false], [false, false], [true, true]]) {
+      Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: input });
+      Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: output });
+      const result = supersedeOwnerRefusal({ env: {}, ancestry: ['bash'] });
+      if (input && output) assert.equal(result, null);
+      else assert.match(result, ownerGateMsg);
+    }
+  } finally {
+    if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
+    else delete process.stdin.isTTY;
+    if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
+    else delete process.stdout.isTTY;
+  }
+});
+
+test('supersedeOwnerRefusal walks parents from this process and stops at pid 1', () => {
+  const visited = [];
+  const parents = new Map([
+    [process.pid, { ppid: 900002, comm: '/usr/bin/node' }],
+    [900002, { ppid: 900003, comm: '/bin/bash' }],
+    [900003, { ppid: 1, comm: '/opt/bin/Codex' }],
+  ]);
+  const processInfo = pid => {
+    visited.push(pid);
+    assert.ok(parents.has(pid), `unexpected pid ${pid}`);
+    return parents.get(pid);
+  };
+  assert.match(supersedeOwnerRefusal({ env: {}, isTTY: true, processInfo }), ownerGateMsg);
+  assert.deepEqual(visited, [process.pid, 900002, 900003]);
+  visited.length = 0;
+  parents.set(900003, { ppid: 1, comm: '/bin/zsh' });
+  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true, processInfo }), null);
+  assert.deepEqual(visited, [process.pid, 900002, 900003]);
+});
+
+test('supersedeOwnerRefusal bounds inspection and refuses incomplete ancestry', () => {
+  let calls = 0;
+  assert.match(supersedeOwnerRefusal({
+    env: {}, isTTY: true,
+    processInfo: pid => { calls += 1; return { ppid: pid + 1, comm: 'bash' }; },
+  }), ownerGateMsg);
+  assert.equal(calls, 32);
+  assert.match(supersedeOwnerRefusal({
+    env: {}, isTTY: true, processInfo: () => { throw new Error('ps unavailable'); },
+  }), ownerGateMsg);
+});
+
+test('agent session refuses bulk supersede with SWARM_OWNER=1; test hook allows and resets', async () => {
   const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
+  const before = await fs.readFile(ledgerPath(root), 'utf8');
   const prevCode = process.env.CLAUDECODE;
   const prevOwner = process.env.SWARM_OWNER;
   process.env.CLAUDECODE = '1';
-  delete process.env.SWARM_OWNER;
+  process.env.SWARM_OWNER = '1';
   try {
     const denied = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01']);
     assert.equal(denied.exitCode, 1);
     assert.match(denied.stdout, ownerGateMsg);
-    process.env.SWARM_OWNER = '1';
-    const allowed = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--dry-run']);
-    assert.equal(allowed.exitCode, 0);
+    assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), before);
+    const allowed = await runSupersede(root, ['--before', '2025-01-01', '--yes']);
+    assert.equal(allowed.exitCode, 0, allowed.stdout);
+    assert.equal((await readLedger(root)).tickets[0].status, 'superseded');
+    assert.match((await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01'])).stdout, ownerGateMsg);
   } finally {
+    setSupersedeOwnerCheck();
     if (prevCode === undefined) delete process.env.CLAUDECODE;
     else process.env.CLAUDECODE = prevCode;
     if (prevOwner === undefined) delete process.env.SWARM_OWNER;
@@ -196,20 +266,28 @@ test('agent session refused unless SWARM_OWNER=1', async () => {
   }
 });
 
-test('--set superseded uses the same owner gate as bulk supersede', async () => {
+test('--set superseded uses the same real owner gate and resettable test hook as bulk supersede', async () => {
   const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
+  const before = await fs.readFile(ledgerPath(root), 'utf8');
   const prev = { SWARM_WORKER: process.env.SWARM_WORKER, SWARM_OWNER: process.env.SWARM_OWNER };
   process.env.SWARM_WORKER = '1';
-  delete process.env.SWARM_OWNER;
+  process.env.SWARM_OWNER = '1';
   try {
-    const denied = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', '--yes']);
-    assert.equal(denied.exitCode, 1);
-    assert.match(denied.stdout, ownerGateMsg);
-    process.env.SWARM_OWNER = '1';
+    for (const flags of [['--yes'], ['--force'], ['--dry-run']]) {
+      const denied = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', ...flags]);
+      assert.equal(denied.exitCode, 1);
+      assert.match(denied.stdout, ownerGateMsg);
+    }
+    assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), before);
+    setSupersedeOwnerCheck(() => null);
     const allowed = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', '--yes']);
     assert.equal(allowed.exitCode, 0);
     assert.equal((await readLedger(root)).tickets[0].status, 'superseded');
+    setSupersedeOwnerCheck();
+    const other = await projectWithLedger([ticket('T-0001', 'todo')]);
+    assert.match((await runScopeCommand(other, 'tickets', ['T-0001', '--set', 'superseded', '--yes'])).stdout, ownerGateMsg);
   } finally {
+    setSupersedeOwnerCheck();
     if (prev.SWARM_WORKER === undefined) delete process.env.SWARM_WORKER;
     else process.env.SWARM_WORKER = prev.SWARM_WORKER;
     if (prev.SWARM_OWNER === undefined) delete process.env.SWARM_OWNER;
@@ -288,14 +366,7 @@ test('bulk supersede prunes superseded dependencies and logs prune-deps', async 
       ],
     },
   );
-  const prevOwner = process.env.SWARM_OWNER;
-  process.env.SWARM_OWNER = '1';
-  try {
-    await runSupersede(root, ['--before', '2025-01-01', '--yes']);
-  } finally {
-    if (prevOwner === undefined) delete process.env.SWARM_OWNER;
-    else process.env.SWARM_OWNER = prevOwner;
-  }
+  await runSupersede(root, ['--before', '2025-01-01', '--yes']);
   const ledger = await readLedger(root);
   assert.equal(ledger.tickets.find(t => t.id === 'T-0001').status, 'superseded');
   assert.deepEqual(ledger.tickets.find(t => t.id === 'T-0002').dependsOn, []);
@@ -328,8 +399,8 @@ function spawnScopeTickets(root, args, env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      ['--import', './tests/_isolate-config.mjs', '-e', `import { runScopeCommand } from './tools/scope-commands.mjs'; const r = await runScopeCommand(process.argv[1], 'tickets', process.argv.slice(2)); process.stdout.write(r.stdout ?? ''); process.exit(r.exitCode ?? 0);`, root, ...args],
-      { cwd: repoRoot, env: { ...process.env, SWARM_OWNER: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'] },
+      ['--import', './tests/_isolate-config.mjs', '-e', `import { runScopeCommand, setSupersedeOwnerCheck } from './tools/scope-commands.mjs'; let r; setSupersedeOwnerCheck(() => null); try { r = await runScopeCommand(process.argv[1], 'tickets', process.argv.slice(2)); } finally { setSupersedeOwnerCheck(); } process.stdout.write(r.stdout ?? ''); process.exitCode = r.exitCode ?? 0;`, root, ...args],
+      { cwd: repoRoot, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let stdout = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
