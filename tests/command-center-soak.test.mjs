@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createWatchServer } from '../tools/watch-server.mjs';
-import { runSoak } from '../tools/watch-soak.mjs';
+import { intervalCpuPercent, runSoak, summarizeSoak } from '../tools/watch-soak.mjs';
 
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const json = async (file, body) => { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(body)); };
@@ -59,6 +59,30 @@ test('watch-soak CLI usage rejects missing URL', async () => {
   assert.notEqual(code, 0);
 });
 
+test('interval CPU measures CPU seconds once over elapsed wall time', () => {
+  assert.equal(intervalCpuPercent(0, 1.5, 30_000), 5);
+  assert.equal(intervalCpuPercent(0, 0.3, 30_000), 1);
+  assert.equal(intervalCpuPercent(10, 13, 30_000), 10);
+  assert.equal(intervalCpuPercent(13, 13, 30_000), 0);
+  assert.equal(intervalCpuPercent(13, 10, 30_000), 0);
+  for (const args of [
+    [0, 1, 0], [0, 1, -1],
+    [null, 1, 30_000], [0, null, 30_000], [0, 1, null],
+    [undefined, 1, 30_000], [0, undefined, 30_000], [0, 1, undefined],
+    [NaN, 1, 30_000], [0, Infinity, 30_000], [0, 1, Infinity],
+  ]) {
+    assert.equal(intervalCpuPercent(...args), null);
+  }
+  // One build is charged to its interval; warm-up contributes no CPU value.
+  const cpuSeconds = [10, 13, 13, 13, 13];
+  const summary = summarizeSoak(cpuSeconds.map((cpu, i) => ({
+    serverCpuPercent: intervalCpuPercent(cpuSeconds[i - 1], cpu, 30_000),
+  })));
+  assert.deepEqual(summary.cpu, { first: 10, last: 0, average: 2.5, slopePerSample: -10 / 3 });
+  assert.equal(summary.thresholds.cpuAverageMax, 5);
+  assert.equal(summary.verdict, 'flat');
+});
+
 test('short Command Center soak reports flat verdict and bounded connections', { timeout: 120_000 }, async (t) => {
   const { url } = await fixtureServer(t);
   const result = await runSoak({
@@ -69,7 +93,16 @@ test('short Command Center soak reports flat verdict and bounded connections', {
     waitMs: 60_000,
   });
   assert.equal(result.verdict, 'flat', result.reasons.join('; '));
-  assert.ok(result.sampleCount >= 1);
+  assert.equal(result.sampleCount, 2);
+  assert.equal(result.samples[0].serverCpuPercent, null, 'first CPU sample is a warm-up baseline');
+  const [first, last] = result.samples;
+  for (const sample of result.samples) {
+    // Process telemetry can be unavailable when ps is restricted.
+    assert.ok(sample.serverCpuSeconds === null || Number.isFinite(sample.serverCpuSeconds));
+  }
+  assert.equal(last.serverCpuPercent, intervalCpuPercent(first.serverCpuSeconds,
+    last.serverCpuSeconds, Date.parse(last.at) - Date.parse(first.at)));
+  assert.equal(result.cpu.average, last.serverCpuPercent, 'warm-up is excluded from the CPU summary');
   assert.ok(result.connections.last != null && result.connections.last <= 4, `connections=${result.connections.last}`);
   assert.ok(result.watchers.last == null || result.watchers.last <= 200, `watchers=${result.watchers.last}`);
   assert.ok(!result.url.includes('t=') || result.url.includes('t=…'), 'url must redact token');

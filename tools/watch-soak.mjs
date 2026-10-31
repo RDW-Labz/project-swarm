@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { redactUrl } from './watch-perf.mjs';
+import { parsePsTime, redactUrl } from './watch-perf.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -164,8 +164,16 @@ function monotonicGrowth(values) {
   return grew > 0 && grew === values.length - 1;
 }
 
+/** Average CPU over one wall-clock interval; missing baselines are warm-up samples. */
+export function intervalCpuPercent(prevCpuSeconds, nextCpuSeconds, elapsedMs) {
+  if (!Number.isFinite(prevCpuSeconds) || !Number.isFinite(nextCpuSeconds)
+    || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return null;
+  return Math.max(0, (nextCpuSeconds - prevCpuSeconds) / (elapsedMs / 1000) * 100);
+}
+
 export function summarizeSoak(samples) {
   const rssKb = samples.map((s) => s.serverRssKb).filter((v) => v != null);
+  // The first sample only establishes cumulative CPU time and is excluded here.
   const cpu = samples.map((s) => s.serverCpuPercent).filter((v) => v != null);
   const heap = samples.map((s) => s.pageHeapBytes).filter((v) => v != null);
   const connections = samples.map((s) => s.eventSourceConnections);
@@ -209,13 +217,13 @@ export function summarizeSoak(samples) {
 
 async function readServerRssCpu(pid) {
   try {
-    const { stdout } = await execFileAsync('ps', ['-o', 'rss=,%cpu=', '-p', String(pid)]);
+    const { stdout } = await execFileAsync('ps', ['-o', 'rss=,time=', '-p', String(pid)]);
     const line = stdout.trim();
-    const match = /^(\d+)\s*,?\s*([\d.]+)/.exec(line);
-    if (!match) return { rssKb: null, cpuPercent: null };
-    return { rssKb: Number.parseInt(match[1], 10), cpuPercent: Number.parseFloat(match[2]) };
+    const match = /^(\d+)\s+(\S+)$/.exec(line);
+    if (!match) return { rssKb: null, cpuSeconds: null };
+    return { rssKb: Number.parseInt(match[1], 10), cpuSeconds: parsePsTime(match[2]) };
   } catch {
-    return { rssKb: null, cpuPercent: null };
+    return { rssKb: null, cpuSeconds: null };
   }
 }
 
@@ -312,7 +320,11 @@ export async function runSoak(opts) {
     await page.waitForTimeout(Math.min(5000, Math.max(1000, opts.durationMs / 4)));
 
     async function takeSample() {
-      const server = opts.serverPid != null ? await readServerRssCpu(opts.serverPid) : { rssKb: null, cpuPercent: null };
+      const server = opts.serverPid != null ? await readServerRssCpu(opts.serverPid) : { rssKb: null, cpuSeconds: null };
+      const at = new Date().toISOString();
+      const previous = samples.at(-1);
+      const cpuPercent = intervalCpuPercent(previous?.serverCpuSeconds, server.cpuSeconds,
+        Date.parse(at) - Date.parse(previous?.at));
       const heap = await readPageHeap(cdp);
       const eventSources = await page.evaluate(() => (
         typeof globalThis.__swarmCcEventSourcesOpen === 'function' ? globalThis.__swarmCcEventSourcesOpen() : 0
@@ -320,9 +332,10 @@ export async function runSoak(opts) {
       const tcpConnections = opts.serverPid != null ? await countServerTcpConnections(opts.serverPid) : null;
       const watcherHandles = opts.serverPid != null ? await readWatcherHandles(opts.serverPid) : null;
       return {
-        at: new Date().toISOString(),
+        at,
         serverRssKb: server.rssKb,
-        serverCpuPercent: server.cpuPercent,
+        serverCpuSeconds: server.cpuSeconds,
+        serverCpuPercent: cpuPercent,
         pageHeapBytes: heap,
         eventSourceConnections: eventSources,
         tcpConnections,
