@@ -12,6 +12,8 @@ const COCKPIT_WARM_MODULES = [
   './cockpit-view.js',
   './cockpit-lists.js',
   './cockpit-orchestrator.js',
+  './orchestrator-view.js',
+  './robot-head.js',
   './cc-ledger-browser.js',
   './cc-glitch.js',
   './cc-tour.js',
