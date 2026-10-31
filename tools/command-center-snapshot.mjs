@@ -210,10 +210,13 @@ function ledgerFromProject(project) {
   for (const item of project?.card?.blocked?.items ?? []) {
     if (item?.id) tickets.push({ id: item.id, title: item.title ?? item.id, status: 'blocked' });
   }
-  if (!tickets.length && project?.tickets?.byStatus) {
+  if (project?.tickets?.byStatus) {
     for (const [status, count] of Object.entries(project.tickets.byStatus)) {
       if (!count || status === 'proposed') continue;
-      for (let i = 0; i < count; i += 1) tickets.push({ id: `${status}-${i}`, title: status, status });
+      // Ready/blocked card rows are only a partial ledger. Fill the remaining
+      // statuses too, so a newly completed ticket appears in the cockpit.
+      const present = tickets.filter(ticket => ticket.status === status).length;
+      for (let i = present; i < count; i += 1) tickets.push({ id: `${status}-${i}`, title: status, status });
     }
   }
   const scope = project?.progress?.scope ?? project?.progress?.stages ? { stages: project.progress.stages } : undefined;

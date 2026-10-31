@@ -105,17 +105,17 @@ function bucketForUrl(urlString, resourceType) {
   return null;
 }
 
-function parsePsTime(text) {
+export function parsePsTime(text) {
   const s = String(text ?? '').trim();
-  if (!s) return 0;
-  if (s.includes('-')) {
-    const [days, rest] = s.split('-');
-    return parsePsTime(rest) + Number.parseInt(days, 10) * 86400;
-  }
-  const parts = s.split(':').map((p) => Number.parseFloat(p));
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return Number.parseFloat(s) || 0;
+  // ps uses seconds, m:ss.ss or h:mm:ss.ss (and sometimes d-h:mm:ss.ss).
+  // Number retains fractional seconds and rejects partially numeric fields.
+  const match = /^(?:(\d+)-)?(\d+(?::\d+){0,2}(?:\.\d+)?)$/.exec(s);
+  if (!match) return 0;
+  const days = Number(match[1] ?? 0) * 86400;
+  const parts = match[2].split(':').map(Number);
+  if (parts.length === 3) return days + parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return days + parts[0] * 60 + parts[1];
+  return days + parts[0];
 }
 
 async function readServerCpu(pid) {

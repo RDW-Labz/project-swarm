@@ -543,8 +543,11 @@ export function createWatchServer(opts) {
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
-  const commandCenterCache = new Map();
-  const snapshotTtlMs = 2000;
+  // One board and Hive representation, independent of project ids or query keys.
+  // Cockpit responses are derived on demand and never retained in a map.
+  let commandCenterCache = null;
+  let snapshotPending = null;
+  const snapshotTtlMs = 60000;
   let server = null;
   let port = 0;
   let url = null;
@@ -625,34 +628,46 @@ export function createWatchServer(opts) {
     }, a.body, a);
   }
 
-  async function commandCenterResponse(pathname, q) {
-    const options = { ...q, local: q.local === '1', redact: true };
-    const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
-    let entry = commandCenterCache.get(key);
-    if (entry?.pending) return entry.pending;
-    if (entry && now() - entry.at < snapshotTtlMs) return entry;
-    if (!entry) {
-      // Bound memory even when clients supply many distinct query arguments.
-      if (commandCenterCache.size >= 128) commandCenterCache.delete(commandCenterCache.keys().next().value);
-      entry = {};
-      commandCenterCache.set(key, entry);
-    }
-    entry.pending = (async () => {
-      const snapshot = await board.snapshot(options);
-      const revision = snapshot?.version == null && snapshot?.at == null
-        ? null : JSON.stringify([snapshot.version, snapshot.at]);
-      if (!entry.encoded || revision == null || revision !== entry.revision) {
-        const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
-        const result = pathname.endsWith('/project')
-          ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
-        entry.encoded = result ? representation(JSON.stringify(result), 'application/json') : null;
-        entry.revision = revision;
-      }
-      entry.at = now();
+  function rebuildCommandCenterSnapshot() {
+    if (snapshotPending) return snapshotPending;
+    snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
+      const snapshot = await board.snapshot({ local: false, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const entry = {
+        payload,
+        encoded: representation(JSON.stringify(buildCommandCenterSnapshot(payload)), 'application/json'),
+        at: now(),
+      };
+      // A build finishing after shutdown must not keep the snapshot alive.
+      if (!closed) commandCenterCache = entry;
       return entry;
-    })();
-    try { return await entry.pending; }
-    finally { entry.pending = null; }
+    }).finally(() => { snapshotPending = null; });
+    return snapshotPending;
+  }
+
+  async function commandCenterResponse(pathname, q) {
+    // Preserve the explicit local-only view without retaining another snapshot
+    // or allowing query strings to grow cache keys. Normal dashboard requests
+    // always share the single default board below.
+    if (q.local === '1') {
+      const snapshot = await board.snapshot({ ...q, local: true, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const result = pathname.endsWith('/project')
+        ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
+      return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
+    }
+    let entry = commandCenterCache;
+    if (!entry) {
+      // Startup warming and all cold requests share the same build.
+      entry = await rebuildCommandCenterSnapshot();
+    } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
+      // Keep the previous snapshot available, including its validators, while
+      // a single refresh runs. A failure leaves it available for the next retry.
+      if (!snapshotPending) void rebuildCommandCenterSnapshot().catch(() => {});
+    }
+    if (!pathname.endsWith('/project')) return entry;
+    const result = buildProjectCockpit(entry.payload, String(q.id ?? ''));
+    return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
   }
 
   async function payload() {
@@ -912,6 +927,7 @@ export function createWatchServer(opts) {
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
     streamManager.close();
+    commandCenterCache = null;
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -974,6 +990,9 @@ export function createWatchServer(opts) {
     if (timer && typeof timer.unref === 'function') timer.unref();
     heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+    // Warm once without delaying listen or retrying in an idle loop. A cold
+    // request can join this attempt; a later request can retry a failed build.
+    if (commandCenter && board) void rebuildCommandCenterSnapshot().catch(() => {});
     return { url, port };
   }
 

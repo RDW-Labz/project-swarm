@@ -442,8 +442,6 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
   return out;
 }
 
-// Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
-const stateCache = new Map();
 export async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
@@ -455,14 +453,11 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
       if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
       const file = path.join(dir, id, 'state.json');
       const stat = await fs.stat(file);
-      let hit = stateCache.get(file);
-      if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
-        const state = JSON.parse(await fs.readFile(file, 'utf8'));
-        hit = { size: stat.size, mtimeMs: stat.mtimeMs, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
-        if (stateCache.size > 20000) stateCache.clear();
-        stateCache.set(file, hit);
+      const state = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (state && typeof state === 'object' && !Array.isArray(state)
+        && (state.jobs === undefined || Array.isArray(state.jobs))) {
+        runs.push({ id, state, mtimeMs: stat.mtimeMs });
       }
-      if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
     } catch (error) {
       const code = error?.code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR' && error?.name !== 'SyntaxError') console.error('[tools/board-data.mjs] readRunStates run folder:', error?.message ?? error);
@@ -685,6 +680,7 @@ async function scopeFor(root, ledger) {
   const file = path.resolve(root, relative);
   const base = path.resolve(root);
   if (file !== base && !file.startsWith(`${base}${path.sep}`)) return null;
+  // A ledger may name a scope document elsewhere inside its project root.
   try { return parseScope(await fs.readFile(file, 'utf8')); } catch { return null; }
 }
 
@@ -991,7 +987,8 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined, profile } = {}) {
+  const started = performance.now();
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -1047,7 +1044,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState, profile }));
     const familyIds = new Set([project.id]);
     for (const root of family) {
       const member = registered.get(root);
@@ -1064,7 +1061,8 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (let i = 0; i < inputProjects.length; i += 1) {
     const parentId = parentIds[i];
     if (!parentId) continue;
-    const child = overviews[i];
+    const child = byId.get(inputProjects[i].id);
+    if (!child) continue;
     child.parentId = parentId;
     child.worktree = true;
     const parentOverview = byId.get(parentId);
@@ -1083,7 +1081,9 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     console.error('[tools/board-data.mjs] boardSnapshot workersHeld:', error?.message ?? error);
   }
   let inboxSnapshot = { items: [] };
-  try { inboxSnapshot = await boardInbox({ projects: inputProjects, now, env }); } catch (error) {
+  try {
+    inboxSnapshot = await boardInbox({ projects: inputProjects, now, env });
+  } catch (error) {
     console.error('[tools/board-data.mjs] boardSnapshot boardInbox:', error?.message ?? error);
   }
   for (let i = 0; i < overviews.length; i += 1) {
@@ -1145,7 +1145,10 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   machine.liveRuns = live.filter(run => activeRunState(run.state)).length;
   for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
   // One session can be in two projects' logs: the machine totals count each message once over all transcripts.
-  { const c = transcripts.size ? combinedUsage([...transcripts], { now }) : { todayListUsd: 0, allListUsd: 0 }; machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd; }
+  {
+    const c = await combinedUsage([...transcripts], { now });
+    machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd;
+  }
   for (const o of overviews) if (o.orchestrator) delete o.orchestrator.transcripts;
   { const t = machine.orchestrator.handBuiltFiles + machine.orchestrator.swarmBuiltFiles; machine.orchestrator.swarmPct = t ? Math.round(machine.orchestrator.swarmBuiltFiles * 100 / t) : null; machine.orchestrator.handPct = t ? Math.round(machine.orchestrator.handBuiltFiles * 100 / t) : null; }
   machine.orchestrator.sessions.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
@@ -1187,6 +1190,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   } catch {
     machine.laneIdle = {};
   }
+  profile?.({ kind: 'board', ms: performance.now() - started });
   return { at: new Date(now).toISOString(), machine, projects: overviews };
 }
 

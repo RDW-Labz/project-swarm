@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t7-cc-cache-test",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Train 7: the board snapshot cache TTL is moving from 2 s to 6 s (to match the 5 s Command Center poll). Update tests/command-center-perf-budget.test.mjs's cache expectations: where the test advances 2001 ms expecting a rebuild/read count, advance past 6 s instead (6001 ms) and keep the read-count assertions consistent (the cache hit before that). Keep all other assertions. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs -> all pass (both with a 2 s and a 6 s TTL: at 6001 ms a rebuild happens either way). Report counts.",
+      "context": ["tests/command-center-perf-budget.test.mjs"],
+      "outputs": ["tests/command-center-perf-budget.test.mjs"],
+      "timeoutMs": 900000
+    }
+  ],
+  "checks": [ { "name": "t7-cc-cache-test", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-perf-budget.test.mjs"] } ]
+}

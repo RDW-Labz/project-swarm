@@ -245,35 +245,161 @@ test('cache policies distinguish fonts, vendor, JS/CSS, HTML and JSON', async t 
   }
 });
 
-test('snapshot caches coalesce reads, separate effective query options, and validate revisions', async t => {
+async function waitForResponse(get, predicate) {
+  const deadline = performance.now() + 5000;
+  while (performance.now() < deadline) {
+    const response = await get();
+    if (predicate(response)) return response;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.fail('snapshot did not refresh within five seconds');
+}
+
+test('one snapshot shares Hive, Cockpit and arbitrary queries for 60 seconds, then serves stale and refreshes', async t => {
   const f = await fixture(t);
   const responses = await Promise.all(Array.from({ length: 6 }, () => f.get('/api/command-center')));
   assert.equal(f.reads(), 1);
   const tag = responses[0].headers.etag;
   assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
-  assert.equal(f.reads(), 1);
-  const local = await f.get('/api/command-center?local=1&redact=0');
-  assert.notEqual(local.headers.etag, tag);
-  assert.equal(f.reads(), 2);
-  assert.equal(f.optionsSeen[1].redact, true);
-  assert.equal(f.optionsSeen[1].local, true);
-  await f.get('/api/command-center?redact=1&local=1');
-  assert.equal(f.reads(), 2, 'canonical effective options share a key');
+  for (let i = 0; i < 20; i++) {
+    const response = await f.get('/api/command-center?view=' + i);
+    assert.deepEqual(response.body, responses[0].body);
+  }
   const project = await f.get('/api/command-center/project?id=alpha');
   assert.equal(JSON.parse(project.body).id, 'alpha');
   assert.equal((await f.get('/api/command-center/project?id=alpha', { 'if-none-match': project.headers.etag })).status, 304);
   assert.equal((await f.get('/api/command-center/project?id=missing')).status, 404);
-  assert.equal(f.reads(), 4);
-  f.advance(2001);
-  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
-  assert.equal(f.reads(), 5);
+  assert.equal(f.reads(), 1, 'all ids and query strings share the board snapshot');
+  assert.deepEqual(f.optionsSeen, [{ local: false, redact: true }]);
   f.revise();
-  f.advance(2001);
-  const changed = await f.get('/api/command-center', { 'if-none-match': tag });
-  assert.equal(changed.status, 200);
+  f.advance(59999);
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
+  assert.equal(f.reads(), 1, 'fresh for the entire 60 second TTL');
+  f.advance(1);
+  const stale = await f.get('/api/command-center', { 'if-none-match': tag });
+  assert.equal(stale.status, 304, 'the first expired request still uses the old validator');
+  const changed = await waitForResponse(() => f.get('/api/command-center', { 'if-none-match': tag }),
+    response => response.status === 200);
   assert.notEqual(changed.headers.etag, tag);
+  assert.equal(JSON.parse(changed.body).projects[0].name, 'All 2');
+  assert.equal(f.reads(), 2);
+  const freshProject = await f.get('/api/command-center/project?id=alpha');
+  assert.equal(JSON.parse(freshProject.body).name, 'All 2');
+  assert.notEqual(freshProject.headers.etag, project.headers.etag);
+  f.advance(59999);
+  await f.get('/api/command-center');
+  assert.equal(f.reads(), 2, 'one rebuild per stale period');
   assert.equal((await f.get('/api/command-center', { 'x-watch-token': '' })).status, 403);
-  t.diagnostic('6 simultaneous polls + conditional repeat: 1 board read; unchanged revision returns empty 304');
+});
+
+test('explicit local-only requests preserve query semantics and redaction without retaining another snapshot', async t => {
+  const f = await fixture(t);
+  const shared = await f.get('/api/command-center');
+  for (let i = 0; i < 2; i++) {
+    const local = await f.get('/api/command-center?local=1&redact=0');
+    assert.equal(JSON.parse(local.body).projects[0].name, 'Local 1');
+    assert.notEqual(local.headers.etag, shared.headers.etag);
+  }
+  const cockpit = await f.get('/api/command-center/project?id=alpha&local=1&redact=0');
+  assert.equal(JSON.parse(cockpit.body).name, 'Local 1');
+  assert.equal(f.reads(), 4, 'local variants are computed without another cache');
+  assert.ok(f.optionsSeen.every(options => options.redact === true));
+  const after = await f.get('/api/command-center');
+  assert.deepEqual(after.body, shared.body);
+  assert.equal(f.reads(), 4, 'local variants do not replace the shared snapshot');
+});
+
+test('stale Hive and Cockpit return without waiting for a single background rebuild', async t => {
+  let reads = 0;
+  let release;
+  let entered;
+  const building = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { board: { snapshot: async () => {
+    const revision = ++reads;
+    if (revision > 1) { entered(); await gate; }
+    return { at: '2026-10-30T12:00:00Z', projects: [{ id: 'alpha', name: 'Revision ' + revision, ledger: { tickets: [] } }] };
+  } } });
+  const initial = await f.get('/api/command-center');
+  const cockpit = await f.get('/api/command-center/project?id=alpha');
+  f.advance(60000);
+  const start = performance.now();
+  let timeout;
+  const deadline = new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('stale response waited for rebuild')), 1500); });
+  t.after(() => clearTimeout(timeout));
+  const stale = await Promise.race([f.get('/api/command-center'), deadline]);
+  await building;
+  const polls = await Promise.race([Promise.all(Array.from({ length: 12 }, (_, i) =>
+    f.get(i % 2 ? '/api/command-center/project?id=alpha' : '/api/command-center',
+      { 'if-none-match': i % 2 ? cockpit.headers.etag : initial.headers.etag }))), deadline]);
+  clearTimeout(timeout);
+  assert.deepEqual(stale.body, initial.body);
+  assert.ok(polls.every(response => response.status === 304));
+  assert.equal(reads, 2, 'only one refresh starts while its result is unresolved');
+  const staleMs = performance.now() - start;
+  release();
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Revision 2');
+  await f.get('/api/command-center/project?id=alpha');
+  assert.equal(reads, 2);
+  f.advance(60000);
+  const nextStale = await f.get('/api/command-center');
+  assert.equal(JSON.parse(nextStale.body).projects[0].name, 'Revision 2');
+  await waitForResponse(() => f.get('/api/command-center'),
+    response => JSON.parse(response.body).projects[0].name === 'Revision 3');
+  assert.equal(reads, 3);
+  t.diagnostic(JSON.stringify({ staleBatchMs: staleMs, concurrentStaleRequests: 13, builds: reads }));
+});
+
+test('startup warm is non-blocking, shares cold requests and is ready before the first dashboard visit', async t => {
+  let reads = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { board: { snapshot: async () => {
+    reads++;
+    await gate;
+    return { at: '2026-10-30T12:00:00Z', projects: [] };
+  } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 1, 'listen starts one background attempt without a dashboard request');
+  let coldFinished = false;
+  const cold = Promise.all([f.get('/api/command-center'), f.get('/api/command-center/project?id=missing')])
+    .then(responses => { coldFinished = true; return responses; });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(coldFinished, false, 'cold requests wait for startup build');
+  assert.equal(reads, 1);
+  release();
+  assert.deepEqual((await cold).map(response => response.status), [200, 404]);
+  assert.equal((await f.get('/api/command-center')).status, 200);
+  assert.equal(reads, 1, 'warm visit does not rebuild');
+});
+
+test('failed startup warm retries on demand; failed refresh keeps stale data and validators', async t => {
+  let reads = 0;
+  let fail = true;
+  const f = await fixture(t, { board: { snapshot: async () => {
+    reads++;
+    if (fail) throw new Error('fixture build failed');
+    return { at: '2026-10-30T12:00:00Z', projects: [] };
+  } } });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(reads, 1, 'warming makes only one attempt');
+  assert.equal((await f.get('/api/command-center')).status, 500);
+  fail = false;
+  const initial = await f.get('/api/command-center');
+  assert.equal(initial.status, 200);
+  fail = true;
+  f.advance(60000);
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  fail = false;
+  assert.deepEqual((await f.get('/api/command-center')).body, initial.body);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const before = reads;
+  assert.equal((await f.get('/api/command-center', { 'if-none-match': initial.headers.etag })).status, 304);
+  assert.equal(reads, before, 'successful retry renews the TTL even for identical bytes');
 });
 
 test('an idle board does not read run state before any event stream opens', async t => {
