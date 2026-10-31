@@ -609,3 +609,63 @@ test('prompt cockpit warm adds modulepreload within 300ms without waiting for id
     globalThis.requestIdleCallback = oldIdle;
   }
 });
+
+test('prompt cockpit warm prefetches first project data into cache', async () => {
+  const rt = makeRuntime();
+  const projectFetches = [];
+  const baseFetch = rt.fetchJson;
+  rt.fetchJson = async (url) => {
+    if (String(url).includes('/api/command-center/project')) projectFetches.push(url);
+    return baseFetch(url);
+  };
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  try {
+    const handle = await mountWithRuntime(rt);
+    assert.equal(projectFetches.length, 0, 'Hive boot only loads the board snapshot');
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    assert.ok(warm);
+    warm.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(projectFetches.length, 1);
+    assert.match(projectFetches[0], /id=alpha/);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
+
+test('warm timer cached project paints cockpit without waiting on navigation fetch', async () => {
+  const rt = makeRuntime();
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = () => 1;
+  let finishNavFetch;
+  let navFetchStarted = false;
+  const baseFetch = rt.fetchJson;
+  rt.fetchJson = async (url) => {
+    if (String(url).includes('/api/command-center/project')) {
+      if (navFetchStarted) {
+        return new Promise((resolve) => { finishNavFetch = resolve; });
+      }
+      return baseFetch(url);
+    }
+    return baseFetch(url);
+  };
+  try {
+    const handle = await mountWithRuntime(rt);
+    const warm = rt.timeouts.find((timer) => timer.ms === 300);
+    warm.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    navFetchStarted = true;
+    const card = rt.root.querySelector('.hive-node');
+    card.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(rt.root.querySelector('.cc-cockpit-shell'), 'cached warm data paints before nav fetch completes');
+    assert.ok(finishNavFetch, 'navigation still awaits a fresh project response');
+    finishNavFetch(rt.cockpit);
+    await new Promise((resolve) => setImmediate(resolve));
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});

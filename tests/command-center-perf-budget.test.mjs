@@ -322,7 +322,8 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   }
   assert.match(boot, /link\.rel\s*=\s*['"]modulepreload['"]/);
   assert.match(boot, /new URL\(rel,\s*import\.meta\.url\)\.href/);
-  assert.match(boot, /setTimeoutFn\(\(\)\s*=>\s*\{[\s\S]*preloadCockpit\(\)[\s\S]*\},\s*300\)/);
+  assert.match(boot, /setTimeoutFn\(\(\)\s*=>\s*\{[\s\S]*preloadCockpit\(warmProjectId\)[\s\S]*\},\s*300\)/);
+  assert.match(boot, /schedulePromptCockpitWarm\(snapshot\.projects\[0\]\?\.id\)/);
   assert.doesNotMatch(boot, /modulepreload[\s\S]*\.as\s*=/);
   assert.match(hive, /import\('\.\/robot-head\.js'\)/);
   assert.match(boot, /import\('\.\/command-palette\.js'\)/);
@@ -372,6 +373,66 @@ test('hover-prefetched Cockpit data paints before a slow navigation refresh', as
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(rendered, [{ id: 'alpha', name: 'Prefetched' }], 'shell and cached data render while the new response is unresolved');
   finishRefresh({ id: 'alpha', name: 'Fresh' });
+});
+
+test('300ms warm timer prefetches first project into cache for a fast Cockpit switch', async t => {
+  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
+  const oldData = globalThis.CommandCenterData;
+  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
+  t.after(() => { globalThis.CommandCenterData = oldData; });
+  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
+  const location = { pathname: '/command-center' };
+  const projectUrls = [];
+  let finishNav;
+  let navPending = false;
+  const rendered = [];
+  const timeouts = [];
+  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
+    document: { hidden: false, addEventListener() {}, removeEventListener() {} },
+    location,
+    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
+    fetchJson: async url => {
+      if (url.includes('/project')) {
+        projectUrls.push(url);
+        if (navPending) return new Promise(resolve => { finishNav = resolve; });
+        return { id: 'alpha', name: 'Warm cached' };
+      }
+      return { projects: [{ id: 'alpha' }, { id: 'beta' }] };
+    },
+    renderHive: (_root, _data) => ({
+      update() {},
+      destroy() {},
+    }),
+    loadCockpit: async () => ({
+      renderProjectCockpit: (_root, project) => {
+        rendered.push(project);
+        return { update() {}, destroy() {} };
+      },
+    }),
+    loadTour: async () => ({ maybeStartFirstVisit() {} }),
+    setInterval: () => 1,
+    clearInterval() {},
+    setTimeout: (fn, ms) => { timeouts.push({ fn, ms }); return timeouts.length; },
+    clearTimeout: () => {},
+    requestAnimationFrame() {},
+    cancelAnimationFrame() {},
+    matchMedia() {},
+  });
+  t.after(() => handle.destroy());
+  await handle.whenReady;
+  assert.equal(projectUrls.length, 0);
+  const warm = timeouts.find(timer => timer.ms === 300);
+  assert.ok(warm, 'Hive schedules warm after first render');
+  warm.fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(projectUrls.length, 1);
+  assert.match(projectUrls[0], /id=alpha/);
+  navPending = true;
+  location.pathname = '/command-center/project/alpha';
+  void handle.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(rendered, [{ id: 'alpha', name: 'Warm cached' }], 'switch paints from warm cache while nav fetch is pending');
+  finishNav({ id: 'alpha', name: 'Fresh' });
 });
 
 test('browser path modulepreloads cockpit graph from boot URL without import before Hive navigation', async t => {

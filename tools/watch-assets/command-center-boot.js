@@ -199,17 +199,19 @@ export function mountCommandCenter(root, deps = {}) {
   let cockpitPreloadLinks = [];
   let cockpitWarmTimer = null;
   let cockpitWarmScheduled = false;
+  let warmProjectId = null;
   const projectCache = new Map();
   const projectRequests = new Map();
   const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
   const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
   const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
-  function schedulePromptCockpitWarm() {
+  function schedulePromptCockpitWarm(projectId) {
     if (destroyed || cockpitWarmScheduled) return;
     cockpitWarmScheduled = true;
+    if (typeof projectId === 'string' && projectId.length) warmProjectId = projectId;
     cockpitWarmTimer = setTimeoutFn(() => {
       cockpitWarmTimer = null;
-      preloadCockpit();
+      preloadCockpit(warmProjectId);
     }, 300);
   }
 
@@ -400,7 +402,7 @@ export function mountCommandCenter(root, deps = {}) {
         viewProjectId = null;
       }
       applyTourMarkers(root, 'hive');
-      schedulePromptCockpitWarm();
+      schedulePromptCockpitWarm(snapshot.projects[0]?.id);
       await startTourIfNeeded();
     } catch (err) {
       if (destroyed || sequence !== refreshSequence) return;
