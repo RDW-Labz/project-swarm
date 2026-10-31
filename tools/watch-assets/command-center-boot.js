@@ -191,10 +191,10 @@ export function mountCommandCenter(root, deps = {}) {
       cockpitModule ||= loadCockpit().catch(error => { cockpitModule = null; throw error; });
       void cockpitModule.catch(() => {});
     } else if (!cockpitPreload && document.createElement) {
-      // Warm the chunk bytes without evaluating its legacy orchestrator dependencies on the Hive.
+      // Warm the ES module graph without evaluating Cockpit code on the Hive.
       cockpitPreload = document.createElement('link');
-      cockpitPreload.rel = 'preload'; cockpitPreload.as = 'script';
-      cockpitPreload.crossOrigin = 'anonymous'; cockpitPreload.href = '/assets/cc-cockpit-mount.js';
+      cockpitPreload.rel = 'modulepreload';
+      cockpitPreload.href = new URL('./cc-cockpit-mount.js', import.meta.url).href;
       (document.head || document.documentElement)?.appendChild(cockpitPreload);
     }
     if (projectId && !projectRequests.has(projectId)) {

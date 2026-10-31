@@ -306,6 +306,9 @@ test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entr
   }
   assert.doesNotMatch(staticImports(boot).join('\n'), /cc-router/, 'legacy router imports the robot-backed layout');
   assert.match(boot, /import\('\.\/cc-cockpit-mount\.js'\)/);
+  assert.match(boot, /cockpitPreload\.rel\s*=\s*['"]modulepreload['"]/);
+  assert.match(boot, /cockpitPreload\.href\s*=\s*new URL\('\.\/cc-cockpit-mount\.js',\s*import\.meta\.url\)\.href/);
+  assert.doesNotMatch(boot, /cockpitPreload\.as\s*=/);
   assert.match(hive, /import\('\.\/robot-head\.js'\)/);
   assert.match(boot, /import\('\.\/command-palette\.js'\)/);
   assert.match(html, /command-center-boot\.js/);
@@ -354,6 +357,60 @@ test('hover-prefetched Cockpit data paints before a slow navigation refresh', as
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(rendered, [{ id: 'alpha', name: 'Prefetched' }], 'shell and cached data render while the new response is unresolved');
   finishRefresh({ id: 'alpha', name: 'Fresh' });
+});
+
+test('browser path modulepreloads cockpit from boot URL without import before Hive navigation', async t => {
+  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
+  const oldData = globalThis.CommandCenterData;
+  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
+  t.after(() => { globalThis.CommandCenterData = oldData; });
+  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
+  const cockpitMountHref = new URL(
+    './cc-cockpit-mount.js',
+    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
+  ).href;
+  const links = [];
+  const document = {
+    hidden: false,
+    head: { appendChild(link) { links.push(link); return link; } },
+    createElement(tag) {
+      return {
+        tagName: String(tag).toUpperCase(),
+        rel: '',
+        href: '',
+        as: undefined,
+        crossOrigin: undefined,
+        remove() {},
+      };
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const location = { pathname: '/command-center' };
+  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
+    document,
+    location,
+    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
+    fetchJson: async url => (url.includes('/project') ? { id: 'alpha' } : { projects: [{ id: 'alpha' }] }),
+    renderHive: (_root, _data, deps) => {
+      deps.preloadCockpit('alpha');
+      return { update() {}, destroy() {} };
+    },
+    loadTour: async () => ({ maybeStartFirstVisit() {} }),
+    setInterval: () => 1,
+    clearInterval() {},
+    requestAnimationFrame() {},
+    cancelAnimationFrame() {},
+    matchMedia() {},
+  });
+  t.after(() => handle.destroy());
+  await handle.whenReady;
+  assert.equal(location.pathname, '/command-center');
+  assert.equal(links.length, 1);
+  assert.equal(links[0].rel, 'modulepreload');
+  assert.equal(links[0].href, cockpitMountHref);
+  assert.equal(links[0].as, undefined);
+  assert.equal(links[0].crossOrigin, undefined);
 });
 
 test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and refreshes on return', async t => {

@@ -514,3 +514,31 @@ function walkForText(node, text) {
   }
   return null;
 }
+
+test('browser idle preload inserts modulepreload for cockpit without loading cockpit on Hive', async () => {
+  const rt = makeRuntime();
+  const cockpitMountHref = new URL(
+    './cc-cockpit-mount.js',
+    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
+  ).href;
+  let idleFn;
+  const oldIdle = globalThis.requestIdleCallback;
+  globalThis.requestIdleCallback = (fn) => {
+    idleFn = fn;
+    return 1;
+  };
+  try {
+    const handle = await mountWithRuntime(rt);
+    assert.ok(rt.root.querySelector('.hive-node'), 'Hive is visible before any cockpit switch');
+    assert.equal(rt.root.querySelector('.cc-cockpit-shell'), null);
+    idleFn?.();
+    const link = rt.dom.document.head.children.find((node) => node.rel === 'modulepreload');
+    assert.ok(link, 'modulepreload link is appended while Hive idles');
+    assert.equal(link.href, cockpitMountHref);
+    assert.equal(link.as, undefined);
+    assert.equal(link.crossOrigin, undefined);
+    handle.destroy();
+  } finally {
+    globalThis.requestIdleCallback = oldIdle;
+  }
+});
