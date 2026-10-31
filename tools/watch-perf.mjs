@@ -4,8 +4,21 @@ import { chromium } from 'playwright';
 import { writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { pathToFileURL } from 'node:url';
 
 const execFileAsync = promisify(execFile);
+
+/** Redact watch-board token from `t=` query param (never log or persist raw token). */
+export function redactUrl(url) {
+  if (typeof url !== 'string' || url === '') return url;
+  return url.replace(/([?&])t=([^&#]*)/gi, '$1t=…');
+}
+
+function redactErrorText(text, rawUrl) {
+  let s = String(text ?? '');
+  if (rawUrl) s = s.split(rawUrl).join(redactUrl(rawUrl));
+  return s.replace(/([?&])t=([^&#]*)/gi, '$1t=…');
+}
 
 const PROFILES = {
   desktop: { width: 1440, height: 900, throttle: null },
@@ -297,7 +310,7 @@ async function main() {
     const serverCpuAfter = opts.serverPid != null ? await readServerCpu(opts.serverPid) : null;
 
     const result = {
-      url: opts.url,
+      url: redactUrl(opts.url),
       profile: opts.profile,
       viewport: { width: profile.width, height: profile.height },
       timings: {
@@ -320,7 +333,7 @@ async function main() {
         apiRequests: idleApi.requests,
         apiBytes: idleApi.bytes,
       },
-      consoleErrors,
+      consoleErrors: consoleErrors.map((line) => redactErrorText(line, opts.url)),
     };
 
     const json = `${JSON.stringify(result, null, 2)}\n`;
@@ -331,11 +344,13 @@ async function main() {
     }
     console.error(summarize(result));
   } catch (err) {
-    console.error(err.message || err);
+    console.error(redactErrorText(err.message || err, opts?.url));
     process.exit(1);
   } finally {
     if (browser) await browser.close();
   }
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  await main();
+}
