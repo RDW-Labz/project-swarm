@@ -1,0 +1,3681 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index d100b949..35be665f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## 1.167.30
++
++Release train 6: a fast Command Center and a hardened owner-only gate.
++- Command Center performance: gzip/brotli, ETag/304 and real cache headers (fonts immutable, JS/CSS revalidated) replace no-store, and the Command Center snapshot is cached for 2 s; Cockpit, the tour and the palette lazy-load with the Cockpit module graph and the first project's data warmed during Hive idle; the robot is deferred; ambient animation is capped at 30 fps (robot 15 fps) and goes static after 5 s idle, pausing when hidden, off-screen or under reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real 9-project board: usable 3518 to 195 ms desktop and 5251 to 943 ms on a 1.6 Mbps/100 ms phone profile; Hive to Cockpit 3114 to 131 ms and 4099 to 111 ms; idle page CPU 91.8 to 3.4 percent and 95.8 to 3.2 percent; Hive payload 497 to 157 KB and 434 to 81 KB; API calls 23 to 12 per minute;
++- Owner gate: the tickets supersede and --set superseded owner check no longer accepts SWARM_OWNER=1, refuses any agent/worker env marker first, walks the process ancestry to refuse agent shells and ptys, and requires both stdin and stdout to be TTYs; a test-only hook replaces the env override in tests; tools/watch-perf.mjs and npm run perf:cc measure the Command Center against a real board URL;
++- Version 1.167.30.
++
+ ## 1.167.29
+ 
+ Release train 5: process-group kill paths, ticket-ledger hardening, and a merge gate that verifies the review run's own record.
+diff --git a/README.md b/README.md
+index 86d44573..9cc0e3be 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.29 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.30 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.29 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.30 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/package-lock.json b/package-lock.json
+index d98179eb..c95307d1 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.29",
++  "version": "1.167.30",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.29",
++      "version": "1.167.30",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index 32c408b5..fa8693df 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.29",
++  "version": "1.167.30",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+@@ -15,7 +15,8 @@
+     "doctor": "node tools/swarm.mjs doctor",
+     "smoke": "node tools/swarm.mjs run examples/smoke.json",
+     "test:stress": "node tools/stress-tests.mjs",
+-    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs"
++    "test:browser": "node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs",
++    "perf:cc": "node tools/watch-perf.mjs"
+   },
+   "repository": {
+     "type": "git",
+diff --git a/tests/command-center-boot.test.mjs b/tests/command-center-boot.test.mjs
+index 904e5e72..52e9b32e 100644
+--- a/tests/command-center-boot.test.mjs
++++ b/tests/command-center-boot.test.mjs
+@@ -17,6 +17,29 @@ const dataModulePath = fileURLToPath(new URL('../tools/watch-assets/command-cent
+ 
+ const NOW = Date.UTC(2026, 10, 26, 20, 0, 0);
+ 
++const COCKPIT_WARM_MODULES = [
++  './cc-cockpit-mount.js',
++  './cockpit-view.js',
++  './cockpit-lists.js',
++  './cockpit-orchestrator.js',
++  './orchestrator-view.js',
++  './robot-head.js',
++  './cc-ledger-browser.js',
++  './cc-glitch.js',
++  './cc-tour.js',
++];
++
++function cockpitWarmHrefs() {
++  const bootUrl = new URL('../tools/watch-assets/command-center-boot.js', import.meta.url);
++  return COCKPIT_WARM_MODULES.map((rel) => new URL(rel, bootUrl).href);
++}
++
++function modulepreloadHrefs(head) {
++  return (head.children || [])
++    .filter((node) => node.rel === 'modulepreload')
++    .map((node) => node.href);
++}
++
+ function loadCommandCenterData() {
+   const src = fs.readFileSync(dataModulePath, 'utf8');
+   const box = { self: {} };
+@@ -373,6 +396,14 @@ function makeRuntime() {
+   };
+   const clearInterval = () => {};
+ 
++  const timeouts = [];
++  const setTimeout = (fn, ms) => {
++    const id = timeouts.length + 1;
++    timeouts.push({ id, fn, ms });
++    return id;
++  };
++  const clearTimeout = () => {};
++
+   const storage = {
+     _data: new Map(),
+     getItem(k) { return this._data.get(k) ?? null; },
+@@ -392,6 +423,9 @@ function makeRuntime() {
+     fetchCalls: () => fetchCalls,
+     setInterval,
+     intervals,
++    setTimeout,
++    timeouts,
++    clearTimeout,
+     storage,
+     hiveSnapshot,
+     cockpit,
+@@ -411,6 +445,8 @@ async function mountWithRuntime(rt) {
+     now: () => NOW,
+     setInterval: rt.setInterval,
+     clearInterval: () => {},
++    setTimeout: rt.setTimeout,
++    clearTimeout: rt.clearTimeout,
+     requestAnimationFrame: rt.dom.requestAnimationFrame,
+     cancelAnimationFrame: rt.dom.cancelAnimationFrame,
+     matchMedia: rt.dom.matchMedia,
+@@ -514,3 +550,122 @@ function walkForText(node, text) {
+   }
+   return null;
+ }
++
++test('browser idle preload inserts modulepreload for cockpit without loading cockpit on Hive', async () => {
++  const rt = makeRuntime();
++  const expectedHrefs = cockpitWarmHrefs();
++  let idleFn;
++  const oldIdle = globalThis.requestIdleCallback;
++  globalThis.requestIdleCallback = (fn) => {
++    idleFn = fn;
++    return 1;
++  };
++  try {
++    const handle = await mountWithRuntime(rt);
++    assert.ok(rt.root.querySelector('.hive-node'), 'Hive is visible before any cockpit switch');
++    assert.equal(rt.root.querySelector('.cc-cockpit-shell'), null);
++    idleFn?.();
++    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
++    handle.destroy();
++  } finally {
++    globalThis.requestIdleCallback = oldIdle;
++  }
++});
++
++test('prompt cockpit warm adds modulepreload within 300ms without waiting for idle', async () => {
++  const rt = makeRuntime();
++  const expectedHrefs = cockpitWarmHrefs();
++  const oldIdle = globalThis.requestIdleCallback;
++  globalThis.requestIdleCallback = () => 1;
++  try {
++    await ensureHivePanels(rt.dom.document);
++    const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++    const handle = mountCommandCenter(rt.root, {
++      document: rt.dom.document,
++      fetchJson: rt.fetchJson,
++      location: rt.location,
++      history: rt.history,
++      now: () => NOW,
++      setInterval: rt.setInterval,
++      clearInterval: () => {},
++      setTimeout: rt.setTimeout,
++      clearTimeout: rt.clearTimeout,
++      requestAnimationFrame: rt.dom.requestAnimationFrame,
++      cancelAnimationFrame: rt.dom.cancelAnimationFrame,
++      matchMedia: rt.dom.matchMedia,
++      storage: rt.storage,
++    });
++    await handle.whenReady;
++    assert.ok(rt.root.querySelector('.hive-node'));
++    assert.equal(modulepreloadHrefs(rt.dom.document.head).length, 0,
++      'modulepreload is not inserted until the warm timer fires',
++    );
++    const warm = rt.timeouts.find((timer) => timer.ms === 300);
++    assert.ok(warm, 'schedules a 300ms cockpit warm after the first Hive render');
++    warm.fn();
++    assert.deepEqual(modulepreloadHrefs(rt.dom.document.head), expectedHrefs);
++    handle.destroy();
++  } finally {
++    globalThis.requestIdleCallback = oldIdle;
++  }
++});
++
++test('prompt cockpit warm prefetches first project data into cache', async () => {
++  const rt = makeRuntime();
++  const projectFetches = [];
++  const baseFetch = rt.fetchJson;
++  rt.fetchJson = async (url) => {
++    if (String(url).includes('/api/command-center/project')) projectFetches.push(url);
++    return baseFetch(url);
++  };
++  const oldIdle = globalThis.requestIdleCallback;
++  globalThis.requestIdleCallback = () => 1;
++  try {
++    const handle = await mountWithRuntime(rt);
++    assert.equal(projectFetches.length, 0, 'Hive boot only loads the board snapshot');
++    const warm = rt.timeouts.find((timer) => timer.ms === 300);
++    assert.ok(warm);
++    warm.fn();
++    await new Promise((resolve) => setImmediate(resolve));
++    assert.equal(projectFetches.length, 1);
++    assert.match(projectFetches[0], /id=alpha/);
++    handle.destroy();
++  } finally {
++    globalThis.requestIdleCallback = oldIdle;
++  }
++});
++
++test('warm timer cached project paints cockpit without waiting on navigation fetch', async () => {
++  const rt = makeRuntime();
++  const oldIdle = globalThis.requestIdleCallback;
++  globalThis.requestIdleCallback = () => 1;
++  let finishNavFetch;
++  let navFetchStarted = false;
++  const baseFetch = rt.fetchJson;
++  rt.fetchJson = async (url) => {
++    if (String(url).includes('/api/command-center/project')) {
++      if (navFetchStarted) {
++        return new Promise((resolve) => { finishNavFetch = resolve; });
++      }
++      return baseFetch(url);
++    }
++    return baseFetch(url);
++  };
++  try {
++    const handle = await mountWithRuntime(rt);
++    const warm = rt.timeouts.find((timer) => timer.ms === 300);
++    warm.fn();
++    await new Promise((resolve) => setImmediate(resolve));
++    navFetchStarted = true;
++    const card = rt.root.querySelector('.hive-node');
++    card.click();
++    await new Promise((resolve) => setImmediate(resolve));
++    assert.ok(rt.root.querySelector('.cc-cockpit-shell'), 'cached warm data paints before nav fetch completes');
++    assert.ok(finishNavFetch, 'navigation still awaits a fresh project response');
++    finishNavFetch(rt.cockpit);
++    await new Promise((resolve) => setImmediate(resolve));
++    handle.destroy();
++  } finally {
++    globalThis.requestIdleCallback = oldIdle;
++  }
++});
+diff --git a/tests/command-center-perf-budget.test.mjs b/tests/command-center-perf-budget.test.mjs
+new file mode 100644
+index 00000000..bd9c256a
+--- /dev/null
++++ b/tests/command-center-perf-budget.test.mjs
+@@ -0,0 +1,649 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import http from 'node:http';
++import { readFile } from 'node:fs/promises';
++import { fileURLToPath } from 'node:url';
++import { gzipSync, gunzipSync } from 'node:zlib';
++import { createWatchServer, watchAssetCacheControl } from '../tools/watch-server.mjs';
++
++const assets = new URL('../tools/watch-assets/', import.meta.url);
++const source = name => readFile(new URL(name, assets), 'utf8');
++
++test('ambient work caps at 30 fps, sleeps after 5 seconds, and pauses hidden, offscreen and reduced motion', async () => {
++  const { mountAmbientMotion } = await import('../tools/watch-assets/cc-hive-stage.js');
++  const events = new Map();
++  const frames = new Map();
++  let id = 0;
++  let draws = 0;
++  let intersect;
++  const media = { matches: false, addEventListener(_name, fn) { this.change = fn; }, removeEventListener() {} };
++  const doc = { hidden: false, addEventListener: (n, fn) => events.set(n, fn), removeEventListener: n => events.delete(n) };
++  const win = { IntersectionObserver: class { constructor(fn) { intersect = fn; } observe() {} disconnect() {} } };
++  const motion = mountAmbientMotion({ element: {}, doc, win, media,
++    raf: fn => { frames.set(++id, fn); return id; }, caf: n => frames.delete(n), draw: () => draws++ });
++  const step = ts => { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(ts)); };
++  for (let ts = 0; ts <= 1000; ts += 5) step(ts);
++  assert.ok(draws <= 31, `${draws} draws in one second`);
++  step(5001);
++  assert.equal(frames.size, 0, 'idle has no pending animation callback');
++  events.get('pointermove')();
++  assert.equal(frames.size, 1);
++  intersect([{ isIntersecting: false }]);
++  assert.equal(frames.size, 0);
++  intersect([{ isIntersecting: true }]);
++  assert.equal(frames.size, 1);
++  doc.hidden = true; events.get('visibilitychange')();
++  assert.equal(frames.size, 0);
++  doc.hidden = false; events.get('visibilitychange')();
++  assert.equal(frames.size, 1);
++  media.matches = true; media.change();
++  assert.equal(frames.size, 0);
++  motion.destroy();
++  assert.equal(events.size, 0);
++});
++
++// Optional real-browser measurement. Keep this in the fixture test so no production server or board is needed.
++test('desktop Chromium nine-project idle CPU and navigation fixture', { skip: !process.env.SWARM_CC_BROWSER_PERF }, async t => {
++  const { chromium } = await import('playwright');
++  const board = { at: '2026-10-30T12:00:00Z', machine: { agents: { total: 9 } }, projects: Array.from({ length: 9 }, (_, i) => ({
++    id: `project-${i}`, name: `Project ${i}`, machine: 'fixture', agents: { total: 1 },
++    ledger: { tickets: Array.from({ length: 40 }, (_, j) => ({ id: `T-${j}`, title: `Ticket ${j}`, stage: 'S1', status: j < 20 ? 'done' : j === 20 ? 'running' : 'ready' })) },
++    orchestrator: { sessions: [] },
++  })) };
++  const srv = createWatchServer({ root: fileURLToPath(assets), assetDir: fileURLToPath(assets),
++    deltaFile: fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url)), commandCenter: true, board: { snapshot: async () => board } });
++  const { port } = await srv.listen();
++  t.after(() => srv.close());
++  const browser = await chromium.launch({ headless: true,
++    ...(process.env.SWARM_CC_CHROMIUM ? { executablePath: process.env.SWARM_CC_CHROMIUM } : {}) });
++  t.after(() => browser.close());
++  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
++  const errors = [];
++  const robotRequests = [];
++  page.on('request', request => { if (/\/robot-[^/]+\.js/.test(request.url())) robotRequests.push(request.url()); });
++  page.on('pageerror', err => errors.push(err.message));
++  await page.goto(`http://127.0.0.1:${port}/command-center?t=${srv.token}&tour=0`);
++  await page.waitForSelector('.hive-node');
++  const session = await browser.newBrowserCDPSession();
++  const cpu = async () => (await session.send('SystemInfo.getProcessInfo')).processInfo.filter(p => p.type === 'renderer').reduce((sum, p) => sum + p.cpuTime, 0);
++  const before = await cpu();
++  const started = performance.now();
++  await new Promise(resolve => setTimeout(resolve, 45000));
++  const idleCpu = ((await cpu()) - before) / ((performance.now() - started) / 1000) * 100;
++  const runningAnimations = await page.evaluate(() => document.getAnimations().filter(a => a.playState === 'running').map(a => ({ name: a.animationName, target: a.effect?.target?.className })));
++  const visibleLaneHeads = await page.evaluate(() => [...document.querySelectorAll('[data-lane]')].some(node => {
++    const rect = node.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight;
++  }));
++  if (!visibleLaneHeads) assert.deepEqual(robotRequests, [], 'Hive without visible lane heads never loads the 3D robot graph');
++  assert.deepEqual(runningAnimations, [], 'idle CSS also holds its composed frame');
++  const switchMs = await page.evaluate(async () => {
++    const started = performance.now();
++    document.querySelector('.hive-node').click();
++    while (!document.querySelector('.cc-cockpit-shell h1')) await new Promise(requestAnimationFrame);
++    return performance.now() - started;
++  });
++  const backMs = await page.evaluate(async () => {
++    const started = performance.now(); document.querySelector('.cc-cockpit-back-btn').click();
++    while (!document.querySelector('.hive-node')) await new Promise(requestAnimationFrame);
++    return performance.now() - started;
++  });
++  t.diagnostic(JSON.stringify({ idleCpuPercent: idleCpu, switchMs, backMs, runningAnimations, visibleLaneHeads, errors }));
++  const reconciliation = await page.evaluate(async () => {
++    const { renderProjectCockpit } = await import('/assets/cc-cockpit-mount.js');
++    const token = new URL(location.href).searchParams.get('t');
++    const project = await fetch('/api/command-center/project?id=project-0', { headers: { 'x-watch-token': token } }).then(r => r.json());
++    const host = document.createElement('div'); document.body.appendChild(host);
++    const decoration = [];
++    const view = renderProjectCockpit(host, project, { document, now: () => Date.parse('2026-10-30T12:00:00Z'), matchMedia: () => ({ matches: true }),
++      setTimeout: (fn, ms) => { decoration.push({ fn, ms }); return decoration.length; }, clearTimeout() {} });
++    const shellBeforeDecoration = Boolean(host.querySelector('h1')) && !host.querySelector('.pxc');
++    decoration.filter(timer => timer.ms === 0).forEach(timer => timer.fn());
++    await Promise.resolve();
++    const title = host.querySelector('h1');
++    const card = host.querySelector('[data-ticket-id]');
++    const observer = new MutationObserver(() => {});
++    observer.observe(host, { attributes: true, childList: true, characterData: true, subtree: true });
++    view.update(structuredClone(project));
++    const unchangedMutations = observer.takeRecords().length;
++    const changed = structuredClone(project); changed.name = 'Renamed project';
++    view.update(changed);
++    const result = { shellBeforeDecoration, decorated: Boolean(host.querySelector('.pxc')), unchangedMutations, titleRetained: title === host.querySelector('h1'), cardRetained: card === host.querySelector('[data-ticket-id]'), title: title.textContent };
++    changed.ledger.tickets.find(ticket => ticket.id === card.dataset.ticketId).title = 'Updated ticket title';
++    view.update(changed);
++    result.changedCardRetained = card === host.querySelector(`[data-ticket-id="${card.dataset.ticketId}"]`);
++    result.changedTitleBound = card.getAttribute('data-title') === 'Updated ticket title'
++      && card.textContent.toLowerCase().includes('updated ticket title');
++    observer.disconnect(); view.destroy(); host.remove();
++    return result;
++  });
++  assert.deepEqual(reconciliation, { shellBeforeDecoration: true, decorated: true, unchangedMutations: 0, titleRetained: true, cardRetained: true, title: 'RENAMED PROJECT', changedCardRetained: true, changedTitleBound: true });
++  assert.equal(robotRequests.some(url => /robot-(render|geometry|sim)\.js/.test(url)), false, 'Cockpit shell and pixel decoration never await the 3D graph');
++  await page.evaluate(async () => {
++    const { mountRobotHead } = await import('/assets/robot-head.js');
++    const host = document.createElement('div'); host.id = 'perf-visible-head';
++    host.style.cssText = 'position:fixed;top:10px;left:10px;width:56px;height:56px'; document.body.appendChild(host);
++    window.perfVisibleHead = mountRobotHead(host, { state: 'working' });
++  });
++  await page.waitForFunction(() => {
++    const canvas = document.querySelector('#perf-visible-head canvas'); return canvas && canvas.width !== 300;
++  });
++  await page.evaluate(() => { window.perfVisibleHead.setState('error'); window.perfVisibleHead.destroy(); document.querySelector('#perf-visible-head').remove(); delete window.perfVisibleHead; });
++  assert.deepEqual(errors, []);
++  if (!process.env.SWARM_CC_PERF_BASELINE) {
++    assert.ok(idleCpu < 5, `idle renderer CPU ${idleCpu.toFixed(2)}%`);
++    assert.ok(switchMs < 150, `Cockpit shell ${switchMs.toFixed(2)}ms`);
++  }
++});
++
++function request(port, pathname, headers = {}, method = 'GET') {
++  return new Promise((resolve, reject) => {
++    const req = http.request({ hostname: '127.0.0.1', port, path: pathname, method, headers }, res => {
++      const chunks = [];
++      res.on('data', chunk => chunks.push(chunk));
++      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
++    });
++    req.on('error', reject);
++    req.end();
++  });
++}
++
++async function fixture(t, extra = {}) {
++  let clock = Date.parse('2026-10-30T12:00:00Z');
++  let revision = 1;
++  let reads = 0;
++  let runReads = 0;
++  const optionsSeen = [];
++  const timers = [];
++  const srv = createWatchServer({
++    root: fileURLToPath(assets), assetDir: fileURLToPath(assets),
++    deltaFile: fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.url)),
++    commandCenter: true, now: () => clock,
++    getRunSnapshot: async () => { runReads++; return null; },
++    setIntervalFn: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearIntervalFn() {},
++    board: {
++      snapshot: async options => {
++        reads++;
++        optionsSeen.push(options);
++        return { version: revision, at: '2026-10-30T12:00:00Z', projects: [{
++          id: 'alpha', name: `${options.local ? 'Local' : 'All'} ${revision}`,
++          agents: { total: 0 }, ledger: { tickets: [] },
++        }] };
++      },
++    }, ...extra,
++  });
++  const { port } = await srv.listen();
++  t.after(() => srv.close());
++  return {
++    get: (pathname, headers = {}, method) => request(port, pathname, { 'x-watch-token': srv.token, ...headers }, method),
++    advance: ms => { clock += ms; }, revise: () => { revision++; },
++    reads: () => reads, runReads: () => runReads, optionsSeen, timers,
++  };
++}
++
++test('assets use strong validators, Last-Modified, 304 precedence and HEAD', async t => {
++  const f = await fixture(t);
++  const initial = await f.get('/assets/command-center-boot.js');
++  assert.equal(initial.status, 200);
++  assert.match(initial.headers.etag, /^"[a-f0-9]+"$/);
++  assert.ok(Date.parse(initial.headers['last-modified']));
++  for (const headers of [
++    { 'if-none-match': initial.headers.etag },
++    { 'if-none-match': `"other", W/${initial.headers.etag}` },
++    { 'if-modified-since': initial.headers['last-modified'] },
++  ]) {
++    const result = await f.get('/assets/command-center-boot.js', headers);
++    assert.equal(result.status, 304);
++    assert.equal(result.body.length, 0);
++    assert.equal(result.headers.vary, 'Accept-Encoding');
++  }
++  assert.equal((await f.get('/assets/command-center-boot.js', {
++    'if-none-match': '"stale"', 'if-modified-since': initial.headers['last-modified'],
++  })).status, 200);
++  const head = await f.get('/assets/command-center-boot.js', {}, 'HEAD');
++  assert.equal(head.body.length, 0);
++  assert.equal(Number(head.headers['content-length']), initial.body.length);
++});
++
++test('gzip is negotiated and cached with a distinct strong validator; binaries stay unchanged', async t => {
++  const f = await fixture(t);
++  const plain = await f.get('/assets/command-center-boot.js');
++  const zipped = await f.get('/assets/command-center-boot.js', { 'accept-encoding': 'br, gzip' });
++  assert.equal(plain.headers['content-encoding'], undefined);
++  assert.equal(zipped.headers['content-encoding'], 'gzip');
++  assert.deepEqual(gunzipSync(zipped.body), plain.body);
++  assert.ok(zipped.body.length < plain.body.length * 0.4);
++  assert.notEqual(zipped.headers.etag, plain.headers.etag);
++  assert.equal(Number(zipped.headers['content-length']), zipped.body.length);
++  assert.equal((await f.get('/assets/command-center-boot.js', {
++    'accept-encoding': 'gzip', 'if-none-match': zipped.headers.etag,
++  })).status, 304);
++  assert.equal((await f.get('/assets/command-center-boot.js', {
++    'accept-encoding': 'gzip;q=0, *;q=1',
++  })).headers['content-encoding'], undefined);
++  const binary = await f.get('/assets/vendor/fluent-emoji/high_voltage_56.webp', { 'accept-encoding': 'gzip' });
++  assert.equal(binary.status, 200);
++  assert.equal(binary.headers['content-encoding'], undefined);
++  t.diagnostic(`boot JS ${plain.body.length} bytes -> ${zipped.body.length} gzip bytes`);
++});
++
++test('cache policies distinguish fonts, vendor, JS/CSS, HTML and JSON', async t => {
++  const f = await fixture(t);
++  for (const name of ['font.woff2', 'font.woff', 'font.ttf', 'vendor/module.js', 'vendor/icon.webp']) {
++    assert.equal(watchAssetCacheControl(name), 'public, max-age=31536000, immutable');
++  }
++  for (const pathname of ['/assets/command-center-boot.js', '/assets/cc-hive.css']) {
++    assert.equal((await f.get(pathname)).headers['cache-control'], 'public, max-age=300, must-revalidate');
++  }
++  for (const pathname of ['/command-center', '/api/command-center']) {
++    const res = await f.get(pathname, { 'accept-encoding': 'gzip' });
++    assert.equal(res.headers['cache-control'], 'no-cache');
++    assert.equal(res.headers.vary, 'Accept-Encoding');
++    assert.equal(res.headers['content-encoding'], 'gzip');
++    assert.ok(res.headers.etag);
++  }
++});
++
++test('snapshot caches coalesce reads, separate effective query options, and validate revisions', async t => {
++  const f = await fixture(t);
++  const responses = await Promise.all(Array.from({ length: 6 }, () => f.get('/api/command-center')));
++  assert.equal(f.reads(), 1);
++  const tag = responses[0].headers.etag;
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
++  assert.equal(f.reads(), 1);
++  const local = await f.get('/api/command-center?local=1&redact=0');
++  assert.notEqual(local.headers.etag, tag);
++  assert.equal(f.reads(), 2);
++  assert.equal(f.optionsSeen[1].redact, true);
++  assert.equal(f.optionsSeen[1].local, true);
++  await f.get('/api/command-center?redact=1&local=1');
++  assert.equal(f.reads(), 2, 'canonical effective options share a key');
++  const project = await f.get('/api/command-center/project?id=alpha');
++  assert.equal(JSON.parse(project.body).id, 'alpha');
++  assert.equal((await f.get('/api/command-center/project?id=alpha', { 'if-none-match': project.headers.etag })).status, 304);
++  assert.equal((await f.get('/api/command-center/project?id=missing')).status, 404);
++  assert.equal(f.reads(), 4);
++  f.advance(2001);
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': tag })).status, 304);
++  assert.equal(f.reads(), 5);
++  f.revise();
++  f.advance(2001);
++  const changed = await f.get('/api/command-center', { 'if-none-match': tag });
++  assert.equal(changed.status, 200);
++  assert.notEqual(changed.headers.etag, tag);
++  assert.equal((await f.get('/api/command-center', { 'x-watch-token': '' })).status, 403);
++  t.diagnostic('6 simultaneous polls + conditional repeat: 1 board read; unchanged revision returns empty 304');
++});
++
++test('an idle board does not read run state before any event stream opens', async t => {
++  const f = await fixture(t);
++  await f.timers.find(timer => timer.ms === 1000).fn();
++  assert.equal(f.runReads(), 0);
++});
++
++test('warm caches preserve remote identity, token checks and read-only routes', async t => {
++  const f = await fixture(t, { remote: { hosts: ['board.example'], login: 'owner@example.com' } });
++  const identity = { 'tailscale-user-login': 'owner@example.com' };
++  const warm = await f.get('/api/command-center', identity);
++  assert.equal(warm.status, 200);
++  assert.equal((await f.get('/api/command-center', { 'if-none-match': warm.headers.etag })).status, 403);
++  assert.equal((await f.get('/api/command-center', { ...identity, 'x-watch-token': '', 'if-none-match': warm.headers.etag })).status, 403);
++  assert.equal((await f.get('/api/command-center?t=wrong', { ...identity, 'x-watch-token': '' })).status, 403);
++  assert.equal((await f.get('/api/command-center', { ...identity, 'tailscale-funnel-request': '1' })).status, 403);
++  const board = await f.get('/api/board', identity);
++  assert.equal(JSON.parse(board.body).openRun, false);
++  assert.equal((await f.get('/open/run?id=alpha', identity)).status, 404);
++});
++
++test('Hive entry imports exclude Cockpit, robot, tour and palette; supplied entry source budget', async t => {
++  const [boot, hive, html] = await Promise.all([
++    source('command-center-boot.js'), source('cc-hive-mount.js'), source('command-center.html'),
++  ]);
++  const staticImports = text => [...text.matchAll(/^import\s+[\s\S]*?from\s+['"]([^'"]+)['"]/gm)].map(m => m[1]);
++  for (const text of [boot, hive]) {
++    assert.doesNotMatch(staticImports(text).join('\n'), /cockpit|robot|cc-tour|command-palette/);
++  }
++  assert.doesNotMatch(staticImports(boot).join('\n'), /cc-router/, 'legacy router imports the robot-backed layout');
++  assert.match(boot, /import\('\.\/cc-cockpit-mount\.js'\)/);
++  assert.match(boot, /COCKPIT_WARM_MODULES/);
++  for (const rel of [
++    './cc-cockpit-mount.js',
++    './cockpit-view.js',
++    './cockpit-lists.js',
++    './cockpit-orchestrator.js',
++    './orchestrator-view.js',
++    './robot-head.js',
++    './cc-ledger-browser.js',
++    './cc-glitch.js',
++    './cc-tour.js',
++  ]) {
++    assert.match(boot, new RegExp(rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
++  }
++  assert.match(boot, /link\.rel\s*=\s*['"]modulepreload['"]/);
++  assert.match(boot, /new URL\(rel,\s*import\.meta\.url\)\.href/);
++  assert.match(boot, /setTimeoutFn\(\(\)\s*=>\s*\{[\s\S]*preloadCockpit\(warmProjectId\)[\s\S]*\},\s*300\)/);
++  assert.match(boot, /schedulePromptCockpitWarm\(snapshot\.projects\[0\]\?\.id\)/);
++  assert.doesNotMatch(boot, /modulepreload[\s\S]*\.as\s*=/);
++  assert.match(hive, /import\('\.\/robot-head\.js'\)/);
++  assert.match(boot, /import\('\.\/command-palette\.js'\)/);
++  assert.match(html, /command-center-boot\.js/);
++  const bytes = Buffer.byteLength(boot) + Buffer.byteLength(hive);
++  const zipped = gzipSync(boot).length + gzipSync(hive).length;
++  assert.ok(bytes < 80000, `entry source ${bytes} exceeds 80 KB`);
++  assert.ok(zipped < 22000, `entry gzip ${zipped} exceeds 22 KB`);
++  const support = await Promise.all(['cc-hive-stage.js', 'hive-panels.js'].map(source));
++  const suppliedHiveGzip = zipped + support.reduce((sum, text) => sum + gzipSync(text).length, 0);
++  assert.ok(suppliedHiveGzip < 45000, `Hive entry, runtime and panels gzip ${suppliedHiveGzip} exceeds 45 KB`);
++  const robotHead = await source('robot-head.js');
++  assert.deepEqual(staticImports(robotHead), [], 'robot facade must defer its 3D graph until an actual mount');
++  t.diagnostic(`2 supplied Hive entry modules: ${bytes} bytes -> ${zipped} gzip bytes; graph dependencies excluded from this budget`);
++  t.diagnostic(`Hive entries + shared runtime + panels: ${suppliedHiveGzip} gzip bytes (45 KB budget)`);
++});
++
++test('hover-prefetched Cockpit data paints before a slow navigation refresh', async t => {
++  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
++  const oldData = globalThis.CommandCenterData;
++  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
++  t.after(() => { globalThis.CommandCenterData = oldData; });
++  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++  const location = { pathname: '/command-center' };
++  let hiveDeps;
++  let projectCalls = 0;
++  let finishRefresh;
++  const rendered = [];
++  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
++    document: { hidden: false, addEventListener() {}, removeEventListener() {} }, location,
++    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
++    fetchJson: async url => {
++      if (!url.includes('/project')) return { projects: [{ id: 'alpha' }] };
++      if (++projectCalls === 1) return { id: 'alpha', name: 'Prefetched' };
++      return new Promise(resolve => { finishRefresh = resolve; });
++    },
++    renderHive: (_root, _data, deps) => { hiveDeps = deps; return { destroy() {} }; },
++    loadCockpit: async () => ({ renderProjectCockpit: (_root, project) => { rendered.push(project); return { update() {}, destroy() {} }; } }),
++    loadTour: async () => ({ maybeStartFirstVisit() {} }),
++    setInterval: () => 1, clearInterval() {}, requestAnimationFrame() {}, cancelAnimationFrame() {}, matchMedia() {},
++  });
++  t.after(() => handle.destroy());
++  await handle.whenReady;
++  hiveDeps.preloadCockpit('alpha');
++  await new Promise(resolve => setImmediate(resolve));
++  hiveDeps.onOpenProject('alpha');
++  await new Promise(resolve => setImmediate(resolve));
++  assert.deepEqual(rendered, [{ id: 'alpha', name: 'Prefetched' }], 'shell and cached data render while the new response is unresolved');
++  finishRefresh({ id: 'alpha', name: 'Fresh' });
++});
++
++test('300ms warm timer prefetches first project into cache for a fast Cockpit switch', async t => {
++  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
++  const oldData = globalThis.CommandCenterData;
++  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
++  t.after(() => { globalThis.CommandCenterData = oldData; });
++  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++  const location = { pathname: '/command-center' };
++  const projectUrls = [];
++  let finishNav;
++  let navPending = false;
++  const rendered = [];
++  const timeouts = [];
++  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
++    document: { hidden: false, addEventListener() {}, removeEventListener() {} },
++    location,
++    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
++    fetchJson: async url => {
++      if (url.includes('/project')) {
++        projectUrls.push(url);
++        if (navPending) return new Promise(resolve => { finishNav = resolve; });
++        return { id: 'alpha', name: 'Warm cached' };
++      }
++      return { projects: [{ id: 'alpha' }, { id: 'beta' }] };
++    },
++    renderHive: (_root, _data) => ({
++      update() {},
++      destroy() {},
++    }),
++    loadCockpit: async () => ({
++      renderProjectCockpit: (_root, project) => {
++        rendered.push(project);
++        return { update() {}, destroy() {} };
++      },
++    }),
++    loadTour: async () => ({ maybeStartFirstVisit() {} }),
++    setInterval: () => 1,
++    clearInterval() {},
++    setTimeout: (fn, ms) => { timeouts.push({ fn, ms }); return timeouts.length; },
++    clearTimeout: () => {},
++    requestAnimationFrame() {},
++    cancelAnimationFrame() {},
++    matchMedia() {},
++  });
++  t.after(() => handle.destroy());
++  await handle.whenReady;
++  assert.equal(projectUrls.length, 0);
++  const warm = timeouts.find(timer => timer.ms === 300);
++  assert.ok(warm, 'Hive schedules warm after first render');
++  warm.fn();
++  await new Promise(resolve => setImmediate(resolve));
++  assert.equal(projectUrls.length, 1);
++  assert.match(projectUrls[0], /id=alpha/);
++  navPending = true;
++  location.pathname = '/command-center/project/alpha';
++  void handle.refresh();
++  await new Promise(resolve => setImmediate(resolve));
++  assert.deepEqual(rendered, [{ id: 'alpha', name: 'Warm cached' }], 'switch paints from warm cache while nav fetch is pending');
++  finishNav({ id: 'alpha', name: 'Fresh' });
++});
++
++test('browser path modulepreloads cockpit graph from boot URL without import before Hive navigation', async t => {
++  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
++  const oldData = globalThis.CommandCenterData;
++  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
++  t.after(() => { globalThis.CommandCenterData = oldData; });
++  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++  const expectedHrefs = [
++    './cc-cockpit-mount.js',
++    './cockpit-view.js',
++    './cockpit-lists.js',
++    './cockpit-orchestrator.js',
++    './orchestrator-view.js',
++    './robot-head.js',
++    './cc-ledger-browser.js',
++    './cc-glitch.js',
++    './cc-tour.js',
++  ].map((rel) => new URL(
++    rel,
++    new URL('../tools/watch-assets/command-center-boot.js', import.meta.url),
++  ).href);
++  const links = [];
++  const document = {
++    hidden: false,
++    head: { appendChild(link) { links.push(link); return link; } },
++    createElement(tag) {
++      return {
++        tagName: String(tag).toUpperCase(),
++        rel: '',
++        href: '',
++        as: undefined,
++        crossOrigin: undefined,
++        remove() {},
++      };
++    },
++    addEventListener() {},
++    removeEventListener() {},
++  };
++  const location = { pathname: '/command-center' };
++  const handle = mountCommandCenter({ replaceChildren() {}, setAttribute() {} }, {
++    document,
++    location,
++    history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
++    fetchJson: async url => (url.includes('/project') ? { id: 'alpha' } : { projects: [{ id: 'alpha' }] }),
++    renderHive: (_root, _data, deps) => {
++      deps.preloadCockpit('alpha');
++      return { update() {}, destroy() {} };
++    },
++    loadTour: async () => ({ maybeStartFirstVisit() {} }),
++    setInterval: () => 1,
++    clearInterval() {},
++    requestAnimationFrame() {},
++    cancelAnimationFrame() {},
++    matchMedia() {},
++  });
++  t.after(() => handle.destroy());
++  await handle.whenReady;
++  assert.equal(location.pathname, '/command-center');
++  assert.equal(links.length, expectedHrefs.length);
++  assert.deepEqual(links.map((link) => link.href), expectedHrefs);
++  for (const link of links) {
++    assert.equal(link.rel, 'modulepreload');
++    assert.equal(link.as, undefined);
++    assert.equal(link.crossOrigin, undefined);
++  }
++});
++
++test('boot defers Cockpit and optional UI, polls at 5000ms, pauses hidden and refreshes on return', async t => {
++  process.env.SWARM_COMMAND_CENTER_BOOT_TEST = '1';
++  const oldData = globalThis.CommandCenterData;
++  globalThis.CommandCenterData = { parseCommandCenterSnapshot: data => data };
++  t.after(() => { globalThis.CommandCenterData = oldData; });
++  const { mountCommandCenter } = await import('../tools/watch-assets/command-center-boot.js');
++  const events = new Map();
++  const document = {
++    hidden: false,
++    addEventListener: (name, fn) => events.set(name, fn),
++    removeEventListener: name => events.delete(name),
++  };
++  const root = { replaceChildren() {}, setAttribute() {} };
++  const location = { pathname: '/command-center' };
++  const timers = new Map();
++  const timeouts = [];
++  let timerId = 0;
++  let calls = 0;
++  let cockpitLoads = 0;
++  let tourLoads = 0;
++  let paletteLoads = 0;
++  let hiveDeps;
++  const oldIdle = globalThis.requestIdleCallback;
++  const oldCancel = globalThis.cancelIdleCallback;
++  let idle;
++  globalThis.requestIdleCallback = fn => { idle = fn; return 1; };
++  globalThis.cancelIdleCallback = () => {};
++  t.after(() => { globalThis.requestIdleCallback = oldIdle; globalThis.cancelIdleCallback = oldCancel; });
++  const handle = mountCommandCenter(root, {
++    document, location, history: { pushState(_state, _title, pathname) { location.pathname = pathname; } },
++    fetchJson: async url => { calls++; return url.includes('/project') ? { id: 'alpha' } : { projects: [{ id: 'alpha' }] }; },
++    renderHive: (_root, _data, deps) => { hiveDeps = deps; return { update() {}, destroy() {} }; },
++    loadCockpit: async () => { cockpitLoads++; return { renderProjectCockpit: () => ({ destroy() {} }) }; },
++    loadTour: async () => { tourLoads++; return { maybeStartFirstVisit() {} }; },
++    loadPalette: async () => { paletteLoads++; return { createCommandPalette: () => ({ bind() {}, unbind() {} }) }; },
++    setInterval: (fn, ms) => { const id = ++timerId; timers.set(id, { fn, ms }); return id; },
++    clearInterval: id => timers.delete(id),
++    setTimeout: (fn, ms) => { const id = ++timerId; timeouts.push({ id, fn, ms }); return id; },
++    clearTimeout: () => {},
++    requestAnimationFrame() {}, cancelAnimationFrame() {}, matchMedia() {},
++  });
++  t.after(() => handle.destroy());
++  await handle.whenReady;
++  assert.equal(cockpitLoads + tourLoads + paletteLoads, 0);
++  assert.equal(calls, 1);
++  assert.ok(timeouts.some((timer) => timer.ms === 300), 'Hive entry schedules prompt cockpit warm');
++  assert.deepEqual(hiveDeps.rawSnapshot, { projects: [{ id: 'alpha' }] });
++  assert.equal(timers.size, 1);
++  const timer = [...timers.values()][0];
++  assert.equal(timer.ms, 5000);
++  await timer.fn();
++  assert.equal(calls, 2);
++  document.hidden = true;
++  events.get('visibilitychange')();
++  assert.equal(timers.size, 0);
++  await timer.fn();
++  assert.equal(calls, 2, 'even a queued poll does no hidden request');
++  document.hidden = false;
++  events.get('visibilitychange')();
++  assert.equal(calls, 3, 'visible resumes immediately');
++  assert.equal(timers.size, 1);
++  await Promise.resolve();
++  hiveDeps.onOpenProject('alpha');
++  await handle.refresh();
++  assert.equal(cockpitLoads, 1);
++  idle();
++  await Promise.resolve();
++  assert.equal(tourLoads, 1);
++  await events.get('keydown')({ key: 'k', ctrlKey: true, preventDefault() {} });
++  assert.equal(paletteLoads, 1);
++  handle.destroy();
++  assert.equal(timers.size, 0);
++  assert.equal(events.size, 0);
++});
++
++test('Hive loads robot code only for a visible lane head, shares its raw response, and destroys deferred heads', async t => {
++  const { renderHive } = await import('../tools/watch-assets/cc-hive-mount.js');
++  const events = new Map();
++  const node = tag => ({
++    tagName: tag, children: [], style: { setProperty() {} },
++    classList: { add() {}, remove() {}, toggle() {} },
++    appendChild(child) { this.children.push(child); child.parentNode = this; return child; },
++    removeChild(child) { this.children.splice(this.children.indexOf(child), 1); },
++    get firstChild() { return this.children[0]; },
++    setAttribute() {}, querySelector() { return null; },
++    addEventListener() {}, removeEventListener() {}, getContext() { return null; },
++    getBoundingClientRect() { return { width: 800, height: 600 }; },
++  });
++  let idle;
++  let robotLoads = 0;
++  let mounts = 0;
++  let destroys = 0;
++  let rawFetches = 0;
++  const paused = [];
++  const observers = [];
++  const win = {
++    innerWidth: 1200, requestAnimationFrame() {}, requestIdleCallback: fn => { idle = fn; },
++    fetch: () => { rawFetches++; }, addEventListener() {}, removeEventListener() {},
++    IntersectionObserver: class {
++      constructor(callback) { this.callback = callback; observers.push(this); }
++      observe() {} disconnect() {}
++    },
++  };
++  const document = {
++    hidden: false, defaultView: win, body: node('body'), createElement: node,
++    createTextNode: textContent => ({ textContent }),
++    addEventListener: (name, fn) => events.set(name, fn), removeEventListener: name => events.delete(name),
++  };
++  const root = node('div');
++  const oldPanels = globalThis.HivePanels;
++  globalThis.HivePanels = {
++    deriveHiveView: data => ({ ...data, projects: [], agents: 0, needs: 0, projectsTotal: 0, doneLast24h: null }),
++    renderHiveDashboard: (host, view, deps) => ({ heads: [deps.mountHead(host, { state: 'idle', label: 'Alpha' })] }),
++  };
++  t.after(() => { globalThis.HivePanels = oldPanels; });
++  const handle = renderHive(root, { projects: [] }, {
++    document, now: () => 0, rawSnapshot: { projects: [] },
++    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, matchMedia: () => ({ matches: false }),
++    loadRobot: async () => {
++      robotLoads++;
++      return { setAnimationPaused: value => paused.push(value), mountRobotHead: () => {
++        mounts++;
++        assert.equal(root.children.length, 1, 'shell exists before robot mount');
++        return { destroy() { destroys++; } };
++      } };
++    },
++  });
++  assert.equal(root.children.length, 1);
++  assert.equal(robotLoads, 0);
++  assert.equal(rawFetches, 0);
++  assert.equal(idle, undefined, 'offscreen heads do not even schedule a robot import');
++  observers[0].callback([{ isIntersecting: false }]);
++  assert.equal(robotLoads, 0);
++  observers[0].callback([{ isIntersecting: true }]);
++  idle();
++  await new Promise(resolve => setImmediate(resolve));
++  assert.equal(robotLoads, 1);
++  assert.equal(mounts, 1);
++  document.hidden = true;
++  events.get('visibilitychange')();
++  assert.equal(paused.at(-1), true);
++  handle.update({ projects: [] }, { projects: [] });
++  assert.equal(rawFetches, 0);
++  handle.destroy();
++  assert.equal(destroys, 1);
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index 4126d056..ef14982b 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.29', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.30', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.29');
++  assert.equal(pkg.version, '1.167.30');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.29/);
+-  assert.match(readme, /Install from tag v1\.167\.29/);
++  assert.match(readme, /Use Project Swarm 1\.167\.30/);
++  assert.match(readme, /Install from tag v1\.167\.30/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.29\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.30\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index 62fb63bb..22c2e40c 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.29', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.29 while 1.46.1 history remains', async () => {
++describe('release: 1.167.30', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.30 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.29');
+-    assert.equal(lock.version, '1.167.29');
+-    assert.equal(lock.packages[''].version, '1.167.29');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.29\n/);
++    assert.equal(pkg.version, '1.167.30');
++    assert.equal(lock.version, '1.167.30');
++    assert.equal(lock.packages[''].version, '1.167.30');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.30\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 23838832..3a14071f 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.29');
+-  assert.equal(lock.version, '1.167.29');
+-  assert.equal(lock.packages[''].version, '1.167.29');
++  assert.equal(pkg.version, '1.167.30');
++  assert.equal(lock.version, '1.167.30');
++  assert.equal(lock.packages[''].version, '1.167.30');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.29\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.30\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 3e5f0fb2..c7e8d747 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.29 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.30 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.29');
+-  assert.equal(lock.version, '1.167.29');
+-  assert.equal(lock.packages[''].version, '1.167.29');
++  assert.equal(pkg.version, '1.167.30');
++  assert.equal(lock.version, '1.167.30');
++  assert.equal(lock.packages[''].version, '1.167.30');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.29\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.30\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.29',
++    'README.md': '1.167.30',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.29',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.29',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.29',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.29',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.30',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.30',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.30',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.30',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index d3bdff47..e48e78a7 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.29', () => {
+-  test('package.json and package-lock.json are both at 1.167.29', async () => {
++describe('release: 1.167.30', () => {
++  test('package.json and package-lock.json are both at 1.167.30', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.29');
+-    assert.equal(lock.version, '1.167.29');
+-    assert.equal(lock.packages[''].version, '1.167.29');
++    assert.equal(pkg.version, '1.167.30');
++    assert.equal(lock.version, '1.167.30');
++    assert.equal(lock.packages[''].version, '1.167.30');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index a152ec11..6b7e532e 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.29');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.29\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.30');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.30\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tests/tickets-supersede.test.mjs b/tests/tickets-supersede.test.mjs
+index 3fe3c669..8409b3d7 100644
+--- a/tests/tickets-supersede.test.mjs
++++ b/tests/tickets-supersede.test.mjs
+@@ -5,7 +5,7 @@ import os from 'node:os';
+ import path from 'node:path';
+ import { spawn } from 'node:child_process';
+ import { fileURLToPath } from 'node:url';
+-import { runScopeCommand, supersedeOwnerRefusal } from '../tools/scope-commands.mjs';
++import { runScopeCommand, supersedeOwnerRefusal, setSupersedeOwnerCheck } from '../tools/scope-commands.mjs';
+ import {
+   createLedger,
+   writeLedger,
+@@ -80,13 +80,11 @@ async function readLog(root) {
+ }
+ 
+ async function runSupersede(root, args) {
+-  const prevOwner = process.env.SWARM_OWNER;
+-  process.env.SWARM_OWNER = '1';
++  setSupersedeOwnerCheck(() => null);
+   try {
+     return await runScopeCommand(root, 'tickets', ['supersede', ...args]);
+   } finally {
+-    if (prevOwner === undefined) delete process.env.SWARM_OWNER;
+-    else process.env.SWARM_OWNER = prevOwner;
++    setSupersedeOwnerCheck();
+   }
+ }
+ 
+@@ -166,29 +164,101 @@ test('last touch from log vs ledger-created fallback', async () => {
+ 
+ const ownerGateMsg = /owner-only.*agent or worker session/i;
+ 
+-test('supersedeOwnerRefusal blocks agent env, missing TTY, and allows owner override', () => {
+-  assert.match(supersedeOwnerRefusal({ env: { CLAUDECODE: '1' }, isTTY: true }), ownerGateMsg);
+-  assert.match(supersedeOwnerRefusal({ env: { SWARM_WORKER: '1' }, isTTY: true }), ownerGateMsg);
+-  assert.match(supersedeOwnerRefusal({ env: { SWARM_JOB_ID: 'j1' }, isTTY: true }), ownerGateMsg);
+-  assert.match(supersedeOwnerRefusal({ env: {}, isTTY: false }), ownerGateMsg);
+-  assert.equal(supersedeOwnerRefusal({ env: { CLAUDECODE: '1', SWARM_OWNER: '1' }, isTTY: false }), null);
+-  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true }), null);
++test('supersedeOwnerRefusal checks every agent marker first, even with SWARM_OWNER=1', () => {
++  for (const marker of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID']) {
++    for (const value of ['1', '']) {
++      let inspected = false;
++      assert.match(supersedeOwnerRefusal({
++        env: { [marker]: value, SWARM_OWNER: '1' }, isTTY: true,
++        processInfo: () => { inspected = true; return { ppid: 1, comm: 'bash' }; },
++      }), ownerGateMsg, marker);
++      assert.equal(inspected, false, 'markers must be checked before ancestry');
++    }
++  }
++});
++
++test('supersedeOwnerRefusal rejects agent ancestry despite a TTY or SWARM_OWNER=1', () => {
++  for (const command of ['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt', '/opt/bin/CoDeX']) {
++    assert.match(supersedeOwnerRefusal({
++      env: { SWARM_OWNER: '1' }, isTTY: true, ancestry: ['bash', command],
++    }), ownerGateMsg, command);
++  }
++});
++
++test('supersedeOwnerRefusal allows clean ancestry only with a TTY', () => {
++  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true, ancestry: ['node', '/bin/bash'] }), null);
++  assert.match(supersedeOwnerRefusal({ env: { SWARM_OWNER: '1' }, isTTY: false, ancestry: ['bash'] }), ownerGateMsg);
++});
++
++test('supersedeOwnerRefusal requires both stdin and stdout TTY by default', () => {
++  const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
++  const stdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
++  try {
++    for (const [input, output] of [[false, true], [true, false], [false, false], [true, true]]) {
++      Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: input });
++      Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: output });
++      const result = supersedeOwnerRefusal({ env: {}, ancestry: ['bash'] });
++      if (input && output) assert.equal(result, null);
++      else assert.match(result, ownerGateMsg);
++    }
++  } finally {
++    if (stdinTTY) Object.defineProperty(process.stdin, 'isTTY', stdinTTY);
++    else delete process.stdin.isTTY;
++    if (stdoutTTY) Object.defineProperty(process.stdout, 'isTTY', stdoutTTY);
++    else delete process.stdout.isTTY;
++  }
++});
++
++test('supersedeOwnerRefusal walks parents from this process and stops at pid 1', () => {
++  const visited = [];
++  const parents = new Map([
++    [process.pid, { ppid: 900002, comm: '/usr/bin/node' }],
++    [900002, { ppid: 900003, comm: '/bin/bash' }],
++    [900003, { ppid: 1, comm: '/opt/bin/Codex' }],
++  ]);
++  const processInfo = pid => {
++    visited.push(pid);
++    assert.ok(parents.has(pid), `unexpected pid ${pid}`);
++    return parents.get(pid);
++  };
++  assert.match(supersedeOwnerRefusal({ env: {}, isTTY: true, processInfo }), ownerGateMsg);
++  assert.deepEqual(visited, [process.pid, 900002, 900003]);
++  visited.length = 0;
++  parents.set(900003, { ppid: 1, comm: '/bin/zsh' });
++  assert.equal(supersedeOwnerRefusal({ env: {}, isTTY: true, processInfo }), null);
++  assert.deepEqual(visited, [process.pid, 900002, 900003]);
+ });
+ 
+-test('agent session refused unless SWARM_OWNER=1', async () => {
++test('supersedeOwnerRefusal bounds inspection and refuses incomplete ancestry', () => {
++  let calls = 0;
++  assert.match(supersedeOwnerRefusal({
++    env: {}, isTTY: true,
++    processInfo: pid => { calls += 1; return { ppid: pid + 1, comm: 'bash' }; },
++  }), ownerGateMsg);
++  assert.equal(calls, 32);
++  assert.match(supersedeOwnerRefusal({
++    env: {}, isTTY: true, processInfo: () => { throw new Error('ps unavailable'); },
++  }), ownerGateMsg);
++});
++
++test('agent session refuses bulk supersede with SWARM_OWNER=1; test hook allows and resets', async () => {
+   const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
++  const before = await fs.readFile(ledgerPath(root), 'utf8');
+   const prevCode = process.env.CLAUDECODE;
+   const prevOwner = process.env.SWARM_OWNER;
+   process.env.CLAUDECODE = '1';
+-  delete process.env.SWARM_OWNER;
++  process.env.SWARM_OWNER = '1';
+   try {
+     const denied = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01']);
+     assert.equal(denied.exitCode, 1);
+     assert.match(denied.stdout, ownerGateMsg);
+-    process.env.SWARM_OWNER = '1';
+-    const allowed = await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01', '--dry-run']);
+-    assert.equal(allowed.exitCode, 0);
++    assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), before);
++    const allowed = await runSupersede(root, ['--before', '2025-01-01', '--yes']);
++    assert.equal(allowed.exitCode, 0, allowed.stdout);
++    assert.equal((await readLedger(root)).tickets[0].status, 'superseded');
++    assert.match((await runScopeCommand(root, 'tickets', ['supersede', '--before', '2025-01-01'])).stdout, ownerGateMsg);
+   } finally {
++    setSupersedeOwnerCheck();
+     if (prevCode === undefined) delete process.env.CLAUDECODE;
+     else process.env.CLAUDECODE = prevCode;
+     if (prevOwner === undefined) delete process.env.SWARM_OWNER;
+@@ -196,20 +266,28 @@ test('agent session refused unless SWARM_OWNER=1', async () => {
+   }
+ });
+ 
+-test('--set superseded uses the same owner gate as bulk supersede', async () => {
++test('--set superseded uses the same real owner gate and resettable test hook as bulk supersede', async () => {
+   const root = await projectWithLedger([ticket('T-0001', 'todo')], { createdAt: '2020-01-01T00:00:00.000Z' });
++  const before = await fs.readFile(ledgerPath(root), 'utf8');
+   const prev = { SWARM_WORKER: process.env.SWARM_WORKER, SWARM_OWNER: process.env.SWARM_OWNER };
+   process.env.SWARM_WORKER = '1';
+-  delete process.env.SWARM_OWNER;
++  process.env.SWARM_OWNER = '1';
+   try {
+-    const denied = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', '--yes']);
+-    assert.equal(denied.exitCode, 1);
+-    assert.match(denied.stdout, ownerGateMsg);
+-    process.env.SWARM_OWNER = '1';
++    for (const flags of [['--yes'], ['--force'], ['--dry-run']]) {
++      const denied = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', ...flags]);
++      assert.equal(denied.exitCode, 1);
++      assert.match(denied.stdout, ownerGateMsg);
++    }
++    assert.equal(await fs.readFile(ledgerPath(root), 'utf8'), before);
++    setSupersedeOwnerCheck(() => null);
+     const allowed = await runScopeCommand(root, 'tickets', ['T-0001', '--set', 'superseded', '--yes']);
+     assert.equal(allowed.exitCode, 0);
+     assert.equal((await readLedger(root)).tickets[0].status, 'superseded');
++    setSupersedeOwnerCheck();
++    const other = await projectWithLedger([ticket('T-0001', 'todo')]);
++    assert.match((await runScopeCommand(other, 'tickets', ['T-0001', '--set', 'superseded', '--yes'])).stdout, ownerGateMsg);
+   } finally {
++    setSupersedeOwnerCheck();
+     if (prev.SWARM_WORKER === undefined) delete process.env.SWARM_WORKER;
+     else process.env.SWARM_WORKER = prev.SWARM_WORKER;
+     if (prev.SWARM_OWNER === undefined) delete process.env.SWARM_OWNER;
+@@ -288,14 +366,7 @@ test('bulk supersede prunes superseded dependencies and logs prune-deps', async
+       ],
+     },
+   );
+-  const prevOwner = process.env.SWARM_OWNER;
+-  process.env.SWARM_OWNER = '1';
+-  try {
+-    await runSupersede(root, ['--before', '2025-01-01', '--yes']);
+-  } finally {
+-    if (prevOwner === undefined) delete process.env.SWARM_OWNER;
+-    else process.env.SWARM_OWNER = prevOwner;
+-  }
++  await runSupersede(root, ['--before', '2025-01-01', '--yes']);
+   const ledger = await readLedger(root);
+   assert.equal(ledger.tickets.find(t => t.id === 'T-0001').status, 'superseded');
+   assert.deepEqual(ledger.tickets.find(t => t.id === 'T-0002').dependsOn, []);
+@@ -328,8 +399,8 @@ function spawnScopeTickets(root, args, env = {}) {
+   return new Promise((resolve, reject) => {
+     const child = spawn(
+       process.execPath,
+-      ['--import', './tests/_isolate-config.mjs', '-e', `import { runScopeCommand } from './tools/scope-commands.mjs'; const r = await runScopeCommand(process.argv[1], 'tickets', process.argv.slice(2)); process.stdout.write(r.stdout ?? ''); process.exit(r.exitCode ?? 0);`, root, ...args],
+-      { cwd: repoRoot, env: { ...process.env, SWARM_OWNER: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'] },
++      ['--import', './tests/_isolate-config.mjs', '-e', `import { runScopeCommand, setSupersedeOwnerCheck } from './tools/scope-commands.mjs'; let r; setSupersedeOwnerCheck(() => null); try { r = await runScopeCommand(process.argv[1], 'tickets', process.argv.slice(2)); } finally { setSupersedeOwnerCheck(); } process.stdout.write(r.stdout ?? ''); process.exitCode = r.exitCode ?? 0;`, root, ...args],
++      { cwd: repoRoot, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] },
+     );
+     let stdout = '';
+     child.stdout.on('data', chunk => { stdout += chunk; });
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 099738a9..5510bff1 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -47,7 +47,7 @@ import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane,
+ import { unlockReady, releaseReady } from './ticket-unlock.mjs';
+ import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, integrationTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
+ import { parseEnvNames, envNamesLine } from './env-names.mjs';
+-import { execFile } from 'node:child_process';
++import { execFile, execFileSync } from 'node:child_process';
+ import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
+ import { promisify } from 'node:util';
+ import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
+@@ -3445,16 +3445,58 @@ async function refreshPlan(root) {
+ const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
+ 
+ const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
++const SUPERSEDE_AGENT_COMMANDS = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt']);
++const SUPERSEDE_AGENT_MARKERS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID'];
+ 
+-export function supersedeOwnerRefusal({ env = process.env, isTTY = process.stdout.isTTY } = {}) {
+-  if (env.SWARM_OWNER === '1') return null;
+-  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.SWARM_WORKER || env.SWARM_JOB_ID || env.SWARM_RUN_ID) {
+-    return SUPERSEDE_OWNER_MSG;
++function supersedeProcessInfo(pid) {
++  const options = { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'pipe'] };
++  return {
++    ppid: Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], options).trim()),
++    comm: execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], options).trim(),
++  };
++}
++
++export function supersedeOwnerRefusal({
++  env = process.env,
++  isTTY = process.stdin.isTTY && process.stdout.isTTY,
++  ancestry,
++  processInfo = supersedeProcessInfo,
++} = {}) {
++  if (SUPERSEDE_AGENT_MARKERS.some(marker => env[marker] !== undefined)) return SUPERSEDE_OWNER_MSG;
++  const isAgent = command => SUPERSEDE_AGENT_COMMANDS.has(path.basename(command.trim()).toLowerCase());
++  if (ancestry !== undefined) {
++    if (ancestry.some(isAgent)) return SUPERSEDE_OWNER_MSG;
++  } else {
++    // A terminal allocated inside an agent still has that agent in its parent chain.
++    // Refuse if the chain cannot be inspected completely within the hop limit.
++    let pid = process.pid;
++    const seen = new Set();
++    try {
++      for (let hop = 0; hop < 32 && pid > 1; hop += 1) {
++        if (seen.has(pid)) return SUPERSEDE_OWNER_MSG;
++        seen.add(pid);
++        const { ppid, comm } = processInfo(pid);
++        if (typeof comm !== 'string' || !comm.trim() || isAgent(comm)) return SUPERSEDE_OWNER_MSG;
++        if (!Number.isInteger(ppid) || ppid < 1) return SUPERSEDE_OWNER_MSG;
++        pid = ppid;
++      }
++      if (pid !== 1) return SUPERSEDE_OWNER_MSG;
++    } catch {
++      return SUPERSEDE_OWNER_MSG;
++    }
+   }
+   if (!isTTY) return SUPERSEDE_OWNER_MSG;
+   return null;
+ }
+ 
++let supersedeOwnerCheck = supersedeOwnerRefusal;
++
++// Test-only injection; calling without an argument restores the production gate.
++export function setSupersedeOwnerCheck(fn = supersedeOwnerRefusal) {
++  if (typeof fn !== 'function') throw new TypeError('supersede owner check must be a function');
++  supersedeOwnerCheck = fn;
++}
++
+ const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
+ 
+ async function supersedeStaleCommand(root, rest, flags) {
+@@ -3462,7 +3504,7 @@ async function supersedeStaleCommand(root, rest, flags) {
+   if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
+   const beforeMs = Date.parse(flags.before);
+   if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+-  const denied = supersedeOwnerRefusal();
++  const denied = supersedeOwnerCheck();
+   if (denied) return out(denied, 1);
+   const ledger = await readLedger(root);
+   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+@@ -3949,11 +3991,11 @@ async function setTicketStatus(root, rest, flags) {
+       return out(msg, 1);
+     }
+   }
+-  if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
+   if (to === 'superseded') {
+-    const denied = supersedeOwnerRefusal();
++    const denied = supersedeOwnerCheck();
+     if (denied) return out(denied, 1);
+   }
++  if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
+   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
+   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
+   let holdQuestion;
+diff --git a/tools/watch-assets/cc-cockpit-mount.js b/tools/watch-assets/cc-cockpit-mount.js
+index 3c8c7456..f61a4ad0 100644
+--- a/tools/watch-assets/cc-cockpit-mount.js
++++ b/tools/watch-assets/cc-cockpit-mount.js
+@@ -19,7 +19,7 @@ import {
+   shortTitle,
+ } from './cockpit-lists.js';
+ import { glitch as defaultGlitch } from './cc-glitch.js';
+-import { completionKey } from './cc-tour.js';
++import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
+ 
+ const TOUR_USER = 'anonymous';
+ const SVG_NS = 'http://www.w3.org/2000/svg';
+@@ -62,8 +62,9 @@ function nowMs(deps) {
+   return typeof n === 'function' ? n() : (typeof n === 'number' ? n : Date.now());
+ }
+ 
+-function suppressCockpitAutoTour() {
++async function suppressCockpitAutoTour() {
+   try {
++    const { completionKey } = await import('./cc-tour.js');
+     globalThis.localStorage?.setItem(completionKey(TOUR_USER), '1');
+   } catch {
+     // ignore storage failures (tests, private mode)
+@@ -166,12 +167,12 @@ export function renderProjectCockpit(host, project, deps) {
+   };
+   const raf = deps.requestAnimationFrame || (typeof win.requestAnimationFrame === 'function' ? win.requestAnimationFrame.bind(win) : null);
+   const caf = deps.cancelAnimationFrame || (typeof win.cancelAnimationFrame === 'function' ? win.cancelAnimationFrame.bind(win) : null);
+-  let reducedMotion = false;
++  let reducedMq = null;
+   try {
+     const mm = typeof deps.matchMedia === 'function' ? deps.matchMedia : (typeof win.matchMedia === 'function' ? win.matchMedia.bind(win) : null);
+-    reducedMotion = Boolean(mm && mm('(prefers-reduced-motion: reduce)').matches);
++    reducedMq = mm && mm('(prefers-reduced-motion: reduce)');
+   } catch {
+-    reducedMotion = false;
++    reducedMq = null;
+   }
+ 
+   while (host.firstChild) host.removeChild(host.firstChild);
+@@ -318,10 +319,6 @@ export function renderProjectCockpit(host, project, deps) {
+   wstream.appendChild(wHead);
+   wstream.appendChild(wgrid);
+ 
+-  // the orchestrator run is one line at the foot of the NOW card (no separate run-stream block)
+-  const runLine = el(doc, 'div', 'ck-runs');
+-  runLine.setAttribute('aria-label', 'Orchestrator run');
+-
+   const stack = el(doc, 'footer', 'stack');
+   stack.setAttribute('aria-label', 'Ticket stack');
+   const stackLeft = el(doc, 'div');
+@@ -354,6 +351,17 @@ export function renderProjectCockpit(host, project, deps) {
+ 
+   let destroyed = false;
+   let activeId = null;
++  let motion = null;
++  const patchPanel = (target, render) => {
++    const staging = doc.createElement('div');
++    const result = render(staging);
++    const attrs = staging.attributes?.[Symbol.iterator]
++      ? [...staging.attributes].map(a => [a.name, a.value]) : Object.entries(staging.attributes || {});
++    for (const [name, value] of attrs) if (target.getAttribute(name) !== value) target.setAttribute(name, value);
++    reconcileDom(target, staging);
++    return result;
++  };
++  const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+ 
+   /** The card of the NOW RUNNING ticket, in whichever column it sits. */
+   function activeRow() {
+@@ -456,16 +464,8 @@ export function renderProjectCockpit(host, project, deps) {
+   // The creature bob, glow, live chips, scan and stream shine are CSS keyframes (cc-cockpit.css), so they run on the
+   // compositor without restyling the page each frame; this loop only moves what depends on measured geometry.
+   // Reduced motion never starts it and CSS drops the keyframes.
+-  let frame = null;
+-  function tick(ts) {
+-    frame = null;
+-    if (destroyed) return;
+-    if (!doc.hidden) placeDots(typeof ts === 'number' ? ts : Date.now());
+-    frame = raf(tick);
+-  }
+   function startMotion() {
+-    if (reducedMotion || !raf || frame != null || destroyed) return;
+-    frame = raf(tick);
++    motion?.sync();
+   }
+ 
+   // Orchestrator creature: mounted once per project, then only its state follows the orchestrator.
+@@ -486,7 +486,7 @@ export function renderProjectCockpit(host, project, deps) {
+       headHandle = null;
+       headKey = key;
+       headMounted = null;
+-      loadCreature().then((api) => {
++      const decorate = () => loadCreature().then((api) => {
+         if (!api || destroyed || headKey !== key || headHandle) return;
+         try {
+           clear(hd2);
+@@ -498,10 +498,14 @@ export function renderProjectCockpit(host, project, deps) {
+           });
+           headMounted = headWanted.state;
+           layoutWire();
++          motion?.sync();
+         } catch {
+           headHandle = null;
+         }
+       });
++      // Paint the shell and data before secondary visuals. Tests may inject an immediate mount.
++      if (typeof deps.mountRobotHead === 'function') void decorate();
++      else later(() => { if (!destroyed) void decorate(); }, 0);
+       return;
+     }
+     if (headHandle && headMounted !== state) {
+@@ -511,61 +515,71 @@ export function renderProjectCockpit(host, project, deps) {
+   }
+ 
+   function paintCounters(items) {
+-    clear(cnt);
+-    for (const c of items) {
+-      const cell = el(doc, 'div');
+-      cell.appendChild(el(doc, 'div', 'l', c.label));
+-      const v = el(doc, 'div', 'v has-tip', String(c.value));
+-      v.setAttribute('tabindex', '0');
+-      v.setAttribute('data-k', c.label);
+-      v.setAttribute('data-tip', c.tip);
+-      if (c.color) v.style.color = c.color;
+-      cell.appendChild(v);
+-      cnt.appendChild(cell);
+-    }
++    patchPanel(cnt, cnt => {
++      for (const c of items) {
++        const cell = el(doc, 'div');
++        cell.appendChild(el(doc, 'div', 'l', c.label));
++        const v = el(doc, 'div', 'v has-tip', String(c.value));
++        v.setAttribute('tabindex', '0');
++        v.setAttribute('data-k', c.label);
++        v.setAttribute('data-tip', c.tip);
++        if (c.color) v.style.color = c.color;
++        cell.appendChild(v);
++        cnt.appendChild(cell);
++      }
++    });
+   }
+ 
+   function paintNow(columns, model, runs) {
+-    clear(nowHost);
+-    const name = model.name;
+-    const lead = columns.left[0] && ['running', 'ready'].includes(columns.left[0].state) ? columns.left[0] : null;
+-    if (lead) {
+-      const t = lead.ticket;
+-      const running = lead.state === 'running';
+-      const k = el(doc, 'div', 'k');
+-      k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
+-      k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
+-      nowHost.appendChild(k);
+-      const full = String(t.title || t.id).replace(/"/g, '');
+-      nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
+-      nowHost.appendChild(el(doc, 'div', 't', t.id));
+-      const d = el(doc, 'div', 'd', full);
+-      d.setAttribute('title', full);
+-      d.setAttribute('data-title', full);
+-      nowHost.appendChild(d);
+-    } else {
+-      const k = el(doc, 'div', 'k');
+-      k.appendChild(el(doc, 'span', null, 'STATUS'));
+-      k.appendChild(el(doc, 'span'));
+-      nowHost.appendChild(k);
+-      nowHost.appendChild(el(doc, 'div', 'p', name));
+-      nowHost.appendChild(el(doc, 'div', 't', model.total > 0 && model.done >= model.total ? 'All done' : 'Idle'));
+-      nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
+-    }
+-    const running = columns.counts.running;
+-    const w = el(doc, 'div', 'd w');
+-    w.appendChild(el(doc, 'em', null, 'WORKER >'));
+-    w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
+-    nowHost.appendChild(w);
+-    renderRunLine(runLine, runs);
+-    nowHost.appendChild(runLine);
++    patchPanel(nowHost, nowHost => {
++      clear(nowHost);
++      const name = model.name;
++      const lead = columns.left[0] && ['running', 'ready'].includes(columns.left[0].state) ? columns.left[0] : null;
++      if (lead) {
++        const t = lead.ticket;
++        const running = lead.state === 'running';
++        const k = el(doc, 'div', 'k');
++        k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
++        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
++        nowHost.appendChild(k);
++        const full = String(t.title || t.id).replace(/"/g, '');
++        nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
++        nowHost.appendChild(el(doc, 'div', 't', t.id));
++        const d = el(doc, 'div', 'd', full);
++        d.setAttribute('title', full);
++        d.setAttribute('data-title', full);
++        nowHost.appendChild(d);
++      } else {
++        const k = el(doc, 'div', 'k');
++        k.appendChild(el(doc, 'span', null, 'STATUS'));
++        k.appendChild(el(doc, 'span'));
++        nowHost.appendChild(k);
++        nowHost.appendChild(el(doc, 'div', 'p', name));
++        nowHost.appendChild(el(doc, 'div', 't', model.total > 0 && model.done >= model.total ? 'All done' : 'Idle'));
++        nowHost.appendChild(el(doc, 'div', 'd', `${model.total} tickets in the ledger`));
++      }
++      const running = columns.counts.running;
++      const w = el(doc, 'div', 'd w');
++      w.appendChild(el(doc, 'em', null, 'WORKER >'));
++      w.appendChild(el(doc, 'b', null, running ? `${running} ticket${running === 1 ? '' : 's'} running now` : 'no ticket running right now'));
++      nowHost.appendChild(w);
++      const nextRunLine = el(doc, 'div', 'ck-runs');
++      nextRunLine.setAttribute('aria-label', 'Orchestrator run');
++      renderRunLine(nextRunLine, runs);
++      nowHost.appendChild(nextRunLine);
++    });
+   }
+ 
+   let projectRef = project;
+   let firstPaint = true;
++  let paintSignature = '';
+ 
+   function paint(at) {
+     const p = projectRef;
++    const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
++      p?.done, p?.total, p?.runStream, Math.floor(at / 60000)]);
++    if (signature === paintSignature) return;
++    paintSignature = signature;
+     const ledger = p?.ledger ?? { tickets: [] };
+     const model = renderCockpit(titleHost, {
+       ledger,
+@@ -586,30 +600,31 @@ export function renderProjectCockpit(host, project, deps) {
+     const lead = columns.left[0];
+     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
+ 
+-    crumbProject.textContent = model.name;
++    text(crumbProject, model.name);
+     paintCounters(headerCounters(p, counts));
+-    metaDate.textContent = utcDate(at);
++    text(metaDate, utcDate(at));
+ 
+-    if (columns.left.length) renderTicketColumn(colL, columns.left, { side: 'L', activeId, categoryOf: cats.of });
+-    else renderReadyEmptyState(colL, ledger, readyTickets);
+-    renderTicketColumn(colR, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' });
++    patchPanel(colL, col => columns.left.length
++      ? renderTicketColumn(col, columns.left, { side: 'L', activeId, categoryOf: cats.of })
++      : renderReadyEmptyState(col, ledger, readyTickets));
++    patchPanel(colR, col => renderTicketColumn(col, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' }));
+     const rowsR = columns.right.length + (columns.more ? 1 : 0);
+     colL.classList.toggle?.('spread', columns.left.length >= SPREAD_MIN_ROWS);
+     colR.classList.toggle?.('spread', rowsR >= SPREAD_MIN_ROWS);
+ 
+-    lab.setAttribute('data-orchestrator', orch.label);
+-    labSub.textContent = orchestratorCaption(orch.label, allDone);
++    if (lab.getAttribute('data-orchestrator') !== orch.label) lab.setAttribute('data-orchestrator', orch.label);
++    text(labSub, orchestratorCaption(orch.label, allDone));
+     syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
+     paintNow(columns, model, runStreamItems(p, orch));
+ 
+     const cards = workerCards(ledger, at, 4);
+-    renderWorkerCards(wgrid, cards);
+-    wCount.textContent = cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE';
++    patchPanel(wgrid, host => renderWorkerCards(host, cards));
++    text(wCount, cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE');
+ 
+-    stackN.textContent = model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS';
+-    stackSub.textContent = cats.field && cats.names.length
++    text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
++    text(stackSub, cats.field && cats.names.length
+       ? cats.names.join(' / ')
+-      : 'no lane or type recorded on these tickets';
++      : 'no lane or type recorded on these tickets');
+     const tiles = [
+       ['ready', counts.ready],
+       ...(counts.running ? [['running', counts.running]] : []),
+@@ -620,8 +635,8 @@ export function renderProjectCockpit(host, project, deps) {
+     ].map(([label, value, key]) => ({ label, value, color: TILE_COLOURS[key || label], footnote: `${value} ${label}` }));
+     const big = Math.max(...tiles.map(t => t.value));
+     for (const t of tiles) t.hi = big > 0 && t.value === big;
+-    renderStackSummaryTiles(tilesHost, tiles);
+-    footNote.textContent = `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`;
++    patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
++    text(footNote, `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
+ 
+     layoutWire();
+     if (firstPaint) {
+@@ -651,6 +666,8 @@ export function renderProjectCockpit(host, project, deps) {
+   } catch {
+     // keep the shell and the back control usable if a panel cannot paint (partial DOM)
+   }
++  motion = mountAmbientMotion({ element: shell, doc, win, raf, caf, media: reducedMq,
++    draw: (_dt, ts) => placeDots(ts) });
+ 
+   return {
+     update(nextProject) {
+@@ -661,8 +678,7 @@ export function renderProjectCockpit(host, project, deps) {
+       destroyed = true;
+       for (const id of timers) clearTimer(id);
+       timers.clear();
+-      if (frame != null && caf) caf(frame);
+-      frame = null;
++      motion?.destroy();
+       backBtn.removeEventListener('click', onBackClick);
+       logo.removeEventListener('mouseenter', onLogoHover);
+       if (typeof win.removeEventListener === 'function') win.removeEventListener('resize', onResize);
+diff --git a/tools/watch-assets/cc-cockpit-orbit.js b/tools/watch-assets/cc-cockpit-orbit.js
+index 2fab39dc..f935c1ef 100644
+--- a/tools/watch-assets/cc-cockpit-orbit.js
++++ b/tools/watch-assets/cc-cockpit-orbit.js
+@@ -4,8 +4,8 @@
+ // (drawO / sizeO / frameO) with the same drawing and timing. The loop stops when the tab is hidden and does not run under reduced motion.
+ 
+ const TAU = Math.PI * 2;
+-const FRAME_MS = 33;
+ const DOT_COLOURS = ['#2fe0a0', '#4d7cff', '#ff4d7e'];
++import { mountAmbientMotion } from './cc-hive-stage.js';
+ 
+ /**
+  * @param {{
+@@ -37,10 +37,7 @@ export function mountOrbit(opts) {
+   let OW = 0;
+   let OH = 0;
+   let ot = 0;
+-  let last = 0;
+   let CN = null;
+-  let rafId = null;
+-  let running = false;
+   let destroyed = false;
+ 
+   function draw(dt) {
+@@ -137,39 +134,8 @@ export function mountOrbit(opts) {
+     draw(0);
+   }
+ 
+-  function tick(ts) {
+-    rafId = null;
+-    if (destroyed || !running) return;
+-    if (doc && doc.hidden) {
+-      running = false;
+-      return;
+-    }
+-    rafId = raf(tick);
+-    if (ts - last < FRAME_MS) return;
+-    const dt = Math.min(0.1, (ts - last) / 1000);
+-    last = ts;
+-    draw(dt);
+-  }
+-
+-  function start() {
+-    if (destroyed || running || reduce || !raf) return;
+-    running = true;
+-    last = 0;
+-    rafId = raf(tick);
+-  }
+-
+-  function stop() {
+-    running = false;
+-    if (rafId != null && caf) caf(rafId);
+-    rafId = null;
+-  }
+-
+-  const onVisibility = () => {
+-    if (doc && doc.hidden) stop();
+-    else start();
+-  };
+-  if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', onVisibility);
+-  start();
++  const motion = mountAmbientMotion({ element: back, doc, win, raf, caf, draw,
++    media: opts.reducedMotion != null ? { matches: reduce } : win.matchMedia?.('(prefers-reduced-motion: reduce)') });
+ 
+   return {
+     resize,
+@@ -177,8 +143,7 @@ export function mountOrbit(opts) {
+     size: () => ({ width: OW, height: OH }),
+     destroy() {
+       destroyed = true;
+-      stop();
+-      if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', onVisibility);
++      motion.destroy();
+     },
+   };
+ }
+diff --git a/tools/watch-assets/cc-hive-mount.js b/tools/watch-assets/cc-hive-mount.js
+index 06f65b93..51d82284 100644
+--- a/tools/watch-assets/cc-hive-mount.js
++++ b/tools/watch-assets/cc-hive-mount.js
+@@ -5,9 +5,8 @@
+  * comes from the live snapshot (/api/command-center) and nothing is simulated.
+  */
+ 
+-import { mountRobotHead, setAnimationPaused } from './robot-head.js';
+ import { glitch, glitchFailure } from './cc-glitch.js';
+-import { hasCompleted, isTourDisabledByQuery, startTour } from './cc-tour.js';
++import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
+ 
+ const TAU = Math.PI * 2;
+ const SVG_NS = 'http://www.w3.org/2000/svg';
+@@ -101,6 +100,30 @@ function createHiveRenderer(canvas, makeCanvas) {
+   let dpr = 1;
+   let grads = null;
+   const sprites = new Map();
++  const sparkSprites = new Map();
++
++  // Preserve the original circle + 9px shadow, rasterized once per particle size/colour.
++  function sparkSprite(col, radius) {
++    const key = `${col}|${radius}|${dpr}`;
++    if (sparkSprites.has(key)) return sparkSprites.get(key);
++    const c = makeCanvas();
++    const pad = Math.ceil(radius * 3 + 24);
++    c.width = c.height = pad * 2 * dpr;
++    const context = c.getContext('2d');
++    if (!context) return null;
++    context.setTransform?.(dpr, 0, 0, dpr, 0, 0);
++    context.globalCompositeOperation = 'lighter';
++    context.fillStyle = context.shadowColor = col;
++    context.shadowBlur = 9;
++    context.beginPath(); context.arc(pad, pad, radius, 0, TAU); context.fill();
++    const halo = sprite('#ffffff');
++    const size = radius * 1.4;
++    if (halo) { context.globalAlpha = 0.9; context.drawImage(halo, pad - size * 2, pad - size * 2, size * 4, size * 4); }
++    const out = { canvas: c, pad };
++    if (sparkSprites.size >= 128) sparkSprites.delete(sparkSprites.keys().next().value);
++    sparkSprites.set(key, out);
++    return out;
++  }
+ 
+   function sprite(col) {
+     if (sprites.has(col)) return sprites.get(col);
+@@ -342,18 +365,13 @@ function createHiveRenderer(canvas, makeCanvas) {
+       }
+       ctx.fill();
+       // sparks: 3-4 px with a real shadow bloom (only a handful per stream, so the blur stays cheap)
+-      ctx.shadowColor = s.col;
+-      ctx.shadowBlur = 9;
+       ctx.fillStyle = s.col;
+       for (const [p, [x, y], fade] of alive) {
+         if (!p.big) continue;
+         ctx.globalAlpha = fade;
+-        ctx.beginPath();
+-        ctx.arc(x, y, p.size * 0.5, 0, TAU);
+-        ctx.fill();
+-        glow('#ffffff', x, y, p.size * 0.7, fade * 0.9);
++        const dot = sparkSprite(s.col, p.size * 0.5);
++        if (dot) ctx.drawImage(dot.canvas, x - dot.pad, y - dot.pad, dot.pad * 2, dot.pad * 2);
+       }
+-      ctx.shadowBlur = 0;
+       const pulse = 0.6 + 0.18 * Math.sin(time * 2.2 + i) + s.spark * 0.6;
+       glow(s.col, k.tx, k.ty, 16, pulse);
+       if (s.spark > 0) glow('#ffb62e', k.sx, k.sy, 14, s.spark);
+@@ -431,7 +449,7 @@ function createHiveRenderer(canvas, makeCanvas) {
+     },
+     setNodes,
+     setActivity({ agents }) { speed = 1 + Math.min(20, Math.max(0, agents || 0)) * 0.025; },
+-    frameMs: () => 15,
++    frameMs: () => 1000 / 30,
+     frame(dt) { update(dt); draw(); },
+     drawStill() { draw(); },
+     spawn(i) { if (streams[i]) streams[i].boost = 1.5; },
+@@ -532,13 +550,12 @@ export function renderHive(host, snapshot, deps) {
+ 
+   const listeners = [];
+   const timers = [];
+-  let rafId = 0;
+-  let lastFrame = 0;
+   let userPaused = false;
+   let destroyed = false;
+-  let hiveVisible = true;
++  let suspended = false;
+   let parsedRef = snapshot;
+-  let rawRef = null;
++  let rawRef = deps.rawSnapshot || null;
++  let hasSuppliedRaw = deps.rawSnapshot != null;
+   let rawBusy = false;
+   let view = null;
+   let prevView = null;
+@@ -549,16 +566,36 @@ export function renderHive(host, snapshot, deps) {
+   let cardCleanups = [];
+   let counterEls = null;
+   let stageGeom = [];
++  let robotApi = null;
++  let robotPromise = null;
++  let motion = null;
++
++  function loadRobots() {
++    if (!robotPromise) {
++      robotPromise = new Promise(resolve => {
++        const load = () => resolve(destroyed ? null : (deps.loadRobot || (() => import('./robot-head.js')))());
++        // The Hive shell, cards and data paint before the optional 3D renderer is requested.
++        if (typeof win.requestIdleCallback === 'function') win.requestIdleCallback(load);
++        else later(load, 0);
++      }).then(api => {
++        robotApi = api;
++        if (!destroyed) api?.setAnimationPaused(userPaused || reduced() || hidden());
++        return api;
++      });
++    }
++    return robotPromise;
++  }
+ 
+   const reducedMq = deps.matchMedia('(prefers-reduced-motion: reduce)');
+   const reduced = () => Boolean(reducedMq && reducedMq.matches);
+   const hidden = () => Boolean(doc.hidden);
+   const isPhone = () => (win.innerWidth ?? 1200) <= PHONE_MAX;
+-  const shouldAnimate = () => !(reduced() || hidden() || userPaused);
++  const shouldAnimate = () => !(reduced() || hidden() || userPaused || suspended);
+ 
+   function addListener(target, type, handler, options) {
+-    target.addEventListener(type, handler, options);
+-    listeners.push({ target, type, handler, options });
++    const activeHandler = (...args) => { if (!suspended) handler(...args); };
++    target.addEventListener(type, activeHandler, options);
++    listeners.push({ target, type, handler: activeHandler, options });
+   }
+ 
+   function later(fn, ms) {
+@@ -588,9 +625,15 @@ export function renderHive(host, snapshot, deps) {
+ 
+   /* ---- robot heads (real heads in a browser, a monogram where there is no animation loop, e.g. tests) ---- */
+   function mountHead(hostEl, o) {
++    if (hostEl._ccHead) { hostEl._ccHead.setState?.(o.state); return hostEl._ccHead; }
+     if (typeof win.requestAnimationFrame === 'function') {
+-      try {
+-        return mountRobotHead(hostEl, {
++      let handle = null;
++      let removed = false;
++      let observer = null;
++      const mount = () => void loadRobots().then(api => {
++        if (!api || removed || destroyed) return;
++        while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
++        handle = api.mountRobotHead(hostEl, {
+           state: o.state,
+           size: o.size || 28,
+           color: o.color,
+@@ -598,14 +641,32 @@ export function renderHive(host, snapshot, deps) {
+           id: o.id,
+           label: o.label,
+         });
+-      } catch {
++      }).catch(() => {
++        if (removed || destroyed) return;
+         while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
+-      }
++        monogram();
++      });
++      // Lane heads are optional and below the fold. Only request their graph when one is visible.
++      if (typeof win.IntersectionObserver === 'function') {
++        observer = new win.IntersectionObserver(entries => {
++          if (!doc.hidden && entries.some(entry => entry.isIntersecting)) { observer.disconnect(); mount(); }
++        });
++        observer.observe(hostEl);
++      } else mount();
++      hostEl._ccHead = {
++        setState(state) { o = { ...o, state }; handle?.setState?.(state); },
++        destroy() { removed = true; observer?.disconnect(); handle?.destroy(); },
++      };
++      return hostEl._ccHead;
+     }
+-    const mono = h(doc, 'span', 'hive-bot hive-bot--mono', String(o.label || '·').charAt(0).toUpperCase());
+-    mono.setAttribute('aria-hidden', 'true');
+-    hostEl.appendChild(mono);
+-    return { destroy() {} };
++    function monogram() {
++      const mono = h(doc, 'span', 'hive-bot hive-bot--mono', String(o.label || '·').charAt(0).toUpperCase());
++      mono.setAttribute('aria-hidden', 'true');
++      hostEl.appendChild(mono);
++    }
++    monogram();
++    hostEl._ccHead = { destroy() {} };
++    return hostEl._ccHead;
+   }
+ 
+   function destroyHeads(list) {
+@@ -821,28 +882,31 @@ export function renderHive(host, snapshot, deps) {
+     for (const k of Object.keys(next)) {
+       const el = counterEls[k];
+       const changed = el.textContent !== '' && el.textContent !== next[k][0];
+-      el.textContent = next[k][0];
+-      el.style.color = next[k][1];
++      if (el.textContent !== next[k][0]) el.textContent = next[k][0];
++      if (el.style.color !== next[k][1]) el.style.color = next[k][1];
+       if (changed) bump(el);
+     }
+   }
+ 
+   function paintCore(v) {
+-    coreState.textContent = v.agents > 0 ? 'building' : 'waiting';
++    const state = v.agents > 0 ? 'building' : 'waiting';
++    if (coreState.textContent !== state) coreState.textContent = state;
+     const parts = [`${plural(v.agents, 'agent', 'agents')} live`];
+     if (v.doneLast24h !== null) parts.push(`${v.doneLast24h} done in 24 h`);
+-    coreExtra.textContent = parts.join(' · ');
++    const text = parts.join(' · ');
++    if (coreExtra.textContent !== text) coreExtra.textContent = text;
+   }
+ 
+   function paintFoot(v) {
+-    footGen.textContent = formatGenerated(v.at);
++    const text = formatGenerated(v.at);
++    if (footGen.textContent !== text) footGen.textContent = text;
+   }
+ 
+   function setPauseUi() {
+     const motionOff = userPaused || reduced() || hidden();
+     if (doc.body?.classList) doc.body.classList.toggle('motion-off', motionOff);
+     try {
+-      setAnimationPaused(motionOff);
++      robotApi?.setAnimationPaused(motionOff);
+     } catch {
+       // heads are optional
+     }
+@@ -939,26 +1003,48 @@ export function renderHive(host, snapshot, deps) {
+       }
+     };
+     card.addEventListener('click', open);
++    const preload = () => deps.preloadCockpit?.(p.id);
++    card.addEventListener('pointerenter', preload, { passive: true });
++    card.addEventListener('focus', preload);
+     card.addEventListener('keydown', onKey);
+-    cardCleanups.push(() => {
++    card._ccCleanup = () => {
+       card.removeEventListener('click', open);
+       card.removeEventListener('keydown', onKey);
+-    });
++      card.removeEventListener('pointerenter', preload);
++      card.removeEventListener('focus', preload);
++    };
++    cardCleanups.push(card._ccCleanup);
+     return card;
+   }
+ 
+   function paintCards(v) {
+     const sig = JSON.stringify(v.projects.map((p) => [p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents, p.raw && p.raw.fails && p.raw.fails.value]));
+     const first = v.projects[0];
+-    tabCockpit.href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
++    const href = first ? `/command-center/project/${encodeURIComponent(first.id)}` : '#';
++    if (tabCockpit.getAttribute?.('href') !== href) tabCockpit.href = href;
+     if (sig === cardSig) return false;
+     cardSig = sig;
+-    clearCards();
++    const staging = h(doc, 'div');
+     v.projects.forEach((p, i) => {
+       const card = buildCard(p, i);
+-      stage.appendChild(card);
+-      cardEls.push(card);
++      staging.appendChild(card);
+     });
++    // Reconcile through a small adapter: cards share the stage with the canvas and ring layers.
++    const oldCards = cardEls;
++    const adapter = {
++      get children() { return cardEls; },
++      appendChild(card) { stage.appendChild(card); cardEls.push(card); },
++      removeChild(card) { stage.removeChild(card); cardEls = cardEls.filter(el => el !== card); },
++      ...(stage.insertBefore ? { insertBefore(card, before) {
++        stage.insertBefore(card, before); cardEls = cardEls.filter(el => el !== card);
++        cardEls.splice(before ? cardEls.indexOf(before) : cardEls.length, 0, card);
++      } } : {}),
++    };
++    reconcileDom(adapter, staging);
++    cardEls = Array.from(adapter.children);
++    // Reused cards retain their original handlers; discard handlers created for detached render output.
++    for (const card of [...oldCards, ...Array.from(staging.children)]) if (!cardEls.includes(card)) card._ccCleanup?.();
++    cardCleanups = cardEls.map(card => card._ccCleanup);
+     return true;
+   }
+ 
+@@ -1014,33 +1100,8 @@ export function renderHive(host, snapshot, deps) {
+     stageApi.drawStill();
+   }
+ 
+-  function scheduleFrame() {
+-    deps.cancelAnimationFrame(rafId);
+-    rafId = deps.requestAnimationFrame(tick);
+-  }
+-
+-  function tick(now) {
+-    if (destroyed) return;
+-    if (!shouldAnimate()) {
+-      rafId = 0;
+-      drawStillFrame();
+-      return;
+-    }
+-    if (hiveVisible && now - lastFrame >= stageApi.frameMs()) {
+-      const dt = Math.min(0.1, (now - lastFrame) / 1000);
+-      lastFrame = now;
+-      stageApi.frame(dt);
+-    }
+-    rafId = deps.requestAnimationFrame(tick);
+-  }
+-
+   function restart() {
+-    if (shouldAnimate()) scheduleFrame();
+-    else {
+-      deps.cancelAnimationFrame(rafId);
+-      rafId = 0;
+-      drawStillFrame();
+-    }
++    motion?.sync();
+   }
+ 
+   /* ---- paint from a snapshot ---- */
+@@ -1087,23 +1148,26 @@ export function renderHive(host, snapshot, deps) {
+     const psig = JSON.stringify([view.projects.map((p) => [p.id, p.counts, p.pct]), view.events, view.throughput, view.lanes, view.prs, view.totals, view.needs, view.spend, view.doneLast24h, view.machines, view.projectsTotal, minute]);
+     if (psig !== panelSig) {
+       panelSig = psig;
+-      destroyHeads(panelHeads);
+       const out = panels.renderHiveDashboard(panelsRoot, view, {
+         nowMs: deps.now(),
+         mountHead,
++        reconcile: reconcileDom,
+       });
+-      panelHeads = out.heads || [];
++      const nextHeads = out.heads || [];
++      destroyHeads(panelHeads.filter(head => !nextHeads.includes(head)));
++      panelHeads = nextHeads;
+     }
+-    layout();
++    if (rebuilt || !stageGeom.length) { layout(); if (motion) drawStillFrame(); }
++    stageApi.setActivity({ agents: view.agents });
+     if (rebuilt) setPauseUi();
+     reactToChange(prevView, view);
+   }
+ 
+   /* ---- full-body fetch while the shared parser drops card fields ---- */
+   function loadRaw() {
+-    if (typeof win.fetch !== 'function' || rawBusy || parsedRef.hive) return;
++    if (hasSuppliedRaw || hidden() || typeof win.fetch !== 'function' || rawBusy || parsedRef.hive) return;
+     rawBusy = true;
+-    win.fetch(RAW_URL, { method: 'GET', cache: 'no-store', headers: { 'x-watch-token': readWatchToken(win) } })
++    win.fetch(RAW_URL, { method: 'GET', cache: 'no-cache', headers: { 'x-watch-token': readWatchToken(win) } })
+       .then((res) => (res && res.ok ? res.json() : null))
+       .then((body) => {
+         rawBusy = false;
+@@ -1124,6 +1188,8 @@ export function renderHive(host, snapshot, deps) {
+     if (e && typeof e.preventDefault === 'function') e.preventDefault();
+     openProject(first.id);
+   });
++  addListener(tabCockpit, 'pointerenter', () => deps.preloadCockpit?.());
++  addListener(stage, 'pointerover', () => deps.preloadCockpit?.(), { passive: true });
+   addListener(searchBtn, 'click', () => {
+     if (typeof win.KeyboardEvent !== 'function' || typeof doc.dispatchEvent !== 'function') return;
+     const mac = /mac|iphone|ipad/i.test(String(win.navigator?.platform || ''));
+@@ -1139,7 +1205,9 @@ export function renderHive(host, snapshot, deps) {
+     if (t && typeof t.closest === 'function' && t.closest('.cc-tour-overlay')) return;
+     if (!menu.contains(t)) closeMenu();
+   });
+-  addListener(tourBtn, 'click', () => {
++  addListener(tourBtn, 'click', async () => {
++    const { hasCompleted, isTourDisabledByQuery, startTour } = await import('./cc-tour.js');
++    if (destroyed) return;
+     if (isTourDisabledByQuery(win.location)) return;
+     const storage = { getItem: (k) => { try { return win.localStorage?.getItem(k) ?? null; } catch { return null; } }, setItem: (k, v) => { try { win.localStorage?.setItem(k, v); } catch { /* ignore */ } } };
+     startTour({ doc, storage, userId: 'anonymous', replay: hasCompleted(storage, 'anonymous') });
+@@ -1164,11 +1232,7 @@ export function renderHive(host, snapshot, deps) {
+   });
+   addListener(doc, 'visibilitychange', () => {
+     setPauseUi();
+-    if (hidden()) {
+-      deps.cancelAnimationFrame(rafId);
+-      rafId = 0;
+-      drawStillFrame();
+-    } else restart();
++    restart();
+   });
+   if (reducedMq?.addEventListener) addListener(reducedMq, 'change', () => { setPauseUi(); restart(); });
+   addListener(win, 'resize', () => {
+@@ -1177,35 +1241,38 @@ export function renderHive(host, snapshot, deps) {
+     restart();
+     if (!shouldAnimate()) drawStillFrame();
+   });
+-  if (typeof win.IntersectionObserver === 'function') {
+-    const io = new win.IntersectionObserver((entries) => { hiveVisible = entries[0].isIntersecting; });
+-    io.observe(stage);
+-    listeners.push({ target: { removeEventListener() { io.disconnect(); } }, type: '', handler: null });
+-  }
+-
+   paint();
+   setPauseUi();
+   loadRaw();
+-  restart();
++  drawStillFrame();
++  motion = mountAmbientMotion({ element: shell, visibilityElement: stage, doc, win, media: reducedMq,
++    raf: deps.requestAnimationFrame, caf: deps.cancelAnimationFrame,
++    onVisibility: setPauseUi,
++    paused: () => !shouldAnimate(), draw: dt => stageApi.frame(dt) });
+ 
+   return {
+-    update(nextSnapshot) {
++    suspend() { suspended = true; motion?.sync(); robotApi?.setAnimationPaused(true); },
++    resume() { suspended = false; motion?.sync(); setPauseUi(); },
++    update(nextSnapshot, rawSnapshot) {
+       parsedRef = nextSnapshot;
++      if (rawSnapshot !== undefined) {
++        rawRef = rawSnapshot;
++        hasSuppliedRaw = true;
++      }
+       paint();
+       restart();
+       loadRaw();
+     },
+     destroy() {
+       destroyed = true;
+-      deps.cancelAnimationFrame(rafId);
+-      rafId = 0;
++      motion?.destroy();
+       if (typeof win.clearTimeout === 'function') for (const id of timers) win.clearTimeout(id);
+       timers.length = 0;
+       clearCards();
+       destroyHeads(panelHeads);
+       for (const l of listeners) l.target.removeEventListener(l.type, l.handler, l.options);
+       listeners.length = 0;
+-      while (host.firstChild) host.removeChild(host.firstChild);
++      if (shell.parentNode) shell.parentNode.removeChild(shell);
+     },
+   };
+ }
+diff --git a/tools/watch-assets/cc-hive-stage.js b/tools/watch-assets/cc-hive-stage.js
+index 40256e00..0f9f2554 100644
+--- a/tools/watch-assets/cc-hive-stage.js
++++ b/tools/watch-assets/cc-hive-stage.js
+@@ -11,6 +11,121 @@ const ORBIT_TEXT = '  ONE LEDGER  ·  MANY WORKERS  ·  NOTHING GUESSED  ·  EVE
+ const MAX_PARTS = 400;
+ const MAX_INNER = 160;
+ 
++/** Shared ambient budget: at most 30 fps, a composed static frame after 5s without input.
++ * No callbacks are scheduled while idle, hidden, offscreen or under reduced motion.
++ * CSS animations freeze at their current phase too, preserving the composed picture.
++ */
++export function mountAmbientMotion({ element, visibilityElement = element, doc = globalThis.document, win = globalThis,
++  raf = win.requestAnimationFrame?.bind(win), caf = win.cancelAnimationFrame?.bind(win),
++  media = win.matchMedia?.('(prefers-reduced-motion: reduce)'), draw, frameMs = 1000 / 30,
++  paused = () => false, onVisibility = () => {}, freezeCss = true }) {
++  let frame = null;
++  let timer = null;
++  let last = null;
++  let activeSince = null;
++  let visible = true;
++  let idle = false;
++  let destroyed = false;
++  const frozen = new Set();
++  const canRun = () => !destroyed && !doc?.hidden && visible && !media?.matches && !paused() && !idle;
++  function syncCss(moving) {
++    if (!freezeCss) return;
++    if (moving) {
++      for (const animation of frozen) animation.play();
++      frozen.clear();
++    } else {
++      for (const animation of element?.getAnimations?.({ subtree: true }) || []) {
++        if (animation.playState === 'running') { animation.pause(); frozen.add(animation); }
++      }
++    }
++  }
++  function stop() {
++    if (frame != null) caf?.(frame);
++    if (timer != null) win.clearTimeout?.(timer);
++    frame = timer = null;
++    last = null;
++  }
++  function tick(ts) {
++    frame = null;
++    if (activeSince == null) activeSince = ts;
++    if (ts - activeSince >= 5000) idle = true;
++    if (!canRun()) { stop(); syncCss(false); return; }
++    if (last == null || ts - last >= frameMs) {
++      const dt = last == null ? 0 : Math.min(0.1, (ts - last) / 1000);
++      last = ts;
++      draw(dt, ts);
++    }
++    frame = raf?.(tick) ?? null;
++  }
++  function sync() {
++    const moving = canRun();
++    syncCss(moving);
++    if (!moving) { stop(); return; }
++    if (frame == null && raf) frame = raf(tick);
++    if (timer == null && win.setTimeout) {
++      timer = win.setTimeout(() => { timer = null; idle = true; sync(); }, 5000);
++      timer?.unref?.();
++    }
++  }
++  function wake() { idle = false; activeSince = null; if (timer != null) win.clearTimeout?.(timer); timer = null; sync(); }
++  const visibility = () => { onVisibility(); sync(); };
++  const events = [['pointermove', wake], ['pointerdown', wake], ['keydown', wake], ['visibilitychange', visibility]];
++  for (const [name, fn] of events) doc?.addEventListener?.(name, fn, { passive: true });
++  media?.addEventListener?.('change', sync);
++  const observer = win.IntersectionObserver ? new win.IntersectionObserver(entries => {
++    visible = entries[entries.length - 1].isIntersecting; sync();
++  }) : null;
++  if (visibilityElement) observer?.observe(visibilityElement);
++  sync();
++  return { sync, wake, destroy() {
++    destroyed = true; stop(); observer?.disconnect();
++    for (const [name, fn] of events) doc?.removeEventListener?.(name, fn);
++    media?.removeEventListener?.('change', sync);
++    for (const animation of frozen) if (animation.playState === 'paused') animation.play();
++    frozen.clear();
++  } };
++}
++
++/** Reconcile detached render output. Existing elements, focus and event handlers survive polls. */
++export function reconcileDom(target, next) {
++  const attrs = node => node.attributes?.[Symbol.iterator]
++    ? [...node.attributes].map(a => [a.name, a.value]) : Object.entries(node.attributes || {});
++  function patch(current, wanted) {
++    if (current.nodeType === 3) {
++      if (current.textContent !== wanted.textContent) current.textContent = wanted.textContent;
++      return;
++    }
++    for (const [name, value] of attrs(wanted)) if (current.getAttribute(name) !== value) current.setAttribute(name, value);
++    for (const [name] of attrs(current)) if (wanted.getAttribute(name) == null) current.removeAttribute?.(name);
++    if (wanted.getAttribute?.('data-cc-visual') != null) return;
++    // Small DOM test doubles expose style and className separately from attributes.
++    if (!current.nodeType) {
++      if (current.className !== wanted.className) current.className = wanted.className;
++      Object.assign(current.style || {}, wanted.style);
++      if (current.textContent !== wanted.textContent) current.textContent = wanted.textContent;
++    }
++    reconcileDom(current, wanted);
++  }
++  const children = node => Array.from(node.nodeType ? node.childNodes : node.children || []);
++  const wanted = children(next);
++  const old = children(target);
++  const key = node => node?.getAttribute?.('data-ticket-id') || node?.getAttribute?.('data-project-id');
++  for (let i = 0; i < wanted.length; i++) {
++    const item = wanted[i];
++    let current = children(target)[i];
++    const id = key(item);
++    if (id && key(current) !== id) {
++      const match = old.find(n => key(n) === id && children(target).includes(n));
++      if (match && target.insertBefore) { target.insertBefore(match, current || null); current = match; }
++      else if (!match && current && target.insertBefore) { target.insertBefore(item, current); continue; }
++    }
++    if (current && current.nodeType === item.nodeType && current.tagName === item.tagName && (!id || key(current) === id)) patch(current, item);
++    else if (current && target.replaceChild) target.replaceChild(item, current);
++    else { if (current) target.removeChild(current); target.appendChild(item); }
++  }
++  for (const extra of children(target).slice(wanted.length)) target.removeChild(extra);
++}
++
+ /** Card centres on an ellipse around the ring, first card at the top, clockwise. */
+ export function cardPositions(w, h, n) {
+   const rx = Math.min(w * 0.38, 500);
+@@ -267,3 +382,88 @@ export function createHiveStage(deps) {
+     get size() { return { w: W, h: H, ringR: RING_R }; },
+   };
+ }
++
++// Navigation shared by boot and the legacy router, without importing legacy visual dependencies.
++/**
++ * Navigation state:
++ * - `{ view: 'hive' }` — project ring overview
++ * - `{ view: 'cockpit', projectId: string }` — single-project cockpit for that id
++ *
++ * Actions:
++ * - `{ type: 'select-project', projectId: string }` — from hive, open cockpit for projectId
++ * - `{ type: 'back' }` — from cockpit, return to hive in one transition
++ *
++ * @typedef {{ view: 'hive' }} CcHiveState
++ * @typedef {{ view: 'cockpit', projectId: string }} CcCockpitState
++ * @typedef {CcHiveState | CcCockpitState} CcNavState
++ * @typedef {{ type: 'select-project', projectId: string } | { type: 'back' }} CcNavAction
++ */
++
++export const CC_INITIAL_STATE = Object.freeze({ view: 'hive' });
++
++const CC_BASE_PATH = '/command-center';
++
++/**
++ * Map a URL pathname to command-center navigation state (deep-link entry).
++ * @param {string} pathname
++ * @returns {CcNavState}
++ */
++export function ccStateFromPath(pathname) {
++  if (typeof pathname !== 'string') return { view: 'hive' };
++  const raw = pathname.trim();
++  if (!raw.startsWith(CC_BASE_PATH)) return { view: 'hive' };
++
++  const suffix = raw.slice(CC_BASE_PATH.length);
++  if (suffix === '' || suffix === '/') return { view: 'hive' };
++
++  const projectMatch = /^\/project\/([^/]+)\/?$/.exec(suffix);
++  if (projectMatch) {
++    const projectId = projectMatch[1];
++    if (typeof projectId === 'string' && projectId.length > 0) {
++      return { view: 'cockpit', projectId };
++    }
++  }
++
++  return { view: 'hive' };
++}
++
++/**
++ * Pathname for a navigation state (inverse of {@link ccStateFromPath} for valid states).
++ * @param {CcNavState | null | undefined} state
++ * @returns {string}
++ */
++export function ccPathFromState(state) {
++  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
++  if (
++    current.view === 'cockpit'
++    && typeof current.projectId === 'string'
++    && current.projectId.length > 0
++  ) {
++    return `${CC_BASE_PATH}/project/${current.projectId}`;
++  }
++  return CC_BASE_PATH;
++}
++
++/**
++ * Pure reducer for command-center view transitions.
++ * @param {CcNavState | null | undefined} state
++ * @param {CcNavAction} action
++ * @returns {CcNavState}
++ */
++export function ccNavigate(state, action) {
++  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
++  if (!action || typeof action !== 'object') return current;
++
++  if (action.type === 'select-project') {
++    const projectId = action.projectId;
++    if (typeof projectId !== 'string' || projectId.length === 0) return current;
++    return { view: 'cockpit', projectId };
++  }
++
++  if (action.type === 'back') {
++    if (current.view === 'cockpit') return { view: 'hive' };
++    return current;
++  }
++
++  return current;
++}
+diff --git a/tools/watch-assets/cc-router.js b/tools/watch-assets/cc-router.js
+index a6823d3d..f677ba8a 100644
+--- a/tools/watch-assets/cc-router.js
++++ b/tools/watch-assets/cc-router.js
+@@ -3,89 +3,8 @@
+ import { renderHiveLayout } from './hive-layout.js';
+ import { renderCockpit } from './cockpit-view.js';
+ 
+-/**
+- * Navigation state:
+- * - `{ view: 'hive' }` — project ring overview
+- * - `{ view: 'cockpit', projectId: string }` — single-project cockpit for that id
+- *
+- * Actions:
+- * - `{ type: 'select-project', projectId: string }` — from hive, open cockpit for projectId
+- * - `{ type: 'back' }` — from cockpit, return to hive in one transition
+- *
+- * @typedef {{ view: 'hive' }} CcHiveState
+- * @typedef {{ view: 'cockpit', projectId: string }} CcCockpitState
+- * @typedef {CcHiveState | CcCockpitState} CcNavState
+- * @typedef {{ type: 'select-project', projectId: string } | { type: 'back' }} CcNavAction
+- */
+-
+-export const CC_INITIAL_STATE = Object.freeze({ view: 'hive' });
+-
+-const CC_BASE_PATH = '/command-center';
+-
+-/**
+- * Map a URL pathname to command-center navigation state (deep-link entry).
+- * @param {string} pathname
+- * @returns {CcNavState}
+- */
+-export function ccStateFromPath(pathname) {
+-  if (typeof pathname !== 'string') return { view: 'hive' };
+-  const raw = pathname.trim();
+-  if (!raw.startsWith(CC_BASE_PATH)) return { view: 'hive' };
+-
+-  const suffix = raw.slice(CC_BASE_PATH.length);
+-  if (suffix === '' || suffix === '/') return { view: 'hive' };
+-
+-  const projectMatch = /^\/project\/([^/]+)\/?$/.exec(suffix);
+-  if (projectMatch) {
+-    const projectId = projectMatch[1];
+-    if (typeof projectId === 'string' && projectId.length > 0) {
+-      return { view: 'cockpit', projectId };
+-    }
+-  }
+-
+-  return { view: 'hive' };
+-}
+-
+-/**
+- * Pathname for a navigation state (inverse of {@link ccStateFromPath} for valid states).
+- * @param {CcNavState | null | undefined} state
+- * @returns {string}
+- */
+-export function ccPathFromState(state) {
+-  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
+-  if (
+-    current.view === 'cockpit'
+-    && typeof current.projectId === 'string'
+-    && current.projectId.length > 0
+-  ) {
+-    return `${CC_BASE_PATH}/project/${current.projectId}`;
+-  }
+-  return CC_BASE_PATH;
+-}
+-
+-/**
+- * Pure reducer for command-center view transitions.
+- * @param {CcNavState | null | undefined} state
+- * @param {CcNavAction} action
+- * @returns {CcNavState}
+- */
+-export function ccNavigate(state, action) {
+-  const current = state && typeof state === 'object' ? state : CC_INITIAL_STATE;
+-  if (!action || typeof action !== 'object') return current;
+-
+-  if (action.type === 'select-project') {
+-    const projectId = action.projectId;
+-    if (typeof projectId !== 'string' || projectId.length === 0) return current;
+-    return { view: 'cockpit', projectId };
+-  }
+-
+-  if (action.type === 'back') {
+-    if (current.view === 'cockpit') return { view: 'hive' };
+-    return current;
+-  }
+-
+-  return current;
+-}
++import { CC_INITIAL_STATE, ccNavigate } from './cc-hive-stage.js';
++export { CC_INITIAL_STATE, ccNavigate, ccPathFromState, ccStateFromPath } from './cc-hive-stage.js';
+ 
+ function clearElement(el) {
+   if (!el) return;
+diff --git a/tools/watch-assets/cockpit-view.js b/tools/watch-assets/cockpit-view.js
+index f5b68aa7..6d5265ea 100644
+--- a/tools/watch-assets/cockpit-view.js
++++ b/tools/watch-assets/cockpit-view.js
+@@ -3,6 +3,7 @@
+ import { ledgerStats } from './cc-ledger-browser.js';
+ import { cockpitOrchestratorFromSessions } from './cockpit-orchestrator.js';
+ import { STAGE_COLOURS, cockpitCategories, setCssVar } from './cockpit-lists.js';
++import { reconcileDom } from './cc-hive-stage.js';
+ 
+ /** Artifact title sizes: the project name is 54px on desktop and 34px at 900px and below; the page wrap is 1320px. */
+ export const COCKPIT_TITLE_PX = { desktop: 54, phone: 34 };
+@@ -174,6 +175,8 @@ function utcClock(ms) {
+ export function renderCockpit(host, data, opts) {
+   const now = (opts && opts.now) || Date.now();
+   const doc = host.ownerDocument || globalThis.document;
++  const liveHost = host;
++  host = doc.createElement('div');
+   const mk = (tag, cls, text) => {
+     const n = doc.createElement(tag);
+     if (cls) n.className = cls;
+@@ -249,6 +252,7 @@ export function renderCockpit(host, data, opts) {
+     strip.appendChild(seg);
+   });
+   host.appendChild(strip);
++  reconcileDom(liveHost, host);
+ 
+   return {
+     name,
+diff --git a/tools/watch-assets/command-center-boot.js b/tools/watch-assets/command-center-boot.js
+index 3a9ca402..338fd53d 100644
+--- a/tools/watch-assets/command-center-boot.js
++++ b/tools/watch-assets/command-center-boot.js
+@@ -2,13 +2,22 @@
+ /** Command Center page boot: Hive ↔ Project Cockpit, polling, palette, first-visit tour. */
+ 
+ import { renderHive } from './cc-hive-mount.js';
+-import { renderProjectCockpit } from './cc-cockpit-mount.js';
+-import { ccNavigate, ccPathFromState, ccStateFromPath, mountCcRouter } from './cc-router.js';
+-import { createCommandPalette } from './command-palette.js';
+-import { maybeStartFirstVisit } from './cc-tour.js';
++import { ccNavigate, ccPathFromState, ccStateFromPath } from './cc-hive-stage.js';
+ 
+ const REFRESH_MS = 5000;
+ const ROOT_TOUR_ATTR = 'data-tour';
++/** ES module graph warmed on Hive idle/hover without evaluating Cockpit code. */
++const COCKPIT_WARM_MODULES = [
++  './cc-cockpit-mount.js',
++  './cockpit-view.js',
++  './cockpit-lists.js',
++  './cockpit-orchestrator.js',
++  './orchestrator-view.js',
++  './robot-head.js',
++  './cc-ledger-browser.js',
++  './cc-glitch.js',
++  './cc-tour.js',
++];
+ 
+ function resolveCommandCenterData() {
+   if (globalThis.CommandCenterData && typeof globalThis.CommandCenterData.parseCommandCenterSnapshot === 'function') {
+@@ -43,7 +52,7 @@ function defaultFetchJson(url, deps) {
+   const authValue = readWatchToken(loc);
+   return fetchImpl(url, {
+     method: 'GET',
+-    cache: 'no-store',
++    cache: 'no-cache',
+     headers: { 'x-watch-token': authValue },
+   }).then((res) => {
+     if (!res || !res.ok) {
+@@ -147,6 +156,8 @@ async function ensureBrowserGlobals(document) {
+  *   now?: () => number,
+  *   setInterval?: typeof setInterval,
+  *   clearInterval?: typeof clearInterval,
++ *   setTimeout?: typeof setTimeout,
++ *   clearTimeout?: typeof clearTimeout,
+  *   requestAnimationFrame?: typeof requestAnimationFrame,
+  *   cancelAnimationFrame?: typeof cancelAnimationFrame,
+  *   matchMedia?: typeof matchMedia,
+@@ -161,10 +172,13 @@ export function mountCommandCenter(root, deps = {}) {
+   const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
+   const setIntervalFn = deps.setInterval || globalThis.setInterval.bind(globalThis);
+   const clearIntervalFn = deps.clearInterval || globalThis.clearInterval.bind(globalThis);
++  const setTimeoutFn = deps.setTimeout || globalThis.setTimeout.bind(globalThis);
++  const clearTimeoutFn = deps.clearTimeout || globalThis.clearTimeout.bind(globalThis);
+   const requestAnimationFrame = deps.requestAnimationFrame || globalThis.requestAnimationFrame.bind(globalThis);
+   const cancelAnimationFrame = deps.cancelAnimationFrame || globalThis.cancelAnimationFrame.bind(globalThis);
+   const matchMedia = deps.matchMedia || globalThis.matchMedia.bind(globalThis);
+   const storage = deps.storage || defaultStorage();
++  const renderHiveView = deps.renderHive || renderHive;
+ 
+   let navState = ccStateFromPath(location?.pathname || '/command-center');
+   let viewHandle = null;
+@@ -174,9 +188,68 @@ export function mountCommandCenter(root, deps = {}) {
+   let refreshTimer = null;
+   let tourStarted = false;
+   let popHandler = null;
++  let destroyed = false;
++  let refreshSequence = 0;
++  let cockpitModule = null;
++  let paletteModule = null;
++  let projectsForPalette = [];
++  let idleTour = null;
++  let parkedHive = null;
++  let cockpitPreloadedHrefs = null;
++  let cockpitPreloadLinks = [];
++  let cockpitWarmTimer = null;
++  let cockpitWarmScheduled = false;
++  let warmProjectId = null;
++  const projectCache = new Map();
++  const projectRequests = new Map();
++  const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
++  const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
++  const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
++  function schedulePromptCockpitWarm(projectId) {
++    if (destroyed || cockpitWarmScheduled) return;
++    cockpitWarmScheduled = true;
++    if (typeof projectId === 'string' && projectId.length) warmProjectId = projectId;
++    cockpitWarmTimer = setTimeoutFn(() => {
++      cockpitWarmTimer = null;
++      preloadCockpit(warmProjectId);
++    }, 300);
++  }
++
++  function preloadCockpit(projectId) {
++    if (destroyed) return;
++    if (deps.loadCockpit) {
++      cockpitModule ||= loadCockpit().catch(error => { cockpitModule = null; throw error; });
++      void cockpitModule.catch(() => {});
++    } else if (document.createElement) {
++      // Warm the ES module graph without evaluating Cockpit code on the Hive.
++      cockpitPreloadedHrefs ||= new Set();
++      for (const rel of COCKPIT_WARM_MODULES) {
++        const href = new URL(rel, import.meta.url).href;
++        if (cockpitPreloadedHrefs.has(href)) continue;
++        cockpitPreloadedHrefs.add(href);
++        const link = document.createElement('link');
++        link.rel = 'modulepreload';
++        link.href = href;
++        cockpitPreloadLinks.push(link);
++        (document.head || document.documentElement)?.appendChild(link);
++      }
++    }
++    if (projectId && !projectRequests.has(projectId)) {
++      const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
++        .then(body => { if (body?.id === projectId) projectCache.set(projectId, body); return body; })
++        .finally(() => projectRequests.delete(projectId));
++      projectRequests.set(projectId, pending);
++      void pending.catch(() => {});
++    }
++  }
+ 
+-  function destroyView() {
+-    if (viewHandle && typeof viewHandle.destroy === 'function') {
++  function destroyView(parkHive = false) {
++    if (parkHive && viewKind === 'hive' && viewHandle?.suspend && root.removeChild) {
++      const nodes = Array.from(root.childNodes || root.children || []);
++      viewHandle.suspend();
++      for (const node of nodes) root.removeChild(node);
++      parkedHive = { nodes, handle: viewHandle };
++    } else if (viewHandle && typeof viewHandle.destroy === 'function') {
+       viewHandle.destroy();
+     }
+     viewHandle = null;
+@@ -185,9 +258,11 @@ export function mountCommandCenter(root, deps = {}) {
+   }
+ 
+   function syncPalette(projects) {
++    projectsForPalette = projects;
++    if (!paletteModule) return;
+     const items = paletteItemsFromProjects(projects);
+     if (palette) palette.unbind();
+-    palette = createCommandPalette({
++    palette = paletteModule.createCommandPalette({
+       doc: document,
+       items,
+       platform: globalThis.navigator?.platform,
+@@ -213,21 +288,26 @@ export function mountCommandCenter(root, deps = {}) {
+     void refresh(false);
+   }
+ 
+-  function startTourIfNeeded() {
++  async function startTourIfNeeded() {
+     if (tourStarted) return;
+     tourStarted = true;
+-    try {
+-      maybeStartFirstVisit({
+-        doc: document,
+-        storage,
+-        userId: 'anonymous',
+-      });
+-    } catch {
+-      // Tour is optional when the shell DOM is not fully featured (tests, partial loads).
++    const start = async () => {
++      if (destroyed) return;
++      try {
++        const { maybeStartFirstVisit } = await loadTour();
++        if (!destroyed) maybeStartFirstVisit({ doc: document, storage, userId: 'anonymous' });
++      } catch { /* optional decoration in a partial DOM */ }
++    };
++    if (typeof globalThis.requestIdleCallback === 'function') {
++      idleTour = globalThis.requestIdleCallback(() => { idleTour = null; preloadCockpit(); void start(); });
++    } else {
++      await start();
+     }
+   }
+ 
+   async function refresh(isPoll) {
++    if (destroyed || (isPoll && document.hidden)) return;
++    const sequence = ++refreshSequence;
+     const CommandCenterData = resolveCommandCenterData();
+     if (!CommandCenterData) {
+       showShellMessage(root, document, 'Command Center data layer is not loaded yet.');
+@@ -240,29 +320,48 @@ export function mountCommandCenter(root, deps = {}) {
+       if (navState.view === 'cockpit') {
+         const projectId = navState.projectId;
+         const url = `/api/command-center/project?id=${encodeURIComponent(projectId)}`;
+-        const body = await fetchJson(url);
++        // Fetch data and code together, then paint the shell before optional decorations load.
++        const request = projectRequests.get(projectId) || fetchJson(url);
++        void request.catch(() => {});
++        const cockpit = await (cockpitModule ||= loadCockpit());
++        // Hover-prefetched project data can paint immediately; the current response follows independently.
++        const cached = projectCache.get(projectId);
++        if (cached && !destroyed && sequence === refreshSequence && (viewKind !== 'cockpit' || viewProjectId !== projectId)) {
++          destroyView(true); clearHost(root);
++          viewHandle = cockpit.renderProjectCockpit(root, cached, {
++            document, now, onBack: goBack, requestAnimationFrame, cancelAnimationFrame, matchMedia,
++          });
++          viewKind = 'cockpit'; viewProjectId = projectId;
++        }
++        const body = await request;
++        if (destroyed || sequence !== refreshSequence) return;
+         if (!body || typeof body !== 'object' || body.id !== projectId) {
+           throw new Error('Project cockpit response was missing or invalid');
+         }
++        projectCache.set(projectId, body);
+         if (viewKind === 'cockpit' && viewProjectId === projectId && viewHandle?.update) {
+           viewHandle.update(body);
+         } else {
+-          destroyView();
++          destroyView(true);
+           clearHost(root);
+-          viewHandle = renderProjectCockpit(root, body, {
++          viewHandle = cockpit.renderProjectCockpit(root, body, {
+             document,
+             now,
+             onBack: goBack,
++            requestAnimationFrame,
++            cancelAnimationFrame,
++            matchMedia,
+           });
+           viewKind = 'cockpit';
+           viewProjectId = projectId;
+         }
+         applyTourMarkers(root, 'cockpit');
+-        startTourIfNeeded();
++        await startTourIfNeeded();
+         return;
+       }
+ 
+       const body = await fetchJson('/api/command-center');
++      if (destroyed || sequence !== refreshSequence) return;
+       const snapshot = CommandCenterData.parseCommandCenterSnapshot(body);
+       if (!Array.isArray(snapshot.projects) || snapshot.projects.length === 0) {
+         destroyView();
+@@ -279,25 +378,37 @@ export function mountCommandCenter(root, deps = {}) {
+       const hiveDeps = {
+         document,
+         now,
++        rawSnapshot: body,
+         requestAnimationFrame,
+         cancelAnimationFrame,
+         matchMedia,
+         onOpenProject: openProject,
++        preloadCockpit,
+       };
+ 
+       if (viewKind === 'hive' && viewHandle?.update) {
+-        viewHandle.update(snapshot);
++        viewHandle.update(snapshot, body);
+       } else {
+         destroyView();
+         clearHost(root);
+-        viewHandle = renderHive(root, snapshot, hiveDeps);
++        if (parkedHive) {
++          viewHandle = parkedHive.handle;
++          for (const node of parkedHive.nodes) root.appendChild(node);
++          parkedHive = null;
++          viewHandle.update(snapshot, body);
++          viewHandle.resume();
++        } else viewHandle = renderHiveView(root, snapshot, hiveDeps);
+         viewKind = 'hive';
+         viewProjectId = null;
+       }
+       applyTourMarkers(root, 'hive');
+-      startTourIfNeeded();
++      schedulePromptCockpitWarm(snapshot.projects[0]?.id);
++      await startTourIfNeeded();
+     } catch (err) {
++      if (destroyed || sequence !== refreshSequence) return;
+       destroyView();
++      parkedHive?.handle.destroy();
++      parkedHive = null;
+       const detail = err && err.message ? String(err.message) : 'Unknown error';
+       showShellMessage(
+         root,
+@@ -313,22 +424,57 @@ export function mountCommandCenter(root, deps = {}) {
+   };
+   globalThis.addEventListener?.('popstate', popHandler);
+ 
+-  refreshTimer = setIntervalFn(() => {
+-    void refresh(true);
+-  }, REFRESH_MS);
++  const onPaletteKey = async (event) => {
++    if (palette || event.key?.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
++    event.preventDefault?.();
++    try {
++      paletteModule = await loadPalette();
++      if (destroyed) return;
++      syncPalette(projectsForPalette);
++      const KeyboardEvent = document.defaultView?.KeyboardEvent || globalThis.KeyboardEvent;
++      if (KeyboardEvent) document.dispatchEvent(new KeyboardEvent('keydown', {
++        key: 'k', ctrlKey: event.ctrlKey, metaKey: event.metaKey, bubbles: true,
++      }));
++    } catch { /* search can be retried */ }
++  };
++  document.addEventListener?.('keydown', onPaletteKey);
++
++  function syncPolling() {
++    if (refreshTimer != null) clearIntervalFn(refreshTimer);
++    refreshTimer = document.hidden ? null : setIntervalFn(() => refresh(true), REFRESH_MS);
++  }
++  const onVisibility = () => {
++    syncPolling();
++    if (!document.hidden) void refresh(false);
++  };
++  document.addEventListener?.('visibilitychange', onVisibility);
++  syncPolling();
+ 
+   const whenReady = refresh(false);
+ 
+   return {
+     whenReady,
+     destroy() {
++      destroyed = true;
++      refreshSequence++;
+       if (refreshTimer != null) clearIntervalFn(refreshTimer);
+       refreshTimer = null;
++      if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
++      idleTour = null;
++      if (cockpitWarmTimer != null) clearTimeoutFn(cockpitWarmTimer);
++      cockpitWarmTimer = null;
++      document.removeEventListener?.('visibilitychange', onVisibility);
++      document.removeEventListener?.('keydown', onPaletteKey);
+       if (palette) palette.unbind();
+       palette = null;
+       if (popHandler) globalThis.removeEventListener?.('popstate', popHandler);
+       popHandler = null;
+       destroyView();
++      parkedHive?.handle.destroy();
++      parkedHive = null;
++      for (const link of cockpitPreloadLinks) link.remove?.();
++      cockpitPreloadLinks = [];
++      cockpitPreloadedHrefs = null;
+       clearHost(root);
+     },
+     refresh: () => refresh(false),
+diff --git a/tools/watch-assets/command-center.html b/tools/watch-assets/command-center.html
+index 8069c1af..79d82704 100644
+--- a/tools/watch-assets/command-center.html
++++ b/tools/watch-assets/command-center.html
+@@ -5,6 +5,9 @@
+ <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+ <meta name="color-scheme" content="dark">
+ <title>Swarm Watch: Command Center</title>
++<link rel="preload" href="/assets/command-center-data.js" as="script">
++<link rel="preload" href="/assets/hive-panels.js" as="script">
++<link rel="modulepreload" href="/assets/cc-hive-mount.js">
+ <link rel="stylesheet" href="/assets/cc-theme.css">
+ <link rel="stylesheet" href="/assets/swarm-ui.css">
+ <link rel="stylesheet" href="/assets/cc-phone.css">
+diff --git a/tools/watch-assets/hive-panels.js b/tools/watch-assets/hive-panels.js
+index ae32f914..633d9596 100644
+--- a/tools/watch-assets/hive-panels.js
++++ b/tools/watch-assets/hive-panels.js
+@@ -1220,6 +1220,8 @@
+   /** Three panels: session log + hourly bars, all projects + who built, what the ledger shows. Returns the robot-head handles it mounted. */
+   function renderHiveDashboard(root, view, options) {
+     var opts = options || {};
++    var liveRoot = root;
++    if (opts.reconcile) { root = document.createElement('div'); }
+     var nowMs = typeof opts.nowMs === 'number' ? opts.nowMs : Date.now();
+     var heads = [];
+     var pendingHeads = [];
+@@ -1297,6 +1299,7 @@
+         var col = laneColor(lane.name);
+         var host = el('span', 'hive-lh');
+         host.setAttribute('data-lane', lane.name);
++        host.setAttribute('data-cc-visual', 'lane');
+         var state = lane.running > 0 ? 'working' : 'sleeping';
+         if (typeof opts.mountHead === 'function') {
+           pendingHeads.push({ host: host, spec: { state: state, size: 30, color: col, id: 'lane-' + lane.name, label: lane.name + ' lane, ' + (state === 'working' ? 'working' : 'resting') } });
+@@ -1370,9 +1373,14 @@
+     root.appendChild(log);
+     root.appendChild(all);
+     root.appendChild(led);
++    if (opts.reconcile) { opts.reconcile(liveRoot, root); root = liveRoot; }
+     // Heads mount after everything is in the page so their off-screen tracking sees real layout.
+     for (var pi = 0; pi < pendingHeads.length; pi += 1) {
+-      var handle = opts.mountHead(pendingHeads[pi].host, pendingHeads[pi].spec);
++      var pending = pendingHeads[pi];
++      var liveHost = opts.reconcile && root.querySelectorAll
++        ? Array.from(root.querySelectorAll('[data-lane]')).find(function (node) { return node.getAttribute('data-lane') === pending.host.getAttribute('data-lane'); })
++        : pending.host;
++      var handle = liveHost && opts.mountHead(liveHost, pending.spec);
+       if (handle) { heads.push(handle); }
+     }
+     return { heads: heads };
+diff --git a/tools/watch-assets/robot-head.js b/tools/watch-assets/robot-head.js
+index 96a7fdbc..74b55aec 100644
+--- a/tools/watch-assets/robot-head.js
++++ b/tools/watch-assets/robot-head.js
+@@ -3,12 +3,18 @@
+ // rewritten here without React; the drawing itself is in robot-*.js). One head is one agent: its face shows the agent's real state.
+ // Motion rules: a head is static under prefers-reduced-motion or when animation is paused, it stops drawing while it is off screen,
+ // and the shared loop sleeps when no head is moving or the tab is hidden.
+-import { getShape } from './robot-geometry.js';
+-import { RobotSim, restPose } from './robot-sim.js';
+-import { RobotRenderer, frameFor } from './robot-render.js';
+-import { linear } from './robot-light.js';
+-import { parseColor } from './robot-color.js';
+-import { subscribe } from './robot-ticker.js';
++// Keep the public mount cheap to import. The software 3D graph is decoration, loaded only for a visible head.
++let getShape, RobotSim, restPose, RobotRenderer, frameFor, linear, parseColor, subscribe;
++let core = null;
++function loadCore() {
++  return core ||= Promise.all([
++    import('./robot-geometry.js'), import('./robot-sim.js'), import('./robot-render.js'),
++    import('./robot-light.js'), import('./robot-color.js'), import('./robot-ticker.js'),
++  ]).then(([geometry, sim, render, light, color, ticker]) => {
++    ({ getShape } = geometry); ({ RobotSim, restPose } = sim); ({ RobotRenderer, frameFor } = render);
++    ({ linear } = light); ({ parseColor } = color); ({ subscribe } = ticker);
++  }).catch(error => { core = null; throw error; });
++}
+ 
+ export const STATES = ['idle', 'thinking', 'working', 'error', 'sleeping'];
+ 
+@@ -50,7 +56,42 @@ if (media && media.addEventListener) media.addEventListener('change', () => head
+  * host: an element to put the head in. options: state, size (px), color, trimColor, screenColor, shape, antenna, id (any string: spreads blinks),
+  * label (accessible name). Returns { setState, setColor, destroy }.
+  */
+-export function mountRobotHead(host, { state = 'idle', size = 56, color = '#2b49a3', trimColor = '#93a6c8', screenColor = '#e8f2ff', shape = 'rectangle', antenna = false, id = '', label } = {}) {
++export function mountRobotHead(host, options = {}) {
++  const placeholder = document.createElement('span');
++  placeholder.style.cssText = `display:block;width:${options.size || 56}px;height:${options.size || 56}px`;
++  placeholder.setAttribute('role', 'img');
++  placeholder.setAttribute('aria-label', options.label || `Agent, ${options.state || 'idle'}`);
++  host.appendChild(placeholder);
++  let mounted = null;
++  let removed = false;
++  let loading = false;
++  let visible = typeof IntersectionObserver !== 'function';
++  const start = () => {
++    if (removed || loading || mounted || !visible || document.hidden) return;
++    loading = true;
++    void loadCore().then(() => {
++      loading = false;
++      if (removed || !visible || document.hidden) return;
++      placeholder.remove();
++      mounted = mountLoadedRobotHead(host, options);
++      observer?.disconnect();
++      document.removeEventListener?.('visibilitychange', start);
++    }).catch(() => { loading = false; });
++  };
++  const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
++    visible = entries[entries.length - 1].isIntersecting; start();
++  }) : null;
++  observer?.observe(placeholder);
++  document.addEventListener?.('visibilitychange', start);
++  start();
++  return {
++    setState(state) { options = { ...options, state }; mounted?.setState(state); },
++    setColor(color) { options = { ...options, color }; mounted?.setColor(color); },
++    destroy() { removed = true; observer?.disconnect(); document.removeEventListener?.('visibilitychange', start); mounted?.destroy(); placeholder.remove(); },
++  };
++}
++
++function mountLoadedRobotHead(host, { state = 'idle', size = 56, color = '#2b49a3', trimColor = '#93a6c8', screenColor = '#e8f2ff', shape = 'rectangle', antenna = false, id = '', label } = {}) {
+   const box = document.createElement('span');
+   box.setAttribute('role', 'img');
+   box.style.cssText = `position:relative;display:block;flex:none;width:${size}px;height:${size}px`;
+@@ -66,7 +107,7 @@ export function mountRobotHead(host, { state = 'idle', size = 56, color = '#2b49
+   const sim = new RobotSim(hashSeed(String(id)), current);
+   sim.setState(current);
+   const renderer = new RobotRenderer();
+-  let visible = true;
++  let visible = typeof IntersectionObserver !== 'function';
+   let unsubscribe = null;
+   const label0 = () => label ?? `Agent, ${current}`;
+   box.setAttribute('aria-label', label0());
+@@ -74,7 +115,7 @@ export function mountRobotHead(host, { state = 'idle', size = 56, color = '#2b49
+   let paintedStill = '';
+   const paint = animated => {
+     // A still frame is drawn once per state and colour, not on every sync.
+-    const key = animated ? '' : `${current}|${color}`;
++    const key = animated ? '' : `${current}|${JSON.stringify(pal)}`;
+     if (!animated && key === paintedStill) return;
+     paintedStill = key;
+     const dpr = Math.min(2, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1);
+@@ -89,30 +130,32 @@ export function mountRobotHead(host, { state = 'idle', size = 56, color = '#2b49
+   let acc = 0;
+   const handle = {
+     sync(fromRebalance) {
+-      let still = paused || reducedMotion() || !visible;
++      let still = paused || reducedMotion() || !visible || document.hidden;
+       if (!still && !animating.has(handle)) { if (animating.size < MAX_ANIMATED) animating.add(handle); else still = true; }
+       if (still) {
+         const had = animating.delete(handle);
+         if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+-        paint(false);
++        if (visible && !document.hidden) paint(false);
+         if (had && !fromRebalance) rebalance();   // a freed slot goes to a head that was waiting
+         return;
+       }
+-      if (!unsubscribe) unsubscribe = subscribe(dt => { sim.pointer = null; sim.update(dt); acc += dt; if (acc >= FRAME_S) { acc = 0; paint(true); } });
++      if (!unsubscribe) unsubscribe = subscribe(dt => { acc += dt; if (acc + 1e-6 >= FRAME_S) { sim.pointer = null; sim.update(acc); acc = 0; paint(true); } });
+     },
+     setState(next) {
+       const s = STATES.includes(next) ? next : 'idle';
+       if (s === current) return;
+       current = s; sim.setState(s); box.setAttribute('aria-label', label0());
+       handle.sync();
+-      if (!unsubscribe) paint(false);
++      if (visible && !document.hidden) paint(false);
+     },
+-    setColor(c) { pal = palette(c, trimColor, screenColor); if (!unsubscribe) paint(false); },
+-    destroy() { if (unsubscribe) unsubscribe(); unsubscribe = null; observer?.disconnect(); heads.delete(handle); const had = animating.delete(handle); box.remove(); if (had) rebalance(); },
++    setColor(c) { pal = palette(c, trimColor, screenColor); if (visible && !document.hidden) paint(false); },
++    destroy() { if (unsubscribe) unsubscribe(); unsubscribe = null; observer?.disconnect(); document.removeEventListener?.('visibilitychange', onVisibility); heads.delete(handle); const had = animating.delete(handle); box.remove(); if (had) rebalance(); },
+   };
+   // Stop drawing while the head is off screen.
+   const observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => { visible = entries[entries.length - 1].isIntersecting; handle.sync(); }) : null;
+   observer?.observe(box);
++  const onVisibility = () => handle.sync();
++  document.addEventListener?.('visibilitychange', onVisibility);
+   heads.add(handle);
+   handle.sync();
+   return handle;
+diff --git a/tools/watch-assets/robot-ticker.js b/tools/watch-assets/robot-ticker.js
+index 062d8524..d3c67b47 100644
+--- a/tools/watch-assets/robot-ticker.js
++++ b/tools/watch-assets/robot-ticker.js
+@@ -8,29 +8,21 @@
+ 
+ /** Where the pointer last was on the page, NaN while it is away. */
+ export const pointer = { x: NaN, y: NaN };
++import { mountAmbientMotion } from './cc-hive-stage.js';
+ 
+ const subscribers = new Set      ();
+-let frame = 0;
+-let last = 0;
++let motion = null;
+ let listening = false;
+ 
+-function loop(now        ) {
+-  frame = 0;
+-  const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
+-  last = now;
+-  subscribers.forEach((fn) => fn(dt));
+-  if (subscribers.size) frame = requestAnimationFrame(loop);
+-}
+-
+ function start() {
+-  if (frame || typeof document === 'undefined' || document.hidden) return;
+-  last = 0;
+-  frame = requestAnimationFrame(loop);
++  if (motion || typeof document === 'undefined') return;
++  motion = mountAmbientMotion({ element: document.documentElement, frameMs: 1000 / 15, freezeCss: false,
++    draw: dt => subscribers.forEach(fn => fn(dt)) });
+ }
+ 
+ function stop() {
+-  if (frame) cancelAnimationFrame(frame);
+-  frame = 0;
++  motion?.destroy();
++  motion = null;
+ }
+ 
+ function listen() {
+@@ -46,10 +38,6 @@ function listen() {
+   }, { passive: true });
+   document.addEventListener('pointerleave', away);
+   window.addEventListener('blur', away);
+-  document.addEventListener('visibilitychange', () => {
+-    if (document.hidden) stop();
+-    else if (subscribers.size) start();
+-  });
+ }
+ 
+ export function subscribe(fn      )             {
+diff --git a/tools/watch-perf.mjs b/tools/watch-perf.mjs
+new file mode 100644
+index 00000000..98c4d56a
+--- /dev/null
++++ b/tools/watch-perf.mjs
+@@ -0,0 +1,341 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: Apache-2.0
++import { chromium } from 'playwright';
++import { writeFile } from 'node:fs/promises';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++
++const execFileAsync = promisify(execFile);
++
++const PROFILES = {
++  desktop: { width: 1440, height: 900, throttle: null },
++  phone: {
++    width: 390,
++    height: 844,
++    throttle: {
++      offline: false,
++      latency: 100,
++      downloadThroughput: Math.floor((1.6 * 1_000_000) / 8),
++      uploadThroughput: Math.floor((750 * 1_000) / 8),
++      connectionType: 'cellular4g',
++    },
++  },
++};
++
++function usage() {
++  return `Usage: node tools/watch-perf.mjs URL [--out FILE] [--profile desktop|phone] [--server-pid PID] [--idle SECONDS] [--wait-ms MS]`;
++}
++
++function parseArgs(argv) {
++  const positional = [];
++  const opts = {
++    out: null,
++    profile: 'desktop',
++    serverPid: null,
++    idle: 45,
++    waitMs: 120_000,
++  };
++  for (let i = 0; i < argv.length; i++) {
++    const arg = argv[i];
++    if (arg === '--out') {
++      opts.out = argv[++i];
++      if (!opts.out) throw new Error('--out requires a path');
++      continue;
++    }
++    if (arg === '--profile') {
++      opts.profile = argv[++i];
++      if (!PROFILES[opts.profile]) throw new Error(`unknown profile ${opts.profile}`);
++      continue;
++    }
++    if (arg === '--server-pid') {
++      const raw = argv[++i];
++      opts.serverPid = Number.parseInt(raw, 10);
++      if (!Number.isFinite(opts.serverPid)) throw new Error('--server-pid requires a number');
++      continue;
++    }
++    if (arg === '--idle') {
++      opts.idle = Number.parseFloat(argv[++i]);
++      if (!Number.isFinite(opts.idle)) throw new Error('--idle requires a number');
++      continue;
++    }
++    if (arg === '--wait-ms') {
++      opts.waitMs = Number.parseInt(argv[++i], 10);
++      if (!Number.isFinite(opts.waitMs)) throw new Error('--wait-ms requires a number');
++      continue;
++    }
++    if (arg.startsWith('-')) throw new Error(`unknown flag ${arg}`);
++    positional.push(arg);
++  }
++  const url = positional[0];
++  if (!url) throw new Error(usage());
++  if (positional.length > 1) throw new Error(usage());
++  return { url, ...opts };
++}
++
++function emptyBytes() {
++  return { total: 0, api: 0, html: 0, js: 0, css: 0, fonts: 0 };
++}
++
++function bucketForUrl(urlString, resourceType) {
++  let pathname = urlString;
++  try {
++    pathname = new URL(urlString).pathname;
++  } catch {
++    /* keep raw */
++  }
++  const lower = pathname.toLowerCase();
++  if (lower.includes('/api/') || lower.startsWith('/api')) return 'api';
++  if (resourceType === 'document' || lower.endsWith('.html') || lower === '/command-center') return 'html';
++  if (resourceType === 'stylesheet' || lower.endsWith('.css')) return 'css';
++  if (/\.(woff2?|ttf|otf|eot)(\?|$)/i.test(lower)) return 'fonts';
++  if (resourceType === 'script' || lower.endsWith('.js') || lower.endsWith('.mjs')) return 'js';
++  return null;
++}
++
++function parsePsTime(text) {
++  const s = String(text ?? '').trim();
++  if (!s) return 0;
++  if (s.includes('-')) {
++    const [days, rest] = s.split('-');
++    return parsePsTime(rest) + Number.parseInt(days, 10) * 86400;
++  }
++  const parts = s.split(':').map((p) => Number.parseFloat(p));
++  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
++  if (parts.length === 2) return parts[0] * 60 + parts[1];
++  return Number.parseFloat(s) || 0;
++}
++
++async function readServerCpu(pid) {
++  const { stdout } = await execFileAsync('ps', ['-o', 'time=', '-p', String(pid)]);
++  return parsePsTime(stdout);
++}
++
++async function doubleRaf(page) {
++  await page.evaluate(() => new Promise((resolve) => {
++    requestAnimationFrame(() => requestAnimationFrame(resolve));
++  }));
++}
++
++function createByteTracker(onFinished) {
++  const requestUrls = new Map();
++  return {
++    noteRequest(requestId, url, resourceType) {
++      requestUrls.set(requestId, { url, resourceType });
++    },
++    noteEncoded(requestId, encodedDataLength) {
++      const meta = requestUrls.get(requestId);
++      if (!meta || !encodedDataLength) return;
++      onFinished(meta.url, meta.resourceType, encodedDataLength);
++    },
++  };
++}
++
++function createNetworkCollector(segmentRef, cacheControl) {
++  const segments = {
++    boot: emptyBytes(),
++    hiveToCockpit: emptyBytes(),
++    cockpitToHive: emptyBytes(),
++  };
++
++  const addBytes = (segment, url, resourceType, encoded) => {
++    if (!segments[segment]) return;
++    const bucket = bucketForUrl(url, resourceType);
++    const row = segments[segment];
++    row.total += encoded;
++    if (bucket) row[bucket] += encoded;
++  };
++
++  const tracker = createByteTracker((url, resourceType, encoded) => {
++    addBytes(segmentRef.current, url, resourceType, encoded);
++  });
++
++  return {
++    segments,
++    tracker,
++    setCacheHeader(url, resourceType, header) {
++      const bucket = bucketForUrl(url, resourceType);
++      if (bucket === 'js' || bucket === 'css' || bucket === 'fonts') {
++        cacheControl[bucket].set(url, header ?? '');
++      }
++    },
++  };
++}
++
++async function taskDurationSeconds(cdp) {
++  const { metrics } = await cdp.send('Performance.getMetrics');
++  const hit = metrics.find((m) => m.name === 'TaskDuration');
++  return hit ? hit.value : 0;
++}
++
++function summarize(result) {
++  const lines = [
++    `profile=${result.profile} timeToUsable=${result.timings.timeToUsableMs.toFixed(1)}ms`,
++    `hive→cockpit=${result.timings.hiveToCockpitMs.toFixed(1)}ms cockpit→hive=${result.timings.cockpitToHiveMs.toFixed(1)}ms`,
++    `boot bytes total=${result.bytes.boot.total} api=${result.bytes.boot.api} js=${result.bytes.boot.js} css=${result.bytes.boot.css}`,
++    `idle ${result.idle.seconds}s pageTaskDurationΔ=${result.idle.pageTaskDurationSeconds.toFixed(3)}s apiReq=${result.idle.apiRequests} apiBytes=${result.idle.apiBytes}`,
++  ];
++  if (result.idle.serverCpuSeconds != null) {
++    lines.push(`serverCpuΔ=${result.idle.serverCpuSeconds.toFixed(3)}s`);
++  }
++  if (result.consoleErrors.length) {
++    lines.push(`consoleErrors=${result.consoleErrors.length}`);
++  }
++  return lines.join('\n');
++}
++
++async function main() {
++  let opts;
++  try {
++    opts = parseArgs(process.argv.slice(2));
++  } catch (err) {
++    console.error(err.message || err);
++    process.exit(1);
++  }
++
++  const profile = PROFILES[opts.profile];
++  const cacheControl = { js: new Map(), css: new Map(), fonts: new Map() };
++  const segmentRef = { current: 'boot' };
++  const net = createNetworkCollector(segmentRef, cacheControl);
++  const consoleErrors = [];
++  const idleApi = { requests: 0, bytes: 0 };
++
++  let browser;
++  try {
++    browser = await chromium.launch({
++      headless: true,
++      ...(process.env.SWARM_CC_CHROMIUM ? { executablePath: process.env.SWARM_CC_CHROMIUM } : {}),
++    });
++    const context = await browser.newContext({
++      viewport: { width: profile.width, height: profile.height },
++    });
++    const page = await context.newPage();
++    const cdp = await context.newCDPSession(page);
++    await cdp.send('Performance.enable');
++    await cdp.send('Network.enable');
++
++    if (profile.throttle) {
++      await cdp.send('Network.emulateNetworkConditions', profile.throttle);
++    }
++
++    page.on('console', (msg) => {
++      if (msg.type() === 'error') consoleErrors.push(msg.text());
++    });
++    page.on('pageerror', (err) => consoleErrors.push(String(err.message || err)));
++
++    cdp.on('Network.requestWillBeSent', ({ requestId, request, type }) => {
++      net.tracker.noteRequest(requestId, request.url, type || request.resourceType);
++    });
++    cdp.on('Network.loadingFinished', ({ requestId, encodedDataLength }) => {
++      net.tracker.noteEncoded(requestId, encodedDataLength);
++    });
++
++    page.on('response', async (response) => {
++      if (segmentRef.current !== 'idle') {
++        const request = response.request();
++        net.setCacheHeader(request.url(), request.resourceType(), response.headers()['cache-control']);
++        return;
++      }
++      const url = response.url();
++      if (!url.includes('/api/')) return;
++      idleApi.requests += 1;
++      try {
++        const sizes = await response.request().sizes();
++        idleApi.bytes += sizes.responseBodySize + sizes.responseHeadersSize;
++      } catch {
++        /* ignore */
++      }
++    });
++
++    const nav = page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: opts.waitMs });
++    await nav;
++
++    await page.waitForSelector('[data-project-id]', { timeout: opts.waitMs });
++    const timeToUsableMs = await page.evaluate(async () => {
++      await new Promise((resolve) => {
++        requestAnimationFrame(() => requestAnimationFrame(resolve));
++      });
++      const entry = performance.getEntriesByType('navigation')[0];
++      const start = entry?.startTime ?? 0;
++      return performance.now() - start;
++    });
++
++    segmentRef.current = 'hiveToCockpit';
++    const hiveToCockpitMs = await page.evaluate(async () => {
++      const node = document.querySelector('.hive-node') || document.querySelector('[data-project-id]');
++      if (!node) throw new Error('no project node to click');
++      const started = performance.now();
++      node.click();
++      while (!document.querySelector('.cc-cockpit-shell')) {
++        await new Promise((resolve) => requestAnimationFrame(resolve));
++      }
++      await new Promise((resolve) => {
++        requestAnimationFrame(() => requestAnimationFrame(resolve));
++      });
++      return performance.now() - started;
++    });
++
++    segmentRef.current = 'cockpitToHive';
++    const cockpitToHiveMs = await page.evaluate(async () => {
++      const back = document.querySelector('.cc-cockpit-back-btn');
++      if (!back) throw new Error('no cockpit back control');
++      const started = performance.now();
++      back.click();
++      while (!document.querySelector('.hive-node')) {
++        await new Promise((resolve) => requestAnimationFrame(resolve));
++      }
++      await new Promise((resolve) => {
++        requestAnimationFrame(() => requestAnimationFrame(resolve));
++      });
++      return performance.now() - started;
++    });
++
++    segmentRef.current = 'idle';
++    const pageTaskBefore = await taskDurationSeconds(cdp);
++    const serverCpuBefore = opts.serverPid != null ? await readServerCpu(opts.serverPid) : null;
++    await page.waitForTimeout(Math.max(0, opts.idle * 1000));
++    const pageTaskAfter = await taskDurationSeconds(cdp);
++    const serverCpuAfter = opts.serverPid != null ? await readServerCpu(opts.serverPid) : null;
++
++    const result = {
++      url: opts.url,
++      profile: opts.profile,
++      viewport: { width: profile.width, height: profile.height },
++      timings: {
++        timeToUsableMs,
++        hiveToCockpitMs,
++        cockpitToHiveMs,
++      },
++      bytes: net.segments,
++      cacheControl: {
++        js: Object.fromEntries(cacheControl.js),
++        css: Object.fromEntries(cacheControl.css),
++        fonts: Object.fromEntries(cacheControl.fonts),
++      },
++      idle: {
++        seconds: opts.idle,
++        pageTaskDurationSeconds: Math.max(0, pageTaskAfter - pageTaskBefore),
++        serverCpuSeconds: serverCpuBefore != null && serverCpuAfter != null
++          ? Math.max(0, serverCpuAfter - serverCpuBefore)
++          : null,
++        apiRequests: idleApi.requests,
++        apiBytes: idleApi.bytes,
++      },
++      consoleErrors,
++    };
++
++    const json = `${JSON.stringify(result, null, 2)}\n`;
++    if (opts.out) {
++      await writeFile(opts.out, json, 'utf8');
++    } else {
++      process.stdout.write(json);
++    }
++    console.error(summarize(result));
++  } catch (err) {
++    console.error(err.message || err);
++    process.exit(1);
++  } finally {
++    if (browser) await browser.close();
++  }
++}
++
++await main();
+diff --git a/tools/watch-server.mjs b/tools/watch-server.mjs
+index 2b80bc80..0a44c62c 100644
+--- a/tools/watch-server.mjs
++++ b/tools/watch-server.mjs
+@@ -1,9 +1,10 @@
+ // SPDX-License-Identifier: Apache-2.0
+ import http from 'node:http';
+ import os from 'node:os';
+-import { randomBytes, timingSafeEqual } from 'node:crypto';
+-import { readdir, readFile } from 'node:fs/promises';
++import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
++import { readdir, readFile, stat } from 'node:fs/promises';
+ import path from 'node:path';
++import { gzipSync } from 'node:zlib';
+ import { diffSnapshots, createThrottle } from './watch-delta.mjs';
+ import { stripMoney } from './watch-cli.mjs';
+ import { versionInfo } from './server-version.mjs';
+@@ -19,7 +20,12 @@ const TYPES = {
+   '.html': 'text/html; charset=utf-8',
+   '.css': 'text/css; charset=utf-8',
+   '.js': 'text/javascript; charset=utf-8',
++  '.mjs': 'text/javascript; charset=utf-8',
++  '.json': 'application/json; charset=utf-8',
+   '.woff2': 'font/woff2',
++  '.woff': 'font/woff',
++  '.ttf': 'font/ttf',
++  '.otf': 'font/otf',
+   '.webp': 'image/webp',
+   '.png': 'image/png',
+   '.svg': 'image/svg+xml',
+@@ -29,7 +35,8 @@ const SECURITY = {
+   'Content-Security-Policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+   'X-Content-Type-Options': 'nosniff',
+   'Referrer-Policy': 'no-referrer',
+-  'Cache-Control': 'no-store',
++  'Cache-Control': 'no-cache',
++  Vary: 'Accept-Encoding',
+ };
+ 
+ const IDLE_FINISHED_MS = 10000;
+@@ -264,9 +271,57 @@ function watchCookie(header, expectedName) {
+   return matches.length === 1 ? matches[0][1] : null;
+ }
+ 
+-function send(res, method, status, headers, body) {
+-  res.writeHead(status, { ...SECURITY, ...headers });
+-  res.end(method === 'HEAD' ? undefined : body);
++const COMPRESSIBLE = /^(?:text\/(?!event-stream)|application\/(?:json|javascript)|image\/svg\+xml)/;
++
++function acceptsGzip(header = '') {
++  const encodings = String(header).toLowerCase().split(',').map(part => {
++    const [name, ...params] = part.trim().split(';');
++    const quality = params.find(p => p.trim().startsWith('q='));
++    return [name, quality ? Number(quality.trim().slice(2)) : 1];
++  });
++  const explicit = encodings.find(([name]) => name === 'gzip');
++  return (explicit || encodings.find(([name]) => name === '*') || ['', 0])[1] > 0;
++}
++
++function representation(body, type) {
++  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
++  return {
++    body: bytes,
++    etag: `"${createHash('sha256').update(bytes).digest('hex')}"`,
++    gzip: COMPRESSIBLE.test(type) && bytes.length ? gzipSync(bytes) : null,
++  };
++}
++
++export function watchAssetCacheControl(name) {
++  if (name.startsWith('vendor/') || /\.(?:woff2?|ttf|otf)$/.test(name)) return 'public, max-age=31536000, immutable';
++  return /\.(?:m?js|css)$/.test(name) ? 'public, max-age=300, must-revalidate' : 'no-cache';
++}
++
++function send(res, method, status, headers, body, encoded = null) {
++  const out = { ...SECURITY, ...headers };
++  const req = res.req;
++  let bytes = body;
++  if (status === 200 && COMPRESSIBLE.test(out['Content-Type'] || '') && acceptsGzip(req?.headers['accept-encoding'])) {
++    bytes = encoded?.gzip ?? gzipSync(body);
++    out['Content-Encoding'] = 'gzip';
++    // Strong validators identify the selected wire representation.
++    if (out.ETag) out.ETag = out.ETag.slice(0, -1) + '-gzip"';
++  }
++  if (status === 200 && out.ETag && (method === 'GET' || method === 'HEAD')) {
++    const match = req?.headers['if-none-match'];
++    const since = req?.headers['if-modified-since'];
++    const unchanged = match !== undefined
++      ? String(match).split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === out.ETag)
++      : since && out['Last-Modified'] && Number.isFinite(Date.parse(since)) && Date.parse(since) >= Date.parse(out['Last-Modified']);
++    if (unchanged) {
++      delete out['Content-Length'];
++      res.writeHead(304, out);
++      return res.end();
++    }
++  }
++  if (bytes != null && status !== 304) out['Content-Length'] = Buffer.byteLength(bytes);
++  res.writeHead(status, out);
++  res.end(method === 'HEAD' || status === 304 ? undefined : bytes);
+ }
+ 
+ function sendText(res, method, status, msg) {
+@@ -488,6 +543,8 @@ export function createWatchServer(opts) {
+ 
+   const token = fixedToken ?? randomBytes(24).toString('hex');
+   const assets = new Map();
++  const commandCenterCache = new Map();
++  const snapshotTtlMs = 2000;
+   let server = null;
+   let port = 0;
+   let url = null;
+@@ -536,8 +593,7 @@ export function createWatchServer(opts) {
+       if (entry.name === 'LICENSE' || entry.name.startsWith('LICENSE-')) continue;
+       const ext = path.extname(entry.name);
+       if (!Object.hasOwn(TYPES, ext)) continue;
+-      const body = await readFile(full);
+-      assets.set(key, { type: TYPES[ext], body });
++      assets.set(key, await loadAsset(full, key, TYPES[ext]));
+     }
+   }
+ 
+@@ -548,18 +604,55 @@ export function createWatchServer(opts) {
+       if (!entry.isFile()) continue;
+       const ext = path.extname(entry.name);
+       if (!Object.hasOwn(TYPES, ext)) continue;
+-      const body = await readFile(path.join(assetDir, entry.name));
+-      assets.set(entry.name, { type: TYPES[ext], body });
++      assets.set(entry.name, await loadAsset(path.join(assetDir, entry.name), entry.name, TYPES[ext]));
+     }
+     await loadVendorAssets(path.join(assetDir, 'vendor'), 'vendor');
+-    const delta = await readFile(deltaFile);
+-    assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
++    assets.set('watch-delta.mjs', await loadAsset(deltaFile, 'watch-delta.mjs', TYPES['.js']));
++  }
++
++  async function loadAsset(file, name, type) {
++    const [body, info] = await Promise.all([readFile(file), stat(file)]);
++    const cacheControl = watchAssetCacheControl(name);
++    return { ...representation(body, type), type, lastModified: info.mtime.toUTCString(), cacheControl };
+   }
+ 
+   function sendAsset(res, method, name, headers = {}) {
+-    const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
++    const a = assets.get(name);
+     if (!a) return sendText(res, method, 404, 'not found');
+-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length, ...headers }, a.body);
++    send(res, method, 200, {
++      'Content-Type': a.type, ETag: a.etag, 'Last-Modified': a.lastModified,
++      'Cache-Control': a.cacheControl, ...headers,
++    }, a.body, a);
++  }
++
++  async function commandCenterResponse(pathname, q) {
++    const options = { ...q, local: q.local === '1', redact: true };
++    const key = JSON.stringify([pathname, Object.entries(options).sort(([a], [b]) => a.localeCompare(b))]);
++    let entry = commandCenterCache.get(key);
++    if (entry?.pending) return entry.pending;
++    if (entry && now() - entry.at < snapshotTtlMs) return entry;
++    if (!entry) {
++      // Bound memory even when clients supply many distinct query arguments.
++      if (commandCenterCache.size >= 128) commandCenterCache.delete(commandCenterCache.keys().next().value);
++      entry = {};
++      commandCenterCache.set(key, entry);
++    }
++    entry.pending = (async () => {
++      const snapshot = await board.snapshot(options);
++      const revision = snapshot?.version == null && snapshot?.at == null
++        ? null : JSON.stringify([snapshot.version, snapshot.at]);
++      if (!entry.encoded || revision == null || revision !== entry.revision) {
++        const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
++        const result = pathname.endsWith('/project')
++          ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
++        entry.encoded = result ? representation(JSON.stringify(result), 'application/json') : null;
++        entry.revision = revision;
++      }
++      entry.at = now();
++      return entry;
++    })();
++    try { return await entry.pending; }
++    finally { entry.pending = null; }
+   }
+ 
+   async function payload() {
+@@ -709,9 +802,15 @@ export function createWatchServer(opts) {
+       return sendText(res, method, 403, 'forbidden');
+     }
+     lastActivity = now();
+-    const pageHeaders = queryOk ? {
+-      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+-    } : {};
++    const pagePrivacyCache = isHtmlPage && (pathname === '/classic' || isWatchClassicPagePath(pathname))
++      ? { 'Cache-Control': 'no-store' }
++      : {};
++    const pageHeaders = {
++      ...pagePrivacyCache,
++      ...(queryOk ? {
++        'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
++      } : {}),
++    };
+     if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
+     if (pathname === '/') {
+       if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
+@@ -731,13 +830,11 @@ export function createWatchServer(opts) {
+     if (isCommandCenterApi) {
+       const q = Object.fromEntries(u.searchParams);
+       delete q.t;
+-      const localOnly = q.local === '1';
+-      const payload = { ...(await board.snapshot({ ...q, local: localOnly, redact: true })), openRun: !remote, server: await versionInfo() };
+-      if (pathname === '/api/command-center/project') {
+-        const cockpit = buildProjectCockpit(payload, String(q.id ?? ''));
+-        return cockpit ? sendJson(res, method, cockpit) : sendText(res, method, 404, 'not found');
+-      }
+-      return sendJson(res, method, buildCommandCenterSnapshot(payload));
++      const { encoded } = await commandCenterResponse(pathname, q);
++      if (!encoded) return sendText(res, method, 404, 'not found');
++      return send(res, method, 200, {
++        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', ETag: encoded.etag,
++      }, encoded.body, encoded);
+     }
+     if (isBoardRoute) {
+       const q = Object.fromEntries(u.searchParams);
+@@ -836,6 +933,7 @@ export function createWatchServer(opts) {
+           await close();
+           return;
+         }
++        if (!streamEverClosed) return;
+         const run = (await getRunSnapshot()) ?? null;
+         const finished = !!run && (run.status === 'complete' || run.status === 'failed');
+         if (finished && streamEverClosed && t - noStreamSince >= IDLE_FINISHED_MS) {

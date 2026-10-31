@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain6",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: one Opus review of the train 6 combined diff",
+      "prompt": "Review release train 6 of Project Swarm: branch swarm/train6 against main at 2a8dda74 (1.167.29). The combined diff is in context at coordination/review/train6.diff (every changed source file); tools/watch-perf.mjs, the perf budget test, package.json and CHANGELOG are also in context. Judge from these; the workspace files are not readable in your sandbox.\n\nWhat changed:\n(1) OWNER GATE, tools/scope-commands.mjs: supersedeOwnerRefusal no longer accepts SWARM_OWNER=1; agent/worker env markers are checked first; it walks the process ancestry (ps ppid/comm) and refuses if any ancestor is claude, codex, cursor-agent, opencode or chatgpt; both stdin and stdout must be TTYs; a test-only setSupersedeOwnerCheck hook replaces the env override in tests, and both `tickets supersede` and `tickets --set superseded` use it.\n(2) COMMAND CENTER PERF, tools/watch-server.mjs + tools/watch-assets: gzip/brotli, ETag/304, cache headers (fonts immutable, JS/CSS revalidated, HTML/JSON no-cache) replace no-store; a 2 s snapshot cache; the Cockpit/tour/palette lazy-load, the Cockpit module graph and first-project data warm during Hive idle, the robot is deferred; ambient animation caps at 30 fps (robot 15), goes static after 5 s idle, pauses hidden/off-screen/reduced motion; polling is 5 s and pauses hidden; DOM updates are incremental. Measured on the real board: usable 3518->195 ms desktop and 5251->943 ms phone 4G; switch 3114->131 ms and 4099->111 ms; idle page CPU 91.8->3.4% and 95.8->3.2%; Hive payload 497->157 KB and 434->81 KB; API 23->12/min.\n(3) tools/watch-perf.mjs + npm run perf:cc: the measurement harness.\n\nPass bar (owner): blockers only. Look hard at the owner gate: can an agent/worker or a pty still get through (env override, ancestry gaps, TTY spoof, direct --set superseded), can an innocent owner be refused? For the perf/serve changes: any security header/CSP/cookie/token regression (the exact security-headers test was fixed after the first cache attempt), cache poisoning or cross-query leakage, stale/wrong snapshot caching, a data or visual regression, a lazy-load that breaks the Hive/Cockpit, an animation/pause bug, a hidden secret or token in the perf script or logs, or a budget test that can pass while slow. Everything else is a follow-up.\n\nThe runner stamps the reviewed head into your result; do NOT add or change a head field. Write ONLY coordination/review/train6-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": [
+        "coordination/review/train6.diff",
+        "tools/watch-perf.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "package.json",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/train6-review.json"
+      ],
+      "resultFile": "coordination/review/train6-review.json",
+      "timeoutMs": 3000000
+    }
+  ]
+}

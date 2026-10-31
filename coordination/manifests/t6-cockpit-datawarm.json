@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-cockpit-datawarm",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Train 6 perf: the phone Cockpit switch is now 241 ms with all JS cached; the remaining fetch is /api/command-center/project (1.5 KB, one 4G round trip). After the Hive render, warm the first project's Cockpit data too so the switch renders from cache. In command-center-boot.js, where the boot calls schedulePromptCockpitWarm() after the Hive render (~line 403), pass the first project id from the snapshot; store it and have the 300 ms timer call preloadCockpit(warmProjectId) so the existing projectCache fill path runs. Keep the hover/idle behavior and deps.loadCockpit test path. Update tests/command-center-boot.test.mjs and tests/command-center-perf-budget.test.mjs: the warm timer prefetches the first project's data into the cache (and the switch uses cached data without a blocking fetch), with a fake fetch. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/watch-assets/command-center-boot.js",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/command-center-boot.js",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/watch-assets-browser-safe.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused boot/perf tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t6-cockpit-datawarm",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ]
+    }
+  ]
+}

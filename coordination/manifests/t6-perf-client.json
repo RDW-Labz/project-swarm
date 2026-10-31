@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t6-perf-client",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "top-priority Command Center performance; Opus review in train 6",
+      "sensitive": false,
+      "prompt": "FILE ACCESS: declared outputs are writable. Tests first. Train 6 performance part 2: the client still burns CPU and the page switch is slow. Current numbers on the branch (fixture server, real 9-project board, desktop headless Chromium, 45 s idle): usable 1140 ms (was 3518), Hive payload 194 KB (was 497 KB; JS 100 KB, CSS 27 KB), Hive to Cockpit 1093 ms (was 3114), back 72 ms, idle page CPU 96.5% (target under 5%), idle API 12/min. Keep the look identical.\n\n1) ANIMATIONS/CPU (main): find every requestAnimationFrame/setInterval/canvas loop in the Command Center assets (cc-hive-mount.js, cc-hive-stage.js, hive-panels.js, cc-cockpit-mount.js, cc-cockpit-orbit.js, cockpit-view.js, robot-head.js and its modules). Make idle cheap without changing the look:\n- Cap ambient animation work to a frame budget (e.g. 30 fps max, and drop to 10 fps or a static frame after 5 s with no pointer/keyboard input while still showing the composed look).\n- Reduce expensive per-frame work: avoid shadowBlur/glow recomputation per particle, batch canvas draws, use offscreen canvases, avoid layout reads in rAF.\n- Pause all loops when document.hidden or the element is off-screen (IntersectionObserver), resume on visible; honor prefers-reduced-motion (static).\n- Do not run the 3D robot or heavy canvases on the Hive unless visible and needed; if the Hive does not visually use the 3D robot, defer it entirely; lazy-load it on the Cockpit after the shell renders.\n- The target is under 5% idle CPU on this MacBook with the dashboard open and idle. Measure with a fixture server and headless Chromium (the existing perf harness style); report the frame budget and measured CPU.\n2) PAGE SWITCH: render the Cockpit shell and its data immediately on click/navigation (under 150 ms), then load/decorate the robot and secondary visuals asynchronously (preload the cockpit chunk on pointerenter/idle; never await the robot before showing the shell/data). Keep the Hive back path fast.\n3) Only re-render what changed: on each poll, compare the new snapshot with the previous one and update only changed text/width/class values; do not rebuild the DOM. Keep all data bindings.\n4) Update tests/command-center-perf-budget.test.mjs (and/or add a browser perf test) to lock in: animation frame budget/pause-on-hidden/reduced-motion, no Hive robot load, lazy Cockpit decoration, poll interval, and asset gzip budgets. Keep every existing command-center/cc/watch-assets test green. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs tests/cc-hive-mount.test.mjs tests/cc-cockpit-mount.test.mjs tests/command-center-boot.test.mjs tests/command-center-hive.test.mjs tests/command-center-cockpit.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report before/after idle CPU and switch time from your own fixture run. You have read/write access to cc-router.js and the robot modules; the Hive initial static import graph must not pull the robot modules.",
+      "context": [
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cc-cockpit-orbit.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-hive-stage.js",
+        "tools/watch-assets/cc-router.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/robot-avatar.js",
+        "tools/watch-assets/robot-color.js",
+        "tools/watch-assets/robot-faces.js",
+        "tools/watch-assets/robot-geometry.js",
+        "tools/watch-assets/robot-head.js",
+        "tools/watch-assets/robot-light.js",
+        "tools/watch-assets/robot-render.js",
+        "tools/watch-assets/robot-sim.js",
+        "tools/watch-assets/robot-ticker.js"
+      ],
+      "outputs": [
+        "tests/command-center-perf-budget.test.mjs",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cc-cockpit-orbit.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-hive-stage.js",
+        "tools/watch-assets/cc-router.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/robot-head.js",
+        "tools/watch-assets/robot-render.js",
+        "tools/watch-assets/robot-ticker.js"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-palette.test.mjs",
+        "tests/watch-assets-browser-safe.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused CC/perf tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t6-perf-client",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ]
+    }
+  ]
+}
