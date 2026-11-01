@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "hotfix-cc-scroll-testfix",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. In tests/browser/command-center.smoke.mjs, the new scroll test (around line 563) unconditionally clicks a 'Skip tour' button that the fixture does not render, so the test times out. Make the tour dismissal conditional and never required:\n\n- Replace the two unconditional lines with: find the button via `const skipTour = page.getByRole('button', { name: 'Skip tour', exact: true });` and only when `(await skipTour.count()) > 0` click `skipTour.first()` and wait for `.cc-tour-overlay` to be hidden (tolerate the selector disappearing).\n- Do not otherwise change the scroll assertions, viewports, wheel/touch/keyboard logic, or the existing smoke test.\n- Run ONLY the fast checks: node --import ./tests/_isolate-config.mjs --test tests/command-center-boot.test.mjs tests/command-center-live.test.mjs. Do NOT run Playwright. Report the change.",
+      "context": [
+        "tests/browser/command-center.smoke.mjs"
+      ],
+      "outputs": [
+        "tests/browser/command-center.smoke.mjs"
+      ],
+      "ignoreTests": [
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-phone.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "test-only tour guard fix; fast boot/live checks here, browser test before merge",
+      "timeoutMs": 900000
+    }
+  ],
+  "checks": [
+    {
+      "name": "hotfix-cc-scroll-testfix",
+      "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-boot.test.mjs", "tests/command-center-live.test.mjs"]
+    }
+  ]
+}

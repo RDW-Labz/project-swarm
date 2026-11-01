@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewhotfix133",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: delta Opus review for the 1.167.33 hotfix",
+      "prompt": "Delta review of hotfix 1.167.33 for Project Swarm, on top of 1.167.32 (22411782). The combined code diff is in context at coordination/review/hotfix-1167-33.diff; the browser evidence is in hotfix-1167-33-evidence.json; the full suite passed (7643 tests, 7612 pass, 0 fail) and the new browser test passed. The workspace files are not readable in your sandbox; judge from these.\n\nOwner bug: the Command Center could not scroll on 1.167.32. Root cause: body.cc-body.hive-body in tools/watch-assets/command-center.css was locked to the viewport (min-height:100vh; max-height:100vh; overflow:hidden), so wheel, trackpad, touch, PageDown and Space did nothing (Hive content 1621 px at 1440x900, 2306 at 800x900, 3151 at 390x844). At 800 px the Hive shell also sized to its 1320 px max-content and the ring/card layout only switched below 900 px, causing horizontal overflow.\n\nThe hotfix: removes the body lock (height auto, max-height none, overflow-x hidden, overflow-y auto); makes .hive-shell width:100%/min-width:0 with max-width 1320; moves the card-grid/ring breakpoint from 900 to 1340 in cc-hive.css and sets PHONE_MAX=1340 in cc-hive-mount.js so the JS geometry matches; leaves the 1600 px ellipse layout unchanged; adds a real browser scroll test at 1600x900, 1280x800, 800x900 and 390x844 for Hive and Cockpit that asserts scrollWidth === clientWidth and exercises wheel, touch (all viewports) and keyboard to the last card and back; bumps to 1.167.33.\n\nLook hard at: any remaining vertical lock or overflow:hidden that still traps content on either page (including the Cockpit worker stream/ticket stack and the Hive panels below the fold); the 1340 px boundary (a page at 1340/1341 must not jump into horizontal overflow or a broken ring/card layout); CSS/JS breakpoint mismatch (PHONE_MAX vs the media query); the shell width fix breaking the 1600 desktop ellipse or the centering; the ring/canvas geometry in the grid layout; horizontal overflow from the header/legend/panels; test false positives (programmatic scrollTo instead of real wheel/touch, networkidle, unconditional tour dismissal, wrong viewport, last-card selector missing); keyboard scrolling; the version bump and changelog accuracy; and any regression to the existing smoke test or the train 8 live feed. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/hotfix-1167-33-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head into your result; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/hotfix-1167-33.diff",
+        "coordination/review/hotfix-1167-33-evidence.json",
+        "tools/watch-assets/command-center.css",
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tests/browser/command-center.smoke.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/hotfix-1167-33-review.json"
+      ],
+      "resultFile": "coordination/review/hotfix-1167-33-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}
