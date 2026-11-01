@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-board-probe-header",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 9 tin 1 defect found by a live test: the new board reuse probe cannot see the real launchd board. `boardAnswers` in tools/watch-cli.mjs requests `http://127.0.0.1:<port>/api/board?t=<token>`; the watch server refuses a query token on non-page API routes with 403 (it accepts the token only in the `x-watch-token` header or the strict cookie). So findRunningBoard returned null and `swarm watch --all` still started a second board (52001) next to the launchd board on 51058.\n\nFix:\n- In tools/watch-cli.mjs `boardAnswers(url, fetchImpl)`: extract the token from the URL query, request `${u.origin}/api/board` with NO token in the URL, passing `headers: token ? { 'x-watch-token': token } : {}`, keeping redirect:'manual' and the 2 s timeout. Keep the success shape check (projects array + machine). Do not log the token; do not change the returned human URL format.\n- Update tests/one-board-owner.test.mjs: in the watch-reuse test, make the fetch stub assert the request URL is exactly `${origin}/api/board` with no `t=` and that the `x-watch-token` header equals the identity token; return the board shape only under those conditions. Add a test that a board answering only without the header (or with a query token) is treated as not running and starts one board. Keep the existing stale/board.json tests green.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/one-board-owner.test.mjs tests/watch-token-urls.test.mjs tests/memory-fixes.test.mjs -> all pass. Do not start a real board; use stubs/temp dirs.",
+      "context": [
+        "tools/watch-cli.mjs",
+        "tests/one-board-owner.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/memory-fixes.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tests/one-board-owner.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-page.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/split-module.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/fix-1167-13.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/swarm-watch-human-checklist-walkthrough.spec.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "probe header fix; focused reuse/token tests run here, full suite before merge",
+      "timeoutMs": 1200000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-board-probe-header",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/one-board-owner.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/memory-fixes.test.mjs"
+      ]
+    }
+  ]
+}

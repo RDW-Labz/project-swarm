@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9tin1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 1 delta review: one board owner (watch reuse + launchd update restart)",
+      "prompt": "Delta review of train 9 tin 1 (one board owner) on Project Swarm, on top of 1.167.33 (2cb33f58). The combined diff is in context at coordination/review/t9-tin1.diff; live/tests evidence is in t9-tin1-evidence.json. Full suite passed (7668 tests, 7637 pass, 0 fail); focused suite 55/55; live reuse tested three times against the launchd board (no second board, no board.json write). The workspace files are not readable in your sandbox; judge from these.\n\nWhat changed:\n1. `swarm watch --all` (plain web-board path) now calls findRunningBoard before starting: it reads the keep-up identity beside board.json with a read-only trust-checked readBoardIdentity (48-hex token, port, owner/mode, no symlink; never repairs), probes `http://127.0.0.1:<port>/api/health` (no token, redirect manual, 3 s, accepts only ok:true + string version), and falls back to the live board.json record. On a live board it prints 'already running' plus the token link, opens it with --open, and returns exit 0 without starting a server, waiting on server.done, or writing board.json. A stale identity/non-watch health/no board starts one board as before. --text/--json/--keep-up are unchanged.\n2. `swarm update` / restartRegisteredServers: when a board record is old, the launchd plist exists, and `launchctl print gui/<uid>/com.project-swarm.board` reports state running with a pid, it runs `launchctl kickstart -k gui/<uid>/com.project-swarm.board`, polls `/api/health` for the target version, reports restarted-launchd, and does NOT signal or spawn the record pid. If the job is not loaded while its port is busy it skips with a bootstrap/swarm watch hint (launchd-not-loaded); if the port is free the existing manual path remains. Non-darwin/no-plist and the remote server path are unchanged.\n3. Tests in tests/one-board-owner.test.mjs (55 focused tests with board-keepalive/memory/restart suites): identity discovery (valid/missing/corrupt/untrusted/symlink), identity-first reuse, board.json fallback, stale identity, non-watch health, query-token rejection, --open, launchd kickstart no-kill/no-spawn, stale pid, unloaded busy port skip, failed kickstart no fallback, manual path unchanged.\n\nLook hard at: identity trust bypasses (symlink, mode/owner, corrupt, port/token validation), the health probe being spoofable on loopback or timing out and starting a second board, a live board being missed (or a non-watch 200 reused), token leakage in logs/URLs, exit/hang behavior, board.json writes, --open, the launchd detection (plist exists but job loaded for another board, pid mismatch, stale registry record, discovered server path, non-macOS, remote unchanged), kickstart without waiting or double restart, poll timeout/failure reporting, the unloaded-job skip vs free-port fallback, and whether the tests encode real behavior rather than stubs. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-tin1-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-tin1.diff",
+        "coordination/review/t9-tin1-evidence.json",
+        "tools/board-keepalive.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tests/one-board-owner.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-tin1-review.json"
+      ],
+      "resultFile": "coordination/review/t9-tin1-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}

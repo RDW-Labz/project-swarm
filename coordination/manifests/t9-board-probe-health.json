@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-board-probe-health",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 9 tin 1 live-test failure: the board reuse probe still sometimes starts a second board. `boardAnswers` in tools/watch-cli.mjs probes the heavy `/api/board` and aborts at 2 s; on the real launchd board that payload can take longer, so the probe intermittently returns null and `swarm watch --all` starts a second board (observed on 55201/55701). The watch server exposes a cheap token-free loopback `/api/health` that returns `{\"ok\":true,\"version\":\"...\",\"pid\":...}` instantly.\n\nFix:\n- In tools/watch-cli.mjs `boardAnswers(url, fetchImpl)`: request `${u.origin}/api/health` (NO token in the URL, no token header), redirect:'manual', timeout 3000 ms (AbortSignal.timeout?.(3000)). Treat the board as live only when the response is ok and the JSON body has `ok === true` and a string `version` (this distinguishes the watch server from an arbitrary 200). Keep returning false on any error/timeout. The human URL returned by readBoardFile/findRunningBoard still keeps its token; only the probe changes.\n- Update tests/one-board-owner.test.mjs: stubs now answer `/api/health` with `{ok:true,version:'1.0.0'}`; assert the probe URL is exactly `${origin}/api/health` and carries no token query/header. Replace the old 'a board answering only with a query token is not reused' test with: a health response that is not a watch health (404, HTML, or JSON without ok/version) is not reused and starts one board. Keep the identity/board.json reuse, stale and open tests green.\n- Do not change the identity/board-file URL formats or the launchd update path.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/one-board-owner.test.mjs tests/watch-token-urls.test.mjs tests/memory-fixes.test.mjs -> all pass. Use stubs/temp dirs; do not start a real board.",
+      "context": [
+        "tools/watch-cli.mjs",
+        "tests/one-board-owner.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/memory-fixes.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-cli.mjs",
+        "tests/one-board-owner.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/fix-1167-13.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/swarm-watch-human-checklist-walkthrough.spec.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-ui.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "probe health fix; focused reuse/token tests run here, full suite before merge",
+      "timeoutMs": 1200000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-board-probe-health",
+      "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/one-board-owner.test.mjs", "tests/watch-token-urls.test.mjs", "tests/memory-fixes.test.mjs"]
+    }
+  ]
+}
