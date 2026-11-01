@@ -10,7 +10,7 @@ export const COCKPIT_LISTS_CSS = '';
 /** Stage colours: stage "S<n>" takes colour n mod 7 (the artifact's SC palette). */
 export const STAGE_COLOURS = ['#2fe0a0', '#4d7cff', '#ffb62e', '#a98bff', '#ff4d7e', '#4ccce6', '#58627a'];
 const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', todo: '○', done: '✓' };
-const HIDDEN_STATUSES = ['cancelled', 'proposed'];
+const HIDDEN_STATUSES = ['cancelled', 'proposed', 'superseded'];
 const STAMP_FIELDS = ['doneAt', 'completedAt', 'finishedAt', 'updatedAt', 'at'];
 
 /** Ledger fields a ticket category is read from, in order: lane, area, type, then stage as the last resort. */
@@ -306,7 +306,7 @@ export function emptyReadyExplanation(ledger, readyTicketsFn) {
   const done = new Set(tickets.filter(t => t.status === 'done').map(t => t.id));
   let blockedOnDeps = 0;
   for (const t of tickets) {
-    if (t.status === 'cancelled' || t.status === 'proposed' || t.status === 'done') continue;
+    if (t.status === 'cancelled' || t.status === 'proposed' || t.status === 'superseded' || t.status === 'done') continue;
     const waiting = (t.dependsOn ?? []).filter(d => !done.has(d));
     if (waiting.length) blockedOnDeps += 1;
   }

@@ -932,6 +932,10 @@
   function cardCounts(project) {
     var c = project && project.ticketCounts;
     if (!c || typeof c !== 'object' || nonNeg(c.total) === null) { return null; }
+    var counted = nonNeg(c.counted);
+    if (counted === null) {
+      counted = Math.max(0, c.total - (nonNeg(c.cancelled) || 0));
+    }
     return {
       total: c.total,
       done: nonNeg(c.done) || 0,
@@ -939,17 +943,21 @@
       blocked: nonNeg(c.blocked) || 0,
       review: nonNeg(c.review) || 0,
       cancelled: nonNeg(c.cancelled) || 0,
-      remaining: nonNeg(c.remaining) !== null ? c.remaining : Math.max(0, c.total - (nonNeg(c.done) || 0) - (nonNeg(c.cancelled) || 0)),
+      remaining: nonNeg(c.remaining) !== null ? c.remaining : Math.max(0, (counted !== null ? counted : c.total) - (nonNeg(c.done) || 0)),
+      counted: counted,
     };
   }
 
   /** One project for the Hive: ledger counts, percent, and the colour category the ring and card share. */
   function projectView(project) {
     var s = projectSignals(project);
+    var c = project && project.ticketCounts;
     var counts = cardCounts(project);
-    var counted = counts ? counts.total - counts.cancelled : null;
+    var counted = counts ? counts.counted : null;
     var pct = null;
-    if (counts && counted > 0) { pct = Math.round((counts.done / counted) * 100); }
+    if (c && typeof c.percentDone === 'number' && Number.isFinite(c.percentDone)) {
+      pct = Math.round(c.percentDone);
+    } else if (counts && counted > 0) { pct = Math.round((counts.done / counted) * 100); }
     else if (project.meter && typeof project.meter.value === 'number' && Number.isFinite(project.meter.value)) { pct = Math.round(project.meter.value); }
     else if (project.percentDone && typeof project.percentDone.value === 'string' && Number.isFinite(parseInt(project.percentDone.value, 10))) { pct = parseInt(project.percentDone.value, 10); }
     var cat = 'idle';
@@ -1026,6 +1034,8 @@
       if (projects[m].machine && machines.indexOf(projects[m].machine) < 0) { machines.push(projects[m].machine); }
     }
     var counted = projects.reduce(function (a, p) { return p.counted !== null ? a + p.counted : a; }, 0);
+    var snapTotals = snap.totals && typeof snap.totals === 'object' ? snap.totals : null;
+    var totalsFromSnap = snapTotals && typeof snapTotals.tickets === 'number';
     return {
       at: snap.at,
       projects: projects,
@@ -1038,7 +1048,15 @@
       prs: Array.isArray(hive.prs) ? hive.prs : null,
       events: sessionEvents(projects, hive),
       machines: machines,
-      totals: {
+      totals: totalsFromSnap ? {
+        tickets: snapTotals.tickets,
+        done: snapTotals.done,
+        ready: snapTotals.ready,
+        blocked: snapTotals.blocked,
+        review: snapTotals.review,
+        remaining: snapTotals.tickets - snapTotals.done,
+        counted: snapTotals.tickets,
+      } : {
         tickets: sumField(projects, 'total'),
         done: sumField(projects, 'done'),
         ready: sumField(projects, 'ready'),

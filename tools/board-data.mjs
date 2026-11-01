@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
 import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
+import { ticketCountsOf } from './ticket-counts.mjs';
 import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
 import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
@@ -1049,8 +1050,9 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     machine: os.hostname(),
     version: installedVersion,
     pinnedVersion,
-    stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
+    stage: tickets.stage, tickets, readyTickets,     idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
     ledger: commandCenterLedger(ledger),
+    counts: ticketCountsOf(ledger),
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     liveCount: activeLiveRuns.length,
     agents, cost,
@@ -1393,6 +1395,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     idleWithReady: liveIds.size === 0 && readyTickets > 0,
     tickets, ticketCounts: ticketsOf(ledger, scope),
     ledger: commandCenterLedger(ledger),
+    counts: ticketCountsOf(ledger),
     agents: agentsOf(runs, liveRunIds, now),
     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [] }; } })(),
     runStream: runs.slice(-20).reverse().map(({ id, state }) => ({ id, title: txt(state.status, 30), body: `${(state.jobs ?? []).filter(job => job.status === 'complete').length}/${(state.jobs ?? []).length} jobs` })),

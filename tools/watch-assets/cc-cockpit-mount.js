@@ -23,7 +23,7 @@ import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
 
 const TOUR_USER = 'anonymous';
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const HIDDEN_STATUSES = ['cancelled', 'proposed'];
+const HIDDEN_STATUSES = ['cancelled', 'proposed', 'superseded'];
 const TILE_COLOURS = { ready: '#2fe0a0', running: '#2fe0a0', review: '#ff4d7e', blocked: '#ffb62e', todo: '#a98bff', done: '#4d7cff' };
 const LOOP_STEPS = ['you approve the scope', 'the split makes tickets', 'workers build in waves', 'checks gate every merge', 'the PR merges'];
 const SOURCES_NOTE = 'Read from this project\'s ledger (tickets, stages and their lane or type), its orchestrator sessions and its run stream, as served by the Command Center. The pixel orchestrator, its orbit and the path to the running ticket are drawn here. One glitch in the app, on the SWARM wordmark: under 400 ms, off with reduced motion.';
@@ -75,15 +75,33 @@ function liveTickets(ledger) {
   return (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
 }
 
+function serverCounts(project) {
+  const c = project?.counts;
+  if (!c || typeof c !== 'object' || typeof c.total !== 'number' || !Number.isFinite(c.total)) return null;
+  return c;
+}
+
 /** Header counters, each with the ledger field it is read from. */
-function headerCounters(project, counts) {
+function headerCounters(project, rowCounts) {
+  const c = serverCounts(project);
+  if (c) {
+    const needsYou = typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)
+      ? c.needsYou
+      : (typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0);
+    return [
+      { label: 'tickets', value: c.total, tip: 'Live tickets in this project ledger (cancelled, proposed and superseded left out).' },
+      { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+      { label: 'done', value: c.done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
+      { label: 'need you', value: needsYou, color: needsYou ? 'var(--red)' : '', tip: 'Owner inbox items waiting on you for this project.' },
+    ];
+  }
   const live = liveTickets(project?.ledger);
   const total = project?.total ?? live.length;
-  const done = project?.done ?? counts.done;
+  const done = project?.done ?? rowCounts.done;
   const needsYou = live.filter(t => t.status === 'review' || (t.type === 'human' && t.status !== 'done')).length;
   return [
     { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
-    { label: 'agents', value: counts.running, color: counts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+    { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
     { label: 'done', value: done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
     { label: 'need you', value: needsYou, color: needsYou ? 'var(--red)' : '', tip: 'Human tickets still open plus tickets waiting in review.' },
   ];
@@ -530,7 +548,7 @@ export function renderProjectCockpit(host, project, deps) {
     });
   }
 
-  function paintNow(columns, model, runs) {
+  function paintNow(columns, model, runs, headline) {
     patchPanel(nowHost, nowHost => {
       clear(nowHost);
       const name = model.name;
@@ -540,7 +558,8 @@ export function renderProjectCockpit(host, project, deps) {
         const running = lead.state === 'running';
         const k = el(doc, 'div', 'k');
         k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
-        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
+        const readyN = headline?.ready ?? columns.counts.ready;
+        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : readyN}`));
         nowHost.appendChild(k);
         const full = String(t.title || t.id).replace(/"/g, '');
         nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
@@ -577,18 +596,19 @@ export function renderProjectCockpit(host, project, deps) {
   function paint(at) {
     const p = projectRef;
     const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
-      p?.done, p?.total, p?.runStream, Math.floor(at / 60000)]);
+      p?.done, p?.total, p?.counts, p?.runStream, Math.floor(at / 60000)]);
     if (signature === paintSignature) return;
     paintSignature = signature;
     const ledger = p?.ledger ?? { tickets: [] };
+    const headline = serverCounts(p);
     const model = renderCockpit(titleHost, {
       ledger,
       sessions: p?.sessions ?? [],
       meta: p?.meta ?? {},
       name: p?.name,
       id: p?.id,
-      done: p?.done,
-      total: p?.total,
+      done: headline?.done ?? p?.done,
+      total: headline?.total ?? p?.total,
     }, { now: at });
     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
     const columns = cockpitLedgerRows(ledger, readyTickets, { perColumn: ROWS_PER_COLUMN });
@@ -596,6 +616,16 @@ export function renderProjectCockpit(host, project, deps) {
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
     const cats = cockpitCategories(ledger);
+    const stackCounts = headline ? {
+      ready: headline.ready,
+      running: columns.counts.running,
+      review: headline.review,
+      blocked: headline.blocked,
+      todo: headline.todo,
+      done: headline.done,
+      cancelled: headline.cancelled,
+      proposed: headline.proposed ?? 0,
+    } : columns.counts;
     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
     const lead = columns.left[0];
     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
@@ -615,28 +645,28 @@ export function renderProjectCockpit(host, project, deps) {
     if (lab.getAttribute('data-orchestrator') !== orch.label) lab.setAttribute('data-orchestrator', orch.label);
     text(labSub, orchestratorCaption(orch.label, allDone));
     syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
-    paintNow(columns, model, runStreamItems(p, orch));
+    paintNow(columns, model, runStreamItems(p, orch), headline);
 
     const cards = workerCards(ledger, at, 4);
     patchPanel(wgrid, host => renderWorkerCards(host, cards));
-    text(wCount, cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE');
+    text(wCount, cards.length ? `${cards.length} LATEST · ${stackCounts.done} DONE` : '0 DONE');
 
     text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
     text(stackSub, cats.field && cats.names.length
       ? cats.names.join(' / ')
       : 'no lane or type recorded on these tickets');
     const tiles = [
-      ['ready', counts.ready],
-      ...(counts.running ? [['running', counts.running]] : []),
-      ['review', counts.review],
-      ['waiting', counts.blocked, 'blocked'],
-      ['to do', counts.todo, 'todo'],
-      ['done', counts.done],
+      ['ready', stackCounts.ready],
+      ...(stackCounts.running ? [['running', stackCounts.running]] : []),
+      ['review', stackCounts.review],
+      ['waiting', stackCounts.blocked, 'blocked'],
+      ['to do', stackCounts.todo, 'todo'],
+      ['done', stackCounts.done],
     ].map(([label, value, key]) => ({ label, value, color: TILE_COLOURS[key || label], footnote: `${value} ${label}` }));
     const big = Math.max(...tiles.map(t => t.value));
     for (const t of tiles) t.hi = big > 0 && t.value === big;
     patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
-    text(footNote, `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
+    text(footNote, `${stackCounts.cancelled} cancelled, left out of the percent${stackCounts.proposed ? ` · ${stackCounts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
 
     layoutWire();
     if (firstPaint) {
