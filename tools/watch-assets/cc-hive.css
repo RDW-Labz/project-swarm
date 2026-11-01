@@ -47,7 +47,7 @@
 .hive-body:has(.hive-shell) .cc-tour-fab{display:none}
 .hive-body .cc-shell-message{max-width:720px;margin:40px auto;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--muted);font-family:var(--font-mono);font-size:13px}
 
-.hive-shell{max-width:1320px;margin:0 auto}
+.hive-shell{width:100%;min-width:0;max-width:1320px;margin:0 auto}
 .hive-shell .hive-mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
 .hive-shell button{font:inherit;font-size:13px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
 .hive-shell button:hover{border-color:var(--blue)}
@@ -58,7 +58,7 @@
 .hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 20px;border-bottom:1px solid var(--line)}
 .hive-shell .hive-logo{font-family:var(--font-display);font-style:italic;font-weight:900;font-size:44px;letter-spacing:-.01em;filter:drop-shadow(0 0 14px rgba(255,77,126,.35));line-height:1;background:linear-gradient(90deg,#ff4d7e,#a98bff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .hive-shell .hive-tag{font-family:var(--font-mono);font-size:12.5px;color:#c9d1e3;line-height:1.75;white-space:nowrap}
-.hive-shell .hive-cnt{display:flex;gap:26px;margin-left:auto}
+.hive-shell .hive-cnt{display:flex;flex-wrap:wrap;gap:26px;margin-left:auto;min-width:0}
 .hive-shell .hive-cnt>div{text-align:center}
 .hive-shell .hive-cnt .l{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}
 .hive-shell .hive-cnt .v{font-family:var(--font-mono);font-size:24px;font-weight:500}
@@ -127,7 +127,7 @@
 .hive-shell .hive-core .x{font-family:var(--font-mono);font-size:max(8px,calc(var(--cr) * .12px));line-height:1.35;color:var(--dim);margin-top:2px;text-wrap:balance}
 
 /* lane legend + tagline row */
-.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center}
+.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center;min-width:0}
 .hive-shell .hive-legend span i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;box-shadow:0 0 8px currentColor}
 .hive-shell .hive-legend .tl{margin-left:auto;font-family:var(--font-display);font-style:italic;font-weight:700;font-size:23px;line-height:1.1;text-transform:none;letter-spacing:-.01em;color:var(--fg)}
 .hive-shell .hive-legend .tl u{text-decoration:none;color:var(--fg)}
@@ -230,7 +230,7 @@
 .hive-body .cc-tour-highlight{outline:2px solid var(--cyan);outline-offset:3px}
 
 /* narrow screens: the ring on top (square canvas, sprays come in from its edges), then the cards in a column */
-@media (max-width:900px){
+@media (max-width:1340px){
   .hive-shell .hive-tag{white-space:normal}
   .hive-shell .hive-cnt{margin-left:0}
   .hive-shell .hive-top{padding-bottom:14px}
