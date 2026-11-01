@@ -560,8 +560,11 @@ test('command center scroll input reaches every card at desktop, tablet and phon
             await page.waitForSelector(name === 'Hive' ? '.hive-shell' : '.cc-cockpit-shell', { timeout: 30_000 });
             await page.waitForSelector(cardSelector, { timeout: 30_000 });
             if (name === 'Hive') {
-              await page.getByRole('button', { name: 'Skip tour', exact: true }).click({ timeout: 10_000 });
-              await page.waitForSelector('.cc-tour-overlay', { state: 'hidden', timeout: 10_000 });
+              const skipTour = page.getByRole('button', { name: 'Skip tour', exact: true });
+              if ((await skipTour.count()) > 0) {
+                await skipTour.first().click({ timeout: 10_000 });
+                await page.waitForSelector('.cc-tour-overlay', { state: 'hidden', timeout: 10_000 });
+              }
             }
             await page.evaluate(() => document.fonts.ready);
             await page.evaluate(() => window.scrollTo(0, 0));
