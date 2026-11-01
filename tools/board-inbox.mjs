@@ -31,6 +31,7 @@ const deadline = (promise, ms, label) => {
 };
 const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
 const MAX_PER_PROJECT = 50;
+const INBOX_BLOCKER_MAX_AGE_MS = 7 * 86400000;
 const stepsOf = ({ commands, next }) => ({ commands, command: commands[0]?.cmd ?? null, next });
 
 export function ticketReleaseAllowed(ticket, ledger) {
@@ -123,6 +124,18 @@ function phoneRecordScratch(rec, scratchOpts) {
   return isScratchRoot(root, { strict: true, ...scratchOpts });
 }
 
+function hideStaleNeedsYouItem(item, ledger, now) {
+  if (item.kind === 'blocker' && item.since) {
+    const at = Date.parse(item.since);
+    if (Number.isFinite(at) && now - at > INBOX_BLOCKER_MAX_AGE_MS) return true;
+  }
+  const id = item?.id;
+  if (!id || !ledger?.tickets) return false;
+  const ticket = ledger.tickets.find(t => t?.id != null && String(t.id) === String(id));
+  if (!ticket) return false;
+  return ticket.status === 'superseded' || ticket.status === 'cancelled';
+}
+
 export async function boardInbox({ projects, now = Date.now(), env = process.env, home = os.homedir(), collect = collectInbox, deps = inboxDeps({ channel: 'board' }), ledgerOf = readLedger, phoneDirectory = phoneDir(env), projectMs = PROJECT_MS, ownerInbox, forOwner, phoneSyncDeps = null } = {}) {
   const scratchOpts = { env, home: env.HOME ?? home };
   const ownerProjects = filterScratchFromInbox(projects, ownerInbox, { forOwner, scratchOpts });
@@ -143,6 +156,7 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
   const problems = [];
   // Every project is read at the same time with its own time limit: one that hangs is named and does not hold up the rest.
   const perProject = await Promise.all(ownerProjects.map(async project => {
+    if (project.directBuild) return { project, mine: [] };
     const read = async () => {
       const mine = [];
       for (const it of await collect([project.root], deps)) {
@@ -202,9 +216,13 @@ export async function boardInbox({ projects, now = Date.now(), env = process.env
           phone: null,
         });
       }
-      return mine;
+      return { mine, ledger };
     };
-    try { return { project, mine: await deadline(read(), projectMs, `reading ${project.name}`) }; }
+    try {
+      const { mine: collected, ledger } = await deadline(read(), projectMs, `reading ${project.name}`);
+      const mine = collected.filter(it => !hideStaleNeedsYouItem(it, ledger, now));
+      return { project, mine };
+    }
     catch (error) { problems.push({ project: txt(project.name, 80), problem: txt(error.message, 120) }); return { project, mine: [] }; }
   }));
   const items = [];

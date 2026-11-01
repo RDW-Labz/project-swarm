@@ -27,6 +27,7 @@ import {
   stageColour,
   STAGE_COLOURS,
 } from '../tools/watch-assets/cockpit-lists.js';
+import { compareStageIds, stageRingProgress } from '../tools/watch-assets/cockpit-view.js';
 import {
   renderRunStream,
   readRunStreamWrapStyle,
@@ -364,4 +365,16 @@ test('ticket card helpers: short names, ages, states and stage colours', () => {
   assert.equal(stageColour('S3'), STAGE_COLOURS[3]);
   assert.equal(stageColour('S10'), STAGE_COLOURS[3]);
   assert.equal(stageColour(undefined), STAGE_COLOURS[0]);
+});
+
+test('stageRingProgress orders S1, S2, S10 numerically when stages come from ticket keys', () => {
+  const rings = stageRingProgress({
+    tickets: [
+      { id: 'T-1', status: 'todo', stage: 'S10' },
+      { id: 'T-2', status: 'todo', stage: 'S1' },
+      { id: 'T-3', status: 'todo', stage: 'S2' },
+    ],
+  });
+  assert.deepEqual(rings.map(r => r.id), ['S1', 'S2', 'S10']);
+  assert.deepEqual(['S1', 'S2', 'S10'].sort(compareStageIds), ['S1', 'S2', 'S10']);
 });

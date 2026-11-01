@@ -167,3 +167,57 @@ test('stripped commandCenterLedger plus server counts: counts win for card shape
   const fromLedger = mergeCardTicketCounts({ ...project, counts: undefined }, 0);
   assert.notEqual(fromLedger?.total, 9, 'ledger fallback is distinguishable');
 });
+
+test('direct-build project cards omit ticket totals and hive sums skip them', () => {
+  const board = {
+    at: '2026-10-26T12:00:00.000Z',
+    machine: { agents: { total: 0 } },
+    projects: [
+      {
+        id: 'swarm',
+        name: 'swarm',
+        directBuild: false,
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 10, done: 5, ready: 1, review: 0, blocked: 0, todo: 4,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 5, percentDone: 50, counted: 10,
+        },
+      },
+      {
+        id: 'parts',
+        name: 'parts-request-app',
+        directBuild: true,
+        card: { blocked: { needYou: 9 }, now: {}, next: { ready: 40 } },
+        counts: {
+          total: 400, done: 200, ready: 40, review: 0, blocked: 0, todo: 160,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 200, percentDone: 50, counted: 400,
+        },
+        agents: { total: 2 },
+      },
+    ],
+  };
+  const snap = buildCommandCenterSnapshot(board);
+  const parts = snap.projects.find(p => p.id === 'parts');
+  assert.equal(parts.lane, 'control');
+  assert.equal(parts.ticketCounts, undefined);
+  assert.equal(parts.percentDone, undefined);
+  assert.equal(snap.totals.tickets, 10);
+  assert.equal(snap.totals.done, 5);
+});
+
+test('hive.doneLast24h sums board project doneLast24h fields', () => {
+  const board = {
+    at: '2026-10-26T12:00:00.000Z',
+    machine: { agents: { total: 0 } },
+    projects: [{
+      id: 'p',
+      name: 'P',
+      doneLast24h: 3,
+      card: { blocked: { needYou: 0 }, now: {}, next: {} },
+      counts: { total: 1, done: 0, ready: 0, review: 0, blocked: 0, todo: 1, cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1 },
+      ledger: { tickets: [{ id: 'T-1', status: 'done', doneAt: '2026-10-26T11:00:00.000Z' }] },
+    }],
+  };
+  const snap = buildCommandCenterSnapshot(board);
+  assert.equal(snap.hive.doneLast24h, 3);
+});

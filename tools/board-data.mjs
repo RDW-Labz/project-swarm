@@ -614,7 +614,7 @@ export function ticketDoneAtMs(value) {
   return Number.isFinite(at) ? at : NaN;
 }
 
-export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
+async function familyRootsForTicketLog(roots, { env = process.env } = {}) {
   const scanRoots = new Set();
   const addRoot = async candidate => {
     if (!candidate) return;
@@ -626,7 +626,7 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
     try {
       for (const member of await worktreeFamily(anchor, { all: true, env })) await addRoot(member);
     } catch (error) {
-      console.error('[tools/board-data.mjs] lastTicketFinishedAt worktreeFamily:', error?.message ?? error);
+      console.error('[tools/board-data.mjs] familyRootsForTicketLog worktreeFamily:', error?.message ?? error);
     }
     const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
     if (scratch) {
@@ -637,14 +637,43 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
           try {
             if ((await fs.stat(candidate)).isDirectory()) await addRoot(candidate);
           } catch (error) {
-            if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] lastTicketFinishedAt scratch entry:', error?.message ?? error);
+            if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog scratch entry:', error?.message ?? error);
           }
         }
       } catch (error) {
-        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] lastTicketFinishedAt readdir scratch:', error?.message ?? error);
+        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog readdir scratch:', error?.message ?? error);
       }
     }
   }
+  return scanRoots;
+}
+
+const DONE_LOG_FUTURE_MS = 5 * 60 * 1000;
+
+/** Unique ticket ids marked done in tickets.log within the last 24 hours (family roots, same scan as lastTicketFinishedAt). */
+export async function doneLast24hCount(roots, { now = Date.now(), env = process.env } = {}) {
+  let scanRoots;
+  try { scanRoots = await familyRootsForTicketLog(roots, { env }); } catch { return 0; }
+  const merged = new Map();
+  for (const root of scanRoots) {
+    try {
+      for (const [id, at] of await doneTimes(root)) {
+        const ms = ticketDoneAtMs(at);
+        if (id && Number.isFinite(ms)) merged.set(String(id), Math.max(merged.get(String(id)) ?? 0, ms));
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] doneLast24hCount doneTimes:', error?.message ?? error);
+    }
+  }
+  const since = now - DAY;
+  const until = now + DONE_LOG_FUTURE_MS;
+  let count = 0;
+  for (const ms of merged.values()) if (ms >= since && ms <= until) count += 1;
+  return count;
+}
+
+export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
+  const scanRoots = await familyRootsForTicketLog(roots, { env });
   const doneIds = new Set();
   for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
   let newest = 0;
@@ -999,6 +1028,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
+  const doneLast24h = await doneLast24hCount(roots, { now, env });
   const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
   const lastActivityMs = Math.max(
     0,
@@ -1047,6 +1077,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const installedVersion = await swarmPackageVersion();
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    directBuild: Boolean(project.directBuild),
     machine: os.hostname(),
     version: installedVersion,
     pinnedVersion,
@@ -1066,6 +1097,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
+    doneLast24h,
     checkouts: roots.length,
     activity,
     idle,
@@ -1343,6 +1375,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const pinnedVersion = await pinnedVersionFor(project.root);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
+  const doneLast24h = await doneLast24hCount(roots, { now, env });
   const progressFinished = progress?.finished ?? false;
   const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state?.jobs) ? r.state.jobs.length : 0));
   let card = await buildWatchCard({
@@ -1385,6 +1418,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   ).full;
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    directBuild: Boolean(project.directBuild),
     machine: os.hostname(),
     version: installedVersion,
     pinnedVersion,
@@ -1408,6 +1442,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
+    doneLast24h,
     checkouts: roots.length,
     untracked: untrackedOnDisk,
     splitQuality: split,

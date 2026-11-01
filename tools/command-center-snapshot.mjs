@@ -20,6 +20,7 @@ function textField(label, value, source, explanation) {
 }
 
 function projectLane(p) {
+  if (p.directBuild) return 'control';
   if ((p.card?.blocked?.needYou ?? 0) > 0) return 'safety';
   if ((p.card?.now?.buildingTickets ?? 0) > 0) return 'context';
   if ((p.readyTickets ?? 0) > 0) return 'route';
@@ -172,6 +173,19 @@ function buildProjectCard(p, index) {
     name: p.name ?? null,
     lane: projectLane(p),
   };
+  if (p.directBuild) {
+    card.directBuild = true;
+    const live = field('Live agents', p.agents?.total, 'count', `${prefix}.agents.total`, 'Running agent jobs in live runs for this project.');
+    if (live) card.liveAgents = live;
+    if (typeof p.machine === 'string' && p.machine.length) {
+      card.machine = textField('Machine', p.machine, `${prefix}.machine`, 'Host name where this project root lives.');
+    }
+    const out = p.agents?.jobs?.running;
+    if (typeof out === 'number' && Number.isFinite(out)) {
+      card.out = textField('Out', String(out), `${prefix}.agents.jobs.running`, 'Agent jobs currently running for this project.');
+    }
+    return card;
+  }
   const live = field('Live agents', p.agents?.total, 'count', `${prefix}.agents.total`, 'Running agent jobs in live runs for this project.');
   if (live) card.liveAgents = live;
   const need = field('Needs you', p.card?.blocked?.needYou, 'count', `${prefix}.card.blocked.needYou`, 'Inbox items waiting for the owner on this project.');
@@ -285,10 +299,17 @@ function openPrs(board) {
 function buildHiveExtras(board, projects, nowMs) {
   const hive = {};
   const hours = throughput24h(projects, nowMs);
-  if (hours) {
-    hive.throughput24h = hours;
-    hive.doneLast24h = hours.reduce((a, v) => a + v, 0);
+  if (hours) hive.throughput24h = hours;
+  let doneSum = 0;
+  let anyDoneLast24h = false;
+  for (const p of projects) {
+    if (typeof p?.doneLast24h === 'number' && Number.isFinite(p.doneLast24h)) {
+      doneSum += p.doneLast24h;
+      anyDoneLast24h = true;
+    }
   }
+  if (anyDoneLast24h) hive.doneLast24h = doneSum;
+  else if (hours) hive.doneLast24h = hours.reduce((a, v) => a + v, 0);
   const lanes = laneStats(board);
   if (lanes) hive.lanes = lanes;
   const prs = openPrs(board);
@@ -429,6 +450,7 @@ export function buildProjectCockpit(board, projectId) {
   return {
     id: project.id,
     name: project.name ?? null,
+    directBuild: Boolean(project.directBuild),
     ledger,
     sessions: project.orchestrator?.sessions ?? [],
     meta: {

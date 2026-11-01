@@ -452,3 +452,62 @@ test('renderProjectCockpit view tabs use bare paths without window or defaultVie
   view.destroy();
   globalThis.document = prevDocument;
 });
+
+test('cockpit footer explains cancelled tickets are outside live total and percent', async () => {
+  const board = fakeBoard({
+    counts: {
+      total: 407,
+      done: 230,
+      ready: 0,
+      review: 0,
+      blocked: 0,
+      todo: 177,
+      cancelled: 13,
+      proposed: 0,
+      superseded: 0,
+      remaining: 177,
+      percentDone: 57,
+      counted: 407,
+      needsYou: 0,
+      source: 'counts',
+    },
+    total: 407,
+    done: 230,
+    percentDone: 57,
+  });
+  const project = buildProjectCockpit(board, 'alpha');
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
+  const foot = textOf(host.querySelector('.ck-foot span'));
+  assert.match(foot, /13 cancelled, not counted in the 407 live tickets or the percent/);
+  view.destroy();
+  globalThis.document = prevDocument;
+});
+
+test('direct-build cockpit hides headline swarm counts', async () => {
+  const board = fakeBoard({
+    directBuild: true,
+    counts: {
+      total: 407, done: 230, ready: 40, review: 0, blocked: 0, todo: 137,
+      cancelled: 13, proposed: 0, superseded: 0, remaining: 177, percentDone: 57, counted: 407,
+      needsYou: 0,
+      source: 'counts',
+    },
+    total: 407,
+    done: 230,
+    percentDone: 57,
+  });
+  const project = buildProjectCockpit(board, 'alpha');
+  assert.equal(project.directBuild, true);
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
+  assert.match(textOf(host.querySelector('.sub2')), /SWARM COUNTS HIDDEN/);
+  assert.equal(host.querySelector('.cnt .v[data-k="tickets"]').textContent, '—');
+  assert.match(textOf(host.querySelector('.ck-foot span')), /direct build: swarm counts hidden/);
+  view.destroy();
+  globalThis.document = prevDocument;
+});
