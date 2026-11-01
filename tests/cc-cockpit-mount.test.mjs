@@ -11,7 +11,7 @@ import {
   orchestratorHeadState,
   orchestratorCaption,
 } from '../tools/watch-assets/cockpit-view.js';
-import { emptyReadyExplanation, STAGE_COLOURS } from '../tools/watch-assets/cockpit-lists.js';
+import { emptyReadyExplanation, STAGE_COLOURS, renderStackSummaryTiles } from '../tools/watch-assets/cockpit-lists.js';
 import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
 
 const NOW = Date.UTC(2026, 9, 26, 20, 0, 0);
@@ -508,6 +508,22 @@ test('direct-build cockpit hides headline swarm counts', async () => {
   assert.match(textOf(host.querySelector('.sub2')), /SWARM COUNTS HIDDEN/);
   assert.equal(host.querySelector('.cnt .v[data-k="tickets"]').textContent, '—');
   assert.match(textOf(host.querySelector('.ck-foot span')), /direct build: swarm counts hidden/);
+  assert.equal(textOf(host.querySelector('.stack .n')), '—');
+  // renderStackSummaryTiles: label in children[0], count in children[1] (.cockpit-metric-tile)
+  const tileValues = Object.fromEntries(
+    host.querySelectorAll('.cc-cockpit-stack-tiles .cockpit-metric-tile').map(t => [
+      textOf(t.children[0]).toLowerCase(),
+      textOf(t.children[1]),
+    ]),
+  );
+  assert.equal(tileValues.ready, '0');
+  assert.equal(tileValues.review, '0');
+  assert.equal(tileValues.waiting, '0');
+  assert.equal(tileValues['to do'], '0');
+  assert.equal(tileValues.done, '0');
+  assert.equal(tileValues.running, undefined);
+  assert.notEqual(tileValues.ready, '40');
+  assert.notEqual(tileValues.done, '230');
   view.destroy();
   globalThis.document = prevDocument;
 });

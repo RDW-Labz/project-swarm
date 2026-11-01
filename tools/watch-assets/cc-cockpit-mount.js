@@ -637,7 +637,7 @@ export function renderProjectCockpit(host, project, deps) {
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
     const cats = cockpitCategories(ledger);
-    const stackCounts = headline ? {
+    let stackCounts = headline ? {
       ready: headline.ready,
       running: columns.counts.running,
       review: headline.review,
@@ -647,6 +647,18 @@ export function renderProjectCockpit(host, project, deps) {
       cancelled: headline.cancelled,
       proposed: headline.proposed ?? 0,
     } : columns.counts;
+    if (directBuild) {
+      stackCounts = {
+        ready: 0,
+        running: 0,
+        review: 0,
+        blocked: 0,
+        todo: 0,
+        done: 0,
+        cancelled: 0,
+        proposed: 0,
+      };
+    }
     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
     const lead = columns.left[0];
     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
