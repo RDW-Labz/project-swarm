@@ -209,10 +209,10 @@ index b5d69c60..7162ee91 100644
    test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
 diff --git a/tests/one-board-owner.test.mjs b/tests/one-board-owner.test.mjs
 new file mode 100644
-index 00000000..03b3cc06
+index 00000000..cbd4dea0
 --- /dev/null
 +++ b/tests/one-board-owner.test.mjs
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,399 @@
 +// SPDX-License-Identifier: Apache-2.0
 +import './_isolate-config.mjs';
 +import test from 'node:test';
@@ -244,6 +244,7 @@ index 00000000..03b3cc06
 +async function restartFixture(t, {
 +  loaded = true, plist = true, held = false, platform = 'darwin',
 +  printError, kickError, stalePid = false, defaultPlist = false,
++  launchdPid = 880001, keepup = null, mode = 'background', discovered = false,
 +} = {}) {
 +  const f = await fixture(t);
 +  const socket = net.createServer();
@@ -253,10 +254,13 @@ index 00000000..03b3cc06
 +  else await new Promise(resolve => socket.close(resolve));
 +  const record = {
 +    pid: 880001, version: '1.0.0', port, url: `http://127.0.0.1:${port}/?t=old`,
-+    argv: ['watch', '--all'], cwd: f.home, env: {}, mode: 'background',
++    argv: ['watch', '--all'], cwd: f.home, env: {}, mode,
 +    explicitBackground: true, startedAt: new Date().toISOString(),
 +  };
 +  await writeRegistryRecord(f.file, record);
++  if (keepup) {
++    await saveIdentity(f.file, { ...identity, port: keepup === 'matching' ? port : (port === 51058 ? 51059 : 51058) });
++  }
 +  if (defaultPlist) {
 +    const plistFile = path.join(f.home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
 +    await fs.mkdir(path.dirname(plistFile), { recursive: true });
@@ -265,6 +269,8 @@ index 00000000..03b3cc06
 +  const calls = [], signals = [], spawns = [], lines = [];
 +  let alive = !stalePid;
 +  let healthCalls = 0;
++  let kicked = false;
++  let discoveryHealthCalls = 0;
 +  const result = await restartRegisteredServers({
 +    ...f, targetVersion: '2.0.0', home: f.home, env: { HOME: f.home },
 +    platform, getuid: () => 502, launchdBoardPlistExists: defaultPlist ? undefined : () => plist,
@@ -274,9 +280,21 @@ index 00000000..03b3cc06
 +      if (cmd === 'launchctl' && args[0] === 'print') {
 +        if (printError) throw printError;
 +        if (!loaded) throw new Error('Could not find service');
-+        return { stdout: 'state = running\n pid = 880001\n' };
++        return { stdout: `state = running\n pid = ${launchdPid}\n` };
 +      }
-+      if (cmd === 'launchctl' && args[0] === 'kickstart' && kickError) throw kickError;
++      if (cmd === 'launchctl' && args[0] === 'kickstart') {
++        if (kickError) throw kickError;
++        kicked = true;
++      }
++      if (discovered) {
++        if (cmd === 'ps' && args[0] === '-axo') {
++          return { stdout: `880002 1 00:05 ${process.execPath} ${f.runner} watch --all\n` };
++        }
++        if (args.includes('cwd')) return { stdout: `p880002\ncwd\nn${f.home}\n` };
++        if (args.some(arg => String(arg).includes('LISTEN'))) return { stdout: `p880002\nn127.0.0.1:${port}\n` };
++        if (args.some(arg => String(arg).includes('tty'))) return { stdout: '??\n' };
++        if (cmd === 'readlink') return { stdout: `${f.home}\n` };
++      }
 +      return { stdout: '' };
 +    },
 +    pidAliveImpl: pid => (pid === record.pid && alive) || pid === 880002,
@@ -288,12 +306,16 @@ index 00000000..03b3cc06
 +    },
 +    fetchImpl: async url => {
 +      assert.equal(url, `http://127.0.0.1:${port}/api/health`);
++      if (discovered && !kicked) {
++        discoveryHealthCalls += 1;
++        return { ok: true, json: async () => ({ version: '1.0.0', pid: 880002 }) };
++      }
 +      healthCalls += 1;
 +      // A successful kickstart can return before the old server stops answering.
 +      return { ok: true, json: async () => ({ version: healthCalls === 1 ? '1.0.0' : '2.0.0', pid: 880002 }) };
 +    },
 +  });
-+  return { ...result, calls, signals, spawns, lines, port, healthCalls };
++  return { ...result, calls, signals, spawns, lines, port, healthCalls, discoveryHealthCalls };
 +}
 +
 +test('update restarts the loaded launchd board through its job without signaling or spawning', async t => {
@@ -312,6 +334,42 @@ index 00000000..03b3cc06
 +test('launchd ownership survives a stale registry pid and uses the home-specific plist', async t => {
 +  const r = await restartFixture(t, { stalePid: true, defaultPlist: true });
 +  assert.equal(r.servers[0]?.status, 'restarted-launchd');
++  assert.deepEqual(r.signals, []);
++  assert.deepEqual(r.spawns, []);
++});
++
++for (const mode of ['background', 'terminal']) {
++  test(`a stray ${mode} board keeps its existing restart path when launchd owns another port`, async t => {
++    const r = await restartFixture(t, {
++      keepup: 'different', launchdPid: 880003, mode, held: mode === 'terminal',
++    });
++    assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 0);
++    if (mode === 'terminal') {
++      assert.equal(r.servers[0]?.status, 'terminal');
++      assert.ok(r.lines.some(line => /press Ctrl-C there and run swarm watch --all/.test(line)));
++      assert.deepEqual(r.signals, []);
++      assert.deepEqual(r.spawns, []);
++    } else {
++      assert.equal(r.servers[0]?.status, 'restarted');
++      assert.deepEqual(r.signals, [[880001, 'SIGTERM']]);
++      assert.equal(r.spawns.length, 1);
++    }
++  });
++}
++
++test('matching keep-up port identifies the launchd board despite a stale different registry pid', async t => {
++  const r = await restartFixture(t, { keepup: 'matching', launchdPid: 880003, stalePid: true });
++  assert.equal(r.servers[0]?.status, 'restarted-launchd');
++  assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 1);
++  assert.deepEqual(r.signals, []);
++  assert.deepEqual(r.spawns, []);
++});
++
++test('registry and discovered entries for the launchd board kickstart once and leave the updated board running', async t => {
++  const r = await restartFixture(t, { keepup: 'matching', launchdPid: 880002, stalePid: true, discovered: true });
++  assert.ok(r.discoveryHealthCalls > 0, 'the second work item must come from discovery');
++  assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 1);
++  assert.deepEqual(r.servers.map(server => server.status), ['restarted-launchd']);
 +  assert.deepEqual(r.signals, []);
 +  assert.deepEqual(r.spawns, []);
 +});
@@ -610,14 +668,14 @@ index ddec0afc..792838e1 100644
    await ensureConfigDirSecure(dir, { fs, uid });
    const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
 diff --git a/tools/server-restart.mjs b/tools/server-restart.mjs
-index edb3aabc..e1430cf0 100644
+index edb3aabc..50777896 100644
 --- a/tools/server-restart.mjs
 +++ b/tools/server-restart.mjs
 @@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
  import { promisify } from 'node:util';
  import { boardFile, safeEnvSubset, serverMode } from './watch-cli.mjs';
  import { discoverRunningServers } from './server-discovery.mjs';
-+import { defaultIsPortFree } from './board-keepalive.mjs';
++import { defaultIsPortFree, readBoardIdentity } from './board-keepalive.mjs';
  
  export { safeEnvSubset, serverMode };
  export {
@@ -629,7 +687,23 @@ index edb3aabc..e1430cf0 100644
  } = {}) {
    const emit = line => {
      const text = line.endsWith('\n') ? line : `${line}\n`;
-@@ -891,6 +893,45 @@ export async function restartRegisteredServers({
+@@ -816,6 +818,7 @@ export async function restartRegisteredServers({
+   const locked = await withRestartLock(installRoot, async () => {
+   const pathEnv = registryEnv(env, home);
+   const boardPath = boardFile(pathEnv, home);
++  const identity = await readBoardIdentity({ dir: path.dirname(boardPath), fs });
+   const remotePath = remoteServerFile(pathEnv, home);
+   const registryEntries = [
+     await readKind(boardPath, 'board'),
+@@ -880,6 +883,7 @@ export async function restartRegisteredServers({
+     } catch { /* no url */ }
+   };
+ 
++  let launchdKicked = false;
+   for (const { kind, file, record, fromDiscovery } of workByPid.values()) {
+     const label = kind === 'board' ? 'board' : 'remote server';
+     const hadTerminal = record.mode === 'terminal' || record.modeFromTty === true;
+@@ -891,6 +895,50 @@ export async function restartRegisteredServers({
        continue;
      }
  
@@ -640,18 +714,23 @@ index edb3aabc..e1430cf0 100644
 +      const uid = typeof getuid === 'function' ? getuid() : process.getuid();
 +      const target = `gui/${uid}/com.project-swarm.board`;
 +      let loaded = false;
++      let launchdPid = null;
 +      let available = true;
 +      try {
 +        const { stdout } = await execFileImpl('launchctl', ['print', target], { timeout: 2000 });
++        const pidMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/m.exec(String(stdout));
++        launchdPid = pidMatch ? Number(pidMatch[1]) : null;
 +        loaded = /^\s*state\s*=\s*running\s*$/m.test(String(stdout))
-+          && /^\s*pid\s*=\s*[1-9]\d*\s*$/m.test(String(stdout));
++          && launchdPid !== null;
 +      } catch (error) {
 +        // Missing/unsupported launchctl keeps the existing platform fallback.
 +        available = !['ENOENT', 'ENOSYS', 'ENOTSUP'].includes(error?.code);
 +      }
-+      if (loaded) {
++      if (loaded && ((identity && identity.port === record.port) || launchdPid === record.pid)) {
++        if (launchdKicked) continue;
 +        const from = record.version ?? null;
 +        const port = record.port;
++        launchdKicked = true;
 +        try {
 +          await execFileImpl('launchctl', ['kickstart', '-k', target], { timeout: stopTimeoutMs });
 +          const confirm = await pollNewVersion(record, targetVersion, { timeoutMs: stopTimeoutMs, sleep, fetchImpl });
@@ -664,7 +743,7 @@ index edb3aabc..e1430cf0 100644
 +        }
 +        continue;
 +      }
-+      if (available && !(await defaultIsPortFree(record.port))) {
++      if (!loaded && available && !(await defaultIsPortFree(record.port))) {
 +        const hint = `launchctl bootstrap gui/${uid} ${shellQuote(defaultLaunchdBoardPlistPath(home))}`;
 +        emit(`board launchd job is not loaded; port ${record.port} is busy. Run: ${hint} (or swarm watch --all --keep-up)`);
 +        servers.push({ kind: 'board', from: record.version ?? null, to: targetVersion, port: record.port, status: 'launchd-not-loaded' });

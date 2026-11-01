@@ -25,5 +25,20 @@
     "port": 51058,
     "version": "1.167.33"
   },
-  "update_launchd": "unit-tested kickstart/no-spawn; the 1.167.34 install will exercise it live"
+  "update_launchd": "unit-tested kickstart/no-spawn; the 1.167.34 install will exercise it live",
+  "full_suite_after_owner_match": {
+    "tests": 7672,
+    "pass": 7641,
+    "fail": 0,
+    "skipped": 22,
+    "todo": 9,
+    "duration_ms": 229944
+  },
+  "focused_after_owner_match": {
+    "tests": 54,
+    "pass": 54,
+    "fail": 0
+  },
+  "blocker_fix": "launchd restart only when identity.port matches record.port or launchctl pid matches record.pid; once-per-call kickstart guard; duplicate launchd items skipped; unloaded busy-port skip only when !loaded",
+  "delta_review_of": "188c2fb9 fail (stray lock and double kickstart); fixed in 4ae2e783"
 }

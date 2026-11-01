@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9tin1delta",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 1 delta review after the Opus blocker fix",
+      "prompt": "Delta review of train 9 tin 1 (one board owner) after the blocker you found in the first review (head 188c2fb9, verdict fail). The fixed combined diff is in context at coordination/review/t9-tin1.diff; evidence is in t9-tin1-evidence.json. Full suite after the fix: 7672 tests, 7641 pass, 0 fail; focused 54/54.\n\nThe blocker was: the launchd restart branch in tools/server-restart.mjs was taken for every old-version board work item whenever the plist existed and `launchctl print` reported running, without tying the record to the launchd job or limiting kickstart to once. That could kickstart launchd for a stray board on another port, poll the wrong port and report failed, and double-kickstart when the registry and discovery both named the board (killing the just-updated board).\n\nThe fix (4ae2e783): read the keep-up identity once per call; parse the launchd pid; take the launchd path only when identity.port === record.port OR launchdPid === record.pid; a per-call `launchdKicked` guard runs kickstart at most once and skips duplicate launchd items; the launchd-not-loaded busy-port skip now requires !loaded, so a stray board falls through to the normal manual/terminal path. Tests added: stray record on another port => zero kickstarts and the manual/terminal path; registry + discovered board => exactly one kickstart; stale record pid with matching identity port => one kickstart; existing launchd tests kept.\n\nAlso re-check the earlier followups: (a) boardAnswers probes token-free /api/health and no longer validates the token it prints; (b) success is confirmed only by the version at record.port, the health pid is ignored; (c) the unloaded-job busy-port check. Say whether each is now addressed or remains a followup; only real blockers fail the bar. Re-check the watch --all reuse path and the full diff for regressions. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-tin1-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-tin1.diff",
+        "coordination/review/t9-tin1-evidence.json",
+        "tools/board-keepalive.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tests/one-board-owner.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-tin1-review.json"
+      ],
+      "resultFile": "coordination/review/t9-tin1-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}

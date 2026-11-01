@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-launchd-owner-match",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 1 Opus blocker: launchd restart must match the launchd board and run once",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Opus found a blocker in train 9 tin 1 (tools/server-restart.mjs around the launchd branch ~893): the branch is taken for EVERY old-version board work item (registry or discovered) when the plist exists and `launchctl print` reports running with any pid. It never checks that the record is the launchd board, and it can kickstart more than once per update. Consequences: a stray pre-1.167.34 board in board.json gets the launchd job kickstarted, pollNewVersion polls the stray port and reports failed; registry + discovered board items double-kickstart and kill the just-updated board; a terminal board on another port gets its 'press Ctrl-C' guidance replaced by a launchd restart.\\n\\nFix:\\n1. Import readBoardIdentity from './board-keepalive.mjs' (fs and boardFile are already available; boardPath is computed in restartRegisteredServers). Compute the keep-up identity once per call: `const identity = await readBoardIdentity({ dir: path.dirname(boardPath), fs });`.\n2. In the launchd branch, parse the pid from `launchctl print` into a number (not just a regex existence check). Treat the work item as the launchd board only when `(identity && identity.port === record.port) || launchdPid === record.pid`. Only then run the launchd path; every other board item falls through to the existing terminal/isAutoRestartable/pid-ownership/manual/discovery logic exactly as before.\\n3. Add a per-call `launchdKicked` flag. Run kickstart at most once. If a second work item is also identified as the launchd board after a kick, skip it (continue) instead of restarting it again or falling through to a manual restart. A stray/non-launchd board must still take the manual or terminal path.\\n4. Keep the unloaded-job busy-port skip and the remote path as they are. Keep the kickstart + pollNewVersion + status semantics.\\n5. Tests in tests/one-board-owner.test.mjs:\\n   - stray record on a port different from the keep-up identity (identity file present, launchd loaded, launchd pid different from record.pid): zero kickstart calls; the old manual or terminal path runs as before (assert kill/spawn or the terminal guidance).\\n   - registry record + a discovered board entry (simulate via the existing execFileImpl/discovery seams): exactly one kickstart call, no manual restart of the launchd board, and the just-updated board is not killed by a second item.\\n   - launchd board identified by a matching identity port but a stale record pid: still kickstarted once.\\n   - Keep every existing launchd test green.\\n\\nVerify: node --import ./tests/_isolate-config.mjs --test tests/one-board-owner.test.mjs tests/board-keepalive.test.mjs tests/restart-any-server.test.mjs tests/server-restart-round3.test.mjs -> all pass. Do not start a real board; use stubs/temp dirs.",
+      "context": [
+        "tools/server-restart.mjs",
+        "tools/board-keepalive.mjs",
+        "tools/watch-cli.mjs",
+        "tests/one-board-owner.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/server-restart-round3.test.mjs"
+      ],
+      "outputs": [
+        "tools/server-restart.mjs",
+        "tests/one-board-owner.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-page.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/fix-1167-13.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/update-pending-round3.test.mjs"
+      ],
+      "ignoreTestsReason": "launchd owner-match fix; focused restart/reuse tests run here, full suite before merge",
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-launchd-owner-match",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/one-board-owner.test.mjs",
+        "tests/board-keepalive.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/server-restart-round3.test.mjs"
+      ]
+    }
+  ]
+}
