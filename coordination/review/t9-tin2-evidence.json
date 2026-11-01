@@ -1,0 +1,71 @@
+{
+ "tin": "train 9 tin 2 - one source for all counts",
+ "base": "df30c768 (1.167.34)",
+ "head": "f86ab4f4dae180a8733924c3560107add62ca1c3",
+ "version": "1.167.35",
+ "full_suite": {
+  "tests": 7678,
+  "pass": 7647,
+  "fail": 0,
+  "skipped": 22,
+  "todo": 9,
+  "duration_ms": 464350
+ },
+ "focused": {
+  "tests": 62,
+  "pass": 62,
+  "fail": 0,
+  "duration_ms": 8299
+ },
+ "load_flakes": {
+  "note": "An earlier full-suite run under high machine load (load average 6-12 from unrelated apps) failed only three load-sensitive tests; each passes isolated on the same head.",
+  "tests": [
+   {
+    "id": "memory budget: 120 snapshot revisions keep one snapshot and bounded heap",
+    "isolated": "pass",
+    "detail": "maxHeap 100.0 MiB, retained growth 0.30 MiB, 121 builds, 126 s"
+   },
+   {
+    "id": "nine-project server stays below 5% CPU while polled every five seconds",
+    "isolated": "pass",
+    "detail": "1.59% CPU, max poll 9.3 ms, 45 s"
+   },
+   {
+    "id": "STRESS_ROUNDS=1 STRESS_CONCURRENCY=4 test:stress still passes",
+    "isolated": "pass",
+    "detail": "1 round passed in 65.9 s"
+   }
+  ]
+ },
+ "live_parity": {
+  "source": "live /api/board payload for project-swarm plus its full ledger",
+  "hive_card": {
+   "total": 407,
+   "done": 230,
+   "percentDone": 57,
+   "ready": 15,
+   "blocked": 102,
+   "review": 5,
+   "todo": 61,
+   "cancelled": 13,
+   "needsYou": 8
+  },
+  "cockpit_counts": {
+   "total": 407,
+   "done": 230,
+   "percentDone": 57,
+   "ready": 15,
+   "blocked": 102,
+   "review": 5,
+   "todo": 61,
+   "cancelled": 13,
+   "needsYou": 8
+  },
+  "equal": true,
+  "old_pair": "Hive 408 tickets / 58% / 8 need you vs Cockpit 407 / 57% / 5 need you; cockpit ready 70 from the stripped ledger"
+ },
+ "tin1_grade": {
+  "hive_overall": 4,
+  "cockpit_overall": 4
+ }
+}
