@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9tin2delta",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 2 delta review after the Cockpit ready-set blocker fix",
+      "prompt": "Delta review of train 9 tin 2 (one source for all counts) after your fail review at head f86ab4f4 (score 6, one blocker). The fixed delta is in context at coordination/review/t9-tin2-delta.diff; the previous review is at coordination/review/t9-tin2-review.json; evidence is in t9-tin2-evidence.json. Full suite after the fix: 7679 tests, 7648 pass, 0 fail, 22 skipped, 9 todo; focused 45/45.\n\nThe blocker was: the Cockpit headline/tiles used canonical server counts, but its ready column, NEXT UP card and '+N more' overflow derived readiness from the stripped commandCenterLedger (no dependsOn/type), so dependency-blocked todo tickets rendered as ready and as NEXT UP next to the correct ready tile.\n\nThe fix (527a34a5):\n- buildProjectCockpit now returns readyIds from the board card's dependency-aware next.items (the same readyTickets set as counts.ready), or null when absent.\n- cc-cockpit-mount projects project.readyIds into a readyFn and passes it to cockpitLedgerRows and renderReadyEmptyState, so the ready rows, NEXT UP and the overflow count use the server's dependency-aware set. The old readyTickets fallback remains only when readyIds is absent.\n- headerCounters' no-counts fallback no longer guesses need-you from review + open human statuses; it uses project.card.blocked.needYou when finite, otherwise 0, and keeps preferring project.total/project.done.\n- Tests: cc-cockpit-mount has a new render test with a stripped ledger (R-1 ready, T-1 todo with no dependsOn), readyIds ['R-1'], counts 9/3/7: it asserts NEXT UP 1/1 is R-1, T-1 is absent from the left ready column, and the header shows 9/3/7. The counts-win test now makes counts differ from the stripped rows and asserts the counts source. The Hive DOM fixture now carries a realistic counts object, so it exercises the canonical path.\n\nRe-check the blocker and also say whether each earlier followup is now addressed or remains: (a) counts-win test could not tell sources apart — addressed; (b) cross-page parity test is stub-vs-stub and no board-data integration test — remains unless you find it addressed; (c) Hive fixture had no counts — addressed; (d) no Cockpit DOM render test with project.counts — addressed by the new test (judge whether it is enough); (e) legacy status-guess need-you fallback — addressed; (f) Hive panel totals cover more projects than the 10-project list shows — remains. Only real blockers fail the bar. Re-check the whole delta for regressions: does any path still derive readiness from the stripped ledger (rows, NEXT UP, overflow, empty state, active row)? Does readyIds match counts.ready when card.next.items is present? Does a payload without readyIds still behave as before? Are the new tests real behavior rather than stubs? Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-tin2-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-tin2-delta.diff",
+        "coordination/review/t9-tin2-review.json",
+        "coordination/review/t9-tin2-evidence.json",
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-lists.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-tin2-review.json"
+      ],
+      "resultFile": "coordination/review/t9-tin2-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}
