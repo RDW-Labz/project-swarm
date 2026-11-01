@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.35
+
+Train 9, tin 2: one source for all counts.
+- The Command Center now computes ticket counts once on the server from the full ledger: one live set (human tickets included; cancelled, proposed and superseded left out), one done count and percent, and one dependency-aware ready count. The Hive cards and panels and the Cockpit header, NOW card, ticket stack and footer render those same numbers; the cockpit no longer guesses needs-you from ticket statuses or counts every todo+ready as ready;
+- needs-you comes from the owner inbox on both pages (card.blocked.needYou); the snapshot exposes board totals and live patches recompute them, so counts cannot drift between a full rebuild and a change patch;
+- Tests: canonical counts over human/cancelled/proposed/superseded and dependency-aware ready, Hive/Cockpit parity on one fixture, stripped-ledger payloads, and full-rebuild vs patch totals;
+- Version 1.167.35.
+
 ## 1.167.34
 
 Train 9, tin 1: one board owner.
