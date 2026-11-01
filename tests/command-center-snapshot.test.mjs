@@ -78,20 +78,36 @@ test('buildCommandCenterSnapshot maps labelled stats and project cards', () => {
   assert.ok(alpha.asks);
   assert.ok(alpha.out);
   assert.ok(alpha.fails);
-  assert.equal(alpha.meter.value, 40);
+  assert.equal(alpha.meter.value, 50);
 });
 
-test('project cards carry ledger counts by status for the Hive', () => {
+test('project cards carry canonical counts from board counts, not byStatus alone', () => {
   const board = fakeBoardPayload();
-  board.projects[0].tickets.byStatus = { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, proposed: 9 };
+  board.projects[0].counts = {
+    total: 408, done: 237, ready: 15, review: 12, blocked: 8, todo: 136,
+    cancelled: 3, proposed: 2, superseded: 1, remaining: 171, percentDone: 58, counted: 408,
+  };
+  board.projects[0].tickets.byStatus = { done: 1, ready: 70, blocked: 1, review: 1, cancelled: 1, proposed: 9 };
+  board.projects[0].card.blocked.needYou = 8;
   const snap = buildCommandCenterSnapshot(board);
   const alpha = snap.projects.find(p => p.id === 'alpha');
-  assert.deepEqual(alpha.ticketCounts, {
-    total: 6, done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, remaining: 3,
-    source: 'projects[0].tickets.byStatus',
-  });
+  assert.equal(alpha.ticketCounts.total, 408);
+  assert.equal(alpha.ticketCounts.ready, 15);
+  assert.equal(alpha.ticketCounts.needsYou, 8);
+  assert.equal(alpha.ticketCounts.percentDone, 58);
+  assert.equal(alpha.ticketCounts.source, 'projects[0].counts');
+  assert.equal(snap.totals.tickets, 408);
+  assert.equal(snap.totals.needsYou, 8);
+});
+
+test('project cards fall back to byStatus when counts and ledger rows are absent', () => {
+  const board = fakeBoardPayload();
+  delete board.projects[1].ledger;
+  board.projects[1].tickets.byStatus = { done: 1, ready: 2, todo: 1 };
+  const snap = buildCommandCenterSnapshot(board);
   const beta = snap.projects.find(p => p.id === 'beta');
-  assert.equal(beta.ticketCounts, undefined, 'no counts: no field, not zeros');
+  assert.equal(beta.ticketCounts.total, 4);
+  assert.equal(beta.ticketCounts.source, 'projects[1].tickets.byStatus');
 });
 
 test('hive extras: completions per hour, session events, lanes and pull requests', () => {

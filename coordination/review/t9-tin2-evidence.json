@@ -1,0 +1,43 @@
+{
+ "tin": "train 9 tin 2 - one source for all counts (post-review blocker fix)",
+ "base": "df30c768 (1.167.34)",
+ "previous_review": {
+  "head": "f86ab4f4dae180a8733924c3560107add62ca1c3",
+  "verdict": "fail",
+  "score": 6,
+  "blocker": "Cockpit ready column, NEXT UP and overflow derived readiness from the stripped commandCenterLedger (no dependsOn), so dependency-blocked todos appeared ready next to the correct ready tile."
+ },
+ "blocker_fix_commit": "527a34a52e9f5697d338784607ec0a692edfe238",
+ "head": "527a34a52e9f5697d338784607ec0a692edfe238",
+ "version": "1.167.35",
+ "full_suite": {
+  "tests": 7679,
+  "pass": 7648,
+  "fail": 0,
+  "skipped": 22,
+  "todo": 9,
+  "duration_ms": 442437
+ },
+ "focused": {
+  "tests": 45,
+  "pass": 45,
+  "fail": 0,
+  "duration_ms": 3550
+ },
+ "test_quality": {
+  "counts_win": "strengthened so counts differ from the stripped rows and the source field is asserted",
+  "cockpit": "new render test: readyIds [R-1], todo T-1 with no dependsOn in rows, header 9/3/7 from project.counts; NEXT UP 1 / 1 is R-1 and T-1 is absent from the left column",
+  "hive": "proj-a now carries a realistic counts object so the DOM test exercises the canonical counts path"
+ },
+ "host_load_flakes": {
+  "note": "Two earlier full-suite runs on this loaded host (load average 5-15 from unrelated apps) failed only load-sensitive tests; each passes isolated on this code.",
+  "tests": [
+   "memory budget: 120 snapshot revisions keep one snapshot and bounded heap (passes isolated: maxHeap 100 MiB, retained growth 0.30 MiB)",
+   "cancelling four live CLI processes closes them and never launches queued workers (passes isolated 1/1)"
+  ]
+ },
+ "tin1_grade": {
+  "hive_overall": 4,
+  "cockpit_overall": 4
+ }
+}

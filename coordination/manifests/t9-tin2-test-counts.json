@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-tin2-test-counts",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable.\n\nTrain 9 tin 2 (one source for all counts) is integrated on this branch. The Command Center now derives project ticket counts once from the ledger (tools/ticket-counts.mjs) and both the Hive and Cockpit render those counts. Two existing Hive tests in tests/cc-hive-mount.test.mjs still encode the old divergent counts and fail in the full suite. Update ONLY those two tests to the canonical ledger-derived values; do not change production code.\n\nFixture boardFixture in that file: proj-a ledger has 4 tickets (T-1 done 30 min ago, T-2 done 5 h ago, T-3 review, T-4 blocked); proj-b ledger has 4 tickets, all done (check the fixture). The canonical counts for proj-a are total 4, done 2, blocked 1, review 1, ready 0, cancelled 0, failed 0, percentDone 50; board totals: tickets in the ledger 8, tickets left to do 2, done 6, ready to start 0, waiting on others 1, in review 1, done per project Alpha 50% and Beta 100%.\n\nTest 'Hive shows four labelled counters...': change the assertion matching the text tickets7 to tickets4 and its message to 'tickets total is the canonical live count from the ledger'; change the assertion matching done2 of 6 to done2 of 4; change the assertion matching 33% to 50%. Keep the other assertions and the beta expectations.\n\nTest 'Hive panels read the ledger...': change the assertion matching Alpha followed by 33% to Alpha followed by 50%; change the assertion matching 'tickets in the ledger' followed by 12 to the same text followed by 8; change the assertion matching 'tickets left to do' followed by 4 to the same text followed by 2. Keep the rest.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/cc-hive-mount.test.mjs -> all pass. Do not edit .swarm/, coordination/, or production files.",
+      "context": [
+        "tests/cc-hive-mount.test.mjs",
+        "tools/ticket-counts.mjs",
+        "tools/command-center-snapshot.mjs"
+      ],
+      "outputs": [
+        "tests/cc-hive-mount.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-tin2-test-counts",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cc-hive-mount.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Board /api/board payload → Command Center snapshot and per-project cockpit data.
 
+import { ticketCountsOf } from './ticket-counts.mjs';
+import { readyTickets } from './tickets.mjs';
+
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 }
@@ -33,6 +36,135 @@ function needsYouTotal(projects) {
   return any ? total : null;
 }
 
+const EXCLUDED_FROM_TOTAL = new Set(['cancelled', 'proposed', 'superseded']);
+
+function shapeFromStatusMap(by, { readyFromStatusOnly = false, tickets = null } = {}) {
+  if (!by || typeof by !== 'object') return null;
+  const get = (k) => (num(by[k]) ?? 0);
+  let total = 0;
+  for (const [status, count] of Object.entries(by)) {
+    if (EXCLUDED_FROM_TOTAL.has(status)) continue;
+    total += num(count) ?? 0;
+  }
+  const done = get('done');
+  const cancelled = get('cancelled');
+  const proposed = get('proposed');
+  const superseded = get('superseded');
+  const review = get('review');
+  const blocked = get('blocked');
+  const todo = get('todo');
+  let ready = get('ready');
+  if (tickets && !readyFromStatusOnly) {
+    ready = readyTickets(tickets).length;
+  } else if (readyFromStatusOnly) {
+    ready = get('ready');
+  }
+  const remaining = Math.max(0, total - done);
+  const percentDone = total ? Math.round((100 * done) / total) : 0;
+  return {
+    total,
+    done,
+    ready,
+    blocked,
+    review,
+    todo,
+    cancelled,
+    proposed,
+    superseded,
+    remaining,
+    percentDone,
+    counted: total,
+  };
+}
+
+function ticketCountsFromLedgerRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const tickets = rows.filter(t => t && typeof t === 'object');
+  const by = {};
+  for (const t of tickets) if (t.status) by[t.status] = (by[t.status] ?? 0) + 1;
+  const hasDeps = tickets.some(t => Array.isArray(t.dependsOn) && t.dependsOn.length);
+  const hasType = tickets.some(t => t.type != null);
+  const shaped = shapeFromStatusMap(by, {
+    readyFromStatusOnly: !hasDeps && !hasType,
+    tickets: hasDeps || hasType ? tickets : null,
+  });
+  return shaped;
+}
+
+function mergeCardTicketCounts(p, index) {
+  const prefix = `projects[${index}]`;
+  let base = null;
+  let source = null;
+  if (p?.counts && typeof p.counts === 'object') {
+    base = { ...p.counts };
+    source = `${prefix}.counts`;
+  } else {
+    const fromLedger = ticketCountsFromLedgerRows(p?.ledger?.tickets);
+    if (fromLedger) {
+      base = fromLedger;
+      source = `${prefix}.ledger.tickets`;
+    } else if (p?.tickets?.byStatus && Object.keys(p.tickets.byStatus).length) {
+      base = shapeFromStatusMap(p.tickets.byStatus, { readyFromStatusOnly: true });
+      source = `${prefix}.tickets.byStatus`;
+    }
+  }
+  if (!base) return null;
+  const needYou = p.card?.blocked?.needYou;
+  return {
+    total: base.total,
+    done: base.done,
+    ready: base.ready,
+    blocked: base.blocked,
+    review: base.review,
+    todo: base.todo ?? 0,
+    cancelled: base.cancelled,
+    proposed: base.proposed ?? 0,
+    superseded: base.superseded ?? 0,
+    remaining: base.remaining,
+    counted: base.counted ?? base.total,
+    percentDone: base.percentDone ?? (base.total ? Math.round((100 * base.done) / base.total) : 0),
+    ...(typeof needYou === 'number' && Number.isFinite(needYou) ? { needsYou: needYou } : {}),
+    source,
+  };
+}
+
+function snapshotTotals(cards) {
+  let tickets = 0;
+  let done = 0;
+  let ready = 0;
+  let review = 0;
+  let blocked = 0;
+  let todo = 0;
+  let cancelled = 0;
+  let needsYou = 0;
+  let any = false;
+  for (const card of cards) {
+    const c = card.ticketCounts;
+    if (!c || num(c.total) === null) continue;
+    any = true;
+    tickets += c.total;
+    done += c.done ?? 0;
+    ready += c.ready ?? 0;
+    review += c.review ?? 0;
+    blocked += c.blocked ?? 0;
+    todo += c.todo ?? 0;
+    cancelled += c.cancelled ?? 0;
+    if (typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)) needsYou += c.needsYou;
+  }
+  if (!any) return null;
+  return {
+    tickets,
+    done,
+    ready,
+    review,
+    blocked,
+    todo,
+    cancelled,
+    percentDone: tickets ? Math.round((100 * done) / tickets) : 0,
+    needsYou,
+  };
+}
+
 function buildProjectCard(p, index) {
   const prefix = `projects[${index}]`;
   const card = {
@@ -44,10 +176,17 @@ function buildProjectCard(p, index) {
   if (live) card.liveAgents = live;
   const need = field('Needs you', p.card?.blocked?.needYou, 'count', `${prefix}.card.blocked.needYou`, 'Inbox items waiting for the owner on this project.');
   if (need) card.needsYou = need;
-  const overall = p.progress?.overall;
-  if (typeof overall === 'number' && Number.isFinite(overall)) {
-    card.percentDone = textField('Done', `${Math.round(overall)}%`, `${prefix}.progress.overall`, 'Overall build progress percent from the project ledger.');
-    card.meter = { label: 'done', value: Math.round(overall), source: `${prefix}.progress.overall` };
+  const ticketCountShape = mergeCardTicketCounts(p, index);
+  if (ticketCountShape) {
+    const pct = ticketCountShape.percentDone;
+    card.percentDone = textField('Done', `${Math.round(pct)}%`, `${ticketCountShape.source}.percentDone`, 'Percent of live ledger tickets marked done.');
+    card.meter = { label: 'done', value: Math.round(pct), source: `${ticketCountShape.source}.percentDone` };
+  } else {
+    const overall = p.progress?.overall;
+    if (typeof overall === 'number' && Number.isFinite(overall)) {
+      card.percentDone = textField('Done', `${Math.round(overall)}%`, `${prefix}.progress.overall`, 'Overall build progress percent from the project ledger.');
+      card.meter = { label: 'done', value: Math.round(overall), source: `${prefix}.progress.overall` };
+    }
   }
   const building = p.card?.now?.buildingTickets;
   if (typeof building === 'number' && Number.isFinite(building)) {
@@ -68,29 +207,12 @@ function buildProjectCard(p, index) {
   if (typeof fails === 'number' && Number.isFinite(fails)) {
     card.fails = textField('Fails', String(fails), `${prefix}.tickets.byStatus.failed`, 'Ledger tickets in failed status.');
   }
-  const counts = ticketCounts(p);
-  if (counts) card.ticketCounts = { ...counts, source: `${prefix}.tickets.byStatus` };
+  if (ticketCountShape) card.ticketCounts = ticketCountShape;
   return card;
 }
 
 const HOUR_MS = 3600000;
 const DONE_AT_KEYS = ['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'];
-
-/** Ticket counts by status for the Hive card and panels: the board's byStatus map, else the ledger rows. Null when neither exists. */
-function ticketCounts(p) {
-  let by = p?.tickets?.byStatus;
-  if (!by || typeof by !== 'object' || !Object.keys(by).length) {
-    const rows = Array.isArray(p?.ledger?.tickets) ? p.ledger.tickets : [];
-    if (!rows.length) return null;
-    by = {};
-    for (const t of rows) if (t?.status) by[t.status] = (by[t.status] ?? 0) + 1;
-  }
-  const get = (k) => (num(by[k]) ?? 0);
-  const total = Object.entries(by).reduce((a, [k, v]) => a + (k === 'proposed' ? 0 : (num(v) ?? 0)), 0);
-  const cancelled = get('cancelled');
-  const done = get('done');
-  return { total, done, ready: get('ready'), blocked: get('blocked'), review: get('review'), cancelled, remaining: Math.max(0, total - done - cancelled) };
-}
 
 function doneAtMs(t) {
   for (const k of DONE_AT_KEYS) {
@@ -197,15 +319,16 @@ export function buildCommandCenterSnapshot(board, options = {}) {
     if (!p || p.parentId) continue;
     cards.push(buildProjectCard(p, i));
   }
+  const totals = snapshotTotals(cards);
   const nowMs = Number.isFinite(Date.parse(at)) ? Date.parse(at) : (options.now ?? Date.now());
-  return { at, stats, projects: cards, hive: buildHiveExtras(board, projects, nowMs) };
+  return { at, stats, projects: cards, totals, hive: buildHiveExtras(board, projects, nowMs) };
 }
 
 /** Update only changed cards; aggregates are cheap reductions over the cached rows. */
 export function patchCommandCenterSnapshot(snapshot, board, ids) {
   const changed = new Set(ids);
   const projects = board.projects ?? [];
-  for (let i = 0; i < projects.length; i++) {
+  for (let i = 0; i < projects.length; i += 1) {
     const p = projects[i];
     if (!changed.has(p.id) || p.parentId) continue;
     const index = snapshot.projects.findIndex(card => card.id === p.id);
@@ -217,6 +340,7 @@ export function patchCommandCenterSnapshot(snapshot, board, ids) {
   if (snapshot.stats.agentsLive) snapshot.stats.agentsLive.value = board.machine?.agents?.total ?? 0;
   const needs = needsYouTotal(projects);
   if (needs !== null) snapshot.stats.needsYouCount = field('Needs you', needs, 'count', 'projects[].card.blocked.needYou', 'Owner inbox items summed across projects.');
+  snapshot.totals = snapshotTotals(snapshot.projects);
   snapshot.hive = buildHiveExtras(board, projects.filter(p => !p.parentId), Date.parse(board.at));
   return snapshot;
 }
@@ -233,14 +357,48 @@ function ledgerFromProject(project) {
   if (project?.tickets?.byStatus) {
     for (const [status, count] of Object.entries(project.tickets.byStatus)) {
       if (!count || status === 'proposed') continue;
-      // Ready/blocked card rows are only a partial ledger. Fill the remaining
-      // statuses too, so a newly completed ticket appears in the cockpit.
       const present = tickets.filter(ticket => ticket.status === status).length;
       for (let i = present; i < count; i += 1) tickets.push({ id: `${status}-${i}`, title: status, status });
     }
   }
   const scope = project?.progress?.scope ?? project?.progress?.stages ? { stages: project.progress.stages } : undefined;
   return { tickets, ...(scope ? { scope } : {}) };
+}
+
+function cockpitCounts(project) {
+  const cardShape = mergeCardTicketCounts(project, 0);
+  if (cardShape) {
+    return {
+      total: cardShape.total,
+      done: cardShape.done,
+      ready: cardShape.ready,
+      blocked: cardShape.blocked,
+      review: cardShape.review,
+      todo: cardShape.todo ?? 0,
+      cancelled: cardShape.cancelled,
+      proposed: cardShape.proposed ?? 0,
+      superseded: cardShape.superseded ?? 0,
+      remaining: cardShape.remaining,
+      counted: cardShape.counted,
+      percentDone: cardShape.percentDone,
+      needsYou: cardShape.needsYou ?? (typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0),
+      source: cardShape.source,
+    };
+  }
+  const ledger = ledgerFromProject(project);
+  const fromLedger = ticketCountsFromLedgerRows(ledger.tickets);
+  if (fromLedger) {
+    return {
+      ...fromLedger,
+      needsYou: typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0,
+      source: 'ledger.tickets',
+    };
+  }
+  return {
+    ...ticketCountsOf(null),
+    needsYou: typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0,
+    source: 'empty',
+  };
 }
 
 function runStreamItems(project) {
@@ -263,9 +421,11 @@ export function buildProjectCockpit(board, projectId) {
   const project = (board?.projects ?? []).find(p => p && p.id === id);
   if (!project) return null;
   const ledger = ledgerFromProject(project);
-  const live = (ledger.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
-  const done = live.filter(t => t.status === 'done').length;
-  const total = live.length;
+  const counts = cockpitCounts(project);
+  const nextItems = project?.card?.next?.items;
+  const readyIds = Array.isArray(nextItems)
+    ? nextItems.map(item => item?.id).filter(id => id != null && String(id) !== '').map(String)
+    : null;
   return {
     id: project.id,
     name: project.name ?? null,
@@ -279,7 +439,12 @@ export function buildProjectCockpit(board, projectId) {
     progress: project.progress ?? null,
     stageRings: project.progress ?? null,
     runStream: runStreamItems(project),
-    done,
-    total,
+    counts,
+    readyIds,
+    done: counts.done,
+    total: counts.total,
+    percentDone: counts.percentDone,
   };
 }
+
+export { ticketCountsOf, mergeCardTicketCounts, snapshotTotals };
