@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-one-board-owner",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "train 9 first tin: one board owner across watch and update",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 9, tin 1: ONE BOARD OWNER. Today the launchd board runs on 51058 (identity file ~/.project-swarm/board-identity.json, plist ~/Library/LaunchAgents/com.project-swarm.board.plist). Two bugs: (a) plain `swarm watch --all` ignores that board and starts a second board on a new port (it also overwrites ~/.project-swarm/board.json; this just happened on 59811); (b) `swarm update` stops the launchd board and spawns a manual board instead of restarting the launchd job, so launchd then retries and conflicts.\n\nImplement:\n1. tools/board-keepalive.mjs: add an exported READ-ONLY `readBoardIdentity({ dir, fs, uid, warn } = {})` using the same trust rules as loadOrCreateBoardIdentity (no symlink, owned by uid, mode 0600, valid 48-hex token and port 1-65535). It returns { token, port } or null; it must never create or rewrite the identity file.\n2. tools/watch-cli.mjs: add an exported `findRunningBoard({ env = process.env, home, fetchImpl = fetch } = {})`. It must (i) read the identity beside boardFile(env) with readBoardIdentity and, when present, probe `http://127.0.0.1:<port>/?t=<token>` with the existing `boardAnswers` helper; if the board answers, return `${origin}/?t=${token}`; (ii) otherwise use the existing `readBoardFile({ env, fetchImpl })` (board.json) and return that URL if live. Return null when neither answers. In runWatchCommand's plain `opts.all` web-board path (the one after the keep-up/text/json/tui branches) call findRunningBoard BEFORE startBoardServer. When a board is found: write a clear message naming it as already running and printing the URL (e.g. 'Swarm Watch board (already running)\\n<url>\\nRead-only, on this machine only. This command is not a second board; Ctrl-C stops only this command.'), open it when opts.open, and return { stdout: '', exitCode: 0 } without starting a server, without waiting on server.done, and without writing board.json. Add an injectable `fetchImpl = fetch` and `open = openUrl` option to runWatchCommand for tests. Do not change the --keep-up branch (launchd itself uses it) or --text/--json.\n3. tools/server-restart.mjs: when restarting a board server record, if the launchd plist exists (defaultLaunchdBoardPlistPath / launchdBoardPlistExists) and the launchd job is loaded (run `launchctl print gui/<uid>/com.project-swarm.board`; parse `state = running` and `pid = N`), restart it by running `launchctl kickstart -k gui/<uid>/com.project-swarm.board` instead of SIGTERM + spawn. Wait (bounded, e.g. 15 s) for the board URL/port to answer again, then report `{ kind: 'board', from, to: targetVersion, port, status: 'restarted-launchd' }` and emit a line like 'board restarted through launchd: <from> to <to> (port <port>)'. Do not signal or spawn the record pid. If the plist exists but the job is NOT loaded, do not start a second board on a busy port: skip with a clear hint (`launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/com.project-swarm.board.plist` or `swarm watch --all --keep-up`) and status 'launchd-not-loaded'; if the port is free a manual restart may proceed as before. Non-macOS/platform errors and no-plist behavior stay exactly as today. Keep the remote server path unchanged. Make the launchd probe/kickstart injectable through the existing execFileImpl/getuid/launchdBoardPlistExists test seams and add platform = process.platform if needed.\n4. Tests in a NEW tests/one-board-owner.test.mjs (plus updates to existing tests only if they encode the old behavior):\n   - watch --all with a live identity board: temp SWARM_BOARD_FILE dir, identity file mode 0600 with a valid token/port, stub fetchImpl returning the board shape; startBoard stub that fails if called; assert output contains the identity URL, startBoard not called, exit 0; with open:true assert open got the same URL.\n   - stale identity (fetch fails) and no board.json: startBoard is called once.\n   - live board.json only (no identity): the recorded URL is reused, no start.\n   - update/restart: follow the injection style of tests/restart-any-server.test.mjs and tests/server-restart-round3.test.mjs. Board record version old, background, port, url; launchd plist exists and `launchctl print` reports running pid; assert `launchctl kickstart -k gui/<uid>/com.project-swarm.board` is called, killImpl/spawnImpl are not called for the board, and the result status is restarted-launchd; plist exists but job not loaded: no manual board is spawned on the held port, status launchd-not-loaded, hint printed; no plist: the existing manual restart still runs.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/one-board-owner.test.mjs tests/board-keepalive.test.mjs tests/memory-fixes.test.mjs tests/restart-any-server.test.mjs tests/server-restart-round3.test.mjs tests/watch-leftovers.test.mjs -> all pass. Do not start any real board; tests use temp dirs and stubs.",
+      "context": [
+        "tools/board-keepalive.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tests/board-keepalive.test.mjs",
+        "tests/memory-fixes.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/board-keepalive.mjs",
+        "tools/watch-cli.mjs",
+        "tools/server-restart.mjs",
+        "tests/one-board-owner.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/board-page.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-phone.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/remote.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/fix-1167-13.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart-round4.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/swarm-watch-human-checklist-walkthrough.spec.mjs",
+        "tests/update-pending-round3.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "one-board-owner unit tests run here; full suite and browser suite before merge",
+      "timeoutMs": 3600000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-one-board-owner",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/one-board-owner.test.mjs",
+        "tests/board-keepalive.test.mjs",
+        "tests/memory-fixes.test.mjs",
+        "tests/restart-any-server.test.mjs",
+        "tests/server-restart-round3.test.mjs",
+        "tests/watch-leftovers.test.mjs"
+      ]
+    }
+  ]
+}

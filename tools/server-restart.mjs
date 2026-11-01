@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { boardFile, safeEnvSubset, serverMode } from './watch-cli.mjs';
 import { discoverRunningServers } from './server-discovery.mjs';
+import { defaultIsPortFree, readBoardIdentity } from './board-keepalive.mjs';
 
 export { safeEnvSubset, serverMode };
 export {
@@ -805,6 +806,7 @@ export async function restartRegisteredServers({
   killImpl = (pid, signal) => process.kill(pid, signal),
   launchdBoardPlistExists,
   getuid,
+  platform = process.platform,
 } = {}) {
   const emit = line => {
     const text = line.endsWith('\n') ? line : `${line}\n`;
@@ -816,6 +818,7 @@ export async function restartRegisteredServers({
   const locked = await withRestartLock(installRoot, async () => {
   const pathEnv = registryEnv(env, home);
   const boardPath = boardFile(pathEnv, home);
+  const identity = await readBoardIdentity({ dir: path.dirname(boardPath), fs });
   const remotePath = remoteServerFile(pathEnv, home);
   const registryEntries = [
     await readKind(boardPath, 'board'),
@@ -880,6 +883,7 @@ export async function restartRegisteredServers({
     } catch { /* no url */ }
   };
 
+  let launchdKicked = false;
   for (const { kind, file, record, fromDiscovery } of workByPid.values()) {
     const label = kind === 'board' ? 'board' : 'remote server';
     const hadTerminal = record.mode === 'terminal' || record.modeFromTty === true;
@@ -889,6 +893,50 @@ export async function restartRegisteredServers({
       emit(`${label} restart failed: invalid port ${record.port}${manual ? `; run by hand: ${manual}` : ''}`);
       servers.push({ kind, pid: record.pid, from: record.version, to: targetVersion, port: record.port, status: 'failed' });
       continue;
+    }
+
+    // launchd owns the lifecycle even when the registry still names an earlier pid.
+    // Never replace its job with a detached manual process.
+    if (kind === 'board' && platform === 'darwin' && record.version !== targetVersion
+      && (launchdBoardPlistExists ? launchdBoardPlistExists() : existsSync(defaultLaunchdBoardPlistPath(home)))) {
+      const uid = typeof getuid === 'function' ? getuid() : process.getuid();
+      const target = `gui/${uid}/com.project-swarm.board`;
+      let loaded = false;
+      let launchdPid = null;
+      let available = true;
+      try {
+        const { stdout } = await execFileImpl('launchctl', ['print', target], { timeout: 2000 });
+        const pidMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/m.exec(String(stdout));
+        launchdPid = pidMatch ? Number(pidMatch[1]) : null;
+        loaded = /^\s*state\s*=\s*running\s*$/m.test(String(stdout))
+          && launchdPid !== null;
+      } catch (error) {
+        // Missing/unsupported launchctl keeps the existing platform fallback.
+        available = !['ENOENT', 'ENOSYS', 'ENOTSUP'].includes(error?.code);
+      }
+      if (loaded && ((identity && identity.port === record.port) || launchdPid === record.pid)) {
+        if (launchdKicked) continue;
+        const from = record.version ?? null;
+        const port = record.port;
+        launchdKicked = true;
+        try {
+          await execFileImpl('launchctl', ['kickstart', '-k', target], { timeout: stopTimeoutMs });
+          const confirm = await pollNewVersion(record, targetVersion, { timeoutMs: stopTimeoutMs, sleep, fetchImpl });
+          if (!confirm.ok) throw new Error('board did not answer with the updated version');
+          emit(`board restarted through launchd: ${from ?? 'unknown'} to ${targetVersion} (port ${port})`);
+          servers.push({ kind: 'board', from, to: targetVersion, port, status: 'restarted-launchd' });
+        } catch (error) {
+          emit(`board restart through launchd failed: ${error.message}; try launchctl kickstart -k ${target}`);
+          servers.push({ kind: 'board', from, to: targetVersion, port, status: 'failed' });
+        }
+        continue;
+      }
+      if (!loaded && available && !(await defaultIsPortFree(record.port))) {
+        const hint = `launchctl bootstrap gui/${uid} ${shellQuote(defaultLaunchdBoardPlistPath(home))}`;
+        emit(`board launchd job is not loaded; port ${record.port} is busy. Run: ${hint} (or swarm watch --all --keep-up)`);
+        servers.push({ kind: 'board', from: record.version ?? null, to: targetVersion, port: record.port, status: 'launchd-not-loaded' });
+        continue;
+      }
     }
 
     const probe = pidAliveImpl === pidAlive ? pidProbe(record.pid) : (pidAliveImpl(record.pid) ? 'alive' : 'dead');

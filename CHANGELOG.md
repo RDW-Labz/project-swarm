@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.167.34
+
+Train 9, tin 1: one board owner.
+- swarm watch --all now finds the running keep-up board on its stable identity (port 51058) through the token-free loopback /api/health probe (or the board registry record), prints its link, opens it with --open, and exits instead of starting a second board on a new port. A stale identity, a non-watch health response or no board starts one board as before; the identity is read only and never repaired by discovery;
+- swarm update restarts a launchd-owned board with launchctl kickstart -k gui/<uid>/com.project-swarm.board and waits for the updated version, instead of spawning a detached manual board; if the launchd job is not loaded while its port is busy it skips with a bootstrap hint. The remote server restart path is unchanged;
+- Tests: read-only identity discovery, identity-first reuse, board.json fallback, stale identity, query-token rejection, health-only detection, launchd kickstart with no signal or spawn, unloaded-job skip, and the manual restart path; 55 focused tests;
+- Version 1.167.34.
+
 ## 1.167.33
 
 Hotfix: the Command Center scrolls again on Hive and Cockpit.
