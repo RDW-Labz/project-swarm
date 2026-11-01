@@ -13,7 +13,7 @@ import { findRunningBoard, runWatchCommand } from '../tools/watch-cli.mjs';
 
 const identity = { token: 'a'.repeat(48), port: 51058 };
 const identityUrl = `http://127.0.0.1:${identity.port}/?t=${identity.token}`;
-const boardResponse = () => ({ ok: true, json: async () => ({ projects: [], machine: { name: 'test' } }) });
+const boardResponse = () => ({ ok: true, json: async () => ({ ok: true, version: '1.0.0' }) });
 
 async function fixture(t) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'one-board-'));
@@ -203,6 +203,37 @@ async function watch(t, file, options = {}, args = ['--all']) {
   return { ...result, output: output.join('') };
 }
 
+test('watch --all reuses a healthy board when the board payload times out', async t => {
+  const { file } = await fixture(t);
+  await saveIdentity(file);
+  let starts = 0;
+  const probes = [];
+  const timeouts = [];
+  const signal = new AbortController().signal;
+  t.mock.method(AbortSignal, 'timeout', ms => { timeouts.push(ms); return signal; });
+  const result = await watch(t, file, {
+    fetchImpl: async (url, options) => {
+      probes.push({ url, options });
+      if (new URL(url).pathname === '/api/board') {
+        throw new DOMException('board payload timed out', 'TimeoutError');
+      }
+      return boardResponse();
+    },
+    startBoardServer: async () => {
+      starts += 1;
+      return { url: 'http://127.0.0.1:59811/?t=new', server: { done: Promise.resolve(), close() {} }, api: { async close() {} } };
+    },
+  });
+  assert.equal(starts, 0);
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.output.includes(identityUrl));
+  assert.deepEqual(probes.map(probe => probe.url), [`${new URL(identityUrl).origin}/api/health`]);
+  assert.equal(probes[0].options.headers, undefined);
+  assert.equal(probes[0].options.redirect, 'manual');
+  assert.equal(probes[0].options.signal, signal);
+  assert.deepEqual(timeouts, [3000]);
+});
+
 test('watch --all reuses the identity board before board.json and opens the same URL', async t => {
   const { file } = await fixture(t);
   const idFile = await saveIdentity(file);
@@ -212,10 +243,7 @@ test('watch --all reuses the identity board before board.json and opens the same
   const origin = new URL(identityUrl).origin;
   const result = await watch(t, file, {
     fetchImpl: async (url, options) => {
-      probes.push(url);
-      assert.equal(url, `${origin}/api/board`);
-      assert.equal(options.headers['x-watch-token'], identity.token);
-      assert.equal(options.redirect, 'manual');
+      probes.push({ url, headers: options.headers, redirect: options.redirect });
       return boardResponse();
     },
     open: url => opened.push(url),
@@ -225,13 +253,23 @@ test('watch --all reuses the identity board before board.json and opens the same
   assert.match(result.output, /already running/);
   assert.ok(result.output.includes(identityUrl));
   assert.deepEqual(opened, [identityUrl]);
-  assert.deepEqual(probes, [`${origin}/api/board`]);
+  assert.deepEqual(probes, [{ url: `${origin}/api/health`, headers: undefined, redirect: 'manual' }]);
   assert.equal(await fs.readFile(file, 'utf8'), json);
   assert.equal(await fs.readFile(idFile, 'utf8'), JSON.stringify(identity));
 });
 
-for (const auth of ['without a header', 'with a query token']) {
-  test(`a board answering only ${auth} is not reused and starts one board`, async t => {
+for (const [name, response] of [
+  ['404', () => ({ ok: false, status: 404, json: async () => ({ ok: true, version: '1.0.0' }) })],
+  ['HTML', () => ({ ok: true, json: async () => { throw new SyntaxError('Unexpected token <'); } })],
+  ['missing ok', () => ({ ok: true, json: async () => ({ version: '1.0.0' }) })],
+  ['missing version', () => ({ ok: true, json: async () => ({ ok: true }) })],
+  ['false ok', () => ({ ok: true, json: async () => ({ ok: false, version: '1.0.0' }) })],
+  ['truthy ok', () => ({ ok: true, json: async () => ({ ok: 1, version: '1.0.0' }) })],
+  ['non-string version', () => ({ ok: true, json: async () => ({ ok: true, version: 1 }) })],
+  ['null body', () => ({ ok: true, json: async () => null })],
+  ['board payload', () => ({ ok: true, json: async () => ({ projects: [], machine: { name: 'test' } }) })],
+]) {
+  test(`a health response with ${name} is not reused and starts one board`, async t => {
     const { file } = await fixture(t);
     await saveIdentity(file);
     let starts = 0;
@@ -239,10 +277,7 @@ for (const auth of ['without a header', 'with a query token']) {
     const result = await watch(t, file, {
       fetchImpl: async (url, options) => {
         probes.push({ url, headers: options.headers });
-        const answers = auth === 'without a header'
-          ? !options.headers?.['x-watch-token']
-          : new URL(url).searchParams.get('t') === identity.token;
-        return answers ? boardResponse() : { ok: false, status: 403 };
+        return response();
       },
       startBoardServer: async () => {
         starts += 1;
@@ -253,8 +288,8 @@ for (const auth of ['without a header', 'with a query token']) {
     assert.equal(result.exitCode, 0);
     assert.doesNotMatch(result.output, /already running/);
     assert.deepEqual(probes, [{
-      url: `${new URL(identityUrl).origin}/api/board`,
-      headers: { 'x-watch-token': identity.token },
+      url: `${new URL(identityUrl).origin}/api/health`,
+      headers: undefined,
     }]);
   });
 }
@@ -282,12 +317,18 @@ for (const stale of [false, true]) {
     const url = 'http://127.0.0.1:59811/?t=recorded';
     await writeRegistryRecord(file, { pid: process.pid, url });
     const json = await fs.readFile(file, 'utf8');
-    const result = await watch(t, file, { fetchImpl: async probe => {
+    const probes = [];
+    const result = await watch(t, file, { fetchImpl: async (probe, options) => {
+      probes.push({ url: probe, headers: options.headers, redirect: options.redirect });
       if (String(probe).includes(':51058/')) throw new Error('stale');
       return boardResponse();
     } });
     assert.equal(result.exitCode, 0);
     assert.ok(result.output.includes(url));
+    assert.deepEqual(probes, [
+      ...(stale ? [{ url: `${new URL(identityUrl).origin}/api/health`, headers: undefined, redirect: 'manual' }] : []),
+      { url: `${new URL(url).origin}/api/health`, headers: undefined, redirect: 'manual' },
+    ]);
     assert.equal(await fs.readFile(file, 'utf8'), json);
   });
 }
