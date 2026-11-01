@@ -29,6 +29,7 @@ async function fixture(t) {
 async function restartFixture(t, {
   loaded = true, plist = true, held = false, platform = 'darwin',
   printError, kickError, stalePid = false, defaultPlist = false,
+  launchdPid = 880001, keepup = null, mode = 'background', discovered = false,
 } = {}) {
   const f = await fixture(t);
   const socket = net.createServer();
@@ -38,10 +39,13 @@ async function restartFixture(t, {
   else await new Promise(resolve => socket.close(resolve));
   const record = {
     pid: 880001, version: '1.0.0', port, url: `http://127.0.0.1:${port}/?t=old`,
-    argv: ['watch', '--all'], cwd: f.home, env: {}, mode: 'background',
+    argv: ['watch', '--all'], cwd: f.home, env: {}, mode,
     explicitBackground: true, startedAt: new Date().toISOString(),
   };
   await writeRegistryRecord(f.file, record);
+  if (keepup) {
+    await saveIdentity(f.file, { ...identity, port: keepup === 'matching' ? port : (port === 51058 ? 51059 : 51058) });
+  }
   if (defaultPlist) {
     const plistFile = path.join(f.home, 'Library', 'LaunchAgents', 'com.project-swarm.board.plist');
     await fs.mkdir(path.dirname(plistFile), { recursive: true });
@@ -50,6 +54,8 @@ async function restartFixture(t, {
   const calls = [], signals = [], spawns = [], lines = [];
   let alive = !stalePid;
   let healthCalls = 0;
+  let kicked = false;
+  let discoveryHealthCalls = 0;
   const result = await restartRegisteredServers({
     ...f, targetVersion: '2.0.0', home: f.home, env: { HOME: f.home },
     platform, getuid: () => 502, launchdBoardPlistExists: defaultPlist ? undefined : () => plist,
@@ -59,9 +65,21 @@ async function restartFixture(t, {
       if (cmd === 'launchctl' && args[0] === 'print') {
         if (printError) throw printError;
         if (!loaded) throw new Error('Could not find service');
-        return { stdout: 'state = running\n pid = 880001\n' };
+        return { stdout: `state = running\n pid = ${launchdPid}\n` };
       }
-      if (cmd === 'launchctl' && args[0] === 'kickstart' && kickError) throw kickError;
+      if (cmd === 'launchctl' && args[0] === 'kickstart') {
+        if (kickError) throw kickError;
+        kicked = true;
+      }
+      if (discovered) {
+        if (cmd === 'ps' && args[0] === '-axo') {
+          return { stdout: `880002 1 00:05 ${process.execPath} ${f.runner} watch --all\n` };
+        }
+        if (args.includes('cwd')) return { stdout: `p880002\ncwd\nn${f.home}\n` };
+        if (args.some(arg => String(arg).includes('LISTEN'))) return { stdout: `p880002\nn127.0.0.1:${port}\n` };
+        if (args.some(arg => String(arg).includes('tty'))) return { stdout: '??\n' };
+        if (cmd === 'readlink') return { stdout: `${f.home}\n` };
+      }
       return { stdout: '' };
     },
     pidAliveImpl: pid => (pid === record.pid && alive) || pid === 880002,
@@ -73,12 +91,16 @@ async function restartFixture(t, {
     },
     fetchImpl: async url => {
       assert.equal(url, `http://127.0.0.1:${port}/api/health`);
+      if (discovered && !kicked) {
+        discoveryHealthCalls += 1;
+        return { ok: true, json: async () => ({ version: '1.0.0', pid: 880002 }) };
+      }
       healthCalls += 1;
       // A successful kickstart can return before the old server stops answering.
       return { ok: true, json: async () => ({ version: healthCalls === 1 ? '1.0.0' : '2.0.0', pid: 880002 }) };
     },
   });
-  return { ...result, calls, signals, spawns, lines, port, healthCalls };
+  return { ...result, calls, signals, spawns, lines, port, healthCalls, discoveryHealthCalls };
 }
 
 test('update restarts the loaded launchd board through its job without signaling or spawning', async t => {
@@ -97,6 +119,42 @@ test('update restarts the loaded launchd board through its job without signaling
 test('launchd ownership survives a stale registry pid and uses the home-specific plist', async t => {
   const r = await restartFixture(t, { stalePid: true, defaultPlist: true });
   assert.equal(r.servers[0]?.status, 'restarted-launchd');
+  assert.deepEqual(r.signals, []);
+  assert.deepEqual(r.spawns, []);
+});
+
+for (const mode of ['background', 'terminal']) {
+  test(`a stray ${mode} board keeps its existing restart path when launchd owns another port`, async t => {
+    const r = await restartFixture(t, {
+      keepup: 'different', launchdPid: 880003, mode, held: mode === 'terminal',
+    });
+    assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 0);
+    if (mode === 'terminal') {
+      assert.equal(r.servers[0]?.status, 'terminal');
+      assert.ok(r.lines.some(line => /press Ctrl-C there and run swarm watch --all/.test(line)));
+      assert.deepEqual(r.signals, []);
+      assert.deepEqual(r.spawns, []);
+    } else {
+      assert.equal(r.servers[0]?.status, 'restarted');
+      assert.deepEqual(r.signals, [[880001, 'SIGTERM']]);
+      assert.equal(r.spawns.length, 1);
+    }
+  });
+}
+
+test('matching keep-up port identifies the launchd board despite a stale different registry pid', async t => {
+  const r = await restartFixture(t, { keepup: 'matching', launchdPid: 880003, stalePid: true });
+  assert.equal(r.servers[0]?.status, 'restarted-launchd');
+  assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 1);
+  assert.deepEqual(r.signals, []);
+  assert.deepEqual(r.spawns, []);
+});
+
+test('registry and discovered entries for the launchd board kickstart once and leave the updated board running', async t => {
+  const r = await restartFixture(t, { keepup: 'matching', launchdPid: 880002, stalePid: true, discovered: true });
+  assert.ok(r.discoveryHealthCalls > 0, 'the second work item must come from discovery');
+  assert.equal(r.calls.filter(c => c[0] === 'launchctl' && c[1] === 'kickstart').length, 1);
+  assert.deepEqual(r.servers.map(server => server.status), ['restarted-launchd']);
   assert.deepEqual(r.signals, []);
   assert.deepEqual(r.spawns, []);
 });

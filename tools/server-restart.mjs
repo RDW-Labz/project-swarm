@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { boardFile, safeEnvSubset, serverMode } from './watch-cli.mjs';
 import { discoverRunningServers } from './server-discovery.mjs';
-import { defaultIsPortFree } from './board-keepalive.mjs';
+import { defaultIsPortFree, readBoardIdentity } from './board-keepalive.mjs';
 
 export { safeEnvSubset, serverMode };
 export {
@@ -818,6 +818,7 @@ export async function restartRegisteredServers({
   const locked = await withRestartLock(installRoot, async () => {
   const pathEnv = registryEnv(env, home);
   const boardPath = boardFile(pathEnv, home);
+  const identity = await readBoardIdentity({ dir: path.dirname(boardPath), fs });
   const remotePath = remoteServerFile(pathEnv, home);
   const registryEntries = [
     await readKind(boardPath, 'board'),
@@ -882,6 +883,7 @@ export async function restartRegisteredServers({
     } catch { /* no url */ }
   };
 
+  let launchdKicked = false;
   for (const { kind, file, record, fromDiscovery } of workByPid.values()) {
     const label = kind === 'board' ? 'board' : 'remote server';
     const hadTerminal = record.mode === 'terminal' || record.modeFromTty === true;
@@ -900,18 +902,23 @@ export async function restartRegisteredServers({
       const uid = typeof getuid === 'function' ? getuid() : process.getuid();
       const target = `gui/${uid}/com.project-swarm.board`;
       let loaded = false;
+      let launchdPid = null;
       let available = true;
       try {
         const { stdout } = await execFileImpl('launchctl', ['print', target], { timeout: 2000 });
+        const pidMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/m.exec(String(stdout));
+        launchdPid = pidMatch ? Number(pidMatch[1]) : null;
         loaded = /^\s*state\s*=\s*running\s*$/m.test(String(stdout))
-          && /^\s*pid\s*=\s*[1-9]\d*\s*$/m.test(String(stdout));
+          && launchdPid !== null;
       } catch (error) {
         // Missing/unsupported launchctl keeps the existing platform fallback.
         available = !['ENOENT', 'ENOSYS', 'ENOTSUP'].includes(error?.code);
       }
-      if (loaded) {
+      if (loaded && ((identity && identity.port === record.port) || launchdPid === record.pid)) {
+        if (launchdKicked) continue;
         const from = record.version ?? null;
         const port = record.port;
+        launchdKicked = true;
         try {
           await execFileImpl('launchctl', ['kickstart', '-k', target], { timeout: stopTimeoutMs });
           const confirm = await pollNewVersion(record, targetVersion, { timeoutMs: stopTimeoutMs, sleep, fetchImpl });
@@ -924,7 +931,7 @@ export async function restartRegisteredServers({
         }
         continue;
       }
-      if (available && !(await defaultIsPortFree(record.port))) {
+      if (!loaded && available && !(await defaultIsPortFree(record.port))) {
         const hint = `launchctl bootstrap gui/${uid} ${shellQuote(defaultLaunchdBoardPlistPath(home))}`;
         emit(`board launchd job is not loaded; port ${record.port} is busy. Run: ${hint} (or swarm watch --all --keep-up)`);
         servers.push({ kind: 'board', from: record.version ?? null, to: targetVersion, port: record.port, status: 'launchd-not-loaded' });
