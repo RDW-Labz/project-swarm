@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
   });
 });
 
-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.33', async () => {
+test('T80 release docs describe the bounded loop and pin kickoff to 1.167.34', async () => {
   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
   const pkg = JSON.parse(pkgText);
-  assert.equal(pkg.version, '1.167.33');
+  assert.equal(pkg.version, '1.167.34');
   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
   assert.equal(pkg.scripts.build, undefined);
-  assert.match(readme, /Use Project Swarm 1\.167\.33/);
-  assert.match(readme, /Install from tag v1\.167\.33/);
+  assert.match(readme, /Use Project Swarm 1\.167\.34/);
+  assert.match(readme, /Install from tag v1\.167\.34/);
   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.33\n/);
+  assert.match(changelog, /^# Changelog\n\n## 1\.167\.34\n/);
   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
   assert.ok(section.trimEnd().split('\n').length <= 10);
   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
