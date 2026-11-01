@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "hotfix-cc-scroll",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Owner bug on 1.167.32: the Command Center cannot scroll. Reproduced in real Chromium against the installed board: body.cc-body.hive-body in tools/watch-assets/command-center.css sets min-height:100vh; max-height:100vh; overflow:hidden. Hive content is 1621 px tall at 1440x900, 1536 at 1280x800, 2306 at 800x900 and 3151 at 390x844, so wheel, touch, PageDown and Space do nothing. At 800 the Hive shell also sizes to its 1320 px max-content (body scrollWidth 1336 in an 800/508 window) because .hive-shell has max-width:1320px, auto side margins and no width/min-width; the ring/card layout only switches to the mobile grid at max-width:900px.\n\nFix (keep the desktop 1600 look):\n1. tools/watch-assets/command-center.css: remove the viewport lock from body.cc-body.hive-body. It must keep min-height:100vh for the background but allow the page to grow and scroll: height auto, no max-height, overflow-x hidden, overflow-y auto (the document scrolls; cold loads at every size). Do not break the Cockpit shell or the classic board.\n2. tools/watch-assets/cc-hive.css: .hive-shell must be width:100%; min-width:0; max-width:1320px; margin:0 auto (so it fills the window below 1320 instead of sizing to max-content). Change the existing @media (max-width:900px) block (ring as a square canvas above the cards, cards in a wrapping grid) to @media (max-width:1340px); at 1280x800 and below the ring scales down above a wrapping card grid. Add flex-wrap/min-width:0 to the header/legend/counter rows only as needed so nothing overflows horizontally; keep the 1600x900 ellipse layout unchanged.\n3. tools/watch-assets/cc-hive-mount.js: PHONE_MAX is 900 and must match the CSS: set it to 1340 so layout() uses the phone geometry (square canvas above the grid) at <=1340 and the desktop ellipse above it.\n4. Cockpit: the body lock is shared; remove any other max-height/overflow lock you find in tools/watch-assets/cc-cockpit.css or cc-phone.css that prevents vertical scrolling. Cockpit must scroll at 1600x900, 1280x800, 800x900 and 390x844 with no horizontal overflow. Do not redesign it.\n5. Add a real browser scroll test to tests/browser/command-center.smoke.mjs (same Playwright fixture server and helpers; a second test with its own server/browser setup is fine). For each viewport 1600x900, 1280x800, 800x900 and 390x844, on Hive (/command-center?t=...) and Cockpit (/command-center/project/alpha?t=...):\n   - assert document.documentElement.scrollWidth === document.documentElement.clientWidth (no horizontal overflow; this is the content-width check, scrollbar-safe);\n   - wheel: scroll until the last card (Hive .hive-card; Cockpit .tk) is inside the viewport, assert it was reached, continue to the bottom, then scroll back to 0;\n   - touch: in a context with hasTouch true (isMobile true at 390), dispatch real CDP touch swipes until the last card is visible and swipe back to the top; assert scrollY 0;\n   - keyboard at non-phone sizes: PageDown and Space each increase scrollY, then Home/scrollTo returns to 0.\n   The test must fail on the current 1.167.32 code (body locked: wheel/touch/keyboard leave scrollY 0) and pass after the fix. Keep the existing smoke test green.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/browser/command-center.smoke.mjs and node --import ./tests/_isolate-config.mjs --test tests/command-center-live.test.mjs tests/command-center-boot.test.mjs. Report the per-viewport scroll result and the scrollWidth/clientWidth numbers.",
+      "context": [
+        "tools/watch-assets/command-center.css",
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-phone.css",
+        "tools/watch-assets/cc-cockpit.css",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-boot.test.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/command-center.css",
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-phone.css",
+        "tools/watch-assets/cc-cockpit.css",
+        "tests/browser/command-center.smoke.mjs"
+      ],
+      "ignoreTests": [
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-nav.test.mjs",
+        "tests/command-center-phone.spec.mjs",
+        "tests/command-center-routes.spec.mjs",
+        "tests/watch-token-urls.test.mjs"
+      ],
+      "ignoreTestsReason": "hotfix scoped to the scroll shell; focused browser/live/boot suite runs here, full suite before merge",
+      "timeoutMs": 3600000
+    }
+  ],
+  "checks": [
+    {
+      "name": "hotfix-cc-scroll",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-boot.test.mjs"
+      ]
+    }
+  ]
+}

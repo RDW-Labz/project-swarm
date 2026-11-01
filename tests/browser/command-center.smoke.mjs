@@ -243,13 +243,15 @@ async function assertMainArea(page, mainSelector, pageLabel) {
   assert.ok(stats.boxed >= 20, `${pageLabel} page: too few laid-out elements in main (${stats.boxed})`);
 }
 
-async function startCommandCenterServer({ commandCenterOn }) {
+async function startCommandCenterServer({ commandCenterOn, boardPayload }) {
   const prevFlag = process.env.SWARM_COMMAND_CENTER;
   if (commandCenterOn) process.env.SWARM_COMMAND_CENTER = '1';
 
   const board = {
-    snapshot: async () => fakeBoardPayload(),
-    project: async (id) => (id === 'alpha' ? { id: 'alpha', name: 'Alpha' } : null),
+    snapshot: async () => boardPayload ?? fakeBoardPayload(),
+    project: async (id) => (boardPayload
+      ? boardPayload.projects.find((project) => project.id === id) ?? null
+      : id === 'alpha' ? { id: 'alpha', name: 'Alpha' } : null),
     live: async () => null,
     history: async () => ({ events: [] }),
     historyCsv: async () => '',
@@ -411,7 +413,7 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
     smokePages.push(cockpitDirectPage);
     attachPageMonitors(cockpitDirectPage, 'Cockpit-direct', bag);
     const cockpitDirectUrl = `http://127.0.0.1:${smokeOn.port}/command-center/project/alpha?${smokeOn.pageAuthQuery}`;
-    await cockpitDirectPage.goto(cockpitDirectUrl, { waitUntil: 'networkidle', timeout: 60_000 });
+    await cockpitDirectPage.goto(cockpitDirectUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await cockpitDirectPage.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
     await cockpitDirectPage.waitForSelector('.cc-cockpit-shell, #cc-cockpit-main', { timeout: 30_000 });
     assertMonitorBag(bag, 'Cockpit-direct');
@@ -423,7 +425,7 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
     attachPageMonitors(page, 'Cockpit', bag);
 
     const hiveUrl = `http://127.0.0.1:${smokeOn.port}/command-center?${smokeOn.pageAuthQuery}`;
-    await page.goto(hiveUrl, { waitUntil: 'networkidle', timeout: 60_000 });
+    await page.goto(hiveUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
     await page.waitForSelector('.hive-shell', { timeout: 30_000 });
     assertMonitorBag(bag, 'Hive');
@@ -451,9 +453,10 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
     smokePages.push(classicPage);
     attachPageMonitors(classicPage, 'Classic board', classicBag);
     await classicPage.goto(`http://127.0.0.1:${smokeOff.port}/?${smokeOff.pageAuthQuery}`, {
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });
+    await classicPage.waitForSelector('body', { timeout: 30_000 });
     assertMonitorBag(classicBag, 'Classic board');
     assert.ok(classic.body.length > 100, 'Classic board page: home HTML body was empty');
 
@@ -462,4 +465,171 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
     await disposeSmokeServers();
   }
   assertNoLeftoverBrowser(smokeTracked);
+});
+
+async function scrollState(page, cardSelector) {
+  return page.evaluate((selector) => {
+    const cards = document.querySelectorAll(selector);
+    const last = cards[cards.length - 1];
+    if (!last) throw new Error(`No cards for ${selector}`);
+    const rect = last.getBoundingClientRect();
+    return {
+      y: window.scrollY,
+      maxY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+      remaining: rect.bottom - window.innerHeight,
+      lastVisible: rect.width > 0 && rect.height > 0
+        && rect.top >= 0 && rect.bottom <= window.innerHeight
+        && rect.left >= 0 && rect.right <= window.innerWidth,
+    };
+  }, cardSelector);
+}
+
+async function scrollUntil(page, cardSelector, label, input, goal, direction) {
+  const { height } = page.viewportSize();
+  for (let step = 0; step < 80; step += 1) {
+    const state = await scrollState(page, cardSelector);
+    if (goal === 'last' && state.lastVisible) return;
+    if (goal === 'bottom' && state.maxY - state.y <= 1) return;
+    if (goal === 'top' && state.y === 0) return;
+    // Stop just past the card's bottom so a gesture cannot skip over it.
+    const distance = goal === 'last' ? Math.max(40, state.remaining + 2) : height * 0.55;
+    await input(direction * Math.min(height * 0.55, distance));
+    await page.waitForFunction(({ before, sign }) => sign * (window.scrollY - before) > 0,
+      { before: state.y, sign: direction }, { timeout: 3_000 }).catch(() => {
+      assert.fail(`${label}: scrolling stopped at ${state.y} before reaching ${goal}`);
+    });
+    await page.waitForTimeout(150);
+  }
+  assert.fail(`${label}: did not reach ${goal} within 80 gestures`);
+}
+
+async function touchSwipe(page, session, delta) {
+  const { width, height } = page.viewportSize();
+  const x = Math.round(width / 2);
+  const startY = delta > 0 ? height * 0.8 : height * 0.2;
+  const point = (y) => [{ x, y, id: 1, radiusX: 1, radiusY: 1 }];
+  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(startY) });
+  try {
+    for (let step = 1; step <= 8; step += 1) {
+      await session.send('Input.dispatchTouchEvent', {
+        type: 'touchMove', touchPoints: point(startY - delta * step / 8),
+      });
+      await page.waitForTimeout(20);
+    }
+    // Pause before release to avoid a fling skipping the last card.
+    await page.waitForTimeout(100);
+  } finally {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  }
+}
+
+test('command center scroll input reaches every card at desktop, tablet and phone sizes', { timeout: 180_000 }, async () => {
+  const payload = fakeBoardPayload();
+  const alpha = payload.projects[0];
+  alpha.ledger.tickets = Array.from({ length: 24 }, (_, index) => ({
+    id: `T-${index + 1}`, title: `Scroll regression ticket ${index + 1}`,
+    status: index < 12 ? 'ready' : 'done', stage: 'S1',
+  }));
+  alpha.tickets = { byStatus: { ready: 12, done: 12 } };
+  let server;
+  let launched;
+  let tracked;
+  try {
+    server = await startCommandCenterServer({ commandCenterOn: true, boardPayload: payload });
+    launched = await launchChromium();
+    tracked = trackBrowser(launched.server);
+    for (const viewport of [
+      { width: 1600, height: 900 }, { width: 1280, height: 800 },
+      { width: 800, height: 900 }, { width: 390, height: 844 },
+    ]) {
+      const context = await launched.browser.newContext({
+        viewport, hasTouch: true, isMobile: viewport.width === 390,
+      });
+      try {
+        for (const [name, route, cardSelector] of [
+          ['Hive', '/command-center', '.hive-card'],
+          ['Cockpit', '/command-center/project/alpha', '.tk'],
+        ]) {
+          const page = await context.newPage();
+          let session;
+          const label = `${name} ${viewport.width}x${viewport.height}`;
+          try {
+            await page.goto(`http://127.0.0.1:${server.port}${route}?${server.pageAuthQuery}`, {
+              waitUntil: 'domcontentloaded', timeout: 30_000,
+            });
+            await page.waitForSelector(name === 'Hive' ? '.hive-shell' : '.cc-cockpit-shell', { timeout: 30_000 });
+            await page.waitForSelector(cardSelector, { timeout: 30_000 });
+            if (name === 'Hive') {
+              const skipTour = page.getByRole('button', { name: 'Skip tour', exact: true });
+              if ((await skipTour.count()) > 0) {
+                await skipTour.first().click({ timeout: 10_000 });
+                await page.waitForSelector('.cc-tour-overlay', { state: 'hidden', timeout: 10_000 });
+              }
+            }
+            await page.evaluate(() => document.fonts.ready);
+            await page.evaluate(() => window.scrollTo(0, 0));
+            const widths = await page.evaluate(() => ({
+              scroll: document.documentElement.scrollWidth,
+              client: document.documentElement.clientWidth,
+            }));
+            assert.equal(widths.scroll, widths.client, `${label}: horizontal overflow`);
+            assert.ok((await scrollState(page, cardSelector)).maxY > 0, `${label}: fixture must scroll`);
+
+            await page.mouse.move(viewport.width / 2, viewport.height / 2);
+            const wheel = (delta) => page.mouse.wheel(0, delta);
+            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'last', 1);
+            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'bottom', 1);
+            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'top', -1);
+            assert.equal(await page.evaluate(() => window.scrollY), 0, `${label}: wheel returns to top`);
+
+            session = await context.newCDPSession(page);
+            const swipe = (delta) => touchSwipe(page, session, delta);
+            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'last', 1);
+            // Desktop cards may already be visible; still exercise a real swipe in both directions.
+            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'bottom', 1);
+            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'top', -1);
+            assert.equal(await page.evaluate(() => window.scrollY), 0, `${label}: touch returns to top`);
+
+            if (viewport.width !== 390) {
+              await page.evaluate(() => document.activeElement?.blur());
+              await page.keyboard.press('PageDown');
+              await page.waitForFunction(() => window.scrollY > 0, null, { timeout: 5_000 });
+              const afterPageDown = await page.evaluate(() => window.scrollY);
+              await page.keyboard.press('Space');
+              await page.waitForFunction((before) => window.scrollY > before, afterPageDown, { timeout: 5_000 });
+              await page.waitForTimeout(300);
+              await page.keyboard.press('Home');
+              await page.evaluate(() => window.scrollTo(0, 0));
+              await page.waitForFunction(() => window.scrollY === 0, null, { timeout: 5_000 });
+            }
+          } finally {
+            try {
+              if (session) await session.detach();
+            } finally {
+              await page.close();
+            }
+          }
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    try {
+      if (launched) {
+        try {
+          await launched.browser.close();
+        } finally {
+          try {
+            await launched.server.close();
+          } finally {
+            await closeBrowserFully({ tracked });
+          }
+        }
+      }
+    } finally {
+      if (server) await server.dispose();
+    }
+  }
+  assertNoLeftoverBrowser(tracked);
 });

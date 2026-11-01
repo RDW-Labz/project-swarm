@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.167.33
+
+Hotfix: the Command Center scrolls again on Hive and Cockpit.
+- Scroll: removed the body viewport lock (100vh height, max-height and overflow hidden) that made wheel, trackpad, touch, PageDown and Space do nothing; the document now scrolls whenever the content is taller than the window;
+- Hive responsive: the shell fills the window below its 1320 px max width, and at 1340 px and below the ring scales down above a wrapping card grid (previously only below 900 px); the 1600 px desktop ellipse layout is unchanged and there is no horizontal overflow;
+- Cockpit: shares the scroll shell and has no vertical lock;
+- Tests: a real browser scroll test at 1600x900, 1280x800, 800x900 and 390x844 for Hive and Cockpit: wheel, touch and keyboard reach the last card and return to the top, and scrollWidth equals clientWidth;
+- Version 1.167.33.
+
 ## 1.167.32
 
 Release train 8: a live Command Center change feed, bounded live detection, change-driven snapshot rebuilds, and review/guard follow-ups.

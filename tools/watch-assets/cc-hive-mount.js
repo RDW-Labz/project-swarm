@@ -473,7 +473,7 @@ function resolveHivePanels() {
 
 const ICON_BASE = '/assets/vendor/fluent-emoji/';
 const TOAST_ICON = { volt: 'high_voltage_56.webp', done: 'party_popper_56.webp', think: 'thinking_face_56.webp' };
-const PHONE_MAX = 900;
+const PHONE_MAX = 1340;
 const RAW_URL = '/api/command-center';
 
 function h(doc, tag, cls, text) {
