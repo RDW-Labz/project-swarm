@@ -209,9 +209,12 @@ test('watch --all reuses the identity board before board.json and opens the same
   const json = JSON.stringify({ pid: process.pid, url: 'http://127.0.0.1:59811/?t=other' });
   await fs.writeFile(file, json);
   const probes = [], opened = [];
+  const origin = new URL(identityUrl).origin;
   const result = await watch(t, file, {
     fetchImpl: async (url, options) => {
       probes.push(url);
+      assert.equal(url, `${origin}/api/board`);
+      assert.equal(options.headers['x-watch-token'], identity.token);
       assert.equal(options.redirect, 'manual');
       return boardResponse();
     },
@@ -222,10 +225,39 @@ test('watch --all reuses the identity board before board.json and opens the same
   assert.match(result.output, /already running/);
   assert.ok(result.output.includes(identityUrl));
   assert.deepEqual(opened, [identityUrl]);
-  assert.deepEqual(probes, [`http://127.0.0.1:51058/api/board?t=${identity.token}`]);
+  assert.deepEqual(probes, [`${origin}/api/board`]);
   assert.equal(await fs.readFile(file, 'utf8'), json);
   assert.equal(await fs.readFile(idFile, 'utf8'), JSON.stringify(identity));
 });
+
+for (const auth of ['without a header', 'with a query token']) {
+  test(`a board answering only ${auth} is not reused and starts one board`, async t => {
+    const { file } = await fixture(t);
+    await saveIdentity(file);
+    let starts = 0;
+    const probes = [];
+    const result = await watch(t, file, {
+      fetchImpl: async (url, options) => {
+        probes.push({ url, headers: options.headers });
+        const answers = auth === 'without a header'
+          ? !options.headers?.['x-watch-token']
+          : new URL(url).searchParams.get('t') === identity.token;
+        return answers ? boardResponse() : { ok: false, status: 403 };
+      },
+      startBoardServer: async () => {
+        starts += 1;
+        return { url: 'http://127.0.0.1:59811/?t=new', server: { done: Promise.resolve(), close() {} }, api: { async close() {} } };
+      },
+    });
+    assert.equal(starts, 1);
+    assert.equal(result.exitCode, 0);
+    assert.doesNotMatch(result.output, /already running/);
+    assert.deepEqual(probes, [{
+      url: `${new URL(identityUrl).origin}/api/board`,
+      headers: { 'x-watch-token': identity.token },
+    }]);
+  });
+}
 
 test('stale identity and no board.json starts one board', async t => {
   const { file } = await fixture(t);

@@ -441,8 +441,9 @@ async function boardAnswers(url, fetchImpl = fetch) {
   try {
     const u = new URL(url);
     if (u.hostname !== '127.0.0.1') return false;
+    const token = u.searchParams.get('t');
     // Only our own board answers with the board's shape; a redirect is never followed (the token goes to this address and nowhere else).
-    const res = await fetchImpl(`${u.origin}/api/board?t=${encodeURIComponent(u.searchParams.get('t') ?? '')}`, { redirect: 'manual', signal: AbortSignal.timeout?.(2000) });
+    const res = await fetchImpl(`${u.origin}/api/board`, { headers: token ? { 'x-watch-token': token } : {}, redirect: 'manual', signal: AbortSignal.timeout?.(2000) });
     if (!res.ok) return false;
     const body = typeof res.json === 'function' ? await res.json() : null;
     return Boolean(body) && typeof body === 'object' && Array.isArray(body.projects) && Boolean(body.machine);
