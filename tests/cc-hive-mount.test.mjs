@@ -230,6 +230,20 @@ function boardFixture() {
         progress: { overall: 40 },
         card: { blocked: { needYou: 0 }, now: { buildingTickets: 1 }, next: { ready: 3 } },
         tickets: { byStatus: { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, failed: 1 } },
+        counts: {
+          total: 4,
+          done: 2,
+          ready: 0,
+          blocked: 1,
+          review: 1,
+          todo: 0,
+          cancelled: 0,
+          proposed: 0,
+          superseded: 0,
+          remaining: 2,
+          percentDone: 50,
+          counted: 4,
+        },
         ledger: {
           tickets: [
             { id: 'T-1', title: 'One', status: 'done', doneAt: iso(NOW - 30 * 60000) },

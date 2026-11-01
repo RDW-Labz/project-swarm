@@ -321,6 +321,75 @@ test('renderProjectCockpit binds title, counters, columns, orchestrator, streams
   globalThis.document = prevDocument;
 });
 
+test('renderProjectCockpit uses server readyIds for NEXT UP and header when ledger strips dependsOn', async () => {
+  const project = {
+    id: 'strip-ready',
+    name: 'Strip',
+    ledger: {
+      tickets: [
+        { id: 'R-1', title: 'Ready one', status: 'ready' },
+        { id: 'T-1', title: 'Todo blocked in full ledger', status: 'todo' },
+      ],
+    },
+    sessions: [],
+    meta: { project: 'Strip' },
+    readyIds: ['R-1'],
+    counts: {
+      total: 9,
+      done: 3,
+      ready: 1,
+      review: 0,
+      blocked: 0,
+      todo: 1,
+      cancelled: 0,
+      proposed: 0,
+      superseded: 0,
+      remaining: 6,
+      percentDone: 33,
+      counted: 9,
+      needsYou: 7,
+    },
+    card: { blocked: { needYou: 7 } },
+    total: 9,
+    done: 3,
+    percentDone: 33,
+    runStream: [],
+  };
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, {
+    document,
+    now: () => NOW,
+    glitch: () => false,
+    mountRobotHead,
+  });
+  const counter = k => {
+    const cnt = host.querySelector('.cnt');
+    for (const cell of cnt.children) {
+      for (const child of cell.children) {
+        if (child.getAttribute?.('data-k') === k) return textOf(child);
+      }
+    }
+    return '';
+  };
+  assert.equal(counter('tickets'), '9');
+  assert.equal(counter('done'), '3');
+  assert.equal(counter('need you'), '7');
+  assert.match(textOf(host.querySelector('.now .k')), /NEXT UP/);
+  assert.match(textOf(host.querySelector('.now .k')), /1 \/ 1/);
+  assert.equal(textOf(host.querySelector('.now .t')), 'R-1');
+  const leftIds = ticketIds(host.querySelector('#tickets-left'));
+  assert.deepEqual(leftIds, ['R-1']);
+  assert.ok(!leftIds.includes('T-1'));
+  const tileValues = Object.fromEntries(
+    host.querySelectorAll('.cockpit-metric-tile').map(t => [textOf(t.children[0]).toLowerCase(), textOf(t.children[1])]),
+  );
+  assert.equal(tileValues.ready, '1');
+  view.destroy();
+  globalThis.document = prevDocument;
+});
+
 test('renderProjectCockpit shows short muted lines when the project has no tickets', async () => {
   const project = buildProjectCockpit(fakeBoard({
     orchestrator: { sessions: [] },

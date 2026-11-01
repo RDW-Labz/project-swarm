@@ -75,6 +75,15 @@ function liveTickets(ledger) {
   return (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
 }
 
+/** Server dependency-aware ready set when present; otherwise ledger-row readyTickets. */
+function projectReadyFn(project) {
+  if (Array.isArray(project?.readyIds)) {
+    const ids = new Set(project.readyIds.map(id => String(id)).filter(Boolean));
+    return (tickets) => (tickets ?? []).filter(t => t && ids.has(String(t.id)));
+  }
+  return readyTickets;
+}
+
 function serverCounts(project) {
   const c = project?.counts;
   if (!c || typeof c !== 'object' || typeof c.total !== 'number' || !Number.isFinite(c.total)) return null;
@@ -98,7 +107,8 @@ function headerCounters(project, rowCounts) {
   const live = liveTickets(project?.ledger);
   const total = project?.total ?? live.length;
   const done = project?.done ?? rowCounts.done;
-  const needsYou = live.filter(t => t.status === 'review' || (t.type === 'human' && t.status !== 'done')).length;
+  const needYouRaw = project?.card?.blocked?.needYou;
+  const needsYou = typeof needYouRaw === 'number' && Number.isFinite(needYouRaw) ? needYouRaw : 0;
   return [
     { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
     { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
@@ -596,7 +606,7 @@ export function renderProjectCockpit(host, project, deps) {
   function paint(at) {
     const p = projectRef;
     const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
-      p?.done, p?.total, p?.counts, p?.runStream, Math.floor(at / 60000)]);
+      p?.done, p?.total, p?.counts, p?.readyIds, p?.runStream, Math.floor(at / 60000)]);
     if (signature === paintSignature) return;
     paintSignature = signature;
     const ledger = p?.ledger ?? { tickets: [] };
@@ -610,8 +620,9 @@ export function renderProjectCockpit(host, project, deps) {
       done: headline?.done ?? p?.done,
       total: headline?.total ?? p?.total,
     }, { now: at });
+    const readyFn = projectReadyFn(p);
     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
-    const columns = cockpitLedgerRows(ledger, readyTickets, { perColumn: ROWS_PER_COLUMN });
+    const columns = cockpitLedgerRows(ledger, readyFn, { perColumn: ROWS_PER_COLUMN });
     const { counts } = columns;
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
@@ -636,7 +647,7 @@ export function renderProjectCockpit(host, project, deps) {
 
     patchPanel(colL, col => columns.left.length
       ? renderTicketColumn(col, columns.left, { side: 'L', activeId, categoryOf: cats.of })
-      : renderReadyEmptyState(col, ledger, readyTickets));
+      : renderReadyEmptyState(col, ledger, readyFn));
     patchPanel(colR, col => renderTicketColumn(col, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' }));
     const rowsR = columns.right.length + (columns.more ? 1 : 0);
     colL.classList.toggle?.('spread', columns.left.length >= SPREAD_MIN_ROWS);

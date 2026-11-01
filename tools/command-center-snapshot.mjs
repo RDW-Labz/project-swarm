@@ -422,6 +422,10 @@ export function buildProjectCockpit(board, projectId) {
   if (!project) return null;
   const ledger = ledgerFromProject(project);
   const counts = cockpitCounts(project);
+  const nextItems = project?.card?.next?.items;
+  const readyIds = Array.isArray(nextItems)
+    ? nextItems.map(item => item?.id).filter(id => id != null && String(id) !== '').map(String)
+    : null;
   return {
     id: project.id,
     name: project.name ?? null,
@@ -436,6 +440,7 @@ export function buildProjectCockpit(board, projectId) {
     stageRings: project.progress ?? null,
     runStream: runStreamItems(project),
     counts,
+    readyIds,
     done: counts.done,
     total: counts.total,
     percentDone: counts.percentDone,

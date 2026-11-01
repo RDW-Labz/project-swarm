@@ -143,15 +143,27 @@ test('stripped commandCenterLedger plus server counts: counts win for card shape
     id: 'x',
     card: { blocked: { needYou: 2 } },
     ledger: { tickets: [{ id: 'A', status: 'ready' }, { id: 'B', status: 'todo' }] },
-    counts: ticketCountsOf({
-      tickets: [
-        { id: 'A', status: 'ready' },
-        { id: 'B', status: 'blocked' },
-      ],
-    }),
+    counts: {
+      total: 9,
+      done: 4,
+      ready: 0,
+      review: 0,
+      blocked: 0,
+      todo: 1,
+      cancelled: 0,
+      proposed: 0,
+      superseded: 0,
+      remaining: 5,
+      percentDone: 44,
+      counted: 9,
+    },
   };
   const shaped = mergeCardTicketCounts(project, 0);
-  assert.equal(shaped.ready, 1);
-  assert.equal(shaped.total, 2);
+  assert.equal(shaped.ready, 0, 'server ready wins over stripped rows that look ready');
+  assert.equal(shaped.total, 9, 'server total differs from two stripped rows');
+  assert.equal(shaped.done, 4);
   assert.equal(shaped.needsYou, 2);
+  assert.equal(shaped.source, 'projects[0].counts');
+  const fromLedger = mergeCardTicketCounts({ ...project, counts: undefined }, 0);
+  assert.notEqual(fromLedger?.total, 9, 'ledger fallback is distinguishable');
 });
