@@ -3,6 +3,7 @@
 import net from 'node:net';
 import path from 'node:path';
 import { constants as fsConstants } from 'node:fs';
+import defaultFs from 'node:fs/promises';
 
 export const BOARD_IDENTITY_BASENAME = 'board-identity.json';
 export const DEFAULT_KEEPUP_PORT = 51058;
@@ -165,6 +166,27 @@ function portMismatchError(savedPort, requestedPort) {
     new Error(`board keep-up: saved identity uses port ${savedPort}; --port ${requestedPort} would break the bookmark (omit --port to reuse ${savedPort})`),
     { code: 'board-port-mismatch' },
   );
+}
+
+// Discovery shares the identity trust checks, but never repairs or creates files.
+export async function readBoardIdentity({
+  dir,
+  fs = defaultFs,
+  uid = typeof process.getuid === 'function' ? process.getuid() : 0,
+  warn = msg => process.stderr.write(`${msg}\n`),
+} = {}) {
+  if (!dir) return null;
+  const ignored = msg => warn(msg.replace('; creating a new identity', '; ignoring identity'));
+  try {
+    const trust = await trustIdentityFile(boardIdentityPath(dir), { fs, uid, warn: ignored });
+    if (trust.kind !== 'trusted') return null;
+    const identity = parseIdentityText(trust.text);
+    if (!identity) ignored('board identity: corrupt or invalid; creating a new identity');
+    return identity;
+  } catch {
+    ignored('board identity: unreadable; creating a new identity');
+    return null;
+  }
 }
 
 async function writeIdentityAtomic(file, identity, { fs, dir, randomBytes, uid }) {

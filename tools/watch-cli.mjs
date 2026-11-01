@@ -52,7 +52,7 @@ import { backfillHistory } from './board-commands.mjs';
 import { projectSummary } from './project-spend.mjs';
 import { createDeployTracker } from './deploy-status.mjs';
 import { runnerVersion } from './runner-version.mjs';
-import { loadOrCreateBoardIdentity, portBusyError, DEFAULT_KEEPUP_PORT } from './board-keepalive.mjs';
+import { loadOrCreateBoardIdentity, readBoardIdentity, portBusyError, DEFAULT_KEEPUP_PORT } from './board-keepalive.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -471,6 +471,16 @@ export async function readBoardFile({ env = process.env, fetchImpl = fetch } = {
     if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') console.error('[tools/watch-cli.mjs] readBoardFile:', error?.message ?? error);
   }
   return null;
+}
+
+export async function findRunningBoard({ env = process.env, home, fetchImpl = fetch } = {}) {
+  const file = boardFile(env, home ?? env.HOME ?? os.homedir());
+  const identity = await readBoardIdentity({ dir: path.dirname(file), fs });
+  if (identity) {
+    const url = `http://127.0.0.1:${identity.port}/?t=${identity.token}`;
+    if (await boardAnswers(url, fetchImpl)) return url;
+  }
+  return readBoardFile({ env: { ...env, SWARM_BOARD_FILE: file }, fetchImpl });
 }
 
 // The board's own project page address, from the board's address: same server, same token.
@@ -973,6 +983,8 @@ export async function runWatchCommand(root, args, {
   write = text => process.stdout.write(text),
   startBoardServer: startBoard = startBoardServer,
   loadOrCreateBoardIdentity: loadIdentity = loadOrCreateBoardIdentity,
+  fetchImpl = fetch,
+  open = openUrl,
 } = {}) {
   const opts = parseWatchArgs(args);
   if (opts.error) return { stdout: `${opts.error}\n${WATCH_USAGE}`, exitCode: 2 };
@@ -1023,8 +1035,14 @@ export async function runWatchCommand(root, args, {
   }
   if (opts.all) {
     // The web board: a lane per project on this machine, the machine's agents and spend on top, the history, and a click-through to any run's own page.
+    const running = await findRunningBoard({ env: process.env, fetchImpl });
+    if (running) {
+      write(`Swarm Watch board (already running)\n${running}\nRead-only, on this machine only. This command is not a second board; Ctrl-C stops only this command.\n`);
+      if (opts.open) await open(running);
+      return { stdout: '', exitCode: 0 };
+    }
     const watchArgv = ['watch', '--all', ...(opts.open ? ['--open'] : []), ...(opts.tui ? ['--tui'] : []), ...(opts.text ? ['--text'] : [])];
-    const board = await startBoardServer({
+    const board = await startBoard({
       env: process.env,
       root,
       registry: {
@@ -1036,7 +1054,7 @@ export async function runWatchCommand(root, args, {
       },
     });
     write(`Swarm Watch board (every project on this machine)\n${board.url}\nRead-only, on this machine only. Opening a run starts that run's own page. Stops after 30 minutes idle. Ctrl-C stops it now. (swarm watch --all --text prints the live runs instead.)\n`);
-    if (opts.open) openUrl(board.url);
+    if (opts.open) await open(board.url);
     const stop = () => { board.server.close(); board.api.close(); };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
