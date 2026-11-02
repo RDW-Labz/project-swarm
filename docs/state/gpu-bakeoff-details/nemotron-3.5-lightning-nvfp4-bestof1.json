@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker must return every declared output exactly once",
+  "detail": "tests failed: # todo 0 # duration_ms 718.553",
+  "durationMs": 2172,
+  "tokens": null
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker must return every declared output exactly once",
+  "detail": "tests failed: # todo 0 # duration_ms 38.881625",
+  "durationMs": 2373,
+  "tokens": null
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 35.212625",
+  "durationMs": 54961,
+  "tokens": 11582
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 90838,
+  "tokens": 17654
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 30.226209",
+  "durationMs": 52079,
+  "tokens": 13845
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": false,
+  "status": "failed",
+  "error": "Rented server response incomplete, refused, truncated, or unexpected",
+  "detail": "not refactored: \"laneDefaults[lane]?.reserveUsd\" appears 2 times (was 2)",
+  "durationMs": 94247,
+  "tokens": null
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker must return every declared output exactly once",
+  "detail": "job failed: Worker must return every declared output exactly once",
+  "durationMs": 21776,
+  "tokens": null
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass; killed 4/4 mutants",
+  "durationMs": 72854,
+  "tokens": 18130
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker returned an invalid, duplicate, or undeclared output: files[].path \"docs/providers.md\" is duplicate",
+  "detail": "missing facts: ## Anthropic API | anthropic\\.api_key | ANTHROPIC_API_KEY | (?i)sensitive | (?i)haiku | (?i)sonnet | (?i)tier.{0,12}expensive | \\$500 | \\$20 | anthropic-spend\\.jsonl|ledger | (?i)lower",
+  "durationMs": 2850,
+  "tokens": null
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: host-exit|any other code|one job | hosts-exhausted",
+  "durationMs": 15986,
+  "tokens": 8524
+ }
+]

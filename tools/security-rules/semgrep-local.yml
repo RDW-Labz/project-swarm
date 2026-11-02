@@ -1,0 +1,198 @@
+rules:
+  - id: swarm-js-exec-injection
+    message: Shell command built from dynamic string input.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: exec($A + $B)
+      - pattern: execSync($A + $B)
+      - pattern: exec(`...${$X}...`)
+      - pattern: execSync(`...${$X}...`)
+      - pattern: $CP.exec($A + $B)
+      - pattern: $CP.execSync($A + $B)
+      - pattern: $CP.exec(`...${$X}...`)
+      - pattern: $CP.execSync(`...${$X}...`)
+    metadata:
+      category: security
+  - id: swarm-js-eval
+    message: Dynamic code evaluation is unsafe.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function(...)
+    metadata:
+      category: security
+  - id: swarm-js-sql-concat
+    message: SQL query built from dynamic string input.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: $DB.query($A + $B)
+      - pattern: $DB.query(`...${$X}...`)
+      - pattern: $DB.execute($A + $B)
+      - pattern: $DB.execute(`...${$X}...`)
+    metadata:
+      category: security
+  - id: swarm-js-weak-hash
+    message: Weak hash algorithm used.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: crypto.createHash('md5')
+      - pattern: crypto.createHash('sha1')
+    metadata:
+      category: security
+  - id: swarm-js-tls-off
+    message: TLS certificate verification is disabled.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: '{rejectUnauthorized: false}'
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    metadata:
+      category: security
+  - id: swarm-js-innerhtml
+    message: Non-literal value assigned to innerHTML.
+    severity: WARNING
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: $X.innerHTML = $Y
+      - pattern-not: $X.innerHTML = "..."
+      - pattern-not: $X.innerHTML = '...'
+    metadata:
+      category: security
+  - id: swarm-js-hardcoded-jwt-secret
+    message: JWT signed with a hardcoded secret.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: jwt.sign($P, '...')
+      - pattern: jwt.sign($P, "...")
+    metadata:
+      category: security
+  - id: swarm-js-random-secret
+    message: Secret-like value generated with Math.random.
+    severity: WARNING
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: $V = Math.random(...)
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i)(token|secret|password|nonce|apikey|key)
+    metadata:
+      category: security
+  - id: swarm-py-subprocess-shell
+    message: Subprocess called with shell enabled.
+    severity: ERROR
+    languages: [python]
+    pattern: subprocess.$F(..., shell=True, ...)
+    metadata:
+      category: security
+  - id: swarm-py-pickle
+    message: Pickle deserialization of untrusted data is unsafe.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: pickle.loads($X)
+      - pattern: pickle.load($X)
+    metadata:
+      category: security
+  - id: swarm-py-yaml-load
+    message: yaml.load called without a safe Loader.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: yaml.load($X)
+      - pattern-not: yaml.load($X, Loader=$L)
+    metadata:
+      category: security
+  - id: swarm-py-requests-verify-off
+    message: Requests called with certificate verification disabled.
+    severity: ERROR
+    languages: [python]
+    pattern: requests.$F(..., verify=False, ...)
+    metadata:
+      category: security
+  - id: swarm-py-flask-debug
+    message: Flask app started with debug enabled.
+    severity: WARNING
+    languages: [python]
+    pattern: app.run(..., debug=True, ...)
+    metadata:
+      category: security
+  - id: swarm-py-sql-format
+    message: SQL query built with string formatting.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $C.execute("..." % ...)
+      - pattern: $C.execute("...".format(...))
+      - pattern: $C.execute(f"...")
+    metadata:
+      category: security
+  - id: swarm-py-weak-hash
+    message: Weak hash algorithm used.
+    severity: WARNING
+    languages: [python]
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+    metadata:
+      category: security
+  - id: swarm-js-spawn-shell
+    message: Child process spawned with shell enabled.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: '$CP.spawn(..., {..., shell: true, ...})'
+      - pattern: 'spawn(..., {..., shell: true, ...})'
+      - pattern: '$CP.spawnSync(..., {..., shell: true, ...})'
+      - pattern: 'spawnSync(..., {..., shell: true, ...})'
+      - pattern: '$CP.exec(..., {..., shell: true, ...})'
+      - pattern: 'exec(..., {..., shell: true, ...})'
+      - pattern: '$CP.execSync(..., {..., shell: true, ...})'
+      - pattern: 'execSync(..., {..., shell: true, ...})'
+    metadata:
+      category: security
+  - id: swarm-js-settimeout-string
+    message: Timer called with a string argument evaluates code.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: "setTimeout('...', ...)"
+      - pattern: 'setTimeout("...", ...)'
+      - pattern: 'setTimeout($A + $B, ...)'
+      - pattern: "setInterval('...', ...)"
+      - pattern: 'setInterval("...", ...)'
+      - pattern: 'setInterval($A + $B, ...)'
+    metadata:
+      category: security
+  - id: swarm-py-eval-exec
+    message: eval or exec called with a non-literal argument.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: eval('...')
+      - pattern-not: exec("...")
+      - pattern-not: exec('...')
+    metadata:
+      category: security
+  - id: swarm-py-os-system
+    message: Shell command run with a non-literal argument.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: os.system($X)
+          - pattern: os.popen($X)
+      - pattern-not: os.system("...")
+      - pattern-not: os.system('...')
+      - pattern-not: os.popen("...")
+      - pattern-not: os.popen('...')
+    metadata:
+      category: security

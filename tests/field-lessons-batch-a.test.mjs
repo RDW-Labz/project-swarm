@@ -113,7 +113,7 @@ describe('L109: manifest preChecks run before checks when an integrated file is 
     const root = await fixture(t);
     const spawnImpl = fake("fs.writeFileSync('package-lock.json','{}')");
     const state = await runManifest(root, { version: 1, jobs: [lockfileJob()] }, { spawnImpl });
-    const result = await integrateRun(root, state.id);
+    const result = await integrateRun(root, state.id, { securityGate: { policy: { enabled: false } } });
     assert.deepEqual(result.warnings, ['lockfile changed, env not synced']);
     assert.equal(result.preChecks, undefined);
   });
@@ -122,7 +122,7 @@ describe('L109: manifest preChecks run before checks when an integrated file is 
     const root = await fixture(t);
     const spawnImpl = fake("fs.writeFileSync('package-lock.json','{}')");
     const state = await runManifest(root, { version: 1, jobs: [lockfileJob()], preChecks: [[process.execPath, '-e', 'process.exit(0)']] }, { spawnImpl });
-    const result = await integrateRun(root, state.id);
+    const result = await integrateRun(root, state.id, { securityGate: { policy: { enabled: false } } });
     assert.equal(result.warnings, undefined);
     assert.equal(result.preChecks.length, 1);
     assert.equal(result.preChecks[0].status, 'passed');

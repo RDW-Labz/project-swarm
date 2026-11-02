@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0190",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "A sandboxed worker could read a project root's real git metadata but not write to it, so a job asked to commit from a linked working copy of that root could never actually succeed. The read access alone was not enough for the one operation a commit actually needs.",
+  "rule": "A sandbox that grants read access to a linked working copy's real git metadata for one operation grants write access for the same reason, scoped just as narrowly.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a worker's sandbox now grants write access to exactly those paths when the project root is itself a linked working copy; a warning names the grant whenever a job's own prompt asks it to commit under this condition. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "prompt",
+    "sandbox",
+    "scope",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#190"
+  }
+}

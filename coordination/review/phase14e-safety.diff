@@ -1,0 +1,269 @@
+diff --git a/tools/api-adapters.mjs b/tools/api-adapters.mjs
+index da4280c..0ed1ec1 100644
+--- a/tools/api-adapters.mjs
++++ b/tools/api-adapters.mjs
+@@ -46,6 +46,7 @@ export function apiConfiguration(agent, env = process.env, { readKey = readOpenR
+     const { config: rented } = loadRentedConfig(env);
+     if (!rented) return { endpoint: 'https://rented.invalid/v1/chat/completions', key: null, keyName: 'rentedGpu config (machine config) and Keychain project-swarm/rented.api_key', selfHosted: true, configured: false };
+     // A running GPU session (or auth: none) has no key: the servers listen only on the node's loopback and are reached through the ssh tunnel.
++    if (rented.auth === 'session') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: rented.sessionKey, keyName: 'the running GPU session key', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
+     if (rented.auth === 'none') return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: null, keyName: 'none (ssh tunnel to a loopback server)', selfHosted: true, configured: true, model: rented.model, bestOf: rented.bestOf };
+     key = readRentedKey(env, rented.keyItem);
+     return { endpoint: rented.chatUrl, endpoints: rented.chatUrls, key: key || null, keyName: `Keychain ${rented.keyItem.service}/${rented.keyItem.account}`, selfHosted: true, configured: Boolean(key), model: rented.model, bestOf: rented.bestOf };
+diff --git a/tools/gpu-commands.mjs b/tools/gpu-commands.mjs
+index 7b203b4..c1eb56d 100644
+--- a/tools/gpu-commands.mjs
++++ b/tools/gpu-commands.mjs
+@@ -7,7 +7,7 @@ import os from 'node:os';
+ import path from 'node:path';
+ import { spawn, execFile } from 'node:child_process';
+ import { fileURLToPath } from 'node:url';
+-import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession } from './gpu.mjs';
++import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOptions, SHORTLIST, GPU_DEFAULTS, SSH_HARDENING, readSessionFile, removeSession, authFetch, PINNED_IMAGE } from './gpu.mjs';
+ import { fetchCacheStats } from './gpu-cache.mjs';
+ import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
+ 
+@@ -36,7 +36,7 @@ export function upOptions(flags, extra = {}) {
+ 
+ export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
+   const hours = sessionHours(options);
+-  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key on the node\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; no files, keys or .env\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\nAdd --yes to go.`;
++  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; no files, keys or .env\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
+ }
+ 
+ function sshReal(argv, { input } = {}) {
+@@ -86,10 +86,10 @@ export async function runGpuCommand(args, deps = {}) {
+   const env = deps.env ?? process.env;
+   const [verb, ...rest] = args;
+   const flags = parseGpuFlags(rest);
+-  const real = { ssh: deps.ssh ?? sshReal, openTunnel: deps.openTunnel ?? openTunnelReal, stopTunnel: deps.stopTunnel ?? stopTunnelReal, fetchImpl: deps.fetchImpl ?? fetch, env, log: message => process.stderr.write(`${message}\n`), ...(deps.gpu ?? {}) };
++  const real = { ssh: deps.ssh ?? sshReal, openTunnel: deps.openTunnel ?? openTunnelReal, stopTunnel: deps.stopTunnel ?? stopTunnelReal, fetchImpl: deps.fetchImpl ?? fetch, probePort: deps.probePort ?? undefined, randomKey: deps.randomKey ?? undefined, env, log: message => process.stderr.write(`${message}\n`), ...(deps.gpu ?? {}) };
+   if (verb === 'models') {
+     out(SHORTLIST.map(item => `${item.label}\t${item.model}\t${item.quant}${item.extra ? '\t(extra run)' : ''}`).join('\n'));
+-    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-quant.');
++    out('Hugging Face ids are a shortlist: check each one exists before renting. FP8 runs first; NVFP4 only with --extra-quant.' + ' Server image: ' + PINNED_IMAGE + ' (pinned by digest; --image takes only another digest).');
+     return { status: 'ok' };
+   }
+   if (verb === 'status') {
+@@ -128,6 +128,7 @@ async function bakeoff(flags, { out, real, deps }) {
+   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
+   const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
+   const repo = path.join(tmp, 'repo');
++  let apiKey;
+   const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
+     log: real.log,
+     start: async (candidate, { remainingUsd }) => {
+@@ -138,14 +139,15 @@ async function bakeoff(flags, { out, real, deps }) {
+         try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
+         throw error;
+       }
++      apiKey = session.apiKey;
+       return { endpoint: session.endpoints[0], stop: () => gpuDown(real) };
+     },
+-    cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, real.fetchImpl),
++    cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
+     benchmark: async ({ model, bestOf }) => {
+       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
+       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
+     },
+-    throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: real.fetchImpl }),
++    throughput: ({ endpoint, model, level }) => measureThroughput({ endpoint, model, level, fetchImpl: authFetch(real.fetchImpl, apiKey) }),
+   });
+   const text = renderBakeoff(results, { hourlyUsd: base.hourlyUsd, evalTasks: countEvalTasks(root), levels });
+   const file = writeBakeoffReport(root, text);
+diff --git a/tools/gpu.mjs b/tools/gpu.mjs
+index 27da4e8..e4f0970 100644
+--- a/tools/gpu.mjs
++++ b/tools/gpu.mjs
+@@ -1,21 +1,27 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // `swarm gpu up|down|status` (Phase 14e): runs one vLLM replica per GPU on a node the OWNER rented, over ssh. Swarm never rents
+ // anything, never copies a file, key or .env to the node (it only runs fixed commands there), and the servers listen on the node's
+-// loopback only, so no API key exists: they are reached through an ssh tunnel. The session file (next to the machine config) names
+-// the replicas, model, price and an expiry; the rented lane (tools/rented.mjs) reads it, load-balances across the replicas, and is
++// loopback only. Each rental gets a random API key, kept in the 0600 session file and in an env file on the node that is removed at
++// stop. The servers are reached through an ssh tunnel and need that key. The session file (next to the machine config) names the
++// replicas, model, price and an expiry; the rented lane (tools/rented.mjs) reads it, load-balances across the replicas, and is
+ // routable only while the session is live. A dead-man timer on the node removes the servers and powers it off at the expiry.
+ import fs from 'node:fs';
++import net from 'node:net';
+ import path from 'node:path';
++import { randomBytes } from 'node:crypto';
+ import { gpuSessionPath } from './rented.mjs';
+ import { fetchCacheStats, combineCacheStats } from './gpu-cache.mjs';
+ 
+-export const GPU_DEFAULTS = Object.freeze({ image: 'vllm/vllm-openai:latest', remotePortBase: 8000, localPortBase: 18000, maxModelLen: 32768, perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
++export const PINNED_IMAGE = 'vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967';
++
++export const GPU_DEFAULTS = Object.freeze({ image: PINNED_IMAGE, remotePortBase: 8000, localPortBase: 18000, maxModelLen: 32768, perReplica: 32, healthTimeoutMs: 1200000, maxHours: 4 });
+ 
+ export const SSH_HARDENING = Object.freeze(['-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no', '-o', 'StrictHostKeyChecking=yes']);
+ 
+ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\/[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+-const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,100}(:[A-Za-z0-9._-]{1,60})?(@sha256:[a-f0-9]{64})?$/;
++const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,100}@sha256:[0-9a-f]{64}$/;
+ const TARGET_RE = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,31}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
++const KEY_RE = /^[0-9a-f]{48}$/;
+ 
+ // The small, fast coding models worth testing (a shortlist, not a promise: ids must be checked on Hugging Face before renting).
+ // FP8 is tried first on every candidate; `nvfp4` entries are extra runs.
+@@ -43,7 +49,7 @@ export function validateUpOptions(options) {
+   if (!isPosNum(hourlyUsd) || hourlyUsd > 1000) throw fail('gpu-hourly-invalid', '--hourly-usd must be the node price per hour, above 0');
+   if (!isPosNum(maxUsd)) throw fail('gpu-cap-invalid', '--max-usd is required: the hard dollar cap for this session');
+   const image = options.image ?? GPU_DEFAULTS.image;
+-  if (!IMAGE_RE.test(image)) throw fail('gpu-image-invalid', 'image is not a valid container image name');
++  if (!IMAGE_RE.test(image)) throw fail('gpu-image-invalid', 'pin the image by digest (name@sha256:<64 hex>); tags are refused');
+   for (const [name, value] of [['gpus', options.gpus], ['perReplica', options.perReplica], ['maxModelLen', options.maxModelLen]]) if (value !== undefined && !isPosInt(value)) throw fail('gpu-option-invalid', `${name} must be a positive whole number`);
+   if (options.bestOf !== undefined && !(Number.isInteger(options.bestOf) && options.bestOf >= 1 && options.bestOf <= 8)) throw fail('gpu-option-invalid', 'bestOf must be a whole number from 1 to 8');
+   if (options.maxHours !== undefined && !isPosNum(options.maxHours)) throw fail('gpu-option-invalid', 'maxHours must be above 0');
+@@ -64,21 +70,49 @@ export function replicaPorts(count, { remotePortBase = GPU_DEFAULTS.remotePortBa
+   return Array.from({ length: count }, (_, index) => ({ index, remote: remotePortBase + index, local: localPortBase + index }));
+ }
+ 
+-// The shell script run on the node (sent on stdin to `bash -s`): the dead-man timer first, then one container per GPU.
+-export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase }) {
++// The shell script run on the node (sent on stdin to `bash -s`): the dead-man timer first, then the key file, then one container per GPU.
++export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
++  if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
+   // The timer is on the node itself, so it still fires if this computer sleeps or loses the link, and even if a later step fails.
+   // Powering off is best effort (it needs passwordless sudo); the owner still has to terminate the instance, which is what stops the billing.
+-  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; sudo -n shutdown -h now >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true'];
++  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; sudo -n shutdown -h now >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
+   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
+-    lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
++    lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host --env-file "$HOME/.swarm-vllm.env" -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
+   }
+   return `${lines.join('\n')}\n`;
+ }
+ 
+-export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\n';
++export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
++
++// The health check and status calls send the rental's key; the key is never logged.
++export function authFetch(fetchImpl, key) {
++  return async (url, init = {}) => fetchImpl(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${key}` } });
++}
+ 
+ const sleepReal = ms => new Promise(resolve => setTimeout(resolve, ms));
+ 
++// Default exposure probe: true when a TCP connection to host:port succeeds.
++const probeTcp = (host, port) => new Promise(resolve => {
++  const socket = net.connect({ host, port });
++  const finish = ok => { socket.destroy(); resolve(ok); };
++  socket.setTimeout(3000, () => finish(false));
++  socket.once('connect', () => finish(true));
++  socket.once('error', () => finish(false));
++});
++
++// The first replica port reachable from outside (probe from here, or a non-loopback listener on the node), or null.
++async function exposedPort({ host, ports, ssh, sshArgs, probePort }) {
++  for (const { remote } of ports) if (await probePort(host, remote)) return remote;
++  const out = String((await ssh([...sshArgs, 'ss -ltnH'], {})).stdout);
++  const listening = new Set(ports.map(item => item.remote));
++  for (const line of out.split('\n')) {
++    const local = line.trim().split(/\s+/)[3] ?? '';
++    const match = /^(?:0\.0\.0\.0|\*|\[::\]):(\d+)$/.exec(local);
++    if (match && listening.has(Number(match[1]))) return Number(match[1]);
++  }
++  return null;
++}
++
+ export function writeSession(env, session) {
+   const file = gpuSessionPath(env);
+   fs.mkdirSync(path.dirname(file), { recursive: true });
+@@ -124,8 +158,10 @@ async function waitHealthy(endpoints, model, { fetchImpl, sleep, now, timeoutMs,
+ // ssh(argv, { input }) -> { stdout }; openTunnel({ target, key, ports }) -> { pid, stop() }. Both injected so tests need no network.
+ export async function gpuUp(options, deps) {
+   validateUpOptions(options);
+-  const { ssh, openTunnel, fetchImpl = fetch, sleep = sleepReal, now = Date.now, env = process.env, log = () => {} } = deps;
++  const { ssh, openTunnel, fetchImpl = fetch, sleep = sleepReal, now = Date.now, env = process.env, log = () => {}, probePort = probeTcp, randomKey } = deps;
+   if (readSessionFile(env)) throw fail('gpu-session-exists', 'a GPU session is already recorded; run swarm gpu status, or swarm gpu down first');
++  const apiKey = randomKey ? randomKey() : randomBytes(24).toString('hex');
++  if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'the generated API key must be 48 lower-case hex characters');
+   const sshArgs = [...(options.sshOptions ?? []), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', options.target];
+   const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no)'], {})).stdout);
+   const count = parseGpuCount(output);
+@@ -138,19 +174,24 @@ export async function gpuUp(options, deps) {
+   const gpus = Math.min(options.gpus ?? count, count, 16);
+   const hours = sessionHours({ hourlyUsd: options.hourlyUsd, maxUsd: options.maxUsd, maxHours: options.maxHours });
+   const perReplica = options.perReplica ?? GPU_DEFAULTS.perReplica;
+-  const script = remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase });
++  const script = remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
+   const ports = replicaPorts(gpus);
+   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
+   const startedAt = now();
+-  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, routable: options.routable !== false, powerOff, state: 'starting' };
++  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, routable: options.routable !== false, powerOff, state: 'starting' };
+   createSession(env, session);
+   try {
+     await ssh([...sshArgs, 'bash -s'], { input: script });
+     log(`started ${gpus} replica(s) of ${options.model}; dead-man timer set for ${hours.toFixed(2)} h`);
++    const exposed = await exposedPort({ host: options.target.split('@').pop(), ports, ssh, sshArgs, probePort });
++    if (exposed !== null) {
++      try { await ssh([...sshArgs, 'bash -s'], { input: remoteStopScript() }); } catch { /* ignored: the timer still removes them */ }
++      throw fail('gpu-exposed', `port ${exposed} on ${options.target.split('@').pop()} is reachable from outside; the servers must listen on the node loopback only; the servers were stopped`);
++    }
+     const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions: options.sshOptions });
+     session.tunnelPid = tunnel?.pid ?? null;
+     writeSession(env, session);
+-    await waitHealthy(endpoints, options.model, { fetchImpl, sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
++    await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
+   } catch (error) { error.session = session; throw error; }
+   session.state = 'up';
+   writeSession(env, session);
+@@ -175,9 +216,10 @@ export async function gpuDown(deps) {
+ }
+ 
+ export async function gpuStatus(deps) {
+-  const { env = process.env, fetchImpl = fetch, now = Date.now } = deps;
++  const { env = process.env, fetchImpl: baseFetch = fetch, now = Date.now } = deps;
+   const session = readSessionFile(env);
+   if (!session) return { active: false };
++  const fetchImpl = session.apiKey ? authFetch(baseFetch, session.apiKey) : baseFetch;
+   const expires = Date.parse(session.expiresAt);
+   const expired = expires <= now();
+   const hours = Math.max(0, (now() - Date.parse(session.startedAt)) / 3600000);
+diff --git a/tools/rented.mjs b/tools/rented.mjs
+index 67d47dc..e823a12 100644
+--- a/tools/rented.mjs
++++ b/tools/rented.mjs
+@@ -6,7 +6,7 @@ import { loadLocalConfig, resolveConfigPath } from './local-config.mjs';
+ 
+ export const RENTED_DEFAULTS = Object.freeze({ maxHoursPerRun: 4, concurrency: 32, minBillableMinutes: 1, warnAt: 0.8, keyItem: Object.freeze({ service: 'project-swarm', account: 'rented.api_key' }) });
+ 
+-const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted', 'bestOf']);
++const KEYS = new Set(['name', 'endpoint', 'endpoints', 'auth', 'model', 'keyItem', 'hourlyUsd', 'maxHoursPerRun', 'concurrency', 'dailyUsd', 'trusted', 'bestOf', 'sessionKey']);
+ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/;
+ const NAME_RE = /^[A-Za-z0-9 ._-]{1,40}$/;
+ const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
+@@ -38,8 +38,9 @@ export function validateRentedConfig(raw) {
+     }
+   }
+   const auth = raw.auth ?? 'key';
+-  if (!['key', 'none'].includes(auth)) errors.push('rentedGpu.auth: must be "key" or "none"');
+-  else if (auth === 'none' && origins.some(origin => !LOOPBACK.has(new URL(origin).hostname))) errors.push('rentedGpu.auth none: only for loopback endpoints (an ssh tunnel)');
++  if (!['key', 'none', 'session'].includes(auth)) errors.push('rentedGpu.auth: must be "key", "none" or "session"');
++  else if (auth !== 'key' && origins.some(origin => !LOOPBACK.has(new URL(origin).hostname))) errors.push('rentedGpu.auth none or session: only for loopback endpoints (an ssh tunnel)');
++  if (auth === 'session' && !/^[0-9a-f]{48}$/.test(raw.sessionKey ?? '')) errors.push('rentedGpu.sessionKey: auth session needs the 48-character key of the running GPU session');
+   const origin = origins[0] ?? null;
+ 
+   if (typeof raw.model !== 'string' || !MODEL_RE.test(raw.model)) errors.push('rentedGpu.model: invalid model id');
+@@ -83,6 +84,7 @@ export function validateRentedConfig(raw) {
+       concurrency,
+       dailyUsd,
+       auth,
++      sessionKey: auth === 'session' ? raw.sessionKey : null,
+       bestOf,
+       endpoints: origins,
+       chatUrls: origins.map(item => `${item}/v1/chat/completions`),
+@@ -197,7 +199,9 @@ export function effectiveRentedRaw(raw, env = process.env, { now = Date.now } =
+   const session = readGpuSession(env, { now });
+   if (!session) return { raw, session: null };
+   const hours = Number.isFinite(session.maxHours) ? session.maxHours : RENTED_DEFAULTS.maxHoursPerRun;
+-  const merged = { ...(raw ?? {}), endpoints: session.endpoints, auth: 'none', model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
++  // A session made by this version carries a random per-rental API key; an older one has none.
++  const sessionAuth = typeof session.apiKey === 'string' ? { auth: 'session', sessionKey: session.apiKey } : { auth: 'none' };
++  const merged = { ...(raw ?? {}), endpoints: session.endpoints, ...sessionAuth, model: session.model, hourlyUsd: session.hourlyUsd, maxHoursPerRun: raw?.maxHoursPerRun === undefined ? hours : Math.min(raw.maxHoursPerRun, hours), concurrency: Math.min(2048, session.endpoints.length * (session.perReplica ?? 32)) };
+   delete merged.endpoint; delete merged.dailyUsd;
+   if (Number.isInteger(session.bestOf)) merged.bestOf = session.bestOf;
+   if (Number.isFinite(session.capUsd)) merged.dailyUsd = session.capUsd;

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-startup",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu-container-review.test.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-startup.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-startup.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy envFor, options, fakes and MODEL from tests/gpu-container-review.test.mjs (read it and tools/gpu.mjs). Tests: (1) Fail fast on a dead server (container mode): make the fake fetchImpl always throw (the server never answers) and the fake ssh answer a call whose last argument contains 'pgrep -f' with stdout 'DEAD\\nValueError: Invalid prefix_match_unit=64\\nsecond line' (other calls as before); with a fake clock whose sleep advances time by 5 seconds and healthTimeoutMs 1200000, gpuUp rejects with /gpu-server-died/, the message contains 'Invalid prefix_match_unit=64' and 'second line', the number of fetch attempts is small (under 20, i.e. it did not wait for the 20-minute timeout), a stop script (call with input containing 'pkill') was sent, and the session file is gone. (2) When the alive command answers 'ALIVE' the up keeps polling and succeeds once the fake fetch starts answering (fetch throws for the first three calls, then answers 200 with the model list when the authorization header is present and 401 without). (3) An odd or empty answer from the alive command counts as alive (the up still succeeds). (4) A thrown error from the alive ssh call counts as alive. (5) Docker mode (options without mode container; fakes answering the first command like tests/gpu-docker.test.mjs does with GPU lines, SUDO:ok and DOCKER:28.0.1): the alive command contains 'docker ps -q --filter name=swarm-vllm-0' and a 'DEAD\\nsome docker log' answer fails with /gpu-server-died/. (6) Startup flags: commonArgs (GPU_DEFAULTS.commonArgs) does not contain '--prefix-match-unit'; SHORTLIST qwen3.6-35b-a3b-nvfp4 args contain '--prefix-match-unit' followed by '64' and still contain '--quantization','modelopt_fp4' and do not contain '--moe-backend'; the nemotron entry args do not contain '--prefix-match-unit'; the qwen3-coder-next-nvfp4 entry args contain no '--quantization' and no '--moe-backend' and do contain '--prefix-match-unit','64'. Use only exports that exist (GPU_DEFAULTS, SHORTLIST, gpuUp, readSessionFile ...). Keep tests short."
+    }
+  ]
+}

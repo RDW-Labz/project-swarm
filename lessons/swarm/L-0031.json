@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0031",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A missing CLI and an empty error both hid the same kind of failure. Landing a run failed partway through with a bare error before anyone noticed the required CLI simply was not on PATH; separately, a failed pull-request lookup gave no detail at all when its own error stream was empty.",
+  "rule": "Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship` resolves `gh` and `git` before doing any real work and refuses at once with \"gh not found on PATH\" (or the spawn error text) when either is missing; a `pr list failed` reason always includes stderr, or the literal `(empty)` when there is none. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#31"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0076",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "One mutants shape was expected, but a worker wrote a different one. A worker's own mutants file used a different key for a mutant's name than the one the mutation tool reads, so the difference had to be converted by hand before the tool would accept the file.",
+  "rule": "State the one true shape everywhere a worker can read it, and let the tool bridge the common near-miss instead of failing outright.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the mutation tool now accepts the old key as an alias for the new one (renamed, with a warning), and the paste-ready environment block states the exact shape alongside every other rule a worker needs. Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#76"
+  }
+}

@@ -1,0 +1,259 @@
+# Project Swarm — Plan v2: Thousands of Workers, Better Drop-in, Better CLI
+
+Starting point: v1.62.0. Lanes, job types, short reports, merge queue, spend guard, lead agents, remote hosts, `swarm init` / `swarm go` all shipped. 500 stub jobs ran at about 131 MB of memory. 50 real jobs ran across 6 lanes for $0.34.
+
+Goal: one command takes any goal and runs it across up to thousands of workers, as fast and cheap as possible, without dropping quality.
+
+## Ground rules (same as v1)
+
+- Claude Code orchestrates only. Route cheapest-first, from the lane benchmark: Anthropic API (Haiku) → Cursor → Codex → Claude subscription (after two failures). Hermes runs only research/summary jobs. OpenRouter runs only non-sensitive bookkeeping jobs.
+- No secrets to workers. Sensitive jobs never go to OpenRouter, OpenAI, Gemini, Lambda, or untrusted sandboxes.
+- One PR per phase. Tests, CHANGELOG, and a version bump go in the same PR. Never merge without Braden's explicit OK.
+- Ask before any cap raise or new paid service.
+- Dogfood: use the swarm to build these phases.
+
+## Reality check (put this in the docs)
+
+- Thousands of workers at once only happens on **API lanes** (Anthropic Haiku/Sonnet, OpenRouter) and **extra hosts**. Subscription CLIs (Claude, Codex, Cursor) stay capped low per lane, or the accounts get throttled.
+- The real ceiling is each provider's rate limit for your account tier. The swarm must find it and stay under it automatically.
+- More workers only helps if the goal splits into that many independent pieces. The planner matters as much as the scheduler.
+
+---
+
+## Phase 10 — Real `swarm` command (replace the alias)
+
+The alias only works in your interactive shell. Claude Code, Cursor agents, and scripts run commands in non-interactive shells that don't load aliases, so agents can't call `swarm`.
+
+- Ship a real executable: `swarm` in `~/.local/bin`, symlinked to the `current` runner. `install`/`update` creates it, and `doctor` checks that it's on PATH. Remove the alias.
+- Shell completion for zsh (commands, run ids, flags).
+- `swarm` with no args: a short status for this project (initialized? last run? lanes up? today's spend), plus the 5 most useful next commands.
+- `swarm "goal"` works as shorthand for `swarm go "goal"`.
+- `swarm go` auto-runs `init` the first time in a project.
+- Done when: a non-interactive `bash -c 'swarm doctor all'` works, and Claude Code can run `swarm` with no setup.
+
+## Phase 10b — Orchestrator failover
+
+**Goal:** any capable agent can take over mid-project in under a minute, with no lost work, and most routine orchestration doesn't need a frontier model at all.
+
+### 1. The runner keeps the state, not the model's memory
+
+- Add a **project journal** at `.swarm/project/journal.ndjson`: an append-only log of every goal, plan, decision, run, integration, PR, blocker and human task. The runner writes it automatically on every command. No model has to remember to write it.
+- Add **`swarm brief`**: prints a compact briefing (under 4 KB) from the journal plus live run state:
+  - the goal and done-when;
+  - what's done (merged PRs, integrated runs);
+  - what's running right now (run ids, waves, ETA) — runs keep going without the orchestrator;
+  - open decisions and the human inbox (Phase 10c);
+  - the exact **next 3 actions**, as commands;
+  - the rules that apply (routing order, budget, no merging without OK).
+- `coordination/HANDOFF.md` is regenerated from the journal after every command (keep the file for compatibility; it is no longer hand-written).
+- `swarm note "<text>"` lets any orchestrator add a decision or context line to the journal in one command.
+
+### 2. Make any agent pick up the seat
+
+- The agent pointers (CLAUDE.md, AGENTS.md, Cursor rule, a Gemini file) all say: **"At session start, run `swarm brief` and continue from its next actions."**
+- `swarm handoff --to codex|cursor|claude|gemini` prints one paste-ready message for that agent: the brief plus a short "you are the orchestrator, here are the rules" header.
+- Add a **Claude Code hook** (installed by `swarm init`): after each turn, run `swarm checkpoint`. This is cheap and needs no model; it just snapshots the journal. That way the state is current even if the next turn gets rate-limited.
+
+### 3. Autopilot: routine orchestration without a model
+
+- **`swarm autopilot`**: a long-running, no-model process that drives the plan: start the next wave when its dependencies integrate, run the merge queue, retry and escalate failed jobs, pause and resume at caps and quota resets, open PRs, and update the journal.
+- It only calls a model for real decisions: planning a new lead, reviewing a failed job twice, or the final gate. Those calls go through the lanes with fallback (orchestrator tier: Claude subscription → Codex top model → Anthropic API Sonnet), so one provider's limit never stops the project.
+- When the human orchestrator (you plus Claude Code) is rate-limited, autopilot keeps building. You come back to progress, not a stalled terminal.
+- It never merges to main, deploys, raises a cap, or spends past budget. Those wait in the inbox.
+
+### Done when
+
+- Kill the Claude Code session mid-project. Start Codex CLI, run `swarm brief`, and it continues correctly with zero re-explaining. Test this on a real project.
+- A 500-job `swarm go` reaches its final gate with no orchestrator session open (autopilot only), with the inbox holding anything that needs Braden.
+
+---
+
+## Phase 10c — Never wait on a human (inbox and unblocked work)
+
+**Goal:** everything that can be built gets built while manual steps are pending. Braden handles manual steps in one batch, whenever he's ready.
+
+### 1. Human tasks are jobs too
+
+- The planner marks anything that needs Braden as a `type: "human"` job: logins, API keys, approvals, design choices, account setup, deploys, merges. Each one says exactly what to do (copy-paste steps) and **which jobs it blocks**.
+- The scheduler runs **every job that isn't blocked**, across all leads and waves, instead of working down the list. Only the jobs that truly depend on a human task wait.
+
+### 2. Build around the gap
+
+- When work depends on something missing (a key, an account, a decision), the planner adds a **stub path**: build against an interface plus a mock or fake (for example a fake payment provider, seed data, or a feature flag that's off), with tests on the mock. The real hookup becomes a small follow-up job that unlocks when the human task is done.
+- Design choices: if there's a sensible default, the swarm **picks it, builds it, and records it** as "decision to confirm" in the inbox, instead of stopping. Braden confirms or changes it later, and a change becomes a normal follow-up job.
+- Never stub anything security- or money-sensitive into the real path (auth, payments, secrets). Those stay behind a flag and clearly marked "not wired."
+
+### 3. One inbox
+
+- **`swarm inbox`**: everything waiting on Braden across all projects, sorted by **how much work it unblocks**. Each item has the steps and one command to mark it done (`swarm done <item>` or `swarm decide <item> <choice>`).
+- Swarm Watch gets a **"Needs you"** panel at the top showing the same list.
+- Optional notifications: a macOS notification when a new item would unblock 20+ jobs, and a daily digest. No spam: group items, and never notify for one that unblocks nothing.
+- When an item is marked done, the jobs it blocked start automatically (autopilot).
+
+### 4. Keep the pipeline full
+
+- **`swarm backlog`**: queue several goals or projects. When one run is waiting on the inbox or a quota reset, autopilot starts unblocked work from the next goal (inside budget and lane limits, never in overlapping files).
+- Matches the standing rule: never sit idle. During a quota wait, autopilot runs the zero-quota idle menu.
+
+### Done when
+
+- On a real app build with 3 manual steps (one key, one login, one design choice), all non-dependent work finishes before Braden touches the inbox, and finishing the 3 items unlocks the rest automatically.
+- `swarm inbox` never shows an item without exact steps and the number of jobs it unblocks.
+
+---
+
+---
+
+## Phase 11 — Plan preview and approval
+
+- `swarm plan "goal"`: a dry run. Shows leads, scopes, job count, lanes, and **estimated cost, time, and peak concurrency**, plus anything risky (sensitive files, big deletes). Nothing runs.
+- `swarm go` shows the same preview and asks `Run? [y/N]` (`--yes` skips it). Unattended runs need `--yes` plus a budget.
+- Saved plans: `swarm go --plan <id>` runs exactly what was previewed.
+- After each run, compare the estimates with the actuals and use the difference to improve future estimates.
+- Done when: the preview is within 2× of the real cost and time on the scale-test runs.
+
+## Phase 12 — Better drop-in (`swarm init` v2)
+
+- **Project profile** in `.project-swarm.json`: stack, checks, default `sensitive` (asks once, e.g. BinGo = sensitive), protected paths (never written), and default budget.
+- **Base check:** run the project's checks once at init. If they're already red, say so and record it, so workers aren't blamed for old failures.
+- **Repo map:** build and cache a map of the repo (file tree, exports/symbols, import graph, test-to-source links). Refresh it incrementally on each run. Planners and leads read the map instead of re-reading the repo.
+- Write agent pointers (CLAUDE.md / AGENTS.md / Cursor rule) that tell any agent how to use `swarm` in this project.
+- `swarm init --check`: a read-only health check of the setup.
+- Done when: a fresh clone of a real project goes from `swarm init` to a green `swarm plan` with no hand edits.
+
+## Phase 13 — Scope → Tickets → Swarm (replaces "Planner quality")
+
+The full spec is [swarm-scope-tickets-spec.md](swarm-scope-tickets-spec.md). Built after Phase 14b, then Phase 15, 16 and 17. Order: 14b → 13 → 15 → 16 → 17.
+
+Goal: Braden drops in a full build scope written with Claude; the swarm breaks it into hundreds or thousands of small tickets without losing anything in it, runs them in parallel, and keeps one live Build Plan that everyone (Braden, the orchestrator, leads, workers, the dashboard) checks progress against. Change orders update it.
+
+- **The scope is the source of truth** (`docs/scope/scope.md`): a template with stages and requirement IDs (`R-001` …) with acceptance criteria; `swarm scope template` prints it and `swarm scope check` lints it (missing IDs, untestable wording, duplicates, missing acceptance criteria, unclear stage order).
+- **`swarm scope split`** builds a Stage → Epic → Ticket tree. Every ticket traces to requirement IDs (`scopeRefs`), carries acceptance criteria copied or derived from the requirement (never invented), owns its files (one writer per file), has `dependsOn`, a size (S or M, never L), a risk and a sensitive flag. It splits along real boundaries using the repo map and import graph (Phase 12), puts **contracts first** (types, API shapes, schema) so the rest runs in parallel, takes waves from the dependency graph, and uses leads (Phase 5) to split each stage in parallel. This keeps the old Phase 13 aims: real boundaries, contracts first, waves, job sizing, contracts auto-attached and a job that names a contract it lacks is refused.
+- **Integrity before anything runs:** 100% requirement coverage, every ticket traced (untraced ones are "not in scope" and need Braden's OK), testable acceptance criteria, no two tickets writing the same file in a wave, size budget, a strong-model review of the whole tree against the scope (the local brain, Phase 14b, does a free first pass), and Braden's approval of a summary (stages, ticket count, coverage %, cost and time estimate, risks). While it runs, every worker report names its ticket; review checks the result against the ticket's criteria and the original requirement text; work outside the ticket is flagged as **drift** and not merged without approval; a ticket is `done` only when checks, review and merge have passed.
+- **Change orders:** `swarm change "…"` or edit `scope.md` and `swarm scope sync`: impact analysis (requirements and tickets affected, new, cancelled or reopened, cost and time change), Braden approves, the scope gets new or versioned requirement IDs, tickets are added, cancelled or reopened and dependents re-planned, and it is all logged as a numbered change order (`CO-007`). History is never deleted.
+- **The ticket ledger:** `.swarm/project/tickets.json` (current) plus `tickets.log` (append-only), committed summaries in `docs/scope/build-plan.md`; `swarm tickets`, `swarm ticket T-0123`; `swarm brief` and autopilot read it, so the orchestrator knows what is done, next and blocked against the scope, not only against runs. GitHub Issues or Linear sync is optional and later.
+- **Contracts first, then generate** (speed spec [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md), 1a): wave 0 is small: database schema, API spec (OpenAPI), shared types, events, and the screen list with routes, straight from the scope and approved once by Braden. A tool, not a model, then generates types, API clients, validators, migrations, **mock API servers** and **seed data** from the contracts, so database, API and screens build at the same time against the contract and mocks (about 6 waves become about 2). Contract tests for both sides are generated from the same contract.
+- **Day 0 setup checklist** (speed spec 3): splitting the scope lists every account, key and decision the project needs (Stripe, domain, app store, email provider, …) as human tickets (10c), to be done together on day 0, not as surprises mid-build. Store and launch work (developer accounts, listings, privacy policy, review submission) also starts on day 0 as human tickets.
+- **Approval policy, set once per project** (speed spec 3): auto-merge into the `swarm/*` branch when tests and review pass; Braden approves only the scope and contracts (day 0), the design gallery (16), change orders over $X and the final PR per stage; a pre-approved budget per project. Stored in the project profile.
+- **Tests from the scope first** (speed spec 2): acceptance tests are written straight from the requirement criteria in wave 1, in parallel with the code, so every ticket has a pass/fail target from the start.
+- **Commands:** `swarm scope template|check|split|approve`, `swarm go --scope` (runs every ready ticket), `swarm tickets`, `swarm ticket <id>`, `swarm change "<text>"`, `swarm scope sync`.
+- **Builds on:** repo map and profile (12), plan preview and approval (11), human jobs and inbox (10c: human tickets), backlog, local brain (14b), protected paths (12), throughput (14).
+- Done when: a real scope with at least 100 requirements splits into 300+ tickets with 100% coverage, zero untraced tickets after review, and Braden's approval; `swarm go --scope` runs them in waves with hundreds in flight and every merged change traces to a ticket and a requirement; and a change order mid-build adds and cancels the right tickets, with the Build Plan view showing it live. For the contracts-first part: on a real scope, codegen and mocks produce a working mock API and seed data in seconds, and the build takes 3 waves or fewer.
+
+## Phase 14 — Throughput to thousands
+
+- **State store:** move run state from rewriting `state.json` on every change to an append-only event log (or SQLite), with snapshots for `inspect`, `monitor` and `rollup`. A full rewrite doesn't scale to thousands of jobs.
+- **Cheap workspaces:** use copy-on-write clones (APFS `clonefile` on macOS, reflink or hardlinks on Linux) instead of byte copies. Clean them up as soon as a job integrates.
+- **API jobs without processes:** API-lane jobs run as in-process async requests, not one child process each. That's what makes thousands in flight feasible on one Mac.
+- **Adaptive concurrency:** each lane finds its own limit by ramping up until it hits 429s, then backing off, honoring `retry-after` and the provider's rate-limit headers. Shared machine-wide, as today.
+- **Prompt caching:** shared context (repo map, contracts, style guides) goes in a cached prefix for Anthropic, cutting the cost of large fan-outs.
+- **Batch mode:** `--batch` sends jobs that don't need to finish fast to the Anthropic Message Batches API at a lower price. Good for big review or doc sweeps.
+- **More hosts:** dev2, once reachable, plus optional trusted cloud sandboxes with auto-scaling.
+- Done when: 2,000 stub jobs and 1,000 concurrent fake-API requests on one Mac stay under 1 GB of memory, with no state-write slowdown.
+
+## Phase 14b — Local brain
+
+Use dev2's model (the Strata API, reached the way `dev2chat` does: an ssh tunnel with the swarm key) as a free helper that cuts orchestrator and paid-model use. **Runner-side only: workers never call it and never see its address, key or tunnel.** Built right after Phase 14.
+
+- **`swarm think "question" [--rounds N]`:** a proposer/critic loop on the local model (default 2 rounds, at most 4). Returns a short top-3 with a reason for each, so the orchestrator reads 10 lines instead of reasoning through the options itself.
+- **`swarm digest <file|run-id|diff>`:** condenses long logs, diffs, test output or a run's results to 15 lines or fewer for the orchestrator. Accepts a file path, a run id (its failures and results) or `-` / `git diff` text on stdin.
+- **Failure triage:** when a job fails, the local model first classifies it `retry`, `escalate` or `needs-human` and writes the retry hint. The orchestrator (and autopilot) see only the verdict, the hint and the evidence pointer. `needs-human` becomes an inbox item (Phase 10c); `escalate` moves the job up the route (Claude after two failures stays the rule).
+- **Draft then polish:** docs, PR text and plans are drafted by the local model; a cheap paid model (Haiku) reviews and fixes the draft instead of writing from nothing.
+- **Pre-flight before Claude or Opus:** before any job is routed to Claude or Opus, the local model checks the prompt, the context list and the outputs for the usual mistakes (missing context, unnamed output files, ambiguous goal, a file the job needs that is not in context) and returns fixes. A failed pre-flight is a warning with the fixes; it never blocks on its own.
+
+**Rules**
+- A **local-brain queue** with concurrency 1 to 2 (one model server shared with other people's work). Requests time out; nothing waits on it forever.
+- Everything it returns is **untrusted worker text**: sanitized (control characters, bidi, secrets redacted), length-capped, never executed, never pasted into prompts as instructions, and never allowed to approve, merge, raise a cap or change routing by itself.
+- **Sensitive data:** the local model is on the owner's own machine, so sensitive material may go to it; it is the one remote helper allowed for sensitive jobs. Secret paths and protected paths are still never sent (the same rules as remote hosts).
+- **If dev2 is down** (tunnel, server, or no answer in time), the same request falls back to Haiku on the Anthropic lane (machine-wide caps apply, non-sensitive material only; a sensitive request just reports "local brain unavailable" and does nothing).
+- The tunnel and the API key are read the way `dev2chat` does and kept in memory only.
+- **Saving is measured:** every call records the tokens it kept away from the orchestrator (the input it digested or the reasoning it replaced, estimated) and the paid tokens it used, in the usage ledger, and the dogfood scoreboard gets an "orchestrator tokens saved" column.
+- Done when: on the Phase 17 scale test, triage and digest keep orchestrator reads of failures under 20 lines per failed job, and the scoreboard shows a measured drop in orchestrator tokens for the same work.
+
+## Phase 14c — Batch mode
+
+Anthropic Message Batches only, at half price. Opt-in per run (`--batch`), per job type (`review`, `docs`, `test`) in the manifest or machine config, or per job. Same run, lane and machine-wide caps and reservations; sensitive rules unchanged; `swarm plan` shows the estimated saving. Built; see [batch](../batch.md) and `phase14c-design.md`.
+
+## Phase 14d — Rented GPU lane
+
+`agent: "rented"`: any OpenAI-compatible endpoint (vLLM or SGLang) we spin up in the cloud. Config: endpoint URL, model, Keychain key, hourly cost, max hours per run, max concurrency (adaptive). The spend guard counts the hourly cost toward the run and day caps, warns at 80% and stops launching at the cap; only jobs marked `sensitive: false` ever go to a rented host (`trusted` is gone). Includes a runbook for renting a node, connecting and shutting it down (revised in 14e for small models). **Nothing is rented by the build;** the 2-hour live test needs the owner's separate approval before Phase 17. Built; see [rented GPU](../rented-gpu.md) and `phase14d-design.md`.
+
+## Phase 14e — Small-model GPU swarm
+
+- Rented GPUs run SMALL fast coding models (about 7B to 35B, mixture-of-experts preferred; shortlist Qwen3.6-35B-A3B, Qwen3-Coder-30B-A3B, Devstral Small 2, Nemotron-3.5-Lightning as an NVFP4 extra) as the main worker lane. dev2's Qwen stays the free reviewer and brain.
+- `swarm gpu up|down|status` starts one vLLM replica per GPU over ssh. It sends commands only: no files, keys or .env. Servers stay on the node's loopback behind an ssh tunnel. The lane load-balances across replicas (least in flight; an unhealthy replica is skipped for 30 s).
+- `swarm gpu bakeoff` ranks candidates on one GPU using our own tasks (the lane benchmark now, the lessons eval set once Phase 15 builds it). It reports pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task. FP8 runs first; NVFP4 runs only as an extra. Results go to docs/state/gpu-bakeoff.md.
+- Every job on this lane carries exact files, the manifest contract and acceptance tests. One failure escalates to Haiku, then Codex.
+- Safety before any rental: a hard dollar cap per session (the session lasts at most cap divided by hourly price); a timer on the node that removes the servers and powers it off; rented hosts take only sensitive: false jobs; nothing is copied to the node.
+- Done when: the bake-off ran once on one rented GPU with Braden's approval, and docs/state/gpu-bakeoff.md names the winner.
+- Status: built, nothing rented; see [rented GPU](../rented-gpu.md).
+
+## Phase 15 — Quality at scale
+
+- **Verify every write:** each write job is followed by checks (tests or lint on the files it touched), then a cheap review job. Failures go back to the worker once with the reviewer's notes.
+- **Escalation ladder:** if a cheap lane fails checks, retry once on the next tier up (Haiku → Sonnet → Codex/Cursor → Claude). Record which lane passes which job type.
+- **Learned routing:** use the pass/fail and cost history per (job type × lane × model) to pick the cheapest lane that usually passes. Start from the current fixed order and adjust slowly.
+- **Best-of-N** for risky jobs (`quality: "high"`): run 2–3 cheap attempts, keep the one that passes checks and review.
+- **Speed multipliers** (speed spec [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md), 1b, 2 and 4):
+  - **Test only what changed:** each batch runs the tests affected by its files (the repo map's test links, Phase 12); the full suite runs every N batches and at the end.
+  - **Adaptive batch size:** when batches keep passing, merge bigger ones (10 → 25 → 50); when failures rise, shrink; bisect stays the safety net. **Merge often, branch short:** every green batch lands on the `swarm/*` branch at once, so later tickets build on real code.
+  - **Speculative start:** the next wave starts against the contract before the previous one finishes merging; only tickets whose contract changed are redone.
+  - **Skeleton first:** one feature built all the way through (database → API → screen → test) before fanning out, so connection bugs show on day 0.
+  - **Continuous integration:** after every merged batch, end-to-end smoke tests (Playwright) on a running copy; failures are triaged by the local brain (14b) and become fix tickets. One **integration lead** watches the connections between areas and opens fix tickets.
+  - **Preview deploy per batch:** every green batch deploys to a preview URL (Vercel, Fly, Cloudflare, …); Playwright mobile emulation and simulators check each batch, real devices only for final candidates.
+  - **Fast test machines:** cached dependencies, a prebuilt dev container, tests split across CPU cores (also on the rented GPU box's CPUs).
+- **Final gate:** before a `swarm/go` branch is marked done, run the full test suite plus one high-tier review of the whole diff (Claude subscription).
+- Done when: on the scale-test repos, the final branch passes the full test suite with zero human fixes on at least 90% of runs.
+
+## Phase 16 — Swarm Watch (replaced by the spec)
+
+The full spec is [swarm-watch-spec.md](swarm-watch-spec.md) and the reference design is [the prototype](../design/swarm-watch-prototype.html). Build it with real run data (the run state snapshots and the ticket ledger; Phase 14 found an event log unnecessary), to match the prototype.
+
+- `swarm watch` opens a local, read-only web dashboard for the newest live run (`<run-id>`, `--all` and `--tui` are in the spec). `swarm go` and `swarm "goal"` print the watch URL, and `--watch` opens it.
+- The server binds to 127.0.0.1 only, uses a random port and token, streams deltas over Server-Sent Events, and has no write routes.
+- **Build Plan tab** (from [the scope and tickets spec](swarm-scope-tickets-spec.md), section 6), next to the live run view, reading the ticket ledger from Phase 13:
+  - a header with scope name and version, overall % done, coverage % (requirements done / total), tickets by status, spend against estimate and the change-order count;
+  - **stage lanes**: each stage a row with a progress bar; expand to epics, and an epic to ticket cards with status colour, type icon, risk and sensitive pills and the lane working on it;
+  - a **dependency view** (blocked chains highlighted) and a **requirement view** (each `R-` ID with its tickets and a done / partial / missing state, so nothing dropped from the scope hides);
+  - a **change-order timeline** (what each added, cancelled or reopened) and a **ticket drawer** (scope text, acceptance criteria, files, runs, review result, PR, cost, drift flags);
+  - live: it updates as tickets move, and tickets from a change order animate in.
+- **Screenshot gallery** (speed spec 3): design review is one gallery of screenshots per batch that Braden approves in one sitting; comments become fix tickets. The design system is picked once per brand (for example RDW Labz navy and lime) and every screen uses it.
+- Done when: you can follow a real 1,000+ job `swarm go` run from start to the final gate without reading logs, on desktop or phone, and the Build Plan tab shows a real scoped build (stages, tickets, requirements, change orders) live.
+
+---
+
+## Phase 17 — Scale test v2
+
+- 2,000 stub jobs: record memory, CPU, queue latency, state-write time, and merge throughput.
+- 200 real jobs on a throwaway repo across all lanes (Hermes included if dev2 is reachable), with a $10 cap. Record cost and pass rate per tier.
+- One real `swarm go` on a medium project. Record plan accuracy, the conflict rate, and how many fixes it needed after the run.
+- **Lane benchmark** (a small one ran at 1.63.0; see `docs/state/lane-benchmark.md`): 10 real tasks from this repo, 2 each of small bug fix, new function plus test, refactor, test-writing and docs, run on every lane including Hermes on dev2. Each result is scored by real tests (hidden tests, mutants and fact checks the worker never sees) plus a review. Record pass rate, cost, time and quality per lane and per kind. Rerun it whenever a lane, model or the router changes, and use the results to set the default route per job type (`tools/job-types.mjs`). The harness is `bench/lane-benchmark/`.
+- Verify the Phase 18 effect table on a medium app: waves, swarm build time, Braden's time, and when glue bugs are found.
+- Publish the numbers in `docs/field-report.md`.
+
+---
+
+## Phase 18 — Speed multipliers
+
+The full spec is [swarm-speed-multipliers-spec.md](swarm-speed-multipliers-spec.md). Goal: the code is already fast; cut the five things around it that are slow (work that must happen in order, testing and merging, Braden's own steps, gluing the pieces, real-world steps) so a medium app ships in hours and days.
+
+Most of it lives in earlier phases, as the spec's build order says:
+1. Contracts first, codegen and mocks: **Phase 13**.
+2. Day 0 checklist and approval policy: **Phase 13**.
+3. Affected-only tests and adaptive batches: **Phase 15**.
+4. Skeleton first, continuous integration tests, preview deploys: **Phase 15**.
+5. Screenshot gallery approval: **Phase 16**.
+6. **RDW Labz starter kit** (this phase, its own project): one template repo per app type (web app, mobile app, booking or portal) with auth, roles, layout, design system, forms, tables, payments (sandbox), emails, file upload, admin panel, CI/CD, deploy, error tracking and test setup already built and tested, so the swarm builds only what is unique. `swarm init --kit web-portal`; first kit is `web-portal`, dogfooded on the parts request app. Secrets stay in the vault (the Oasis plan): keys go in once, deploys and tests use them, agents never see them.
+7. **Scope interview** (this phase, built after Phase 13): `swarm scope new` asks structured questions (local brain or Claude), uses a scope template for the app type and writes the scope with requirement IDs, so the scope takes about 30–60 minutes instead of hours.
+
+Expected effect, to verify in Phase 17: waves for a medium app ~6–10 → ~2–3; swarm build time ~4–10 h → ~1–3 h; Braden's time ~2–4 days spread out → ~1 day in 3–4 planned sittings; glue bugs found at the end → in the first hour.
+
+Done when: the starter kit and scope interview exist, and the Phase 17 medium-app run shows the effect table's numbers (or says honestly which ones were missed).
+
+---
+
+## Suggested order
+
+10 → 10b → 10c → 11 → 12 → 14 → 14b → 14c → 14d → 14e → 13 → 15 → 16 (use swarm-watch-spec.md) → 17 → 18 (scope interview right after 13; starter kit is its own project and can start any time)
+
+(The CLI comes first. Failover and the inbox (10b, 10c) come next because they fix the biggest day-to-day stalls; see the addendum. The plan preview follows because it makes every later run safer and easier to use. Throughput comes before the planner and quality work, so those can be tested at real scale.)

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-s13",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes lane routing, spend-adjacent scheduling, a config-restoring guard process and review context building",
+      "type": "review",
+      "prompt": "Review coordination/review/s13.diff (changes to the swarm tools since 1.136.0). Focus: (1) tools/router.mjs: the cheapest-first order is now cursor, codex, anthropic, openrouter and the claude lane gets midModel and expensiveModel; could any job go to a lane that cannot accept it, or a sensitive job reach a wrong lane; (2) tools/ticket-manifest.mjs: pinned lanes drop cacheContext and take a model from the machine config, and ticket ids in context are expanded through tools/ticket-refs.mjs; could expansion leak a protected or secret file into a worker context, loop, or pull in a huge file list; (3) tools/scope-commands.mjs sync: laterIds transitive closure and the ownership wait; any way a ticket now skips a test file that should block it, or an infinite loop; (4) tools/concurrency-guard.mjs: the marker file and watcher process that restores machineConcurrency; races, restoring a value the owner changed, a crash leaving the config wrong; (5) tools/lanes.mjs queue and tools/acceptance.mjs evaluate fallback. Report only real defects with file and line. Finish with a verdict line: pass or fail, then the findings.",
+      "context": [
+        "coordination/review/s13.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

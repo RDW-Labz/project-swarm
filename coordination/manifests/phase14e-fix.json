@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "uncovered-module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "context": [
+        "tools/scaffold.mjs",
+        "tools/leads.mjs"
+      ],
+      "outputs": [
+        "tools/uncovered-tests.mjs"
+      ],
+      "prompt": "Write tools/uncovered-tests.mjs: plain ESM for Node 20+, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\". Background: when a lead's child manifest names a file that some existing test mentions, validation fails with a message of the form \"Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): JOB: OUTPUT <- TEST; JOB: OUTPUT <- TEST\" (entries separated by \"; \"). For lead children the runner should add those tests to the job's ignoreTests itself, the way tools/scaffold.mjs does. Export exactly two functions. (1) parseUncovered(message): returns an array of { job, output, test } parsed from such a message (the part after the first \"): \"), or an empty array when the message is not an Uncovered test references message or has no entries; entries that do not match \"JOB: OUTPUT <- TEST\" are skipped; job ids may contain letters, digits, dot, underscore and dash; paths contain no spaces. (2) ignoreUncovered(jobs, refs): returns a NEW array of jobs (never mutate the input) where each job named in refs gets each of its tests added to ignoreTests (keep any existing entries, no duplicates, sorted) and, for each test that was newly added, this line appended to its prompt: \"\\nignoreTests: \" + test + \" — Existing test is outside this job's declared outputs; the coordinator runs it after integration.\" (the dash is an em dash, exactly as in tools/scaffold.mjs). Jobs not named in refs are returned unchanged. A ref whose job id is not in jobs is ignored. Keep the code compact."
+    },
+    {
+      "id": "uncovered-tests",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "context": [
+        "tools/scaffold.mjs"
+      ],
+      "outputs": [
+        "tests/uncovered-tests.test.mjs"
+      ],
+      "prompt": "Write tests/uncovered-tests.test.mjs: node:test and node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\". It tests tools/uncovered-tests.mjs, which exports parseUncovered(message) and ignoreUncovered(jobs, refs). parseUncovered parses a message of the form \"Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): JOB: OUTPUT <- TEST; JOB: OUTPUT <- TEST\" into an array of { job, output, test }; it returns [] for any other message, for an empty entry list, and skips entries that do not match \"JOB: OUTPUT <- TEST\". ignoreUncovered(jobs, refs) returns a NEW array (never mutates the input): each job named in refs gets its tests added to ignoreTests (existing entries kept, no duplicates, sorted) and, for each newly added test, this exact line appended to its prompt: \"\\nignoreTests: \" + test + \" — Existing test is outside this job's declared outputs; the coordinator runs it after integration.\" (em dash). Jobs not named in refs are returned unchanged; a ref naming an unknown job is ignored; a test already in ignoreTests adds no second prompt line. Write about 8 focused tests, including that the input jobs array and its jobs are not changed."
+    }
+  ]
+}

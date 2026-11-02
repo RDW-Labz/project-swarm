@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-mine",
+      "type": "build",
+      "prompt": "Write the mine module, section 8 of the design. It imports listLessons from the lesson store module and safeWritableDir and assertRegularOrMissing from the journal module (check the export names in the context). Keep it under 16000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 8 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-store.mjs",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-mine.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-mine-test",
+      "type": "build",
+      "prompt": "Write the test file for the mine module, section 8 of the design (the module is written at the same time; use exactly the names there). Use fake lesson objects built in the test and temp folders. Cover: clustering rules (min, generic tags ignored, guarded lessons ignored unless included, greedy assignment, dropped small clusters, deterministic order), every classify rule in order, proposal fields and the example for scope-rule only, rendered Markdown sections, mine in dry run writes nothing, mine with write creates files and never overwrites an existing one, a symlinked output folder or file is refused.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 8 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/lesson-store.mjs"
+      ],
+      "outputs": [
+        "tests/lesson-mine.test.mjs"
+      ]
+    }
+  ]
+}

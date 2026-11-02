@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0029",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "An intended error alarmed a review that expected only failures. A harness view that deliberately triggered an HTTP error to exercise error handling was flagged by review as an unexpected failure.",
+  "rule": "Any view that intentionally triggers an error belongs on that view's own expected-errors list, not treated as a surprise.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the skill's UI-job boilerplate states this rule directly. Documentation: the skill's UI-test prompt guidance.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "prompt",
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#29"
+  }
+}

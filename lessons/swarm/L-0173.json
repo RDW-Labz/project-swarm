@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0173",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An evaluator's own test could report a clean pass while never once exercising the very attack path it exists to catch, because its test used only hand-built fixtures instead of the real data it will actually see in production. A gate that only ever saw fixture data built to be clean, or built to be caught, proves nothing about whether it can tell the two apart on a real input.",
+  "rule": "A test for any evaluator or gate must run on the real data it will see in production and prove the attack path itself actually ran, not merely that the final verdict came back as expected.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shared contract template now requires exactly that real-data test for every evaluator or gate a batch adds or changes, together with a standard mutant that forces the evaluator to treat every case as clean, which that same test must then kill.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "evals",
+    "mutation-testing",
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#173"
+  }
+}

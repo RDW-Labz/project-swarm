@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0119",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker with no ability to run tools of its own was pointed at reference material it needed for its task, but that material never actually reached the request sent to it, and the run was still reported as finished successfully with nothing usable to show for it.",
+  "rule": "A worker with no tools of its own must have its reference material actually delivered to it, or the task should be refused outright; a result that amounts to nothing is never reported as finished successfully.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: reference material for such a worker is now inlined directly into its request, with a size limit per file and a record of what was actually included; material that cannot be delivered this way now refuses the task up front, and an empty result from such a worker is now reported as failed rather than finished. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#119"
+  }
+}

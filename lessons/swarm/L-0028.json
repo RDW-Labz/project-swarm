@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0028",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A useful mutant needed a whole run's manifest, even for a one-off check. Testing a single guard on the current tree meant writing a throwaway manifest and a full run just to reach mutation testing.",
+  "rule": "Let mutation testing run directly against the working tree, with no run at all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `mutants --mutants-file FILE --mutant-check \"<argv json>\"` applies each `{name,file,find,replace}` entry alone (its `find` must match exactly once, else `invalid`), checks it, and restores the file byte-for-byte before the next, restoring on `SIGINT` too, and reports killed/survived/invalid counts plus the first failing test line. Documentation: verification.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#28"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0054",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An env var exported to checks leaked into an independent project test. A release added `SWARM_PORT_BASE` to the environment of every check, and a project's own test suite that unstubbed/restored environment variables saw the swarm's value leak through and change the test's behavior unexpectedly.",
+  "rule": "A release that adds environment variables to check processes lists them clearly, and test code that exercises env isolation must explicitly unset or stub them.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate`/`ship` scan every project test file that was integrated for references to names of swarm-exported env vars (`SWARM_PORT_BASE`, …); a match prints `swarm-env-in-tests: <file>: references <name>; stub or unset it in this test`. The changelog lists all exported env vars under a dedicated line. Regression coverage is in `tests/lessons120-ship.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "release",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#54"
+  }
+}

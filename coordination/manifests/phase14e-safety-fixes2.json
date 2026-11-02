@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "review2-gpu",
+      "context": [
+        "tools/gpu.mjs",
+        "tools/rented.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, same exports and signatures; keep every behaviour not named here). Apply exactly these review fixes. (1) The key must not leak through errors: every error gpuUp throws with error.session set must carry a copy WITHOUT apiKey (use { ...session, apiKey: undefined } semantics: delete the property on the copy); the session file keeps the key. (2) gpu-exposed handling: when exposure is found, try the stop script over ssh (ignore its errors, but remember whether it succeeded) and then REMOVE the session file (removeSession(env)); the thrown message must end with 'the servers were stopped' only if the stop script succeeded, otherwise with 'the servers could NOT be stopped from here; the timer on the node will remove them at <expiresAt>; terminate the instance'. The same stop-and-remove-session handling (message text: the original error message plus ' (the servers were stopped)' or ' (could not stop the servers from here; the timer on the node still fires)') must run when ANY failure happens after the start script was sent and before the health wait finished (tunnel failure, probe error, ss failure, health timeout): wrap that part in try/catch, stop, remove the session, rethrow with the message and error.session (key-less copy); but a failure BEFORE the start script is sent (nvidia-smi, sudo check, validation) just removes the session it created if any and rethrows. (3) ss check: parse 'ss -ltnH' output line by line; take the 4th whitespace column as the local address; for every replica node port (8000+n) a listener is EXPOSED unless its host part is in 127.0.0.0/8 (starts with '127.'), or '[::1]', or starts with '[::ffff:127.'; strip an interface suffix (the part after % inside the host) before judging; if the ss command fails or returns no parseable column for lines that mention a server port, treat it as exposure (fail closed); if ss fails to run at all, throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (ss -ltnH); the servers were stopped') through the same stop-and-remove handling. (4) TCP probe: resolve the real host first: run the ssh command with the same hardening args but '-G' before the '--' and the target and nothing after it (so: [...sshOptionsWithoutCommand, '-G', '--', target]); take the value of the line that starts 'hostname ' from its stdout, fall back to the target's host part (after '@') when absent. Resolve all addresses with deps.lookup ? deps.lookup(host) : dns.promises.lookup(host, { all: true }) (the injectable returns an array of { address }); a failed lookup throws fail('gpu-exposure-unknown', ...) through the stop handling. Probe every address on every replica node port with deps.probePort(address, port); any true means exposed. Run the whole exposure check (probe and ss) twice: once right after the start script and again after the replicas pass the health wait (before the session is rewritten as 'up'). (5) The env file: in remoteStartScript add 'rm -f \"$HOME/.swarm-vllm.env\"' immediately BEFORE the 'umask 077' line, and another 'rm -f \"$HOME/.swarm-vllm.env\"' right after the LAST docker run line (docker has read it by then; the timer and stop script still remove it as a backstop). (6) Wording: the header comment and any message that says no keys or files are sent must say: commands only; no file, key or .env of the owner goes to the node; a random per-rental API key is written for the servers. Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "review2-gpu-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, same exports and signatures; keep everything not named here). (1) 'gpu up' with --json must print the session WITHOUT apiKey (print { ...session, apiKey: undefined }); the human line stays as is. gpu down --json and status --json must never include apiKey either (they should already not; make sure). (2) planText: change the line that says 'sent to the node: commands only; no files, keys or .env' to 'sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers'. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

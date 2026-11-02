@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0044",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A tool temp dir inside a repo trips repo-safety rules. A sandboxed job's own temp directory sat inside the project's own git worktree, and a tool it ran refused to write scratch data there, correctly treating it as version-controlled storage.",
+  "rule": "A job's scratch/temp directory must live outside every git repo, never as a path under one the job itself is working in.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a claude shell job's `HOME`/`TMPDIR` point at a per-job scratch dir created under the OS temp dir, refusing the job outright if that OS temp dir itself resolves inside a repo. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest",
+    "path-safety",
+    "sandbox"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#44"
+  }
+}

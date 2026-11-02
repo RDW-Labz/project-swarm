@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0004",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Equal wait and test timeouts hid the stuck step. The runner reported only that the test timed out.",
+  "rule": "Keep element waits below the test timeout and diagnose with a long `--testTimeout`.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: the skill's UI-test prompt guidance.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "prompt",
+    "test",
+    "timeout"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#4"
+  }
+}

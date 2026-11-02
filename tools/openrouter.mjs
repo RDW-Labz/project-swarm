@@ -5,7 +5,7 @@
 // - anthropic/* models are pinned to the Anthropic provider, with no fallback;
 // - deepseek/* models may only write bookkeeping files (PR payloads, changelogs, mutants files,
 //   metrics), never code;
-// - spend caps: $5 per job and $25 per UTC day, checked against a worst-case estimate before
+// - spend caps: $5 per job and $5 per UTC day, checked against a worst-case estimate before
 //   each request and recorded from the provider's reported cost after it.
 // The key is read by the swarm parent only (env OPENROUTER_API_KEY, else the macOS keychain item
 // named by config `keychain.service`, default "project-swarm", account "openrouter.api_key"),
@@ -28,7 +28,13 @@ export function openRouterKeyItem(config = {}) {
 }
 export const OPENROUTER_KEY_ITEM = Object.freeze(openRouterKeyItem());
 export const JOB_CAP_USD = 5;
-export const DAY_CAP_USD = 25;
+// The operator's rule is $5/day. The machine config (`spend.lanes.openrouter.dailyUsd`) sets it and
+// may only lower the built-in ceiling; with no config the built-in is the same $5.
+export const DAY_CAP_USD = 5;
+export function dayCapUsd(env = process.env) {
+  let value; try { value = loadLocalConfig({ env })?.spend?.lanes?.openrouter?.dailyUsd; } catch { value = undefined; }
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(value, DAY_CAP_USD) : DAY_CAP_USD;
+}
 // Bookkeeping outputs a deepseek/* model may write. Anything else (all code, tests, configs)
 // refuses. An allowlist, not a denylist: a new sensitive path can never slip through.
 export const BOOKKEEPING_OUTPUTS = Object.freeze([
@@ -48,6 +54,17 @@ const fail = message => { throw new OpenRouterError(message); };
 
 export const isAnthropicModel = model => typeof model === 'string' && model.startsWith('anthropic/');
 export const isBookkeepingOnlyModel = model => typeof model === 'string' && model.startsWith('deepseek/');
+
+// Field lesson #285: outputSchema already forces files/edits to be empty when outputs: [] — every
+// character of real content such a job can ever return rides in one summary string, capped at its
+// own output-token limit. A prompt plainly asking for substantial written output has nowhere else
+// for it to go, so it refuses before any request is ever sent (never spends against the caps).
+const CONTENT_REQUEST_RE = /\b(write|draft|list|summarize|summarise|report|document|describe|compile|produce)\b/i;
+export function emptyOutputsContentRefusal(job) {
+  if ((job.outputs?.length ?? 0) > 0) return;
+  if (!CONTENT_REQUEST_RE.test(job.prompt ?? '')) return;
+  fail(`openrouter-empty-outputs-content: Job ${job.id} has outputs: [] but its prompt asks for real content; a job with no declared output file can only ever return a short summary string capped at its own output-token limit — declare an output file for the content instead`);
+}
 
 // The provider block every request carries. require_parameters keeps OpenRouter from routing to
 // a provider that would silently drop response_format.
@@ -72,6 +89,20 @@ export function assertRequestBody(body) {
 export function nonBookkeepingOutputs(model, outputs) {
   if (!isBookkeepingOnlyModel(model)) return [];
   return (outputs ?? []).filter(file => !BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(String(file).replaceAll('\\', '/'))));
+}
+// Every output is a bookkeeping file (and there is at least one): the only jobs the router sends to OpenRouter.
+// Strings only, relative, with no `..` or absolute path, so a bookkeeping-looking name cannot point outside
+// the project or hide a code file.
+export function isBookkeepingJob(outputs) {
+  if (!Array.isArray(outputs) || outputs.length === 0) return false;
+  for (let index = 0; index < outputs.length; index += 1) {
+    const file = outputs[index];
+    if (typeof file !== 'string' || !file) return false;
+    const normalized = file.replaceAll('\\', '/');
+    if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) return false;
+    if (!BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(normalized))) return false;
+  }
+  return true;
 }
 export function assertBookkeepingOnly(job) {
   const bad = nonBookkeepingOutputs(job.model, job.outputs);
@@ -134,9 +165,15 @@ export function worstCaseUsd(pricing, { inputChars, maxTokens }) {
   return inputChars * pricing.prompt + maxTokens * pricing.completion;
 }
 
-export function assertWithinCaps({ worstUsd, spent }) {
+export function assertWithinCaps({ worstUsd, spent, dayCap = DAY_CAP_USD }) {
   if (spent.job + worstUsd > JOB_CAP_USD) fail(`OpenRouter job cap: $${spent.job.toFixed(4)} spent + $${worstUsd.toFixed(4)} worst case > $${JOB_CAP_USD}; request refused`);
-  if (spent.today + worstUsd > DAY_CAP_USD) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${DAY_CAP_USD}; request refused`);
+  if (spent.today + worstUsd > dayCap) fail(`OpenRouter day cap: $${spent.today.toFixed(4)} spent today + $${worstUsd.toFixed(4)} worst case > $${dayCap}; request refused`);
+}
+
+// Lesson 325: retain provider termination metadata even when content validation fails.
+export function responseFinishReason(body) {
+  const reasons = [body?.choices?.[0]?.finish_reason, body?.finish_reason, body?.stop_reason];
+  return reasons.find(reason => typeof reason === 'string') ?? null;
 }
 
 // Row #185: a tool-free worker is never left with a generic "incomplete, refused, truncated, or

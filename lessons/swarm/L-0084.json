@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0084",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A resolver picked a directory because it passed the same check a file would. A path resolver for a named binary considered a candidate found as soon as one existence-and-permission check passed, and a directory that happened to share the binary's name passed that same check — so the resolver returned a directory, and every attempt to run \"it\" then failed before it ever started, with no message worth reading.",
+  "rule": "A resolver picking a program to run must confirm it is actually a regular, executable file, not merely a path that exists and carries an execute bit — directories carry that bit too.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the resolver now also requires the candidate to stat as a regular file before it counts, and the launcher that spawns a resolved path now distinguishes \"never started\" from \"ran and exited non-zero,\" naming the failure either way. Regression coverage is in `tests/field-lessons-batch-k.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#84"
+  }
+}

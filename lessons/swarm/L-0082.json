@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0082",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Ship stopped on a red CI run whose failing tests the change never touched. A platform-specific, timing-sensitive test suite failed on a run that otherwise had nothing to do with the change being shipped, and a manual rerun of the same run passed immediately — the wait and the manual step were both wasted.",
+  "rule": "A failing test the change did not touch is worth one automatic rerun before it blocks a ship; a failing test the change did touch is treated as a real regression and must never be rerun away.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: ship can now rerun a CI run's own failed jobs, up to a given number of attempts, but only when none of the tests they failed on appear among the files the change itself touched; it reports how many attempts it took and whether the rerun passed. Regression coverage is in `tests/field-lessons-batch-j.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#82"
+  }
+}

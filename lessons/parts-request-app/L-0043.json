@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0043",
+  "project": "parts-request-app",
+  "date": "2026-10-18",
+  "stage": "split",
+  "what": "S8 wave 1: T-0128 ReplyButtons.tsx set state inside useEffect, failing react-hooks/set-state-in-effect; all 12 tickets stayed in review on the lint check",
+  "rule": "Worker prompts for client components must forbid setState in useEffect; use useSyncExternalStore for browser-only values.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Replaced the effect with useSyncExternalStore by hand",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "lint",
+    "prompt",
+    "review",
+    "split",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#43"
+  }
+}

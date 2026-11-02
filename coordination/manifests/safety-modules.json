@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 2.0
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "type": "build",
+      "id": "safety-stop",
+      "prompt": "Write tools/stop-all.mjs (design section 1) and tests/stop-all.test.mjs. Tests use temp dirs and fake deps only (no real processes, no real signals): marker first, runs cancelled and polled, autopilot exact pid with SIGTERM then SIGKILL, gpu down retried three times and verified, billingRisk on gpu failure, ok false on any failed step, stopGuard and clearStop.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed. Write backslashes in strings as String.fromCharCode(92) or avoid them; never write a lone backslash literal.",
+      "context": [
+        "docs/plans/safety-design.md"
+      ],
+      "outputs": [
+        "tools/stop-all.mjs",
+        "tests/stop-all.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "type": "build",
+      "id": "safety-backup",
+      "prompt": "Write tools/state-backup.mjs (design section 2) and tests/state-backup.test.mjs. Tests use temp dirs: secrets never copied, symlinks skipped, bad ids refused, retention, verify detects a changed file, restore plan without yes, restore takes a pre-restore backup and is undoable, refuses unsafe paths.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed. Write backslashes in strings as String.fromCharCode(92) or avoid them; never write a lone backslash literal.",
+      "context": [
+        "docs/plans/safety-design.md"
+      ],
+      "outputs": [
+        "tools/state-backup.mjs",
+        "tests/state-backup.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "type": "build",
+      "id": "safety-migration",
+      "prompt": "Write tools/migration-gate.mjs (design section 3) and tests/migration-gate.test.mjs. Tests: down step rules for both modes, destructive statement detection (comments and string literals ignored, delete and update without where), approval bound to the file hash, seed-looks-real, runRoundTrip order up seed down up with a fake exec and stop at first failure, config validation.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed. Write backslashes in strings as String.fromCharCode(92) or avoid them; never write a lone backslash literal.",
+      "context": [
+        "docs/plans/safety-design.md"
+      ],
+      "outputs": [
+        "tools/migration-gate.mjs",
+        "tests/migration-gate.test.mjs"
+      ]
+    }
+  ]
+}

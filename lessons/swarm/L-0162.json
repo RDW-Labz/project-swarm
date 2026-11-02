@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0162",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A worker's own passing status and its own evidence disagreed, and nothing noticed. A job's report named a check \"passed\" while the very same report's own text still carried a nonzero failure count for that check — a self-contradiction sitting in plain sight inside one report, caught only if a reviewer happened to read the whole thing closely.",
+  "rule": "A report that grades itself is cheap evidence next to what its own numbers already say, and the two should never be allowed to quietly disagree.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: review now scans a job's own reported text for a nonzero failure count and warns when a check the same report calls \"passed\" is contradicted by it. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#162"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/init-profile.test.mjs",
+        "tests/phase12-cli.test.mjs"
+      ],
+      "id": "a1f-profile",
+      "context": [
+        "tools/init-profile.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/init-profile.mjs (plain ESM; same first line, exports and signatures; change ONLY this). In validateSecurity (the profile security block) add three allowed keys: requireVulnerabilityScan (boolean), codeScan (the string 'auto' or 'off'), codeScanSensitive (boolean); each invalid value is an error 'profile.security.<key>: <what is expected>' and is left out of the normalized copy, like the existing keys. Do not edit tests.\nignoreTests: tests/init-profile.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/phase12-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

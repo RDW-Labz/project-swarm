@@ -1,0 +1,464 @@
+diff --git a/tools/api-adapters.mjs b/tools/api-adapters.mjs
+index ead33ef..770cf51 100644
+--- a/tools/api-adapters.mjs
++++ b/tools/api-adapters.mjs
+@@ -350,7 +350,15 @@ export async function executeApi(job, context, { fetchImpl = fetch, env = proces
+       // Key goes in a header only. Thinking depth is the only control these models take, so it is
+       // pinned low: a bounded one-shot job never needs to pay for deep reasoning.
+       headers['x-api-key'] = config.key; headers['anthropic-version'] = ANTHROPIC_VERSION;
+-      body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content: input }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
++      // cacheContext names context files shared by many jobs (a contract, a style guide, the repo map). They go first, in their own
++      // block marked cacheable, so a fan-out pays full price for them once and about a tenth after; the rest of the task follows.
++      // Below the model's minimum size (1024 to 4096 tokens) the marker is simply ignored.
++      const cached = new Set(Array.isArray(job.cacheContext) ? job.cacheContext : []);
++      const shared = cappedContext.filter(file => cached.has(file.path));
++      const content = shared.length
++        ? [{ type: 'text', text: JSON.stringify({ files: shared }), cache_control: { type: 'ephemeral' } }, { type: 'text', text: JSON.stringify({ task: `${skillsBlock}${job.prompt}`, declaredOutputs: job.outputs, files: cappedContext.filter(file => !cached.has(file.path)) }) }]
++        : input;
++      body = { model: job.model, max_tokens: limit, system: instructions, messages: [{ role: 'user', content }], output_config: { effort: 'low', format: { type: 'json_schema', schema: anthropicSchema(schema) } } };
+     }
+     else if (job.agent === 'lambda') { if (config.key) headers.authorization = `Bearer ${config.key}`; headers['x-helm-session'] = `${env.SWARM_LAMBDA_SESSION || 'swarm'}-${randomBytes(16).toString('hex')}-${job.id}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, max_tokens: limit, ...(config.selfHosted && env.SWARM_LAMBDA_THINKING !== 'on' ? { chat_template_kwargs: { enable_thinking: false } } : {}), response_format: { type: 'json_schema', json_schema: { name: 'swarm_output', strict: true, schema } } }; }
+     else { if (config.key) headers.authorization = `Bearer ${config.key}`; body = { model: job.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], stream: false, format: schema, options: { num_predict: limit } }; }
+diff --git a/tools/board.mjs b/tools/board.mjs
+index 8e61baf..cd6acec 100644
+--- a/tools/board.mjs
++++ b/tools/board.mjs
+@@ -18,21 +18,33 @@ async function git(cwd, args) {
+   return (await execFileAsync('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
+ }
+ 
+-export async function repoKey(root) {
+-  try {
+-    return await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+-  } catch {
+-    return await fs.realpath(root);
+-  }
++// A repo's identity does not change while a command runs, and a manifest of thousands of jobs asks for it once per job.
++const memo = new Map();
++function memoized(key, make) {
++  const hit = memo.get(key);
++  const at = Date.now();
++  if (hit && at - hit.at < 2000) return hit.value;
++  const value = make();
++  memo.set(key, { at, value });
++  value.catch(() => memo.delete(key));
++  return value;
++}
++
++export function repoKey(root) {
++  return memoized(`key:${root}`, async () => {
++    try {
++      return await fs.realpath(await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
++    } catch {
++      return await fs.realpath(root);
++    }
++  });
+ }
+ 
+ export async function repoPaths(root, outputs) {
+-  let toplevel;
+-  try {
+-    toplevel = await fs.realpath(await git(root, ['rev-parse', '--show-toplevel']));
+-  } catch {
+-    return [...outputs];
+-  }
++  const toplevel = await memoized(`top:${root}`, async () => {
++    try { return await fs.realpath(await git(root, ['rev-parse', '--show-toplevel'])); } catch { return null; }
++  });
++  if (toplevel === null) return [...outputs];
+   const realRoot = await fs.realpath(root);
+   return outputs.map(file => path.relative(toplevel, path.join(realRoot, file)).split(path.sep).join('/'));
+ }
+@@ -78,11 +90,11 @@ export async function listLiveRuns({ dir = liveDir(), isAlive = pidAlive } = {})
+   return runs.sort((a, b) => a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0);
+ }
+ 
+-export async function findWriterConflicts({ runId, root, outputs, dir = liveDir(), isAlive }) {
++export async function findWriterConflicts({ runId, root, outputs, dir = liveDir(), isAlive, runs: given }) {
+   const realRoot = await fs.realpath(root);
+   const repo = await repoKey(realRoot);
+   const files = new Set(await repoPaths(realRoot, outputs));
+-  const runs = await listLiveRuns({ dir, isAlive });
++  const runs = given ?? await listLiveRuns({ dir, isAlive });
+   const conflicts = [];
+   for (const run of runs) {
+     if (run.runId === runId || run.repo !== repo) continue;
+diff --git a/tools/lanes.mjs b/tools/lanes.mjs
+index a1edb43..31d891f 100644
+--- a/tools/lanes.mjs
++++ b/tools/lanes.mjs
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: Apache-2.0
+ import crypto from 'node:crypto';
+-import { readFileSync } from 'node:fs';
++import { readFileSync, statSync } from 'node:fs';
+ import fs from 'node:fs/promises';
+ import os from 'node:os';
+ import path from 'node:path';
+@@ -15,6 +15,8 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
+   pauseMs: 900000,
+   maxPauseMs: 900000,
+   model: null,
++  // null, or { start, min }: the lane begins at `start` requests in flight and finds its own limit (see report()).
++  adaptive: null,
+ })])));
+ 
+ function invalid(agent, field, reason) {
+@@ -27,13 +29,18 @@ function integer(agent, field, value, min, max) {
+   if (!Number.isInteger(value) || value < min || value > max) throw invalid(agent, field, `must be an integer ${min}–${max}`);
+ }
+ function validate(agent, lane) {
+-  integer(agent, 'concurrency', lane.concurrency, 1, 512);
++  integer(agent, 'concurrency', lane.concurrency, 1, 2048);
+   if (lane.requestsPerMinute !== null) integer(agent, 'requestsPerMinute', lane.requestsPerMinute, 1, 100000);
+   integer(agent, 'backoff.baseMs', lane.backoff.baseMs, 1, 600000);
+   integer(agent, 'backoff.maxMs', lane.backoff.maxMs, lane.backoff.baseMs, 3600000);
+   integer(agent, 'backoff.maxRetries', lane.backoff.maxRetries, 0, 20);
+   integer(agent, 'pauseMs', lane.pauseMs, 1, 86400000);
+   integer(agent, 'maxPauseMs', lane.maxPauseMs, 1, 86400000);
++  if (lane.adaptive !== null) {
++    if (!object(lane.adaptive) || Object.keys(lane.adaptive).some(key => !['start', 'min'].includes(key))) throw invalid(agent, 'adaptive', 'must be null, true or { start, min }');
++    integer(agent, 'adaptive.min', lane.adaptive.min, 1, lane.concurrency);
++    integer(agent, 'adaptive.start', lane.adaptive.start, lane.adaptive.min, lane.concurrency);
++  }
+   if (lane.model !== null && (typeof lane.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,119}$/.test(lane.model))) {
+     throw invalid(agent, 'model', 'must be null or a valid model name');
+   }
+@@ -55,10 +62,16 @@ export function resolveLanes({ config = {}, manifest = {} } = {}) {
+             if (!Object.hasOwn(LANE_DEFAULTS[agent].backoff, key)) throw invalid(agent, `backoff.${key}`, 'is unknown');
+             lanes[agent].backoff[key] = entry;
+           }
+-        } else lanes[agent][field] = value;
++        } else if (field === 'adaptive') lanes[agent].adaptive = value === true ? {} : value === false ? null : value;
++        else lanes[agent][field] = value;
+       }
+     }
+   }
++  // adaptive: true (or a partial object) is filled in from the lane's concurrency once every override is applied.
++  for (const agent of LANE_AGENTS) {
++    const adaptive = lanes[agent].adaptive;
++    if (object(adaptive) && Object.keys(adaptive).every(key => ['start', 'min'].includes(key))) lanes[agent].adaptive = { min: adaptive.min ?? 1, start: adaptive.start ?? Math.min(8, lanes[agent].concurrency) };
++  }
+   for (const agent of LANE_AGENTS) validate(agent, lanes[agent]);
+   return lanes;
+ }
+@@ -233,7 +246,7 @@ export function writeLanePause({ dir, agent, state, until, consecutiveRateLimits
+ 
+ export class LaneScheduler {
+   constructor({ lanes, globalConcurrency, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, random = Math.random, shared = null }) {
+-    integer('global', 'concurrency', globalConcurrency, 1, 512);
++    integer('global', 'concurrency', globalConcurrency, 1, 2048);
+     this.lanes = resolveLanes({ manifest: { lanes } });
+     this.globalConcurrency = globalConcurrency;
+     this.now = now;
+@@ -253,9 +266,15 @@ export class LaneScheduler {
+     this.timer = null;
+     this.states = Object.fromEntries(LANE_AGENTS.map(agent => [agent, {
+       state: 'ok', until: null, inFlight: 0, machineInFlight: null, peak: 0, queue: [], acquisitions: [], consecutiveRateLimits: 0, used: false,
++      limit: this.lanes[agent].adaptive ? this.lanes[agent].adaptive.start : this.lanes[agent].concurrency, okStreak: 0,
+     }]));
+   }
+ 
++  // How many requests this lane may have in flight right now: its configured cap, or, when adaptive, the limit it has found so far.
++  limitOf(agent) {
++    return this.lanes[agent].adaptive ? this.states[agent].limit : this.lanes[agent].concurrency;
++  }
++
+   lane(agent) {
+     if (!Object.hasOwn(this.states, agent)) throw invalid(agent, 'agent', 'is unknown');
+     return this.states[agent];
+@@ -271,17 +290,27 @@ export class LaneScheduler {
+   }
+ 
+   // The file is the source of truth for other runs. A local quota pause still wins over a shorter backoff.
+-  readShared(time) {
++  // Reads that only look (health, pausedFor, snapshot) reuse the last read while the file is unchanged; a pump always reads fresh.
++  // Liveness of a slot's pid is checked once per pid per read, not once per slot.
++  readShared(time, fresh = false) {
+     if (!this.shared) return;
++    // The file is only parsed again when it changed (size or modification time) or a second has passed (a slot's process may have died).
++    let signature = null;
++    try { const stat = statSync(this.shared.file); signature = `${stat.mtimeMs}:${stat.size}`; } catch { /* no file yet */ }
++    if (!fresh && signature !== null && signature === this.sharedSignature && time >= this.lastSharedRead && time - this.lastSharedRead < 1000) return;
++    this.sharedSignature = signature;
++    this.lastSharedRead = time;
+     let store;
+     try { store = JSON.parse(readFileSync(this.shared.file, 'utf8')); }
+     catch { return; }
+     if (!validStore(store)) return;
+     const host = os.hostname();
++    const seen = new Map();
++    const alive = pid => { if (!seen.has(pid)) seen.set(pid, this.shared.isAlive(pid)); return seen.get(pid); };
+     for (const agent of LANE_AGENTS) {
+       const lane = this.states[agent];
+       const slots = store.slots[agent] ?? [];
+-      lane.machineInFlight = slots.filter(slot => slotLive(slot, host, this.shared.isAlive)).length;
++      lane.machineInFlight = slots.filter(slot => slotLive(slot, host, alive)).length;
+       const pause = store.pauses[agent];
+       if (!pause || !(pause.until > time)) continue;
+       const keep = lane.state === 'paused' && lane.until !== null && lane.until >= pause.until && pause.state !== 'paused';
+@@ -357,6 +386,7 @@ export class LaneScheduler {
+     if (this.closed) return;
+     const time = this.now();
+     let wakeAt = Infinity;
++    this.readShared(time, true);
+     for (const agent of LANE_AGENTS) {
+       const lane = this.states[agent];
+       this.refresh(lane, time);
+@@ -371,7 +401,7 @@ export class LaneScheduler {
+         const lane = this.states[agent];
+         const limits = this.lanes[agent];
+         if (!lane.queue.length || lane.state !== 'ok') continue;
+-        if (lane.machineInFlight !== null && lane.machineInFlight >= limits.concurrency) { skipped.add(agent); continue; }
++        if (lane.machineInFlight !== null && lane.machineInFlight >= this.limitOf(agent)) { skipped.add(agent); continue; }
+         if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
+         if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
+       }
+@@ -384,7 +414,7 @@ export class LaneScheduler {
+         const other = this.states[agent];
+         const otherLimits = this.lanes[agent];
+         if (!other.queue.length || other.state !== 'ok') continue;
+-        if (other.machineInFlight !== null && other.machineInFlight >= otherLimits.concurrency) continue;
++        if (other.machineInFlight !== null && other.machineInFlight >= this.limitOf(agent)) continue;
+         if (otherLimits.requestsPerMinute !== null && other.acquisitions.length >= otherLimits.requestsPerMinute) continue;
+         otherEarliest = Math.min(otherEarliest, other.queue[0].arrival);
+       }
+@@ -392,13 +422,13 @@ export class LaneScheduler {
+       for (const waiter of lane.queue) {
+         if (waiter.arrival > otherEarliest) break;
+         if (this.globalInFlight + waiters.length >= this.globalConcurrency) break;
+-        if (lane.inFlight + waiters.length >= limits.concurrency) break;
++        if (lane.inFlight + waiters.length >= this.limitOf(selected)) break;
+         if (limits.requestsPerMinute !== null && lane.acquisitions.length + waiters.length >= limits.requestsPerMinute) break;
+         waiters.push(waiter);
+       }
+       if (!waiters.length) break;
+       let claim;
+-      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: limits.concurrency, count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
++      try { claim = await claimLaneSlots({ dir: this.shared.dir, agent: selected, concurrency: this.limitOf(selected), count: waiters.length, runId: this.shared.runId, now: this.now, isAlive: this.shared.isAlive }); }
+       catch (error) {
+         for (const waiter of waiters) {
+           const index = lane.queue.indexOf(waiter);
+@@ -479,7 +509,7 @@ export class LaneScheduler {
+       for (const agent of LANE_AGENTS) {
+         const lane = this.states[agent];
+         const limits = this.lanes[agent];
+-        if (!lane.queue.length || lane.state !== 'ok' || lane.inFlight >= limits.concurrency) continue;
++        if (!lane.queue.length || lane.state !== 'ok' || lane.inFlight >= this.limitOf(agent)) continue;
+         if (limits.requestsPerMinute !== null && lane.acquisitions.length >= limits.requestsPerMinute) continue;
+         if (selected === null || lane.queue[0].arrival < this.states[selected].queue[0].arrival) selected = agent;
+       }
+@@ -518,6 +548,16 @@ export class LaneScheduler {
+     if (this.closed) return;
+     const limits = this.lanes[agent];
+     lane.used = true;
++    // Adaptive lanes: a full window of clean successes opens one more slot; a rate limit halves the limit (never below min).
++    if (limits.adaptive) {
++      if (outcome.kind === 'ok') {
++        lane.okStreak += 1;
++        if (lane.okStreak >= lane.limit) { lane.limit = Math.min(limits.concurrency, lane.limit + 1); lane.okStreak = 0; }
++      } else if (outcome.kind === 'rate-limited') {
++        lane.limit = Math.max(limits.adaptive.min, Math.floor(lane.limit / 2));
++        lane.okStreak = 0;
++      }
++    }
+     if (outcome.kind === 'rate-limited') {
+       lane.consecutiveRateLimits += 1;
+       const delay = outcome.retryAfterMs ?? Math.min(limits.backoff.maxMs, limits.backoff.baseMs * 2 ** (lane.consecutiveRateLimits - 1)) * (0.5 + this.random() / 2);
+@@ -555,6 +595,7 @@ export class LaneScheduler {
+       agent, state: lane.state, until: lane.until === null ? null : new Date(lane.until).toISOString(),
+       inFlight: this.shared && lane.machineInFlight !== null ? lane.machineInFlight : lane.inFlight, queued: lane.queue.length, concurrency: this.lanes[agent].concurrency,
+       consecutiveRateLimits: lane.consecutiveRateLimits,
++      ...(this.lanes[agent].adaptive ? { limit: lane.limit } : {}),
+     };
+   }
+ 
+diff --git a/tools/scale.mjs b/tools/scale.mjs
+index b51e9ab..d11dc45 100644
+--- a/tools/scale.mjs
++++ b/tools/scale.mjs
+@@ -29,7 +29,7 @@ export function queueLatencyMs(jobs) {
+ 
+ export function stubManifest(count, concurrency) {
+   if (!Number.isInteger(count) || count < 1 || count > 500) throw Object.assign(new Error('scale jobs must be an integer 1–500'), { code: 'scale-jobs' });
+-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 512) throw Object.assign(new Error('scale concurrency must be an integer 1–512'), { code: 'scale-concurrency' });
++  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 2048) throw Object.assign(new Error('scale concurrency must be an integer 1–2048'), { code: 'scale-concurrency' });
+   const jobs = Array.from({ length: count }, (_, n) => ({
+     id: `job-${n}`,
+     agent: 'ollama',
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index ae37e55..c893bf6 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -3,6 +3,9 @@
+ // Copyright 2026 Project Swarm contributors
+ // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
+ import fs from 'node:fs/promises';
++// File work for thousands of jobs shares libuv's thread pool (4 threads by default, which capped a run at 4 jobs in flight).
++// It is read when the pool starts, so it is set before the first async file call.
++process.env.UV_THREADPOOL_SIZE ||= '32';
+ import { createReadStream, realpathSync, existsSync } from 'node:fs';
+ import path from 'node:path';
+ import os from 'node:os';
+@@ -954,7 +957,8 @@ async function jsonWrite(root, value, data) {
+   const target = await safePath(root, value, { internal: true, parents: true });
+   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+   try {
+-    await fs.writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx' });
++    // A run of thousands of jobs is megabytes of state; pretty-printing it costs more than writing it.
++    await fs.writeFile(temporary, `${JSON.stringify(data, null, (data?.jobs?.length ?? 0) > 200 ? 0 : 2)}\n`, { flag: 'wx' });
+     await fs.rename(temporary, target);
+   } catch (error) {
+     await fs.unlink(temporary).catch(() => {});
+@@ -1222,7 +1226,7 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
+     if (typeof manifest.contract !== 'string') fail('contract must be a relative file path');
+     relative(manifest.contract);
+   }
+-  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 512)) fail('Concurrency must be 1–512');
++  if (manifest.concurrency !== undefined && (!Number.isInteger(manifest.concurrency) || manifest.concurrency < 1 || manifest.concurrency > 2048)) fail('Concurrency must be 1–2048');
+   if (manifest.checks !== undefined) {
+     if (!Array.isArray(manifest.checks) || manifest.checks.length > 10) fail('checks must be an array of at most 10 checks');
+     for (const check of manifest.checks) {
+@@ -1435,8 +1439,12 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
+     // Unknown command/provider fields cannot create an execution path.
+     if (job.type === 'lead') validateLeadArea(job);
+     else if (job.area !== undefined) fail(`lead-area-invalid: Job ${job.id}: area requires type lead`, 'lead-area-invalid');
+-    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext'];
++    const knownJobFields = ['area', 'type', 'typeRoute', 'sensitive', 'id', 'agent', 'model', 'tier', 'tierReason', 'prompt', 'context', 'outputs', 'timeoutMs', 'maxOutputTokens', 'readPaths', 'ignoreTests', 'after', 'web', 'testEnv', 'resultFile', 'resultSchema', 'mutantsFile', 'contextGlob', 'shell', 'preset', 'networkAllow', 'loopbackAllow', 'setup', 'keepScratch', 'deletes', 'skills', 'maxCredits', 'creditPreflight', 'privateData', 'outputCapBytes', 'scope', 'outputDirs', 'report', 'allowProtectedContext', 'cacheContext'];
+     for (const key of Object.keys(job)) if (!knownJobFields.includes(key)) fail(unknownJobFieldMessage(key, knownJobFields));
++    if (job.cacheContext !== undefined) {
++      if (!Array.isArray(job.cacheContext) || !job.cacheContext.length || job.cacheContext.length > 10 || job.cacheContext.some(file => typeof file !== 'string' || !(job.context ?? []).includes(file)) || new Set(job.cacheContext).size !== job.cacheContext.length) fail(`Job ${job.id}: cacheContext must be 1-10 unique paths that are also in context`, 'cache-context-invalid');
++      if (!['anthropic', 'auto'].includes(job.agent)) fail(`Job ${job.id}: cacheContext is for the anthropic lane (agent anthropic or auto)`, 'cache-context-invalid');
++    }
+     if (job.allowProtectedContext !== undefined && (typeof job.allowProtectedContext !== 'string' || !job.allowProtectedContext.trim() || job.allowProtectedContext.length > 200)) fail(`Job ${job.id}: allowProtectedContext must be a reason of 1-200 characters`, 'allow-protected-context-invalid');
+   }
+   validateParentLeads(manifest);
+@@ -1444,7 +1452,14 @@ export function validateManifest(manifest, { outputJobIds = null } = {}) {
+   for (const job of manifest.jobs) for (const afterId of job.after ?? []) if (!ids.has(afterId.toLowerCase())) fail(`Job ${job.id} after names unknown job ${afterId}`);
+   const cycle = detectAfterCycle(manifest.jobs);
+   if (cycle) fail(`after cycle: ${cycle.join(' -> ')}`);
+-  for (const a of writers) for (const b of writers) if (a !== b && pathContains(a, b)) fail(`Overlapping output paths: ${a}, ${b}`);
++  // A path overlaps another when one of its parent folders is itself an output: one set lookup per parent, not one comparison per pair.
++  for (const b of writers) {
++    const parts = b.split('/');
++    for (let length = 1; length < parts.length; length++) {
++      const parent = parts.slice(0, length).join('/');
++      if (writers.has(parent)) fail(`Overlapping output paths: ${parent}, ${b}`);
++    }
++  }
+   // Field lesson #294: check output capacity for API agents with maxOutputTokens
+   for (const job of manifest.jobs) {
+     if (job.maxOutputTokens && API_AGENTS.includes(job.agent)) {
+@@ -2434,13 +2449,13 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
+ // One live-output scan is shared by validate and run. The legacy board compares exact repository
+ // paths; open-scope jobs additionally reserve parent/child path collisions, just as run has always
+ // done. Keeping that policy here prevents validate from approving a launch that run will refuse.
+-async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive } = {}) {
++async function liveOutputConflicts(root, jobs, { runId, liveDir, isAlive, runs } = {}) {
+   const outputs = jobs.flatMap(job => job.outputs ?? []);
+-  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive });
++  let conflicts = await findWriterConflicts({ runId, root, outputs, dir: liveDir, isAlive, runs });
+   if (!jobs.some(job => job.scope === 'open')) return conflicts;
+   const repo = await repoKey(root);
+   const files = (await repoPaths(root, outputs)).map(file => file.toLowerCase());
+-  for (const run of await listLiveRuns({ dir: liveDir, isAlive })) {
++  for (const run of runs ?? await listLiveRuns({ dir: liveDir, isAlive })) {
+     if (run.runId === runId || run.repo !== repo || conflicts.some(conflict => conflict.runId === run.runId)) continue;
+     const shared = run.files.filter(file => files.some(own => pathContains(own, file.toLowerCase()) || pathContains(file.toLowerCase(), own)));
+     if (shared.length) conflicts.push({ runId: run.runId, root: run.root, files: shared });
+@@ -2695,29 +2710,56 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
+   const swarmDirWarning = state.worktreesBase ? null : await swarmDirNotIgnoredWarning(root);
+   const manifestWarnings = [...jobTypeWarnings.map(warning => warning.message), ...scopeWarnings.map(warning => warning.message), ...sharedRootFullSuiteWarnings(manifest), ...(liveWarning ? [liveWarning.message] : []), ...await lessonQueueWarnings(root), ...(swarmDirWarning ? [swarmDirWarning] : [])];
+   const save = async () => { state.lanes = scheduler.snapshot(); state.peakConcurrency = state.lanes.peakGlobal; state.warnings = runWarnings(state, manifestWarnings); state.summary = summarizeRun(state); await jsonWrite(root, `${directory}/state.json`, state); onState(state); };
+-  // Coalesce bursts into one writer and one pending publication of the latest state.
+-  let writes = null, pendingWrite = false;
++  // Coalesce bursts into one writer and one pending publication of the latest state. A caller waits only for the save that
++  // covers its own change, never for the writer to go quiet: with other jobs' progress arriving all the time that never
++  // happens, and every job start would be held until the running ones ended.
++  let writes = null, pendingWrite = false, requested = 0;
++  const saveWaiters = [];
+   const queueSave = () => {
+     pendingWrite = true;
++    const mine = ++requested;
++    const covered = new Promise((resolve, reject) => saveWaiters.push({ mine, resolve, reject }));
+     if (!writes) writes = (async () => {
++      // The wait grows with the cost of the last save (about 10% of the time goes to saving, however large the run is);
++      // a small run keeps the 20 ms window.
++      let lastSaveMs = 0;
+       while (pendingWrite) {
+-        await new Promise(resolve => setTimeout(resolve, 20));
++        await new Promise(resolve => setTimeout(resolve, Math.max(20, Math.min(2000, lastSaveMs * 8))));
+         pendingWrite = false;
++        const target = requested;
++        const began = performance.now();
+         await save();
++        lastSaveMs = performance.now() - began;
++        for (const waiter of saveWaiters.splice(0)) { if (waiter.mine <= target) waiter.resolve(); else saveWaiters.push(waiter); }
+       }
+-    })().finally(() => { writes = null; });
+-    return writes;
++    })().catch(error => { for (const waiter of saveWaiters.splice(0)) waiter.reject(error); throw error; }).finally(() => { writes = null; });
++    writes.catch(() => {});
++    return covered;
+   };
+   hostHooks.save = queueSave;
+   // Throttled progress writes join the same serialized queue and always publish the live
+   // record, so a late tick can never resurrect a status the worker loop already finalized.
+   const activity = activityRecorder(queueSave, progressIntervalMs, () => cleanup.abort());
+-  const cancelled = async () => Boolean(signal?.aborted || await bytesAt(root, `${directory}/cancel`, true));
++  // Every in-flight job polls this (an API job every 100 ms); with a thousand in flight that alone would be ten thousand
++  // file reads a second. One read of the cancel file serves every caller for 250 ms, and a cancel is never un-seen.
++  const cancelCache = { at: -Infinity, value: false, pending: null };
++  const cancelled = async () => {
++    if (signal?.aborted || cancelCache.value) return true;
++    if (performance.now() - cancelCache.at < 250) return false;
++    cancelCache.pending ??= bytesAt(root, `${directory}/cancel`, true).then(bytes => Boolean(bytes), () => false).finally(() => { cancelCache.pending = null; });
++    const value = await cancelCache.pending;
++    cancelCache.at = performance.now();
++    if (value) cancelCache.value = true;
++    return value;
++  };
+   const waitingJobs = new Map();
+   let waitPoll = null;
+   const abortLongPauses = () => {
++    // One look per lane per poll, not one per waiting job (thousands may be waiting).
++    const pausedFor = new Map();
+     for (const [controller, waiter] of waitingJobs) {
+-      if (scheduler.pausedFor(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
++      if (!pausedFor.has(waiter.agent)) pausedFor.set(waiter.agent, scheduler.pausedFor(waiter.agent));
++      if (pausedFor.get(waiter.agent) > lanes[waiter.agent].maxPauseMs) {
+         waiter.onPause(scheduler.health(waiter.agent).until);
+         controller.abort();
+       }
+@@ -3019,7 +3061,9 @@ async function runManifestBody(root, manifest, { spawnImpl, killImpl, fetchImpl,
+           // (Hermes, Qwen) and the host names that CLI's absolute path. Every other job runs here.
+           const hostFilter = host => host.kind === 'local' || (EXTRA_CLI_AGENTS.includes(job.agent) && typeof host.commands?.[job.agent] === 'string');
+           let hostFailure = null;
+-          if (hostPool && configuredHosts.some(hostFilter)) {
++          // A tool-free API job is one HTTP request: it uses no local CPU or disk worth rationing, so it never takes a host slot
++          // (the local host's capacity is for workers that run code, and capped every API job at 4 at a time).
++          if (hostPool && !API_AGENTS.includes(job.agent) && configuredHosts.some(hostFilter)) {
+             // No usable host is a failure of this job alone, never of the run.
+             try { hostPlacement = await hostPool.claim({ signal, sensitive: job.sensitive !== false, hostFilter }); }
+             catch (error) { if (error?.code !== 'hosts-exhausted') throw error; hostFailure = error; }
+@@ -5499,8 +5543,10 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
+   warnings.push(...await windowsCiGotchasWarnings(root));
+   if (uncovered.length) throw Object.assign(new Error(`Uncovered test references (add the test to context, or list it in ignoreTests with a reason in the prompt): ${uncovered.map(u => `${u.job}: ${u.output} <- ${u.test}`).join('; ')}`), { details: { suggestedIgnoreTests: suggestIgnoreTests(uncovered) } });
+   const jobConflicts = new Map();
++  // The live-run list is read once for the whole manifest, not once per job.
++  const liveRuns = await listLiveRuns({ dir: liveDir, isAlive });
+   for (const job of manifest.jobs) {
+-    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive });
++    const conflicts = await liveOutputConflicts(root, [job], { liveDir, isAlive, runs: liveRuns });
+     for (const conflict of conflicts) {
+       const key = `${conflict.runId}\u0000${conflict.root}`;
+       const existing = jobConflicts.get(key) ?? { ...conflict, jobIds: [] };
+@@ -7256,7 +7302,7 @@ async function mainInner() {
+     for(let index=1;index<args.length;index++){
+       const flag=args[index],value=args[++index];
+       if(flag==='--jobs'){if(!/^\d+$/.test(value??''))fail('--jobs must be an integer 1–500');jobs=Number(value);}
+-      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–512');concurrency=Number(value);}
++      else if(flag==='--concurrency'){if(!/^\d+$/.test(value??''))fail('--concurrency must be an integer 1–2048');concurrency=Number(value);}
+       else fail('Invalid arguments; use --help');
+     }
+     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-scale-'));

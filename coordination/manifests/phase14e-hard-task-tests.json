@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-hard-task",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "bench/gpu-bakeoff/hard-task.mjs",
+        "bench/gpu-bakeoff/tasks/hard-planwaves/README.md",
+        "tests/gpu-bestof.test.mjs"
+      ],
+      "outputs": [
+        "tests/hard-task.test.mjs"
+      ],
+      "prompt": "Write tests/hard-task.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Read bench/gpu-bakeoff/hard-task.mjs; import only its named exports (TASK_DIR, HARD_TIMEOUT_MS, parseTapSummary, gradeSolution, prepareRepo, hardManifest, runHardTask). The task folder is bench/gpu-bakeoff/tasks/hard-planwaves with planWaves.mjs (the stub), TASK.md, test/planWaves.test.mjs, solution/planWaves.mjs. Tests: (1) parseTapSummary reads '# tests 16\\n# pass 12\\n# fail 4' as { passed: 12, total: 16 } and returns { passed: 0, total: 0 } for text without the lines. (2) gradeSolution with the REAL stub (path.join(TASK_DIR, 'planWaves.mjs')) gives passed 0, total 16, passedAll false, and with the real solution (path.join(TASK_DIR, 'solution', 'planWaves.mjs')) gives passed 16, total 16, passedAll true; a missing file gives passedAll false with error 'no solution file'. (3) prepareRepo({ dir }) (use a temp dir from fs.mkdtempSync, remove it after) leaves exactly TASK.md, planWaves.mjs, .gitignore and .git at the top level, never a test or solution folder, the committed tree (git -C dir ls-files) lists only TASK.md and planWaves.mjs and .gitignore, and planWaves.mjs equals the stub. (4) hardManifest({ model: 'm/x', bestOf: 3, maxUsd: 15 }) has one job: agent 'rented', model 'm/x', sensitive false, context ['TASK.md','planWaves.mjs'], outputs ['planWaves.mjs'], contract 'TASK.md', a non-empty acceptance list, timeoutMs HARD_TIMEOUT_MS (600000) and bestOf 3; with bestOf 1 the job has no bestOf property; budget.maxUsd is 15; the manifest never mentions 'solution' or 'test/' paths in context or outputs. (5) runHardTask with a fake exec that dispatches by program/arguments: calls to 'git' are passed to the real child_process.spawnSync; a call whose first argument after process.execPath is the fake runner path ('fake-runner.mjs') parses --root DIR from its args, creates DIR/ws/planWaves.mjs as a copy of the real solution, and returns { status: 0, stdout: JSON.stringify({ jobs: [{ id: 'hard-planwaves', status: 'complete', workspace: 'ws', durationMs: 31000, attempts: [{}], usage: { total_tokens: 1234 } }] }) + '\\n', stderr: '' }; every other call (the grading run of node --test) is passed to the real spawnSync. Call runHardTask({ model: 'm/x', bestOf: 3, runner: 'fake-runner.mjs', exec }) and expect passed 16, total 16, passedAll true, seconds 31, attempts 1, tokens 1234, status 'complete'. Then a second case where the fake runner creates no output file and reports status 'failed' with error 'truncated': expect passed 0, passedAll false, status 'failed', error 'truncated'. A third case where the fake runner prints 'not json' makes runHardTask throw an error whose message starts with 'hard task run failed: '. Keep each test short."
+    }
+  ]
+}

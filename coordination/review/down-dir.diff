@@ -1,0 +1,310 @@
+diff --git a/tests/init.test.mjs b/tests/init.test.mjs
+index 930e367..565f386 100644
+--- a/tests/init.test.mjs
++++ b/tests/init.test.mjs
+@@ -75,10 +75,11 @@ test('init turns the migration check on for a NEW project that has a migrations
+   const fresh = await project(t);
+   await fs.mkdir(path.join(fresh, 'supabase/migrations'), { recursive: true });
+   const first = await initProject(fresh, { source });
+-  assert.deepEqual(first.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' });
++  // Supabase reads every .sql in its migrations folder, so a Supabase project gets down files in a separate folder the CLI never reads.
++  assert.deepEqual(first.profile.migrations, { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' });
+   assert.ok(first.warnings.some(w => w.startsWith('migrations-check-on:')));
+   const second = await initProject(fresh, { source });
+-  assert.deepEqual(second.profile.migrations, { dir: 'supabase/migrations', down: 'sibling' }, 'kept on a re-init');
++  assert.deepEqual(second.profile.migrations, { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' }, 'kept on a re-init');
+   assert.ok(!second.warnings.some(w => w.startsWith('migrations-check-on:')), 'announced once, when it is added');
+ 
+   // An existing project (a profile already there) does not get the block added; the owner turns it on by hand.
+@@ -87,6 +88,10 @@ test('init turns the migration check on for a NEW project that has a migrations
+   await fs.mkdir(path.join(old, 'prisma/migrations'), { recursive: true });
+   const again = await initProject(old, { source });
+   assert.equal(again.profile.migrations, undefined);
++  // A non-Supabase new project keeps the sibling default.
++  const prismaProject = await project(t);
++  await fs.mkdir(path.join(prismaProject, 'prisma/migrations'), { recursive: true });
++  assert.deepEqual((await initProject(prismaProject, { source })).profile.migrations, { dir: 'prisma/migrations', down: 'sibling' });
+ 
+   // No migrations folder: nothing added. Other folders are found too.
+   const none = await project(t);
+diff --git a/tests/migration-down-dir.test.mjs b/tests/migration-down-dir.test.mjs
+new file mode 100644
+index 0000000..d36e874
+--- /dev/null
++++ b/tests/migration-down-dir.test.mjs
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: Apache-2.0
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { initProject } from '../tools/init.mjs';
++import { validateProfile } from '../tools/init-profile.mjs';
++import { migrationQueueCheck } from '../tools/migration-queue.mjs';
++import { downFileFor } from '../tools/migration-gate.mjs';
++
++// A model of which files `supabase db push` / `supabase migration up` pick up. The CLI lists ONLY the files directly inside supabase/migrations
++// (not subfolders, not sibling folders), keeps the ones named <digits>_<name>.sql, and takes <digits> as the version; two files with the same
++// version are a duplicate-key error. This is the behaviour the parts app hit with 0009.down.sql next to 0009_x.sql (the name part is
++// "x.down"). The real CLI is not run here (it needs Docker and a database); this models its documented file rule.
++async function supabasePushPlan(migrationsDir) {
++  const versions = new Map();
++  for (const entry of await fs.readdir(migrationsDir, { withFileTypes: true })) {
++    if (!entry.isFile()) continue;
++    const match = /^([0-9]+)_(.*)\.sql$/.exec(entry.name);
++    if (!match) continue;
++    if (versions.has(match[1])) throw new Error(`duplicate migration version ${match[1]}: ${versions.get(match[1])} and ${entry.name}`);
++    versions.set(match[1], entry.name);
++  }
++  return [...versions.values()].sort();
++}
++
++async function supabaseProject(t) {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-down-dir-')));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  await fs.mkdir(path.join(root, 'supabase/migrations'), { recursive: true });
++  await fs.writeFile(path.join(root, 'package.json'), '{"name":"x"}');
++  return root;
++}
++const source = process.cwd();
++
++test('supabase db push ignores the down folder: a Supabase project\'s down files never reach the CLI, while sibling files do collide', async t => {
++  const root = await supabaseProject(t);
++  const { profile } = await initProject(root, { source });
++  const config = profile.migrations;
++  assert.equal(config.down, 'dir');
++  const up = 'supabase/migrations/0009_add_x.sql';
++  await fs.writeFile(path.join(root, up), 'create table x (id int);');
++  const down = downFileFor(up, config);
++  assert.equal(down, 'supabase/migrations_down/0009_add_x.sql');
++  await fs.mkdir(path.dirname(path.join(root, down)), { recursive: true });
++  await fs.writeFile(path.join(root, down), 'drop table x;');
++  assert.deepEqual(await supabasePushPlan(path.join(root, 'supabase/migrations')), ['0009_add_x.sql'], 'only the up file is applied');
++  assert.ok(!down.startsWith('supabase/migrations/'), 'the down folder is outside the migrations folder');
++  // The old layout: the sibling down file is a second migration with the same version.
++  await fs.writeFile(path.join(root, 'supabase/migrations/0009_add_x.down.sql'), 'drop table x;');
++  await assert.rejects(supabasePushPlan(path.join(root, 'supabase/migrations')), /duplicate migration version 0009/);
++});
++
++test('the profile accepts down dir with downDir, and down none', () => {
++  assert.deepEqual(validateProfile({ version: 1, migrations: { dir: 'supabase/migrations', down: 'dir' } }).profile?.migrations ?? {}, { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' });
++  assert.deepEqual(validateProfile({ version: 1, migrations: { dir: 'db/m', down: 'dir', downDir: 'db/d' } }).profile?.migrations, { dir: 'db/m', down: 'dir', downDir: 'db/d' });
++  assert.deepEqual(validateProfile({ version: 1, migrations: { dir: 'db/m', down: 'none' } }).profile?.migrations, { dir: 'db/m', down: 'none' });
++  assert.ok(validateProfile({ version: 1, migrations: { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations/down' } }).errors.some(e => /separate folder/.test(e)));
++});
++
++test('the merge queue check sees a change in the down folder and checks its migration', async t => {
++  const root = await supabaseProject(t);
++  const profile = { migrations: { dir: 'supabase/migrations', down: 'dir', downDir: 'supabase/migrations_down' } };
++  await fs.writeFile(path.join(root, 'supabase/migrations/0009_a.sql'), 'create table a (id int);');
++  const exec = async () => ({ code: 0, stdout: '', stderr: '' });
++  const missingDown = await migrationQueueCheck({ root, changes: [{ file: 'supabase/migrations/0009_a.sql', bytes: Buffer.from('create table a (id int);') }], profile, exec });
++  assert.match(missingDown.blocks[0].message, /no-down: migration supabase\/migrations\/0009_a\.sql has no down step \(add supabase\/migrations_down\/0009_a\.sql\)/);
++  const withDown = await migrationQueueCheck({ root, changes: [{ file: 'supabase/migrations/0009_a.sql', bytes: Buffer.from('create table a (id int);') }, { file: 'supabase/migrations_down/0009_a.sql', bytes: Buffer.from('drop table a;') }], profile, exec });
++  assert.deepEqual(withDown.blocks, []);
++  // Only the down file changed: its migration is checked again (and an emptied down file blocks).
++  await fs.mkdir(path.join(root, 'supabase/migrations_down'), { recursive: true });
++  await fs.writeFile(path.join(root, 'supabase/migrations_down/0009_a.sql'), '');
++  const downOnly = await migrationQueueCheck({ root, changes: [{ file: 'supabase/migrations_down/0009_a.sql', bytes: Buffer.from('') }], profile, exec });
++  assert.match(downOnly.blocks[0]?.message ?? '', /no-down/);
++});
+diff --git a/tests/migration-gate.test.mjs b/tests/migration-gate.test.mjs
+index f60ab44..7ea3d40 100644
+--- a/tests/migration-gate.test.mjs
++++ b/tests/migration-gate.test.mjs
+@@ -273,3 +273,65 @@ test('runRoundTrip hands the commands a short environment', async () => {
+   assert.deepEqual(migrationEnv([], { PATH: 'p', OPENAI_API_KEY: 'k', DATABASE_URL: 'db' }), { PATH: 'p' });
+   assert.deepEqual(migrationEnv(['DATABASE_URL'], { PATH: 'p', DATABASE_URL: 'db' }), { PATH: 'p', DATABASE_URL: 'db' });
+ });
++
++// ---- down: "dir" and down: "none" (parts-app: Supabase reads 0009.down.sql as a duplicate migration; "section" runs the down right after the up) ----
++const dirCfg = (over) => validateMigrationsConfig({ dir: 'supabase/migrations', down: 'dir', ...over });
++test('down dir: the default folder is <dir>_down, the down file has the same name, and the path is mirrored', () => {
++  const r = dirCfg({});
++  assert.equal(r.ok, true, r.errors.join('; '));
++  assert.equal(r.config.downDir, 'supabase/migrations_down');
++  assert.equal(downFileFor('supabase/migrations/0009_add_x.sql', r.config), 'supabase/migrations_down/0009_add_x.sql');
++  assert.equal(downFileFor('supabase/migrations/sub/0010_y.sql', r.config), 'supabase/migrations_down/sub/0010_y.sql');
++  assert.equal(dirCfg({ downDir: 'db/down' }).config.downDir, 'db/down');
++});
++test('down dir: the down folder must be separate (never the migrations folder, inside it, or containing it) and downDir needs down "dir"', () => {
++  for (const downDir of ['supabase/migrations', 'supabase/migrations/down', 'supabase', '../x', '/abs']) {
++    const r = dirCfg({ downDir });
++    assert.equal(r.ok, false, downDir);
++  }
++  assert.ok(validateMigrationsConfig({ dir: 'supabase/migrations', down: 'sibling', downDir: 'x' }).errors.some((e) => e.includes('downDir needs down')));
++  assert.ok(validateMigrationsConfig({ down: 'bogus' }).errors.some((e) => e.includes('sibling, section, dir or none')));
++});
++test('down dir: a missing or empty down file in the down folder is a problem naming the folder; a good one passes; a down-only edit re-checks its migration', async () => {
++  const c = dirCfg({}).config;
++  const up = 'supabase/migrations/0009_a.sql', down = 'supabase/migrations_down/0009_a.sql';
++  const files = new Map([[up, 'create table t (id int);']]);
++  const io = { read: async (f) => Buffer.from(files.get(f) ?? ''), exists: async (f) => files.has(f) };
++  const missing = await checkMigrations({ files: [up], config: c, ...io });
++  assert.equal(missing.problems[0].message, `migration ${up} has no down step (add ${down})`);
++  files.set(down, '-- nothing');
++  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).problems[0].check, 'no-down', 'comment-only down file');
++  files.set(down, 'drop table t;');
++  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).ok, true);
++  // A sibling-style .down.sql next to the migration does NOT count in dir mode.
++  files.delete(down); files.set('supabase/migrations/0009_a.down.sql', 'drop table t;');
++  assert.equal((await checkMigrations({ files: [up], config: c, ...io })).ok, false);
++  // Editing only the down file checks the migration again, and a bad edit is caught.
++  files.set(down, '');
++  assert.equal((await checkMigrations({ files: [down], config: c, ...io })).problems[0].file, up);
++});
++test('down dir: destructive SQL still needs approval, and the approval is bound to the file hash', async () => {
++  const c = dirCfg({}).config;
++  const up = 'supabase/migrations/0010_drop.sql', down = 'supabase/migrations_down/0010_drop.sql';
++  const bytes = Buffer.from('drop table old_things;');
++  const io = { read: async (f) => (f === up ? bytes : Buffer.from('create table old_things (id int);')), exists: async () => true };
++  const need = await checkMigrations({ files: [up], config: c, ...io });
++  assert.equal(need.needsApproval.length, 1);
++  assert.equal((await checkMigrations({ files: [up], config: c, ...io, approvals: [{ file: up, sha256: sha('drop table old_things;') }] })).ok, true);
++  assert.equal((await checkMigrations({ files: [up], config: c, ...io, approvals: [{ file: up, sha256: sha('other') }] })).ok, false);
++  assert.equal(isMigrationFile(down, c), false, 'a down file is never itself a migration');
++});
++test('down none: no down step is required, but the destructive scan and approval still apply', async () => {
++  const r = validateMigrationsConfig({ dir: 'supabase/migrations', down: 'none' });
++  assert.equal(r.ok, true);
++  assert.equal(r.config.downDir, undefined);
++  const up = 'supabase/migrations/0011_a.sql';
++  const safe = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('create table t (id int);'), exists: async () => false });
++  assert.equal(safe.ok, true, JSON.stringify(safe.problems));
++  const bad = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('drop table t;'), exists: async () => false });
++  assert.equal(bad.ok, false);
++  assert.deepEqual(bad.problems.map((p) => p.check), ['needs-approval']);
++  const priv = await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('create extension pg_stat_statements;'), exists: async () => false });
++  assert.equal(priv.ok, false, 'privileged SQL still needs approval');
++  assert.equal((await checkMigrations({ files: [up], config: r.config, read: async () => Buffer.from('drop table t;'), exists: async () => false, approvals: [{ file: up, sha256: sha('drop table t;') }] })).ok, true);
++});
+diff --git a/tools/init-profile.mjs b/tools/init-profile.mjs
+index db2a408..25572b8 100644
+--- a/tools/init-profile.mjs
++++ b/tools/init-profile.mjs
+@@ -174,8 +174,8 @@ export function validateProfile(profile) {
+     const checked = validateMigrationsConfig(profile.migrations);
+     for (const message of checked.errors) errors.push(`profile.migrations: ${message}`);
+     if (checked.ok) {
+-      const { dir, down, commands } = checked.config;
+-      out.migrations = { dir, down, ...(Object.keys(commands).length ? { commands } : {}) };
++      const { dir, down, downDir, commands } = checked.config;
++      out.migrations = { dir, down, ...(downDir ? { downDir } : {}), ...(Object.keys(commands).length ? { commands } : {}) };
+       // The scripts the migration commands run are protected like a ci hook's files.
+       for (const argv of Object.values(commands)) for (const entry of hookFiles(argv)) {
+         try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
+diff --git a/tools/init.mjs b/tools/init.mjs
+index 479598a..5df5800 100644
+--- a/tools/init.mjs
++++ b/tools/init.mjs
+@@ -250,7 +250,7 @@ export async function initProject(root, { source = installSource(), install = in
+     // Blocks the owner set by hand (security policy, approval, ci hooks, verify, context) survive a re-init.
+     ...Object.fromEntries(['security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'].filter(key => prior[key] !== undefined).map(key => [key, prior[key]])),
+     // A NEW project (no profile yet) that already has a migrations folder gets the migration check on; an existing profile keeps what it has.
+-    ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: { dir: migrationsDir, down: 'sibling' } } : {}),
++    ...(priorPointer?.profile === undefined && prior.migrations === undefined && migrationsDir ? { migrations: migrationsDir === 'supabase/migrations' ? { dir: migrationsDir, down: 'dir', downDir: 'supabase/migrations_down' } : { dir: migrationsDir, down: 'sibling' } } : {}),
+     baseCheck: runBase
+       ? await runBaseChecks(root, checksToRun, { run, head: await gitHead(root), now })
+       : (prior.baseCheck ?? { status: 'skipped', ranAt: new Date(now()).toISOString(), head: await gitHead(root), checks: [] }),
+diff --git a/tools/migration-gate.mjs b/tools/migration-gate.mjs
+index 233a9b9..8998c3f 100644
+--- a/tools/migration-gate.mjs
++++ b/tools/migration-gate.mjs
+@@ -8,7 +8,7 @@ const WS_RE = new RegExp('[ ' + String.fromCharCode(9, 10, 13) + ']+', 'g');
+ const DOWN_MARK = /^--[ ]*migrate:down/im;
+ const APPROVALS = '.swarm/project/migration-approvals.json';
+ const CMD_KEYS = ['up', 'down', 'seed'];
+-const CONFIG_KEYS = ['dir', 'down', 'commands', 'env'];
++const CONFIG_KEYS = ['dir', 'down', 'downDir', 'commands', 'env'];
+ const ENV_KEEP = ['PATH', 'HOME', 'USER', 'LANG', 'TERM', 'TMPDIR', 'DOCKER_HOST', 'DOCKER_CONFIG'];
+ // The environment a migration command gets: a short allow list (never provider keys), plus names the profile lists in migrations.env.
+ export function migrationEnv(extraNames = [], env = process.env) {
+@@ -95,7 +95,21 @@ export function validateMigrationsConfig(raw) {
+     else envNames = [...raw.env];
+   }
+   const down = raw.down ?? MIGRATION_DEFAULTS.down;
+-  if (down !== 'sibling' && down !== 'section') errors.push('down must be sibling or section');
++  if (!['sibling', 'section', 'dir', 'none'].includes(down)) errors.push('down must be sibling, section, dir or none');
++  // down "dir": down files live in a separate folder the migration tool never reads (Supabase reads every .sql in its migrations folder, so a
++  // down file next to its migration is run as a second migration with the same version). Same file name, mirrored path.
++  let downDir = null;
++  if (raw.downDir !== undefined && down !== 'dir') errors.push('downDir needs down: "dir"');
++  if (down === 'dir') {
++    const rawDown = raw.downDir ?? (segments.length ? segments.join('/') + '_down' : '');
++    const parts = typeof rawDown === 'string' ? rawDown.split('/').filter((part) => part !== '' && part !== '.') : [];
++    if (typeof rawDown !== 'string' || rawDown.startsWith('/') || parts.length === 0 || parts.includes('..')) errors.push('downDir must be a relative path without ..');
++    else {
++      downDir = parts.join('/');
++      const nested = (a, b) => a === b || a.startsWith(b + '/');
++      if (nested(downDir, dir) || nested(dir, downDir)) errors.push('downDir must be a separate folder, not the migrations folder or inside it (the migration tool would read the down files)');
++    }
++  }
+   const commands = {};
+   if (raw.commands !== undefined) {
+     if (raw.commands === null || typeof raw.commands !== 'object' || Array.isArray(raw.commands)) errors.push('commands must be an object');
+@@ -109,7 +123,7 @@ export function validateMigrationsConfig(raw) {
+       }
+   }
+   if (errors.length > 0) return { ok: false, config: null, errors };
+-  return { ok: true, config: { dir, down, commands, env: envNames, commandTimeoutMs: MIGRATION_DEFAULTS.commandTimeoutMs }, errors: [] };
++  return { ok: true, config: { dir, down, ...(downDir ? { downDir } : {}), commands, env: envNames, commandTimeoutMs: MIGRATION_DEFAULTS.commandTimeoutMs }, errors: [] };
+ }
+ export function isMigrationFile(file, config) {
+   if (typeof file !== 'string' || !config) return false;
+@@ -117,9 +131,16 @@ export function isMigrationFile(file, config) {
+   const lower = file.toLowerCase();
+   return file.startsWith(prefix) && lower.endsWith('.sql') && !lower.endsWith('.down.sql') && !file.split('/').includes('..');
+ }
+-export function downFileFor(file) {
++export function downFileFor(file, config) {
++  if (config?.down === 'dir' && config.downDir && file.startsWith(config.dir + '/')) return config.downDir + '/' + file.slice(config.dir.length + 1);
+   return file.replace(/[.]sql$/i, '.down.sql');
+ }
++// The migration a down file belongs to, or null (a sibling X.down.sql, or a file in the down folder).
++export function upFileFor(file, config) {
++  if (config?.down === 'dir' && config.downDir && file.startsWith(config.downDir + '/') && /[.]sql$/i.test(file) && !file.split('/').includes('..')) return config.dir + '/' + file.slice(config.downDir.length + 1);
++  if (config?.down !== 'dir' && /[.]down[.]sql$/i.test(file)) return file.replace(/[.]down[.]sql$/i, '.sql');
++  return null;
++}
+ // The marker only counts as a line comment in real code (not inside a block comment or a string).
+ function splitDown(sql) {
+   const i = lexSql(sql, { keepLineComments: true }).search(DOWN_MARK);
+@@ -194,17 +215,18 @@ export async function checkMigrations({ files = [], config, read, exists, approv
+   // A change to a down file is a change to its migration: the pair is checked again.
+   const wanted = new Set();
+   for (const changed of files) {
+-    if (typeof changed === 'string' && /[.]down[.]sql$/i.test(changed)) {
+-      const up = changed.replace(/[.]down[.]sql$/i, '.sql');
+-      if (await exists(up)) wanted.add(up);
+-    } else wanted.add(changed);
++    const up = typeof changed === 'string' ? upFileFor(changed, config) : null;
++    if (up) { if (await exists(up)) wanted.add(up); }
++    else wanted.add(changed);
+   }
+   for (const file of wanted) {
+     if (!isMigrationFile(file, config)) continue;
+     const bytes = await read(file);
+     const sql = Buffer.from(bytes).toString('utf8');
+-    if (config.down === 'sibling') {
+-      const df = downFileFor(file);
++    if (config.down === 'none') {
++      // down: "none": no down step is required (the destructive/privileged SQL scan below still runs, and approvals still bind to the file hash).
++    } else if (config.down === 'sibling' || config.down === 'dir') {
++      const df = downFileFor(file, config);
+       const has = (await exists(df)) && stripNonCode(Buffer.from(await read(df)).toString('utf8')).trim().length > 0;
+       if (!has) problems.push({ file, check: 'no-down', message: 'migration ' + file + ' has no down step (add ' + df + ')' });
+     } else {
+diff --git a/tools/migration-queue.mjs b/tools/migration-queue.mjs
+index 109c563..b44cdee 100644
+--- a/tools/migration-queue.mjs
++++ b/tools/migration-queue.mjs
+@@ -12,7 +12,7 @@ export async function migrationQueueCheck({ root, changes, profile, exec }) {
+   if (!checked.ok) return { blocks: [{ check: 'migration', severity: 'high', message: `profile.migrations is invalid: ${checked.errors.join('; ')}` }], notes: [], needsApproval: [] };
+   const config = checked.config;
+   // Up files and down files both count: an edit of a down file re-checks its migration.
+-  const touched = changes.filter(change => change.bytes !== null && change.file.startsWith(`${config.dir}/`) && /[.]sql$/i.test(change.file)).map(change => change.file);
++  const touched = changes.filter(change => change.bytes !== null && (change.file.startsWith(`${config.dir}/`) || (config.downDir && change.file.startsWith(`${config.downDir}/`))) && /[.]sql$/i.test(change.file)).map(change => change.file);
+   if (!touched.length) return { blocks: [], notes: [], needsApproval: [] };
+   if (!profile?.migrations) {
+     return { blocks: [], notes: [`migrations: ${touched.length} migration file(s) changed but the profile has no migrations block, so no down-step or destructive-change check ran (add "migrations": {} to the profile)`], needsApproval: [] };

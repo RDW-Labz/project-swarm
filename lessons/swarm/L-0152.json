@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0152",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A handful of tests passed in continuous integration and in one long-lived local checkout, but failed the moment they ran from a fresh checkout in a different location. Each read some piece of the real machine's own state instead of a value the test itself controlled: a personal configuration file, a personal collection of optional add-ons, or an ambient identity setting — all present (with one particular shape) on the machine that had been used for development, and absent or different elsewhere.",
+  "rule": "A test run must never depend on the real user's home configuration, the real user's optional add-ons directory, the real global identity settings, or where the checkout happens to live; every test isolates all of these for itself.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shared test-isolation setup now isolates the real home configuration and identity settings for every test file that touches them, proven by running the affected tests from a brand-new checkout with an empty home directory.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#152"
+  }
+}

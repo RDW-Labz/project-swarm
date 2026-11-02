@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0353",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Test caches need narrow write access. Prepare the test bundler's cache directories and grant those locations explicitly when dependencies are shared read-only. Verify both permitted cache writes and denied dependency writes.",
+  "rule": "Test caches need narrow write access.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#353"
+  }
+}

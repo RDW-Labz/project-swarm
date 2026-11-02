@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0093",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A research gate rejected results a brief had explicitly allowed. A license check used only its own fixed, hard-coded allowlist, so worker-verified results the requesting brief explicitly permitted were moved to rejected anyway, and had to be re-admitted by hand.",
+  "rule": "A gate driven by policy reads that policy from the request that actually made it, not only from a list baked into the tool.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the gate now reads an explicit allowed-licenses line from the brief itself when present, falling back to the fixed list only when the brief names none. Regression coverage is in `tests/scout-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#93"
+  }
+}

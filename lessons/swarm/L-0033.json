@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0033",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A failed mutants parse left every other output already written. `integrate --mutants` wrote every job's output into the project tree, then failed while parsing the mutants file, leaving the run neither cleanly integrated nor safely retryable — a retry refused with \"changed since worker snapshot\" on the very files it had itself just written.",
+  "rule": "Integration is all-or-nothing; every precondition, including a mutants file's shape, is checked before the first file is written.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate --mutants` parses and validates every mutants source, including `--mutants-file` and a job's own `mutantsFile` output, before writing anything; a later failure instead leaves the run's saved state `integrationStatus: \"partial\"` (persisted immediately after the write step), so a retry recognizes files it already wrote as already applied instead of refusing them as changed. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "mutation-testing",
+    "retries",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#33"
+  }
+}

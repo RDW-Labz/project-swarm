@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0037",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "scope",
+  "what": "1.93.1 scope split --wire on the S1-S10 ledger: ingest refused 4 times. (1) S1 worker always lists .env.example as a ticket context path, which the validator rejects, although the prompt's own existing tickets name it. (2) Without S1, 9 stages produced 197 tickets but 2 file-ownership conflicts within a wave: per-stage workers cannot see shared files (src/app/layout.tsx, api/requests/route.ts, dashboard/page.tsx, dashboard/layout.tsx) that integration tickets of other stages also write.",
+  "rule": "A wire split must chain or merge integration tickets that edit the same shared file across stages, and must not reject .env.example as context when its own prompt shows it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Runner: after collecting per-stage wire tickets, add dependsOn chains between tickets sharing a file in order of stage; map .env.example to env.example.txt or allow it read-only; make --wire skip stages whose requirements are all done.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "merge-queue",
+    "path-safety",
+    "prompt",
+    "scope",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#37"
+  }
+}

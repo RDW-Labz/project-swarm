@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0003",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": "split-S4 (Haiku) returned a Python-style array with single quotes; integrate accepted it with only an output-invalid-json warning, ingest would fail",
+  "rule": "Scope split jobs should fail or retry when a ticket file is not valid JSON.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": "anthropic/claude-haiku-5-5",
+  "fix": "mark job failed on invalid JSON output so the router retries; or json-repair step before ingest",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "json-output",
+    "split",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 3"
+  }
+}

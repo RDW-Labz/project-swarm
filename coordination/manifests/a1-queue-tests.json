@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "a1-queue-tests",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/merge-queue.test.mjs",
+        "tools/security-gate.mjs"
+      ],
+      "outputs": [
+        "tests/security-queue.test.mjs"
+      ],
+      "prompt": "Write tests/security-queue.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). It tests the A1 security gate inside the merge queue (integrateRun with queue: true and integrateQueue from ../tools/swarm.mjs). Copy the imports, job, manifest, completion, fixture and read helpers from tests/merge-queue.test.mjs (read it; it uses the ollama test provider with a fake fetchImpl and a git fixture repo; make the fake worker write whatever content a test needs for out/<n>.txt). IMPORTANT: never write a complete secret-looking literal in the file; build planted secrets at run time (\"gh\" + \"p_\" + \"a\".repeat(36), \"AK\" + \"IA\" + \"ABCDEFGHIJKLMNOP\"). Tests: (1) a job whose output file contains a planted github token is blocked: integrateRun(root, run.id, { queue: true, noChecks: true }) leaves the file at its base content (rolled back, read the file), result.mergeQueue.checkFailed is [{ job: 'job-0', checks: ['security-gate'] }], result.mergeQueue.securityBlocked has one entry for job-0 whose blocks have check 'secret-scan' and whose JSON does not contain the planted token, a journal blocker event exists (read it with readJournal from ../tools/journal.mjs, kinds ['blocker'], an item whose id starts with 'security-<runId>-job-0' and whose text does not contain the token), and the file <root>/.swarm/project/security-lessons.ndjson has one JSON line with stage 'merge' and no token text; (2) a batch of two jobs where only the second plants a secret: the first job still integrates (its file changes) and only the second is blocked (the queue bisects: result.mergeQueue.integrated is ['job-0'], securityBlocked job is 'job-1'); (3) integrateQueue (full queue with requeue logic) returns a summary with securityBlocked listing the job and status 'partial'; (4) a clean job integrates normally (securityBlocked is empty, the file has the proposed content) and a sentence in the output that mentions the word password in prose is not blocked; (5) a project profile with security disabled: write .project-swarm.json into the fixture root with { \"version\": 1, \"profile\": { \"sensitive\": false, \"protectedPaths\": [], \"budget\": { \"maxUsd\": 5 }, \"baseCheck\": { \"status\": \"none\", \"ranAt\": null, \"head\": null, \"checks\": [] }, \"security\": { \"enabled\": false } } } (read tools/init-profile.mjs validateProfile to make the profile valid; commit it in the fixture before the run) and the same planted-secret job then integrates (nothing blocked); (6) a made-up dependency: a job whose output is package.json adding dependencies { 'definitely-not-real-pkg': '1.0.0' } (the fixture needs a committed package.json with {} first) is blocked with check 'package-check' when integrateRun is given securityGate: { fetchImpl: <fake registry answering 404> , exec: <fake exec resolving { exitCode: 0, stdout: '', stderr: '' }> }, and passes when the fake registry returns an old popular package with a permissive license (created 500 days ago, 100000 weekly downloads, MIT; shape as in tests/security-deps.test.mjs if you need it: registry JSON { time: { created }, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': { license: 'MIT' } } } and downloads JSON { downloads: 100000 }); (7) securityGate.exec is used for vulnerabilities: package.json and package-lock.json both change and the fake exec answers the 'npm audit --json' call with an npm 7 JSON that has one high vulnerability: the job is blocked with check 'vulnerability'. Use only names that exist; keep each test short."
+    }
+  ]
+}

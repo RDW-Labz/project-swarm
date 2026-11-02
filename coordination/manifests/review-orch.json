@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-orch",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a hook that runs on every tool call of the owner's coding sessions, reads transcripts and installs settings",
+      "type": "review",
+      "prompt": "Review coordination/review/orch.diff (the Orchestrator lane: tools/orchestrator-hook.mjs, orchestrator-events.mjs, orchestrator-usage.mjs, board-orchestrator.mjs, install.mjs ensureOrchestratorHooks, board and page changes). Promises: the hook stores only the session id, the tool name, a path inside the project or a masked shell command start, never file contents, edit strings, prompt text, tool output or outside paths; it prints nothing and always exits 0; it ignores swarm worker sessions; the usage reader only reads transcripts under Claude Code's own folder by real path; the pages set text with textContent only; the settings installer keeps other hooks and settings and leaves unreadable files alone; subscription list value is never added to billed spend. Look hard for: (1) any secret or content that can reach the events file or the board (shell command masking gaps, tool_input fields, a path that looks inside but resolves outside through a symlink or ..), (2) the events file or transcript being attacker-written and what the board does with it (huge files, torn lines, prototype keys, injection into the page), (3) races or corruption in append and rotate, (4) the session state logic when events are out of order or clocks differ, (5) the hook slowing or breaking a tool call, (6) the installer replacing or duplicating hooks, (7) wrong totals (double counted messages, today boundary). Report only real defects with file and line. Finish with one JSON line verdict.",
+      "context": [
+        "coordination/review/orch.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

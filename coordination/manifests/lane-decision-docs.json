@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docs-decision",
+      "context": [
+        "docs/state/lane-comparison.md",
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/state/lane-comparison.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/lane-comparison.md add a new section at the end of the file (use the last paragraph that starts \"The Qwen3.6 NVFP4 row is computed\" as the anchor and add the section after the whole paragraph) titled \"## When the router uses the GPU lane\" with this content in short plain sentences and a small table of the three lanes (pass rate, cost per passing task): Router decision (from the 11-task comparison): Haiku passed 11/11 at $0.0023 per passing task (11 tasks cost $0.0253, 135k tokens, 131 s; an earlier run passed 10/11); Codex passed 11/11 on the subscription (no dollars reported, 172k tokens, 446 s); Qwen3.6-35B-A3B NVFP4 on the rented GPU passed 8/11 (7/10 lane tasks plus the hard task, thinking on, best-of off) and costs $0.0026 per passing task only when the GPU is kept 100 percent busy at 128 agents: about 14k tokens per task, 3718 output tokens per second, so about 960 tasks and about 700 passing tasks per hour for $1.807, that is $0.135 per million tokens. At lower load the price per passing task rises in proportion: 50 percent busy is about $0.0052, more than twice Haiku. A failed Qwen task escalates to Haiku, so each failure adds about $0.0023 on top: at 27 percent failures the effective cost per ticket is about $0.0026 plus 0.27 times $0.0023. Break-even with Haiku needs about 90 percent GPU utilization and still gives a lower pass rate. Decision rule for the router: use Haiku by default; use the rented GPU only for a large queue (about 700 or more tickets ready at once, enough to keep 128 agents busy for most of an hour), for work where escalation to Haiku on failure is acceptable, and never for sensitive jobs; Codex stays the free lane for hard tickets."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-lane-rented",
+      "context": [
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md, directly before the heading \"## Using the winner: swarm gpu up|down|status\" (use that heading line as the anchor and keep it) add a section \"## Defaults and when to use the lane\" saying: the lane default is Qwen3.6-35B-A3B NVFP4 with thinking on (SWARM_RENTED_THINKING=off turns it off), at most 128 agents per GPU (the default --per-replica), best-of-N off (N=1; a failed job escalates to Haiku, then Codex), and Lightning and Coder-Next are not part of the lane (they can still be tested with --models); then one short paragraph with this rule: Router decision (from the 11-task comparison): Haiku passed 11/11 at $0.0023 per passing task (11 tasks cost $0.0253, 135k tokens, 131 s; an earlier run passed 10/11); Codex passed 11/11 on the subscription (no dollars reported, 172k tokens, 446 s); Qwen3.6-35B-A3B NVFP4 on the rented GPU passed 8/11 (7/10 lane tasks plus the hard task, thinking on, best-of off) and costs $0.0026 per passing task only when the GPU is kept 100 percent busy at 128 agents: about 14k tokens per task, 3718 output tokens per second, so about 960 tasks and about 700 passing tasks per hour for $1.807, that is $0.135 per million tokens. At lower load the price per passing task rises in proportion: 50 percent busy is about $0.0052, more than twice Haiku. A failed Qwen task escalates to Haiku, so each failure adds about $0.0023 on top: at 27 percent failures the effective cost per ticket is about $0.0026 plus 0.27 times $0.0023. Break-even with Haiku needs about 90 percent GPU utilization and still gives a lower pass rate. Decision rule for the router: use Haiku by default; use the rented GPU only for a large queue (about 700 or more tickets ready at once, enough to keep 128 agents busy for most of an hour), for work where escalation to Haiku on failure is acceptable, and never for sensitive jobs; Codex stays the free lane for hard tickets. Also link [the lane comparison](state/lane-comparison.md).\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-changelog-defaults",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. Insert a new section directly after the line \"# Changelog\" (and a blank line) titled \"## 1.78.0\" with these bullets: \"- Rented lane defaults (owner decision after the bake-off): Qwen3.6-35B-A3B NVFP4 only (Lightning and Coder-Next leave the shortlist), thinking ON by default (`SWARM_RENTED_THINKING=off` turns it off; the default output limit for the lane is 16000 tokens), 128 agents per GPU (`--per-replica` default 128), best-of-N off by default (`--best-of` default 1; a failed job escalates to Haiku, then Codex).\" and \"- Lane comparison (`bench/gpu-bakeoff/compare-lanes.mjs`, `docs/state/lane-comparison.md`): the same 11 tasks (the 10 lane tasks and the hard task) on Haiku (11/11, about $0.0023 per passing task), Codex (11/11, subscription) and the rented Qwen3.6 (8/11, about $0.0026 per passing task only at full 128-agent load): Haiku is the default and the GPU lane pays only for a large, busy queue. The hard task runs on any lane (`runHardTask` takes an agent); CLI lanes get no output limits.\" \nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docs-dogfood-decision",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add after the last bullet of that section (the bullet that starts \"- Swarm share of this round:\"; use that start as the anchor and add after the whole bullet) this bullet: \"- Lane defaults and comparison: 12 swarm jobs (5 default changes, 3 test updates, the comparison driver, its tests, 3 docs edits), all complete on the first try; hand work: version pins and two small fixes found by running it (the hard task must not send output limits to a CLI lane; the details of an unused Codex run). Haiku and Codex both solved the 11 tasks, so the swarm's own cheap lanes beat the rented GPU on quality and price for this workload.\" "
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-watch-run-ui",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR",
+      "type": "review",
+      "prompt": "Review coordination/review/watch-run-ui.diff: a restyle of the per-run Swarm Watch page (index.html, watch.css, tabs.css, board.css) onto the board's design system (swarm-ui.css loaded first). No script was changed except literal colour values in the run scripts. Look for: (1) selectors in swarm-ui.css that now collide with the run page's old class names and break a tab or panel (card, kpi, tabs, tab, chip, pill, btn, seg, feed, legend, lane, dot, label, sub, wrap), (2) class names the unchanged scripts rely on that the new markup or CSS dropped, (3) accessibility regressions (focus rings, touch targets, contrast of the remapped colours on the new dark surfaces, reduced motion), (4) leftover references to removed tokens or fonts, (5) tests that would not catch a regression. Real findings only, ranked, file and line, with the concrete page state.",
+      "context": [
+        "tools/watch-assets/index.html",
+        "tools/watch-assets/watch.css",
+        "tools/watch-assets/swarm-ui.css",
+        "tools/watch-assets/tabs.css",
+        "tools/watch-assets/board.css",
+        "tools/watch-assets/plan.css",
+        "tools/watch-assets/app.js",
+        "coordination/review/watch-run-ui.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

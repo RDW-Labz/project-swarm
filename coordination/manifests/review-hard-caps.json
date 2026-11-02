@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-hard-caps",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR; this changes how money caps are enforced",
+      "type": "review",
+      "prompt": "Review coordination/review/hard-caps.diff: (1) the spend cap is now hard: capDecision takes the job's own worst case (add) and refuses when spent plus reserved plus this job would pass the cap, subscription lanes reserve an estimate while they run (flatRateReserve, a local in-flight entry in tools/swarm.mjs), (2) swarm change and swarm quote scale with ticket count, lane and size from the project's own history (tools/estimates.mjs). Look hard for: (a) any path where money can still be spent past a cap: a job admitted without a reservation, a reservation released too early or never (retries, held jobs, refused-before-start, setup failures, an exception between admit and finishSpend), best-of or batch jobs, resume paths, jobs whose agent changes after admission (auto routing, cap reroute) so the reservation is for the wrong lane, the unreserved shortcut when maxTokens is set, concurrency races between two admissions in the same tick; (b) reservations that make the cap refuse work that should run (a job refused although it fits, a reservation counted twice, history that includes held or failed jobs, a p90 that explodes from one outlier, held jobs that never resume); (c) estimate logic: division by zero, stages with partial run records, tickets counted twice across runs, cancelled and human tickets, ratios when a requirement spans stages, the approval check using the high end, null cost handling in needsHuman, quote scaling when a project has zero or missing requirements, negative or huge ratios; (d) tests that cannot fail. Real findings only, ranked, file and line, concrete input.",
+      "context": ["tools/spend.mjs", "tools/estimates.mjs", "tools/change-orders.mjs", "tools/quotes.mjs", "tests/hard-cap.test.mjs", "tests/estimates.test.mjs", "coordination/review/hard-caps.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0096",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "The same timing-sensitive tests flaked only under real parallel load. Two tests that waited on fixed, wall-clock sleeps passed alone but intermittently failed when several processes ran the same suite at once, making a real regression indistinguishable from ordinary system noise.",
+  "rule": "A timing-sensitive test waits on the actual event it needs, never on a fixed sleep.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: both tests were rewritten to wait on their own completion signal instead of a clock, and now pass reliably under repeated parallel runs. Regression coverage is in `tests/swarm.test.mjs`, `tests/cli-adapters.test.mjs`, and `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "flaky-test",
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#96"
+  }
+}

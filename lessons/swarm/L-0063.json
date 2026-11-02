@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "L-0063",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A shell job could not start its own test interpreter. A mid-tier shell job's venv pointed at a managed Python under the home directory, reached through symlinks; the sandbox hid it, so the worker fell back to an old system Python and reported its checks as not run.",
+  "rule": "A shell job's first check must be able to start before the worker spends a token.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the parent follows `.venv/bin/python` symlink by symlink to its realpath and grants every install dir under `$HOME`, plus the swarm toolchains dir and uv's managed-Python dir (and points `UV_PYTHON_INSTALL_DIR` at it); a python link that resolves nowhere refuses the job, and the first manifest check is smoke-started once inside the profile, refusing `sandbox-cannot-run-check: <argv0>` when it cannot start. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "manifest",
+    "sandbox",
+    "spend",
+    "symlink",
+    "test",
+    "tokens",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#63"
+  }
+}

@@ -1,0 +1,74 @@
+diff --git a/tools/job-types.mjs b/tools/job-types.mjs
+index 6c66576..1e56958 100644
+--- a/tools/job-types.mjs
++++ b/tools/job-types.mjs
+@@ -6,12 +6,12 @@ const preset = (writes, route, timeoutMs, skill, promptLine) => Object.freeze({
+ });
+ 
+ export const JOB_TYPES = Object.freeze({
+-  build: preset('any', ['cursor', 'codex'], 1800000, null, 'Implement the change and its tests inside your declared outputs.'),
+-  fix: preset('any', ['cursor', 'codex'], 1800000, 'diagnosing-bugs', 'Reproduce the failure first, fix the cause, and keep or add a regression test inside your outputs.'),
+-  test: preset('tests', ['codex', 'cursor'], 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
+-  review: preset('none', ['hermes', 'codex'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
+-  research: preset('none', ['hermes', 'openrouter'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
+-  docs: preset('docs', ['hermes'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
++  build: preset('any', ['anthropic', 'cursor', 'codex'], 1800000, null, 'Implement the change and its tests inside your declared outputs.'),
++  fix: preset('any', ['anthropic', 'cursor', 'codex'], 1800000, 'diagnosing-bugs', 'Reproduce the failure first, fix the cause, and keep or add a regression test inside your outputs.'),
++  test: preset('tests', ['codex', 'anthropic', 'cursor'], 1200000, 'tdd', 'Write or update tests only; do not change non-test files.'),
++  review: preset('none', ['codex'], 900000, 'code-review', 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","findings":[{"file":"...","line":0,"severity":"high|medium|low","issue":"...","fix":"..."}]}.'),
++  research: preset('none', ['hermes'], 900000, null, 'Do not edit files. Finish with one JSON line: {"status":"complete","summary":"...","sources":["..."],"findings":["..."]}. For GitHub prior art, the coordinator uses swarm scout or sweep instead.'),
++  docs: preset('docs', ['anthropic', 'cursor', 'codex'], 900000, null, 'Edit documentation only. Plain, short sentences.'),
+   merge: preset('any', ['codex'], 1800000, 'resolving-merge-conflicts', "Resolve the conflict so both sides' intent survives; never drop a side silently. Keep tests passing."),
+   lead: preset('manifest', ['codex'], 900000, null, 'Write exactly one child manifest JSON file as your only output. Do not edit any other file. Child jobs must stay inside your assigned area.'),
+ });
+diff --git a/tools/openrouter.mjs b/tools/openrouter.mjs
+index cf0bf52..01894c4 100644
+--- a/tools/openrouter.mjs
++++ b/tools/openrouter.mjs
+@@ -90,6 +90,11 @@ export function nonBookkeepingOutputs(model, outputs) {
+   if (!isBookkeepingOnlyModel(model)) return [];
+   return (outputs ?? []).filter(file => !BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(String(file).replaceAll('\\', '/'))));
+ }
++// Every output is a bookkeeping file (and there is at least one): the only jobs the router sends to OpenRouter.
++export function isBookkeepingJob(outputs) {
++  return Array.isArray(outputs) && outputs.length > 0
++    && outputs.every(file => BOOKKEEPING_OUTPUTS.some(pattern => pattern.test(String(file).replaceAll('\\', '/'))));
++}
+ export function assertBookkeepingOnly(job) {
+   const bad = nonBookkeepingOutputs(job.model, job.outputs);
+   if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
+diff --git a/tools/router.mjs b/tools/router.mjs
+index 03779db..bc2bf8f 100644
+--- a/tools/router.mjs
++++ b/tools/router.mjs
+@@ -1,7 +1,13 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-export const CHEAP_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter']);
+-export const ROUTE_ORDER = Object.freeze(['hermes', 'cursor', 'codex', 'anthropic', 'openrouter', 'claude']);
++import { isBookkeepingJob } from './openrouter.mjs';
++
++// Code jobs: Haiku first, then Cursor, then Codex; the Claude subscription only after 2 failures.
++// Hermes is not in this order: it runs only where a job type names it (research). OpenRouter runs
++// only bookkeeping jobs (PR payloads, changelogs, metrics) that are not sensitive. The order comes
++// from the lane benchmark (docs/state/lane-benchmark.md).
++export const CHEAP_ORDER = Object.freeze(['anthropic', 'cursor', 'codex', 'openrouter']);
++export const ROUTE_ORDER = Object.freeze([...CHEAP_ORDER, 'claude']);
+ 
+ // The Anthropic lane's model follows the job's tier: the lane model (Haiku) by default, Sonnet for
+ // tier "mid". Opus is never picked here; it needs an explicit anthropic job with tier "expensive".
+@@ -25,12 +31,12 @@ export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), fa
+     candidates = configured('claude') && !(failures.claude >= 2) && accepted('claude') ? ['claude'] : [];
+   } else {
+     candidates = order.filter(agent => configured(agent)
+-      && (agent !== 'openrouter' || job.sensitive === false)
++      && (agent !== 'openrouter' || (job.sensitive === false && isBookkeepingJob(job.outputs)))
+       && accepted(agent));
+     const failed = candidates.filter(agent => failures[agent] >= 2);
+     if (failed.length) reason = `fallback after 2 failures on ${failed.join(', ')}`;
+     candidates = candidates.filter(agent => !(failures[agent] >= 2));
+-    const totalFailures = CHEAP_ORDER.reduce((sum, agent) => sum + (failures[agent] ?? 0), 0);
++    const totalFailures = order.reduce((sum, agent) => sum + (failures[agent] ?? 0), 0);
+     if (!candidates.length && totalFailures >= 2 && configured('claude')
+       && !(failures.claude >= 2) && accepted('claude')) {
+       candidates = ['claude'];

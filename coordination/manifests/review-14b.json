@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14b",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "sensitive-data routing, secrets (ssh key, API key), model output used by autopilot",
+      "type": "review",
+      "prompt": "Safety review of Phase 14b (local brain). Files: tools/brain-link.mjs (ssh tunnel to dev2 and chat), tools/brain.mjs (queue, fallback, ledger), tools/brain-tasks.mjs (prompts and parsing), tools/brain-commands.mjs (CLI glue, Haiku fallback, triage, preflight), docs/plans/phase14b-design.md (the rules), docs/local-brain.md, coordination/review/phase14b.diff (swarm.mjs and autopilot.mjs). Check with evidence: (1) sensitive data: can any path send sensitive project text to Haiku or any non-local service (digest, draft polish, triage, preflight, fallback when the link is down or times out, a profile that is missing or invalid, sensitive defaulting), can a secret path, protected path, symlink or file outside the project be read and sent; (2) secrets: the dev2 API key and ssh key handling (process args, error messages, ledger, status output, logs, the keyCommand string in config, command injection through config or sshTarget, ssh option injection), the tunnel process lifetime and cleanup; (3) untrusted model output: can a model reply influence autopilot beyond the verdict enum (hint text in blockers shown to the owner, blocker ids, journal event forging, terminal escape sequences, prompt injection from a job error or log tail into triage or digest causing a wrong needs-human/retry), can a hostile log make triage always say retry and burn spend, retry caps still intact; (4) availability and spend: the queue (maxQueued, timeouts, abort), the Haiku fallback under the machine-wide $500/$20/$5 caps and reservation (per-call job ids, concurrency), a loop or fan-out that could call the brain unboundedly (autopilot step triage per failed run every 30 s?); (5) draft --out and digest file reads: path traversal, overwrite, TOCTOU. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase14b-design.md",
+        "docs/local-brain.md",
+        "tools/brain-link.mjs",
+        "tools/brain.mjs",
+        "tools/brain-tasks.mjs",
+        "tools/brain-commands.mjs",
+        "coordination/review/phase14b.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

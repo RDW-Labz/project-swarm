@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-review-retry",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "changes the security review gate: what lets a sensitive ticket reach done, and a paid re-ask",
+      "type": "review",
+      "prompt": "Review coordination/review/review-retry.diff (security review retry, review-blocked, required --reason for --accept-unreviewed) in tools/scope-commands.mjs, with tools/security-review.mjs, tools/tickets.mjs, tools/watch-plan.mjs and the watch-assets changes. Rules that must hold: (1) a review answer without a {\"reviews\":[...]} array is re-asked at most ONCE per source review, even with crashes, concurrent calls or reruns (the marker file: is the wx create atomic and written before the paid run? what if the marker exists but the first ask crashed: does the ticket stay safe?); the second ask is validated exactly like the first (opus, complete, right job, tickets limited to the hashes sync recorded); the prompt reminder cannot be abused; the cost is capped; (2) after a failed second ask the tickets are marked review-blocked and are NEVER moved to done by sync (check every path in cmdSync that could mark done: a stale 'pass' record, a record from an earlier run, filesHash, accept-unreviewed, the securityReview field itself being ignored by sync), and the mark is cleared only by a real verdict; (3) --accept-unreviewed: reason required (length, whitespace-only, control characters, very long, a flag value that looks like another flag), still needs --yes, nothing logged or changed when refused, the reason is written to the log and the ticket and cannot inject markup into swarm watch (check watch-plan sanitising and the plan-views.js / plan-tab.js rendering: textContent only?), accepted-unreviewed is recorded only for tickets that really skipped a needed review; (4) the securityReview field: validateTicket, the approval hash (must NOT change the approved ledger hash), ledger rewrites under withLock without losing concurrent changes; (5) exit codes and messages. Find real bugs with file and line evidence, rank high, medium, low, and say how to fix each. Do not edit files.",
+      "context": [
+        "tools/scope-commands.mjs",
+        "tools/security-review.mjs",
+        "tools/tickets.mjs",
+        "tools/watch-plan.mjs",
+        "tools/watch-assets/plan-views.js",
+        "tools/watch-assets/plan-tab.js",
+        "tests/review-retry.test.mjs",
+        "coordination/review/review-retry.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

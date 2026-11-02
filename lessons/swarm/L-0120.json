@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0120",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A dependency-installation warning and a toolchain-environment warning both fired when nothing they warned about could actually break. One fired on a manifest with no dependencies at all; the other fired on a check that only ever ran a plain script interpreter needing no extra environment.",
+  "rule": "A warning fires only when the thing it warns about can actually break.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the dependency warning now fires only when a manifest actually declares dependencies; the toolchain warning now recognizes a script that resolves to a plain interpreter call and skips it. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "installer",
+    "manifest",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#120"
+  }
+}

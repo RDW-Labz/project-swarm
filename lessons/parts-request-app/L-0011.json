@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0011",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Workers cannot run commands, so DB tests r004-r008 were never executed; r006/r007/r008 and migration 0008's embedded test failed on first real run (invalid enum value, dblink password, no pgTAP plan, seed path)",
+  "rule": "Every ticket needs a test-run step against local Supabase/npm before it counts as done.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add a coordinator-run check stage (supabase start, supabase test db, npm test) to integrate/go and feed failures back as fix tickets",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "database",
+    "tests-not-run",
+    "verification"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 11"
+  }
+}

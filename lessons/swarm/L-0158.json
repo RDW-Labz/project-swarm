@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0158",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "A worker's own report of an unmet rule read the same as a silent workaround. A worker faced a contract requirement it genuinely could not satisfy inside its own declared outputs, but had no structured way to say so short of stopping outright, so a reviewer could not easily tell a deliberate, reasoned deviation apart from a worker that just quietly did something else instead.",
+  "rule": "Let a worker report a deviation it could not avoid, with what the rule was, what it did instead, and why, and require a person to accept it explicitly before it lands.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a result may carry a `deviations` list read at review time and again before landing; landing refuses outright unless that acceptance is explicit, and an accepted deviation is recorded alongside the change instead of disappearing into a worker's own notes. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review",
+    "scope",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#158"
+  }
+}

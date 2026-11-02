@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0077",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A check that could not even start reported no reason at all. A pre-push lock check spawned a toolchain binary that was not on a bare system path (it lived only in a dedicated toolchains directory); the check refused with a blank reason, costing one re-attempt (about three minutes) before the real cause was found.",
+  "rule": "A check that cannot start says so, naming the command it tried.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: that toolchain binary is now resolved the same way every other one is (a dedicated toolchains directory, then the system path) before it is ever spawned; when it cannot be found, the check refuses at once, naming every path it tried. Regression coverage is in `tests/field-lessons-batch-g.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "locking",
+    "path-safety",
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#77"
+  }
+}

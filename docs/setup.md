@@ -31,11 +31,21 @@ Read [the security boundaries](../SECURITY.md) before copying sensitive files in
 ## Local machine config
 
 Anything project-specific (a keychain service name, a rig port file, a cheap-tier model
-override, extra denied home directories, a private-names list) lives in a small local, machine-specific
+override, extra denied home directories, a private-names list, `cursor` worker settings) lives in a small local, machine-specific
 config file, never as a source literal: `$XDG_CONFIG_HOME/project-swarm/config.json` when
 `XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/project-swarm/config.json`.
 `SWARM_CONFIG` overrides either. This file must sit outside any git work tree, including the
 shared install's own checkout — the runner refuses to read a config file found inside one.
+
+Live Codex and Claude shell runs put their detached worktrees outside the project root by
+default. Set `{"worktreesOutsideRoot": false}` in this local config to opt back into the
+historical in-root layout; `worktreesDir` may select a different outside-root base. The
+low-level adapter fallback and saved legacy `worktreePath` records remain readable.
+
+An optional `coordination/toolchain-versions.md` inventory can document executable
+availability with a Markdown table headed `binary | version | reinstall`. `doctor` reports
+missing binaries and displays the reinstall text for review; it never executes that text or
+claims version compatibility from a found executable.
 
 ## One shared install per machine
 
@@ -66,6 +76,18 @@ Run commands against that project with `--root`:
 ```sh
 node ~/.project-swarm/tools/swarm.mjs --root /path/to/your-project doctor
 ```
+
+`swarm init` is the same link plus the project setup a fresh repo needs. From the shared install:
+
+```sh
+node ~/.project-swarm/current/tools/swarm.mjs --root /path/to/your-project init
+```
+
+It detects the stack (node, python, go, rust), copies `test` and `lint` scripts and CI `run:` checks into `coordination/checks.json`, adds `.swarm/` to `.gitignore`, and adds that ignore to an ESLint flat config or `pytest.ini` when the edit is obvious. A config it cannot edit safely is named in `warnings`. It writes the agent pointers and seeds `coordination/` the same way as `install.mjs`. Running it again keeps files that are already there.
+
+`swarm go "<goal>"` is the one command after that. The goal is a sentence, not a manifest path or a run id. It reads the real top-level folders (not a fixed `src/` / `tests/` / `docs/` list) and makes one lead per folder, up to 10. `--leads 3` groups those folders into 3 leads. `--max-jobs` (default 25) is the cap for each lead. `--concurrency` (default 8) is the run cap; lane caps still decide how many jobs actually run at once. Short reports are on. The default budget is $5 and 2,000,000 tokens. `--max-usd` and `--max-tokens` change it. If a cap pauses the run, the result includes the `swarm resume <run> --raise ... --reason TEXT` command and the process exits 75. A dirty tree is refused. On a clean tree, `go` creates `swarm/go-<runId>`, integrates and commits there, and prints that branch plus the rollup. The branch you started on is not moved. Provider logins still have to exist on the machine. `--pr` stays on `go MANIFEST`.
+
+`swarm scale` measures the runner without calling a model. It creates a throwaway repo, runs 500 stub jobs at concurrency 500 (or `--jobs` / `--concurrency`), and prints peak RAM, peak CPU, queue latency, and how fast `integrate --queue` writes the files. It does not use the project you started in, and it does not spend. The numbers from one run are in [the field report](field-report.md).
 
 Without `--root`, the runner uses its own install directory as the project. `update` and `version` refuse `--root` before any git operation; invoke those commands on the shared install runner without a project root. With `--root`, manifests, copied inputs, outputs, and `.swarm/` records are all resolved in the selected project. An explicit root is not permission to use files from other projects as context. If the project's `.project-swarm.json` version differs from the running install's version, `run` and `validate` print one warning line to stderr and continue.
 
@@ -110,7 +132,7 @@ Run the target project's relevant tests and inspect its actual behavior. A succe
 - **Integration conflict:** preserve the newer project content. Start a fresh task from that content or manually review the proposed changes; the runner intentionally does not force an overwrite.
 - **A worker says it ran tests:** tool-free API and restricted Claude/Hermes/Qwen workers cannot run shell tests. Codex workers can test their committed worktree; the coordinator still verifies the integrated project.
 - **Stale `running` status after a machine or runner crash:** inspect the records and processes you own. Status files are historical evidence, not proof that a process is alive. Never kill an unrelated terminal based on a stale PID.
-- **Stale integration lock:** confirm no integration is active before manually removing `.swarm/integration.lock`. Locks are not silently discarded after crashes.
+- **Stale integration lock:** stale locks from dead processes on this host are cleared automatically with a warning. A live owner refuses with `integrate-locked`; the repository lock also covers other worktrees.
 - **A project still has its own `tools/swarm.mjs` and `skills/`:** that is an old per-project copy from before the shared-install model. Run `node ~/.project-swarm/tools/swarm.mjs update --projects` to see it reported, then again with `--yes` to replace it with a pointer; the old files are moved into a timestamped `.swarm-old-copy-*/` folder in that project, never deleted.
 
 For upgrades, run `node ~/.project-swarm/tools/swarm.mjs update` in the shared install. It refuses if `tools/` or `skills/` have uncommitted changes, verifies the install is its own project-swarm git checkout, fetches tags, validates the selected release package, checks out the newest semantic `v*` tag, reinstalls the skill, and reports the changelog sections between your previous and new version. It is a no-op if you are already on the newest tag. Nothing updates itself: run this only when you decide to.
@@ -125,7 +147,7 @@ git clone https://github.com/RDW-Labz/project-swarm.git
 
 The owner name in the URL is the source repository location. You do not sign into that account. You can also download the source archive from the release page. Model execution still uses your own provider setup.
 
-`doctor all` lists all nine adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
+`doctor all` lists all twelve adapters without making network requests by default. `doctor all --probe-local` opts into a short HTTP health probe only for loopback Ollama and self-hosted Lambda endpoints. It sends no credentials, follows no redirects and makes no model request. Remote endpoints and cloud keys are never probed. Reports distinguish `configured`, `reachable` (HTTP health only), and `unreachable`; `reachable: null` means not checked. `configured` means a required environment key is present, or a local Ollama endpoint is selected; it does not prove service health or model access. Each run checks only its selected providers. Default concurrency is 2; set `concurrency` to an integer from 1 to 32 when you deliberately want more simultaneous workers.
 
 ## Preflight before larger assignments
 
@@ -174,3 +196,14 @@ Cursor also discovers its always-applied project rule; agents without an
 AGENTS.md convention can follow that same explicit prompt. Keep HANDOFF.md
 and TASK.md current after every dispatch; use the [exact handoff](kickoff.md#handoff)
 at the 10th build dispatch.
+
+## The `swarm` command
+
+`swarm update` and `tools/install.mjs --user` write `~/.local/bin/swarm`. It is a small script that runs `~/.project-swarm/current/tools/swarm.mjs` with the node that was installed, so it works in shells that never load your aliases (Claude Code, Cursor, cron, `bash -c`). A shell alias only exists in your interactive terminal, so remove any old `alias swarm=...` line after you update.
+
+Two lines are left to you, because the installer never edits a shell profile:
+
+- `export PATH="$HOME/.local/bin:$PATH"` in `~/.zshenv` (zsh reads that file in non-interactive shells; `~/.zshrc` is only for interactive ones). `swarm doctor all` warns with `swarm-not-on-path` until this is done.
+- For tab completion in `~/.zshrc`: `fpath=(~/.project-swarm/completions $fpath)` then `autoload -Uz compinit && compinit`. `swarm completion zsh` prints the same script.
+
+Run `swarm` alone for a short project status, or `swarm "goal"` to run a goal. The first `swarm go` in a project runs `swarm init` and commits its files on the go branch.

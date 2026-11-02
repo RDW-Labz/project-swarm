@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.0
+  },
+  "jobs": [
+    {
+      "id": "review-hb",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a security guard that decides what a coding agent may write, installed as a hook on every edit and shell command",
+      "type": "review",
+      "prompt": "Review coordination/review/hb.diff (the hand-build guard: tools/shell-writes.mjs, handbuild.mjs, handbuild-guard.mjs, handbuild-commands.mjs, the hook installer in install.mjs, the decide() hook in inbox.mjs, live-processes.mjs and the update refusal in swarm.mjs, and the Orchestrator lane changes). Promises: an orchestrator session cannot edit or shell-write the project checkout outside .swarm/ and docs/plans/ without an owner approval that names the file and has not expired; it cannot approve its own request, edit the approval state or the guard settings, or switch the guard off; shell writes are read from the command text and what cannot be read fails closed; a bug in the guard lets the call through (fail open) but never throws output; the guard never blocks a swarm worker workspace or paths outside the checkout; swarm update refuses while swarm commands run from the install. Look hard for: (1) bypasses of the shell analyzer (quoting, backslashes, here-docs, command substitution, subshells, brace expansion, `xargs`, `find -exec`, `bash -c`, `sh -c`, env -S, interpreters, symlinks, cwd tricks, relative paths with .., writes through a path variable) and what it wrongly BLOCKS (false positives that would stop normal test and build commands), (2) the protected-path and self-approval rules (case, alternative spellings, node tools/swarm.mjs, the phone path, writing the state file via another tool or an interpreter), (3) approvals: expiry, file pattern matching (regex escaping, ** and *), a pending or denied request approving something, git operation naming, request validation, (4) races and corruption in the state file, log and journal writes (symlinks, O_NOFOLLOW, atomic rename), (5) the installer changing or duplicating hooks, the refresh-only rule, the matcher, (6) the process check (false refusals, missing a real run), (7) anything that would make the guard lock the owner out. Report only real defects with file and line. Finish with one JSON line verdict.",
+      "context": [
+        "coordination/review/hb.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

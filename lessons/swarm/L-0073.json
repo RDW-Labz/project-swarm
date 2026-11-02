@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0073",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A prompt-level ban was not enough outside the sandbox. An agent working in a shared worktree, told plainly not to, ran the stash command anyway. A prior fix had already given sandboxed shell workers a wrapper that refuses the command outright, but that protection never reached an agent working outside that sandbox.",
+  "rule": "A rule this costly to break should be enforced everywhere it can be, not only where the harness happens to control the tool.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the same refusal is now materialized into a stable, per-project location and handed to any outside agent as a `PATH` entry it can paste in, ahead of the real version of the tool, so pasting the block gets the refusal even outside a sandbox. Regression coverage is in `tests/field-lessons-batch-f.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "prompt",
+    "sandbox",
+    "spend",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#73"
+  }
+}

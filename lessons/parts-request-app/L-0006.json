@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0006",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "S1 scaffold ticket T-0037 outputs only package.json+tsconfig.json; integrate refused: security-gate 'no scanner ran (needs a lockfile with npm...)'; go reported stage integrate failed and told me to use --queue. Also split tickets use bare file names, so theme-contract.ts and 0001_status_enum.sql land at repo root",
+  "rule": "Scaffold tickets must be able to emit a lockfile or the gate must accept pnpm; ticket files must allow folders.",
+  "caughtBy": "merge-check",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "let scope tickets name paths with folders; have gate run npm audit via package-lock-only or osv-scanner; go should print the queue hint as a next step",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "lockfile",
+    "paths",
+    "scaffold",
+    "security-gate"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 6"
+  }
+}

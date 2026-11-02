@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1.5
+  },
+  "jobs": [
+    {
+      "id": "review-hb3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "verification round of the owner-requested security review of the hand-build guard",
+      "type": "review",
+      "prompt": "Review coordination/review/hb3.diff: the hand-build guard after a first review round (shell-writes.mjs, handbuild.mjs, handbuild-guard.mjs). The first round asked for: reading bash -c, eval, substitutions, subshells, cd, xargs, find -exec, awk, wrappers with option values, downloads and extraction; failing closed on inline code that is not plainly read-only and on interpreters run on writable or outside scripts; a read-only git allowlist; protecting .git/, .swarm itself, .claude, the install and the user's Claude settings (case-insensitively); specific, expiring, locked requests; a commit carrying only approved files; the project from CLAUDE_PROJECT_DIR; refusing too-large input. Check that those fixes are correct and complete, and look for regressions: normal test and build commands that are now wrongly blocked, mistakes in the new code (wrong variable, wrong regular expression, a path that throws and so fails open), and any remaining high-severity gap in what the analyzer reads. Report each real defect as one short finding: file, line, what is wrong, the fix. Keep findings brief and factual; describe the class of gap, do not write sample commands that bypass the guard. Finish with one JSON line verdict.",
+      "context": [
+        "coordination/review/hb3.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

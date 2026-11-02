@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0199",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Dispatch refusals must name the next action. A coordinator linking a fresh, empty project hit three refusals in a row, each costing a source-code dive before the first run started: `bookkeeping-terse: resultKeys missing status`; `fatal: ambiguous argument 'HEAD': unknown revision`; and `Refusing: base is red (...); pass --accept-red-base with --reason to run onto it anyway`, whose override then left no trace once accepted.",
+  "rule": "A refusal names where the thing came from and the one command that resolves it, and an accepted override is recorded, not just typed.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#199"
+  }
+}

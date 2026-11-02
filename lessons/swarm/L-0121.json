@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0121",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A shipping guard refused a run for a scratch file that was never actually part of what got pushed. The guard read a run's own declared-output list instead of the actual pushed diff, so a git-ignored bookkeeping file always tripped it even though it was never committed.",
+  "rule": "A diff guard checks the diff, not a list of what a run merely declared.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the guard now reads the actual pushed diff (plus anything staged) and no longer refuses a file that was never committed. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#121"
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "concurrency": 5,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/change-orders.test.mjs",
+        "tests/day0.test.mjs",
+        "tests/scope-integrity.test.mjs",
+        "tests/ticket-manifest.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "id": "fix-scope-sensitive",
+      "type": "build",
+      "prompt": "Add one export to the scope module: isSensitiveText(scope, text). It returns true when any entry of scope.sensitive (an array of strings) appears in text as a whole word or whole phrase, case-insensitive, with no minimum length (so PII and SSN count). Split nothing: match the full entry as a phrase, and also match each separate word of an entry when the entry has several words only if the word is at least 3 characters. Escape regular expression characters. An empty entry never matches. Non-string text returns false. Add tests for: a short word like PII matches, a phrase matches, a partial word like payments inside prepayments does not match, special characters in an entry do not throw, empty and non-string inputs return false. Keep everything else.\nReturn the complete new content of each output file in files; never use edits. Keep every existing export, behavior and test that is not mentioned. Keep the code style of the file. No secrets in code or tests.\nignoreTests: tests/change-orders.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/day0.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/scope-integrity.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/ticket-manifest.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
+      "context": [
+        "tools/scope.mjs",
+        "tests/scope.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope.mjs",
+        "tests/scope.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/day0.test.mjs"
+      ],
+      "timeoutMs": 900000,
+      "id": "fix-tickets-approval",
+      "type": "build",
+      "prompt": "Fix three issues in the ticket module and add tests. (1) badPath must also reject: an empty path, a path with an empty segment (double slash), a path with a dot segment, any path whose first segment is .git or .swarm or .github-hooks-free names, and the exact names .project-swarm.json and .env (case-insensitive), in addition to what it rejects now. (2) Add export ticketSetHash(tickets): a sha256 hex of canonical JSON (sorted keys) of the tickets, using only these fields of each ticket: id, title, type, stage, scopeRefs, acceptance, files, context, contracts, dependsOn, size, risk, sensitive, hard, steps; ignoring status and notes; tickets sorted by id. (3) approveLedger records approved as at, by, scopeHash (the ledger scope hash) and ticketsHash (ticketSetHash of the ledger tickets). isApproved(ledger) returns true only when approved.at exists AND approved.scopeHash equals ledger.scope.hash AND approved.ticketsHash equals ticketSetHash(ledger.tickets). A ledger approved by an older version without ticketsHash is not approved. Add tests: approval survives a status change, a changed acceptance line or added ticket makes isApproved false, a changed scope hash makes it false, the new badPath rules, and ticketSetHash is stable across key order.\nReturn the complete new content of each output file in files; never use edits. Keep every existing export, behavior and test that is not mentioned. Keep the code style of the file. No secrets in code or tests.\nignoreTests: tests/day0.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.",
+      "context": [
+        "tools/tickets.mjs",
+        "tests/tickets.test.mjs"
+      ],
+      "outputs": [
+        "tools/tickets.mjs",
+        "tests/tickets.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "fix-change-orders",
+      "type": "build",
+      "prompt": "Fix two issues in the change orders module and add tests. (1) When a done ticket is reopened, every ticket that depends on it directly or through other tickets and is not cancelled and not todo must go back to todo, so nothing stays ready or running before its dependency is done. Record those ids as dependentsReset in the change order entry and count them in the impact estimate only as a separate field dependentsReset (an array in impactAnalysis result: compute them there as reset, and applyChangeOrder applies it). (2) The change order entry must record the retag details: retagged: an array of objects with ticket and removed (the removed requirement ids). History is never deleted. Add tests for both, including a chain of three tickets where the first is reopened.\nReturn the complete new content of each output file in files; never use edits. Keep every existing export, behavior and test that is not mentioned. Keep the code style of the file. No secrets in code or tests.",
+      "context": [
+        "tools/change-orders.mjs",
+        "tests/change-orders.test.mjs"
+      ],
+      "outputs": [
+        "tools/change-orders.mjs",
+        "tests/change-orders.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "fix-ticket-manifest",
+      "type": "build",
+      "prompt": "Fix two issues in the ticket manifest module and add tests. (1) ticketsToManifest must validate maxJobs when given: it must be a positive safe integer, otherwise throw an Error with code ticket-max-jobs; undefined means no limit. (2) A job is sensitive when the ticket says so OR isSensitiveText(scope, text) is true, where isSensitiveText is exported by the scope module (import it from there; signature isSensitiveText(scope, text), returns boolean) and text is the ticket title, epic, acceptance lines, file names, and the text and acceptance of every referenced requirement joined by newlines; when scope is missing, keep the ticket value. Add tests: a ticket with sensitive false whose requirement text names a Sensitive entry becomes a sensitive job; maxJobs 0, -1, 1.5 and NaN throw; maxJobs 2 limits the jobs.\nReturn the complete new content of each output file in files; never use edits. Keep every existing export, behavior and test that is not mentioned. Keep the code style of the file. No secrets in code or tests.",
+      "context": [
+        "tools/ticket-manifest.mjs",
+        "tests/ticket-manifest.test.mjs",
+        "tools/scope.mjs"
+      ],
+      "outputs": [
+        "tools/ticket-manifest.mjs",
+        "tests/ticket-manifest.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "fix-contracts",
+      "type": "build",
+      "prompt": "Harden the OpenAPI code generator against hostile input files. (1) validateOpenApi must reject, with a clear error message, any component schema name or operationId that does not match the pattern letter or underscore followed by letters, digits or underscores; and any path with two path parameters next to each other without a slash between them; and an enum that is not an array. (2) All lookups keyed by names from the input (resolving a ref, string format table, seed table, schema maps) must use Object.hasOwn or objects created with a null prototype, so names like constructor, __proto__ and toString never resolve to inherited values; a ref must resolve with the same name decoding everywhere (decode the JSON pointer escapes tilde-1 and tilde-0 once, in one helper) and an unresolved or non-own ref is an error. (3) The generated source must never contain raw input text outside string literals created with JSON.stringify: every name that is used as an identifier is checked by the pattern above, and every other input value placed in generated source goes through JSON.stringify. (4) The mock server route matching must not build a regular expression that can backtrack badly: build one regular expression per path with each parameter matching one segment of any characters except slash, and escape every literal segment. Keep all current exports and generated file names. Do not change behavior for valid documents.\nReturn the complete new content of each output file in files; never use edits. Keep every existing export, behavior and test that is not mentioned. Keep the code style of the file. No secrets in code or tests.",
+      "context": [
+        "tools/contracts-schema.mjs",
+        "tools/contracts-gen.mjs"
+      ],
+      "outputs": [
+        "tools/contracts-schema.mjs",
+        "tools/contracts-gen.mjs"
+      ]
+    }
+  ]
+}

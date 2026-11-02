@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0156",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A release step merged a change with a locally failing check, silently, because that same check also happened to fail on the unchanged base. — treated as excused rather than as the environment problem it actually was. Separately, a check's own narrowed environment sometimes left out a program the wider environment plainly had, refusing in a way that read exactly like that program being genuinely absent.",
+  "rule": "A release step never merges past a non-passing local check without an explicit, deliberate choice to do so, and a check failing the same way on the unchanged base is an environment problem to fix, never a quiet green light.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a release step now holds, naming the failing tests, on a check that also fails on the base, unless that is explicitly accepted; validation also now warns when a check's own narrowed environment omits a program the wider environment plainly has. Regression coverage is in `tests/field-lessons-batch-t1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "merge",
+    "merge-queue",
+    "release"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#156"
+  }
+}

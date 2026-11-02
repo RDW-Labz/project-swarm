@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0092",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Two runs started in the same instant were given the same id. Two background jobs launched within the same millisecond generated identical run identifiers, so the second one collided with the first and died before it ever started; a cancelled job also reported no idea what it had already spent.",
+  "rule": "A run id is unique across processes, not merely across milliseconds, and a cancelled job still reports whatever it is known to have spent.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: run ids now add a short random suffix and retry once on a genuine collision; a cancelled job reports its last known cost, or an explicit \"unknown\" flag with the amount it had reserved when no cost was ever observed. Regression coverage is in `tests/scout-125.test.mjs` and `tests/ask-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "retries",
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#92"
+  }
+}

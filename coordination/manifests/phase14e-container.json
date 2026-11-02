@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "container-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM; same first line, same exports and signatures; keep every behaviour not named here; compact code). Add CONTAINER MODE for nodes that are themselves a container already running the pinned vLLM image (Vast.ai container instances: no docker, no systemd, we are root, vllm is on PATH). (1) validateUpOptions: options.mode is optional, 'vm' (default; today's docker behaviour) or 'container'; anything else throws fail('gpu-option-invalid', \"mode must be 'vm' or 'container'\"). options.probePorts is optional: an array of at most 8 integers from 1 to 65535, else fail('gpu-option-invalid', ...). (2) New exported pure functions: containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) and containerStopScript(), plus listeningFromProc(text) and hostFromProcAddr(hex). containerStartScript must validate apiKey exactly like remoteStartScript (KEY_RE, same error). Its lines, in order: first the dead-man timer: setsid nohup sh -c 'sleep <ceil seconds>; pkill -f \"vllm serve\" >/dev/null 2>&1; rm -f \"$HOME/.swarm-vllm.env\"' >/dev/null 2>&1 </dev/null & ; then 'set -e'; 'pkill -f \"vllm serve\" >/dev/null 2>&1 || true'; 'rm -f \"$HOME/.swarm-vllm.env\"'; 'umask 077'; the key file here-document exactly as in remoteStartScript (cat > \"$HOME/.swarm-vllm.env\" <<'SWARMKEY' / VLLM_API_KEY=<key> / SWARMKEY); then for each replica from replicaPorts(gpus, { remotePortBase }) one line: CUDA_VISIBLE_DEVICES=<index> VLLM_API_KEY=\"$(sed -n 's/^VLLM_API_KEY=//p' \"$HOME/.swarm-vllm.env\")\" setsid nohup vllm serve <model> --served-model-name <model> --host 127.0.0.1 --port <remote> --max-model-len <n> --max-num-seqs <n> --gpu-memory-utilization 0.9 --enable-prefix-caching <args joined by space> > \"$HOME/.swarm-vllm-<index>.log\" 2>&1 </dev/null & ; and finally 'rm -f \"$HOME/.swarm-vllm.env\"'. (The key therefore lives only in the server processes' environment and never on a command line.) containerStopScript() returns 'pkill -f \"vllm serve\" >/dev/null 2>&1 || true\\nrm -f \"$HOME/.swarm-vllm.env\"\\n'. hostFromProcAddr(hex) turns a /proc/net/tcp local address host part into text: 8 hex digits are an IPv4 address in little-endian byte order (0100007F is 127.0.0.1, 00000000 is 0.0.0.0); 32 hex digits are IPv6 as four little-endian 32-bit words (00000000000000000000000001000000 is ::1, 0000000000000000FFFF00000100007F is ::ffff:127.0.0.1, 32 zeros is ::); return the IPv4 dotted text or for IPv6 the strings '::1', '::ffff:127.0.0.1' (generalise: ::ffff:a.b.c.d) or '::' for all zeros, otherwise 'ipv6:' plus the 32 hex digits; return null for anything else. listeningFromProc(text) parses the contents of /proc/net/tcp and /proc/net/tcp6 (the header lines start with 'sl'; split rows on whitespace; column 1 is local_address as HEXHOST:HEXPORT, column 3 is the state) and returns an array of { host, port } for rows whose state is '0A' (LISTEN), port parsed from hex. (3) gpuUp with options.mode === 'container': the first ssh command becomes 'nvidia-smi -L; echo VLLM:$(command -v vllm || true); echo ROOT:$(id -u)'. Do NOT check docker or sudo. Require at least one GPU (gpu-none as today) and a non-empty VLLM: line, else throw fail('gpu-no-vllm', 'the node has no vllm command; container mode needs an instance that runs the vLLM image'). powerOff is false in container mode (no log warning needed; the session records powerOff: false) and the session records mode: 'container' (mode: 'vm' otherwise). Use containerStartScript instead of remoteStartScript. Exposure check in container mode: same TCP probes as now (all resolved addresses on every replica port, and also on every port in options.probePorts if given), then instead of 'ss -ltnH' run one ssh command 'cat /proc/net/tcp /proc/net/tcp6' (same ssh args) and apply listeningFromProc: any LISTEN socket on a replica node port whose host is not loopback (127.x, ::1, ::ffff:127.x) is exposure; if the command fails or returns nothing parseable throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)'). The failure handling (stop the servers, remove the session, message, error.session) uses containerStopScript in container mode. (4) The session stores mode; gpuDown uses containerStopScript when session.mode === 'container' (remoteStopScript otherwise, and for sessions without a mode), and in container mode its final message must be: 'Servers stopped and the session removed. This does NOT stop the rental: destroy the instance (provider console or the rental helper) now.' (and the 'Could not stop the servers over ssh ...' variant keeps its text but ends with that same destroy reminder instead of the terminate reminder). formatStatus when the session mode is container (add mode to the status object) says 'destroy the instance' instead of 'terminate the instance'. Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "container-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change only this). Add value flags --mode (vm|container) and --probe-ports (comma separated integers) to VALUE_FLAGS; upOptions passes mode: flags.mode and probePorts: parsed array of integers (undefined when absent; a non-integer entry throws Error with code 'gpu-usage' and message 'gpu-usage: --probe-ports must be comma separated port numbers'). planText: when options.mode === 'container' the node line says 'a container instance already running the pinned vLLM image (swarm gpu up starts vllm serve inside it; no docker needed)', and the billing line says: '  billing: the dollar cap and the timer end the servers, but billing continues until the instance is DESTROYED (the rental helper's reaper does that at the deadline); nothing here can power a container off'. In vm mode both lines stay as they are. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/vast-rental.test.mjs"
+      ],
+      "id": "container-vast",
+      "context": [
+        "bench/gpu-bakeoff/vast.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "prompt": "Return the complete new bench/gpu-bakeoff/vast.mjs (plain ESM; same first line, exports and behaviour; add CONTAINER MODE as below). Import { PINNED_IMAGE } from '../../tools/gpu.mjs'. (1) New exports: checkContainerOffer(offer, { hours, maxUsd }) throws Error('offer <id> refused: <reasons joined by \"; \">') unless ALL hold: gpu_name matches /^RTX PRO 6000 (S|WS)$/ (Max-Q refused), num_gpus === 1, rentable !== false, verification === 'verified', (offer.reliability2 ?? offer.reliability) >= 0.99, dph_total * hours <= maxUsd * 0.8; returns { worstUsd }. rankContainerOffers(offers): returns a new array of the offers that pass checkContainerOffer(offer, { hours: 4, maxUsd: 15 }) sorted with hosting_type === 1 (datacenter) first, then by dph_total ascending. containerCreateBody({ disk = 200, label = 'swarm-bakeoff' } = {}) returns { image: PINNED_IMAGE, disk, runtype: 'ssh_direct', label } with NO vm field, no env, no ports; it must throw if PINNED_IMAGE does not match /@sha256:[0-9a-f]{64}$/ . (2) CLI: 'search --mode container' prints one line per ranked offer: id, gpu_name, $price/h, reliability, hosting (datacenter or community), host_id, geolocation (it only reads; calls findOffer-style bundles search with num_gpus eq 1, gpu_ram gte 90000, rentable eq true, type ondemand, limit 500). 'rent' accepts --mode container (default vm, existing behaviour): in container mode it uses checkContainerOffer and containerCreateBody, never the vm body; everything else (logging INSTANCE_ID first, writing the state file with mode: 'container', starting the detached reaper under caffeinate -i, waiting for running with --wait-min, destroying the instance if it never gets an ssh address) stays. When the instance is running, additionally print one line MAPPED_PORTS=<comma separated external HostPort numbers found in instance.ports values (array of {HostPort}), excluding the ssh port, or empty>. Keep everything else unchanged. Do not edit tests.\nignoreTests: tests/vast-rental.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

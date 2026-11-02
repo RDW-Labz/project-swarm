@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/rented-run.test.mjs"
+      ],
+      "id": "f4-lanes-doc",
+      "context": [
+        "docs/lanes.md"
+      ],
+      "outputs": [
+        "docs/lanes.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/lanes.md, directly before the heading line \"## The rented lane\" (use that heading line as the anchor and keep it) add two sections. First \"## Haiku rate limits and lane concurrency\": Anthropic rate limits for claude-haiku-5-5 at our tier, read from the response headers of a 1-token call on 2026-10-16: 10,000 requests per minute, 10,000,000 input tokens per minute, 2,000,000 output tokens per minute (12,000,000 tokens per minute in all). Measured Haiku task profile (the 11-task comparison): about 9.6k input and 2.7k output tokens per task, about 11.8 s per task, so one agent sends about 5.1 requests per minute, 49k input tokens per minute and 13.6k output tokens per minute. Maximum agents by each limit: requests 1,960; input tokens 204; output tokens about 147 (the binding one), so about 147 Haiku agents at full speed and about 100 with a 70 percent margin. One more rule: Anthropic estimates output tokens per minute from each request's max_tokens when it starts and corrects it when it ends, so agents times requests per minute times max_tokens must stay under 2,000,000: at the default 8192 that is about 47 agents for fast 12 s tasks, at 4096 about 95, at 2048 about 190. The lane's default concurrency is 32 (safe at the default 8192 even for fast tasks, about 66 percent of the limit); raise it with lanes.anthropic.concurrency in the machine config up to about 96 only when jobs set maxOutputTokens of 4096 or less; 429 answers are already backed off and retried by the lane. Second \"## Which lane gets a ticket\": Router rule (owner decision): Haiku (anthropic) is the default worker lane; the rented GPU lane is used by automatic routing only when at least 700 non-sensitive tickets are ready in the run (the number of auto jobs in the manifest; RENTED_MIN_READY, overridable with lanes.rented.minReady) and the job carries its contract; Codex takes hard tickets (a job with hard: true goes to Codex first); sensitive jobs never go to the rented lane; one failure on the rented lane escalates to Haiku, then Codex.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lanes.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/leads-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/rented-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "f4-gate-doc",
+      "context": [
+        "docs/security-gate.md"
+      ],
+      "outputs": [
+        "docs/security-gate.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/security-gate.md: (1) add a short section at the end titled \"## Every integration is gated\" saying: plain integrate (without --queue) now runs the same gate on the planned writes BEFORE the first write (it has no rollback), a block writes nothing and fails with security-gate-blocked, records the inbox blocker and the lesson, and there is no integration path without the gate (the only switch is the profile security block); (2) add a section \"## Offline code scan\" saying: the code scan runs for every project, sensitive or not, with pinned local rules (tools/security-rules/semgrep-local.yml, 15 rules for JavaScript, TypeScript and Python, its sha256 pinned in the code; a changed or unreadable file blocks the batch), --metrics=off, no version check, a minimal environment and no network; policy codeScan is local (default), auto (registry rules, only for non-sensitive projects unless codeScanSensitive is true) or off; (3) add a section \"## Unparsed ecosystems fail closed\" saying: a change (including a deletion) to a pnpm, yarn, Go, Cargo, Python (pyproject.toml, Pipfile, poetry.lock, setup.py), PHP, Ruby or JVM manifest or lockfile blocks the batch with check unsupported-manifest and an inbox item until the gate can parse it; the owner can allow a file with allowUnparsedManifests in the profile security block (file name or path). Also remove or fix any sentence in the file that says plain integrate is not gated or that semgrep is skipped for sensitive projects. Anchor your additions after the last line of the file (use the last heading line of the file as the anchor and add after that section's text), and for the removals use the exact sentences from the file.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "f4-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. Insert a new section directly after the line \"# Changelog\" (and a blank line) titled \"## 1.80.0\" with these bullets: \"- A1 follow-up: every integration is gated (plain `integrate` runs the gate on the planned writes before the first write, so there is no bypass; a block writes nothing and fails with `security-gate-blocked`); the code scan runs offline for every project, sensitive or not, with pinned local Semgrep rules (`tools/security-rules/semgrep-local.yml`, 15 rules, sha256 pinned in the code), metrics off, no network (`codeScan`: `local` default, `auto`, `off`); a change to a pnpm, yarn, Go, Cargo, Python, PHP, Ruby or JVM manifest or lockfile blocks the batch (`unsupported-manifest`) with an inbox item until the owner allows it (`allowUnparsedManifests`).\" and \"- Router (owner decision): Haiku is the default worker lane; the rented GPU lane is used by automatic routing only when 700 or more non-sensitive tickets are ready (`RENTED_MIN_READY`, `lanes.rented.minReady`); a job with `hard: true` goes to Codex first. The Anthropic lane's default concurrency is 32 (was 16): at our tier Haiku allows 10,000 requests, 10M input and 2M output tokens per minute, about 147 agents at the measured task profile (see docs/lanes.md).\" \nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f4-dogfood",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add after the last bullet (the bullet that starts \"- A1 security gate:\"; use that start as the anchor and add after the whole bullet) this bullet: \"- A1 follow-up and router: about 20 swarm jobs (rules file and its fix, router, lane, profile, gate rewrite, 7 test files, docs), all complete on the first try. The rules were validated with a real Semgrep 1.136 installed in a temp venv: the first version missed one rule (cp.exec as a method call), found by planted code and fixed by a swarm job; the pinned sha256 is of the fixed file. Hand work: plain integrate gating, router call sites and the hard field (core runner), two test fixes.\" "
+    }
+  ]
+}

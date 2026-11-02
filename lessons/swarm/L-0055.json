@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0055",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A shell job's new declared output triggered a spurious dropped-write warning. A shell worker created a file declared in the job's own outputs, but the completion logic warned it as a dropped write before integration even saw the run. The warning's path-matching logic differed from integration's own normalization, so files that would integrate just fine were flagged as skipped.",
+  "rule": "A warning that claims data was lost must match integration's own decision; shell-job and copy-job completion use identical path logic for output matching.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: shell-job completion normalizes and matches new files against the outputs list the same way `integrate` does, so a declared output is never warned as dropped; the warning only fires when `integrate` would actually skip the file. Additionally, swarm's own tests that spawn the sandbox no longer run when already inside a sandbox; they skip with a named reason set via `SWARM_IN_SANDBOX=1`, avoiding spurious nested-sandbox denials. Regression coverage is in `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing",
+    "path-safety",
+    "sandbox",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#55"
+  }
+}

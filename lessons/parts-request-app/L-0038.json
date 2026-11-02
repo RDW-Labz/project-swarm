@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0038",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "split",
+  "what": "S6: (1) T-0091 looped to escalation 3 on a lint error (rules-of-hooks) caused by T-0090 naming a function useDevEmailTransport; T-0091 could not edit that file, so no retry could fix it, then route-exhausted at the top tier. (2) T-0089 and T-0090 both wrote a dev console email sender; T-0089's printed raw email text and tripped the R-020 log lint. (3) T-0164 (route integration) blocked correctly: the real path (S5 submit-deps/submit-emails) already queues and sends emails, S6 modules are parallel, and its named e2e spec did not exist.",
+  "rule": "A lint/test failure in a file other than the ticket's outputs must route to the owning ticket, not escalate the current one; a done ticket's integration must not pass with a failed check; split modules in the same stage must not each implement the same sender; integration tickets must name a test fi",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Runner: attribute failures to the owner of the named file; hold ticket->done when any integrate check failed; scope split: one owner per capability across the stage and let the integration ticket own the test file; init: untrack tsbuildinfo.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "lint",
+    "path-safety",
+    "privacy",
+    "retries",
+    "split",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#38"
+  }
+}

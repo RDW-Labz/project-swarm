@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0365",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Rework metrics need follow-up evidence. Report follow-up edits within 24 hours by skill as the primary rework measure, and mark red rate not applicable when integration checks are empty.",
+  "rule": "Rework metrics need follow-up evidence.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "integration"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#365"
+  }
+}

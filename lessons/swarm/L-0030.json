@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0030",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A brief document that lived outside the project could not be used at all. Useful background for a research job sat in a path outside the project root, and the only way to use it was to copy it in by hand first.",
+  "rule": "Let a research brief name any readable path, read-only, while still keeping a copy for provenance and refusing early on a path that cannot be read.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `scout`/`sweep --brief` accepts any readable path, including one outside the project root; it is copied into the scout/sweep directory for provenance, and an unreadable brief fails before its job ever backgrounds. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "manifest",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#30"
+  }
+}

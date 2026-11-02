@@ -44,6 +44,10 @@ public lessons, and anything that spends credits or money.
 - Validate and preflight. Verify the chosen provider with read-only and writing
   smoke exchanges before substantial work. Do not weaken adapter restrictions
   to make an incompatible CLI run. Never let a worker see secrets.
+- Keep the seat working: when no worker is running for five minutes, expose an
+  idle-seat event and list every runnable, unblocked TASK item. Before a hand
+  step (merge, build, or intake), start a non-overlapping job; record the hand
+  step in idle-gap attribution.
 
 ## After every dispatch
 

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0078",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A required section was refused for carrying extra words in its own heading. A gate that required a named section refused a real section whose heading added a short parenthetical after the required name, even though the section itself was present and filled in.",
+  "rule": "Match a required heading by its name plus a following word boundary (end of line, a space, or an opening parenthesis), not by an exact match, so a heading that only shares a name's first word without a boundary still correctly fails to match.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the section-matching rule was changed from an exact heading match to this boundary-prefix match, and a refusal for a section that is genuinely absent now also names the heading in the body that came closest to matching, to save a guess. Regression coverage is in `tests/field-lessons-batch-h.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#78"
+  }
+}

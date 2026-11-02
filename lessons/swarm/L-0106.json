@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0106",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A guard meant to stop a scratch file from ever being pushed judged the wrong thing and refused a file that was never going to be pushed at all. It asked whether a run's own declared-output list named a scratch-shaped file absent from the base commit — but a declared output that is git-ignored and never committed is *also* absent from the base commit, so a legitimate, ignored side-effect file was refused exactly like a real mistake would have been.",
+  "rule": "A guard that exists to stop something from being pushed must judge the actual diff that would be pushed, never a list of what a job merely claims to have produced.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the guard now reads the real diff between the base commit and the current one (plus anything staged) instead of the run's declared outputs. Regression coverage is in `tests/field-lessons-batch-m1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#106"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0003",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "CI handoff guesses were wrong. Bisecting on CI with throwaway branches, a control branch and a push-triggered, single-OS diagnostic workflow found the cause in three short rounds.",
+  "rule": "Reproduce in the failing environment, use verbose per-test timings, and open no diagnostic pull requests.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: Bisect on CI and `templates/ci-diag.yml`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "merge"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#3"
+  }
+}

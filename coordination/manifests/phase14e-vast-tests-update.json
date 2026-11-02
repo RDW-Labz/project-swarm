@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-vast-update",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/vast-rental.test.mjs",
+        "bench/gpu-bakeoff/vast.mjs"
+      ],
+      "outputs": [
+        "tests/vast-rental.test.mjs"
+      ],
+      "prompt": "Return the complete updated tests/vast-rental.test.mjs. bench/gpu-bakeoff/vast.mjs changed (read it): destroyInstance now treats a DELETE answer with success:false as failure and, after a DELETE, polls getInstance (via the injected wait, up to 12 times) until the instance is gone (getInstance returns null / no record, or a status that is not running/loading/created) before returning true; reap retries destroy rounds for up to 60 minutes with a 30 s pause (injected wait and now), exits early only when state() has instanceId equal to the reaped id and destroyedAt, and writes heartbeatAt through an injectable writeState dependency; rent and destroy handle the state file as described in the code; checkOffer/checkContainerOffer add the inet_down_cost field times 100 to the worst case. Keep every existing test's intent, but update the fake clients/fetches so they match: GET /instances/ID/ must answer { instances: null } (gone) after a DELETE so verification completes without real sleeping, and always pass a fake wait that advances the fake clock instead of sleeping. Add tests: (a) destroyInstance throws when DELETE answers { success: false } every time; (b) destroyInstance verifies: if GET keeps returning a running instance it keeps polling and finally throws (with a fake wait), and returns true as soon as GET returns null; (c) reap: a destroy that fails for a few rounds (API errors) is retried with 30 s pauses and succeeds on a later round (returns 'destroyed'), and it gives up with an error only after 60 minutes of failed rounds (advance the fake clock); (d) reap ignores a destroyedAt that belongs to a different instanceId (keeps waiting and destroys at the deadline) and exits early only for the matching id; (e) checkOffer worst case includes the inet_down_cost field times 100 (an offer with dph_total 2 and an inet_down_cost field of 0.5 for 4 hours has worstUsd 8 + 50 and is refused against a $15 cap). Every test must finish in well under a second with no real sleeping."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/security-queue.test.mjs"
+      ],
+      "id": "g1-rules",
+      "context": [
+        "tools/security-rules/semgrep-local.yml"
+      ],
+      "outputs": [
+        "tools/security-rules/semgrep-local.yml"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/security-rules/semgrep-local.yml keeping every existing rule exactly as it is and ADDING four rules in the same style (id prefix swarm-, short plain message, severity, languages, metadata category security): swarm-js-spawn-shell (child_process spawn, spawnSync, exec or execSync called with an options object that has shell: true: patterns $CP.spawn(..., { ..., shell: true, ... }) and spawn(..., { ..., shell: true, ... }) and the Sync forms), swarm-js-settimeout-string (setTimeout or setInterval called with a string literal or a concatenated string as the first argument), swarm-py-eval-exec (eval($X) and exec($X) where $X is not a string literal: use pattern plus pattern-not for a literal), swarm-py-os-system (os.system($X) and os.popen($X) where $X is not a string literal). Keep it valid Semgrep YAML.\nignoreTests: tests/security-queue.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

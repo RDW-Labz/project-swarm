@@ -1,0 +1,569 @@
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index fcc3dc7..9bdc0fb 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.103.0', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.104.0', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.103.0');
++  assert.equal(pkg.version, '1.104.0');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test tests/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.103\.0/);
+-  assert.match(readme, /Install from tag v1\.103\.0/);
++  assert.match(readme, /Use Project Swarm 1\.104\.0/);
++  assert.match(readme, /Install from tag v1\.104\.0/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.103\.0\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.104\.0\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index 7dc7048..3ebd517 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.103.0', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.103.0 while 1.46.1 history remains', async () => {
++describe('release: 1.104.0', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.104.0 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.103.0');
+-    assert.equal(lock.version, '1.103.0');
+-    assert.equal(lock.packages[''].version, '1.103.0');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.103\.0\n/);
++    assert.equal(pkg.version, '1.104.0');
++    assert.equal(lock.version, '1.104.0');
++    assert.equal(lock.packages[''].version, '1.104.0');
++    assert.match(changelog, /^# Changelog\n\n## 1\.104\.0\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index c82b91b..c16d8fa 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.103.0');
+-  assert.equal(lock.version, '1.103.0');
+-  assert.equal(lock.packages[''].version, '1.103.0');
++  assert.equal(pkg.version, '1.104.0');
++  assert.equal(lock.version, '1.104.0');
++  assert.equal(lock.packages[''].version, '1.104.0');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.103\.0\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.104\.0\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 53594ba..d858c56 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.103.0 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.104.0 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.103.0');
+-  assert.equal(lock.version, '1.103.0');
+-  assert.equal(lock.packages[''].version, '1.103.0');
++  assert.equal(pkg.version, '1.104.0');
++  assert.equal(lock.version, '1.104.0');
++  assert.equal(lock.packages[''].version, '1.104.0');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.103\.0\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.104\.0\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.103.0',
++    'README.md': '1.104.0',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.103.0',
+-    'tests/field-lessons-batch-x.test.mjs': '1.103.0',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.103.0',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.103.0',
++    'tests/field-lesson-t80-cli.test.mjs': '1.104.0',
++    'tests/field-lessons-batch-x.test.mjs': '1.104.0',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.104.0',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.104.0',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index 4b14b8d..e7094f5 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -365,14 +365,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.103.0', () => {
+-  test('package.json and package-lock.json are both at 1.103.0', async () => {
++describe('release: 1.104.0', () => {
++  test('package.json and package-lock.json are both at 1.104.0', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.103.0');
+-    assert.equal(lock.version, '1.103.0');
+-    assert.equal(lock.packages[''].version, '1.103.0');
++    assert.equal(pkg.version, '1.104.0');
++    assert.equal(lock.version, '1.104.0');
++    assert.equal(lock.packages[''].version, '1.104.0');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/project-spend.test.mjs b/tests/project-spend.test.mjs
+new file mode 100644
+index 0000000..438dcb9
+--- /dev/null
++++ b/tests/project-spend.test.mjs
+@@ -0,0 +1,139 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { projectSpend, projectCap, projectCapDecision, projectSummary } from '../tools/project-spend.mjs';
++import { runManifest } from '../tools/swarm.mjs';
++import { resolveBudget, mergeLedger, ledgerRows, parseLedgerRow } from '../tools/spend.mjs';
++import { validateProfile } from '../tools/init-profile.mjs';
++import { renderTui } from '../tools/watch-tui.mjs';
++
++const exec = promisify(execFile);
++const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
++
++async function repo(t, { profile, config = {} } = {}) {
++  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-project-spend-'));
++  const root = path.join(temp, 'repo');
++  await fs.mkdir(root);
++  t.after(() => fs.rm(temp, { recursive: true, force: true }));
++  await fs.writeFile(path.join(root, 'input.txt'), 'x\n');
++  await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n');
++  if (profile) await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ install: temp, version: '0', profile }));
++  await fs.writeFile(path.join(temp, 'config.json'), JSON.stringify(config));
++  await exec('git', ['init', '-q', root]);
++  await exec('git', ['-C', root, 'add', '.']);
++  await exec('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'fixture']);
++  return { root, temp, env: { ...process.env, SWARM_CONFIG: path.join(temp, 'config.json'), SWARM_SPEND_DIR: path.join(temp, 'spend') }, liveDir: path.join(temp, 'live') };
++}
++async function oldRun(root, id, costs) {
++  await fs.mkdir(path.join(root, '.swarm/runs', id), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, jobs: costs.map((costUsd, i) => ({ id: `j${i}`, costUsd, usage: { total_tokens: 100 } })) }));
++}
++
++test('projectSpend adds every run of the project, including a rental and unreadable runs', async t => {
++  const { root } = await repo(t);
++  await oldRun(root, 'run-a', [1.25, 2]);
++  await oldRun(root, 'run-b', [0.5]);
++  await fs.mkdir(path.join(root, '.swarm/runs/run-bad'), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs/run-bad/state.json'), '{nope');
++  const spent = await projectSpend(root);
++  assert.equal(spent.usd, 3.75);
++  assert.equal(spent.runs, 2);
++  assert.deepEqual(spent.unreadable, ['run-bad']);
++});
++
++test('projectCap takes the lower of profile and config, and a malformed cap is an error, not "no cap"', () => {
++  assert.equal(projectCap({}), null);
++  assert.equal(projectCap({ profile: { budget: { projectMaxUsd: 20 } }, config: { spend: { projectMaxUsd: 10 } } }), 10);
++  assert.equal(projectCap({ profile: { budget: { projectMaxUsd: 20 } } }), 20);
++  assert.throws(() => projectCap({ profile: { budget: { projectMaxUsd: -1 } } }), /project-cap-invalid/);
++  assert.throws(() => projectCap({ config: { spend: { projectMaxUsd: 'ten' } } }), /project-cap-invalid/);
++  assert.equal(projectCapDecision({ spent: { usd: 9.99, runs: 3 }, cap: 10 }), null);
++  assert.match(projectCapDecision({ spent: { usd: 10, runs: 3 }, cap: 10 }).message, /project-cap: this project has spent \$10\.00 across 3 runs/);
++});
++
++test('the profile and the config accept projectMaxUsd and reject bad values', () => {
++  assert.doesNotThrow(() => resolveBudget({ config: { spend: { projectMaxUsd: 25 } } }));
++  assert.throws(() => resolveBudget({ config: { spend: { projectMaxUsd: 0 } } }), /projectMaxUsd/);
++  const ok = validateProfile({ version: 1, budget: { projectMaxUsd: 30 } });
++  assert.ok(!ok.errors.some(error => /projectMaxUsd|budget/.test(error)), ok.errors.join('; '));
++  assert.ok(validateProfile({ version: 1, budget: { projectMaxUsd: 'x' } }).errors.some(error => /projectMaxUsd/.test(error)));
++});
++
++test('a new run is refused once all runs together reached the project cap (--max-usd stays per run)', async t => {
++  const fx = await repo(t, { profile: { budget: { projectMaxUsd: 5 } } });
++  await oldRun(fx.root, 'old-1', [3]);
++  await oldRun(fx.root, 'old-2', [2]);
++  let called = 0;
++  const m = { version: 1, concurrency: 1, jobs: [{ id: 'job-1', agent: 'ollama', model: 'test-model', prompt: 'Write out/1.txt', context: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 5000 }] };
++  await assert.rejects(runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, maxUsd: 100, fetchImpl: async () => { called++; return reply({}); } }), /project-cap: this project has spent \$5\.00 across 2 runs/);
++  assert.equal(called, 0, 'no worker was called');
++});
++
++test('a project under its cap, or without one, still runs', async t => {
++  const fx = await repo(t, { profile: { budget: { projectMaxUsd: 50 } } });
++  await oldRun(fx.root, 'old-1', [3]);
++  const m = { version: 1, concurrency: 1, jobs: [{ id: 'job-1', agent: 'ollama', model: 'test-model', prompt: 'Write out/1.txt', context: ['input.txt'], outputs: ['out/1.txt'], timeoutMs: 5000 }] };
++  const state = await runManifest(fx.root, m, { env: fx.env, liveDir: fx.liveDir, fetchImpl: async () => reply({ done: true, done_reason: 'stop', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }, message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/1.txt', content: 'ok\n' }] }) } }) });
++  assert.equal(state.status, 'complete');
++});
++
++test('project summary for swarm watch shows the total, the cap and whether it is reached', async t => {
++  const fx = await repo(t, { profile: { budget: { projectMaxUsd: 4 } } });
++  await oldRun(fx.root, 'old-1', [3]);
++  assert.deepEqual(await projectSummary(fx.root, { env: fx.env }), { spendUsd: 3, runs: 1, capUsd: 4, reached: false, unknownUsd: 0 });
++  await oldRun(fx.root, 'old-2', [1.5]);
++  const summary = await projectSummary(fx.root, { env: fx.env });
++  assert.equal(summary.spendUsd, 4.5);
++  assert.equal(summary.reached, true);
++  const frame = renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: summary }, { width: 120, color: false });
++  assert.match(frame, /project total \$4\.50 over 2 runs {2}cap \$4\.00 {2}CAP REACHED: no new runs/);
++  assert.match(renderTui({ runId: 'r', status: 'running', kpi: {}, lanes: [], project: { spendUsd: 1, runs: 1, capUsd: null } }, { width: 120, color: false }), /project total \$1\.00 over 1 runs {2}\(no project cap set\)/);
++});
++
++const attempt = (id, cost, agent = 'anthropic', task = 'build a thing') => ({ id, agent, model: 'm', status: 'complete', costUsd: cost, usage: { total_tokens: 1000 }, report: { summary: task }, attempts: [{ status: 'complete', finishedAt: '2026-10-18T10:00:00Z' }] });
++
++test('ledger: the summary adds up to the detail rows and ends with a total row', () => {
++  const rows = ledgerRows({ id: 'r1', jobs: [attempt('a', 1.1), attempt('b', 2.2), attempt('c', 0.34, 'claude')] });
++  const text = mergeLedger('', rows);
++  assert.match(text, /\| 2026-10-18 \| anthropic \| 2 \| 2 \| 0 \| 2,000 \| \$3\.30 \|/);
++  assert.match(text, /\| 2026-10-18 \| claude \| 1 \| 1 \| 0 \| 1,000 \| \$0\.34 \|/);
++  assert.match(text, /\| \*\*total\*\* \| all \| 3 \| 3 \| 0 \| 3,000 \| \$3\.64 \|/);
++});
++
++test('ledger: writing the same rows again twice does not change the totals', () => {
++  const rows = ledgerRows({ id: 'r1', jobs: [attempt('a', 1.1), attempt('b', 2.2)] });
++  const once = mergeLedger('', rows);
++  assert.equal(mergeLedger(once, []), once, 'merging nothing changes nothing');
++  assert.match(mergeLedger(once, []), /\$3\.30 \|\n/);
++});
++
++test('ledger: a task with a pipe or a hand-written row with extra cells is counted under the right day and tier (columns do not shift)', () => {
++  const rows = ledgerRows({ id: 'r1', jobs: [attempt('a', 1, 'anthropic', 'split a|b|c cells')] });
++  assert.equal(rows[0].task.includes('|'), false, 'a pipe never reaches a cell');
++  // A shifted row: two extra cells inside the task.
++  const shifted = '| 2026-10-18 | p | T-1: a | b | c | anthropic | m | pass | 1,000 | $2.00 |';
++  assert.deepEqual(parseLedgerRow(shifted), { date: '2026-10-18', worker: 'anthropic', result: 'pass', tokens: '1,000', cost: '$2.00' });
++  const base = mergeLedger('', rows);
++  const lines = base.split('\n');
++  const header = lines.findIndex(line => line.startsWith('| date | phase'));
++  lines.splice(header + 3, 0, shifted);
++  const text = mergeLedger(lines.join('\n'), []);
++  assert.match(text, /\| 2026-10-18 \| anthropic \| 2 \| 2 \| 0 \| 2,000 \| \$3\.00 \|/);
++  assert.match(text, /\*\*total\*\* \| all \| 2 \|/);
++});
++
++test('ledger: a row that cannot be read is reported, not silently dropped from the total', () => {
++  const base = mergeLedger('', ledgerRows({ id: 'r1', jobs: [attempt('a', 1)] }));
++  const lines = base.split('\n');
++  const header = lines.findIndex(line => line.startsWith('| date | phase'));
++  lines.splice(header + 3, 0, '| 2026-10-18 | only | four | cells |');
++  const text = mergeLedger(lines.join('\n'), []);
++  assert.match(text, /1 ledger row could not be read and are not in these totals\./);
++  assert.match(text, /\$1\.00 \|/);
++});
+diff --git a/tests/review-retry.test.mjs b/tests/review-retry.test.mjs
+index fcfddce..76685ff 100644
+--- a/tests/review-retry.test.mjs
++++ b/tests/review-retry.test.mjs
+@@ -225,3 +225,17 @@ test('review findings: --accept-unreviewed never overrides a failing review, is
+   assert.equal(bad.exitCode, 1);
+   assert.match(bad.stdout, /needs --reason/);
+ });
++
++test('a re-ask refused by the project spend cap is reported, and the one re-ask is not used up', async t => {
++  const root = await setup(t);
++  await reviewRunFile(root, 'rv', BAD);
++  const capped = async () => { throw Object.assign(new Error('project-cap: this project has spent $5.00 across 2 runs >= the project cap $5.00; no new run starts.'), { code: 'project-cap' }); };
++  const res = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: capped });
++  assert.match(res.stdout, /project-cap: this project has spent/);
++  await assert.rejects(fs.stat(path.join(root, '.swarm/security-reviews/rv.retried')), { code: 'ENOENT' }, 'no retried marker');
++  // The owner raised the cap: the same review is asked again, once.
++  let asked = 0;
++  const ok = await runScopeCommand(root, 'scope', ['security-review', 'rv'], { runReview: async r => { asked += 1; await reviewRunFile(r, 'rv2', GOOD('T-0001')); return { id: 'rv2' }; } });
++  assert.equal(asked, 1);
++  assert.equal(ok.exitCode, 0, ok.stdout);
++});
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index cb158d0..6ebe931 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.103.0');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.103\.0\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.104.0');
++  assert.match(changelog, /^# Changelog\n\n## 1\.104\.0\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/init-profile.mjs b/tools/init-profile.mjs
+index 464b28b..db2a408 100644
+--- a/tools/init-profile.mjs
++++ b/tools/init-profile.mjs
+@@ -352,12 +352,16 @@ function validateBudget(budget, errors) {
+     return out;
+   }
+   for (const key of Object.keys(budget)) {
+-    if (!Object.hasOwn(DEFAULT_PROFILE_BUDGET, key)) errors.push(`profile.budget.${key}: unknown key`);
++    if (!Object.hasOwn(DEFAULT_PROFILE_BUDGET, key) && key !== 'projectMaxUsd') errors.push(`profile.budget.${key}: unknown key`);
+   }
+   if (budget.maxUsd !== undefined) {
+     if (typeof budget.maxUsd === 'number' && Number.isFinite(budget.maxUsd) && budget.maxUsd > 0) out.maxUsd = budget.maxUsd;
+     else errors.push('profile.budget.maxUsd: must be a number above 0');
+   }
++  if (budget.projectMaxUsd !== undefined) {
++    if (typeof budget.projectMaxUsd === 'number' && Number.isFinite(budget.projectMaxUsd) && budget.projectMaxUsd > 0) out.projectMaxUsd = budget.projectMaxUsd;
++    else errors.push('profile.budget.projectMaxUsd: must be a number above 0');
++  }
+   if (budget.maxTokens !== undefined) {
+     if (Number.isInteger(budget.maxTokens) && budget.maxTokens > 0) out.maxTokens = budget.maxTokens;
+     else errors.push('profile.budget.maxTokens: must be a positive integer');
+diff --git a/tools/project-spend.mjs b/tools/project-spend.mjs
+new file mode 100644
+index 0000000..e939c3c
+--- /dev/null
++++ b/tools/project-spend.mjs
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: Apache-2.0
++// Project-wide spend: the total of every run in this repository (.swarm/runs/*/state.json), and the optional cap on it.
++// --max-usd stays per run; this cap refuses NEW runs once the project total has reached it. A review re-ask is a run, so it counts.
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { runTotals } from './spend.mjs';
++import { loadLocalConfig } from './local-config.mjs';
++
++const finite = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
++
++export async function projectSpend(root) {
++  const dir = path.join(root, '.swarm', 'runs');
++  let ids = [];
++  try { ids = await fs.readdir(dir); } catch { /* no runs yet */ }
++  const total = { usd: 0, tokens: 0, runs: 0, unreadable: [], unknownUsd: 0 };
++  for (const id of ids) {
++    let state;
++    try { state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); } catch (error) {
++      if (error.code !== 'ENOENT') total.unreadable.push(id);
++      continue;
++    }
++    const run = runTotals(state);
++    total.usd += run.usd; total.tokens += run.tokens; total.runs++; total.unknownUsd += run.unknownUsd.length;
++  }
++  return total;
++}
++
++// The lower of the profile cap and the local-config cap; null when neither is set. A malformed value is an error, never "no cap".
++export function projectCap({ profile, config } = {}) {
++  const found = [];
++  for (const [source, value] of [['profile budget.projectMaxUsd', profile?.budget?.projectMaxUsd], ['config spend.projectMaxUsd', config?.spend?.projectMaxUsd]]) {
++    if (value === undefined || value === null) continue;
++    if (!finite(value)) throw Object.assign(new Error(`project-cap-invalid: ${source} must be a number above 0`), { code: 'project-cap-invalid' });
++    found.push(value);
++  }
++  return found.length ? Math.min(...found) : null;
++}
++
++export function projectCapDecision({ spent, cap }) {
++  if (cap === null || cap === undefined || spent.usd < cap) return null;
++  return { reason: 'project-cap', spent: spent.usd, cap, message: `project-cap: this project has spent $${spent.usd.toFixed(2)} across ${spent.runs} runs >= the project cap $${cap.toFixed(2)}; no new run starts. Raising it needs the owner (profile budget.projectMaxUsd)` };
++}
++
++export async function checkProjectCap(root, { profile, config } = {}) {
++  const cap = projectCap({ profile, config });
++  if (cap === null) return null;
++  return projectCapDecision({ spent: await projectSpend(root), cap });
++}
++
++// What swarm watch shows: the project total, the cap (or null), and whether the cap is reached. Never throws (a broken cap shows as null).
++export async function projectSummary(root, { env = process.env } = {}) {
++  const spent = await projectSpend(root);
++  let cap = null;
++  try {
++    let pointer = null;
++    try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch { /* no pointer */ }
++    cap = projectCap({ profile: pointer?.profile, config: loadLocalConfig({ env }) });
++  } catch { cap = null; }
++  return { spendUsd: Math.round(spent.usd * 100) / 100, runs: spent.runs, capUsd: cap, reached: cap !== null && spent.usd >= cap, unknownUsd: spent.unknownUsd };
++}
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 1e6f5d8..00229c6 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -833,7 +833,13 @@ async function reAskReview(root, sourceRun, deps, kind = SEC_KIND) {
+     return { asked: false, runId: typeof earlier === 'string' && RUN_ID.test(earlier) ? earlier : null };
+   }
+   only.prompt = `${only.prompt}\n\n${kind.reminder}`;
+-  const run = await (deps.runReview ?? defaultRunReview)(root, manifest);
++  let run;
++  try { run = await (deps.runReview ?? defaultRunReview)(root, manifest); }
++  catch (error) {
++    // The project cap refused the re-ask: nothing was asked, so the one allowed re-ask is not used up. The owner raises the cap and syncs again.
++    if (error?.code === 'project-cap') { await fs.rm(marker, { force: true }); return { asked: false, error: error.message }; }
++    throw error;
++  }
+   const runId = typeof run?.id === 'string' && RUN_ID.test(run.id) ? run.id : null;
+   if (runId) await fs.writeFile(marker, `${JSON.stringify({ at: new Date().toISOString(), run: runId })}\n`);
+   return { asked: true, runId };
+diff --git a/tools/spend.mjs b/tools/spend.mjs
+index 91a9002..41a9853 100644
+--- a/tools/spend.mjs
++++ b/tools/spend.mjs
+@@ -32,7 +32,8 @@ export function resolveBudget({ config = {}, manifest = {}, cli = {}, raises = [
+   // A rented server's day cap defaults to one run's maximum rental (hourlyUsd x maxHoursPerRun) unless the config sets it.
+   const rentedDefault = config.rentedGpu ? validateRentedConfig(config.rentedGpu).config?.dailyUsd : undefined;
+   if (rentedDefault > 0) budget.lanes.rented.dailyUsd = rentedDefault;
+-  if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates'], 'spend');
++  if (config.spend !== undefined) fields(config.spend, ['lanes', 'rates', 'projectMaxUsd'], 'spend');
++  if (config.spend?.projectMaxUsd !== undefined) cap(config.spend.projectMaxUsd, 'spend.projectMaxUsd');
+   validateRates(config.spend?.rates);
+   if (manifest.budget !== undefined) fields(manifest.budget, ['maxUsd', 'maxTokens', 'lanes'], 'budget');
+   for (const key of ['maxUsd', 'maxTokens']) {
+@@ -305,6 +306,16 @@ export function ledgerRows(state, { phase = '-' } = {}) {
+ const ledgerHeader = '| date | phase | task | worker | model | result | tokens | rough cost |';
+ const divider = '| --- | --- | --- | --- | --- | --- | --- | --- |';
+ const rowText = row => `| ${['date', 'phase', 'task', 'worker', 'model', 'result', 'tokens', 'cost'].map(key => clean(row[key])).join(' | ')} |`;
++// A detail row has 8 cells. A row with MORE cells (a stray pipe inside the task text, written by an older version or by hand) is read from
++// the right: cost, tokens, result, model and worker are the last five cells, so a shifted row is still counted under the right day and tier.
++export function parseLedgerRow(line) {
++  const cells = String(line).trim().split('|').slice(1, -1).map(cell => cell.trim());
++  if (cells.length < 8) return null;
++  const tail = cells.slice(-5);
++  const [worker, , result, tokens, cost] = tail;
++  if (!/^\d{4}-\d{2}-\d{2}$/.test(cells[0]) && cells[0] !== '-') return null;
++  return { date: cells[0], worker, result, tokens, cost };
++}
+ export function mergeLedger(text, rows) {
+   let lines = String(text ?? '').split('\n');
+   let start = lines.findIndex(line => line.trim() === ledgerHeader);
+@@ -317,10 +328,11 @@ export function mergeLedger(text, rows) {
+   lines.splice(end, 0, ...rows.map(rowText));
+   end += rows.length;
+   const groups = new Map();
++  let uncounted = 0;
+   for (const line of lines.slice(start + 2, end)) {
+-    const cells = line.trim().split('|').slice(1, -1).map(cell => cell.trim());
+-    if (cells.length !== 8) continue;
+-    const [date, , , worker, , result, tokens, cost] = cells;
++    const cells = parseLedgerRow(line);
++    if (!cells) { uncounted++; continue; }
++    const { date, worker, result, tokens, cost } = cells;
+     const key = `${date}\0${worker}`;
+     const group = groups.get(key) ?? { date, worker, calls: 0, pass: 0, tokens: 0, usd: 0, paid: false, subscription: false, estimated: false };
+     group.calls++;
+@@ -331,7 +343,10 @@ export function mergeLedger(text, rows) {
+     if (cost === 'subscription') group.subscription = true;
+     groups.set(key, group);
+   }
+-  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}${g.estimated ? ' (incl. estimates)' : ''}` : g.subscription ? 'subscription' : 'unknown'} |`)];
++  const all = [...groups.values()].reduce((sum, g) => ({ calls: sum.calls + g.calls, pass: sum.pass + g.pass, tokens: sum.tokens + g.tokens, usd: sum.usd + g.usd, paid: sum.paid || g.paid }), { calls: 0, pass: 0, tokens: 0, usd: 0, paid: false });
++  const summary = ['## Daily summary', '', '| date | tier | calls | pass | fail/blocked | tokens | rough cost |', '| --- | --- | --- | --- | --- | --- | --- |', ...[...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, g]) => `| ${g.date} | ${g.worker} | ${g.calls} | ${g.pass} | ${g.calls - g.pass} | ${g.tokens.toLocaleString('en-US')} | ${g.paid ? `$${g.usd.toFixed(2)}${g.estimated ? ' (incl. estimates)' : ''}` : g.subscription ? 'subscription' : 'unknown'} |`),
++    ...(groups.size ? [`| **total** | all | ${all.calls} | ${all.pass} | ${all.calls - all.pass} | ${all.tokens.toLocaleString('en-US')} | ${all.paid ? `$${all.usd.toFixed(2)}` : 'unknown'} |`] : []),
++    ...(uncounted ? ['', `${uncounted} ledger row${uncounted === 1 ? '' : 's'} could not be read and are not in these totals.`] : [])];
+   const summaryStart = lines.findIndex(line => line.trim() === '## Daily summary');
+   if (summaryStart < 0) lines.push('', ...summary, '');
+   else {
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 200e40c..5ed6d20 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -62,6 +62,7 @@ import { SCALE_DEFAULT_CONCURRENCY, SCALE_DEFAULT_JOBS, prepareScaleRepo, scaleS
+ import { routeJob, rentedContractProblem } from './router.mjs';
+ import { anthropicPrice, assertOpusTier as assertAnthropicModel, readAnthropicKey, ANTHROPIC_ENDPOINT } from './anthropic.mjs';
+ import { loadRentedConfig, createRentalMeter, rentalDecision, rentedSensitiveOk, RENTED_DEFAULTS } from './rented.mjs';
++import { checkProjectCap } from './project-spend.mjs';
+ import { accrueSpend, resolveBudget, runTotals, jobSpend, spendDir, withSpendStore, laneDayTotals, estimateReservation, reserveSpend, settleSpend, releaseSpend, finalCost, PAID_LANES, capDecision, ledgerRows, mergeLedger, validateIdleItems, runIdleMenu } from './spend.mjs';
+ import { JOB_TYPES, applyJobType, jobTypeOutputViolations } from './job-types.mjs';
+ import { validateLeadArea, validateParentLeads, validateChildManifest, leadPromptBlock, leadRollup } from './leads.mjs';
+@@ -2584,6 +2585,13 @@ async function runManifestMain(root, manifest, options = {}) {
+   const { spawnImpl = spawn, killImpl, fetchImpl = fetch, env = process.env, signal, id = runId(), onState = () => {}, progressIntervalMs = PROGRESS_INTERVAL, platform = process.platform, liveDir: liveDirOpt, keyExec, shellHooks, checkBase = false, acceptRedBase = false, reason, baseChecks = {}, sync = false, acceptCoveredRedBase = true, jobs = null, maxUsd, maxTokens, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), resumeState = null, parentRun, leadJob, hostTransport = null, heartbeatMs = null, batch: batchFlag = false, batchLimits } = options;
+   root = await fs.realpath(root);
+   validateManifest(manifest);
++  if (!resumeState) {
++    // The project-wide cap (profile budget.projectMaxUsd, config spend.projectMaxUsd) refuses a new run once every run together reached it.
++    let pointer = null;
++    try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch { /* no pointer: no profile cap */ }
++    const capped = await checkProjectCap(root, { profile: pointer?.profile, config: loadLocalConfig({ env }) });
++    if (capped) fail(capped.message, 'project-cap');
++  }
+   const appliedTypes = await applyManifestJobTypes(root, manifest, { env });
+   manifest = appliedTypes.manifest;
+   manifest = selectRunManifest(manifest, jobs);
+diff --git a/tools/watch-assets/run-kpis.js b/tools/watch-assets/run-kpis.js
+index 0d266c0..928a593 100644
+--- a/tools/watch-assets/run-kpis.js
++++ b/tools/watch-assets/run-kpis.js
+@@ -122,7 +122,8 @@
+     var spendRate = elapsedMin > 0 ? (k.spendUsd || 0) / elapsedMin : 0;
+     var bar = $('kSpendBar');
+     if (bar && bar.parentNode) bar.parentNode.hidden = true;
+-    setText('kForecast', 'rate ' + fmt$(spendRate) + '/min');
++    var pj = run.project;
++    setText('kForecast', (pj ? 'project ' + fmt$(pj.spendUsd) + (pj.capUsd ? ' / ' + fmt$(pj.capUsd) + (pj.reached ? ' CAP REACHED' : '') : '') + ' · ' : '') + 'rate ' + fmt$(spendRate) + '/min');
+     setText('kEta', run.status === 'complete' ? 'done' : (k.etaMs == null ? '–' : fmtT(k.etaMs)));
+     setText('kRate', (k.jobsPerSec || 0).toFixed(1) + ' jobs/s');
+     var mq = run.mergeQueue;
+diff --git a/tools/watch-cli.mjs b/tools/watch-cli.mjs
+index fbac3d2..336e5c7 100644
+--- a/tools/watch-cli.mjs
++++ b/tools/watch-cli.mjs
+@@ -15,6 +15,7 @@ import { buildCommandList, contextCommands } from './watch-command-meta.mjs';
+ import { COMMANDS } from './completion.mjs';
+ import { readLedger } from './tickets.mjs';
+ import { boardSummary } from './board.mjs';
++import { projectSummary } from './project-spend.mjs';
+ 
+ const here = path.dirname(fileURLToPath(import.meta.url));
+ const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+@@ -48,7 +49,9 @@ export function runSnapshotLoader(root, runId) {
+     const state = await readJson(path.join(dir, 'state.json'));
+     if (!state) return null;
+     const manifest = await readJson(path.join(dir, 'manifest.json'));
+-    return buildRunSnapshot(state, { manifest, now: Date.now() });
++    const snapshot = buildRunSnapshot(state, { manifest, now: Date.now() });
++    snapshot.project = await projectSummary(root).catch(() => null);
++    return snapshot;
+   };
+ }
+ 
+diff --git a/tools/watch-tui.mjs b/tools/watch-tui.mjs
+index 5d24023..70e9d06 100644
+--- a/tools/watch-tui.mjs
++++ b/tools/watch-tui.mjs
+@@ -87,6 +87,11 @@ export function renderTui(snapshot, opts = {}) {
+   const eta = k.etaMs == null ? '-' : formatDuration(k.etaMs);
+   out.push(cut('running ' + (k.running || 0) + '  queued ' + (k.queued || 0) + '  failed ' + (k.failed || 0) + '  retries ' + (k.retries || 0) + '  spend ' + money(k.spendUsd) + '  eta ' + eta + '  peak ' + (k.peakInFlight || 0), W));
+ 
++  if (snapshot.project) {
++    const pr = snapshot.project;
++    out.push(cut('project total ' + money(pr.spendUsd) + ' over ' + (pr.runs || 0) + ' runs' + (pr.capUsd ? '  cap ' + money(pr.capUsd) + (pr.reached ? '  CAP REACHED: no new runs' : '') : '  (no project cap set)'), W));
++  }
++
+   out.push('');
+   out.push('LANES');
+   const lanes = Array.isArray(snapshot.lanes) ? snapshot.lanes : [];

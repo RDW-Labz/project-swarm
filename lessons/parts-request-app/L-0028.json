@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0028",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "build",
+  "what": "Build tickets were marked done with only their own tests passing: typecheck and lint were never run, so type errors and lint failures piled up until the owner ran them by hand",
+  "rule": "Every build ticket must pass the project typecheck and lint (and build when cheap) before it is done; a failure goes back to the worker with the errors.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "run typecheck and lint as merge-batch checks for every build ticket and keep the ticket in review until they passed",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "lint",
+    "quality-gate",
+    "tests-not-run",
+    "typecheck"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app S4 report, lesson 28"
+  }
+}

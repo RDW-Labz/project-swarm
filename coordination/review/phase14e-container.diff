@@ -1,0 +1,497 @@
+diff --git a/bench/gpu-bakeoff/vast.mjs b/bench/gpu-bakeoff/vast.mjs
+new file mode 100644
+index 0000000..ced3a59
+--- /dev/null
++++ b/bench/gpu-bakeoff/vast.mjs
+@@ -0,0 +1,215 @@
++// SPDX-License-Identifier: Apache-2.0
++// Manual rental helper for the owner-approved Vast.ai bake-off. Swarm itself never rents anything and nothing in tools/ imports this file;
++// it is run by hand:
++//   node bench/gpu-bakeoff/vast.mjs rent --offer ID --hours 4 --max-usd 15 [--disk 150] [--mode vm|container]
++//   node bench/gpu-bakeoff/vast.mjs search --mode container
++//   node bench/gpu-bakeoff/vast.mjs status | destroy [--id ID]
++// `rent` writes the instance id to ~/.project-swarm-scratch/vast-instance.json and prints it first thing (so it can be destroyed in the
++// Vast console), then starts a detached reaper (under caffeinate -i, so the Mac stays awake) that destroys the instance at the deadline.
++// The API key is read from the Keychain (project-swarm / vast.api_key) inside this process and is never printed or logged.
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { execFileSync, spawn } from 'node:child_process';
++import { fileURLToPath } from 'node:url';
++import { PINNED_IMAGE } from '../../tools/gpu.mjs';
++
++export const API = 'https://console.vast.ai/api/v0';
++export const VM_IMAGE = 'docker.io/vastai/kvm:ubuntu_terminal';
++export const STATE_FILE = path.join(os.homedir(), '.project-swarm-scratch', 'vast-instance.json');
++const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
++
++export function readKey(exec = execFileSync) {
++  const key = String(exec('security', ['find-generic-password', '-s', 'project-swarm', '-a', 'vast.api_key', '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
++  if (!key) throw new Error('no Vast key in the Keychain (project-swarm / vast.api_key)');
++  return key;
++}
++
++export function createClient(key, fetchImpl = fetch) {
++  const call = async (method, url, body) => {
++    const response = await fetchImpl(`${API}${url}`, { method, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
++    const text = await response.text();
++    let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
++    if (!response.ok) throw new Error(`Vast ${method} ${url} failed: HTTP ${response.status} ${String(json?.msg ?? json?.error ?? text).slice(0, 160)}`);
++    return json;
++  };
++  return { call };
++}
++
++// An offer is rentable for this run only if it is the approved kind of machine and 4 hours at its price stays under the cap.
++export function checkOffer(offer, { hours, maxUsd }) {
++  if (!offer) throw new Error('offer not found (it may have been rented by someone else)');
++  const problems = [];
++  if (!/RTX PRO 6000/.test(offer.gpu_name ?? '')) problems.push(`gpu is ${offer.gpu_name}, not an RTX PRO 6000`);
++  if (offer.num_gpus !== 1) problems.push(`${offer.num_gpus} GPUs, want 1`);
++  if (offer.vms_enabled !== true) problems.push('not a VM-capable host (Docker needs a VM)');
++  if (offer.rentable === false) problems.push('not rentable now');
++  if (offer.verification && offer.verification !== 'verified') problems.push(`host is ${offer.verification}`);
++  const worst = (offer.dph_total ?? Infinity) * hours;
++  if (!(worst <= maxUsd * 0.8)) problems.push(`$${(offer.dph_total ?? NaN).toFixed?.(3)}/h for ${hours} h is $${worst.toFixed?.(2)}, over 80% of the $${maxUsd} cap (the rest is for disk and traffic)`);
++  if (problems.length) throw new Error(`offer ${offer.id} refused: ${problems.join('; ')}`);
++  return { worstUsd: worst };
++}
++
++export const CONTAINER_GPU_RE = /^RTX PRO 6000 (S|WS)$/;
++
++// Container mode: the approved machine kinds only (Max-Q refused), one GPU, verified and reliable hosts, and 80% of the cap for the hours.
++export function checkContainerOffer(offer, { hours, maxUsd }) {
++  if (!offer) throw new Error('offer not found (it may have been rented by someone else)');
++  const problems = [];
++  if (!CONTAINER_GPU_RE.test(offer.gpu_name ?? '')) problems.push(`gpu is ${offer.gpu_name}, not an RTX PRO 6000 S or WS`);
++  if (offer.num_gpus !== 1) problems.push(`${offer.num_gpus} GPUs, want 1`);
++  if (offer.rentable === false) problems.push('not rentable now');
++  if (offer.verification !== 'verified') problems.push(`host is ${offer.verification ?? 'unverified'}, want verified`);
++  const reliability = offer.reliability2 ?? offer.reliability;
++  if (!(reliability >= 0.99)) problems.push(`reliability ${reliability} is below 0.99`);
++  const worst = Number(offer.dph_total) * hours;
++  if (!(worst <= maxUsd * 0.8)) problems.push(`$${Number(offer.dph_total).toFixed(3)}/h for ${hours} h is $${worst.toFixed(2)}, over 80% of the $${maxUsd} cap (the rest is for disk and traffic)`);
++  if (problems.length) throw new Error(`offer ${offer.id} refused: ${problems.join('; ')}`);
++  return { worstUsd: worst };
++}
++
++// The offers that pass the container checks for a 4 hour, $15 run, datacenter hosts first, then by price. Returns a new array.
++export function rankContainerOffers(offers) {
++  const passing = (Array.isArray(offers) ? offers : []).filter(offer => {
++    try { checkContainerOffer(offer, { hours: 4, maxUsd: 15 }); return true; } catch { return false; }
++  });
++  return passing.sort((a, b) => ((b.hosting_type === 1) - (a.hosting_type === 1)) || (a.dph_total - b.dph_total));
++}
++
++export function containerCreateBody({ disk = 200, label = 'swarm-bakeoff' } = {}) {
++  if (!/@sha256:[0-9a-f]{64}$/.test(PINNED_IMAGE)) throw new Error('PINNED_IMAGE must be pinned by digest (name@sha256:<64 hex>)');
++  return { image: PINNED_IMAGE, disk, runtype: 'ssh_direct', label };
++}
++
++// External HostPort numbers from the instance ports map (values are arrays of {HostPort}), without the ssh port.
++export function mappedPorts(instance, sshPort) {
++  const values = Object.values(instance?.ports ?? {});
++  const numbers = values.flatMap(item => (Array.isArray(item) ? item : [])).map(item => Number(item?.HostPort)).filter(port => Number.isInteger(port) && port > 0 && port !== Number(sshPort));
++  return [...new Set(numbers)];
++}
++
++export const createBody = ({ disk = 150, label = 'swarm-bakeoff' } = {}) => ({ image: VM_IMAGE, disk, runtype: 'ssh_direct', label, vm: true });
++export const deadlineAt = (now, hours) => new Date(now + hours * 3600000).toISOString();
++
++export async function findOffer(client, id) {
++  const body = await client.call('POST', '/bundles/', { num_gpus: { eq: 1 }, gpu_ram: { gte: 90000 }, rentable: { eq: true }, type: 'ondemand', limit: 500 });
++  return (body?.offers ?? []).find(item => item.id === id) ?? null;
++}
++
++export async function searchContainerOffers(client) {
++  const body = await client.call('POST', '/bundles/', { num_gpus: { eq: 1 }, gpu_ram: { gte: 90000 }, rentable: { eq: true }, type: 'ondemand', limit: 500 });
++  return body?.offers ?? [];
++}
++
++export async function getInstance(client, id) {
++  const body = await client.call('GET', `/instances/${id}/`);
++  return body?.instances ?? null;
++}
++
++export async function destroyInstance(client, id, { retries = 5, wait = sleep } = {}) {
++  let last;
++  for (let n = 0; n < retries; n += 1) {
++    try { await client.call('DELETE', `/instances/${id}/`); return true; } catch (error) { last = error; await wait(2000); }
++  }
++  throw last;
++}
++
++export async function waitRunning(client, id, { timeoutMs = 600000, wait = sleep, now = Date.now } = {}) {
++  const until = now() + timeoutMs;
++  for (;;) {
++    const instance = await getInstance(client, id).catch(() => null);
++    if (instance?.actual_status === 'running' && instance.ssh_host && instance.ssh_port) return instance;
++    if (now() >= until) throw new Error(`instance ${id} did not reach running with an ssh address within ${Math.round(timeoutMs / 60000)} minutes (last status ${instance?.actual_status ?? 'unknown'})`);
++    await wait(10000);
++  }
++}
++
++export function writeState(state, file = STATE_FILE) {
++  fs.mkdirSync(path.dirname(file), { recursive: true });
++  fs.writeFileSync(file, `${JSON.stringify(state, null, 1)}\n`, { mode: 0o600 });
++}
++export function readState(file = STATE_FILE) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
++
++// The reaper: sleeps until the deadline and then destroys the instance. It never exits early because of an API answer (a wrong guess
++// there would leave the rental running); it stops only when the state file says the instance was destroyed by hand.
++export async function reap(client, { id, at }, { wait = sleep, now = Date.now, log = () => {}, state = readState } = {}) {
++  const deadline = Date.parse(at);
++  if (!Number.isFinite(deadline)) throw new Error('reap needs --at as an ISO time');
++  while (now() < deadline) {
++    if (state()?.destroyedAt) { log('already destroyed by hand'); return 'gone'; }
++    await wait(Math.min(30000, Math.max(1000, deadline - now())));
++  }
++  await destroyInstance(client, id, { wait });
++  log(`destroyed ${id} at the deadline`);
++  return 'destroyed';
++}
++
++const flag = (args, name) => { const at = args.indexOf(`--${name}`); return at >= 0 ? args[at + 1] : undefined; };
++
++async function main(args) {
++  const [command] = args;
++  const client = createClient(readKey());
++  const log = message => process.stderr.write(`[vast] ${message}\n`);
++  if (command === 'search') {
++    if (flag(args, 'mode') !== 'container') throw new Error('usage: search --mode container');
++    const ranked = rankContainerOffers(await searchContainerOffers(client));
++    if (!ranked.length) process.stdout.write('no offers pass the container checks\n');
++    for (const offer of ranked) {
++      const reliability = offer.reliability2 ?? offer.reliability;
++      const hosting = offer.hosting_type === 1 ? 'datacenter' : 'community';
++      process.stdout.write(`${offer.id} ${offer.gpu_name} $${Number(offer.dph_total).toFixed(3)}/h reliability ${reliability} ${hosting} host_id ${offer.host_id} ${offer.geolocation ?? 'unknown'}\n`);
++    }
++    return;
++  }
++  if (command === 'rent') {
++    const mode = flag(args, 'mode') ?? 'vm';
++    if (mode !== 'vm' && mode !== 'container') throw new Error('usage: rent --offer ID --hours H(<=4) --max-usd N(<=15) [--disk GB] [--mode vm|container]');
++    const container = mode === 'container';
++    const id = Number(flag(args, 'offer')), hours = Number(flag(args, 'hours') ?? 4), maxUsd = Number(flag(args, 'max-usd') ?? 15), disk = Number(flag(args, 'disk') ?? (container ? 200 : 150));
++    if (!Number.isInteger(id) || !(hours > 0 && hours <= 4) || !(maxUsd > 0 && maxUsd <= 15)) throw new Error('usage: rent --offer ID --hours H(<=4) --max-usd N(<=15) [--disk GB] [--mode vm|container]');
++    const offer = await findOffer(client, id);
++    const { worstUsd } = container ? checkContainerOffer(offer, { hours, maxUsd }) : checkOffer(offer, { hours, maxUsd });
++    log(`offer ${id}: ${offer.gpu_name} $${offer.dph_total.toFixed(3)}/h, ${hours} h = $${worstUsd.toFixed(2)} (cap $${maxUsd})`);
++    const created = await client.call('PUT', `/asks/${id}/`, container ? containerCreateBody({ disk }) : createBody({ disk }));
++    const instanceId = created?.new_contract;
++    if (!instanceId) throw new Error(`Vast did not return an instance id: ${JSON.stringify(created).slice(0, 200)}`);
++    const deadline = deadlineAt(Date.now(), hours);
++    writeState({ instanceId, offerId: id, ...(container ? { mode: 'container' } : {}), createdAt: new Date().toISOString(), deadline, hourlyUsd: offer.dph_total, maxUsd });
++    process.stdout.write(`INSTANCE_ID=${instanceId}  (destroy in the Vast console if anything goes wrong; deadline ${deadline})\n`);
++    const reaper = spawn('caffeinate', ['-i', process.execPath, fileURLToPath(import.meta.url), 'reap', '--id', String(instanceId), '--at', deadline], { detached: true, stdio: ['ignore', fs.openSync(path.join(path.dirname(STATE_FILE), 'vast-reaper.log'), 'a'), fs.openSync(path.join(path.dirname(STATE_FILE), 'vast-reaper.log'), 'a')] });
++    reaper.unref();
++    log(`reaper started (pid ${reaper.pid}, under caffeinate -i)`);
++    try {
++      const instance = await waitRunning(client, instanceId, { timeoutMs: Number(flag(args, 'wait-min') ?? 10) * 60000 });
++      writeState({ ...readState(), ssh: { host: instance.ssh_host, port: instance.ssh_port }, reaperPid: reaper.pid });
++      process.stdout.write(`SSH_HOST=${instance.ssh_host}\nSSH_PORT=${instance.ssh_port}\n`);
++      if (container) process.stdout.write(`MAPPED_PORTS=${mappedPorts(instance, instance.ssh_port).join(',')}\n`);
++    } catch (error) {
++      log(`${error.message}; destroying`);
++      await destroyInstance(client, instanceId);
++      throw error;
++    }
++    return;
++  }
++  if (command === 'destroy') {
++    const id = Number(flag(args, 'id') ?? readState()?.instanceId);
++    if (!Number.isInteger(id)) throw new Error('no instance id (pass --id)');
++    await destroyInstance(client, id);
++    const recorded = readState();
++    if (recorded) writeState({ ...recorded, destroyedAt: new Date().toISOString() });
++    process.stdout.write(`destroyed ${id}\n`);
++    return;
++  }
++  if (command === 'status') {
++    const state = readState();
++    if (!state) { process.stdout.write('no rental recorded\n'); return; }
++    const instance = await getInstance(client, state.instanceId).catch(() => null);
++    process.stdout.write(`${JSON.stringify({ ...state, actual_status: instance?.actual_status ?? 'gone' })}\n`);
++    return;
++  }
++  if (command === 'reap') { await reap(client, { id: Number(flag(args, 'id')), at: flag(args, 'at') }, { log }); return; }
++  throw new Error('usage: vast.mjs rent|search|status|destroy|reap');
++}
++
++if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main(process.argv.slice(2)).catch(error => { process.stderr.write(`[vast] ${error.message}\n`); process.exitCode = 1; });
+diff --git a/tools/gpu-commands.mjs b/tools/gpu-commands.mjs
+index b25f6d9..3dc48cc 100644
+--- a/tools/gpu-commands.mjs
++++ b/tools/gpu-commands.mjs
+@@ -11,7 +11,7 @@ import { gpuUp, gpuDown, gpuStatus, formatStatus, sessionHours, validateUpOption
+ import { fetchCacheStats } from './gpu-cache.mjs';
+ import { runBakeoff, renderBakeoff, writeBakeoffReport, measureThroughput, countEvalTasks, selectCandidates, LEVELS } from './gpu-bakeoff.mjs';
+ 
+-const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of']);
++const VALUE_FLAGS = new Set(['target', 'key', 'model', 'models', 'hourly-usd', 'max-usd', 'max-hours', 'gpus', 'per-replica', 'max-model-len', 'image', 'levels', 'repo', 'best-of', 'ssh-port', 'bench-ref', 'mode', 'probe-ports']);
+ const BOOLEAN_FLAGS = new Set(['yes', 'json', 'extra-quant', 'allow-no-poweroff']);
+ 
+ export function parseGpuFlags(args) {
+@@ -28,15 +28,23 @@ export function parseGpuFlags(args) {
+ }
+ 
+ const num = value => (value === undefined ? undefined : Number(value));
++function parseProbePorts(value) {
++  if (value === undefined) return undefined;
++  return String(value).split(',').map(item => {
++    const text = item.trim();
++    if (!/^\d+$/.test(text)) throw Object.assign(new Error('gpu-usage: --probe-ports must be comma separated port numbers'), { code: 'gpu-usage' });
++    return Number(text);
++  });
++}
+ const expand = file => (typeof file === 'string' && file.startsWith('~/') ? path.join(os.homedir(), file.slice(2)) : file);
+ 
+ export function upOptions(flags, extra = {}) {
+-  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
++  return { target: flags.target, key: expand(flags.key), model: flags.model, hourlyUsd: num(flags['hourly-usd']), maxUsd: num(flags['max-usd']), maxHours: num(flags['max-hours']), gpus: num(flags.gpus), perReplica: num(flags['per-replica']), maxModelLen: num(flags['max-model-len']), image: flags.image, sshPort: flags['ssh-port'] === undefined ? undefined : Number(flags['ssh-port']), mode: flags.mode, probePorts: parseProbePorts(flags['probe-ports']), allowNoPowerOff: flags['allow-no-poweroff'] === true, bestOf: flags['best-of'] === undefined || flags['best-of'].includes(',') ? undefined : Number(flags['best-of']), ...extra };
+ }
+ 
+ export function planText(options, { gpus = options.gpus ?? 'all' } = {}) {
+   const hours = sessionHours(options);
+-  return `Plan (nothing is started yet):\n  node: ${options.target} (a node you already rented; swarm rents nothing)\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
++  return `Plan (nothing is started yet):\n  node: ${options.target}${options.sshPort === undefined ? '' : ` port ${options.sshPort}`} (${options.mode === 'container' ? 'a container instance already running the pinned vLLM image (swarm gpu up starts vllm serve inside it; no docker needed)' : 'a node you already rented; swarm rents nothing'})\n  model: ${options.model}, one server per GPU (${gpus}), reached through an ssh tunnel, no key of yours on the node (a random per-rental key protects the servers)\n  price: $${options.hourlyUsd}/h; hard cap $${options.maxUsd} => the session ends after ${hours.toFixed(2)} h, and a timer on the node removes the servers and powers it off then\n  sent to the node: commands only; nothing of yours (no file, key or .env); a random per-rental key is written for the servers\n  jobs: only sensitive: false, each with exact files, a contract file and acceptance tests; one failure goes to Haiku, then Codex\n  ${options.mode === 'container' ? "billing: the dollar cap and the timer end the servers, but billing continues until the instance is DESTROYED (the rental helper's reaper does that at the deadline); nothing here can power a container off" : "billing: the dollar cap ends the session, but billing continues until YOU terminate the instance; the timer powers the node off only if passwordless sudo works (checked at start)"}\n  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside\nAdd --yes to go.`;
+ }
+ 
+ function sshReal(argv, { input } = {}) {
+@@ -126,7 +134,7 @@ async function bakeoff(flags, { out, real, deps }) {
+   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-bakeoff-'));
+   const bench = deps.bench ?? await import('../bench/lane-benchmark/lib.mjs');
+   const runner = deps.runner ?? fileURLToPath(new URL('./swarm.mjs', import.meta.url));
+-  const info = deps.baseInfo ?? bench.buildBaseRepo(root, 'HEAD', path.join(tmp, 'repo'));
++  const info = deps.baseInfo ?? bench.buildBaseRepo(root, flags['bench-ref'] ?? 'v1.65.0', path.join(tmp, 'repo'));
+   const repo = path.join(tmp, 'repo');
+   let apiKey;
+   const results = await runBakeoff({ candidates, hourlyUsd: base.hourlyUsd, capUsd: base.maxUsd, levels, includeExtra: flags["extra-quant"] === true, bestOf: (flags['best-of'] ?? '1,3').split(',').map(Number) }, {
+diff --git a/tools/gpu.mjs b/tools/gpu.mjs
+index 0d1a16b..5e3c893 100644
+--- a/tools/gpu.mjs
++++ b/tools/gpu.mjs
+@@ -49,6 +49,10 @@ export function validateUpOptions(options) {
+   for (const [name, value] of [['gpus', options.gpus], ['perReplica', options.perReplica], ['maxModelLen', options.maxModelLen]]) if (value !== undefined && !isPosInt(value)) throw fail('gpu-option-invalid', `${name} must be a positive whole number`);
+   if (options.bestOf !== undefined && !(Number.isInteger(options.bestOf) && options.bestOf >= 1 && options.bestOf <= 8)) throw fail('gpu-option-invalid', 'bestOf must be a whole number from 1 to 8');
+   if (options.maxHours !== undefined && !isPosNum(options.maxHours)) throw fail('gpu-option-invalid', 'maxHours must be above 0');
++  if (options.sshPort !== undefined && !(Number.isInteger(options.sshPort) && options.sshPort >= 1 && options.sshPort <= 65535)) throw fail('gpu-option-invalid', 'sshPort must be a whole number from 1 to 65535');
++  const mode = options.mode ?? 'vm';
++  if (mode !== 'vm' && mode !== 'container') throw fail('gpu-option-invalid', "mode must be 'vm' or 'container'");
++  if (options.probePorts !== undefined && (!Array.isArray(options.probePorts) || options.probePorts.length > 8 || options.probePorts.some(port => !Number.isInteger(port) || port < 1 || port > 65535))) throw fail('gpu-option-invalid', 'probePorts must be an array of at most 8 whole ports from 1 to 65535');
+   const args = options.args ?? [];
+   if (!Array.isArray(args) || args.some(item => typeof item !== 'string' || !/^[A-Za-z0-9._=:/-]{1,80}$/.test(item))) throw fail('gpu-option-invalid', 'extra server arguments may only hold letters, digits and . _ = : / -');
+ }
+@@ -79,7 +83,7 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
+   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
+   // The timer is on the node itself, so it still fires if this computer sleeps or loses the link, and even if a later step fails.
+   // Powering off is best effort (it needs passwordless sudo); the owner still has to terminate the instance, which is what stops the billing.
+-  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; sudo -n shutdown -h now >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
++  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"; { sudo -n shutdown -h now || shutdown -h now; } >/dev/null 2>&1' >/dev/null 2>&1 </dev/null &`, 'set -e', 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
+   for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
+     lines.push(`docker run -d --name swarm-vllm-${index} --gpus device=${index} --ipc=host --env-file "$HOME/.swarm-vllm.env" -p 127.0.0.1:${remote}:8000 -v "$HOME/.cache/huggingface:/root/.cache/huggingface" ${image} --model ${model} --served-model-name ${model} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} >/dev/null`.replace(/ +$/, ''));
+   }
+@@ -89,6 +93,46 @@ export function remoteStartScript({ model, image, gpus, maxModelLen, perReplica,
+ 
+ export const remoteStopScript = () => 'docker rm -f $(docker ps -aq --filter name=swarm-vllm) >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
+ 
++// Container mode (the node is itself a container running the pinned vLLM image): the same key handling, with vllm run directly.
++export function containerStartScript({ model, gpus, maxModelLen, perReplica, args = [], seconds, remotePortBase, apiKey }) {
++  if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'api key must be 48 lower-case hex characters');
++  const lines = [`setsid nohup sh -c 'sleep ${Math.ceil(seconds)}; pkill -f "vllm serve" >/dev/null 2>&1; rm -f "$HOME/.swarm-vllm.env"' >/dev/null 2>&1 </dev/null &`, 'set -e', 'pkill -f "vllm serve" >/dev/null 2>&1 || true', 'rm -f "$HOME/.swarm-vllm.env"', 'umask 077', 'cat > "$HOME/.swarm-vllm.env" <<\'SWARMKEY\'', `VLLM_API_KEY=${apiKey}`, 'SWARMKEY'];
++  for (const { index, remote } of replicaPorts(gpus, { remotePortBase })) {
++    lines.push(`CUDA_VISIBLE_DEVICES=${index} VLLM_API_KEY="$(sed -n 's/^VLLM_API_KEY=//p' "$HOME/.swarm-vllm.env")" setsid nohup vllm serve ${model} --served-model-name ${model} --host 127.0.0.1 --port ${remote} --max-model-len ${maxModelLen} --max-num-seqs ${perReplica} --gpu-memory-utilization 0.9 --enable-prefix-caching ${args.join(' ')} > "$HOME/.swarm-vllm-${index}.log" 2>&1 </dev/null &`);
++  }
++  lines.push('rm -f "$HOME/.swarm-vllm.env"');
++  return `${lines.join('\n')}\n`;
++}
++
++export const containerStopScript = () => 'pkill -f "vllm serve" >/dev/null 2>&1 || true\nrm -f "$HOME/.swarm-vllm.env"\n';
++
++// Host part of a /proc/net/tcp(6) local address: IPv4 or IPv6 words are little-endian; returns text, or null when not recognised.
++export function hostFromProcAddr(hex) {
++  if (typeof hex !== 'string' || !/^[0-9A-Fa-f]+$/.test(hex)) return null;
++  if (hex.length === 8) return [6, 4, 2, 0].map(at => parseInt(hex.slice(at, at + 2), 16)).join('.');
++  if (hex.length !== 32) return null;
++  const bytes = [];
++  for (let word = 0; word < 4; word++) for (let b = 3; b >= 0; b--) bytes.push(parseInt(hex.slice(word * 8 + b * 2, word * 8 + b * 2 + 2), 16));
++  if (bytes.every(item => item === 0)) return '::';
++  if (bytes.slice(0, 10).every(item => item === 0) && bytes[10] === 0xff && bytes[11] === 0xff) return `::ffff:${bytes.slice(12).join('.')}`;
++  if (bytes.slice(0, 15).every(item => item === 0) && bytes[15] === 1) return '::1';
++  return `ipv6:${hex}`;
++}
++
++// LISTEN sockets ({ host, port }) from the text of /proc/net/tcp and /proc/net/tcp6.
++export function listeningFromProc(text) {
++  const out = [];
++  for (const line of String(text).split('\n')) {
++    const cols = line.trim().split(/\s+/);
++    if (cols[0] === 'sl' || cols.length < 4 || cols[3] !== '0A') continue;
++    const m = /^([0-9A-Fa-f]+):([0-9A-Fa-f]+)$/.exec(cols[1]);
++    if (!m) continue;
++    const host = hostFromProcAddr(m[1]);
++    if (host !== null) out.push({ host, port: parseInt(m[2], 16) });
++  }
++  return out;
++}
++
+ // The health check and status calls send the rental's key; the key is never logged.
+ export function authFetch(fetchImpl, key) {
+   return async (url, init = {}) => fetchImpl(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${key}` } });
+@@ -129,8 +173,8 @@ async function resolveHost({ base, target, ssh }) {
+ }
+ 
+ // The exposure detail (string) when a replica port is reachable from outside, or null. Probes every resolved address first, then the
+-// node's ss listing. Throws gpu-exposure-unknown when the check cannot be made.
+-async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePort, lookup }) {
++// node's listing (ss -ltnH, or /proc/net/tcp in container mode, which also probes options.probePorts). Throws gpu-exposure-unknown when the check cannot be made.
++async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePort, lookup, container = false, probePorts = [] }) {
+   const host = await resolveHost({ base, target, ssh });
+   const detail = port => `port ${port} on ${shown} is reachable from outside; the servers must listen on the node loopback only`;
+   let addresses;
+@@ -138,15 +182,24 @@ async function findExposure({ base, target, shown, ports, ssh, sshArgs, probePor
+     addresses = lookup ? await lookup(host) : await dns.promises.lookup(host, { all: true });
+   } catch { throw fail('gpu-exposure-unknown', `could not resolve ${host} to check the node's exposure`); }
+   if (!Array.isArray(addresses) || !addresses.length) throw fail('gpu-exposure-unknown', `no address for ${host} to check the node's exposure`);
++  const probeList = [...ports.map(item => item.remote), ...(container ? probePorts : [])];
+   for (const item of addresses) {
+     const address = item?.address;
+-    for (const { remote } of ports) if (await probePort(address, remote)) return detail(remote);
++    for (const port of probeList) if (await probePort(address, port)) return detail(port);
++  }
++  const listening = new Set(ports.map(item => item.remote));
++  if (container) {
++    let text;
++    try { text = String((await ssh([...sshArgs, 'cat /proc/net/tcp /proc/net/tcp6'], {}))?.stdout ?? ''); } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)'); }
++    const sockets = listeningFromProc(text);
++    if (!sockets.length) throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (/proc/net/tcp)');
++    const hit = sockets.find(item => listening.has(item.port) && !isLoopback(item.host));
++    return hit ? detail(hit.port) : null;
+   }
+   let out;
+   try {
+     out = String((await ssh([...sshArgs, 'ss -ltnH'], {}))?.stdout ?? '');
+   } catch { throw fail('gpu-exposure-unknown', 'could not read the node listening sockets (ss -ltnH)'); }
+-  const listening = new Set(ports.map(item => item.remote));
+   for (const line of out.split('\n')) {
+     if (!line.trim()) continue;
+     const mentioned = ports.find(item => line.includes(`:${item.remote}`));
+@@ -213,34 +266,47 @@ export async function gpuUp(options, deps) {
+   if (readSessionFile(env)) throw fail('gpu-session-exists', 'a GPU session is already recorded; run swarm gpu status, or swarm gpu down first');
+   const apiKey = randomKey ? randomKey() : randomBytes(24).toString('hex');
+   if (typeof apiKey !== 'string' || !KEY_RE.test(apiKey)) throw fail('gpu-key-invalid', 'the generated API key must be 48 lower-case hex characters');
+-  const sshBase = [...(options.sshOptions ?? []), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
++  const sshOptions = options.sshPort !== undefined ? ['-p', String(options.sshPort), ...(options.sshOptions ?? [])] : [...(options.sshOptions ?? [])];
++  const sshBase = [...sshOptions, ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', options.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20'];
+   const sshArgs = [...sshBase, '--', options.target];
+   const shown = options.target.split('@').pop();
+-  const output = String((await ssh([...sshArgs, 'nvidia-smi -L; echo SUDO:$(sudo -n true >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)'], {})).stdout);
++  const container = options.mode === 'container';
++  const probeCommand = container
++    ? 'nvidia-smi -L; echo VLLM:$(command -v vllm || true); echo ROOT:$(id -u)'
++    : 'nvidia-smi -L; echo SUDO:$( { [ "$(id -u)" = 0 ] || sudo -n true; } >/dev/null 2>&1 && echo ok || echo no); echo DOCKER:$(docker version --format "{{.Server.Version}}" 2>/dev/null)';
++  const output = String((await ssh([...sshArgs, probeCommand], {})).stdout);
+   const count = parseGpuCount(output);
+-  const dockerMajor = parseDockerMajor(output);
+-  if (dockerMajor === null || dockerMajor < 28) {
+-    const reported = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'))?.slice('DOCKER:'.length).trim() || 'unknown';
+-    throw fail('gpu-docker-old', `the node has Docker ${reported}; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)`);
++  if (!container) {
++    const dockerMajor = parseDockerMajor(output);
++    if (dockerMajor === null || dockerMajor < 28) {
++      const reported = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('DOCKER:'))?.slice('DOCKER:'.length).trim() || 'unknown';
++      throw fail('gpu-docker-old', `the node has Docker ${reported}; version 28 or newer is required (older Docker lets other hosts on the same network reach ports published on 127.0.0.1)`);
++    }
+   }
+   if (count < 1) throw fail('gpu-none', 'no GPU found on the node (nvidia-smi -L listed none)');
+-  const powerOff = !output.includes('SUDO:no');
+-  if (!powerOff) {
++  if (container) {
++    const vllmLine = String(output).split('\n').map(item => item.trim()).find(item => item.startsWith('VLLM:'));
++    if (!(vllmLine ?? '').slice('VLLM:'.length).trim()) throw fail('gpu-no-vllm', 'the node has no vllm command; container mode needs an instance that runs the vLLM image');
++  }
++  const powerOff = container ? false : !output.includes('SUDO:no');
++  if (!container && !powerOff) {
+     if (options.allowNoPowerOff !== true) throw fail('gpu-sudo', 'passwordless sudo is not available on the node, so the timer cannot power it off; fix that or pass --allow-no-poweroff (then billing continues until you terminate the instance)');
+     log('warning: passwordless sudo is not available; the timer will remove the servers but cannot power the node off, so billing continues until you terminate the instance');
+   }
+   const gpus = Math.min(options.gpus ?? count, count, 16);
+   const hours = sessionHours({ hourlyUsd: options.hourlyUsd, maxUsd: options.maxUsd, maxHours: options.maxHours });
+   const perReplica = options.perReplica ?? GPU_DEFAULTS.perReplica;
+-  const script = remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
++  const script = container
++    ? containerStartScript({ model: options.model, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey })
++    : remoteStartScript({ model: options.model, image: options.image ?? GPU_DEFAULTS.image, gpus, maxModelLen: options.maxModelLen ?? GPU_DEFAULTS.maxModelLen, perReplica, args: options.args ?? [], seconds: hours * 3600, remotePortBase: GPU_DEFAULTS.remotePortBase, apiKey });
+   const ports = replicaPorts(gpus);
+   const endpoints = ports.map(port => `http://127.0.0.1:${port.local}`);
+   const startedAt = now();
+-  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, routable: options.routable !== false, powerOff, state: 'starting' };
++  const session = { version: 1, bestOf: options.bestOf ?? 1, target: options.target, key: options.key, apiKey, model: options.model, quant: options.quant ?? null, replicas: gpus, endpoints, perReplica, hourlyUsd: options.hourlyUsd, capUsd: options.maxUsd, maxHours: hours, startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + hours * 3600000).toISOString(), tunnelPid: null, sshOptions, routable: options.routable !== false, powerOff, mode: container ? 'container' : 'vm', state: 'starting' };
+   createSession(env, session);
+ 
+   const exposureCheck = async () => {
+-    const detail = await findExposure({ base: sshBase, target: options.target, shown, ports, ssh, sshArgs, probePort, lookup });
++    const detail = await findExposure({ base: sshBase, target: options.target, shown, ports, ssh, sshArgs, probePort, lookup, container, probePorts: options.probePorts ?? [] });
+     if (detail !== null) throw Object.assign(fail('gpu-exposed', detail), { exposure: true });
+   };
+ 
+@@ -248,7 +314,7 @@ export async function gpuUp(options, deps) {
+   // then rethrow with a message that says whether the stop worked and a key-less session copy on error.session.
+   const afterStartFailure = async error => {
+     let stopped = false;
+-    try { await ssh([...sshArgs, 'bash -s'], { input: remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
++    try { await ssh([...sshArgs, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() }); stopped = true; } catch { /* ignored: the timer still removes them */ }
+     removeSession(env);
+     if (error?.exposure) {
+       error.message = `${error.message}; ${stopped ? 'the servers were stopped' : `the servers could NOT be stopped from here; the timer on the node will remove them at ${session.expiresAt}; terminate the instance`}`;
+@@ -263,7 +329,7 @@ export async function gpuUp(options, deps) {
+     await ssh([...sshArgs, 'bash -s'], { input: script });
+     log(`started ${gpus} replica(s) of ${options.model}; dead-man timer set for ${hours.toFixed(2)} h`);
+     await exposureCheck();
+-    const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions: options.sshOptions });
++    const tunnel = await openTunnel({ target: options.target, key: options.key, ports, sshOptions });
+     session.tunnelPid = tunnel?.pid ?? null;
+     writeSession(env, session);
+     await waitHealthy(endpoints, options.model, { fetchImpl: authFetch(fetchImpl, apiKey), sleep, now, timeoutMs: options.healthTimeoutMs ?? GPU_DEFAULTS.healthTimeoutMs, pollMs: options.pollMs });
+@@ -276,19 +342,24 @@ export async function gpuUp(options, deps) {
+   return session;
+ }
+ 
++const sessionSshOptions = session => (Array.isArray(session?.sshOptions) && session.sshOptions.every(item => typeof item === 'string') ? session.sshOptions : []);
++
+ export async function gpuDown(deps) {
+   const { ssh, stopTunnel, env = process.env, now = Date.now } = deps;
+   const session = readSessionFile(env);
+   if (!session) return { stopped: false, message: 'no GPU session recorded' };
++  const container = session.mode === 'container';
+   const notes = [];
+   let sshOk = true;
+   try {
+-    await ssh([...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: remoteStopScript() });
++    await ssh([...sessionSshOptions(session), ...SSH_HARDENING, '-o', 'ClearAllForwardings=yes', '-i', session.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=20', '--', session.target, 'bash -s'], { input: container ? containerStopScript() : remoteStopScript() });
+   } catch (error) { sshOk = false; notes.push(`could not reach the node to stop the servers (${String(error.message).slice(0, 120)}); its dead-man timer still removes them at ${session.expiresAt}`); }
+   try { if (Number.isInteger(session.tunnelPid) && session.tunnelPid > 1) await stopTunnel(session.tunnelPid, session); } catch { /* already gone */ }
+   removeSession(env);
+   const hours = Math.max(0, (now() - Date.parse(session.startedAt)) / 3600000);
+-  const reminder = 'This does NOT stop the rental: terminate the instance in the provider console now.';
++  const reminder = container
++    ? 'This does NOT stop the rental: destroy the instance (provider console or the rental helper) now.'
++    : 'This does NOT stop the rental: terminate the instance in the provider console now.';
+   const message = sshOk ? `Servers stopped and the session removed. ${reminder}` : `Could not stop the servers over ssh (the timer on the node still removes them at ${session.expiresAt}). The session was removed. ${reminder}`;
+   return { stopped: true, hours, costUsd: Math.round(hours * session.hourlyUsd * 100) / 100, notes, message };
+ }
+@@ -308,11 +379,12 @@ export async function gpuStatus(deps) {
+     replicas.push({ endpoint, healthy, cache: healthy ? await fetchCacheStats(endpoint, fetchImpl) : null });
+   }
+   const cache = combineCacheStats(replicas.map(item => item.cache).filter(Boolean));
+-  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? 'the node may still be billing: terminate the instance' : null };
++  return { cacheHitRate: cache.hitRate, bestOf: session.bestOf ?? 1, mode: session.mode ?? 'vm', active: !expired, expired, model: session.model, replicas, hours, spentUsd: Math.round(hours * session.hourlyUsd * 100) / 100, capUsd: session.capUsd, minutesLeft: Math.max(0, Math.round((expires - now()) / 60000)), hourlyUsd: session.hourlyUsd, expiresAt: session.expiresAt, billingNote: expired ? 'the node may still be billing: terminate the instance' : null };
+ }
+ 
+ export function formatStatus(status) {
+   if (!status.active && !status.expired) return 'No GPU session. Nothing is rented by swarm; start one with swarm gpu up on a node you rented.';
+   const up = status.replicas.filter(item => item.healthy).length;
+-  return [`GPU session: ${status.model}`, `Replicas: ${up} of ${status.replicas.length} answering${status.bestOf > 1 ? `; best-of-${status.bestOf} on` : ''}${status.cacheHitRate === null || status.cacheHitRate === undefined ? '' : `; prefix cache hit ${Math.round(status.cacheHitRate * 100)}%`}`, `Time: ${status.hours.toFixed(2)} h used, ${status.expired ? 'EXPIRED, terminate the instance, billing may continue' : `${status.minutesLeft} min left`}`, `Cost: about $${status.spentUsd.toFixed(2)} of the $${status.capUsd.toFixed(2)} cap ($${status.hourlyUsd}/h)`].join('\n');
++  const verb = status.mode === 'container' ? 'destroy' : 'terminate';
++  return [`GPU session: ${status.model}`, `Replicas: ${up} of ${status.replicas.length} answering${status.bestOf > 1 ? `; best-of-${status.bestOf} on` : ''}${status.cacheHitRate === null || status.cacheHitRate === undefined ? '' : `; prefix cache hit ${Math.round(status.cacheHitRate * 100)}%`}`, `Time: ${status.hours.toFixed(2)} h used, ${status.expired ? `EXPIRED, ${verb} the instance, billing may continue` : `${status.minutesLeft} min left`}`, `Cost: about $${status.spentUsd.toFixed(2)} of the $${status.capUsd.toFixed(2)} cap ($${status.hourlyUsd}/h)`].join('\n');
+ }

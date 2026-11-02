@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0034",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "split",
+  "what": "S5: after the swarm finished every S5 ticket (done), nothing in the app uses the S5 code: submit-request.ts, rate-limit, photo-upload, safe-log, ip-hash, SubmitForm, DashboardRequests and RateLimitMessage are not imported anywhere, and the live /api/requests route (S4) still has no rate limit, photos or emails. Also T-0066 was cancelled earlier but 12 tickets still depended on it, so they never unlocked; roots left with no dependencies (T-0076) do not unlock either; sync marks tickets done only when lint passes but a lint failure leaves the ticket in review with no way back to ready.",
+  "rule": "Add a wiring ticket (or scout step) per stage that mounts new modules in the app and checks with a route-level test; cancelling a ticket must rewrite or reject dependents; review should be able to return to ready with the failing check text.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Reported to the owner; dependencies on cancelled tickets removed by hand; T-0076 released by hand; two lint fixes by hand.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "lint",
+    "privacy",
+    "rate-limit",
+    "review",
+    "split",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#34"
+  }
+}

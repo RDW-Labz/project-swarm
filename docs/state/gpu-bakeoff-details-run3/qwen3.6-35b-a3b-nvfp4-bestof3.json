@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 124507,
+  "tokens": 33780
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 131836,
+  "tokens": 41071
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 33.971792",
+  "durationMs": 92292,
+  "tokens": 26470
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 118491,
+  "tokens": 34362
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 121599,
+  "tokens": 34551
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "not refactored: \"laneDefaults[lane]?.reserveUsd\" appears 2 times (was 2)",
+  "durationMs": 68381,
+  "tokens": 32871
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass; killed 4/4 mutants",
+  "durationMs": 76815,
+  "tokens": 22718
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass; killed 4/4 mutants",
+  "durationMs": 70808,
+  "tokens": 20894
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "all 14 facts present",
+  "durationMs": 128815,
+  "tokens": 47309
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: hosts-exhausted",
+  "durationMs": 50893,
+  "tokens": 22926
+ }
+]

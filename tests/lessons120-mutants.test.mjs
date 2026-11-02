@@ -211,9 +211,9 @@ test('#322: runCheck kills its child as a whole process group once cancelled, le
   const pidFile = path.join(root, 'grandchild.pid');
   // The grandchild inherits the parent's process group (no `detached` of its own) and ignores
   // nothing special; only a signal sent to the whole group reaches it.
-  const script = `const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{},1000);", ${JSON.stringify(pidFile)}], { stdio: 'ignore' }); setInterval(()=>{}, 1000);`;
+  const script = "const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', \"require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{},1000);\", process.argv[1]], { stdio: 'ignore' }); setInterval(()=>{}, 1000);";
   let cancelled = false;
-  const resultPromise = runCheck('sleeper', [process.execPath, '-e', script], root, 300000, spawn, false, () => {}, process.env, { cancelled: async () => cancelled });
+  const resultPromise = runCheck('sleeper', [process.execPath, '-e', script, pidFile], root, 300000, spawn, false, () => {}, process.env, { cancelled: async () => cancelled });
   // Field lesson #182: this is already an event-driven, bounded poll rather than a fixed sleep,
   // but under 4x parallel npm test (heavy CPU contention delaying process spawn, signal delivery
   // and reaping alike) the old 5s/3s bounds were sometimes too tight and reported a real pass as a

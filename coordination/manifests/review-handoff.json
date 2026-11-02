@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-handoff",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner standing rule: an Opus review on every PR; this one spends model money and fetches addresses",
+      "type": "review",
+      "prompt": "Review coordination/review/handoff.diff: swarm handoff generate, check, status and final. Promises: nothing is spent without the owner's y or --yes and the worst case and cap are stated first; the runbook is built only from the owner's profile with TODO (owner) for gaps and never from model text; the guides are written from the approved scope never from ticket titles; check lines fetch only https previews without credentials on the same host; a failing check only files a PROPOSED ticket (new origin handoff, never runs before the owner approves) and never edits a guide; final needs no TODO, a check after the last generate, and no failed step. Look hard for: (1) any way money is spent or a run starts without confirmation, the cap not applying (manifest budget, --max-usd parsing), a run that is partly complete being integrated, (2) SSRF or credential leaks in check (redirects off the host, routes with traversal or a host, IP or localhost previews, huge bodies, the check text matching script or style content), (3) prompt injection from worker-written guide text into tickets, shell commands or the profile (deploy and rollback are shown only, never run), (4) the profile block validation gaps (argv, urls, previewHosts), (5) state file logic in final and status (stale checks, the order of generate and check, TODO detection, a TODO inside a code block or the generated runbook intro), (6) the new proposal origin handoff in tickets.mjs: every place that treats comment and error origins specially (approval records, scope integrity, ticket-manifest) must also treat handoff the same, (7) test gaps. Real findings only, ranked, file and line, concrete input.",
+      "context": ["tools/handoff-docs.mjs", "tools/handoff-commands.mjs", "tools/tickets.mjs", "tools/ticket-manifest.mjs", "tools/scope-integrity.mjs", "tools/budgets.mjs", "tests/handoff.test.mjs", "coordination/review/handoff.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

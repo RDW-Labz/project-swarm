@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "tests-best-of-adapter",
+      "context": [
+        "tests/rented-run.test.mjs",
+        "tools/api-adapters.mjs",
+        "tools/best-of.mjs"
+      ],
+      "outputs": [
+        "tests/best-of-adapter.test.mjs"
+      ],
+      "prompt": "Write tests/best-of-adapter.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). It tests best-of-N in tools/api-adapters.mjs executeApi(job, context, options) for agent 'rented' with NO machine config and a live GPU session file, using the fixture pattern in tests/rented-run.test.mjs (read it: it writes a session with gpuSessionPath from ../tools/rented.mjs next to a temp SWARM_CONFIG, and uses a fake fetchImpl). Call executeApi directly: job = { id: 'j1', agent: 'rented', model: <the session model>, sensitive: false, prompt: 'Write out/a.txt', context: [], outputs: ['out/a.txt'], bestOf: 3 }, context = [], options = { env, fetchImpl, bestOfCheck }. The fake fetchImpl records each request body (JSON.parse(init.body)) and answers 200 with { model, choices: [3 choices], usage: {...} }, each choice { finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ summary: 'ok', files: [{ path: 'out/a.txt', content: X }], edits: [], result: null }) } } with different content X (short, medium, long). Check the envelope shape against how the existing reply helper in tests/rented-run.test.mjs builds one. Tests: (1) the request body carries n: 3 and no authorization header; (2) with bestOfCheck returning { ok: true } for all three the SHORTEST candidate is chosen (result.files[0].content equals the short one) and result.bestOf is { n: 3, valid: 3, passed: 3, chosen: <index of the short one>, checked: true }; (3) with bestOfCheck failing the shortest ({ ok: false }) and passing the others the smallest PASSING one is chosen; (4) with every check false the call returns status 'failed' and an error matching /best-of-failed/; (5) with bestOfCheck absent the call still completes (structural pick, checked false); (6) a job without bestOf sends no n field and works as before (choices has one entry); (7) job.bestOf 3 on a non-rented agent is ignored: not tested here. (8) one of the three choices is not valid JSON: it is skipped (valid: 2). Use only names that exist."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "tests-gpu-bestof-bakeoff",
+      "context": [
+        "tests/gpu.test.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "tools/gpu-cache.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-bestof.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-bestof.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Tests for the best-of and cache parts of tools/gpu-bakeoff.mjs (runBakeoff, renderBakeoff) in the style of tests/gpu.test.mjs (read it for the fake start/benchmark/throughput deps and the clock). (1) runBakeoff with the default bestOf calls benchmark twice per model, with bestOf 1 then 3 (record the bestOf argument), and each result has byBestOf [{ n: 1, ... }, { n: 3, ... }] with the passed and total each call returned; ranking and passRate use N=1 only. (2) runBakeoff({ ..., bestOf: [1] }) calls benchmark once with bestOf 1. (3) bestOf [3] alone still runs N=1 first (the list always includes 1). (4) deps.cacheStats({ endpoint }) is called once per model after the run and its hitRate is stored as cacheHitRate; when cacheStats is not given cacheHitRate is null. (5) renderBakeoff shows, for a model with byBestOf N=1: 5/10 and N=3: 8/10, the text \"N=3: 8/10\" and a cache hit of 82% when cacheHitRate is 0.82, and \"n/a\" for both when absent. Use only names the files export."
+    }
+  ]
+}

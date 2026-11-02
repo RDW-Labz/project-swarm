@@ -1,0 +1,22 @@
+{
+ "version": 1,
+ "jobs": [
+  {
+   "id": "l34-review",
+   "type": "review",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "Merge-queue evidence, approval resealing and a secret-path filter; review before the PR.",
+   "prompt": "Review the lesson 34 changes before a PR. Read coordination/manifests/l34-review.diff (the tools diff) and the new files tools/wiring.mjs and tools/ignored-artifacts.mjs. They touch: (1) split/ingest wiring (integration tickets, refusal, ledger.wiring); (2) go --scope / autopilot releasing todo tickets and pruning cancelled dependencies (approval is resealed); (3) scope sync --integrated sending failed typecheck/lint/build checks back to the worker (new tail stored in merge-queue checkResults, redacted); (4) the dropped-write check now ignoring build artifacts and git-ignored files. Find concrete defects. Focus: (a) security/secrets: can a secret-looking file or a real stray source file be hidden from the dropped-write check (git check-ignore stdin handling, paths with odd characters, symlinks, a .gitignore that ignores everything, secret regex gaps), is the stored check tail redacted, can notes reach prompts unredacted; (b) approval: can pruneCancelledDeps or release/unlock widen what the owner approved or let an unapproved ledger run; can resealing hide a real edit; (c) spend: can the new quality retry loop or release cause retry storms or skip the ladder (applyRetry, systemic guard counts); (d) wiring: cycles from addWiringDeps, a requirement with only docs/test tickets, cancelled tickets, requirements shared by several tickets, the merge/--wire path; (e) any regression for ledgers without ledger.wiring. Report as: HIGH/MEDIUM/LOW, file:line, failure scenario, fix. Say 'no defects' if none. Be brief.",
+   "context": [
+    "coordination/manifests/l34-review.diff",
+    "tools/wiring.mjs",
+    "tools/ignored-artifacts.mjs",
+    "tools/ticket-unlock.mjs"
+   ],
+   "outputs": [],
+   "timeoutMs": 900000
+  }
+ ]
+}

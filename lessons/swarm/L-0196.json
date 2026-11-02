@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0196",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A whole run had to be integrated together even when only some of its jobs had actually finished. A batch run with several jobs could not be integrated at all once any one job failed, even though its other jobs had completed cleanly and did not overlap in their outputs, forcing a wait for a full re-run instead of taking the finished work.",
+  "rule": "A batch run's own complete, non-overlapping jobs can be integrated on their own, named explicitly rather than assumed.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate RUN --jobs <id,...>` integrates only the named complete jobs of a run whose other jobs failed, refusing with a message naming the flag when a partial run is integrated without it. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#196"
+  }
+}

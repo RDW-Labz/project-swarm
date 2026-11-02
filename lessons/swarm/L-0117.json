@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0117",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A coordinator overrode its own git identity to make a commit land, and the hosting service refused the resulting push over an email-privacy setting, requiring several commits to be redone.",
+  "rule": "Never override git identity; the repository's own configuration decides.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: shipping now refuses, before any push, when a commit in the change carries an author or committer email that is neither the repository's configured address nor a hosting-service-issued privacy address. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "privacy",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#117"
+  }
+}

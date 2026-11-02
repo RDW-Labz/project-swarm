@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0186",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "A job's own prompt asked its worker to return a JSON reply missing a field a later check required, and nothing caught it until well after the job had already been dispatched and paid for. The shape a result had to carry was only ever checked once the run was already being integrated.",
+  "rule": "A declared result shape is checked against a prompt's own stated reply shape before a job ever dispatches, not only once its real result is read back.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a job's own prompt is parsed for the JSON shape it promises to return and compared against every attached requirement at validate time, refusing before dispatch on a mismatch. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "prompt",
+    "scope",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#186"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "safety-gpu",
+      "context": [
+        "tools/gpu.mjs",
+        "tools/rented.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu.mjs (plain ESM, same first line and same exports and signatures as now, plus the new exports named below). Apply exactly these safety changes and nothing else; keep the code compact. (1) Pin the image by digest. Export PINNED_IMAGE = 'vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967' (vLLM v0.27.1) and use it as GPU_DEFAULTS.image. IMAGE_RE must accept ONLY the digest form: a lower-case repository path (letters, digits, dot, underscore, dash, slash) then '@sha256:' then exactly 64 lower-case hex characters; a tag (including :latest) is refused. validateUpOptions: when the image is not in that form throw fail('gpu-image-invalid', 'pin the image by digest (name@sha256:<64 hex>); tags are refused'). (2) Random API key per rental. Add 'node:crypto' randomBytes. gpuUp makes apiKey = deps.randomKey ? deps.randomKey() : randomBytes(24).toString('hex') (48 hex characters; reject anything else from deps.randomKey with fail('gpu-key-invalid', ...)). Export authFetch(fetchImpl, key): returns an async function (url, init = {}) that calls fetchImpl(url, { ...init, headers: { ...(init.headers ?? {}), authorization: 'Bearer ' + key } }). remoteStartScript gets a new required parameter apiKey (must match /^[0-9a-f]{48}$/ else throw fail('gpu-key-invalid', ...)); after the dead-man timer line and before 'set -e' is NOT right: put these lines AFTER 'set -e' and the docker rm line and BEFORE the first docker run: 'umask 077' then a here-document that writes the key file: cat > \"$HOME/.swarm-vllm.env\" <<'SWARMKEY' / VLLM_API_KEY=<key> / SWARMKEY (the closing SWARMKEY on its own line). Every docker run line gets --env-file \"$HOME/.swarm-vllm.env\" right after '--ipc=host'. The dead-man timer's sh -c command and remoteStopScript() both also run rm -f \"$HOME/.swarm-vllm.env\" after removing the containers. The timer line is still the very first line of the script. The key is stored in the session file (apiKey, same 0600 file, both the 'starting' and 'up' writes) and is never put in a log message or an error message. gpuUp wraps its fetchImpl with authFetch(fetchImpl, apiKey) for the health wait; gpuStatus wraps with authFetch(fetchImpl, session.apiKey) when the session has one. (3) The servers must not be reachable from outside. After the start script succeeds and BEFORE the health wait, gpuUp checks exposure two ways and, if either shows exposure, tries to stop the servers (ssh with remoteStopScript, ignore its errors) and throws fail('gpu-exposed', 'port <n> on <host> is reachable from outside; the servers must listen on the node loopback only; the servers were stopped') with error.session set: (a) from here: deps.probePort(host, port) resolves true when a TCP connection to host:port succeeds; check every replica's node port (replicaPorts remote values) against the host part of options.target (the text after '@' if any); default deps.probePort uses node:net connect with a 3000 ms timeout (resolve false on error or timeout, true on connect, always destroy the socket); (b) on the node: run one ssh command 'ss -ltnH' (same hardening args as the other calls) and, parsing its stdout line by line, treat a line whose local address (4th column) is 0.0.0.0:<port>, *:<port> or [::]:<port> for any replica node port as exposure; a 127.0.0.1:<port> listener is fine. Keep all existing behaviour (timer first, session-before-start, sudo check, hardening flags, exclusive session creation, health requires the model id, routable, bestOf, cache stats). Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "safety-gpu-commands",
+      "context": [
+        "tools/gpu-commands.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "Return the complete new tools/gpu-commands.mjs (plain ESM, same first line, same exports and signatures; keep everything not named here). Changes: (1) Import authFetch and PINNED_IMAGE from ./gpu.mjs (new exports). In the bake-off start callback, remember the session's apiKey (the session object gpuUp returns now has apiKey) in a variable, and make the throughput and cacheStats dependencies use authFetch(real.fetchImpl, thatKey) instead of real.fetchImpl (the key variable is set by each start). (2) planText: add this line before 'Add --yes to go.': '  access: the servers listen on the node loopback only, need a random per-rental API key, and gpu up fails if any server port is reachable from outside'; and change the model line so it says 'no key of yours on the node (a random per-rental key protects the servers)'. (3) The real dependency set built in runGpuCommand (real) gets probePort: deps.probePort ?? undefined (leave undefined so gpu.mjs uses its default) and randomKey: deps.randomKey ?? undefined; pass them through the existing deps.gpu overrides unchanged. (4) The --image flag help (models output) mentions the pinned default: add to the models output last line: ' Server image: ' + PINNED_IMAGE + ' (pinned by digest; --image takes only another digest).' Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

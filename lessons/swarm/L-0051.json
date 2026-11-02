@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0051",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Background research and long check runs were miscounted as idle time. A single-question run and a scout wrote no record a session-metrics reader could find, and a long checks/mutants run inside integration looked identical to silence.",
+  "rule": "Measure what actually runs, not just what writes to the run registry the reader already knew about.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a small state.json-compatible `{startedAt, finishedAt, costUsd}` record is now written for a single-question run, a scout, and integrate's own checks/mutants windows. Regression coverage is in `tests/lessons120-checks.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing",
+    "spend"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#51"
+  }
+}

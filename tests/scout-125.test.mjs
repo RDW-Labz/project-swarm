@@ -66,7 +66,8 @@ test('#193: a cancelled scout reports costUsd from the last cost-carrying event 
   const brief = await briefFile(root, 'Need a small retry library.');
   const controller = new AbortController();
   const script = `console.log(${JSON.stringify(initEvent('claude-sonnet-5-20260101'))});console.log(JSON.stringify({type:'progress',total_cost_usd:0.02}));setInterval(()=>{},1000);`;
-  const spawnImpl = (...args) => { const child = fake(script)(...args); setTimeout(() => controller.abort(), 80); return child; };
+  // Abort once the progress line has actually been read, not after a fixed delay: a slow CI machine can take longer than that to start node.
+  const spawnImpl = (...args) => { const child = fake(script)(...args); child.stdout.on('data', function seen(chunk) { if (String(chunk).includes('progress')) { child.stdout.off('data', seen); setTimeout(() => controller.abort(), 20); } }); return child; };
   const result = await scoutRun(root, { model: 'sonnet', brief, goal: 'find a library' }, { spawnImpl, signal: controller.signal });
   assert.equal(result.status, 'cancelled');
   assert.equal(result.costUsd, 0.02);

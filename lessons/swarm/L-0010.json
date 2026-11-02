@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0010",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Mutation tooling existed but nothing pointed to it. The orchestrator hand-wrote mutant scripts for weeks because the existing `mutants` manifest field and `integrate --mutants` never surfaced at the moment of need.",
+  "rule": "Surface existing tooling at the point of need instead of re-inventing it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship ... --require-section` warns `no manifest mutants: declare \"mutants\" in the manifest and run \"integrate --mutants\" (see docs/verification.md)` when the run's manifest declares no `mutants`; the skill's ship checklist repeats the same line. Documentation: manifest reference and verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "documentation",
+    "integration",
+    "manifest",
+    "mutation-testing"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#10"
+  }
+}

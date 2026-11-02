@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-12",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "protected paths and sensitivity (secrets), running project commands, file reading",
+      "type": "review",
+      "prompt": "Safety review of Phase 12 (swarm init v2). Files: tools/init-profile.mjs, tools/repo-map.mjs, tools/init.mjs, docs/plans/phase12-design.md (the rules), coordination/review/phase12.diff (swarm.mjs, goal.mjs, plan-commands.mjs, project-commands.mjs changes). Check with evidence: (1) protected paths: can a job write or delete a protected path anyway (case, ./, trailing slash, symlinks, `a/../b`, unicode, outputs vs deletes, lead child manifests, merge jobs, `resources`, `contextGlob`, run via `swarm run` of a manifest, integrate/ship paths that do not call validateProject); can the owner-declared list be weakened by a later `init` or by editing the pointer; (2) sensitivity: can profile.sensitive false leak into jobs that must stay sensitive, can an invalid or edited profile silently turn sensitivity or the budget off; (3) base check: command execution (argv only, cwd, env, timeout, output size), what happens with a malicious package.json or checks.json in a fresh clone (init runs its checks: is that surfaced to the owner), process-group cleanup after timeout; (4) repo map: reading files (symlinks, huge files, special files like fifos, paths escaping the root via list entries), regex denial of service on large or hostile source files, output size and write safety; (5) init --check read-only guarantee, and error messages that print file contents. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/plans/phase12-design.md",
+        "tools/init-profile.mjs",
+        "tools/repo-map.mjs",
+        "tools/init.mjs",
+        "coordination/review/phase12.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

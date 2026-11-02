@@ -5,6 +5,7 @@
     {
       "id": "setup",
       "agent": "openai",
+      "sensitive": false,
       "prompt": "Review only the setup guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
       "context": [
         "README.md"
@@ -19,6 +20,7 @@
     {
       "id": "scope",
       "agent": "gemini",
+      "sensitive": false,
       "prompt": "Review only the scope guidance in README.md. Give concrete evidence and a concise improvement proposal. Do not run tests.",
       "context": [
         "README.md"

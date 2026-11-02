@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0123",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A tool-free worker failed instantly with a vague \"incomplete or unexpected response\" message, but no request had actually reached the provider at all. The real cause was a missing credential after a configuration path moved; nothing in the failure said so.",
+  "rule": "A request that never reached the provider must say so; a missing credential is named before any request is even attempted.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a missing credential now refuses up front, naming where it looked; the generic incomplete-response error is now used only once a real provider response exists, and an empty successful response is now named plainly instead of read as malformed. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#123"
+  }
+}

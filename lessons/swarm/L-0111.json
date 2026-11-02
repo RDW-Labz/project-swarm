@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0111",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A tool-free API worker's reply, cut short by an output-length limit, surfaced only as a bare \"incomplete or unexpected\" error with no way to tell why from the error alone.",
+  "rule": "A failure to parse a worker's reply names the actual reason it failed, not just the fact that it did.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the error now names the provider's own finish reason (e.g. truncated by length) directly. Regression coverage is in `tests/field-lessons-batch-m3.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#111"
+  }
+}

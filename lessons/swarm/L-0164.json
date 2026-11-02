@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0164",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed job's own scratch-directory temp path did not reach its own temp-directory environment variables. A sandboxed job's own tests could call the standard \"create a temp directory under the system temp path\" pattern and still land outside the one directory the sandbox actually grants that job read/write access to, because nothing guaranteed the system temp-path variables pointed at that job's own scratch directory in the first place.",
+  "rule": "A sandboxed job's own temp-directory environment variables always point at that job's own scratch directory, the one its own sandbox already grants access to, never the bare system default.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a sandboxed job's launch environment sets its temp-directory variables to its own scratch directory; an unsandboxed job's environment is unaffected. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "sandbox",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#164"
+  }
+}

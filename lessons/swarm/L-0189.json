@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0189",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A worker CLI's own plan-limit message, printed instead of its usual structured output, was scored as an ordinary job failure. The real cause (a provider-side quota, not a mistake in the job or the worker) was buried under a generic exit-code error, and nothing stopped the next job from being dispatched straight into the same outage.",
+  "rule": "A worker CLI's own quota or plan-limit message is a provider outage, not a job failure, and once seen it should stop further dispatches until the provider's own reported reset time, not rely on a person noticing the pattern by hand.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: this message is now detected and recorded with its own distinct status and the provider's reported reset time; a further dispatch that would need the same provider refuses until that time unless explicitly overridden. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#189"
+  }
+}

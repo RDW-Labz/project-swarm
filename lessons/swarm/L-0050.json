@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "L-0050",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A flaky-test fix went to a worker that could never reproduce it. A job whose own acceptance check loops or repeats, or whose prompt names a flake or race, produced only a guess when handed to a worker with no shell to run that check itself.",
+  "rule": "A job whose done-when is \"reproduce, then prove N green\" needs a shell-capable worker, not a guess.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `runtime-check-no-shell` now also fires when a check's own argv contains a repeat construct or the prompt names a flake/race/intermittent bug, exempting a job whose outputs are all docs. Regression coverage is in `tests/lessons120-checks.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "documentation",
+    "flaky-test",
+    "prompt",
+    "race-condition",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#50"
+  }
+}

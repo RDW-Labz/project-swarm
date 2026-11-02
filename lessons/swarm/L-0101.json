@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0101",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker that answered a question was reported exactly as if it had said nothing at all. A reply that was almost valid, structured data — readable by a person, just not by a strict parser — was reduced to a bare empty result plus a generic parse-failure message, with the actual answer recoverable only by digging through raw logs by hand.",
+  "rule": "A worker that answered is never reported as empty; a parse failure keeps the raw answer reachable, and an easy, well-understood mistake is repaired automatically before it is treated as a failure at all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a parse failure now tries one narrow, documented repair first and reports the raw reply's own location and a leading excerpt of it when nothing can be recovered, instead of only a bare empty result. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#101"
+  }
+}

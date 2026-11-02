@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-s11-fixes",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "relaxes a secret/protected-path guard and changes ledger creation",
+      "type": "review",
+      "prompt": "Review coordination/review/s11-fixes.diff. (1) .env.example is now allowed as READ-ONLY context although a profile may protect it: protectedViolations (init-profile.mjs), the symlink/realpath check in enforceProtectedPaths, safePath/bytesAt/write readOnly/template options, snapshotHash, prepare copy sites in swarm.mjs, isExampleFile. Rules: a real .env (or .env.local, .env.production, any non-template secret) must still be refused as context and as output; a template must never be writable (outputs, deletes, write()); a symlink named like a template that points to a secret must be refused; isExampleFile must not be fooled by names like `.env.example/../.env`, `x.env.example` next to secrets, `.env.example.bak`, uppercase, unicode; the template copy into a worker workspace must not leak anything beyond the template's own bytes (names, not values: but what if the owner put real values in .env.example? is there a size or content guard?). (2) Splitter: acceptance copied from requirements (ticketsFromStageLists), orderTestsAfterBuild (wiring.mjs: cycles, mutation of the worker's dependsOn, existing tickets), ingest keeping a split with missing integration tickets and writing the wire manifest (does it overwrite a manifest the owner still needs? is anything approved or runnable before wiring? the new check in cmdApprove: false refusals for old ledgers, the builtRequirements exclusion, merge/--wire paths, change orders). Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/init-profile.mjs", "tools/wiring.mjs", "tools/scope-commands.mjs", "tests/env-example-context.test.mjs", "tests/splitter-lesson-55.test.mjs", "coordination/review/s11-fixes.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

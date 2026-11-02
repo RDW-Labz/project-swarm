@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0381",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Checks must ignore swarm scratch copies. Exclude scratch workspaces from local checks and warn when check output cites a scratch path.",
+  "rule": "Checks must ignore swarm scratch copies.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "ci",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#381"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "mgx-guard",
+      "type": "build",
+      "prompt": "Apply the review fixes section of the design to the merge guard module (checkRollup without grouping or timestamps, required checks lookup, mergeable retry, repo rules, reasons shape, local update rules). runMerge takes (root, args, { exec, sleep }) with sleep injectable (default a real timer). Keep it under 14000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test, no secrets. The review fixes section replaces the matching earlier rules; follow it exactly.",
+      "context": [
+        "docs/plans/merge-guard-design.md",
+        "tools/merge-guard.mjs"
+      ],
+      "outputs": [
+        "tools/merge-guard.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "mgx-guard-test",
+      "type": "build",
+      "prompt": "Update the test file of the merge guard module for the review fixes section of the design (the module is changed by another job at the same time; use exactly the rules there). Keep the tests that still apply and rewrite those about newest-item replacement: a newer success no longer hides an older failure, a pending run with a year-one completedAt is pending, nameless and null items fail as invalid-item, required contexts missing from the rollup are pending, protection errors are skipped, mergeable UNKNOWN is retried then refused (fake sleep), view null refused, stacked PR list carries the repo argument, the local update is skipped for another repository and uses checkout with the double dash, a bad repo value is refused, merge-failed carries reasons.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test, no secrets. The review fixes section replaces the matching earlier rules; follow it exactly.",
+      "context": [
+        "docs/plans/merge-guard-design.md",
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "outputs": [
+        "tests/merge-guard.test.mjs"
+      ]
+    }
+  ]
+}

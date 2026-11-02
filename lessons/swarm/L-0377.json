@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0377",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Manifest contracts need normalization. Hoist job-level contracts, treat a null tier reason as absent, and label not-yet-created sibling outputs as pending.",
+  "rule": "Manifest contracts need normalization.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "manifest"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#377"
+  }
+}

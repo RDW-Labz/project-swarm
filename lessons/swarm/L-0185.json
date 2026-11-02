@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0185",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's own transcript, saved to disk by default, sometimes carried sensitive data a person never meant to leave their own machine. Every worker's reply and failure log were written to a shared run directory the same way regardless of what they contained.",
+  "rule": "A job may declare that its own transcript must never be written to disk, and a configured sensitive path may require that declaration before a job touching it is allowed to run at all.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: such a job's saved reply and failure log are replaced with a fixed placeholder on disk (the real text is still used in memory for that same run), and a job whose own context or outputs match a configured sensitive path without the declaration refuses before it ever starts. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#185"
+  }
+}

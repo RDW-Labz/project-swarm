@@ -60,6 +60,8 @@ function greenScript(extra = []) {
   return [
     clean(), rev('sha123'), clean(), ok('[]'), ok(prJson()),
     ok(rollupView({ statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] })),
+    // the merge guard reads the PR again right before merging
+    ok(rollupView({ statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }] })),
     ...extra,
   ];
 }

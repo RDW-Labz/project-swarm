@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "concurrency": 5,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-startup.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "defaults-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Owner decision: the rented lane default is Qwen3.6-35B-A3B NVFP4 with thinking on and at most 128 agents per GPU; Lightning and Coder-Next leave the lane. (1) SHORTLIST keeps only the qwen3.6-35b-a3b-nvfp4 entry (remove the nemotron and qwen3-coder-next entries and their comments; the comment above SHORTLIST says: the lane default model; other models can still be tested with --models and an explicit model id). (2) GPU_DEFAULTS.perReplica becomes 128 (requests one replica takes, which is also the vLLM --max-num-seqs). Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-memory-plan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-startup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ],
+      "id": "defaults-adapter",
+      "context": [
+        "tools/api-adapters.mjs"
+      ],
+      "outputs": [
+        "tools/api-adapters.mjs"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement); change nothing else. In tools/api-adapters.mjs: (1) in the request body for job.agent === 'rented' the property ...(env.SWARM_RENTED_THINKING === 'on' ? {} : { chat_template_kwargs: { enable_thinking: false } }) becomes ...(env.SWARM_RENTED_THINKING === 'off' ? { chat_template_kwargs: { enable_thinking: false } } : {}) so thinking is ON by default and only SWARM_RENTED_THINKING=off disables it. (2) the line const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : 8192); becomes const limit = job.maxOutputTokens ?? (job.agent === 'openrouter' ? defaultMaxOutputTokens(job.model) : job.agent === 'rented' ? 16000 : 8192); (a thinking model spends part of its output on reasoning). Use the exact existing text of those two spots as the anchors.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/best-of-adapter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-n.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-y-adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lanes-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/multi-edit.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/reports-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/worker-skills.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu.test.mjs"
+      ],
+      "id": "defaults-commands",
+      "context": [
+        "tools/gpu-commands.mjs"
+      ],
+      "outputs": [
+        "tools/gpu-commands.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/gpu-commands.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Best-of-N is OFF by default now: wherever the bake-off default for --best-of is the string '1,3' (for example (flags['best-of'] ?? '1,3')) it becomes '1'; the plan text must say best-of is off unless --best-of 1,3 is given. The thinking mode of the lane is on by default, so the bake-off plan text adds: 'thinking on (the lane default; SWARM_RENTED_THINKING=off turns it off)'. Do not edit tests.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/hard-task.test.mjs"
+      ],
+      "id": "defaults-hard",
+      "context": [
+        "bench/gpu-bakeoff/hard-task.mjs"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/hard-task.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new bench/gpu-bakeoff/hard-task.mjs (plain ESM; same first line, exports and behaviour; change ONLY this). (1) Thinking is on by default now, so the hard task's maxOutputTokens is 30000 unless process.env.SWARM_RENTED_THINKING === 'off' (then 16000). (2) Generalise runHardTask and hardManifest to other lanes so Haiku and Codex can run the same task: both take optional agent (default 'rented') and the model; hardManifest for agent 'rented' is exactly as today (rented lane only: contract TASK.md, acceptance list, bestOf when > 1); for any other agent the job has { id: 'hard-planwaves', agent, model, sensitive: true, prompt (same text), context ['TASK.md','planWaves.mjs'], outputs ['planWaves.mjs'], timeoutMs: HARD_TIMEOUT_MS, maxOutputTokens: 32000, outputCapBytes: { total: 100000, perFile: 60000 } } with no contract, acceptance or bestOf; runHardTask passes agent through, and its result also carries agent and costUsd: job.costUsd ?? null. Keep every existing export and the existing results shape. Do not edit tests.\nignoreTests: tests/hard-task.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "defaults-ideas",
+      "context": [
+        "docs/plans/ideas.md"
+      ],
+      "outputs": [
+        "docs/plans/ideas.md"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement); change nothing else. In docs/plans/ideas.md replace the whole line that starts \"- 2026-10-16 (orchestrator): best-of-N on tasks with no visible tests keeps the smallest candidate\" with: \"- 2026-10-16 (orchestrator, owner decision): best-of-N is OFF for now (N=1; a failure escalates to Haiku, then Codex). Fix before turning it on again: pick the candidate by tests passed (and lint), never by size; the current selector falls back to the smallest candidate when no test is visible, which was wrong on the hard task (0/16).\""
+    }
+  ]
+}

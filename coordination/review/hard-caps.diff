@@ -1,0 +1,663 @@
+diff --git a/tests/estimates.test.mjs b/tests/estimates.test.mjs
+new file mode 100644
+index 0000000..b831ce2
+--- /dev/null
++++ b/tests/estimates.test.mjs
+@@ -0,0 +1,143 @@
++// SPDX-License-Identifier: Apache-2.0
++// Estimates scale with ticket count, lane and size, from this project's own history. The numbers below are the parts app's real stages (tickets and requirements from its ledger;
++// S11's cost from its run files; S12's runs were mostly gone, so its cost is not used). The old estimate said "11 requirements: 11 tickets, $0.03" for a stage that needs 40 to 50 tickets.
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { stageHistory, laneRates, historyRates, estimateWork } from '../tools/estimates.mjs';
++import { impactAnalysis, diffScopes } from '../tools/change-orders.mjs';
++import { buildQuote, estimatedFull } from '../tools/quotes.mjs';
++import { needsHuman } from '../tools/approval-policy.mjs';
++
++// stage: [tickets, requirements, costed jobs, lane of those jobs, cost per job]
++const STAGES = { S9: [14, 3, 14, 'anthropic', 0.005], S10: [14, 3, 14, 'anthropic', 0.005], S11: [48, 15, 43, 'claude', 0.133], S12: [42, 15, 15, 'claude', 0.187] };
++function parts() {
++  const tickets = [], runs = [];
++  let n = 0;
++  for (const [stage, [t, r, costed, lane, cost]] of Object.entries(STAGES)) {
++    const jobs = [];
++    for (let i = 0; i < t; i += 1) {
++      n += 1;
++      const id = `T-${String(n).padStart(4, '0')}`;
++      tickets.push({ id, stage, status: 'done', type: 'build', scopeRefs: [`R-${stage}-${i % r}`] });
++      if (i < costed) jobs.push({ id, agent: lane, status: 'complete', costUsd: cost });
++    }
++    runs.push({ id: stage, state: { jobs } });
++  }
++  tickets.push({ id: 'T-9001', stage: 'S11', status: 'cancelled', type: 'build', scopeRefs: ['R-x'] }, { id: 'T-9002', stage: 'S12', status: 'proposed', type: 'build', scopeRefs: ['R-y'] }, { id: 'T-9003', stage: 'S12', status: 'done', type: 'human', scopeRefs: [] });
++  return { tickets, runs };
++}
++
++test('stage history: tickets and requirements per finished stage, cancelled, proposed and human tickets left out, a stage with little cost on record is marked', () => {
++  const { tickets, runs } = parts();
++  const h = Object.fromEntries(stageHistory({ tickets, runs }).map(s => [s.stage, s]));
++  assert.deepEqual(Object.keys(h).sort(), ['S10', 'S11', 'S12', 'S9']);
++  assert.equal(h.S11.tickets, 48); assert.equal(h.S11.requirements, 15);
++  assert.equal(h.S11.costedTickets, 43);
++  assert.ok(Math.abs(h.S11.usd - 43 * 0.133) < 1e-6);
++  assert.equal(h.S12.costedTickets, 15, 'S12 cost is mostly missing');
++  const rates = historyRates(Object.values(h));
++  assert.equal(rates.costStages, 3, 'S12 (36 percent of its tickets costed) is not used for cost');
++  assert.equal(rates.latestUsdPerTicket.stage, 'S11');
++});
++
++test('for 11 new requirements the estimate is 40 to 50 tickets at about $5 to $12, not 11 tickets and $0.03', () => {
++  const { tickets, runs } = parts();
++  const work = estimateWork({ requirements: 11, stages: stageHistory({ tickets, runs }), lanes: laneRates({ tickets, runs }) });
++  assert.ok(work.tickets.low >= 30 && work.tickets.low <= 36, `low ${work.tickets.low}`);
++  assert.ok(work.tickets.mid >= 40 && work.tickets.mid <= 46, `mid ${work.tickets.mid}`);
++  assert.ok(work.tickets.high >= 48 && work.tickets.high <= 54, `high ${work.tickets.high}`);
++  assert.ok(work.usd.mid >= 5 && work.usd.mid <= 7, `mid $${work.usd.mid}`);
++  assert.ok(work.usd.high >= 6 && work.usd.high <= 12, `high $${work.usd.high}`);
++  assert.ok(work.usd.low < 1, 'every ticket on the cheap lane is cheap');
++  assert.ok(work.usd.low < work.usd.mid && work.usd.mid < work.usd.high);
++  assert.equal(work.learned, true);
++  assert.match(work.basis, /finished stages of this project/);
++  assert.deepEqual(work.byLane.map(l => l.lane), ['anthropic', 'claude'], 'cheapest lane first');
++  assert.ok(work.byLane[1].usd > work.byLane[0].usd * 10, 'the lane the ticket runs on decides the price');
++});
++
++test('the estimate scales with the number of requirements, and with the lane', () => {
++  const { tickets, runs } = parts();
++  const stages = stageHistory({ tickets, runs }), lanes = laneRates({ tickets, runs });
++  const one = estimateWork({ requirements: 5, stages, lanes }), two = estimateWork({ requirements: 10, stages, lanes });
++  assert.ok(Math.abs(two.tickets.mid - 2 * one.tickets.mid) <= 1);
++  assert.ok(Math.abs(two.usd.mid / one.usd.mid - 2) < 0.2);
++  assert.equal(estimateWork({ requirements: 0, stages, lanes }).tickets.mid, 0);
++});
++
++test('no history: tickets use a stated default and the cost is unknown, never an invented price', () => {
++  const w = estimateWork({ requirements: 11, stages: [], lanes: null });
++  assert.deepEqual(w.tickets, { low: 44, mid: 44, high: 44 });
++  assert.equal(w.usd, null);
++  assert.equal(w.learned, false);
++  assert.match(w.basis, /no finished stage to learn from/);
++});
++
++test('swarm change: impactAnalysis carries the range and the basis; the approval check uses the high end; no history means the cost is unknown (so it needs you)', () => {
++  const { tickets, runs } = parts();
++  const mk = ids => ({ requirements: ids.map(id => ({ id, stage: 'S13', text: `A user can ${id}.`, acceptance: ['works in 2 seconds'], line: 1 })), stages: [{ id: 'S13', title: 'x', order: 13 }], sections: [], external: [], sensitive: [], protected: [], errors: [], strays: [], context: [], name: 'x', version: 1, overview: '', layout: '' });
++  const ids = Array.from({ length: 11 }, (_, i) => `R-${100 + i}`);
++  const diff = diffScopes(mk([]), mk(ids));
++  const impact = impactAnalysis({ diff, tickets, history: { stages: stageHistory({ tickets, runs }), lanes: laneRates({ tickets, runs }) } });
++  assert.equal(impact.estimate.requirements, 11);
++  assert.ok(impact.estimate.ticketsRange.high >= 48);
++  assert.equal(impact.estimate.usd, impact.estimate.usdRange.high, 'the figure the policy checks is the high end');
++  assert.ok(impact.estimate.usd > 5);
++  const blind = impactAnalysis({ diff, tickets: [], history: {} });
++  assert.equal(blind.estimate.usd, null);
++});
++
++test('quotes scale each similar project to the new scope\'s size, so a smaller scope is not quoted as the whole earlier project', () => {
++  const rec = (id, requirements, billed, hours, days) => ({ id, name: id, source: 'recorded', requirements, stages: 4, screens: 6, services: 3, billedUsd: billed, flatRateListUsd: 0, estimatedFullUsd: billed, ownerHours: hours, calendarDays: days, gpuHours: null });
++  const records = [rec('a', 60, 27, 30, 8), rec('b', 50, 24, 25, 7), rec('c', 70, 33, 36, 9)];
++  const config = { hourlyRate: null, margin: null };
++  const half = buildQuote({ traits: { requirements: 30, stages: 4, screens: 5, services: 3 }, records, config });
++  assert.ok(half.cost.high < 17, `a 30-requirement scope quoted at up to $${half.cost.high}; the 60-requirement project cost $27`);
++  assert.ok(Math.abs(half.cost.low - 24 * 30 / 50) < 2.5, 'cost per requirement times the size');
++  assert.ok(half.hours.high < 18);
++  assert.ok(half.days.low > 4.5 && half.days.high < 7, `calendar time by the square root: ${half.days.low} to ${half.days.high}`);
++  assert.deepEqual(half.scale.map(x => x.factor).sort(), [0.43, 0.5, 0.6]);
++  const same = buildQuote({ traits: { requirements: 60, stages: 4, screens: 6, services: 3 }, records, config });
++  assert.ok(same.cost.low > 20 && same.cost.high < 36);
++  const blind = buildQuote({ traits: { requirements: 15, stages: 4, screens: 6, services: 3 }, records: [{ ...rec('d', null, 30, 30, 8), requirements: null }], config });
++  assert.match(blind.why, /not scaled for size/);
++  assert.equal(estimatedFull(rec('x', 1, 2, 3, 4)), 2);
++});
++
++test('work in progress, held jobs and jobs with no cost do not distort the estimate', () => {
++  const { tickets, runs } = parts();
++  // 30 tickets of S11 still running with large costs, a held job with no cost, a job with a null cost: none of it is a finished ticket's price.
++  for (let i = 0; i < 30; i += 1) { tickets.push({ id: `T-W${i}`, stage: 'S11', status: 'running', type: 'build', scopeRefs: ['R-S11-0'] }); runs[2].state.jobs.push({ id: `T-W${i}`, agent: 'claude', status: 'complete', costUsd: 2 }); }
++  runs[2].state.jobs.push({ id: 'T-0001', agent: 'claude', status: 'held', costUsd: 0 }, { id: 'T-0002', agent: 'claude', status: 'complete', costUsd: null });
++  const clean = parts();
++  const a = estimateWork({ requirements: 11, stages: stageHistory(clean), lanes: laneRates(clean) });
++  const b = estimateWork({ requirements: 11, stages: stageHistory({ tickets, runs }), lanes: laneRates({ tickets, runs }) });
++  assert.deepEqual(b.tickets, a.tickets);
++  assert.ok(Math.abs(b.usd.mid - a.usd.mid) < 1e-6, `mid ${b.usd.mid} vs ${a.usd.mid}`);
++  assert.ok(Math.abs(b.usd.high - a.usd.high) < 1e-6);
++  assert.ok(b.usd.low > 0, 'a free-looking job does not pull the low end to zero');
++});
++
++test('a gap in the cost record is a gap: a stage with most of its tickets uncosted is not used for the price', () => {
++  const { tickets, runs } = parts();
++  const h = historyRates(stageHistory({ tickets, runs }));
++  assert.equal(h.latestUsdPerTicket.stage, 'S11');
++  assert.equal(stageHistory({ tickets, runs }).find(s => s.stage === 'S12').costedTickets, 15);
++  assert.equal(h.costStages, 3);
++});
++
++test('an unknown cost needs the owner: the change-order check treats a missing dollar figure as over the limit', () => {
++  const policy = { humanApprovals: [], changeOrderOverUsd: 5 };
++  assert.equal(needsHuman(policy, { kind: 'change-order', usd: null }), true);
++  assert.equal(needsHuman(policy, { kind: 'change-order', usd: 4.9 }), false);
++  assert.equal(needsHuman(policy, { kind: 'change-order', usd: 5.1 }), true);
++});
++
++test('a project more than five times larger or smaller is not scaled into a quote', () => {
++  const rec = (id, requirements) => ({ id, name: id, source: 'recorded', requirements, stages: 4, screens: 6, services: 3, billedUsd: 10, flatRateListUsd: 0, estimatedFullUsd: 10, ownerHours: 10, calendarDays: 5, gpuHours: null });
++  const q = buildQuote({ traits: { requirements: 12, stages: 4, screens: 6, services: 3 }, records: [rec('huge', 150), rec('near', 14)], config: { hourlyRate: null, margin: null } });
++  assert.deepEqual(q.similar.map(s => s.name), ['near']);
++  const none = buildQuote({ traits: { requirements: null, stages: 4, screens: 6, services: 3 }, records: [rec('near', 14)], config: { hourlyRate: null, margin: null } });
++  assert.match(none.why, /this scope has no requirement count/);
++});
+diff --git a/tests/hard-cap.test.mjs b/tests/hard-cap.test.mjs
+new file mode 100644
+index 0000000..5c53205
+--- /dev/null
++++ b/tests/hard-cap.test.mjs
+@@ -0,0 +1,128 @@
++// SPDX-License-Identifier: Apache-2.0
++// The spend cap is hard: a job is refused when what is spent, plus what is already reserved for jobs in flight, plus this job's own worst case would pass the cap.
++// (Parts-app stages S11 and S12 each finished about $6 over their cap: subscription-lane jobs were counted only when they finished, so a wave of parallel jobs all started under the cap.)
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { spawn } from 'node:child_process';
++import { capDecision, estimateReservation, flatRateReserve, runTotals, FLAT_RATE_RESERVE_DEFAULTS } from '../tools/spend.mjs';
++import { runManifest } from '../tools/swarm.mjs';
++
++const budget = (maxUsd, lanes = {}) => ({ maxUsd, maxTokens: null, lanes });
++
++test('capDecision: a job is refused when its own worst case would pass the cap, allowed when it fits exactly, and a token cap is unchanged', () => {
++  assert.equal(capDecision({ budget: budget(1), run: { usd: 0.5, tokens: 0 }, laneToday: {}, agent: 'claude', add: { usd: 0.5, tokens: 99999 } }), null, 'exactly the cap is allowed');
++  const refused = capDecision({ budget: budget(1), run: { usd: 0.6, tokens: 0 }, laneToday: {}, agent: 'claude', add: { usd: 0.5, tokens: 0 } });
++  assert.equal(refused.reason, 'run-cap');
++  assert.match(refused.message, /worst case \$0\.50 would pass maxUsd \$1\.00/);
++  assert.equal(capDecision({ budget: budget(1), run: { usd: 1, tokens: 0 }, laneToday: {}, agent: 'claude' }).reason, 'run-cap', 'already reached, as before');
++  assert.equal(capDecision({ budget: budget(1), run: { usd: 0.1, tokens: 0 }, laneToday: {}, agent: 'claude' }), null, 'no add: the earlier rule');
++  const lane = capDecision({ budget: budget(null, { claude: { dailyUsd: 2 } }), run: { usd: 0, tokens: 0 }, laneToday: { claude: { usd: 1.8, tokens: 0 } }, agent: 'claude', add: { usd: 0.5 } });
++  assert.equal(lane.reason, 'lane-cap');
++  assert.equal(capDecision({ budget: { maxUsd: null, maxTokens: 100, lanes: {} }, run: { usd: 0, tokens: 50 }, laneToday: {}, agent: 'ollama', add: { usd: 0, tokens: 8192 } }), null, 'tokens: refused only once reached');
++});
++
++test('subscription lanes reserve an estimate while a job runs: the most a finished job of the lane and model cost (five or more), else a default per lane and model', () => {
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'opus' }), 1.0);
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'claude-sonnet-5-5' }), 0.5);
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'haiku' }), 0.2);
++  assert.equal(flatRateReserve({ lane: 'codex' }), FLAT_RATE_RESERVE_DEFAULTS.codex);
++  assert.equal(flatRateReserve({ lane: 'cursor' }), 0.4);
++  assert.equal(flatRateReserve({ lane: 'hermes' }), 0, 'a free local lane reserves nothing');
++  assert.equal(flatRateReserve({ lane: 'unknown-lane' }), 0);
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'opus', history: [0.1, 0.1, 0.1, 0.1] }), 1.0, 'fewer than five samples: the default');
++  const history = [0.1, 0.12, 0.11, 0.13, 0.1, 0.12, 0.11, 0.14, 0.1, 0.9];
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'sonnet', history }), 0.9, 'five or more: the most any of them cost');
++  assert.equal(flatRateReserve({ lane: 'claude', model: 'sonnet', history: [0.1, 0.1, 0.1, 0.1, 0.1] }), 0.1, 'learned from the run, below the default');
++  assert.equal(estimateReservation({ job: {}, lane: 'claude', model: 'opus', inputChars: 0, rates: null }).usd, 1.0);
++  assert.equal(estimateReservation({ job: {}, lane: 'claude', model: 'opus', inputChars: 0, rates: null }).source, 'unpaid');
++});
++
++async function fixture(t) {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'hard-cap-')));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  await fs.writeFile(path.join(root, 'input.txt'), 'x');
++  return root;
++}
++// Stands in for the claude CLI: each job takes a moment and reports a list cost.
++const claudeFake = (cost, ms = 250) => (_c, _a, options) => spawn(process.execPath, ['--input-type=module', '-e', `await new Promise(r => setTimeout(r, ${ms}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'ok',total_cost_usd:${cost}}));`], options);
++const jobs = n => Array.from({ length: n }, (_, i) => ({ id: `j${i}`, agent: 'claude', model: 'sonnet', prompt: `Do thing ${i}.`, context: ['input.txt'], outputs: [], timeoutMs: 20000 }));
++
++test('eight parallel subscription jobs under a $1.00 cap: never more than the cap is spent (before: all eight started and cost $3.20)', async t => {
++  const root = await fixture(t);
++  const state = await runManifest(root, { version: 1, concurrency: 8, budget: { maxUsd: 1 }, jobs: jobs(8) }, { spawnImpl: claudeFake(0.4), env: { ...process.env, SWARM_SPEND_DIR: path.join(root, 'spend') } });
++  const total = runTotals(state).usd;
++  assert.ok(total <= 1.0 + 1e-9, `spent ${total}`);
++  const done = state.jobs.filter(j => j.status === 'complete').length;
++  assert.ok(done >= 1 && done <= 2, `${done} jobs ran`);
++  assert.ok(state.jobs.some(j => j.status === 'held'), 'the rest are held, not started');
++  assert.equal(state.status, 'paused');
++});
++
++test('the same jobs with no cap all run; with a cap that fits them all they all run', async t => {
++  const root = await fixture(t);
++  const env = { ...process.env, SWARM_SPEND_DIR: path.join(root, 'spend') };
++  const none = await runManifest(root, { version: 1, concurrency: 8, jobs: jobs(4) }, { spawnImpl: claudeFake(0.4, 50), env });
++  assert.equal(none.jobs.filter(j => j.status === 'complete').length, 4);
++  const roomy = await runManifest(root, { version: 1, concurrency: 8, budget: { maxUsd: 10 }, jobs: jobs(4) }, { spawnImpl: claudeFake(0.4, 50), env });
++  assert.equal(roomy.jobs.filter(j => j.status === 'complete').length, 4);
++});
++
++test('a cap that holds every job\'s reservation lets them all run and stays under the cap ($3.00 for six $0.30 jobs)', async t => {
++  const root = await fixture(t);
++  const state = await runManifest(root, { version: 1, concurrency: 8, budget: { maxUsd: 3 }, jobs: jobs(6) }, { spawnImpl: claudeFake(0.3, 80), env: { ...process.env, SWARM_SPEND_DIR: path.join(root, 'spend') } });
++  assert.ok(runTotals(state).usd <= 3.0 + 1e-9);
++  assert.equal(state.jobs.filter(j => j.status === 'complete').length, 6, state.jobs.map(j => j.status).join());
++  assert.equal(state.status, 'complete');
++});
++
++// ---- Opus review fixes ----
++const claudeFakeBy = byId => (_c, args, options) => {
++  const text = `${options.cwd ?? ''} ${args.join(' ')}`;   // the job's workspace folder carries its id
++  const spec = Object.entries(byId).find(([id]) => text.includes(id))?.[1] ?? { cost: 0.1, ms: 100 };
++  const script = spec.fail ? "console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,result:'boom'}));process.exit(1);" : `await new Promise(r => setTimeout(r, ${spec.ms ?? 100}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'ok',total_cost_usd:${spec.cost}}));`;
++  return spawn(process.execPath, ['--input-type=module', '-e', script], options);
++};
++const named = (id, model = 'sonnet', extra = {}) => ({ id, agent: 'claude', model, prompt: `Do ${id}.`, context: ['input.txt'], outputs: [], timeoutMs: 20000, ...extra });
++const spendEnv = root => ({ ...process.env, SWARM_SPEND_DIR: path.join(root, 'spend') });
++
++test('a refusal that exists only because of money reserved for running jobs waits for them: six $0.10 jobs under a $2.00 cap all run (they were held for good before)', async t => {
++  const root = await fixture(t);
++  const state = await runManifest(root, { version: 1, concurrency: 6, budget: { maxUsd: 2 }, jobs: jobs(6) }, { spawnImpl: claudeFake(0.1, 120), env: spendEnv(root) });
++  assert.equal(state.jobs.filter(j => j.status === 'complete').length, 6, state.jobs.map(j => j.status).join());
++  assert.ok(runTotals(state).usd <= 2 + 1e-9);
++});
++
++test('a failed job gives its reservation back, so the jobs waiting behind it start', async t => {
++  const root = await fixture(t);
++  const list = [named('fails'), named('a'), named('b'), named('c')];
++  const state = await runManifest(root, { version: 1, concurrency: 4, budget: { maxUsd: 1 }, jobs: list }, { spawnImpl: claudeFakeBy({ fails: { fail: true }, a: { cost: 0.1, ms: 150 }, b: { cost: 0.1, ms: 150 }, c: { cost: 0.1, ms: 150 } }), env: spendEnv(root) });
++  const status = Object.fromEntries(state.jobs.map(j => [j.id, j.status]));
++  assert.notEqual(status.fails, 'complete');
++  assert.deepEqual([status.a, status.b, status.c], ['complete', 'complete', 'complete'], JSON.stringify(status));
++  assert.ok(runTotals(state).usd <= 1 + 1e-9);
++});
++
++test('the reservation is per lane AND model: cheap Haiku history does not lower what an Opus job reserves', async t => {
++  const root = await fixture(t);
++  const list = [...Array.from({ length: 5 }, (_, i) => named(`h${i}`, 'haiku')), named('big', 'opus', { after: ['h0', 'h1', 'h2', 'h3', 'h4'] })];
++  const state = await runManifest(root, { version: 1, concurrency: 1, budget: { maxUsd: 1 }, jobs: list }, { spawnImpl: claudeFakeBy({ big: { cost: 1.2, ms: 50 } }), env: spendEnv(root) });
++  const status = Object.fromEntries(state.jobs.map(j => [j.id, j.status]));
++  assert.equal(status.big, 'held', 'five $0.10 Haiku jobs said nothing about Opus: its default $1.00 would pass the $1.00 cap with $0.50 spent');
++  assert.ok(runTotals(state).usd <= 1 + 1e-9);
++});
++
++test('a subscription lane\'s daily dollar cap is enforced with reservations too', async t => {
++  const root = await fixture(t);
++  const state = await runManifest(root, { version: 1, concurrency: 4, budget: { lanes: { claude: { dailyUsd: 0.6 } } }, jobs: jobs(4) }, { spawnImpl: claudeFake(0.4, 150), env: spendEnv(root) });
++  const done = state.jobs.filter(j => j.status === 'complete').length;
++  assert.equal(done, 1, state.jobs.map(j => j.status).join());
++  assert.ok(runTotals(state).usd <= 0.6 + 1e-9);
++});
++
++test('a job and the cap with a float edge: $0.10 spent, $0.20 reserved, $0.30 cap is allowed', () => {
++  assert.equal(capDecision({ budget: budget(0.3), run: { usd: 0.1, tokens: 0 }, laneToday: {}, agent: 'claude', add: { usd: 0.2 } }), null);
++});
+diff --git a/tools/change-orders.mjs b/tools/change-orders.mjs
+index b1c54bd..c02deeb 100644
+--- a/tools/change-orders.mjs
++++ b/tools/change-orders.mjs
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: Apache-2.0
+-const USD_PER_TICKET = 0.003;
++import { estimateWork } from './estimates.mjs';
+ const uniq = (a) => [...new Set(a)];
+ const norm = (r) => JSON.stringify({ t: r?.text ?? '', a: r?.acceptance ?? [] });
+ 
+@@ -16,7 +16,8 @@ export function diffScopes(oldScope, newScope) {
+   return { added, removed, changed, stagesAdded, stagesRemoved };
+ }
+ 
+-export function impactAnalysis({ diff, tickets = [] } = {}) {
++// `stages` is the project's finished-stage history (see estimates.mjs): the estimate is requirements times the tickets a requirement has turned into, times what a ticket has cost.
++export function impactAnalysis({ diff, tickets = [], history = {} } = {}) {
+   const removed = new Set(diff?.removed ?? []);
+   const changed = new Set(diff?.changed ?? []);
+   const live = tickets.filter((t) => t.status !== 'cancelled');
+@@ -62,11 +63,10 @@ export function impactAnalysis({ diff, tickets = [] } = {}) {
+     needTickets,
+     affected,
+     dependentsReset,
+-    estimate: {
+-      newTickets: needTickets.length,
+-      usd: needTickets.length * USD_PER_TICKET,
+-      dependentsReset: dependentsReset.length,
+-    },
++    estimate: (() => {
++      const work = estimateWork({ requirements: needTickets.length, stages: history.stages ?? [], lanes: history.lanes ?? null });
++      return { requirements: needTickets.length, newTickets: work.tickets.mid, ticketsRange: work.tickets, usd: work.usd?.high ?? null, usdRange: work.usd, byLane: work.byLane, basis: work.basis, learned: work.learned, dependentsReset: dependentsReset.length };
++    })(),
+   };
+ }
+ 
+diff --git a/tools/estimates.mjs b/tools/estimates.mjs
+new file mode 100644
+index 0000000..bd3648d
+--- /dev/null
++++ b/tools/estimates.mjs
+@@ -0,0 +1,89 @@
++// SPDX-License-Identifier: Apache-2.0
++// Size and cost estimates that come from this project's own history: how many tickets a requirement turns into, and what a ticket costs (estimated full cost: billed plus the
++// list value of subscription lanes). `swarm change` used to say "11 requirements, about 11 tickets, $0.03": a requirement is not a ticket and $0.003 is not a price.
++import { jobSpend } from './spend.mjs';
++
++const MIN_STAGE_TICKETS = 5;      // a stage this small says little about the ratio
++const MIN_LANE_JOBS = 5;          // a lane needs this many finished ticket jobs before its price counts
++const MIN_COVERAGE = 0.7;         // the share of a stage's tickets whose cost is on record; less and its cost per ticket would be too low
++export const DEFAULT_TICKETS_PER_REQUIREMENT = 4;
++
++const quantile = (sorted, q) => { const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo); };
++// low / mid / high: the middle half (25th to 75th percentile) of the stages, the lowest and highest with two, one point with one.
++function spread(values) {
++  const v = values.filter(x => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
++  if (!v.length) return null;
++  if (v.length < 3) return { low: v[0], mid: v.reduce((s, x) => s + x, 0) / v.length, high: v.at(-1), n: v.length };
++  return { low: quantile(v, 0.25), mid: quantile(v, 0.5), high: quantile(v, 0.75), n: v.length };
++}
++
++/** Per finished stage: its tickets, its requirements, and what its tickets cost, from the ledger and the run files (a job is a ticket when it has the ticket's id). */
++export function stageHistory({ tickets = [], runs = [] }) {
++  const live = tickets.filter(t => t && typeof t.id === 'string' && !['cancelled', 'proposed'].includes(t.status) && t.type !== 'human');
++  // Only finished tickets count, for their number and for their cost: work in progress has cost something but is not yet a ticket's price.
++  const stageOf = new Map(live.filter(t => t.status === 'done').map(t => [t.id, t.stage]));
++  const stages = new Map();
++  const slot = s => { if (!stages.has(s)) stages.set(s, { stage: s, tickets: 0, refs: new Set(), costed: new Set(), usd: 0 }); return stages.get(s); };
++  for (const t of live) { if (t.status !== 'done') continue; const b = slot(t.stage); b.tickets += 1; for (const r of t.scopeRefs ?? []) b.refs.add(r); }
++  for (const { state } of runs) {
++    for (const job of state?.jobs ?? []) {
++      const s = stageOf.get(job?.id);
++      if (s === undefined) continue;
++      const usd = jobSpend(job).usd;
++      if (typeof usd !== 'number' || !(usd > 0)) continue;   // a job with no cost on record is a gap, not a free job
++      const b = slot(s);
++      b.usd += usd;
++      b.costed.add(job.id);
++    }
++  }
++  return [...stages.values()].map(b => ({ stage: b.stage, tickets: b.tickets, requirements: b.refs.size, costedTickets: Math.min(b.costed.size, b.tickets), usd: b.usd })).filter(b => b.tickets >= MIN_STAGE_TICKETS && b.requirements > 0);
++}
++
++const RECENT = 4;   // the pace of the latest stages counts, not the cheap early ones
++const stageNo = s => { const m = /^S(\d+)$/.exec(String(s)); return m ? Number(m[1]) : 0; };
++
++/** What one job costs on each lane (median, from jobs that are tickets), and how many jobs a ticket takes: a ticket's cost depends on the lane it runs on. */
++export function laneRates({ tickets = [], runs = [] }) {
++  const ids = new Set(tickets.filter(t => t && t.status === 'done' && t.type !== 'human').map(t => t.id));
++  const byLane = new Map();
++  const seen = new Set();
++  let jobs = 0;
++  for (const { state } of runs) for (const job of state?.jobs ?? []) {
++    const usd = jobSpend(job).usd;
++    if (!ids.has(job?.id) || job.status !== 'complete' || typeof usd !== 'number' || !(usd > 0)) continue;
++    jobs += 1; seen.add(job.id);
++    const list = byLane.get(job.agent) ?? [];
++    list.push(usd);
++    byLane.set(job.agent, list);
++  }
++  const jobsPerTicket = seen.size ? Math.max(1, jobs / seen.size) : 1;
++  const lanes = [...byLane.entries()].filter(([, v]) => v.length >= MIN_LANE_JOBS).map(([lane, v]) => { const s = [...v].sort((a, b) => a - b); return { lane, jobs: v.length, usdPerJob: quantile(s, 0.5), usdPerTicket: quantile(s, 0.5) * jobsPerTicket }; }).sort((a, b) => a.usdPerTicket - b.usdPerTicket);
++  return { lanes, jobsPerTicket };
++}
++
++export function historyRates(stages) {
++  const recent = stages.slice().sort((a, b) => stageNo(a.stage) - stageNo(b.stage)).slice(-RECENT);
++  const ratio = spread(recent.map(s => s.tickets / s.requirements));
++  const enough = recent.filter(s => s.usd > 0 && s.costedTickets / s.tickets >= MIN_COVERAGE);
++  const perTicket = spread(enough.map(s => s.usd / s.costedTickets));
++  // The latest stage with its cost on record sets the pace: how the swarm is working now (its lanes, its ticket size), not the average of cheaper early stages.
++  const latest = enough.at(-1);
++  return { stages: recent.length, ticketsPerRequirement: ratio, usdPerTicket: perTicket, latestUsdPerTicket: latest ? { stage: latest.stage, usd: latest.usd / latest.costedTickets } : null, costStages: enough.length };
++}
++
++/** What `requirements` new requirements will take: tickets and dollars as a range, with what the numbers rest on. Dollars are null with no cost history (never an invented price). */
++export function estimateWork({ requirements, stages = [], lanes = null }) {
++  const r = historyRates(stages);
++  const ratio = r.ticketsPerRequirement ?? { low: DEFAULT_TICKETS_PER_REQUIREMENT, mid: DEFAULT_TICKETS_PER_REQUIREMENT, high: DEFAULT_TICKETS_PER_REQUIREMENT, n: 0 };
++  const tickets = { low: Math.round(requirements * ratio.low), mid: Math.round(requirements * ratio.mid), high: Math.round(requirements * ratio.high) };
++  // The range of cost: the cheapest lane to the dearest lane seen (a ticket costs what its lane costs), with the recent stages' own pace as the middle.
++  const cheap = lanes?.lanes?.[0]?.usdPerTicket, dear = lanes?.lanes?.at(-1)?.usdPerTicket;
++  const pace = r.latestUsdPerTicket?.usd ?? null;
++  const perTicket = pace === null && cheap === undefined ? null : { low: Math.min(...[cheap, pace].filter(x => x !== undefined && x !== null)), mid: pace ?? (cheap + dear) / 2, high: Math.max(...[dear, pace].filter(x => x !== undefined && x !== null)) };
++  const usd = perTicket ? { low: tickets.low * perTicket.low, mid: tickets.mid * perTicket.mid, high: tickets.high * perTicket.high } : null;
++  const byLane = (lanes?.lanes ?? []).map(l => ({ lane: l.lane, usdPerTicket: l.usdPerTicket, usd: tickets.mid * l.usdPerTicket }));
++  const basis = r.ticketsPerRequirement
++    ? `${r.stages} finished stage${r.stages === 1 ? '' : 's'} of this project (${ratio.low.toFixed(1)} to ${ratio.high.toFixed(1)} tickets per requirement${perTicket ? `, $${perTicket.low.toFixed(3)} to $${perTicket.high.toFixed(3)} per ticket${r.latestUsdPerTicket ? `, ${r.latestUsdPerTicket.stage} ran at $${r.latestUsdPerTicket.usd.toFixed(3)}` : ''}${byLane.length ? ` (${byLane.map(l => `${l.lane} $${l.usdPerTicket.toFixed(3)}`).join(', ')})` : ''}` : ', no cost history'})`
++    : `no finished stage to learn from: ${DEFAULT_TICKETS_PER_REQUIREMENT} tickets per requirement assumed, no cost`;
++  return { requirements, tickets, usd, byLane, basis, learned: Boolean(r.ticketsPerRequirement) };
++}
+diff --git a/tools/quotes.mjs b/tools/quotes.mjs
+index ba081d1..2a33bb5 100644
+--- a/tools/quotes.mjs
++++ b/tools/quotes.mjs
+@@ -122,7 +122,7 @@ export async function saveRecord(dir, record) {
+   return { replaced: next.length === list.length };
+ }
+ 
+-async function readRuns(root) {
++export async function readRuns(root) {
+   const dir = path.join(root, '.swarm', 'runs');
+   let ids = [];
+   try { ids = await fs.readdir(dir); } catch { return []; }
+@@ -208,13 +208,20 @@ export const estimatedFull = r => (typeof r.estimatedFullUsd === 'number' ? r.es
+ 
+ export function buildQuote({ traits, records, config, k = 5 }) {
+   const ranked = records.map(r => ({ r, d: distance(traits, r) })).filter(x => x.d !== null).sort((a, b) => a.d - b.d || a.r.id.localeCompare(b.r.id));
+-  const similar = ranked.filter(x => x.d <= MAX_DISTANCE).slice(0, k);
++  // Similar in size too: a project more than five times larger or smaller in requirements is not scaled into a quote, it is left out.
++  const ratioOk = r => !(traits.requirements > 0 && r.requirements > 0) || (traits.requirements / r.requirements >= 0.2 && traits.requirements / r.requirements <= 5);
++  const similar = ranked.filter(x => x.d <= MAX_DISTANCE && ratioOk(x.r)).slice(0, k);
+   const items = similar.map(x => x.r);
+-  const cost = rangeOf(items.map(estimatedFull));
+-  const billed = rangeOf(items.map(r => r.billedUsd));
+-  const hours = rangeOf(items.map(r => r.ownerHours));
+-  const days = rangeOf(items.map(r => r.calendarDays));
+-  const gpu = rangeOf(items.map(r => r.gpuHours));
++  // Each finished project is scaled to THIS scope's size before the range is taken: cost, hours and rented GPU time by the ratio of requirements, calendar time by its
++  // square root (more tickets run side by side, they do not take proportionally longer). Without a requirement count on either side the number is used as it is, and said so.
++  const factor = r => (traits.requirements > 0 && r.requirements > 0 ? traits.requirements / r.requirements : null);
++  const scaled = (r, value, power = 1) => (typeof value === 'number' ? (factor(r) === null ? value : value * factor(r) ** power) : value);
++  const unscaled = items.filter(r => factor(r) === null).length;
++  const cost = rangeOf(items.map(r => scaled(r, estimatedFull(r))));
++  const billed = rangeOf(items.map(r => scaled(r, r.billedUsd)));
++  const hours = rangeOf(items.map(r => scaled(r, r.ownerHours)));
++  const days = rangeOf(items.map(r => scaled(r, r.calendarDays, 0.5)));
++  const gpu = rangeOf(items.map(r => scaled(r, r.gpuHours)));
+   const medianD = similar.length ? similar[Math.floor(similar.length / 2)].d : null;
+   let confidence = 'none', why = records.length ? 'no finished project shares a size measure with this scope' : 'no finished project has been recorded yet (swarm quote record)';
+   if (similar.length) {
+@@ -225,6 +232,7 @@ export function buildQuote({ traits, records, config, k = 5 }) {
+     else if (similar.length >= 5 && medianD < 0.35) { confidence = 'high'; why = `${similar.length} similar projects, close in size`; }
+     else { confidence = 'medium'; why = `${similar.length} similar projects${medianD >= 0.35 ? ', but not close in size' : ''}`; }
+     if (backfilled) why += `; ${backfilled} backfilled from earlier work, not recorded as they happened`;
++    if (unscaled) why += traits.requirements > 0 ? `; ${unscaled} had no requirement count, so its numbers are not scaled for size` : '; this scope has no requirement count, so the numbers are not scaled for size';
+     if (!hours) why += '; none of them has owner hours logged';
+     if (!cost) why += '; none of them has a cost recorded';
+   }
+@@ -234,7 +242,7 @@ export function buildQuote({ traits, records, config, k = 5 }) {
+     const at = (c, h) => round((c + h * config.hourlyRate) / (1 - config.margin), 0);
+     price = { low: at(cost.low, hours.low), high: at(cost.high, hours.high) };
+   }
+-  return { traits, billed, confidence, why, similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
++  return { traits, billed, confidence, why, scale: similar.map(x => ({ name: x.r.name, factor: factor(x.r) === null ? null : round(factor(x.r), 2) })), similar: similar.map(x => ({ name: x.r.name, source: x.r.source, distance: round(x.d, 2) })), cost, hours, days, gpu, price, priceBlank };
+ }
+ 
+ const usd = v => `$${v >= 100 ? Math.round(v) : round(v, 2)}`;
+@@ -254,6 +262,6 @@ export function renderQuote(q) {
+     ...(q.gpu ? [`Rented GPU:          ${span(q.gpu, plain, ' hours')}`] : []),
+     q.price ? `Price:                ${usd(q.price.low)} to ${usd(q.price.high)} (cost plus hours at your rate, with your margin)` : `Price:                blank until you set both: swarm quote config --rate USD_PER_HOUR --margin PERCENT${q.cost && q.hours ? '' : ' (and the similar projects need cost and hours)'}`,
+     `Confidence: ${q.confidence}. ${q.why}.`,
+-    'Ranges are the middle half of the similar projects (the lowest to the highest when there are only two). They are not scaled for size.',
++    `Each similar project is scaled to this scope's size (${(q.scale ?? []).map(x => `${x.name} x${x.factor ?? '?'}`).join(', ')}; calendar time by the square root). Ranges are the middle half of the scaled numbers (the lowest to the highest when there are only two).`,
+   ].join('\n');
+ }
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 9e16b6c..8b34a71 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -13,6 +13,8 @@ import { readLedger, writeLedger, appendLog, createLedger, transition, readyTick
+ import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
+ import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
+ import { isSecretLooking } from './ignored-artifacts.mjs';
++import { stageHistory, laneRates } from './estimates.mjs';
++import { readRuns } from './quotes.mjs';
+ import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
+ import { day0Checklist, checklistToTickets } from './day0.mjs';
+ import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
+@@ -1690,10 +1692,12 @@ async function cmdChange(root, { rest, flags }) {
+   const checked = checkScope(cur.scope);
+   if (!checked.ok) return out(`the new scope has errors; run swarm scope check ${cur.file}`, 1);
+   const diff = diffScopes(parseScope(snapshot), cur.scope);
+-  const impact = impactAnalysis({ diff, tickets: ledger.tickets });
++  const runs = await readRuns(root);
++  const impact = impactAnalysis({ diff, tickets: ledger.tickets, history: { stages: stageHistory({ tickets: ledger.tickets, runs }), lanes: laneRates({ tickets: ledger.tickets, runs }) } });
+   const reset = impact.dependentsReset?.length ?? 0;
+   const summary = [`change order: +${diff.added.length} added, -${diff.removed.length} removed, ~${diff.changed.length} changed requirements`,
+-    `cancels ${impact.cancel.length} tickets, reopens ${impact.reopen.length}${reset ? ` (and resets ${reset} that depend on them)` : ''}, needs tickets for ${impact.needTickets.length} requirements (about ${impact.estimate.newTickets} tickets, about $${impact.estimate.usd.toFixed(2)})`].join('\n');
++    `cancels ${impact.cancel.length} tickets, reopens ${impact.reopen.length}${reset ? ` (and resets ${reset} that depend on them)` : ''}, needs tickets for ${impact.needTickets.length} requirements`,
++    `estimate: ${impact.estimate.ticketsRange.low} to ${impact.estimate.ticketsRange.high} tickets (about ${impact.estimate.newTickets}), ${impact.estimate.usdRange ? `$${impact.estimate.usdRange.low.toFixed(2)} to $${impact.estimate.usdRange.high.toFixed(2)} at list prices (about $${impact.estimate.usdRange.mid.toFixed(2)})` : 'cost unknown (no cost history yet)'}; based on ${impact.estimate.basis}`].join('\n');
+   const policy = await readApprovalPolicy(root);
+   const big = needsHuman(policy, { kind: 'change-order', usd: impact.estimate.usd });
+   if (flags.yes !== true) return out(`${summary}\nReview it, then rerun with --yes to record it${big ? ' (over the change-order limit: needs you)' : ''}.`);
+diff --git a/tools/spend.mjs b/tools/spend.mjs
+index e449b6a..03e7656 100644
+--- a/tools/spend.mjs
++++ b/tools/spend.mjs
+@@ -180,10 +180,25 @@ export function laneDayTotals(store, { day = utcDay(Date.now) } = {}) {
+   return totals;
+ }
+ 
+-export function estimateReservation({ job, lane, model, inputChars, rates, laneDefaults = LANE_RESERVE_DEFAULTS }) {
++// What a subscription-lane job is expected to cost at list prices, reserved while it runs so the run cap counts work that is in flight (a flat-rate job reports its list cost
++// only when it finishes: counting nothing until then let a wave of parallel jobs all start under the cap and finish far over it). The estimate is the most a finished job of this
++// lane and model cost in the run (five or more of them), else a conservative default per lane.
++export const FLAT_RATE_RESERVE_DEFAULTS = Object.freeze({ claude: Object.freeze({ opus: 1.0, sonnet: 0.5, haiku: 0.2, other: 0.5 }), codex: 0.6, cursor: 0.4, hermes: 0, qwen: 0 });
++export function flatRateReserve({ lane, model, history = [] }) {
++  const costs = history.filter(x => typeof x === 'number' && Number.isFinite(x) && x > 0);
++  // Five or more finished jobs of this lane and model: the most any of them cost (never less than something already seen). Fewer: a conservative default.
++  if (costs.length >= 5) return Math.max(...costs);
++  const d = FLAT_RATE_RESERVE_DEFAULTS[lane];
++  if (d === undefined) return 0;
++  if (typeof d === 'number') return d;
++  const m = String(model ?? '').toLowerCase();
++  return m.includes('opus') ? d.opus : m.includes('sonnet') ? d.sonnet : m.includes('haiku') ? d.haiku : d.other;
++}
++
++export function estimateReservation({ job, lane, model, inputChars, rates, laneDefaults = LANE_RESERVE_DEFAULTS, flatHistory }) {
+   const maxOut = job.maxOutputTokens ?? (lane === 'openrouter' ? defaultMaxOutputTokens(model) : 8192);
+   const tokens = maxOut + Math.ceil(inputChars / 4);
+-  if (!PAID_LANES.includes(lane)) return { usd: 0, tokens, source: 'unpaid' };
++  if (!PAID_LANES.includes(lane)) return { usd: flatRateReserve({ lane, model, history: flatHistory }), tokens, source: 'unpaid' };
+   let usd, source;
+   if (job.maxCredits != null && rates?.creditUsd != null) { usd = job.maxCredits * rates.creditUsd; source = 'max-credits'; }
+   else if (rates?.inUsdPerToken != null && rates?.outUsdPerToken != null) { usd = inputChars * rates.inUsdPerToken + maxOut * rates.outUsdPerToken; source = 'rate'; }
+@@ -196,7 +211,7 @@ export function estimateReservation({ job, lane, model, inputChars, rates, laneD
+ export async function reserveSpend({ dir, key, lane, runId, root, jobId, usd, tokens, budget, runTotals, now = Date.now, isAlive }) {
+   return withSpendStore(store => {
+     const day = utcDay(now);
+-    const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane });
++    const decision = capDecision({ budget, run: runTotals, laneToday: laneDayTotals(store, { day }), agent: lane, add: { usd, tokens } });
+     if (decision) return { decision };
+     store.entries[key] = { day, lane, runId, root, jobId, usd, tokens, kind: 'reservation', pid: process.pid, host: os.hostname(), at: new Date(now()).toISOString(), flagged: false };
+     return { decision: null };
+@@ -261,17 +276,22 @@ export function laneDailyTotals(states, { now = () => new Date(), excludeRunId }
+   }
+   return totals;
+ }
+-export function capDecision({ budget, run, laneToday, agent }) {
++// `add` is what the job about to start is expected to cost (its reservation). The cap is HARD: a job is refused when what has been spent and what is already
++// reserved, plus this job's own worst case, would pass the cap (and as before when the cap is already reached).
++export function capDecision({ budget, run, laneToday, agent, add }) {
+   for (const [reason, target, limits, prefix, keys] of [
+     ['run-cap', run, budget, 'run', ['maxUsd', 'maxTokens']],
+     ['lane-cap', laneToday?.[agent] ?? {}, budget.lanes?.[agent] ?? {}, `lane ${agent}`, ['dailyUsd', 'dailyTokens']],
+   ]) {
+     for (const field of keys) {
+       const usd = field.endsWith('Usd'), spent = target?.[usd ? 'usd' : 'tokens'] ?? 0, limit = limits[field];
+-      if (limit === null || limit === undefined || spent < limit) continue;
++      // The hard rule is for dollars; a token cap keeps its earlier meaning (refuse once reached; in-flight reservations are already counted).
++      const extra = usd ? Number(add?.usd) || 0 : 0;
++      if (limit === null || limit === undefined || (spent < limit && spent + extra <= limit + 1e-9)) continue;
+       const key = reason === 'run-cap' ? field : `lane.${agent}.${field}`;
+       const amount = value => usd ? `$${value.toFixed(2)}` : String(value);
+-      return { reason, key, spent, cap: limit, message: `spend-cap: ${prefix} spent ${amount(spent)}${reason === 'lane-cap' ? ' today' : ''} >= ${field} ${amount(limit)}; resume with --raise ${key}=<N> --reason TEXT` };
++      const would = spent < limit ? ` plus this job's worst case ${amount(extra)} would pass` : ' >=';
++      return { reason, key, spent, cap: limit, message: `spend-cap: ${prefix} spent ${amount(spent)}${reason === 'lane-cap' ? ' today' : ''}${would} ${field} ${amount(limit)}; resume with --raise ${key}=<N> --reason TEXT` };
+     }
+   }
+   return null;
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 0041c3a..ea5e653 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -2768,6 +2768,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+     accruedTotal = Math.max(accruedTotal, total);
+     await accrueSpend({ dir: spendDirectory, key: `${rentalKey}/${day}`, lane: 'rented', runId: id, root, jobId: 'rental', usd: Math.max(0, total - dayBases.get(day)), now }).catch(() => {});
+   };
++  const releaseWaiters = [];
++  const notifyRelease = () => releaseWaiters.splice(0).forEach(resolve => resolve());
+   const reservedRunTotals = () => {
+     const totals = runTotals(state);
+     // The meter is live; the saved copy lags by up to a save interval.
+@@ -3018,6 +3020,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+       const finishSpend = async () => {
+         if (!spendEntry) return;
+         const entry = spendEntry;
++        if (entry.local) { inFlight.delete(entry.key); spendEntry = null; notifyRelease(); return; }   // reserved for this run only: nothing in the machine-wide store
+         if (!adapterStarted || attemptResult?.refusedBeforeStart || attemptResult?.setupFailed) {
+           await releaseSpend({ dir: spendDirectory, key: entry.key });
+         } else {
+@@ -3028,7 +3031,7 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+           }
+           await settleSpend({ dir: spendDirectory, key: entry.key, ...cost, tokens: jobSpend(attemptResult).tokens ?? entry.reservation.tokens, now });
+         }
+-        inFlight.delete(entry.key); spendEntry = null;
++        inFlight.delete(entry.key); spendEntry = null; notifyRelease();
+       };
+       const failures = record.routeFailures ??= {};
+       try {
+@@ -3068,9 +3071,22 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+           if (!waitingJobs.size) { clearInterval(waitPoll); waitPoll = null; }
+         }
+         if (await cancelled()) fail('cancelled');
+-        // An unpaid lane with no token cap has nothing to reserve in the machine-wide store.
+-        const unreserved = !PAID_LANES.includes(job.agent) && state.budget.maxTokens === null && state.budget.lanes[job.agent]?.dailyTokens == null;
+-        const admit = unreserved ? Promise.resolve(capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent })) : admissions.then(async () => {
++        // An unpaid lane with no token or daily dollar cap has nothing to keep in the machine-wide store.
++        const unreserved = !PAID_LANES.includes(job.agent) && state.budget.maxTokens === null && state.budget.lanes[job.agent]?.dailyTokens == null && state.budget.lanes[job.agent]?.dailyUsd == null;
++        let lastReservation = null;
++        // One attempt to admit: reserve the job's worst case (a subscription-lane job is reserved for this run only: its list cost is known at the end) or be refused by a cap.
++        const tryAdmit = async () => {
++          if (unreserved) {
++            const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
++            const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars: 0, rates: null, laneDefaults: state.budget.lanes, flatHistory: history });
++            const decision = capDecision({ budget: state.budget, run: reservedRunTotals(), laneToday: {}, agent: job.agent, add: reservation });
++            if (!decision) {
++              const baseline = jobSpend(record), key = `local/${id}/${job.id}#${record.attempts.length + 1}`;
++              spendEntry = { key, reservation, rates: null, record, local: true, baseline: { usd: baseline.usd ?? 0, tokens: baseline.tokens ?? 0 } };
++              inFlight.set(key, spendEntry);
++            }
++            return decision;
++          }
+           // A rented job first passes the rental guard (hours, run cap and day cap including the time the node has been needed).
+           if (job.agent === 'rented') { const held = await rentalGate(); if (held) return held; }
+           const rates = await ratesFor(job);
+@@ -3080,7 +3096,8 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+             // A cache write costs 1.25 times the plain input rate, so cached files are reserved at 1.25 times their size.
+             inputChars += (job.cacheContext ?? []).includes(file) ? Math.ceil(length * 1.25) : length;
+           }
+-          const reservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes });
++          const history = state.jobs.filter(r => r.agent === job.agent && r.model === job.model && r.status === 'complete').map(r => jobSpend(r).usd);
++          const reservation = lastReservation = estimateReservation({ job, lane: job.agent, model: job.model, inputChars, rates, laneDefaults: state.budget.lanes, flatHistory: history });
+           const key = `${crypto.createHash('sha256').update(root).digest('hex').slice(0, 12)}/${id}/${job.id}#${record.attempts.length + 1}`;
+           const { decision } = await reserveSpend({ dir: spendDirectory, key, lane: job.agent, runId: id, root, jobId: job.id, ...reservation, budget: state.budget, runTotals: reservedRunTotals(), now });
+           if (!decision) {
+@@ -3089,8 +3106,19 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+             inFlight.set(key, spendEntry);
+           }
+           return decision;
+-        });
+-        if (!unreserved) admissions = admit.catch(() => {});
++        };
++        // Admissions go one at a time (subscription and paid lanes in the same queue), so each sees every earlier reservation. A refusal that exists only because of money reserved
++        // for jobs still running is not final: it waits for one of them to finish and tries again; money already spent holds the job.
++        const admit = (async () => {
++          for (;;) {
++            const attempt = admissions.then(tryAdmit);
++            admissions = attempt.catch(() => {});
++            const decision = await attempt;
++            if (!decision || decision.reason !== 'run-cap' || !inFlight.size || await cancelled()) return decision;
++            if (capDecision({ budget: state.budget, run: runTotals(state), laneToday: {}, agent: job.agent, add: lastReservation })) return decision;
++            await new Promise(resolve => releaseWaiters.push(resolve));
++          }
++        })();
+         const decision = await admit;
+         if (decision) {
+           await release(); release = null;

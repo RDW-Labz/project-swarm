@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0179",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Accepting a known pre-existing failure could not reach a verdict at all, because proving it re-ran a whole, possibly slow or unrelated, suite on the base instead of just the failing tests in question. A full-suite re-run on a throwaway base checkout can fail to produce any usable result for reasons that have nothing to do with the specific tests being excused, leaving the decision stuck with no way forward.",
+  "rule": "A base comparison is scoped to just the tests actually in question, not the whole suite around them.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: accepting a pre-existing failure now re-runs the base check scoped to just the failing tests' own files, and the resulting summary names exactly which test ids that verdict covers. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#179"
+  }
+}

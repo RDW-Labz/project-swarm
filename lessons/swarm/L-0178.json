@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0178",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A new test landed right at the edge of a per-test CI timeout, passing on one machine and timing out on another the moment anything nearby ran a little slower. A test's own duration was never checked against the timeout it shares with every other test on that platform, so a test that already used most of the budget looked fine right up until it didn't.",
+  "rule": "A newly added test's own duration is checked against a configured share of the per-test timeout before it gets the chance to surprise CI later on a slightly slower run.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: publishing a change now reads every check run's own timing output and warns by name and duration when a test this change added used more than that configured share of the timeout on any platform. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "test",
+    "timeout"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#178"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0045",
+  "project": "parts-request-app",
+  "date": "2026-10-18",
+  "stage": "split",
+  "what": "S8 T-0171: build failed because note-action.ts had a 'use server' directive with sync exports (Opus flagged it as a build risk in wave 1 but it was only noted); env-check failed on four E2E_* vars used by placeholder .e2e.ts specs",
+  "rule": "A review finding that says the build will break must go back to the owning ticket before dependents run; env vars used by e2e specs belong in .env.example in the same ticket.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Removed the directive from note-action.ts and documented E2E_* vars in .env.example by hand",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review",
+    "split",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#45"
+  }
+}

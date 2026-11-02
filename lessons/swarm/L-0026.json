@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0026",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A whole review round's screenshots still needed naming one by one. Even with a directory glob, a round that shared one filename prefix still had to spell out every one of its own files by hand.",
+  "rule": "Let a glob pattern also match by filename prefix, not only by directory and extension.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: job field `contextGlob` now also accepts `dir/prefix*.ext` (still no `**` and no directory wildcards); `validate` echoes the expanded file count per pattern so an unexpectedly empty or huge expansion is visible before dispatch. Documentation: manifest reference.",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#26"
+  }
+}

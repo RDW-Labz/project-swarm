@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0169",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "An edit outside a job's declared scope vanished the moment the run was refused, with no way back short of asking the worker to redo it. An edit made outside a job's own declared outputs was already detected and could block a run from landing, but nothing preserved the edit itself anywhere; a person facing that refusal could only discard it or re-run the job and hope for a cleaner result, even when the edit itself might have been perfectly reasonable and worth keeping.",
+  "rule": "A detected out-of-scope edit is saved in full, not just flagged, the moment it is found, so a person facing it later has a real choice between discarding it and deliberately applying it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: an out-of-scope edit's full content (plus a comparison against the original where one is available) is saved to a per-run location as soon as it is detected; landing the run now refuses outright on any unaddressed one unless a person explicitly chooses to proceed without it or to apply it from where it was saved. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "scope",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#169"
+  }
+}

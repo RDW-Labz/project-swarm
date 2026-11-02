@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0183",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A default retry for a flaky-looking CI failure covered only one narrow pattern of it, missing a failure in a file the change never touched at all. A failure on a file completely outside a change's own diff is just as clearly unrelated to that change as a failure that only happens on one platform, yet only the platform-specific pattern ever triggered an automatic retry, leaving every other kind of unrelated failure to block the change by hand.",
+  "rule": "A default retry should cover any failure clearly unrelated to the change itself, not just one specific pattern of it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the default retry now also applies when a failing test's own file is one the change never touched, and a failure that keeps recurring in the same file across separate attempts is now logged and flagged by name for a follow-up fix, instead of being rerun forever with nothing else ever changing. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "flaky-test",
+    "retries",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#183"
+  }
+}

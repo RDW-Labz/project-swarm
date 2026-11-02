@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0175",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A model or provider route was switched to a new value after only a listing call confirmed the new option existed, and every real message sent through that route then failed once it reached production. A listing call and a real streaming message travel through completely different code paths in most clients, so confirming an option is listed proves nothing about whether a real message can actually complete through it.",
+  "rule": "A model or provider route change needs one real message sent through the project's own client, on the same code path production uses, before it ever lands.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validating a manifest now warns when a job changes a file that looks like a model or provider route and no declared check looks like that real smoke test; separately, an explicitly configured list of route files now makes publishing the change refuse outright unless its own description names the verification that was actually run. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#175"
+  }
+}

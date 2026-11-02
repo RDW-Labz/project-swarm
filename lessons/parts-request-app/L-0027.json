@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0027",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Fonts: worker's globals.css redefined --font-body/--font-mono as named families that were never loaded (shadowing next/font's variables) and used --font-heading while design uses --font-display; /dev/ui hard-coded fontFamily sans-serif and faked components with inline styles; components.css was never imported and globals.css had no @tailwind directives, so Tailwind and every pr-* style were inactive. All 'done' tickets passed their text-only tests",
+  "rule": "UI tickets need a rendered check (screenshot or computed-style test) and must wire styles into the app entry, not only create files.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add a browser smoke step (playwright) to UI tickets: assert computed font-family and a pr-btn style",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "styles",
+    "tests-not-run",
+    "ui",
+    "visual-check"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 27"
+  }
+}

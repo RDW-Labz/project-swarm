@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0177",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A mutant a real test suite genuinely caught was still reported as unproven, because the classification trusted only one specific exit code as a real failure; separately, a mutant went unproven a second time after an unrelated formatting step silently rewrote its own target file first. Some test runners report a real failure under a different exit code than the one classification already recognized, and a formatting step run before mutation testing can rewrite a mutant's own target text without anything noticing before the mutant is scored.",
+  "rule": "A test runner's own known failure exit code, paired with a real failure line in its own output, counts as a kill; a formatting step that runs before mutation testing must never be allowed to rewrite a mutant's own target file unnoticed.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: mutation testing now recognizes a wider, named set of known test-failure exit codes together with a real failure line in the output as a kill, reports an invalid mutant separately from a genuine build failure, and warns whenever a step run before mutation testing changed the bytes of a file a mutant targets. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#177"
+  }
+}

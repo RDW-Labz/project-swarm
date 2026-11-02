@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0083",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A diff guard refused a branch over a call already on its base. A static gate over a changed test file's spawned binaries refused a branch for a call that was already present on the base commit, untouched by that branch's own diff, and unrelated to what the branch actually did.",
+  "rule": "A guard over what a change touches must judge only the lines that change itself adds, never a whole file's current content, or it blames a branch for something it did not do.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the guard now reads only the lines a diff adds to each changed test file before scanning them; one documented binary was added to the allowlist (with a platform note, since \"documented\" here means one platform, not every platform); and a repeatable, owner-decision exemption flag can excuse one file from one named guard, with a required reason, logged and always visible in the resulting PR body — never silently applied, never applied to a file or guard it wasn't given for. Regression coverage is in `tests/field-lessons-batch-k.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#83"
+  }
+}

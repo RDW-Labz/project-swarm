@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/gpu-cli.test.mjs",
+        "tests/gpu-container-review.test.mjs",
+        "tests/gpu-container.test.mjs",
+        "tests/gpu-docker.test.mjs",
+        "tests/gpu-hardening.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/gpu-memory-plan.test.mjs",
+        "tests/gpu-safety.test.mjs",
+        "tests/gpu-vast.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/vast-container.test.mjs"
+      ],
+      "id": "fix-startup-gpu",
+      "context": [
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tools/gpu.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/gpu.mjs (plain ESM; same first line, exports and signatures; change ONLY what follows). (1) Startup failures found on the real card: (a) commonArgs must no longer contain '--prefix-match-unit' and '64' (Nemotron Lightning's cache block size 2128 is not divisible by 64 and vLLM refuses to start); (b) in SHORTLIST, add '--prefix-match-unit', '64' to the args of the qwen3.6-35b-a3b-nvfp4 entry (after '--block-size', '128'); (c) in the qwen3-coder-next-nvfp4 entry remove '--quantization' and 'modelopt_fp4' (the RedHat build is compressed-tensors; vLLM detects it and rejects a conflicting flag), and add '--prefix-match-unit', '64' after its '--block-size', '128'; the nemotron entry gets no prefix-match-unit; add a one-line comment above each of those three entries saying why (Qwen3.6: block size 128; Lightning: block size 2128 is not divisible by 64; Coder-Next: compressed-tensors, no --quantization flag). (2) Fail fast when the server dies during startup: waitHealthy currently polls /v1/models for up to 20 minutes even when vllm already crashed. Give waitHealthy an optional alive() async callback in its options; on every poll round (after the endpoint checks fail) call it, and when it returns false throw fail('gpu-server-died', 'the vLLM server exited during startup' plus, when available, ' (last log lines: ...)' ) using a detail string the callback may return as { alive: false, detail }. In gpuUp build that callback: container mode runs one ssh command (same ssh args as the other calls) 'pgrep -f \"[v]llm serve\" >/dev/null 2>&1 && echo ALIVE || { echo DEAD; tail -n 15 \"$HOME/.swarm-vllm-0.log\" 2>/dev/null; }' and treats stdout starting with 'ALIVE' as alive, otherwise dead with the remaining lines (each cut to 200 characters, at most 15 lines, joined with ' | ') as the detail; docker mode runs 'docker ps -q --filter name=swarm-vllm-0 | grep -q . && echo ALIVE || { echo DEAD; docker logs --tail 15 swarm-vllm-0 2>&1; }' the same way. A failure of the ssh command itself counts as alive (unknown). Call alive at most once per poll round and not before the first failed poll. The error then goes through the existing stop-and-cleanup handling like any other failure. Do not edit tests.\nignoreTests: tests/adapters.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container-review.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-docker.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-hardening.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-lineup.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-memory-plan.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-safety.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu-vast.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/vast-container.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}
