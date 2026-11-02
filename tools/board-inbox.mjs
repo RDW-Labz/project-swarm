@@ -31,7 +31,7 @@ const deadline = (promise, ms, label) => {
 };
 const quote = s => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
 const MAX_PER_PROJECT = 50;
-const INBOX_BLOCKER_MAX_AGE_MS = 7 * 86400000;
+const INBOX_BLOCKER_MAX_AGE_MS = 2 * 86400000;
 const stepsOf = ({ commands, next }) => ({ commands, command: commands[0]?.cmd ?? null, next });
 
 export function ticketReleaseAllowed(ticket, ledger) {

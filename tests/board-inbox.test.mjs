@@ -431,18 +431,23 @@ test('needs-you auto-hide drops stale blockers and superseded ticket rows', asyn
   const A = proj(home, 'a');
   await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
   const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
-  await writeLedger(A.root, createLedger({
+  const eightDaysAgo = new Date(NOW - 8 * 86400000).toISOString();
+  const threeDaysAgo = new Date(NOW - 3 * 86400000).toISOString();
+  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
+  const oneDayAgo = new Date(NOW - 86400000).toISOString();
+  const ledger = createLedger({
     scope,
     tickets: [
       tk('T-9001', 'superseded'),
       tk('T-9002', 'blocked', { blockReason: 'manual', holdQuestion: 'Still need you?' }),
     ],
-  }));
-  const eightDaysAgo = new Date(NOW - 8 * 86400000).toISOString();
-  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
+  });
+  ledger.updatedAt = twoDaysAgo;
+  await writeLedger(A.root, ledger);
   const collect = async () => [
     { kind: 'blocker', id: 'old-block', title: 'Stale', since: eightDaysAgo, unblocks: 0 },
-    { kind: 'blocker', id: 'new-block', title: 'Fresh', since: twoDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-3d', title: 'Three days', since: threeDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-1d', title: 'One day', since: oneDayAgo, unblocks: 0 },
   ];
   const inbox = await boardInbox({
     projects: [A],
@@ -451,5 +456,5 @@ test('needs-you auto-hide drops stale blockers and superseded ticket rows', asyn
     ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null),
     phoneDirectory: path.join(home, 'none'),
   });
-  assert.deepEqual(inbox.items.map(i => i.id).sort(), ['T-9002', 'new-block']);
+  assert.deepEqual(inbox.items.map(i => i.id).sort(), ['T-9002', 'block-1d']);
 });
