@@ -99,6 +99,9 @@
 .hive-shell .hive-pill{display:inline-block;padding:0 6px;border-radius:999px;font-size:8.5px;line-height:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap;color:var(--pc);border:1px solid color-mix(in srgb,var(--pc) 70%,transparent);background:color-mix(in srgb,var(--pc) 14%,transparent);animation:hive-chip 2.4s ease-in-out infinite}
 .hive-shell .hive-pill--need{--pc:var(--red)}
 .hive-shell .hive-pill--live{--pc:var(--green);animation-delay:-1.2s}
+.hive-shell .hive-pill--remote{--pc:var(--violet)}
+.hive-shell .hive-pill--drift{--pc:var(--amber)}
+.hive-shell .hive-card .hive-machine{display:flex;align-items:center;gap:4px;margin-top:2px}
 @keyframes hive-chip{0%,100%{box-shadow:0 0 0 0 transparent}50%{box-shadow:0 0 9px 0 color-mix(in srgb,var(--pc) 55%,transparent)}}
 .hive-shell .hive-card .pb{display:flex;align-items:center;gap:10px;margin-top:4px}
 .hive-shell .hive-card .pb b{color:var(--c);font-weight:500;flex:none}

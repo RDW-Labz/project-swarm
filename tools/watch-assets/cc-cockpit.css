@@ -95,6 +95,7 @@
 .cc-cockpit-shell .ct { padding: 0; }
 .cc-cockpit-shell .ct h1 { font-family: var(--ck-heavy); font-weight: 900; font-size: 56px; letter-spacing: -.03em; margin: 16px 0 0; line-height: 1; color: #f4f5f8; overflow-wrap: anywhere; }
 .cc-cockpit-shell .ct .sub2 { font-family: var(--ck-heavy); font-weight: 800; font-size: 28px; letter-spacing: -.015em; color: var(--ck-accent); margin: 10px 0 24px; line-height: 1.1; }
+.cc-cockpit-shell .machine-meta { margin-top: 2px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
 .cc-cockpit-shell .stripl { display: flex; align-items: baseline; gap: 10px; font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .16em; color: #d9dde7; text-transform: uppercase; white-space: nowrap; min-width: 0; }
 .cc-cockpit-shell .stripl .st { flex: none; }
 .cc-cockpit-shell .stripl .lg { order: 1; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
