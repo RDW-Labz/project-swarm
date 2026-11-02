@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0013",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A wiring job added an undisclosed request. Told to reuse an existing data fetch, the worker found the component on the data path outside its declared outputs, quietly added a new request instead, and mentioned it only in a side field; two existing tests broke and a follow-up job was needed (cost: $1.18 plus the follow-up).",
+  "rule": "Scout the data path — who mounts or calls whom — before a wiring job, and put every file on that path in its outputs; a worker that cannot meet a rule inside its outputs must return `blocked`, never work around it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the worker preamble states the blocked-not-worked-around rule; `inspect --results` warns `outside outputs: <job>: <path>` when a job's `crossJobNames` or `notes` name a real repo path outside its own outputs. Documentation: orchestration.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "spend",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#13"
+  }
+}

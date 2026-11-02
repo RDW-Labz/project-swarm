@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0153",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's own CLI shell died on a transient provider error, and the orchestrator treated that exactly like a real worker failure. , refusing to salvage its partial (but real) progress even though a second attempt moments later, on an unrelated question, succeeded at once.",
+  "rule": "A transient provider error (a 5xx or a 429 status) is not a worker mistake.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a job that ends on such a status is retried once, over its own kept workspace, with a short continuation note, before it is ever scored failed; a salvage of a run also now accepts a failed job whose failure is this kind of transient error and whose kept workspace still holds real output changes. Regression coverage is in `tests/field-lessons-batch-t1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "retries",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#153"
+  }
+}

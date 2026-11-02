@@ -1,3 +1,4 @@
+import './_isolate-config.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -47,7 +48,8 @@ test('rejects traversal, absolute paths, secrets, collisions, and executable ada
   assert.throws(() => validateManifest(manifest([job(), job({ id: 'second' })])), /collision/);
   assert.throws(() => validateManifest(manifest([job({ command: '/tmp/evil' })])), /Unknown/);
   assert.throws(() => validateManifest(manifest([job({ agent: 'unknown-agent' })])), /Unsupported/);
-  assert.throws(() => validateManifest({ ...manifest(), concurrency: 33 }), /Concurrency/);
+  assert.throws(() => validateManifest({ ...manifest(), concurrency: 2049 }), /Concurrency/);
+  assert.doesNotThrow(() => validateManifest({ ...manifest(), concurrency: 512 }));
 });
 
 test('refuses symlink context and launches no workers', async t => {
@@ -142,7 +144,7 @@ test('every job, CLI or API, must name an explicit model; there is no CLI defaul
   assert.throws(() => validateManifest(manifest([job({ model: undefined })])), /writer requires an explicit model; the runner never uses a CLI default/);
   assert.throws(() => validateManifest(manifest([job({ model: '' })])), /writer requires an explicit model; the runner never uses a CLI default/);
   assert.doesNotThrow(() => validateManifest(manifest([job({ model: 'sonnet' })])));
-  assert.throws(() => validateManifest(manifest([job({ id: 'openai-job', agent: 'openai', model: undefined })])), /openai-job requires an explicit model; the runner never uses a CLI default/);
+  assert.throws(() => validateManifest(manifest([job({ id: 'openai-job', agent: 'openai', sensitive: false, model: undefined })])), /openai-job requires an explicit model; the runner never uses a CLI default/);
 });
 
 test('bounds simultaneous fresh processes to manifest concurrency', async t => {
@@ -682,9 +684,25 @@ test('ask refuses without --model, --context, or a non-empty question', async t 
   await assert.rejects(askRun(root, { model: 'sonnet', context: ['input.txt'], question: '   ' }), /non-empty question/);
 });
 
-test('ask refuses codex as its agent', async t => {
-  const root = await fixture(t);
-  await assert.rejects(askRun(root, { model: 'test-model', context: ['input.txt'], agent: 'codex', question: 'What next?' }), /not codex/);
+import { resolveAskRoute as resolveAskRouteFor417 } from '../tools/swarm.mjs';
+
+test('lesson #417: ask runs a named CLI agent directly when no read-only fallback is configured', () => {
+  const direct = resolveAskRouteFor417({ agent: 'codex', model: 'test-model' }, {});
+  assert.equal(direct.agent, 'codex');
+  assert.equal(direct.model, 'test-model');
+  assert.equal(direct.route.direct, true);
+  assert.equal(direct.route.tier, null);
+  assert.match(direct.warning, /^ask-agent-direct: no read-only fallback configured for codex\/test-model; running it directly/);
+  const tiers = { cheap: { agent: 'codex', model: 'gpt-6-luna' }, mid: { agent: 'codex', model: 'gpt-reserve' } };
+  for (const [options, model, tier] of [[{ tier: 'cheap' }, 'gpt-6-luna', 'cheap'], [{ agent: 'codex', model: 'gpt-reserve' }, 'gpt-reserve', 'mid'], [{ agent: 'codex', model: 'unlisted' }, 'unlisted', null]]) {
+    const route = resolveAskRouteFor417(options, { tiers, fallback: { cheap: { agent: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' } } });
+    assert.deepEqual([route.agent, route.model, route.route.tier, route.route.direct], ['codex', model, tier, true]);
+  }
+  const ambiguous = resolveAskRouteFor417({ agent: 'codex', model: 'gpt-6-luna' }, { tiers: { cheap: tiers.cheap, mid: tiers.cheap } });
+  assert.deepEqual([ambiguous.agent, ambiguous.route.direct, ambiguous.route.tier], ['codex', true, null]);
+  const swapped = resolveAskRouteFor417({ tier: 'cheap' }, { tiers: { cheap: { ...tiers.cheap, fallback: { agent: 'claude', model: 'haiku' } } } });
+  assert.deepEqual([swapped.agent, swapped.model, swapped.route.direct], ['claude', 'haiku', undefined]);
+  assert.throws(() => resolveAskRouteFor417({ tier: 'cheap' }, { tiers: { cheap: { ...tiers.cheap, fallback: { agent: 'unknown', model: 'x' } } } }), { code: 'ask-agent-fallback-unconfigured' });
 });
 
 test('ask builds a read-only job, runs it like run, and returns the contract-shaped result with a fake claude CLI', async t => {
@@ -728,7 +746,7 @@ test('inspect --results prints only the contract shape', async t => {
   assert.equal(report.status, 'complete');
   assert.deepEqual(report.warnings, []);
   assert.equal(report.jobs.length, 1);
-  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'outputs', 'result', 'resultSource', 'status', 'tokens'].sort());
+  assert.deepEqual(Object.keys(report.jobs[0]).sort(), ['actualModel', 'costUsd', 'id', 'model', 'modelMismatch', 'outputs', 'result', 'resultSource', 'status', 'tokens', 'transcript'].sort());
   assert.equal(report.jobs[0].id, 'writer');
   assert.equal(report.jobs[0].costUsd, 0.1);
   assert.deepEqual(report.jobs[0].result, { files_changed: ['input.txt'], notes: ['done'] });

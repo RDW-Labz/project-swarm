@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0025",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "swarm scope contracts generated mock-server whose POST endpoints return bodies failing their own response validators (submitRequest, replyTap fail the generated contract test against the mock; GETs pass); contracts only accept OpenAPI JSON while split 'contract' tickets emit TypeScript",
+  "rule": "Generated mock must satisfy its own contract tests; contract tickets should emit OpenAPI.",
+  "caughtBy": "test",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "make mock POST return seed response; make contract ticket output api.json",
+  "guard": {
+    "kind": "contract-test",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "contracts",
+    "mock-drift",
+    "openapi"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 25"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0197",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed test run could not create its own temp directory where the sandbox would actually allow it. The test suite's own setup created its temporary directory using the plain OS default, which a sandboxed worker could not write to, so a sandboxed job attempting to run tests had no writable location for them at all.",
+  "rule": "A test suite's own temp directory honors an explicit override before falling back to the OS default, so a sandboxed caller can point it somewhere writable.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the test suite's shared setup now honors a dedicated test-temp environment variable (falling back to the ordinary temp-directory variable) when creating its own temp directory. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#197"
+  }
+}

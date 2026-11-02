@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-fix",
+      "type": "fix",
+      "agent": "auto",
+      "prompt": "Reproduce a routing failure when all configured models are missing, then fix its error message and add a regression test.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ]
+    }
+  ]
+}

@@ -5,6 +5,7 @@
     {
       "id": "openai-smoke",
       "agent": "openai",
+      "sensitive": false,
       "model": "gpt-4.1-mini",
       "prompt": "Write one sentence acknowledging this bounded communication test. Do not claim to run tests.",
       "context": [],

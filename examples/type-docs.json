@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-docs",
+      "type": "docs",
+      "agent": "auto",
+      "prompt": "Write a short guide explaining auto routing, sensitivity, and lane failures using the supplied router.",
+      "context": [
+        "tools/router.mjs"
+      ],
+      "outputs": [
+        "docs/auto-routing-guide.md"
+      ]
+    }
+  ]
+}

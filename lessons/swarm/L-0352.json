@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0352",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "Build tools need durable storage and availability checks. Keep toolchains outside temporary storage and report missing inventory executables before relying on them. Reinstall guidance is displayed for review, never executed from documentation.",
+  "rule": "Build tools need durable storage and availability checks.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "review-item",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#352"
+  }
+}

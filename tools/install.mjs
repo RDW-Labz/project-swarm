@@ -4,11 +4,14 @@
 import fs from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import os from 'node:os';
+import nodeCrypto from 'node:crypto';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { installSwarmCommand } from './swarm-bin.mjs';
+import { zshCompletion } from './completion.mjs';
 const packageRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const execFileAsync=promisify(execFile);
 const AGENT_HOMES=['.claude','.codex'];
@@ -145,10 +148,16 @@ export async function installUser({source=packageRoot,home=os.homedir(),dev=fals
    written.push(destination);
   }
  }
- const record={version:pkg.version,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner};
+ // A real `swarm` executable for agents and scripts (non-interactive shells never load aliases),
+ // and the zsh completion file. Neither edits a shell profile; doctor says what is left to do.
+ const swarmCommand=await installSwarmCommand({home,runner});
+ const completionFile=path.join(home,'.project-swarm','completions','_swarm');
+ await fs.mkdir(path.dirname(completionFile),{recursive:true});
+ await fs.writeFile(completionFile,zshCompletion());
+ const record={version:pkg.version,dev,installedAt:new Date().toISOString(),skillTargets:written,versionDir,runner,swarmCommand:swarmCommand.path,completion:completionFile};
  const recordPath=path.join(source,'.swarm-install.json');
  await fs.writeFile(recordPath,`${JSON.stringify(record,null,2)}\n`);
- return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner};
+ return {status:'installed',version:pkg.version,source,skillTargets:written,skipped,installRecord:recordPath,versionDir,runner,swarmCommand,completionFile};
 }
 
 const AGENT_START='<!-- project-swarm:start -->';
@@ -186,6 +195,158 @@ async function ensureSwarmIgnore(root){
  return true;
 }
 
+// After each Claude Code turn, snapshot the project journal. It needs no model, and it keeps the state
+// current even if the next turn is rate limited. The guard makes it a no-op where `swarm` is not on PATH.
+// Existing hooks and settings are kept; an unreadable settings file is left alone.
+export const CHECKPOINT_HOOK='command -v swarm >/dev/null 2>&1 && swarm checkpoint --quiet || true';
+async function ensureCheckpointHook(root){
+ // Personal and local to this checkout: Claude Code reads settings.local.json and it is not committed, so
+ // the hook is never pushed onto collaborators who do not run swarm.
+ const relative='.claude/settings.local.json';
+ const destination=await safeTarget(root,relative,{createParents:true});
+ const before=await readOptional(destination);
+ let settings={};
+ if(before.trim()){
+  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.json is not valid JSON'};}
+  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.json is not an object'};
+ }
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
+ settings.hooks??={};
+ if(settings.hooks.Stop!==undefined&&!Array.isArray(settings.hooks.Stop))return {status:'skipped',reason:'hooks.Stop is not a list'};
+ settings.hooks.Stop??=[];
+ const present=settings.hooks.Stop.some(entry=>Array.isArray(entry?.hooks)&&entry.hooks.some(hook=>hook?.command===CHECKPOINT_HOOK));
+ if(present)return {status:'unchanged'};
+ settings.hooks.Stop.push({hooks:[{type:'command',command:CHECKPOINT_HOOK}]});
+ const temp=`${destination}.swarm-tmp`;
+ await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`);
+ await fs.rename(temp,destination);
+ await ensureLocalSettingsIgnored(root);
+ return {status:before.trim()?'updated':'created'};
+}
+
+// Hooks installed into the personal settings file `.claude/settings.local.json` (git-ignored, like the checkpoint hook): the Orchestrator lane's observer hooks (PreToolUse, PostToolUse,
+// Stop, UserPromptSubmit: tools/orchestrator-hook.mjs appends one small event, prints nothing) and the hand-build guard (a PreToolUse hook: tools/handbuild-guard.mjs). Each command points at
+// the install's `current` folder, so it keeps working after `swarm update`, and is wrapped so that a missing script (before the update that brings it) is a no-op, never an error.
+// An entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
+export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
+export const GUARD_MATCHER='Edit|Write|MultiEdit|NotebookEdit|Bash';
+const hookCommand=(script,arg)=>`test -f ${JSON.stringify(script)} && node ${JSON.stringify(script)}${arg?` ${arg}`:''} || true`;
+const commandOf=hook=>typeof hook?.command==='string'?hook.command:'';
+export function stableInstallDir(installRoot){
+ const parent=path.dirname(installRoot);
+ return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
+}
+async function readSettings(root){
+ const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
+ const before=await readOptional(destination);
+ let settings={};
+ if(before.trim()){
+  try{settings=JSON.parse(before);}catch{return {destination,before,problem:'settings.local.json is not valid JSON'};}
+  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {destination,before,problem:'settings.local.json is not an object'};
+ }
+ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {destination,before,problem:'hooks is not an object'};
+ settings.hooks??={};
+ return {destination,before,settings};
+}
+async function writeSettings(root,destination,settings,before){
+ // A temp file with its own name, created exclusively (a planted link at a fixed name cannot redirect the write), with the old file's mode, then renamed over.
+ let mode=0o600;
+ try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* a new file */}
+ const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
+ await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`,{flag:'wx',mode});
+ await fs.rename(temp,destination);
+ await ensureLocalSettingsIgnored(root);
+ return {status:before.trim()?'updated':'created'};
+}
+// specs: [{event, matcher?, script, arg?}]. marker: the script name that identifies this feature's entries.
+async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
+ const read=await readSettings(root);
+ if(read.problem)return {status:'skipped',reason:read.problem};
+ const {destination,before,settings}=read;
+ if(refreshOnly){
+  const commands=Object.values(settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(commandOf);
+  if(!commands.some(c=>c.includes(CHECKPOINT_HOOK)||specs.some(sp=>c.includes(sp.script))))return {status:'absent'};
+ }
+ let changed=false;
+ for(const sp of specs){
+  if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
+  const command=hookCommand(path.join(stableInstallDir(installRoot),'tools',sp.script),sp.arg);
+  const list=settings.hooks[sp.event]??=[];
+  let found=false;
+  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`))){found=true;if(hook.command!==command){hook.command=command;changed=true;}if(sp.matcher&&entry.matcher!==sp.matcher){entry.matcher=sp.matcher;changed=true;}}
+  if(!found){list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;}
+ }
+ if(!changed)return {status:'unchanged'};
+ return writeSettings(root,destination,settings,before);
+}
+const ORCHESTRATOR_SPECS=Object.entries(ORCHESTRATOR_HOOK_EVENTS).map(([event,arg])=>({event,matcher:event==='PreToolUse'||event==='PostToolUse'?'*':undefined,script:'orchestrator-hook.mjs',arg}));
+// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
+// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
+export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
+ try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
+ return ensureHookSpecs(root,installRoot,ORCHESTRATOR_SPECS,{refreshOnly});
+}
+// The hand-build guard: installed on request (`swarm handbuild install`) and by `swarm init` for a new project; `swarm update` only refreshes where it is already installed.
+export async function ensureHandbuildGuard(root,installRoot,{refreshOnly=false,honorRemoved=false}={}){
+ // `swarm handbuild uninstall` leaves a marker: a later `swarm init` does not bring the guard back (only `swarm handbuild install` does).
+ if(honorRemoved){try{await fs.access(path.join(root,'.swarm','handbuild','removed'));return {status:'removed-by-owner'};}catch{/* no marker */}}
+ await fs.rm(path.join(root,'.swarm','handbuild','removed'),{force:true}).catch(()=>{});
+ if(refreshOnly){
+  const read=await readSettings(root);
+  if(read.problem)return {status:'skipped',reason:read.problem};
+  const has=Object.values(read.settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).some(hook=>commandOf(hook).includes('handbuild-guard.mjs'));
+  if(!has)return {status:'absent'};
+ }
+ return ensureHookSpecs(root,installRoot,[{event:'PreToolUse',matcher:GUARD_MATCHER,script:'handbuild-guard.mjs'}],{refreshOnly:false});
+}
+export async function removeHandbuildGuard(root){
+ const read=await readSettings(root);
+ if(read.problem)return {status:`not removed: ${read.problem}`};
+ const {destination,before,settings}=read;
+ let changed=false;
+ for(const [event,list] of Object.entries(settings.hooks)){
+  if(!Array.isArray(list))continue;
+  const kept=list.map(entry=>Array.isArray(entry?.hooks)?{...entry,hooks:entry.hooks.filter(hook=>!commandOf(hook).includes('handbuild-guard.mjs'))}:entry).filter(entry=>!Array.isArray(entry?.hooks)||entry.hooks.length>0);
+  if(kept.length!==list.length||JSON.stringify(kept)!==JSON.stringify(list)){settings.hooks[event]=kept;changed=true;}
+ }
+ // the owner's choice is remembered: init does not bring the guard back
+ try{await fs.mkdir(path.join(root,'.swarm','handbuild'),{recursive:true});await fs.writeFile(path.join(root,'.swarm','handbuild','removed'),'');}catch{/* best effort */}
+ if(!changed)return {status:'was not installed'};
+ await writeSettings(root,destination,settings,before);
+ return {status:'removed'};
+}
+
+async function ensureLocalSettingsIgnored(root){
+ const destination=await safeTarget(root,'.gitignore');
+ const before=await readOptional(destination);
+ if(before.split(/\r?\n/).some(line=>['.claude/settings.local.json','/.claude/settings.local.json'].includes(line.trim())))return;
+ await fs.writeFile(destination,before+(before&&!before.endsWith('\n')?'\n':'')+'.claude/settings.local.json\n');
+}
+
+// The pointer file `.project-swarm.json` also holds the project's own profile (budget, UI, verify, migrations rule): it is never rewritten from scratch. The old file is copied to
+// `.project-swarm.json.bak-<time>` first, only `install` and `version` change, the new file is written beside it and renamed over it, and a file that is not a JSON object is refused
+// (nothing is written) instead of being replaced by a bare pointer.
+export async function writePointer(root,{install,version}){
+ const destination=await safeTarget(root,'.project-swarm.json');
+ let before=null,existing={};
+ try{before=await fs.readFile(destination,'utf8');}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(before!==null){
+  try{existing=JSON.parse(before);}catch{throw Error(`.project-swarm.json in ${root} is not valid JSON; fix it by hand (a backup was not needed, nothing was changed)`);}
+  if(!existing||typeof existing!=='object'||Array.isArray(existing))throw Error(`.project-swarm.json in ${root} is not a JSON object; fix it by hand (nothing was changed)`);
+  if(existing.install===install&&existing.version===version)return {changed:false,backup:null};
+  const backup=`${destination}.bak-${Date.now()}-${nodeCrypto.randomBytes(3).toString('hex')}`;
+  await fs.writeFile(backup,before,{flag:'wx',mode:0o600});
+  const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(temp,`${JSON.stringify({...existing,install,version},null,2)}\n`);
+  await fs.rename(temp,destination);
+  return {changed:true,backup};
+ }
+ const temp=`${destination}.tmp-${process.pid}-${Date.now()}`;
+ await fs.writeFile(temp,`${JSON.stringify({install,version},null,2)}\n`);
+ await fs.rename(temp,destination);
+ return {changed:true,backup:null};
+}
+
 // Links one project to a shared install instead of copying the runner into it. The project
 // gets a small pointer file; the install root keeps a deduped registry of linked projects.
 export async function installProject(targetDirectory,{source=packageRoot,agentFiles=true}={}){
@@ -193,9 +354,7 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
  if(!(await fs.stat(root)).isDirectory())throw Error('Target must be an existing project directory');
  const installRoot=await fs.realpath(source);
  const pkg=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8'));
- const pointer={install:installRoot,version:pkg.version};
- const pointerDestination=await safeTarget(root,'.project-swarm.json');
- await fs.writeFile(pointerDestination,`${JSON.stringify(pointer,null,2)}\n`);
+ await writePointer(root,{install:installRoot,version:pkg.version});
  const registryPath=path.join(installRoot,'.swarm-projects.json');
  let registry=[];
  try{registry=JSON.parse(await fs.readFile(registryPath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
@@ -209,15 +368,51 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
   try{
    await fs.writeFile(destination,await fs.readFile(path.join(installRoot,from)),{flag:'wx'});
    added.push(to);
-  }catch(error){if(error.code!=='EEXIST')throw error;kept.push(to);}
+   }catch(error){if(error.code!=='EEXIST')throw error;kept.push(to);}
+ }
+ const vendorRoot=path.join(installRoot,'templates/coordination/skills');
+ let vendorSkills=[];
+ try{vendorSkills=(await fs.readdir(vendorRoot,{withFileTypes:true})).filter(entry=>entry.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name));}
+ catch(error){if(error.code!=='ENOENT')throw error;}
+ for(const entry of vendorSkills){
+  const name=entry.name,relativeDir=`coordination/skills/${name}`,sourceDir=path.join(vendorRoot,name),destinationDir=await safeTarget(root,relativeDir);
+  const files=await listFiles(sourceDir);
+  let exists=false;
+  try{
+   const stat=await fs.lstat(destinationDir);
+   if(stat.isSymbolicLink())throw Error(`Symlink refused: ${relativeDir}`);
+   if(!stat.isDirectory())throw Error(`Non-directory parent: ${relativeDir}`);
+   exists=true;
+  }catch(error){if(error.code!=='ENOENT')throw error;}
+  if(exists){
+   for(const file of files)kept.push(`${relativeDir}/${file}`);
+   continue;
+  }
+  await fs.mkdir(await safeTarget(root,'coordination/skills',{createParents:true}),{recursive:true});
+  try{await fs.mkdir(destinationDir);}catch(error){
+   if(error.code!=='EEXIST')throw error;
+   const stat=await fs.lstat(destinationDir);
+   if(stat.isSymbolicLink())throw Error(`Symlink refused: ${relativeDir}`);
+   if(!stat.isDirectory())throw Error(`Non-directory parent: ${relativeDir}`);
+   for(const file of files)kept.push(`${relativeDir}/${file}`);
+   continue;
+  }
+  for(const file of files){
+   const to=`${relativeDir}/${file}`,destination=await safeTarget(root,to,{createParents:true});
+   await fs.copyFile(path.join(sourceDir,file),destination);
+   added.push(to);
+  }
  }
  const agentPaths=[];
- if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
+ if(agentFiles)for(const [template,to] of [['AGENTS.md','AGENTS.md'],['CLAUDE.md','CLAUDE.md'],['GEMINI.md','GEMINI.md'],['cursor-rule.mdc','.cursor/rules/project-swarm.mdc']]){
   await writeAgentPointer(root,to,await fs.readFile(path.join(installRoot,'templates/agent-pointers',template),'utf8'),installRoot);
   agentPaths.push(to);
  }
+ const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
+ const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
+ const handbuildGuard=agentFiles?await ensureHandbuildGuard(root,installRoot,{honorRemoved:true}):null;
  const gitignoreAdded=await ensureSwarmIgnore(root);
- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,gitignoreAdded};
+ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,gitignoreAdded};
 }
 
 if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0005",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Logging hid a race. Probes changed timing enough to mask the failure.",
+  "rule": "Record events into an in-memory array and print only on failure.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: the skill's “Tracing races” guidance.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "race-condition"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#5"
+  }
+}

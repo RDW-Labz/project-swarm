@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-gpu-vast",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu-docker.test.mjs",
+        "tools/gpu.mjs"
+      ],
+      "outputs": [
+        "tests/gpu-vast.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-vast.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\", second line \"import './_isolate-config.mjs';\"). Copy envFor, options and fakes and MODEL from tests/gpu-docker.test.mjs. Tests for non-standard ssh port and root-without-sudo support in tools/gpu.mjs: (1) gpuUp(options({ sshPort: 2222 }), deps): every recorded ssh call (calls with argv) contains '-p' followed by '2222' before the '--' element; the recorded openTunnel call receives sshOptions that include '-p' and '2222' (extend fakes' openTunnel to record the whole argument object as { tunnel: ports, sshOptions }; read how fakes records it and adapt, keeping the existing shape working); the session file (readSessionFile) has sshOptions containing '-p' and '2222'. (2) gpuDown(deps) for that session: its ssh call argv contains '-p','2222' before '--'. (3) gpuStatus does not throw for that session. (4) invalid sshPort values 0, 70000, 1.5, '22' make validateUpOptions or gpuUp reject with /gpu-option-invalid/. (5) The first ssh command (the one whose last argument starts with 'nvidia-smi -L') contains 'id -u' and the start script's timer line contains 'shutdown -h now ||'. Use only names the files export; keep it short."
+    }
+  ]
+}

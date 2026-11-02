@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-14",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "spend caps, concurrency limits, cost accounting for cached prompts",
+      "type": "review",
+      "prompt": "Safety review of Phase 14 (throughput). The whole change is coordination/review/phase14.diff (tools/swarm.mjs, tools/lanes.mjs, tools/api-adapters.mjs, tools/board.mjs); docs/throughput.md explains it. Check with evidence: (1) spend caps and admission: with concurrency raised to 2048 and API jobs no longer taking a host slot, can a run overshoot a USD or token cap (reservations, admissions chain, cap checks per job, paid lanes, daily lane caps), can adaptive lanes exceed the configured concurrency or the machine-wide slot file limit; (2) save/cancel changes: the new queueSave (per-call waiters), the cached cancel flag (250 ms) and the adaptive save window: can a job miss a cancel for long, can state be lost or a waiter hang or reject wrongly on a failed save, is the final state always written before runManifest returns, can a stale save overwrite a newer terminal state; (3) lanes.mjs read cache by file signature plus 1 s: can a stale machine-wide in-flight count let two runs exceed a lane cap, dead-slot liveness, pause visibility between schedulers; (4) board.mjs memoization of repo identity for 2 s: stale identity after a repo is replaced, cross-repo conflicts missed; (5) cacheContext: cost accounting for cache writes and reads, whether the pre-request worst-case check still bounds spend, prompt-injection or data-leak aspects of the split prompt, whether a protected path in cacheContext is still blocked; (6) the compact state.json above 200 jobs: any reader that expects pretty-printed text. Report findings ranked high/medium/low with file and line.",
+      "context": [
+        "docs/throughput.md",
+        "coordination/review/phase14.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 1800000
+    }
+  ]
+}

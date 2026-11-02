@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-a1-followup",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "security gate bypass paths, offline scan, merge queue and router changes",
+      "type": "review",
+      "outputs": [],
+      "timeoutMs": 1800000,
+      "context": [
+        "tools/security-gate.mjs",
+        "tools/security-rules/semgrep-local.yml",
+        "docs/security-gate.md",
+        "coordination/review/f-followup.diff"
+      ],
+      "prompt": "Focused review of the A1 security gate follow-up (diff: coordination/review/f-followup.diff against main for tools/swarm.mjs and tools/router.mjs, plus the full tools/security-gate.mjs and the pinned rules file). Owner requirements: (a) EVERY integration is gated, no bypass (plain integrate now runs the gate on the planned writes before the first write; the queue runs it before the checks); (b) sensitive projects run Semgrep OFFLINE: pinned local rules, metrics off, no network; (c) a change to a pnpm, yarn, Go, Cargo (and other) manifest or lockfile blocks with an inbox item until parsed (fail closed); (d) router: Haiku default, GPU lane only for 700+ ready non-sensitive tickets, Codex for hard tickets. Check with evidence (file:line): (1) BYPASS: list every code path that writes project files from a run or changes the checkout (integrate plain, integrate --queue, requeue/merge child runs, salvage, accept-blocked, --jobs, redcheck, ship/squash/clean-branch, merge jobs, autopilot, the human-job groups, deferred jobs, scaffold/init that write files) and say which are gated and which are not; the gate reads the policy from the profile on disk before writes (can a run change .project-swarm.json first and then integrate? is that file protected?); error/exception paths in the gate that return ok (a thrown runSecurityGate in plain integrate or the queue: does it fail closed or open?); securityGate options (policy/exec/fetchImpl) reachable from the CLI? (2) OFFLINE SCAN: can the local semgrep run reach the network (version check, metrics, rule fetch, semgrep login, SEMGREP_APP_TOKEN in env, the minimal env passing PATH only; does semgrep read ~/.semgrep settings or a project .semgrepignore / .semgrep.yml / semgrep config in the repo that a batch wrote), is the pinned rules hash check TOCTOU-safe (hash read vs file used by semgrep: semgrep reads the path again), what happens if the rules file is replaced by a symlink, are file paths passed after -- safe, can a batch-written file make semgrep run code (no), timeouts; is the rule set meaningfully protective and are there obvious false-negative classes worth noting; (3) UNPARSED MANIFESTS: the list is complete enough? (package.json workspaces, lock files for npm are parsed; what about .npmrc, .nvmrc, Dockerfile, requirements via -r includes, setup.cfg, tox, Makefile, GitHub workflows (supply chain), .gitmodules, vendor dirs), deletion handling, case-insensitive file systems (Cargo.TOML), path tricks, the allowUnparsedManifests allow-list matching by basename (is a basename allow too broad? a sub/dir/go.mod when go.mod is allowed); (4) ROUTER: ready count semantics (auto jobs in the manifest vs jobs ready now), the hard flag, any way a sensitive job reaches rented, ready counts in lead-child runs (child manifests are small so the GPU is never used there: is that acceptable?); (5) correctness regressions in plain integrate (warnings, state.securityNotes, recordGate with jobs list, error codes, partial states, the journal not started when blocked, locks released on the throw). Rank high, medium, low; for each: where, how it fails, smallest fix. End with a final single line of JSON: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":{\"high\":N,\"medium\":N,\"low\":N}}."
+    }
+  ]
+}

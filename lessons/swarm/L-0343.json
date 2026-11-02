@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0343",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "Vendored runtime dependencies need coverage. Inspect a vendored package's runtime metadata and report requirements absent from both direct dependencies and vendored artifacts. A source override alone does not establish dependency coverage.",
+  "rule": "Vendored runtime dependencies need coverage.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "scope"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#343"
+  }
+}

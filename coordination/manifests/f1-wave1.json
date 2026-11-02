@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f1-rules",
+      "context": [],
+      "outputs": [
+        "tools/security-rules/semgrep-local.yml"
+      ],
+      "prompt": "Write tools/security-rules/semgrep-local.yml: the PINNED LOCAL Semgrep rule set for the A1 security gate's offline code scan (no network, no registry). Valid Semgrep YAML with a top-level 'rules:' list; every rule has id (prefix swarm-), message (one short plain sentence, no code), severity (ERROR or WARNING), languages, a pattern (or patterns / pattern-either), and metadata { category: security }. Rules: JavaScript and TypeScript: swarm-js-exec-injection (child_process exec or execSync called with string concatenation or a template literal containing an interpolation: use pattern-either over exec($A + $B), execSync($A + $B), exec(`...${$X}...`), execSync(`...${$X}...`)), swarm-js-eval (eval($X) and new Function(...)), swarm-js-sql-concat ($DB.query($A + $B) and a template literal with interpolation, and .execute), swarm-js-weak-hash (crypto.createHash('md5') and 'sha1'), swarm-js-tls-off (rejectUnauthorized: false, and process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'), swarm-js-innerhtml ($X.innerHTML = $Y where $Y is not a string literal), swarm-js-hardcoded-jwt-secret (jwt.sign($P, '...') with a string literal secret), swarm-js-random-secret ($V = Math.random() style assignment with metavariable-regex on $V (?i)(token|secret|password|nonce|apikey|key)). Python: swarm-py-subprocess-shell (subprocess.$F(..., shell=True)), swarm-py-pickle (pickle.loads($X) and pickle.load($X)), swarm-py-yaml-load (yaml.load($X) with no Loader argument: use patterns with pattern-not for Loader=...), swarm-py-requests-verify-off (requests.$F(..., verify=False)), swarm-py-flask-debug (app.run(..., debug=True)), swarm-py-sql-format ($C.execute(\"...\" % ...), $C.execute(\"...\".format(...)), $C.execute(f\"...\")), swarm-py-weak-hash (hashlib.md5(...) and hashlib.sha1(...)). Keep each rule small and correct Semgrep syntax; no comments with secrets; no regexes that can backtrack badly."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/gpu.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/router.test.mjs"
+      ],
+      "id": "f1-router",
+      "context": [
+        "tools/router.mjs"
+      ],
+      "outputs": [
+        "tools/router.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/router.mjs (plain ESM; same first line, exports and signatures; change ONLY this). Owner router decision: Haiku (anthropic) is the default worker lane; the rented GPU lane is used only when at least 700 non-sensitive tickets are ready; Codex takes the hard tickets. (1) Export RENTED_MIN_READY = 700. routeJob gains an option ready (number of auto jobs ready in this run, default 0) and useRented now also requires ready >= (Number.isFinite(lanes.rented?.minReady) ? lanes.rented.minReady : RENTED_MIN_READY); with fewer ready jobs the rented lane is never a candidate (the other conditions stay: a configured lane with a model, job.sensitive === false, a complete contract). (2) A job with job.hard === true (not tier expensive, which keeps its claude-only rule) puts codex first in the candidate order (before the type route and the cheap order) when codex is configured and accepted; the failure limit logic stays (2 failures on codex then the next lane); the reason text for the pick is 'hard ticket: codex first'. Everything else, including the rented escalation (rented fails once, then Haiku, then Codex) and the rule that sensitive jobs never go to rented, stays exactly as it is. Do not edit tests.\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/gpu.test.mjs",
+        "tests/lanes.test.mjs",
+        "tests/leads-run.test.mjs",
+        "tests/rented-run.test.mjs"
+      ],
+      "id": "f1-lanes",
+      "context": [
+        "tools/lanes.mjs"
+      ],
+      "outputs": [
+        "tools/lanes.mjs"
+      ],
+      "prompt": "Return edits (exact old text found once, and its replacement); change nothing else. In tools/lanes.mjs the line containing concurrency: ({ hermes: 1, cursor: 8, codex: 6, claude: 4, openrouter: 64, anthropic: 16 })[agent] ?? 32 changes only the anthropic value from 16 to 32. Use the exact existing text of that expression as the anchor.\nignoreTests: tests/gpu.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/lanes.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/leads-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/rented-run.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/init-profile.test.mjs",
+        "tests/phase12-cli.test.mjs"
+      ],
+      "id": "f1-profile",
+      "context": [
+        "tools/init-profile.mjs"
+      ],
+      "outputs": [
+        "tools/init-profile.mjs"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/init-profile.mjs (plain ESM; same first line, exports and signatures; change ONLY validateSecurity). The security block's codeScan now accepts the strings 'local' (default), 'auto' and 'off' (was auto and off); add allowUnparsedManifests: an array of at most 50 strings of at most 200 characters each (file names or paths the owner allows to change without parsing, for example go.mod). Invalid values are errors 'profile.security.<key>: <what is expected>' and are left out of the normalized copy, like the other keys. Do not edit tests.\nignoreTests: tests/init-profile.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/phase12-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

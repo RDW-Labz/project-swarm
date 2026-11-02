@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0024",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A failed check's real assertion was buried in a full log. Diagnosing a failed run meant opening a whole log file to find the one assertion that actually failed, every time.",
+  "rule": "Surface the failing assertion inline, and let a diagnostic job see actual measured failures instead of a paraphrase.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate` prints a compact `failures` array (check name plus its last failing assertion lines, capped) for every failed check; `validate`/`run` accept `--evidence <file>`, whose failures block is appended verbatim to every job prompt under a fixed heading. Documentation: manifest reference.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "manifest",
+    "prompt"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#24"
+  }
+}

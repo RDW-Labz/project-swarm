@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0009",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A new topic needs fresh context. Continuing unrelated work carried old assumptions forward.",
+  "rule": "Hand off at the dispatch limit or when the next work is unrelated, whichever comes first.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: kickoff and orchestration.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#9"
+  }
+}

@@ -1,6 +1,6 @@
 # Providers and setup
 
-Project Swarm supports nine adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
+Project Swarm supports twelve adapters. Configure only the providers your manifest uses. No SDK dependencies are required. The toolkit does not install provider accounts, purchase credits, pull model weights, or modify your global configuration.
 
 ## Choose the execution style
 
@@ -53,9 +53,9 @@ The four API adapters have deterministic mocked-transport tests covering their c
 
 ## Limits, cancellation, and errors
 
-All API jobs must name `model`. `maxOutputTokens` defaults to 8,192 and accepts 256–32,768; choose a smaller value for simple tasks. Provider reasoning may consume output allowance. This is not a small effect on a reasoning model: an observed vLLM deployment with a reasoning parser returned `finish_reason: "length"` and null content on a trivial task at 512 tokens, intermittently, because the whole budget went to reasoning the model never emitted as content. The job fails closed rather than writing a partial file, but the cause looks like a schema or load fault and is neither. Budget for reasoning plus the envelope, and prefer a generous cap: an unused allowance costs nothing. Incomplete, refused, malformed, oversized, or wrongly scoped output fails the job; partial files are not accepted. There are no automatic retries.
+Explicit API jobs must name `model`; `agent: "auto"` omits it and uses a configured lane model. `maxOutputTokens` defaults to 8,192 and accepts 256–32,768; choose a smaller value for simple tasks. Provider reasoning may consume output allowance. This is not a small effect on a reasoning model: an observed vLLM deployment with a reasoning parser returned `finish_reason: "length"` and null content on a trivial task at 512 tokens, intermittently, because the whole budget went to reasoning the model never emitted as content. The job fails closed rather than writing a partial file, but the cause looks like a schema or load fault and is neither. Budget for reasoning plus the envelope, and prefer a generous cap: an unused allowance costs nothing. Incomplete, refused, malformed, oversized, or wrongly scoped output fails the job; partial files are not accepted. Rate-limited attempts retry within the lane budget; automatic jobs can fall back to another lane. See [lanes and routing](lanes.md).
 
-Concurrency defaults to 2 and can be explicitly set from 1 to 32 across providers. More concurrent jobs can increase resource load and simultaneous charges. Tokens and timeouts are not dollar budgets. Cancellation aborts the local HTTP request and response reading, but remote work or charges may already have occurred. API cost is recorded as unavailable, not calculated from assumed prices.
+Concurrency defaults to 2 and can be explicitly set from 1 to 512 across providers, with separate lane caps and quota pauses. More concurrent jobs can increase resource load and simultaneous charges. Tokens and timeouts are not dollar budgets. Cancellation aborts the local HTTP request and response reading, but remote work or charges may already have occurred. API cost is recorded as unavailable, not calculated from assumed prices.
 
 HTTP failures record a status and omit the response body. Transport and response-stream exceptions are sanitized; request headers and raw API responses are not logged. Read-only summaries and generated files can still contain supplied source. Keep `.swarm/` private. For authentication errors, check the selected provider's account/environment setup outside the runner; for schema errors, verify the chosen model's structured-output capability. Do not weaken file validation as a workaround.
 
@@ -110,15 +110,52 @@ Local compatibility evidence: official npm Qwen Code 0.24.0 was installed into a
 
 Every Codex job must name `model`, matching `/^[A-Za-z0-9._:-]{1,80}$/`. The runner always passes `-m <job.model>` and never uses the Codex config default. Install and authenticate Codex separately, then run `node tools/swarm.mjs doctor codex`. Doctor checks macOS, `sandbox-exec`, `codex --version`, successful `codex login status`, and every required exec flag through file-backed help probes. It makes no model call. Other platforms report unsupported and refuse Codex jobs.
 
-Codex runs in its own detached git worktree of the root repository's HEAD at `.swarm/runs/<run-id>/worktrees/<job-id>`. The full committed project is available, so the worker can run tests. Uncommitted root changes are not included; `validate` and `preflight` warn when declared context or output files have uncommitted changes. Context is the prompt's “read these first” list. Only declared output files become retained proposals for inspect/integrate/conflict checks. The runner removes the worktree after an ordinary success, failure, timeout, or cancellation; it keeps the worktree when the final envelope was invalid or only resolved through a fallback (see below). Timeouts and cancellation terminate the entire detached process group.
+Codex runs in its own detached git worktree of the root repository's HEAD. Public runs place it outside the project root by default, under the configured scratch base (`<scratch>/worktrees/<repo>-<hash>/<run>/<job>`); `worktreesOutsideRoot: false` preserves the historical `.swarm/runs/<run-id>/worktrees/<job-id>` layout. The saved `worktreePath` is authoritative for inspect/integrate and recorded before checkout; older state without it uses the historical fallback. The full committed project is available, so the worker can run tests. Uncommitted root changes are not included; `validate` and `preflight` warn when declared context or output files have uncommitted changes. Context is the prompt's “read these first” list. Only declared output files become retained proposals for inspect/integrate/conflict checks. The runner removes the worktree after an ordinary success, failure, timeout, or cancellation; it keeps the worktree when the final envelope was invalid or only resolved through a fallback (see below). Timeouts and cancellation terminate the entire detached process group.
 
 The OS seatbelt sandbox enforces file access; prompt text is not the boundary. The runner invokes `sandbox-exec -f <profile> codex exec -m <model> --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --ephemeral -C <worktree> -o <last-message> <prompt>`. Codex's own sandbox is bypassed because the outer seatbelt is the boundary. Stdin is `/dev/null` (Node's `ignore` stdio); Codex otherwise waits for stdin. When `/etc/ssl/cert.pem` exists, the worker receives `SSL_CERT_FILE=/etc/ssl/cert.pem` because TLS cannot use the keychain-backed trust store inside this sandbox.
 
-The profile starts with a home-directory read/write denial, then grants reads of the home literal and necessary ancestor literals, the job worktree, the repository git common directory, `~/.codex`, `~/.nvm`, `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.gitconfig`, and `~/Library/Caches`. Writes are limited to the job worktree, its git worktree metadata directory, `~/.codex`, `~/.cache`, `~/.npm`, `/private/tmp`, `/private/var/folders`, `/dev/null`, and `/dev/tty*`. The common git directory is otherwise read-only. System reads outside the home directory and network access remain available as in the reference profile.
+The profile starts with a home-directory read/write denial, then grants reads of the home literal and necessary ancestor literals, the job worktree, the repository git common directory, `~/.codex`, `~/.nvm`, `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.gitconfig`, and `~/Library/Caches`. Writes are limited to the job worktree, its git worktree metadata directory, `~/.codex`, `~/.cache`, `~/.npm`, `/private/tmp`, `/private/var/folders`, `/dev/null`, and `/dev/tty*`. For a Vite or Vitest project, setup prepares exactly `node_modules/.vite-temp` and `node_modules/.vite` and grants only those two cache directories, including their validated shared dependency real paths; dependency files, sibling caches, the checkout root and secrets remain read-only or denied. The common git directory is otherwise read-only. System reads outside the home directory and network access remain available as in the reference profile.
+
+If the prepared Vite cache cannot be safely created or written, dispatch refuses with
+`vite-temp-not-writable: <path>; prepare writable Vite caches or use an isolated dependency
+install`. Read-only preflight reports the same `vite-temp-not-writable` warning for missing,
+unwritable or unsafe caches on Codex jobs; it does not create directories and does not warn
+unrelated projects or agents. The two cache paths are intentionally shared and are not deleted
+as cleanup.
 
 The final rules re-deny reads/writes of `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.config`, and any directory a project's own local config adds to `deniedHomeDirs`, plus mach lookups of `com.apple.SecurityServer` and `com.apple.securityd.xpc`. Optional per-job `readPaths` grants extra absolute read-only toolchain paths. Paths under denied directories (including resolved aliases) are refused. Paths embedded in profiles cannot contain quotes, backslashes, or control characters. Do not place secrets in the committed project or granted toolchain paths.
 
 The runner reads the final message from the `-o` file inside the job worktree (also inside the run directory), saves it as `response.txt`, and parses it as JSON: the reply's last fenced (```json or bare ```) block wins when it has one, otherwise its last top-level JSON object wins; any keys are accepted (there is no fixed `files_changed`/`notes` schema), since only declared outputs, never anything the JSON names, are ever collected. When that JSON is missing or does not parse, the runner falls back first to the `-o` file's own content if it alone parses as an object, then to the worktree's actual changes to declared outputs versus the job's base commit; either fallback still completes the job, keeps its worktree, and surfaces a `codex envelope fallback: result-file` or `codex envelope fallback: worktree` warning from `inspect`/`wait`. A worktree with no output changes and no parseable result file still fails the job and keeps the worktree for inspection. Parseable `tokens used` output is recorded as `total_tokens`, grouped under provider `codex`; missing usage and dollar cost remain unavailable. Unit tests inject fake workers and do not claim a live Codex or seatbelt smoke run.
+
+## Cursor CLI (`cursor`, macOS only)
+
+A `cursor` job is a worktree writer exactly like a codex job: the same detached HEAD worktree, scratch directory, port block, setup, `readPaths`, `testEnv`, output collection, conflict checks and retention rules, and the same prompt (`codexMessage`: ownership line, design-only line, contract, checks). `after` is refused for cursor jobs as for codex. Every job names its `model` (plain names such as `composer-2.5`, or cursor's bracket form such as `claude-opus-4-8[effort=high]`); the runner never uses a cursor default.
+
+The runner invokes:
+
+```text
+sandbox-exec -f <profile> <real cursor-agent path> -p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>
+```
+
+The outer seatbelt is the boundary, as with codex's `--dangerously-bypass-approvals-and-sandbox`. `--sandbox disabled` is required because cursor's own sandbox is itself seatbelt, and a nested sandbox inside the profile fails every shell command; `--force` is required because print mode otherwise denies non-allowlisted commands, so the worker could not run tests. The runner never passes `--api-key` (it would put the key in argv), `--worktree`, or `--approve-mcps`. Stdin is `/dev/null`. `cursor-agent` is resolved on `PATH` to its real file (`~/.local/bin/cursor-agent` links into `~/.local/share/cursor-agent/versions/<ver>/`).
+
+The profile is the codex profile with exactly two additions: read and exec of that version directory, and read and write of `~/.cursor`. Worktree-only writes, the denied home directories and the Keychain mach-lookup denial are unchanged. Because the Keychain is blocked, `agent login` credentials cannot be used; the worker authenticates only with `CURSOR_API_KEY` from the swarm's own environment. The worker environment is an allowlist (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`, `NO_COLOR`, `CI`, `SSL_CERT_FILE`, the swarm/test variables codex also gets, and `CURSOR_API_KEY`); no other provider key, and not `CURSOR_API_ENDPOINT`, is forwarded. The key is refused in the prompt and in argv, redacted from the adapter logs, `provider.jsonl`, `stderr.log` and `response.txt`, and a job whose output contains it fails without keeping its worktree. A run where the key appeared anywhere is refused by `integrate` and `ship`.
+
+`run` fails fast before any worktree exists: `cursor is unsupported on this platform` off macOS, `cursor-not-installed: ...` when `cursor-agent` is not on `PATH`, and `cursor-not-authenticated: set CURSOR_API_KEY in the swarm environment (Keychain login is blocked by the sandbox)` when the key is missing. `doctor cursor` checks macOS, `sandbox-exec`, the binary, `--version` and every required flag in `--help`, and reports `auth: CURSOR_API_KEY set` or status `not-authenticated`; it never prints the key and makes no model call.
+
+The result is cursor's `--output-format json` object; its `result` text is saved as `response.txt` and parsed with the codex envelope rule (last fenced block, else last top-level object), falling back to the worktree's changes to declared outputs (`codex envelope fallback: worktree`). A nonzero exit or `is_error` result fails the job with the exit code and stderr recorded as for codex.
+
+Local config `cursor` settings, all optional:
+
+```json
+{ "cursor": { "model": "composer-2.5", "timeoutMs": 300000, "maxAttempts": 2, "allowedPaths": [] } }
+```
+
+`timeoutMs` applies when a job sets none. `maxAttempts` (1-5, default 2 like codex) caps launches, and only a transient transport error (`ECONNRESET`, `socket hang up`, a 502/503/504) with no output written earns another; the job records `retries` and `retryReason: cursor-blip: ...`. `allowedPaths` are extra absolute read-only paths for every cursor job, validated like `readPaths`. `model` documents the recommended model for tier routes (`tiers.mid`); a job still names its own. Tests use a fake `cursor-agent`; a live cursor smoke is pending an operator's `CURSOR_API_KEY`.
+
+Manually run Cursor workers outside the swarm keep using the [Cursor lane guard](cursor-lane.md); a swarm-run cursor job is an ordinary swarm job on `swarm board` and needs no claim.
+
+The [Cursor claims check](cursor-lane.md) makes `run` refuse claimed outputs and `validate` warn automatically.
 
 ## Local health diagnostics
 
@@ -128,3 +165,29 @@ timeout. No credentials, code or model prompts are sent and redirects are
 refused. Remote origins and cloud keys remain configuration-only. A successful
 HTTP response means reachable, not authenticated or model-verified; a stopped
 server is reported unreachable while its configuration remains present.
+
+## Anthropic API (`anthropic`)
+
+A one-request, tool-free worker on your own Anthropic API credits (Messages API with structured JSON output). Unlike OpenRouter it is allowed for sensitive jobs: Anthropic already receives this code through Claude workers.
+
+- **Key:** read by the swarm parent only, from the Keychain item service `project-swarm`, account `anthropic.api_key` (or `SWARM_ANTHROPIC_API_KEY` for tests). The ambient `ANTHROPIC_API_KEY` is ignored on purpose. It is sent in one request header and never reaches a worker. Store it yourself with `security add-generic-password -s project-swarm -a anthropic.api_key -w`.
+- **Models:** `claude-haiku-5-5` is the lane default and `claude-sonnet-5-5` serves `tier: "mid"`. `claude-opus-5-5` runs only for a job that sets `tier: "expensive"`; `validate` refuses it otherwise. Thinking effort is pinned to `low`.
+- **Caps, machine-wide:** $500 total and $20 per UTC day across every project, plus $5 per job, from one ledger at `~/.project-swarm/logs/anthropic-spend.jsonl`. Each request is checked against a worst-case estimate first and the real cost is recorded after. A machine config may only lower the day cap (`spend.lanes.anthropic.dailyUsd`); the total is fixed in code. Raising them is a decision for the account owner, never a manifest field.
+- **Routing:** enable the lane with `"lanes": {"anthropic": {"model": "claude-haiku-5-5"}}` in the machine config. Route order is hermes → cursor → codex → anthropic → openrouter → claude.
+
+## Hermes (or Qwen) on another machine over ssh
+
+Hermes can run on a machine you reach over ssh, such as a GPU box. Add this to the machine config (`~/.config/project-swarm/config.json`):
+
+```json
+{ "cliHosts": { "hermes": { "target": "dev2@10.10.10.220", "command": "/home/dev2/.local/bin/hermes" } },
+  "lanes": { "hermes": { "model": "your-hermes-model" } } }
+```
+
+`command` is the absolute path of the CLI on that machine (a non-interactive ssh shell often has a shorter PATH than a login shell). The job message goes to the remote CLI on stdin, through the same text and envelope adapter as a local Hermes. `swarm doctor hermes` runs its checks there too and reports the host.
+
+- Nothing local travels with the job: the ssh process gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `SSH_AUTH_SOCK`, agent and X11 forwarding are off, the host key must already be in `known_hosts`, and the key is read from your own `~/.ssh`. No `.env` or key file is copied.
+- The remote account's login shell must be POSIX (sh, bash or zsh). The remote command is one single-quoted string.
+- `ssh` makes 4 connection attempts, 20 seconds each. Exit 255 fails that job as "cli host unreachable"; other jobs go on. If the connection drops, the remote CLI may keep running until it next writes.
+- This is separate from the `hosts` list in [remote hosts](executors.md), which is for placing whole jobs on other machines.
+- Real Hermes prints `Warning: Unknown toolsets: none` on stdout before its first event (the adapter's `--toolsets none` is deliberately an unknown name). The parser ignores that exact line and nothing else.

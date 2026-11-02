@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0099",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A dependency probe refused a check whose own interpreter actually existed, because the probe resolved the program name against the orchestrator's own search path instead of the path the check itself would use. A check invoked through an explicit environment-variable prefix (setting its own search path before naming the program) was probed as if that prefix were not there at all.",
+  "rule": "A probe must resolve a program the same way the real check will — honoring an explicit search-path override first, then a dedicated tools directory, then the ordinary search path — and a refusal must name every place it looked.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the probe now unwraps that prefix, tries the dedicated tools directory, and falls back to the ordinary search path, listing every directory tried in its refusal. Regression coverage is in `tests/field-lessons-batch-l.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#99"
+  }
+}

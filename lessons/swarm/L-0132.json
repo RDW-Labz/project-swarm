@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0132",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A cheap, bookkeeping-only worker tier was refused for writing a small internal note file, even though that exact kind of file was already the tier's intended job.",
+  "rule": "An allowlist of bookkeeping-only output paths should match the files that tier is actually meant to write.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a small internal note file now matches the bookkeeping allowlist; any other design-content file still goes to a more capable, still inexpensive tier, and the refusal now says so. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#132"
+  }
+}

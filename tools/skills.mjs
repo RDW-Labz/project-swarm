@@ -125,6 +125,9 @@ function globToRegExp(glob) {
 }
 export const pathMatchesGlob = (glob, file) => globToRegExp(glob).test(file);
 export const anyPathMatchesGlobs = (globs, files) => (globs ?? []).some(glob => (files ?? []).some(file => pathMatchesGlob(glob, file)));
+// The first of a skill's own `paths:` globs a job's files actually matched — named so a refusal
+// naming "attached by paths" can quote the one glob responsible, not the whole list.
+const firstMatchingGlob = (globs, files) => (globs ?? []).find(glob => (files ?? []).some(file => pathMatchesGlob(glob, file))) ?? null;
 
 // Refused anywhere in the tree, not just at the top: a source dir is either copied whole or not
 // copied at all.
@@ -217,11 +220,21 @@ export async function listSkills(sourceDir) {
 
 // A manifest job `skills: [...]` (even `[]`) overrides frontmatter `paths:` auto-attach entirely;
 // every known skill still gets a record entry, "index-only" when it is neither named nor matched.
+// `attachedBy` names *why* an attached skill attached (a manifest `skills:` list, or the one
+// `paths:` glob that matched) — read by a refusal that would otherwise name the skill but leave a
+// coordinator guessing where it came from.
 export function attachSkillsForJob(skills, job) {
   const named = Array.isArray(job.skills) ? job.skills : null;
   if (named) for (const name of named) if (!skills.some(skill => skill.name === name)) fail(`unknown-skill: ${name}`, 'unknown-skill');
   const files = [...(job.context ?? []), ...(job.outputs ?? [])];
-  return skills.map(skill => ({ ...skill, attached: named ? (named.includes(skill.name) ? 'named' : 'index-only') : (anyPathMatchesGlobs(skill.paths, files) ? 'paths' : 'index-only') }));
+  return skills.map(skill => {
+    if (named) {
+      const attached = named.includes(skill.name) ? 'named' : 'index-only';
+      return { ...skill, attached, attachedBy: attached === 'named' ? 'manifest skills list' : null };
+    }
+    const matchedGlob = firstMatchingGlob(skill.paths, files);
+    return { ...skill, attached: matchedGlob ? 'paths' : 'index-only', attachedBy: matchedGlob ? `paths: ${matchedGlob}` : null };
+  });
 }
 
 // An index-only skill (neither named nor paths-matched) points at its own copied file, since its
@@ -245,7 +258,10 @@ export const skillRecordEntries = attachedSkills => attachedSkills.map(({ name, 
 
 // Frontmatter `checks` for each attached (named or paths) skill, evaluated at integrate time
 // against that job's own changed files and its result object; index-only skills are never checked.
-export function skillCheckFailures({ attachedSkills, changedFiles, resultData }) {
+// `skillsSourceDir` is optional (omitted, the message stays the original terse form); passed, the
+// message mirrors dispatchResultKeysRefusal's own wording — the source dir, why this skill
+// attached, and the override — since this same check also fires after dispatch, at integrate.
+export function skillCheckFailures({ attachedSkills, changedFiles, resultData, skillsSourceDir }) {
   const failures = [];
   for (const skill of attachedSkills) {
     if (skill.attached === 'index-only' || !skill.checks) continue;
@@ -253,7 +269,12 @@ export function skillCheckFailures({ attachedSkills, changedFiles, resultData })
       if (!anyPathMatchesGlobs([glob], changedFiles)) failures.push(`${skill.name}: filesMustChange ${glob} matched no changed file`);
     }
     for (const key of skill.checks.resultKeys ?? []) {
-      if (!resultData || typeof resultData !== 'object' || !Object.hasOwn(resultData, key)) failures.push(`${skill.name}: resultKeys missing ${key}`);
+      if (!resultData || typeof resultData !== 'object' || !Object.hasOwn(resultData, key)) {
+        const reason = skill.attachedBy ?? (skill.attached === 'named' ? 'manifest skills list' : 'paths match');
+        failures.push(skillsSourceDir
+          ? `${skill.name}: resultKeys missing ${key} (skill from ${skillsSourceDir}, attached by ${reason}; to run without these skills set "skillsDir" in the manifest to an empty directory, or declare the key in the job's "Return JSON only" shape)`
+          : `${skill.name}: resultKeys missing ${key}`);
+      }
     }
   }
   return failures;

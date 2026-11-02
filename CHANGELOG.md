@@ -1,5 +1,915 @@
 # Changelog
 
+## 1.144.0
+
+The hand-build guard (see `docs/handbuild-guard.md`) and a stricter update guard.
+- **An orchestrator session may not build by hand.** A PreToolUse hook blocks, in the project checkout, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and shell writes (`>`, `tee`, `sed -i`, `mv`/`cp` into the project, `rm`, `touch`, `mkdir`, inline scripts that write, `git commit`/`push`...) unless the owner approved that exact hand-build. Allowed without approval: reading, tests and builds, writing under `.swarm/` and `docs/plans/`, build output, anything outside the checkout, swarm worker workspaces, and `swarm` commands.
+- **The request flow.** `swarm handbuild request --kind swarm-cannot|emergency|secret|tiny --reason ... --files ... --minutes 30` shows in Needs you (board and phone) as an approve/deny decision (deny is the default, with a recommendation); the owner answers with `swarm handbuild approve ID`, `swarm decide handbuild-ID approve` or the phone. An approval covers only the files (and git operations) named and expires. Any other reason: "write a ticket instead". An orchestrator session cannot approve its own request, edit the approval state or the hook settings, or switch the guard off.
+- **Every request, approval, denial and blocked attempt is on the journal** and in `.swarm/handbuild/log.ndjson`.
+- **The hand-built share is complete.** The Orchestrator lane now reads shell writes too (the files a command wrote) and counts blocked attempts: `swarm-built 83%, hand-built 17% (12 files, 3 blocked)`.
+- **Hooks are safe before the update that brings them:** their commands are wrapped (`test -f SCRIPT && node SCRIPT || true`). `swarm handbuild install | uninstall | off | on`; `swarm init` installs the guard for a new project, `swarm update` only refreshes where it is installed.
+- **`swarm update` also refuses while a swarm command is running from the install** (found in the process list: a `go --scope` loop between two waves has no run registered), naming the process; `--force` stays the owner's.
+- **In-source tests.** The `in-source-test` check at integration looks only at files a job changed and only at a block the change adds (a file with blocks from earlier waves can be edited again); the security and acceptance reviewers are told that an `import.meta.vitest` block in a production file under `src/` is a defect.
+- **Opus review of the guard (three rounds, $3.10 in all): the analyzer and the decision module were hardened.** It now reads `bash -c`, `eval`, substitutions, subshells, `cd`, `xargs`, `find -exec`, `awk`, wrappers with options, downloads and extraction, interpreters on writable or outside scripts, and fails closed on inline code that is not plainly read-only; git commands are an allowlist of reads; `.git/`, `.swarm` itself, `.claude/`, the install and the user's Claude settings are protected (case-insensitively); requests may not be broad or protected, expire after 24 hours, and are written under a lock; a commit carries only the approved files (a `git add` on the same line is counted; adding everything is refused); bundled shell flags (`-lc`), shell keywords, variable command words, scripts run by path or sourced, `git -c`, sed `w`/`e`, `curl -o`/`tar -x` variants, and a `cd` that may not happen are read; the project comes from `CLAUDE_PROJECT_DIR`; too-large input is refused; shell writes count as hand-built only when files are named.
+- Tests: `tests/handbuild-guard.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
+## 1.143.0
+
+The Orchestrator lane in Swarm Watch (see `docs/orchestrator-lane.md`).
+- **Capture.** `swarm init` and `swarm update` install Claude Code hooks (`PreToolUse`, `PostToolUse`, `Stop`, `UserPromptSubmit`) in each project's `.claude/settings.local.json` (the personal, git-ignored file, like the checkpoint hook). Each appends one small event (session, tool, a path inside the project or a masked command start, time) to `.swarm/orchestrator/events.ndjson`: never contents, prompt text, tool output or outside paths.
+- **Tokens and cost** come from each session's transcript, once per message, as list value (subscription: marked as such, never added to billed spend).
+- **The board** shows an Orchestrator card (a robot head per session: working, thinking, waiting on you, idle, labelled by project, with the current tool and file or command and how long), orchestrator list value on the Cost tab, the share of each project built by the swarm against by hand, and the same on the project Live tab and run pages.
+- **A ticket that owns no test file writes no tests.** The worker prompt of a build or fix ticket whose outputs hold no test file says: write no tests or test blocks (never `import.meta.vitest` in a source file), do not run the test runner, prove the work with the type check; a line that needs a test belongs to the test ticket. (Cursor had put a vitest block inside `submit-request.ts`, breaking the build; Codex refused.) A ticket that owns a test file keeps the tag rule.
+- **The merge queue refuses `import.meta.vitest` in `src/`.** Integration (queue and plain) fails with `in-source-test` and the file and line before anything is written.
+- The run page no longer shows the "Open the live Watch page" button on the remote board.
+- Opus review fixes: shell masking now covers `--api-key X`, `-p`/`-u`, URL credentials and header values; only the transcript's file name is stored; the log refuses symlinks and rotates under a lock; a path through a link out of the project is outside; rotated events and long-idle sessions stay in the totals; tools running at once are tracked by id and events are folded in time order; each message is counted once across projects and resumed sessions; transcripts are opened by real path in bounded reads; the settings temp file is unique, exclusive and keeps the mode; `swarm update` refreshes hooks only where agent files were set up, and `.swarm/orchestrator/off` switches the lane off.
+- Tests: `tests/orchestrator-lane.test.mjs` (recorded fake hook events, a fake transcript, the hook as a real process, the installer, the board data and page code).
+
+## 1.142.0
+
+Board fixes from the S13 run, safe project pointers, and database context for migration tickets.
+- **The Watch link works on the remote board.** `swarm remote` never starts a run's own page on the computer, so the board's `/open/run` link answered 404 there; the board now tells its page (`openRun`) and the link goes to the run inspector instead. A test opens every Watch link on the local and the remote board and checks each answers 200.
+- **A board older than the install says so.** `/api/board` reports the version the server runs, the installed one and `stale`; the board shows a banner (a board or `swarm remote` started before `swarm update` keeps the old code), and `swarm update` says to restart them.
+- **Cost tab lists every lane.** Every configured lane is listed, with the jobs it ran today and its list value (flat-rate lanes that report no cost show "not reported"); Codex and Cursor were missing.
+- **Agents and Overview agree.** One reading (`agentCounts`) feeds both, and worker slots held without a running job are named on both pages.
+- **Events rows name the work.** A run row lists its tickets (id and title), lane and model, pass or fail, and for a failure the short reason and retry count.
+- **Under-filled waves.** Three or more runs in a row with one job each, on a machine with room for four or more, show "waves under-filled: 1 job of N slots" on the project.
+- **Project pointers are safe and kept current.** Linking or updating a project rewrites `.project-swarm.json` as a whole object with only `install` and `version` changed, after copying the old file beside it and through a temp file renamed into place; a file that is not a JSON object is refused and left alone (the old relink could wipe the profile). `swarm update` now moves the version of every linked project whose pointer is behind.
+- **Database context for migration, RLS and pgTAP tickets.** They see the existing migrations (newest first, the ones named by the ticket first), `seed.sql`, `config.toml`, policy, grant and function files, and an existing pgTAP test.
+- **A retry note is not a path.** The `prompt-path-not-in-workspace` check no longer reads text quoted in the prompt as untrusted prose (a retry note, reviewer evidence, an owner comment: everything between `<<<` and `>>>`); "pr-part-*" in a sentence no longer fails a wave at planning. Only declared context and output paths are checked.
+- **`swarm tickets ID --clear-note`** drops a ticket's retry note, `--retry-note TEXT` replaces it, and **`--reopen --reason "why"`** puts a done ticket back to ready (blocked while a dependency is open) with the reason in the journal, no change order needed.
+- Backup file names of a rewritten pointer carry a random suffix (two writes in one millisecond collided).
+- Tests: `tests/pointer-safety.test.mjs`, `tests/watch-ui.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
+## 1.141.0
+
+Two scope-quality fixes from S13.
+- **Workers no longer try to run the test runner.** The worker sandbox cannot start vitest (it cannot create `node_modules/.vitest/.vitest-secret-token`, and the build needs secrets the worker never gets). A routed ticket's prompt now says the merge queue runs its tests after it finishes and not to run the runner or the build; it checks its code against the tests by reading. The shell worker (`after` tickets and tickets whose tests need setup or a database) still runs them.
+- **Gating tickets are flagged.** `swarm scope check` warns (`gating-ticket`) when one ticket gates many others (8 or a quarter of its stage), naming the shared files that usually cause it (CSS, layout, i18n, types); the splitter is told to split shared work early into one small ticket per component or file group.
+- Tests: `tests/s13-live-bugs.test.mjs`.
+
+## 1.140.0
+
+Unblocks the S13 run: escalated tickets and pinned lanes plan on real wave manifests, a ticket no lane can take no longer aborts the wave, and test tickets see what they test.
+- **Escalated tickets route.** `tier expensive` (level 3) routes to `claude:opus` (the lane's `expensiveModel`), level 2 (`hard`) to Codex, level 1 to Cursor; the output limit and prompt caching are API-only and are dropped for every CLI lane, so no escalated ticket ends "no lane left (tier expensive)" and no pin fails "maxOutputTokens is API-only". Tests plan real escalated and pinned wave manifests for every level and every lane.
+- **An unroutable ticket is skipped, not fatal.** The wave builder leaves out a ticket (and anything that waits for it) that no lane can take, blocks it with the reason (`unroutable: ...`, logged) and runs the rest; `unroutableJobs` reports them.
+- **Test tickets get their context.** A ticket of type test sees the files under test (from the tickets it depends on, the tickets that list its tests, or matched by the test's name), the test runner config, `tsconfig.json` (the `@/` aliases) and one existing test as a convention example.
+- Tests: `tests/escalation-routing.test.mjs`, `tests/dogfood-fixes.test.mjs`, `tests/s13-live-bugs.test.mjs`.
+
+## 1.139.0
+
+Six bugs from the live parts-app S13 run, and `swarm update` that waits for an idle machine.
+- **Job-type presets are cheapest-first.** build, fix, test and docs jobs now try Cursor, then Codex, then paid Haiku (then the local Hermes lane); they used to put Anthropic first and override the router's order.
+- **The verify block no longer picks the builder.** A ticket with tests is routed like any other ticket; the profile's `verify` agent is used only for a ticket that waits for others (`after`, which Cursor and Codex cannot take) or whose tests need the project's setup commands or test environment (a database). The merge queue still runs the tests.
+- **No API-only fields on CLI lanes.** A ticket pinned to (or routed to) Cursor, Codex or Claude carries no `maxOutputTokens` or `cacheContext`; an escalated ticket pinned to Codex no longer fails with "maxOutputTokens is API-only".
+- **Test files owned by later tickets.** The acceptance review manifest leaves out files that do not exist yet, and `swarm scope check` warns (`test-owned-by-later`) about a ticket that lists a test file a later ticket owns, naming both.
+- **Output cap.** An automatic ticket whose existing output files are over the single-request cap (two CSS files over 15 KB) is routed to a lane that edits in place (Cursor, Codex, Claude) instead of failing at planning with `output-cap-exceeded`.
+- **`with-concurrency` takes `--root` in any place:** before the word, after it, or before the `--`.
+- **`swarm update` refuses while a run is live** (it names each one) unless you pass `--force` yourself.
+- Tests: `tests/s13-live-bugs.test.mjs`, `tests/job-types.test.mjs`, `tests/s13-blockers.test.mjs`.
+
+## 1.138.0
+
+The three review findings left open in 1.137.0.
+- **Lane store queue timeout.** A caller waiting in the in-process lane store queue gives up with `lanes-store-locked` when no turn has started or finished for 10 seconds (a hung holder used to block every worker forever); its own turn is skipped. A call from inside a turn of the same store fails at once with `lanes-store-reentrant` instead of waiting for itself.
+- **One Ctrl-C, one signal.** `swarm with-concurrency` lets the command end on its own for 200 ms after SIGINT or SIGHUP (a terminal already sent it) and only then passes the signal on.
+- **A killed wrapper stops its command.** The marker names the command's pid; if the wrapper is killed, the watcher stops the command (SIGTERM, then SIGKILL after 10 s) before putting `machineConcurrency` back, so nothing keeps starting workers at the raised value.
+- Test fix: the installed-swarm tests copied the checkout while another test file created and removed a `.tmp-test-*` folder in it (ENOENT); the copy now skips `.tmp-*` folders.
+- Tests: `tests/lanes.test.mjs` (hung holder, recovery, re-entrancy), `tests/concurrency-guard.test.mjs` (single signal, orphan stopped).
+
+## 1.137.0
+
+Fixes for the parts app S13 run, plus the practice-run tooling.
+- **Lane config.** The `claude` lane takes `model`, `midModel` and `expensiveModel` (tier "expensive" jobs, such as the Opus security review, use `expensiveModel`; without it they use `model`). The machine config at `~/.config/project-swarm/config.json` now names every lane.
+- **Routing.** Code jobs now go to the flat-rate lanes first (Cursor, then Codex), then paid Haiku; a paused lane hands work to the next. Before, paid Haiku was first and the flat-rate lanes never ran.
+- **Pins.** A ticket pinned to a lane other than `anthropic` no longer carries `cacheContext` (which only the Anthropic lane accepts), and a pin without a model takes the lane's model from the machine config.
+- **Ticket ids in context.** `T-0193` in a ticket's context becomes that ticket's files (and its tests) in ticket jobs, acceptance reviews and security reviews; an unknown id is dropped, not passed on as a path.
+- **Test files of later tickets.** `scope sync` no longer makes a build ticket wait for a test file owned by a ticket that depends on it (they waited for each other forever).
+- **`go --scope` ending.** The final line no longer fails with "say is not defined"; an acceptance review pass satisfies a covered line whose test was not seen passing.
+- **`swarm with-concurrency N -- COMMAND`** sets `machineConcurrency` for one command and puts the old value back on exit, error, Ctrl-C, kill, a crash of the wrapper, or the next command after a power cut. A new run's cap is clamped to what is left of the project's cap.
+- **`swarm scale --full`** runs a stub run plus a live second run, measured by the Watch API, with a panic stop and a backup check; the lane store queues its callers in process.
+- Opus review fixes: a ticket reference never hands on `.env` files, the project profile or globs (and at most 60 files); the guard marker is created exclusively, only its owner restores it on exit, and a marker from before the last boot is stale even if its pid was reused; `scope sync` skips a test file only when every other owner comes after the ticket; an acceptance review pass must name the same line text.
+- CI fixes: the guard's signal handlers are installed before the value is raised (a Ctrl-C in that gap used to kill the wrapper and leave the value to the watcher a moment later); the four-requests cancel test waits for the four calls instead of one fixed second (starting four workspaces takes 0.5 to 0.8 s here and more on CI).
+- Tests: `tests/s13-blockers.test.mjs`, `tests/concurrency-guard.test.mjs`, `tests/practice-tooling.test.mjs`, router and lesson-40 additions.
+
+## 1.136.0
+
+Two bugs from the parts app: caps that did not hold, and estimates that were far too small.
+- **The spend cap is hard.** A job is now refused when what is spent, plus what is already reserved for jobs in flight, plus this job's own worst case would pass the cap (before: only "already reached"). Cause of S11 and S12 finishing about $6 over: subscription-lane jobs (Claude, Codex, Cursor) reserved nothing, so their cost counted only when they finished and a wave of parallel jobs all started under the cap. They now reserve an estimate while they run (the most a finished job of that lane and model cost in the run once five have finished, else a default per lane and model: Claude Opus $1.00, Sonnet $0.50, Haiku $0.20, Codex $0.60, Cursor $0.40, Hermes and Qwen $0) that frees when the job ends. A job whose own worst case is above a lane's daily cap is held at once with a spend-cap message. Token caps keep their earlier meaning.
+- **`swarm change` scales with size.** It said "11 requirements: about 11 tickets, $0.03" (a requirement counted as a ticket, $0.003 a ticket). It now multiplies requirements by what a requirement has turned into in this project's recent finished stages (the parts app: 2.8 to 4.7 tickets) and by what a ticket costs on each lane (the cheapest lane to the dearest, with the latest stage's own pace as the middle), shows a range and what it rests on, and checks the high end against the change-order limit. With no history it assumes 4 tickets a requirement and says the cost is unknown instead of inventing one. For 11 requirements on the parts-app history: 34 to 51 tickets, about $5.70 at the latest pace, up to about $7.80.
+- **`swarm quote` scales with size.** Each similar finished project's cost, hours and GPU time are scaled by the ratio of requirements before the range is taken (calendar time by its square root); a project with no requirement count is used as it is and the quote says so.
+- Opus review fixes: the reservation is per lane AND model; a subscription lane's daily dollar cap is enforced (its jobs go through the machine-wide store when one is set); subscription and paid admissions share one queue; a refusal that exists only because of money reserved for running jobs waits for one to finish and retries (money already spent holds the job); estimates count only finished tickets and jobs with a cost on record (a gap is not a free job); a project more than five times larger or smaller is left out of a quote; a float edge no longer refuses a job that fits.
+- Tests: `tests/hard-cap.test.mjs` (eight parallel subscription jobs under a $1.00 cap spend at most $1.00; before $3.20), `tests/estimates.test.mjs` (the parts app's S9 to S12 shapes). Updated: the paid-job-refused test (now held at admission), the change-order and quote expectations. Not known: the parts app's S11 and S12 caps themselves (only S11's cost is recoverable from its run files).
+
+## 1.135.0
+
+Phase 18: the starter kit hook and the scope interview (`docs/starter-kit.md`). The `web-portal` kit itself is its own repo (`web-portal-kit`), not part of project-swarm.
+- `swarm init --kit web-portal --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]`: copies the kit into a new repo (no secrets, dependencies, git history or links; size limits; all or nothing, a failure puts the folder back), names the project, lists the kit-owned files in the new profile key `readOnlyPaths` (tickets may read them as context but not edit, create or delete them; the swarm builds only in the kit's project slots), adds one Day 0 human task per service to `swarm inbox`, then runs the normal init. A git source is cloned into a temp folder that is removed; nothing from the kit is run. `kit.json` is validated (names, versions, slots with an owner, plain relative paths, env names).
+- `swarm scope new [--type web-portal] [--out FILE] [--answers FILE]`: an interview (or the same answers as JSON) that writes the scope with requirement IDs, stages of four, a "Provided by the kit" section, external services and sensitive data. No model, no cost; answers are flattened to one line each so they cannot add headings or requirements; never overwrites; rejected answers are kept in `.swarm/project/scope-answers.json`.
+- Opus review fixes: a kit that ships `.project-swarm.json` or `coordination/checks.json` is refused; placeholders only touch files the kit just wrote; a linked `.gitignore` is never written through and kit `!` lines are dropped; the whole kit is checked before anything is written and a failure restores the README and `.gitignore`; a README with content is kept; secrets are skipped in any case and depth (the init-profile secret rules); clone hardened (`--`, no submodules, no external helpers, no LFS download, passwords hidden in errors); the interview summary can no longer start a heading, NEL and Unicode separators are flattened; a kit flag twice or an empty name is refused. Kit files being read-only (not unreadable) is new: `protectedPathHit(profile, file, { read })`.
+- Tests: `tests/kit-and-interview.test.mjs` (23). A project made from the real kit passes its own typecheck, lint, 36 tests, build and 14-check smoke run. Not verified: the kit against a real Supabase, Resend or Stripe account.
+
+## 1.134.0
+
+Handoff docs (`docs/handoff.md`): `swarm handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run]`, `check --url PREVIEW [--propose]`, `status`, `final` (`handoff --to AGENT` is unchanged).
+- `generate` states the worst case and the cap first (default $2.00, at most $20; `--dry-run` writes and spends nothing; without `--yes` it asks, and with no terminal it refuses). The runbook is built from the new `profile.handoff` block with no model (deploy, roll back, rotate keys, logs, contacts); a missing fact is written as `TODO (owner)`. The two guides are written by two mid-tier workers in a normal manifest (`coordination/manifests/handoff-SN.json`) from the approved scope, screens and external services (never ticket titles), then integrated. Screenshots from the gallery are copied to `docs/handoff/img/`.
+- Every guide step that names a screen, address or visible text carries `<!-- check: route=/x text="..." -->`; `check` fetches each route on a preview (https, no credentials; the same host; scripts and styles do not count as text) and, with `--propose`, files one proposed ticket per failing step (new proposal origin `handoff`: it never runs before you approve it).
+- `final` needs all three files, no `TODO (owner)`, a check after the last generate, and no failed step.
+- Opus review fixes: a failing step's ticket has fixed acceptance text and a plain route of at most 100 characters (what the guide said is only in notes, shown to a worker fenced as untrusted); redirects are followed by hand, same protocol and host, at most 5 hops, and a body is read to 2 MB at most; check text in comments, noscript, title or an unclosed script does not count and entities are decoded; `final` is tied to a hash of the checked guides and to a generate followed by a check, and a generate that starts clears an earlier final; `TODO (owner)` is found in any spelling; guides' output is limited to 8,000 tokens each and the plan says when the worst case is above the cap; previewUrl needs previewHosts, IP addresses and `*.com` are not hosts, and a command word may not hold a pipe, semicolon, ampersand, dollar, backtick or angle bracket; a cancelled proposal is not filed again.
+- Tests: `tests/handoff.test.mjs` (26, with a pretend swarm). Not run for real: a live generation (it spends model money; run it when you choose).
+
+
+
+## 1.133.0
+
+The installed `swarm` command: `--version`, a real `swarm update`, and a test that runs it from PATH.
+- Cause of "swarm remote on says Invalid arguments": the `swarm` on PATH (`~/.local/bin/swarm`) runs the INSTALL at `~/.project-swarm` (1.128.0 there), and the updates reported as done had been run with `node tools/swarm.mjs update` from the development checkout, which only looked at the checkout. Nothing had updated the install.
+- `swarm update` now always moves the installed swarm: it finds the install through the launcher (falling back to `~/.project-swarm`), and run from a development checkout it says so (`note`) and leaves that checkout and its branch alone. The result names the `target`, the swarm `command` (path, runner, version) and warns if the command still runs an older version. `--root` is refused for update (it always means the install), and an install made with `node tools/install.mjs --user --dev` (a development checkout) is never moved to a release.
+- `swarm --version`, `-v` and `-V` print the same as `swarm version`. A word swarm does not know now says `Unknown command "x"`, which swarm this is and its version, and to run `swarm update`; an unknown flag says `Unknown option`. `swarm CMD --help` now answers with usage for every documented command (it used to print "Invalid arguments" or a parse error for about 30 of them).
+- `tests/installed-swarm.test.mjs`: a real install into a throwaway HOME, the launcher found on PATH and run as a process: `--version`, `-v`, `-V`, `version`, `status`, bare `swarm`, `remote status|show|off|bogus`, an unknown command and flag, `--help` for every documented command, and `swarm update` from a second checkout (up to date, then a newer release: the install moves, the command runs it, `swarm --version` says so, the checkout's branch is untouched), a `--dev` install refused, and a launcher with an odd runner not guessed at.
+
+## 1.132.0
+
+Live project overview (`docs/watch.md`): a project's page on the `--all` board opens on a **Live** tab that combines every live run in that project.
+- Header: running / queued / blocked jobs, runs live now, spend today, project spend against its cap, and an ETA (the slowest live run's own estimate; "unknown yet" when a run has none).
+- Lanes: one bay per lane with a robot head for every live agent across all runs, labeled with its ticket (when a ticket has that job's id) and run. The board's head cap (12 moving), 15 fps, off-screen, hidden-tab, Pause motion and reduced-motion rules apply.
+- Combined swarm map: one square per job from every live run, filled by state, lane or run, outlined in its run's colour. Combined stats: progress, in flight, first-try pass, retries / failed, merged, merge queue, conflicts. Live runs list (progress ring, spend, elapsed, "Open run page" to the run's own page, which is unchanged, and the inspector). Recent today (result and cost). With nothing running: "No live runs", the last activity and quick links.
+- Real data only: `/api/live` (read-only, token-protected, new `tools/board-live.mjs`) sums the same run files the run pages read; a run that finishes mid-view moves to Recent on the next poll; a failed run's failed jobs and error heads are shown as recorded. The old project sections are the **Overview** tab.
+- Opus review fixes: a run whose state says it is over leaves Live and the live numbers at once and shows under Recent; run and Recent spend is the run total (as the Overview tab); no redraw from elapsed time or estimates (elapsed time ticks in the page), a tab change no longer traps the Back button, a failed load says why, fetches time out, heads exist only for counted jobs, lanes and heads are capped, a paused run makes the ETA unknown.
+- Tests: `tests/board-live.test.mjs` (two or more runs, one finishing mid-view, a failed run, the empty state, hostile names, caps, the route, the page).
+
+## 1.131.0
+
+The per-run Watch page (`swarm watch RUN`) is restyled to match the board (`docs/design/swarm-watch-design-system.md`).
+- Same design system as the board: neutral dark surfaces, one emerald accent, pill tabs and chips, the board's headings and meters. The old navy palette, the corner brackets and the display font are gone from the Run, Build Plan, Commands and Gallery tabs (every colour in those files and in the swarm map, waves and lanes now comes from the same tokens).
+- `index.html` loads `swarm-ui.css` first; `watch.css` is now only this page's own layout. The By state / By lane switch is `.toggle-group` (the board's `.seg` is its stacked bar). Phone widths: one column, 44 px touch targets on buttons and the breadcrumb.
+- No behaviour change: same data, same scripts, same tabs. Not touched: the run page's per-tab scripts.
+- Tests: `tests/watch-ui.test.mjs`.
+
+## 1.130.0
+
+`swarm remote` (`docs/remote.md`): the Swarm Watch board on your phone over Tailscale.
+- `swarm remote on|off|status|show|rotate`. Off by default. `on` checks Tailscale is installed (offers `brew install --cask tailscale`) and signed in (runs `tailscale up`), refuses if Funnel is on for the board's port, starts the board on 127.0.0.1 only with a saved token, runs `tailscale serve` (HTTPS port 8443, tailnet only), checks its own work (Funnel off, the name resolves only to tailnet addresses, the board answers, a wrong token is refused, otherwise everything is taken down) and prints the address, a QR code and the phone steps.
+- The board stays read-only and the token is still required. Through Tailscale only your own login is let in (the `Tailscale-User-Login` header); no run page is started from the remote board.
+- `swarm remote` never runs `tailscale funnel` (the code has no such call, and a test checks that), never listens on a network address, and never changes a `tailscale serve` entry that is not its own. `off` removes the serve entry, stops the board and deletes the token; `rotate` makes a new token and the old link stops working.
+- New: `tools/qr.mjs` (a dependency-free QR encoder, checked with the textbook Reed-Solomon vector and by decoding with macOS CoreImage), `tools/remote.mjs`, `tests/remote.test.mjs` (30 tests against a pretend `tailscale`, `tests/fixtures/mock-tailscale.mjs`). The watch server takes a fixed port, a fixed token and an allowed-host/login rule (`remote`).
+- Opus review fixes: every request to the remote board must carry the owner's Tailscale login whatever its Host (a spoofed loopback Host skipped the login check), every refusal is the same 403, and a Funnel request is refused; an unreadable `tailscale serve status` is "unknown", not "nothing set"; foreground Funnel, Funnel on another entry that proxies to the board, and a taken TCP port are seen; the board stops itself if Funnel appears later; `off` keeps the saved settings and says so when the Tailscale entry or the board could not be removed; a board that starts late is always stopped; a serve entry counts as ours only if it points at one of our loopback ports; QR quiet zone is 4 modules.
+- Not tested: a real Tailscale network and a real phone.
+
+## 1.129.0
+
+Swarm Watch UI upgrade (`docs/design/swarm-watch-design-system.md`, `docs/design/swarm-watch-preflight.md`, `docs/watch.md`).
+- The `swarm watch --all` board has four tabs (Overview, Cost, Agents, Events), a new dark design system (rounded, pill controls, one accent per lane, system fonts only, nothing loaded from the internet), and a phone layout (one column, Needs you first). The project page uses the same system.
+- One robot head per live agent (the MIT-licensed robot-heads drawing, ported to plain JavaScript without React): working when its job produced output in the last 90 seconds, thinking when it is running without output, error when its job failed in the last 10 minutes, sleeping head when a lane has no running agent. At most 12 heads move at once; reduced motion, a Pause motion button (`p`), a hidden tab and off-screen heads all stop drawing. Nothing is shown that the run files do not back.
+- Unread badges on Needs you (kept in the browser); a "Live" chip that turns Stale when the last answer is over 6 seconds old; per-lane usage against the daily cap with the cap's reset time and rate-limit pauses with their end time (Cost tab); keyboard shortcuts (`1`-`4`, `/`, `u`, `p`, `?`) and deep links (`#tab=cost`, `#run=PROJECT/RUN`).
+- New run inspector (`/run?id=PROJECT&run=RUN`): job graph from the run's dependencies, a dashed outline for jobs tried more than once, a journal with each job's cost, a replay slider, and compare against another run. New read-only route `/api/run` behind the board token.
+- `.claude/skills/ui-ux-pro-max/` (MIT, project-local, from nextlevelbuilder/ui-ux-pro-max-skill) was used to write the design system; sources, commits and licenses are in `docs/third-party.md`. `.project-swarm.json` is now git-ignored (a project cap kept on one machine).
+- Opus review fixes: a lane, job or status named `__proto__` or `constructor` can no longer reach `Object.prototype` (maps keyed by run-file text have no prototype); a symlinked or non-file `state.json` is refused; null entries in a job list are skipped; the job graph layers are computed without recursion; replay order is fixed; one poll at a time; the page is not rebuilt when nothing changed (keyboard focus stays); stale lane bays are removed; the live clock chip is no longer a live region (a separate announcement says "N need you, M new" only when it changes); a `#run=` link opens once and does not trap the Back button.
+- Tests: `tests/watch-ui.test.mjs`; the other board tests were updated for the new page (tabs by hash link, `swarm go` test now passes `--root`).
+
+## 1.128.0
+
+Board feedback (`docs/watch.md`).
+- "FYI, no action needed" notes no longer count as needing you: they are listed apart in a collapsed "FYI notes" list. At the source, dropping a dependency on a cancelled ticket now writes a journal note, not an inbox item.
+- Every blocker has a next step: a "do this" line and Copy commands. A security-gate manifest block gets "Approve that file and integrate" (`swarm integrate RUN --queue --approve-manifest FILE`), a no-scanner block says to add a lockfile or install osv-scanner, and every blocker has a dismiss command. New: `swarm resolve BLOCKER_ID` closes a blocker you dealt with (nothing could close one before); `swarm inbox` now prints it.
+- Text is cut at a word, never in the middle of one, and the board wraps it instead of cutting it.
+- History folds a pull request and its merge into one row (the CSV keeps every event).
+- Test and temp projects (under the temp directory, a `.tmp*` folder or a `.swarm` folder) are hidden from `swarm watch --all` by default, everywhere (lanes, totals, inbox, history), with a "show test/temp projects" switch and a count of what is hidden; they are no longer registered when they live in a `.tmp*` folder.
+- Tests: `tests/board-inbox.test.mjs`.
+
+## 1.127.0
+
+A mistyped command can no longer start a paid run (`docs/plan-preview.md`).
+- `swarm "status --json"` (or `swarm go "..."`) used to read a quoted command as a goal. Now a goal that looks like a command is refused before anything is planned: a `--flag` inside the sentence, or a known subcommand starting a sentence of up to three words ("status", "doctor all", "decide logo blue"). It prints "Did you mean: swarm status --json?" (for flags typed inside the quotes: `swarm go "do the thing" --max-usd 5`). Real goals that merely start with a verb ("plan the dealer portal") still work.
+- The question before a paid run now names the cap: "Run, spending at most $5.00 (the cap)? [y/N]" (or "with NO dollar cap"). Only y or yes runs it; `--yes` skips it; with no terminal the run is cancelled; an unattended `--yes` still needs `--max-usd`. The preview (cost estimate, budget) was already shown first.
+- Tests: `tests/goal-guard.test.mjs` (the real command in a temporary repo: refused with no run directory and no spend; a normal goal shows its budget and does not run without an answer).
+
+## 1.126.0
+
+The board's "Needs you" panel (`docs/watch.md`). `swarm watch --all` shows, above the projects, what waits for you in every project: inbox decisions with their choices, human tasks, blockers and proposed tickets, with the command to run at the computer (a Copy button) and, when a question was also sent to your phone, its state and expiry. A count sits in the top bar; `swarm watch --all --text` (and `swarm status --all`) print the same. Read-only and behind the board token: nothing is answered from the page; text is set as text, secrets are redacted, a command is never offered for an id with a control character, one unreadable project is named and does not hide the others, at most 50 rows per project. Opus review fixes: no command for a choice that starts with a dash or holds control, zero-width or text-direction characters; a bad phone expiry date no longer hides a project; an expired phone question says expired; every project is read at once with a 3 second limit (a hung one is named, the rest still show); rows are sorted across projects and the 50-per-project cap is reported ("N more not shown"). Tests: `tests/board-inbox.test.mjs`.
+
+## 1.125.0
+
+Bare `swarm` no longer hangs, and `swarm status` exists.
+- Cause: the short status checked every lane, and a lane that runs on another machine over ssh (hermes on dev2) was probed through ssh with a 90 second timeout, up to three times, so an unreachable host kept `swarm` waiting for minutes.
+- Now the status does not probe remote lanes: they are listed as "not checked (remote host)" (`swarm doctor LANE` still does the real check), the lane check and the spend read have a 5 second limit, and the command exits as soon as it has printed.
+- `swarm status` (no run id) and `swarm status --json` print the same short status; `swarm status RUN` is unchanged; `swarm status --all` is the board's text view (`swarm watch --all --text`).
+- Tests: `tests/bare-status.test.mjs` (a lane on an address that never answers; the whole command must finish in under 15 seconds).
+
+## 1.124.0
+
+Phone approvals: more than one login for the same owner (`docs/phone-approvals.md`). `swarm phone setup --repo OWNER/NAME [--owner LOGIN]...` records the active `gh` login plus each `--owner` as the owner; replies from any of them count, every other login is ignored. Sync can run as any of them. Every comment the swarm posts starts with a marker and is never read back as an answer (the swarm's own login may be one of the owner's). All other rules unchanged (once, 24 hours, unedited, second word for risky items). Tests in `tests/phone.test.mjs`.
+
+## 1.123.0
+
+Phase 19, part 4: phone approvals through a private GitHub repo (`docs/phone-approvals.md`).
+- `swarm phone setup --repo OWNER/NAME | sync [--dry-run] | status | off`. Decisions with choices and proposed tickets that name their files become issues in one private repo (a public repo is refused); you reply with one word from the GitHub app; `swarm phone sync` reads it with the `gh` login already on the machine. No server, no webhook, no new service.
+- A reply counts only from the owner's own login, on an issue the tool opened (kept locally), once, within 24 hours, unedited, one offered word. Borderline items (money, sign-in, secrets, deletion, production, sensitive or high-risk tickets) and the panic button (`swarm stop --all`) need a second step: a one-time word, three wrong tries lock it.
+- Never from a phone: merge, deploy, spend caps, overrides, accepting unmet acceptance lines (not offered; a test reads the source to keep the code from reaching them). Answers are recorded before they run (once only).
+- Opus review fixes: a declined, locked or answered question is never reopened (an expired one only in a later sync); only choices exactly as `swarm decide` compares them, without a leading dash, and plain ids are offered; picking anything but a decision's default (it queues a change goal) needs the confirmation word; a changed set of choices or a ticket that became borderline is re-checked at answer time; state is tied to the repo; a lock file stops two syncs acting on one answer.
+- Tests: `tests/phone.test.mjs` (a fake GitHub).
+
+## 1.122.0
+
+Quotes: automatic time tracking (`docs/quotes.md`).
+- `swarm time summary [--days N]` estimates your hands-on hours per day for a project from your own activity: your messages to the orchestrator (Claude Code session files for the folder), ticket approvals, merges and inbox answers. Activity with gaps of 15 minutes or less is one working block; its hours are the span plus 5 minutes. Only timestamps are read, never message text. Estimates are marked "estimated" and are never written to the time file.
+- Your entries win: `swarm time log HOURS "note"` replaces that day's estimate; `--date YYYY-MM-DD` corrects a past day; `--through YYYY-MM-DD` enters a total up to that day (counted once, silencing the estimates before it).
+- `swarm quote record` keeps the counted hours and how many of them are estimated.
+
+## 1.121.0
+
+Quotes count subscription work: a quote's cost is the ESTIMATED FULL cost (billed plus the list value of flat-rate Codex/Cursor/Claude lanes), shown apart from what was billed (`docs/quotes.md`). `swarm quote record` keeps `estimatedFullUsd`; `swarm quote list` and `swarm quote SCOPE.md` show both; the price starts from the full cost. A record that cannot say its full cost gives no cost number. parts-request-app re-recorded: $26.77 full, $1.96 billed.
+
+## 1.120.0
+
+Phase 19, part 3: quotes as ranges (`docs/quotes.md`).
+- `swarm time log HOURS "note"` / `swarm time list`: your own hours per project (private file in the project).
+- `swarm quote record [--name N] [--charged USD] [--change-orders N] [--gpu-hours H] [--backfill]` keeps a finished project's numbers in `~/.project-swarm/quotes/projects.json`: scope sizes, tickets, model cost billed apart from flat-rate list value, hours, calendar days, what you charged. Unknown numbers are `?`, never 0.
+- `swarm quote SCOPE.md` prints cost, calendar time and your hours as ranges from the nearest finished projects (middle half; no number without history), with a confidence and the reason. The price line stays blank until you set both `swarm quote config --rate` and `--margin`; no default is invented.
+- Opus review fixes: a damaged `projects.json` is never overwritten (record/list/quote refuse and say why); names that slug alike keep separate entries; a folder with no runs records billed cost as unknown, not $0; `--margin 0.3` is refused (30 or 30% only); confidence drops when few similar projects have cost or hours; projects more than about twice the size are not "similar".
+- Never read by a client report, no network or model call. Tests: `tests/quotes.test.mjs`.
+
+## 1.119.0
+
+Phase 19, part 2: client progress reports, files only (`docs/client-report.md`).
+- `swarm report --client [--since DAYS] [--preview URL]` writes a DRAFT (self-contained html, plain text, a record) from the scope's requirements (your own sentences), stage names and ticket progress: percent complete, done this week (from the ticket log), in progress, coming up, decisions from a scope "Client decisions" section, an https preview link. Never ticket titles, notes, models, costs or code.
+- A scan refuses the report, saying what it found, if it holds a money amount, a model or vendor name, an id, a path, code, an internal word, a secret-looking value, an email or any address but the preview link. It runs again at approval.
+- `--approve` records a hash of the exact files; `--status` shows draft / approved / edited; any later edit un-approves.
+- Hardened after an Opus review: the page is read the way a client sees it (comments, scripts, images, extra attributes and links are refused; tags cannot split a word; entities, fullwidth and invisible characters are folded); the status re-scans the files instead of trusting the record; the preview address comes from the record and must be a plain https host with no internal id; a scope section "Report allow" lists phrases (like "support ticket") that are fine for this client, never for money, vendors, ids, paths or secrets; numbered report folders, atomic file creation, `--since` wording.
+- Nothing is sent; the modules contain no network or mail code (a test checks).
+- Tests: `tests/client-report.test.mjs`.
+
+## 1.118.0
+
+`swarm errors pull`, checked against the real `vercel logs --json` (parts-app, read-only dry run): entries are `{type:"log", data:{...}}` with a `{type:"summary"}` last line, which the parser already read. Two fixes from what was seen: Vercel calls an app's stderr output `warn`, so the default query is now `environment:production AND (level:(error OR fatal OR warning) OR stream:stderr)` and an Error-shaped stderr message counts as an error (a plain warning does not); an app that logs JSON is read by the level inside its message (an info line is not an error; an `error` line uses its own message). The Pro plan refuses long windows (24h); the default 15 minutes works. Tests in `tests/errors.test.mjs`.
+
+## 1.117.0
+
+Phase 19, part 1: production errors become tickets (`docs/errors.md`).
+- `swarm errors pull` reads recent production errors with the `vercel` CLI you are already logged in with (no Sentry, no new key; `--dry-run` shows without storing; the command can be set in the profile); `swarm errors ingest FILE|-` takes JSON lines from any other source.
+- Everything is scrubbed before it is stored (emails, phones, ids, IPs, tokens, keys, query strings, home folders, secret-looking values; record ids leave the route). Errors are grouped by a fingerprint; a repeat only raises the count.
+- A new group becomes ONE `proposed` ticket (outside the plan and the approval hash, never ready, never a job until you approve it): fixed title and acceptance, the scrubbed text only as quoted notes. A fixed error that comes back is a new proposal linked to the old. Tickets from outside text (gallery comments, errors) now share one rule (`PROPOSAL_ORIGINS`).
+- Severity from the profile's `errors` block: critical routes (payments, auth by default) and spikes are an inbox decision now; the rest goes in `swarm errors digest`. `list`, `show`, `ignore --reason`, `resolve`.
+- An Opus review (14 high, 12 medium, 7 low) was fixed before release: wider scrubbing (JSON and snake_case secrets, connection strings, short IPv6, record ids, other home folders, disguised emails, fragments, form bodies, Postgres keys, cards) with bounded work on hostile input; routes lose tokens and personal segments and stay out of titles; event keys come from the raw event; times far from now are dropped; per-pull limits and a flood summary; a store that makes room; a cross-process lock; a damaged store is never replaced; regressions are judged from when the fix was noticed, with a grace, and never for ignored groups; payments/auth routes are their own groups; a stopped log command keeps its lines; the digest follows when events were pulled.
+- Tests: `tests/errors.test.mjs`. The `vercel logs --json` line format was read from the CLI's help only, not from real logs.
+
+## 1.116.0
+
+Swarm Watch: back to the board. Every run page and project page has a "← All projects" link and a breadcrumb (All projects › project › run); plain links, so Back works. From a run page the link finds the running board (its address and token are kept in `~/.project-swarm/board.json`, mode 0600, used only if it is a loopback address that answers) or starts one, then redirects there with the board's own token; a run page opened directly works the same way. The run page's own token is needed for every nav route (the board's token is refused there). An Opus review (4 medium, 4 low) was fixed before release: only our own board is reused (its reply shape is checked, a redirect is never followed, a foreign local service never receives the token, a process that is not ours does not count as alive); one start at a time per process; the board file is private, written atomically under a random name and rebuilt to origin plus token; a board that ends closes the run pages it opened and removes its own file entry; Ctrl-C closes a board the run page started. Tests: `tests/board-nav.test.mjs`.
+
+## 1.115.0
+
+The Swarm Watch board, part 2: a machine-wide worker limit shared fairly between projects.
+- New local-config setting `machineConcurrency` (a whole number 1 to 2048; none by default; anything else is an error): the most workers the machine runs at once, in all lanes and projects together. Projects share it fairly: a guaranteed share of limit / active projects (at least 1), idle capacity can be borrowed, but not what another active project is waiting for. Lane limits and every spend cap stay separate and unchanged.
+- The board's top bar shows "Workers held": use of the limit, which project holds how many (by lane), and who is waiting.
+- Tested with real concurrent runs of two projects: at most the limit at once, both finish, each run's outputs and state stay in its own project, every worker slot is given back.
+- An Opus review (1 high, 5 medium, 4 low) was fixed before release: with more projects than workers a freed worker goes to the longest-waiting project; waiting entries are per run and lane and expire after 5 seconds; a waiting run polls the file without taking its lock while the machine is full; a malformed waiting list is reset, never an error; the board shows an invalid limit as `LIMIT INVALID`. (A lead job gives its worker back before its child run starts, so nested runs cannot deadlock on a small limit.)
+- Tests: `tests/machine-share.test.mjs`.
+
+## 1.114.0
+
+The Swarm Watch board, part 1 (data and page). `swarm watch --all` is now the board of the whole machine:
+- A lane per project (current stage, live runs, jobs running / queued / blocked, open and blocked tickets, spend against its cap or NO CAP, last activity); idle lanes collapsed. Click a run: its own Watch page opens (the board starts or reuses that run's server, with the page's own token; no copy and paste). Click a project: tickets by status, run history, spend by lane, lessons.
+- A machine-wide top bar: live agent count by lane (Haiku, Sonnet, Opus, Codex, Cursor, GPU) and by project, and spend today / 7 days / all time, in total and per project, with estimated and flat-rate (subscription) lanes marked apart. Each project's total is the number its cap uses, and the machine totals are the sums (tested).
+- **History:** an append-only, key-deduplicated log of every project, stage, run, PR, merge, lesson and spend, kept on disk (`~/.project-swarm/history/history.ndjson`), searchable, filterable by project, type and date, clickable, exportable as CSV (formula-safe). `swarm history`, `swarm history --backfill`.
+- **Projects:** any swarm command in a folder lists it (`swarm projects`, `add`, `remove`); scratch folders are not listed. A project is named by id, never by a path from the page; two projects stay isolated even with the same run id.
+- Read-only and token-protected: every board route needs the token, only GET, a wrong host is refused.
+- An Opus review (2 high, 11 medium, 8 low) was fixed before release: parsed run states are cached and one snapshot is shared; backfill skips runs still going; history dedupes by key on read, restarts a torn line and normalises every line; a damaged project list is never overwritten, scratch and worker folders are never listed; live runs match by real folder; at most 6 per-run servers, one per run; today / 7 days count billed lanes only.
+- Part 2 (a machine-wide worker limit so projects share workers fairly) follows.
+- Tests: `tests/board-page.test.mjs`.
+
+## 1.113.0
+
+Speed and accessibility budgets (A2) and the model watcher (B3):
+- **Budgets:** a `budgets` block in the profile (performance, accessibility, axe impacts, key screens, your Lighthouse and axe commands). When the preview hook passes, Lighthouse and axe run on each screen; a failing screen (or a tool that could not run) is recorded, gets one fix ticket for the batch's files, and `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage. `swarm budgets check --url URL` / `status`. See `docs/budgets.md`. The default tool commands were not run against a real site.
+- **Model watch:** `swarm models watch` (weekly) finds new open coding models that fit our GPUs and new Anthropic API model versions and puts each new one in the inbox as a decision (default skip); the first run is a silent baseline. It never rents a GPU: the inbox item carries the `swarm gpu bakeoff` command and your pre-approved `modelWatch.evalCapUsd` (or says none is set). `swarm models compare A B` reports pass rate and cost from recorded eval runs. See `docs/models.md`.
+- An Opus review (3 high-impact and 12 smaller findings) was fixed before release: budgets measure an address from a deploy log only when its host is in `budgets.previewHosts`; empty or error reports and wrong pages are `cannot-run`; the gate looks only at screens the profile lists, treats never-measured screens as open, blocks only the run that holds a last-stage ticket, and has a logged way out (`swarm budgets accept`); the model watcher follows Hugging Face pages to the age limit, counts packed weights at full width, baselines only on a real answer, caps inbox decisions per run and gives distinct ids.
+- Tests: `tests/budgets.test.mjs`, `tests/model-watch.test.mjs`.
+
+## 1.112.0
+
+Two parts-app S11 review bugs:
+- The acceptance review job was written with the tier `standard`, which the runner does not know (`cheap`, `mid`, `expensive`), so the manifest was refused. It is now `mid`; a test runs the manifest through the runner's own validation.
+- A review answer that ends with the worker's status line (`{"status":"complete",...}`, which the runner asks every review job to finish with) hid the verdict line, and the recorder found no verdict. The recorder now skips ONE trailing status line (exactly the runner's shape, status complete; a blocked or failed footer means no verdict) and reads the line before it, for the acceptance review and the security review. The rule against quoted objects is kept: a verdict-looking line earlier in the text still never wins, and anything else after the verdict line (prose) still hides it. An Opus review (2 medium, 3 low) tightened the footer rule.
+- Tests: in `tests/acceptance-sync.test.mjs`.
+
+## 1.111.0
+
+Two parts-app bugs (lessons 54 and 55):
+- **A wave could not start because of `.env.example`.** A names-only template (`.env.example`, `.env.sample`, ...) is listed as context in jobs, but the project profile protects it, so the manifest check refused it and no wave started. A template is now readable context everywhere the runner reads or copies context (the protected-path check, the snapshot, the copy into the worker's workspace); it is still never writable, and a real `.env`, or a file named like the template that is a symlink to one, is still refused. The exemption is narrow: the protected entry must be exactly that file (not a folder, not `.git/`/`.swarm/`), no secret folder may sit above it, a template word in front of a key extension (`server.example.pem`) is still a key, and a template that holds what looks like a real secret value is not handed to a worker. An Opus review (4 high, 7 medium, 6 low) was fixed before release.
+- **The splitter.** (1) A TEST ticket the split worker left without acceptance lines gets its requirement's own acceptance lines (a note says so); a build or migration ticket is not (the requirement's lines are route-level), and with none to copy a test ticket is refused as before. (2) A test ticket now waits for the module tickets of its requirements (a test that runs before the module it imports can only block); a test-first dependency the worker wrote is flipped, never a cycle; integration tickets and finished tickets are left alone. (3) A requirement with modules and no integration ticket no longer throws the whole split away: the ledger is written (`pendingWiring`), the wire manifest is written for you to `docs/scope/split/wire-manifest.json` (the split manifest is never overwritten), and `scope approve` refuses until the integration tickets exist. A merge into an approved ledger that would leave a requirement unwired is still refused, so a running build keeps its approval. (4) The split prompt asks for acceptance lines on every build, test and migration ticket and for tests to run after the modules (preferably listed in the build ticket's `tests`).
+- Tests: `tests/env-example-context.test.mjs`, `tests/splitter-lesson-55.test.mjs`; eval 34.1 now expects the kept split.
+
+## 1.110.0
+
+Swarm Watch leftovers:
+- `swarm go` starts Swarm Watch for its run when you are at a terminal and prints `watch: URL` (never in CI or a pipe; `--no-watch` / `SWARM_NO_WATCH=1` turn it off). It never holds the run back.
+- `swarm watch --all` is a web board of every live run on the machine (read-only, token-protected, no `innerHTML`); `--all --text` is the old text list, `--all --json` is data.
+- The job drawer shows the worker's report (summary, files, risks, follow-ups), fetched on open from a token-protected `/job/ID` route as sanitised, capped text under the untrusted-worker-data label.
+- Gallery comments become fix tickets, as proposals: new ticket status `proposed`. A comment is untrusted text: the title and acceptance are fixed words, the comment is kept only in `notes` (a worker sees it quoted as data), and the ticket is outside the plan and the approval hash: never ready, never a job, not movable by `--set` (except cancel). `swarm tickets ID --approve [--yes]` (after `--files`) is the owner's approval; it logs `proposed-approved` and seals an approved ledger again. `swarm gallery comment` proposes one at once; `swarm gallery tickets` backfills older comments.
+- Tests: `tests/gallery-tickets.test.mjs`, `tests/watch-leftovers.test.mjs`.
+
+## 1.109.0
+
+`swarm go --scope` is now the whole loop (the S8 gap: the orchestrator drove every wave by hand):
+- It repeats: build the wave from the ready tickets, run it, integrate and commit it on the current branch, `scope sync RUN`, `scope sync RUN --integrated`, and the security / acceptance reviews that sync asks for (recorded, then the sync repeated, up to three rounds). It stops with a named reason: `complete`, `waiting-human`, `stuck`, `cap`, `stopped`, `paused`, `failed`, `no-progress` or `max-waves` (`--max-waves N`, default 50). Exit 0 for complete and waiting-human, 75 for paused, 1 otherwise; the last stdout line is JSON.
+- A wave that cannot start (the project cap or a spend cap, a stop marker) no longer leaves its tickets marked running: they go back to ready. A wave where some jobs failed integrates and commits the finished ones; the failed tickets go up the escalation ladder as before. A failed integrate stops the loop. It never ships a pull request and never uses the owner's overrides (`--accept-unreviewed`, `--accept-unmet`, `--accept-failed-check`, `tickets --set done`).
+- Unattended safety: each wave and review run gets the per-run cap (`--max-usd`/`--max-tokens`, else the profile budget, else the `swarm go` default); it refuses `main`/`master`/detached HEAD unless `--allow-main-branch`; one loop per project (a lock); a wave commits only its own files and refuses when something else is staged; the stop marker is checked before every wave, salvage and paid review, Ctrl-C ends the loop, and a cancelled run is never synced, salvaged or reviewed; a step that fails (a refused sync, a review that hits a cap) ends the loop with the summary; the salvage path runs the same mutant and flake gates as a normal integrate; `max-waves` exits 75. The last wave finishing every ticket reports `complete`; the loop never ends without the final JSON. Two Opus reviews (2 high, 5 medium, 5 low, then 3 medium, 8 low) were fixed before release.
+- `swarm go --scope --wave` is the old single wave (still the way to ship one wave with `--pr`).
+- Test: `tests/scope-loop.test.mjs` (the loop with fakes, plus the CLI against a real approved ledger with the project cap reached).
+
+## 1.108.0
+
+A lane at its daily cap no longer stops the run (the S8 gap: "cap refusal escalates to Codex instead of aborting"):
+- When an auto-routed job is refused at admission by its lane's daily cap (two jobs pick the lane before either has reserved, so the second is refused), the job goes back to the queue and the lane is skipped for that job (other jobs may still fit it). The router then gives it to the next lane in the routing order: Cursor, then Codex (both subscriptions), then the others it already allows. The move is recorded on the job (`capFallbacks`: from, to, reason) and in the run's `spendWarnings` (`lane-cap-reroute`).
+- Unchanged on purpose: the per-run `--max-usd` / token cap still holds the run (it is the owner's limit on this run, not a lane's); a job that names its own lane (not `auto`) still holds, because its fields may not fit another lane; when no other lane can take the job it holds as before; the daily caps themselves are never raised.
+- Resuming an auto job that was held at a lane cap no longer refuses because the full lane is still full: the job is routed again, so only the run cap is checked. The retry check after a failed attempt also skips capped lanes. An Opus review (3 medium, 5 low) was fixed before release.
+- Test: `tests/cap-reroute.test.mjs` (fails on 1.107.0).
+
+## 1.107.0
+
+`swarm tickets ID --risk low|medium|high` and `swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL]` (the S8 gap: a ticket's route could only be changed by editing the ledger by hand):
+- Both change a todo, ready or blocked ticket. Without `--yes` it previews; with `--yes` it applies, writes a `ticket-edit` line to `.swarm/project/tickets.log` (before, after, whether the approval was renewed) and seals an approved ledger again, since `risk` and the new `lane` field are part of the approved hash. A ticket with no lane hashes exactly as before, so existing approvals stay valid.
+- A pinned lane wins over escalation routing and the profile's verify lane when the ticket becomes a job. A lane that cannot run tests or delete files (`anthropic`) is refused for a ticket that has `tests` or `deletes`. `tickets ID --risk X` with an id now sets; with no id it still filters.
+- A lane is validated strictly (a model must start with a letter or digit; the stored text is normalised). A sensitive ticket may not pin a lane that leaves the known providers (`cursor` only without a model), both when set and when the manifest is built (the pin is then ignored with a warning). `--lane`/`--risk` cannot be mixed with other edit flags. An Opus review (3 medium, 5 low) was fixed before release.
+- Test: `tests/ticket-lane-risk.test.mjs`.
+
+## 1.106.0
+
+Migrations: `down: "dir"` and `down: "none"` (parts-app: with Supabase, `down: "sibling"` breaks the CLI, which reads `0009_x.down.sql` as a second migration with version 0009, and `down: "section"` runs the down right after the up):
+- `down: "dir"`: down files live in a separate folder (`downDir`, default `<dir>_down`, e.g. `supabase/migrations_down/0009_x.sql`, same file name, mirrored path) that the Supabase CLI never reads. The folder must not be, sit inside or contain the migrations folder (case-insensitive; `/` separators only). Editing or deleting a down file re-checks its migration. `swarm init` now writes `down: "dir"` for a new project with `supabase/migrations`; other tools keep `sibling`.
+- `down: "none"` (parts-app lesson 53): skips only the down check. The destructive and privileged SQL scan and `swarm migrations approve` (bound to the file hash) still run.
+- In every mode except `sibling`, a stray `*.down.sql` inside the migrations folder is flagged (`down-in-migrations-dir`) and scanned like a migration, because the tool applies it. Paths are matched case-insensitively; a down file that is a symlink is not a down step; `migrations.env` now survives profile validation. A profile with `dir` or `none` is rejected by older swarm versions (update first).
+- Test: `tests/migration-down-dir.test.mjs`. The Supabase CLI file rule is modelled (the real `supabase db push` needs Docker and a database and was not run). An Opus review (2 high, 4 medium, 5 low) was fixed before release.
+
+## 1.105.0
+
+NO CAP warning, and a worker that could not run a check is no longer blocked (parts-app lesson 52):
+- A project with no project-wide spend cap gets `warning: NO CAP ...` from `swarm go` (stderr), and swarm watch shows `NO CAP` (terminal and web Spend tile). Nothing is defaulted: the owner sets `budget.projectMaxUsd` (an invalid value is refused at run start and shows `CAP INVALID`).
+- A worker's own blocked report that is ONLY about not being able to run a check (no shell, tests not allowed, tool missing), with every declared output written and non-empty, now finishes as `complete` with `checksDeferred` on the job; before, the job was blocked and the orchestrator copied the files by hand. The swarm runs the manifest's checks centrally at integrate (`checks-run-centrally` note; a failing check fails the integrate as always). With `--no-checks`, or a manifest with no checks, integrate says `checks-not-run` so nothing looks verified that was not. A block about anything else (a file it needs, a rule it cannot meet, credentials, permissions, a missing output) stays blocked: every sentence of the report must be "could not run a check" or plain progress. The downgrade needs the manifest to have checks (otherwise nothing would verify the files), every output written, non-empty, not a symlink and different from its start. An Opus review (5 high, 5 medium, 5 low) was fixed before release. `tools/central-checks.mjs`.
+
+## 1.104.0
+
+Project-wide spend cap and a ledger that adds up (parts-app lesson 50):
+- `budget.projectMaxUsd` in the project profile (and `spend.projectMaxUsd` in the local config; the lower one wins) caps the total of ALL runs in the project. A new run is refused once the total has reached it (`project-cap`), before any worker is called. `--max-usd` stays per run. A review re-ask is a run, so it counts; a re-ask refused by the cap does not use up its one retry. Resume is refused over the cap too; runs still going count with their own `--max-usd`; an unreadable run state or pointer file refuses new runs instead of counting as zero. An Opus review (2 high, 6 medium, 4 low) was fixed before release. No cap is set by default. `tools/project-spend.mjs` (`projectSpend`, `projectCap`, `projectSummary`).
+- swarm watch shows the project total (TUI line and the web Spend tile), its cap, and `CAP REACHED` when new runs are refused.
+- Usage ledger: the daily summary ends with a **total** row; a detail row with extra cells (a stray pipe in the task, an older writer, a hand edit) is read from the right so it is counted under the right day and tier; a row that cannot be read is reported under the summary instead of silently dropped. Tests added. The parts-app ledger (365 rows, $14.51) adds up to its summary; the $25.61 figure did not come from that file (see docs/state/dogfood.md).
+
+## 1.103.0
+
+Acceptance lines are enforced (parts-app S8: T-0168 had "validate + encode reply links" and "thin page under 8 KB" in its acceptance and went done without either):
+- Before done, every acceptance line of a build, test, migration or contract ticket is covered by a passing test (its tag `ACn` in a test title; worker prompts now list the lines as AC1, AC2, ... and ask for it) or checked by an acceptance review job (pass or fail per line, with a reason). `tools/acceptance.mjs` (tag matching, coverage, evaluation, review manifest and verdict parsing; written on the swarm).
+- A ticket with an unmet line stays in review; a failing line goes back to the worker with the line and the reason. `swarm scope sync` writes `.swarm/acceptance-reviews/RUN.json` for the lines no test covers; `swarm scope acceptance-review REVIEWRUN` records the verdicts (valid only for the code they were made on), with the same one re-ask and the same blocked state as the security review (`acceptance-blocked`).
+- An Opus review (6 high, 6 medium, 6 low) was fixed before release: enforcement cannot be switched off by an invalid or unreadable profile (sync refuses instead), only tests the runner itself saw pass count (not an owner-accepted failure, not output already in the tree), only real test files the tests check runs for the ticket can cover a line, a file that can switch tests off (`describe.skip`, `skip:`/`todo:` options, `.only`, `skipIf`, pytest and Go skips) counts no titles, a title with two tags covers nothing, a declaration inside a string does not count, comment stripping is one pass (no quadratic hang), a review counts only when it was made from the manifest of the latest sync (a review token in the prompt) and each verdict follows the hash of its line's text; the production module no longer carries test code.
+- The per-line results are on the ticket (`acceptanceResults`), in the sync output and in the swarm watch ticket drawer. `--accept-unmet T-0001 --reason TEXT --yes` is the logged way out (never for a failing line). Profile `acceptance: {enforce, model}`; a project without a profile is not enforced. Doc: docs/scope.md, design: docs/plans/acceptance-design.md.
+
+## 1.102.0
+
+Security review that cannot be skipped by accident (parts-app S9: five tickets were closed with `--accept-unreviewed` because the Opus reviews had no `reviews` array):
+- A review answer with no `{"reviews":[...]}` result is asked again once with a format reminder (`scope security-review`, one extra Opus run capped at $1.5, at most once per review; the second answer is checked like the first: right job, opus, complete).
+- If it is still unusable the tickets are **review-blocked**: they stay in review (never done), with the reason on the ticket (`securityReview`), in the log (`review-blocked`), in the sync output and in swarm watch. A later verdict clears the mark.
+- `--accept-unreviewed` needs `--reason TEXT` (at least 8 characters) as well as `--yes`; the reason goes to the log, to the ticket (`securityReview: accepted-unreviewed`) and to swarm watch.
+- An Opus review (6 medium, 5 low) was fixed: the second ask runs only the single read-only Opus job sync wrote, a rerun reads the earlier second answer instead of paying again, an empty `reviews` list counts as no answer, a blocked ticket needs a verdict newer than the block, `--accept-unreviewed` never overrides a failing review or marks a ticket whose review passed and logs only real skips, and both accept flags are checked before anything is logged.
+
+## 1.101.0
+
+- `swarm lessons import <project-path> [--project NAME] [--dry-run]`: reads another project's `coordination/swarm-lessons.jsonl` (read only: a regular file, 2 MB cap, no symlink) and writes the lessons it does not have yet to `lessons/<NAME>/`, redacted, with stage and tags from the text; running it again skips what exists. First use: the parts-request-app lessons 33 to 47 (the earlier 32 were already here). An Opus review (2 high, 3 medium, 4 low) was fixed: no symlink on the way and one open handle with the size checked on it, a bad date fails only its row, text is redacted before it is cut, an existing id with another rule is a conflict, ids must be whole numbers, inherited object keys are ignored. Doc: docs/lessons-loop.md.
+
+## 1.100.0
+
+Safety group (docs/safety.md, design docs/plans/safety-design.md):
+- `swarm stop --all`: the panic button. Writes a stop marker first (run, go, autopilot and resume refuse until `swarm stop --clear`), cancels running runs, stops the autopilot by exact PID, ends a rented GPU session and says to terminate the instance (an unreachable node is a failed step with a billing warning, exit 2), then takes a backup.
+- State backups: `swarm backup`, `backup list`, `backup verify`, `swarm restore ID [--yes]` (hash-checked, never secrets or symlinks, a restore takes a pre-restore backup so it can be undone, newest 20 kept, automatic at `scope approve`).
+- Safe migrations (profile `migrations` block, opt-in): every changed migration needs a down step, a destructive one needs `swarm migrations approve` (bound to the file hash, opens an inbox item), and up, seed, down, up must run clean, all in the merge queue before the tests.
+- `swarm stop --all` also cancels paused, queued, pending and held runs (in place: unfinished jobs become cancelled), not only running ones.
+- `swarm init` turns the migration check on for a new project that has a migrations folder (supabase, prisma, drizzle, db/migrations); existing projects keep the note. A re-init now also keeps hand-set `ui` and `quality` blocks (they were dropped before).
+- An Opus review (7 high, 8 medium, 8 low) was fixed before release: an unreachable rented node is a failed step, the autopilot PID is signalled only when it really is an autopilot, the stop guard also covers sweep, scout, ship, merge, integrate and gpu up (and a flag value cannot switch it off), quoted identifiers, dollar-quoted bodies, E strings, `DROP` without `COLUMN`, CTE deletes and privileged calls are all caught, restore cannot prune its own source or write outside swarm state, secret names match case-insensitively, migration commands get a short environment.
+
+## 1.99.0
+
+Parts-app S7 lessons (40-41):
+- The build check is on by default: a project with a `build` script runs it on every merge batch. `quality: {build: false}` in the profile turns it off.
+- A ticket's named `tests` files are its own outputs unless another ticket owns them, so the worker may write them. A ticket whose named test files are not in the tree is sent back to the worker, not marked done.
+- Tickets can declare `dependencies` (npm packages, registry names with an optional version; `--dependencies` on `swarm tickets`). The runner builds the new `package.json` and lockfile with no install scripts, they go through the security gate (manifest and lockfile audit) as part of `integrate --queue`, and `npm install --ignore-scripts` adds them to node_modules only after the gate passed.
+- Automatic security review: a ticket that touches auth, an API route, a migration or database policy, or a sensitive path stays in review at `scope sync --integrated` until an Opus review passed on the code in the tree now. Sync writes `.swarm/security-reviews/RUN.json`; run it, then `swarm scope security-review REVIEWRUN` records the verdicts. A failed review sends the findings back to the worker. `--accept-unreviewed T-0001 --yes` is the logged way out.
+- `go --scope` runs design tickets (as docs jobs) instead of skipping them.
+- The worker prompt no longer says "Do not delete files" when the ticket declares `deletes`; it names the files it may delete.
+- `swarm tickets ID --take-from A,B` takes files from several tickets (a file with two owners moves when both are named), and files move by role: a file the other ticket writes moves into `--files`, one it deletes moves into `--deletes` (a deletion is never turned into a write; eval 39.1 caught that).
+- The typecheck check clears stale `.next/types` first (a check may declare `cleanDirs`, limited to that folder).
+- Opus review fixes: dependencies install with `npm install --ignore-scripts` (never `npm ci`, which would wipe `node_modules`), only the named packages may change `package.json`, workspaces and private-registry scopes are refused; the security review counts only the Opus job of a manifest sync wrote, only for the tickets it listed, against the code hash taken when it was requested (a fail beats a pass, only the last JSON line counts); a build ticket waits (no retry) for a test ticket that owns its named test file; the local CI run uses a minimal environment and skips jobs with an `environment`, `services` or `container`, branch-gated jobs, steps that use a secret, run after failure or continue on error, and `pull_request_target` workflows.
+- `ship` runs every command of the project's pull-request CI workflows (`.github/workflows`, in file and step order) before it pushes or opens a PR, and refuses (`ci-local-failed`, naming the step) if one fails. Steps that need secrets or `${{ }}` values, run only on push, or publish and deploy are listed as skipped, not run. `--no-ci-local` turns it off.
+- Test fixes: the build-by-default and `cleanDirs` tests expect the new behavior (`build: false` is the opt-out); eval 38.4 now has the real test file its ticket names; test 286b has hard timeouts (a self-killing fake CLI, a spawn kill timer, a bounded wait and a test timeout) so a stuck child fails fast, and it is no longer skipped.
+
+## 1.98.0
+
+Parts-app S6 lessons (lesson 39):
+- `swarm tickets ID --files a,b --take-from OTHER [--yes]` moves ownership of files from another ticket, even a done one: the other ticket's `files` lose them, this ticket's gain them, the ledger stays approved (sealed again), and a `file-move` line is logged. Only files OTHER writes (and is the only owner of) move; a running, review or cancelled source is refused; the output says when OTHER is done and its tests are not re-run. Without `--take-from` the refusal now names the owner and the flag.
+- Tickets can declare `deletes` (existing files to delete, named exactly, no folder or glob, not also written). The split prompt asks for it, the job declares exactly those files and runs on a shell Claude worker that sees them and can delete in place. The job lists a deleted file in both `outputs` and `deletes` (the engine only integrates a deletion for such a path; a real integrate test found that ticket deletes were never applied before this). A delete counts as a write for file-ownership conflicts, and the security gate looks at deletions (fail closed): deleting a manifest, lockfile, workflow or action, hook, `.gitignore`, `.npmrc`, CODEOWNERS or the profile needs `--approve-manifest FILE`, which is accepted only when the file exists and is really absent in the job's result (a worker that kept the file is refused). A deletion alone no longer triggers the vulnerability scan (nothing is added to audit); after a `--queue` block the run is finished, so run the job again and integrate the new run with the approval. A ticket cannot declare the deletion of those files (delete them by hand).
+- `swarm tickets ID --acceptance "one ;; two"` replaces the acceptance text (lines split on a newline or ` ;; `, so a shell check with `||` stays whole) on todo, ready or blocked tickets; `--add-acceptance TEXT` appends one line and also works on review and done tickets (a replace there could weaken what the work is judged against). The approval is sealed again.
+- `scope check`, `split` and `approve` warn when a ticket names an e2e spec (`e2e/`, `*.e2e.ts`, `cypress/e2e`) and the project's e2e command would not run it: no e2e script in package.json, a command or config (`testDir`, `specPattern`, `--config`) limited to another folder, a playwright spec that does not end in `.spec` or `.test`, or a cypress spec that does not end in `.cy`. The nearest package.json decides in a monorepo; python and other non-JS specs are not judged.
+
+## 1.97.0
+
+Parts-app S6 report (9 hand fixes):
+- A failing check keeps every ticket in its batch or run out of done, whatever the check is called (tests, an env check, a log lint; also a timeout or crash, and a run-level check after a passing batch) and whether or not the ticket has tests. `scope sync --integrated` leaves them in review and says which check failed; a batch of one job goes back to the worker with the failure. If the check was already failing on the base, `scope sync RUN --integrated --accept-failed-check NAME --yes [--note TEXT]` lets tickets pass; it is named, confirmed and logged.
+- Dependency keys the split worker invented (a `dependsOn` key that names no ticket in its file) are dropped with a note instead of refusing the whole split.
+- `--help` or `-h` on go, scope, tickets, change, run, integrate and other acting commands prints the help and does nothing else (`go --scope --help` used to prepare and release a wave).
+- A check failure whose errors name only files that other tickets own (S6: T-0091's lint failed on the file T-0090 wrote) is not that ticket's failure: no escalation and no attempt for it. If the owner is in the run, the failure goes to the owner; if not, the ticket is blocked (manual) with a note naming the owner, to fix and `swarm tickets ID --release`. Applies to batches of one too. Tickets with failed checks are processed first, so the owner is not marked done before it gets the failure.
+- A job that failed for a reason outside the ticket (credit exhausted, rate limit, HTTP 402/429/5xx, host or network down, run stopped; judged on the runner's error line only, never on test output) returns to ready at the same level instead of climbing the escalation ladder; after three in a row it is treated as the ticket's own.
+- A ticket whose proposed output already matches the tree (a regular file in the run workspace, byte for byte, never a symlink or the project itself) is no longer stuck in review waiting for integration evidence; sync says it was not re-verified. A different tree still stays in review.
+- `swarm tickets ID... --release [--note TEXT]` releases held tickets cleanly: blocked, todo or review go back to ready with attempts, escalation level and retry notes cleared (dependencies must be done; the approval stays valid).
+
+## 1.96.0
+
+- The route-level test of an integration ticket must be a test file (a tests, e2e or spec folder with a source file that is not a helper, fixture, support file or page; a `.test` or `.spec` file; `tests.py`, `test_*.py`, `*_test.go`, `*_test.ts`); a page or module file named as the test is refused at split. `swarm tickets --tests` applies the same rule to integration tickets.
+- Lesson 1 and the strict-cancel option are parked in docs/plans/ideas.md.
+
+## 1.95.0
+
+- Lesson 16: `scope split --ingest`, `scope approve` and `scope check` warn when an acceptance check runs a supabase, cypress, prisma or drizzle-kit command and no ticket writes its config file and the project has none. The split prompt asks for that ticket.
+- Lesson 21: a ticket that writes or runs database tests (supabase/tests, pgTAP, `supabase test db`) gets the runner rules in its prompt: every .sql under the tests folder runs, `\ir` stays inside the mounted folder, no dblink as a non-superuser.
+- Lesson 26: a manifest check, preCheck or job setup that stops processes by a loose pattern (`pkill`, `killall`, `kill $(pgrep ...)`) is refused (`loose-kill`); `kill PID`, `pkill -P`, `pkill -F`, a pid-file `xargs kill` and a `grep` for the word are fine. It also catches `/usr/bin/pkill`, `kill $(lsof ...)`, `fuser -k` and `kill-port`. Shell workers and the agent pointer files (AGENTS.md, CLAUDE.md, GEMINI.md, cursor rule) carry the rule.
+- Lesson 2: closed. The updater has run the new release's installer in a fresh process since 1.66.0 (test: tests/update.test.mjs). The lesson records now say so; lessons 14, 16, 17, 21 and 26 are marked built.
+
+## 1.94.1
+
+- `swarm integrate --approve-manifest FILE` is now tied to the file's exact content: swarm takes the sha256 of the bytes the workers proposed, the gate lets only that content through, and a later change to the same file is blocked again with "changed after you approved it (approved X, now Y)". The decision record names the hash.
+- The "500 API jobs" lane test no longer depends on the timing of state snapshots (it failed once on a busy macOS runner): it checks from the requests that other lanes were served during the gemini pause.
+
+## 1.94.0
+
+- A failed tests check at done-check goes back to the worker with the failure, like lint and typecheck (one job in the batch: that job; a run-wide failure: only the ticket the output names; many tickets: base or setup, no paid retries).
+- `swarm tickets ID --files a,b --context c --tests t [--yes]` changes a ticket's file lists (todo, ready, blocked or review only). It previews first, refuses a file another ticket owns, a bad path or an integration ticket with no test, and with `--yes` seals an approved ledger again.
+- `swarm integrate RUN --approve-manifest FILE` lets one reviewed manifest or workflow file pass the security gate for that run only, and records a decision. The gate message now names the flag. Only a file the run really changes can be approved; the path must be exact (no glob, folder or spaces); the file joins the policy already in force (a disabled gate stays disabled); the decision is written before integrate and a failed write stops it; it works with `--queue`.
+- `swarm tickets` only edits todo, ready or blocked tickets, refuses `.env` in context or tests, drops duplicates, logs the old and new lists, and reports a busy go lock instead of crashing.
+- A ticket may name `.env.example` (and other names-only templates) as `context`: ticket validation no longer refuses it (lesson 37 follow-up). It is still refused as a file the ticket writes.
+
+## 1.93.2
+
+- Lesson 37 (the `--wire` flow failed on the parts app):
+  - Integration tickets that write the same file (router, navigation, layout), even in different stages, are chained by code at ingest: the later one waits for the earlier, so they never share a wave.
+  - `scope split --wire` skips requirements whose build tickets are all done (S1) and says so; `--all` includes them.
+  - `.env.example` and other names-only templates (`.env.local.example`, `config.example.json`) are allowed as read-only context. They are still refused as outputs, and a real `.env` is still refused everywhere.
+  - A file ownership conflict at ingest now names the tickets and the file ("T-0001 \"Create list page\" and T-0002 \"Add list filters\" both write src/pages/list.tsx (wave 1)") and says how to fix it.
+
+## 1.93.1
+
+- A cancel that drops a dependency now leaves one non-blocking note in `swarm inbox` naming the tickets that no longer wait (`FYI, no action needed`). It never pauses a run; close it with `swarm done ID`. Covers cancel, `go --scope` and autopilot.
+- Lesson 35: a change order adds tickets only for requirements that have none. The split worker gets the real tracked file list and the existing tickets (read-only), told never to rewrite them. An ingest that touches any other requirement is refused whole, nothing written. The long-line timing test now counts CPU time, so a busy machine can't fail it.
+
+## 1.93.0
+
+- Lesson 34 (parts app S5 report). (1) Wiring: `scope split` now asks for an integration ticket (`integration: true`) per requirement that has build tickets: it mounts the modules in real routes or pages and lists a route-level or end-to-end test; the runner makes it depend on the module tickets of its requirements, and a split without one (or without its test) is refused. A requirement is reported done only when its integration ticket is done (Build Plan state `unwired` otherwise, coverage excludes it). `swarm scope split --wire` asks only for the missing integration tickets of an older ledger (then `--ingest RUN --merge --wire`). (2) `go --scope` and autopilot release `todo` tickets whose dependencies are done (the roots of an approved stage), logged as `release`; the approval is not touched. (3) Cancelling a ticket removes it from other tickets' `dependsOn` (and `go --scope` cleans older ledgers); a valid approval is resealed, and a deps-blocked ticket with nothing left to wait for unlocks. (4) A failed typecheck, lint or build check seen at `scope sync --integrated` (merge batch or plain integrate) sends the ticket back to the worker with the errors, like a failed test (a batch of one job blames that job; a run-wide check sends back only the ticket whose files the errors name; not when the same check failed for 3 or more tickets of the run); merge batches now keep a redacted tail of each failed check. (5) Gitignored build files a worker leaves behind (`tsconfig.tsbuildinfo`, `coverage/`, `.next/`, anything the project's `.gitignore` names) are no longer dropped writes, so `--accept-dropped` is not needed; files git tracks, secret-looking files (`.env*`, keys, `*.pem`, `*.tfvars`) and files hidden only by a catch-all `.gitignore` rule are always still reported.
+
+## 1.92.0
+
+- Phase 16, Swarm Watch: `swarm watch [RUN] [--all] [--tui] [--open] [--json]` opens a read-only dashboard for the newest live run (or the run named), built from the run's `state.json`, the ticket ledger and `.swarm/ui/`. It binds to 127.0.0.1 on a random port, needs a random token in the URL, answers only GET and HEAD, serves a strict Content-Security-Policy, uses no CDN and exits after 30 minutes idle (or when the run is done and the page is closed). The page streams deltas over Server-Sent Events (at most 4 a second) and has four tabs: Run (header, KPIs, swarm map, lanes, waves, attention feed, leads, merge queue, run-complete banner, job drawer), Build Plan (stage lanes, epics, ticket cards, requirement view, dependency graph, change orders, ticket drawer), Commands (generated from the `swarm completion` registry with what, when, example, cost and approval pills, search, and the copyable commands for this run) and Gallery (mockup and page screenshots from `swarm ui check` with verdict, approval and comments). Nothing on the page changes anything: pause, cancel, retry and approvals are shown as commands to copy. `--tui` draws the same data in the terminal, `--json` prints it, `--all` lists live runs on this machine.
+- `swarm gallery list|approve ID...|comment ID "text"` records design-gallery approval in `.swarm/ui/gallery.json`; an approval goes stale when `swarm ui check` later fingerprints different code.
+- `swarm tickets --mark-deps [ID...] [--yes]`: a one-time migration for ledgers made before `blockReason` (1.91.0): blocked tickets with no reason, no failed attempts and dependencies are marked as dependency-blocked so they unlock by themselves (the ones whose dependencies are done unlock at once). See docs/scope.md.
+- Design and module contracts: `docs/plans/watch-design.md`; usage: `docs/watch.md`.
+
+## 1.91.0
+
+- Lessons 28 to 32 (the parts app S4 report). (28) Every merge batch with a build ticket runs the project's typecheck and lint (and build when the profile opts in, profile block `quality`); `scope sync --integrated` keeps the ticket in review until they passed, and a failure goes back to the worker with the errors. (29) A failed or cut-off job escalates its ticket (bigger output, then Codex, then Claude) before it ever blocks; split asks for tickets that fit one answer and `scope approve` warns about big ones. (30) Tickets blocked only by dependencies unlock when those are done, in `go --scope` and `autopilot` (a skipped job now blocks its ticket instead of leaving it running); `blockReason` tells deps, failure and manual blocks apart. (31) `swarm ui check` starts its own server on a free port (`{port}` in `ui.start`), never uses the owner's dev server, and screens may set `mockupQuery` and `waitFor` for pages with several states. (32) A test check that passed but ran 0 tests fails with `no-tests`; `scope approve` prints the test command detected from `package.json`. Small: `lesson add --area` now lists the real areas (tool, gotchas, skill folders) instead of names it then refused; variable names (not values) from `.env.example` go into every ticket prompt. Scenario evals: `tests/lessons-28-32-eval.test.mjs`; lessons L-0028 to L-0032. See docs/plans/lessons-28-32-design.md, docs/scope.md, docs/ui-check.md, docs/verification.md.
+
+## 1.89.0
+
+- Lesson 27, a rendered check for UI tickets: `swarm ui check [SCREEN_ID...]` renders each configured design screen (the mockup file and the real page at `baseUrl + route`) with the project's own Playwright, takes screenshots, and compares them: fonts the mockup uses must be on the page, the page must not look unstyled, no horizontal overflow, the mockup's words and colors must appear, and a coarse screenshot comparison (ink structure plus colors) must reach `minScore`. Profile block `ui` (base url on this machine only, optional dev server command, screens); reports in `.swarm/ui/`; tickets may carry `screens` (their mockups go into the job context, a prompt line asks for wired styles) and `scope sync --integrated` marks them done only after the check passed since the integration. On the parts app's real pages it flags the font variables that were never loaded. A Claude Opus review (2 high, 7 medium, 9 low) was fixed before release: the verdict is bound to the exact code state, the start of the check's own server and the time; mockups are protected paths that only the jobs rendering them may read; the browser cannot navigate off this machine; PNG decompression bombs are refused; the check cleans up on Ctrl-C. See docs/ui-check.md and docs/plans/ui-check-design.md.
+
+## 1.88.1
+
+- Code scanning cleanup: the nine old CodeQL alerts (tests that built `-e` scripts and preload modules by splicing values into code now pass them as arguments or environment variables) and two alerts from the last releases. One was a real bug: the production-word check in `ci` preview hooks split an argument on the letter `s` instead of on whitespace (`'[=:,\\s]+'` in a string), so `stage production` was not caught; now fixed with a test.
+
+## 1.88.0
+
+- Merge guard: `swarm merge PR [--repo OWNER/NAME]` squash-merges only when every check of the PR head is green (a rerun replaces an older failed run; failing, pending, cancelled or missing checks refuse), the PR is open, mergeable and based on the default branch, and no other open PR is stacked on its branch; there is no flag to skip it. `swarm ship` now reads the PR again right before merging and refuses with any failing or pending check, required or not (`--wait-required-only` only limits what it waits for first; pending ones are waited for, `ci-pending` on timeout). An Opus review (2 high, 5 medium, 6 low) was fixed before release: every check item counts on its own, required checks that have not reported are pending, `mergeable` must be known, the local update only runs in the merged repository. Doc: docs/merge-guard.md, design docs/plans/merge-guard-design.md.
+
+## 1.87.0
+
+- Dogfood fixes (the parts request app run logged 27 lessons, now in `lessons/parts-request-app/`): tests run before a ticket counts as done (profile `verify` block: a shell-capable worker with setup commands and test environment, the same tests on every merge-queue batch, done only on the runner's own test evidence, failed tickets go back once with the failure); tickets get their context automatically (scope reference sections, data model, contracts, design files, package.json, shared files first for prompt caching; scope `## Context` and `## Layout` sections, profile `context`); contract tickets must write OpenAPI JSON and `scope contracts` finds it and self-checks; the generated mock answers writes with a body that matches its response schema; split assigns real folder paths and shows the project layout; the profile's package manager reaches prompts and refuses other lockfiles; `swarm init` and `scope approve` ignore build output (`.next/`, `node_modules/`, `*.tsbuildinfo`); the security gate takes per-package accepted advisories with a review date and audits a `package.json` with no lockfile through a lockfile built in a temp folder. Also: `go --scope` validates the manifest before tickets move, human tickets close directly, python-style ticket lists are repaired, a lone empty-find edit is a whole-file write, re-init keeps hand-set profile blocks. A Claude Opus review of the round (4 high, 9 medium, 4 low) was fixed before release: automatic context never attaches secret, protected, symlinked or outside files; the temporary lockfile build takes only registry specs and no credentials; accepted advisories with an id cover only the ids they name; done evidence is tied to the batch that integrated the job and to the run that handed the ticket in, and a broken profile does not switch the test gate off; the retry is one locked write (the second failure blocks); `testEnv` and `{tests}` are checked; the gate also guards `verify`, `context`, `ci`, `approval` and protected paths in the profile; the contract self-check runs the generated mock in its own process. See docs/dogfood-fixes.md.
+- Evals: 4 new tasks from the dogfood (data model columns, DDL-only migration, OpenAPI contract file, dependency version match); the fixtures got unique names; 12 tasks, all proven red on the start and green on the solution. Proof for the context fix on Haiku 5.5: the data model task passes 4 of 4 with the context file and 0 of 4 without it; the Tailwind version task 3 of 4 with package.json and 0 of 4 without.
+
+## 1.86.0
+
+- Phase 15, skeleton first, smoke tests and preview deploys: tickets may carry `skeleton: true` and `swarm go --scope` runs only the skeleton (and what it needs) until it is done (`--skip-skeleton` overrides); the project profile may carry a `ci` block with `smoke` and `preview` commands that run after each green batch in queue integration (secret-looking environment variables are not passed; production flags refused in a preview command); a failing hook never rolls the batch back but becomes a fix ticket (`origin: ci`, outside the approval hash) with a short failure summary; a passed preview records its URL. A Claude Opus review (4 high, 6 medium, 6 low) was fixed before release: hooks get an environment allowlist, the production refusal covers more forms (and is documented as a safety net), a hook cannot hang the queue, the files a hook runs are protected paths, runner-made fix tickets reseal the approval under the ledger lock instead of bypassing it, and the failure summary in prompts is labelled untrusted. Nothing deploys to production and nothing runs unless the profile says so. See docs/ci-hooks.md and docs/plans/phase15-lessons-design.md section 10.
+
+## 1.85.0
+
+- Phase 15, affected-only tests and adaptive batches: a manifest check may carry `affectedArgv` (with an `{affected}` item) and `fullEvery`; in queue integration each batch runs only the tests the repo map says its files affect, with a full run every `fullEvery`-th batch, on the last batch and whenever anything is unknown (no map, non-code or config file, too wide). the --adaptive flag of queue integration grows batches 10 to 25 to 50 after passing batches and shrinks after a failed one; bisect stays. A Claude Opus review (5 high, 6 medium, 2 low) was fixed before release: bisected halves always run the full checks, a final full run covers affected-only batches when the last batch cannot, a stale map is ignored, paths can never become flags, test helpers, fixtures, non-code files, deleted files and truncated import graphs force a full run. See docs/merge-queue.md and docs/plans/phase15-lessons-design.md sections 9 and 9b.
+
+## 1.84.0
+
+- Phase 15, lessons mine: `swarm lessons mine [--min N] [--include-guarded] [--write] [--json]` clusters lessons whose guard is still only proposed and writes one proposal per cluster (scope rule, lint, test template, contract test, router rule, review item or prompt rule) under `proposals/`, naming the lessons it comes from; deterministic, never overwrites, never merges. First proposal: `proposals/ci.md`. Design: docs/plans/phase15-lessons-design.md section 8.
+
+## 1.83.0
+
+- Worker output: a file returned both whole (`files`) and as `edits` is normalized to the whole file instead of failing the job.
+- Anthropic lane (owner decision): default concurrency 64 (adaptive limit still on) and default `max_tokens` 4096; an answer cut off at the limit is retried once at double, re-checked against the job's spend caps with the first call counted and billed. Ticket jobs mark their contract files as the cached shared prefix (`cacheContext`). See docs/lanes.md.
+
+## 1.82.0
+
+- Phase 15, part 1, the lessons loop: structured lessons (`swarm lessons add|list|show|stats|check|backfill|notes`, one JSON file per lesson under `lessons/<project>/`, secrets, emails, home paths and run ids refused); all 229 numbered field lessons and the 2 queue rows are backfilled (idempotent); "Watch out for" notes (up to 3, at the end of the prompt) added to ticket jobs by `swarm go --scope`; a golden eval set (`evals/`, 8 tasks from real failures, each proven red on the start and green on the solution) with `swarm eval list|validate|manifest|score|gate` and a per-model baseline gate. Design and use: docs/lessons-loop.md and docs/plans/phase15-lessons-design.md.
+- Built through the swarm: 8 modules/tests and 8 eval tasks as worker jobs (one rerun after a truncated file and a gate block); the command glue and wiring by hand.
+
+## 1.81.0
+
+- Phase 13, scope to tickets to swarm: `swarm scope template|check|split|approve|sync|contracts`, `swarm tickets`, `swarm change "reason"` and `swarm go --scope`. One scope file becomes a ticket ledger (`.swarm/project/tickets.json`, with an append-only log); integrity checks (every requirement covered, every ticket traced, no two parallel tickets on one file, no cycles, sizes S or M); you approve the plan once; `go --scope` runs the ready tickets in waves; change orders cancel, reopen and add tickets without losing history.
+- Contracts first: an OpenAPI 3 file generates types, validators, a client, a mock API with seed data and contract tests (they run against the mock and the real API).
+- Day 0 checklist of outside services (payments, domain, email, app stores, ...) as human tickets; profile `approval` block (human approvals, change-order limit, budget); `swarm brief` shows ticket progress. Design and details: docs/scope.md and docs/plans/phase13-design.md.
+- A Claude Opus review (18 findings) was fixed before release: a merge clears the approval; the approval covers the ticket set and the scope hash; go --scope refuses a missing or changed scope file and takes a lock; sensitive detection reads requirement text and short words; writes never follow a symlink at the target; hostile OpenAPI names are rejected before any code is generated; split files are size and shape checked; change orders reset dependents of reopened tickets.
+- Built through the swarm: the nine modules and their tests were worker jobs; the command glue, wiring and review fixes were hand work (see docs/state/dogfood.md).
+
+## 1.80.0
+
+- A1 follow-up: every integration is gated (plain `integrate` runs the gate on the planned writes before the first write, so there is no bypass; a block writes nothing and fails with `security-gate-blocked`); the code scan runs offline for every project, sensitive or not, with pinned local Semgrep rules (`tools/security-rules/semgrep-local.yml`, 15 rules, sha256 pinned in the code), metrics off, no network (`codeScan`: `local` default, `auto`, `off`); a change to a pnpm, yarn, Go, Cargo, Python, PHP, Ruby or JVM manifest or lockfile blocks the batch (`unsupported-manifest`) with an inbox item until the owner allows it (`allowUnparsedManifests`).
+- Router (owner decision): Haiku is the default worker lane; the rented GPU lane is used by automatic routing only when 700 or more non-sensitive tickets are ready (`RENTED_MIN_READY`, `lanes.rented.minReady`); a job with `hard: true` goes to Codex first. The Anthropic lane's default concurrency is 32 (was 16): at our tier Haiku allows 10,000 requests, 10M input and 2M output tokens per minute, about 147 agents at the measured task profile (see docs/lanes.md).
+
+- A Claude Opus review of the follow-up found 3 high and 6 medium issues, all fixed: plain integrate now refuses dependency manifest and lockfile changes (it cannot audit them before writing; use --queue) and fails closed when the gate cannot run; file names are compared case-insensitively; a batch cannot change the security policy or sensitivity in .project-swarm.json; changed install lifecycle scripts block; the unparsed-manifest list is much longer (npmrc, yarnrc, bun and uv locks, gradle wrapper, gitmodules, CI workflows, vendored folders and more) and the allow-list matches exact paths; the offline Semgrep scan runs in a fresh temp folder with a private HOME and a minimal environment; 4 more pinned rules (19 in all, validated and exercised with a real Semgrep); the router counts only non-sensitive auto jobs that are ready now.
+
+## 1.79.0
+
+- Security gate on every merge-queue batch (A1): after a batch's files are written and before it can stay merged, `integrate --queue` runs a secret scan (built-in rules; a finding has only a fingerprint, never the secret), a new-dependency check (must exist on npm or PyPI, be at least 30 days old, have real downloads, not look like a popular name; fails closed when the registry is unreachable), known-vulnerability checks (npm audit, pip-audit, osv-scanner; high and critical block; only when a manifest or lockfile changed), a Semgrep code scan when installed (findings become fix tickets, never a block) and a licence check (GPL and AGPL block unless the owner allows). A block rolls the batch back and bisects it like a failed check (`security-gate` in `checkFailed`, `securityBlocked` in the summary), opens an inbox blocker with no secret text and writes a sanitized lesson to `.swarm/project/security-lessons.ndjson`. The policy is the optional `security` block of the project profile; it can only be disabled there, never by a flag, and it also runs with `--no-checks`. See [security gate](docs/security-gate.md).
+
+- A Claude Opus review of the gate found 7 high, 11 medium and 10 low issues; the high and medium ones are fixed: the gate runs before the project checks (a blocked batch never executes its own code); no file is skipped silently (NUL bytes, UTF-16, big files); workers cannot silence findings with the allow marker (it only works on lines that already existed); fingerprints are HMACs with a per-project key; bounded scan work per line; more secret rules and every match on a line; manifests in any folder, version bumps, non-registry and alias specs are checked or blocked; the vulnerability check fails closed; pip-audit runs without installing anything; semgrep runs with metrics off, never on sensitive projects unless the profile says so, and its messages never reach tickets; registry calls have a timeout and a per-run cache; licences use a real SPDX parser.
+
+## 1.78.0
+
+- Rented lane defaults (owner decision after the bake-off): Qwen3.6-35B-A3B NVFP4 only (Lightning and Coder-Next leave the shortlist), thinking ON by default (`SWARM_RENTED_THINKING=off` turns it off; the default output limit for the lane is 16000 tokens), 128 agents per GPU (`--per-replica` default 128), best-of-N off by default (`--best-of` default 1; a failed job escalates to Haiku, then Codex).
+- Lane comparison (`bench/gpu-bakeoff/compare-lanes.mjs`, `docs/state/lane-comparison.md`): the same 11 tasks (the 10 lane tasks and the hard task) on Haiku (11/11, about $0.0023 per passing task), Codex (11/11, subscription) and the rented Qwen3.6 (8/11, about $0.0026 per passing task only at full 128-agent load): Haiku is the default and the GPU lane pays only for a large, busy queue. The hard task runs on any lane (`runHardTask` takes an agent); CLI lanes get no output limits.
+
+## 1.77.0
+
+- Bake-off follows the GPU memory plan (docs/plans/swarm-gpu-memory-plan.md): the pinned vLLM image is v0.31.0 (by digest; NVFP4 on this card needs 0.28 or newer); all models are NVFP4, text-only, no MTP, started with the plan's flags (gpu-memory-utilization 0.93, fp8 KV cache, prefix caching, mamba cache align, 131072 context, per-model quantization, MoE backend, parsers and environment): Qwen3.6-35B-A3B NVFP4, Nemotron 3.5 Lightning NVFP4, and Qwen3-Coder-Next NVFP4 (RedHat build) only when at least an hour of the session is left; one vLLM engine per GPU.
+- The bake-off sweeps 32, 64, 96, 128 and 192 concurrent agents (ms per token, output tokens per second, errors and prefix-cache hit rate at each), takes the highest count under 35 ms per token as the agents per GPU, measures best-of-1 and best-of-3 at that count with that many agents loading the server, and ranks by cost per passing task, then agents per GPU. The rented lane sends `chat_template_kwargs: { enable_thinking: false }` (set `SWARM_RENTED_THINKING=on` to allow thinking). Container offers must also have PCIe Gen5 x16, at least 16 vCPU, 64 GB of RAM and 200 GB of NVMe disk; `rent --offer auto` picks the best current offer (offer ids on a busy host change by the minute); `--local-port` moves the tunnel off a port that is already in use (the exposure check refused to share one). `the test scratch folders is ignored.
+
+- A hard task joins the bake-off (planWaves, bench/gpu-bakeoff/tasks/hard-planwaves): the model gets only the spec and a stub, 16 hidden tests grade it (pass is 16 of 16), 10 minutes per attempt; tests passed, time, attempts and tokens are recorded per model at best-of-1 and best-of-3 (bench/gpu-bakeoff/hard-task.mjs).
+- Qwen3.6 NVFP4 is started without --moe-backend flashinfer_b12x: with it vLLM 0.31.0 crashed on the RTX PRO 6000 (CUDA illegal memory access while profiling CUDA graphs); the default MoE backend works.
+
+## 1.76.0
+
+- Container mode for rented GPUs (`swarm gpu up --mode container`, `--probe-ports`, `--ssh-port`): for nodes that are themselves a container running the pinned vLLM image (Vast.ai container instances, which cannot run Docker). `gpu up` starts `vllm serve` inside it (one per GPU, bound to 127.0.0.1, per-rental key only in the server environment); the exposure check reads `/proc/net/tcp` and `/proc/net/tcp6` instead of `ss` and also probes any ports you name; a failure stops the servers and removes the session; `gpu down` says to destroy the instance (a container cannot be powered off).
+- Rental helper `bench/gpu-bakeoff/vast.mjs` (outside the runner; swarm itself still never rents): container-mode offer filter (verified, reliability 99% or more, RTX PRO 6000 S or WS, datacenter first, 4 hours within 80% of the cap), pinned-image create body with no mapped ports, instance id logged first, detached reaper under `caffeinate -i`, destroy command. The bake-off benchmark base is pinned to v1.65.0 (`--bench-ref`) and the rented lane gets the larger output cap.
+- A Claude Opus review of container mode found 4 high and 5 medium issues, all fixed: the per-rental key is read once before the servers start (a background substitution raced the env-file removal and could start vLLM with no key), `gpu up` now requires the server to refuse an unauthenticated request (401 or 403), the `pkill` patterns no longer match their own command line (the dead-man timer was being killed), the stop is verified, a failed start also stops the tunnel and says to destroy the instance, Ctrl-C stops the servers, `--host`, `--port` and `--api-key` are refused in server args, the rental helper refuses a second live rental, verifies every destroy (retrying for an hour), checks the reaper is alive, destroys the instance on any failure after the create and on Ctrl-C, labels each rental, and counts download traffic in the 80%-of-cap check.
+- Fixed: `swarm gpu up --ssh-port` and root logins without sudo (Vast.ai VMs); sessions remember their ssh options so `down` and `status` reach nodes on other ports.
+
+## 1.75.0
+
+- Rented GPU safety (finishing Phase 14e): the server image is pinned by digest (`vllm/vllm-openai@sha256:...`, vLLM v0.27.1) and tags are refused (`--image` takes only another digest); every rental gets a random 48-character API key (private env file on the node, removed by the timer and `gpu down`; kept in the 0600 session file; the lane and the bake-off send it as a Bearer header); `gpu up` fails and stops the servers if any server port answers from outside or the node lists a server port bound to anything but 127.0.0.1, so servers listen on the node's loopback only and are reached through the ssh tunnel.
+- A regression test (mutation-checked) covers the fix that lets a lead's child manifest list uncovered tests in ignoreTests, so docs-only `swarm go` goals work.
+- `gpu up` fails (before anything is created or sent) if the node's Docker is older than 28 or its version cannot be read: older Docker lets other hosts on the same network reach ports published on 127.0.0.1.
+- Repo rule: project-swarm is only for the swarm itself (CLAUDE.md and AGENTS.md): other projects, the starter kit and the parts request app live in their own repos; evals stay small fixtures; lessons come back as lesson files only.
+- Spend and lane lock files: the age of an ownerless lock is judged against the real clock, not an injected one (a test clock far in the future made a fresh lock look stale and let concurrent writers delete each other's lock). A second Claude Opus review of the new rental safety code found 0 high and 4 medium issues, all fixed: the key is never printed or carried by errors, a failed or exposed start stops the servers and removes the session (and a starting session is never routable), the node-side check treats any non-loopback listener as exposure and fails closed, the outside probe resolves the real host and runs again after the servers answer, and the machine config can no longer hold a session key.
+
+## 1.74.0
+
+- Rented GPU lane (Phase 14d): `agent: "rented"` runs jobs on an OpenAI-compatible server you start yourself in the cloud (vLLM or SGLang on a GPU node). Config in the machine config (`rentedGpu`: endpoint, model, Keychain key item, `hourlyUsd`, `maxHoursPerRun`, `concurrency`, `dailyUsd`, `trusted`). The lane is adaptive (starts at 4, up to the ceiling). Spend: the rental is billed by the hour, not the token. One meter per run counts the time the node was needed and adds it to the run cap and to the lane's day cap across runs (a machine-wide spend entry); the guard warns at 80% and stops launching at a cap or at `maxHoursPerRun` (running jobs are never killed); a run with no USD cap does not start rented jobs. Only jobs marked `sensitive: false` ever go to a rented host. Automatic routing picks the lane only while `swarm gpu up` has a live session. **Swarm never rents or starts anything**; the runbook for renting a node, connecting and shutting it down is in [rented GPU](docs/rented-gpu.md). Twelve adapters now.
+- Small-model GPU swarm (Phase 14e): `swarm gpu models|up|down|status|bakeoff`. `up` runs one vLLM replica per GPU on a node you rented (ssh commands only; no file, key or .env is sent; servers listen on the node's loopback behind an ssh tunnel), sets a hard dollar cap (the session lasts at most the cap divided by the hourly price) and a timer on the node that removes the servers and powers it off; the rented lane spreads requests over the replicas (least in flight, an unreachable replica is skipped for 30 seconds). `bakeoff` ranks candidate small coding models on one GPU on our own tasks (the lane benchmark; the lessons eval set joins in Phase 15), reporting pass rate, tokens per second at 1, 50 and 200 concurrent agents, agents per GPU and cost per passing task, FP8 first and NVFP4 only with `--extra-quant`; the report is docs/state/gpu-bakeoff.md. Jobs on this lane must carry exact files, the manifest contract and `acceptance` tests (new job field); one failure escalates to Haiku, then Codex. `trusted` is gone: a rented host never takes a sensitive job.
+- Best-of-N and prefix caching on the rented GPU lane: a job (or `swarm gpu up --best-of N`) can ask for N answers in one request; the ticket's visible tests run on each in a temporary git worktree and the smallest passing one is kept, otherwise the job fails with `best-of-failed` and escalates as usual (rented lane only, never on paid lanes). The bake-off compares pass rate at N=1 and N=3 and reports vLLM's prefix-cache hit rate; servers start with `--enable-prefix-caching` and the rented lane sends the project's shared files first and the ticket last. A Claude Opus review of the lane found 1 high and 7 medium issues, all fixed: the dead-man timer is now the first line of the start script and a session is recorded before anything starts (so `gpu down` can always clean up), the bake-off refuses to replace a live session and its session is never auto-routed, a failed start tears down its tunnel and session, tunnel ports must be free and the tunnel must stay up, ssh runs with agent and X11 forwarding off and strict host keys, passwordless sudo is checked at start, the adapter refuses any rented job that is not `sensitive: false`, only connection failures move a request to another replica, and the tunnel pid is checked before it is signalled.
+- Batch mode is now opt-in per project: the machine config default (`batch.enabled`) applies only to the folders in `batch.projects` (so BinGo stays off); `--batch` and a manifest `batch` still work anywhere. Batch results stay on Anthropic's servers for up to 29 days; the docs say so.
+- Batch mode is now opt-in per project: the machine config default (`batch.enabled`) applies only to the folders listed in `batch.projects`, so a sensitive project such as BinGo never batches unless you list it (or pass `--batch`). Batch is allowed on sensitive projects under the same rules as the Anthropic lane, and the docs now say batch results stay on Anthropic's servers for up to 29 days.
+- A Claude Opus review found 1 high and 7 medium issues, all fixed: the rental is accrued every 10 seconds while the node is in use and kept as one machine-wide entry per UTC day (so other runs' day-cap checks see it, and a run over midnight counts on both days), the 80% warning is also checked on that timer and deduped per cap, a rented job on a run that has no rental meter is refused explicitly, `ask` and its fallbacks never use the rented lane, the lane's ceiling from `rentedGpu` cannot be lifted by manifest overrides, and the runbook now uses a private env file for the key, `ExitOnForwardFailure` with an unusual local port, a host-key check, and states honestly how far a cap can be passed.
+
+## 1.73.0
+
+- Batch mode (Phase 14c): the Anthropic lane can send jobs that do not need to finish fast to the Message Batches API at half price. Opt-in with `--batch` on `run`, `go` and `plan`, a manifest `batch` (true, or `{ types }`), a job's own `batch`, or the machine config `batch`. The run, lane and machine-wide caps and reservations are unchanged (the reservation uses the standard price; the recorded cost is the half price billed), sensitive rules are unchanged, lead jobs are never batched, a batch job holds no lane slot while it waits, and cancelling the run cancels its batches. `swarm plan` shows the estimated saving. See [batch](docs/batch.md).
+- A Claude Opus review found 4 high and 8 medium issues, all fixed: a batch request's worst case is reserved in the Anthropic ledger when it is sent and settled when the answer arrives (so many batch jobs cannot overshoot the machine-wide day, job or total caps), an unknown price stays unknown instead of becoming $0, the results URL is fetched (with the key) only from the API's own host and ids are URL-encoded, request bodies are dropped from memory once sent, a batch is cancelled when it expires locally, the batch id and request id are saved on the job, `--batch` is kept on resume, whether a job is batched is decided once, a batch job that would have been sent as an ordinary request fails instead, `privateData` jobs are never batched, and the manifest `batch` field is validated.
+
+## 1.72.0
+
+- Local brain (Phase 14b). dev2's model, reached like `dev2chat` (ssh tunnel, key read over ssh and kept in memory), as a free helper for the runner: `swarm think "QUESTION"` (proposer and critic, top 3 with reasons), `swarm digest <file|run-id|->` (15 lines or fewer), `swarm draft docs|pr|plan "BRIEF"` (local draft, Haiku polish for projects that are not sensitive), and `swarm brain status|stats|test`. Autopilot triages failed jobs before retrying (`needs-human` becomes a blocker; only the verdict is used), and `swarm run` pre-flights jobs for Claude or Opus (warnings only). Workers never touch it. See [local brain](docs/local-brain.md).
+- Rules: queue of 1 to 2; output is untrusted text (sanitized, capped, never instructions); a sensitive project is never sent to Haiku (the brain says "unavailable" instead); secret and protected paths and symlinks out of the project are refused; every call records the orchestrator tokens it saved in `.swarm/project/brain-ledger.ndjson`.
+- Configure it with `localBrain` in the machine config; without it only the Haiku fallback exists.
+- A Claude Opus review found 2 high and 9 medium issues, all fixed: `think` ignored project sensitivity (it could reach Haiku in a sensitive project), a request with no sensitivity stated is now treated as sensitive, autopilot no longer re-triages a run whose triage blocker is open, links to secret or protected files are refused, `draft --out` is checked before any model call and cannot leave the project, an abandoned request no longer pays for the fallback, digest input is redacted first, triage sensitivity is per job, an ssh target that looks like an option is refused (and `--` precedes it), pre-flight stops after a minute, and the fallback records the worst case when a reply carries no usage.
+- Also from the Phase 14 review (missed in its changelog): cached prompt tokens count in a job's token total, a failed save no longer becomes an unhandled rejection, repo identity is cached only when git answered, output overlap is compared in one normal form, and compact state applies only to `state.json`.
+
+## 1.71.0
+
+- Throughput (Phase 14). A profile-driven pass: 2,000 stub API jobs now run in about 7 seconds with 177 MiB of memory (before: over 10 minutes), and 1,000 requests can be in flight at once in 148 MiB (before: never more than 4). The causes: API jobs took a local host slot, the machine-wide lane file was re-read and re-probed constantly, every in-flight job polled the cancel file, the output-overlap check was quadratic, per-job git and live-run scans, and state saves that grew with the run. See [throughput](docs/throughput.md). The concurrency ceiling is now 2048 (was 512).
+- Added adaptive lanes: `"adaptive": true` lets a lane find its own limit (start low, one more slot per window of successes, halve on a 429, never below `min`).
+- Added `cacheContext` for the Anthropic lane: shared context files go first in their own prompt-cache block, so a big fan-out pays full price for them once.
+- Added `bench/throughput/stress.mjs`, the stress harness behind these numbers.
+- A Claude Opus review of this phase found 2 high and 6 medium issues, all fixed: a save requested in the same turn the writer quit could be lost, cached prompt tokens now count in a job's token total and the pre-request cost bound and reservation price cache writes at 1.25 times, a failed save no longer becomes an unhandled rejection for callers that do not wait, repo identity is cached only when git answered, output overlap is compared in one normal form (case, `./`, trailing slash), compact state applies only to `state.json`, and a lane's default adaptive start respects its `min`.
+
+## 1.70.0
+
+- `swarm init` v2 (Phase 12). It now writes a **project profile** into `.project-swarm.json`: the stack, whether the project is sensitive (asked once at a terminal, default sensitive without one; `--sensitive` / `--not-sensitive`), **protected paths** that no job may write (detected `.env`, `secrets/`, keys and certificates, plus `--protect PATH`), a default budget (`--max-usd`, `--max-tokens`), and the **base check**: the project's own checks run once at init and recorded, so old failures are not blamed on workers (they run only with `--base-check`, or after a terminal confirms the listed commands, with a small environment; `--no-base-check` skips them). Running init again keeps the owner's answers.
+- Added the **repo map** (`.swarm/project/repo-map.json`): files with their exports, imports (the import graph), external packages and test-to-source links for JS/TS, Python, Go and Rust, refreshed incrementally (unchanged files are reused). `swarm map` builds or refreshes it and prints a summary; `init` and `plan` keep it fresh.
+- A Claude Opus review of this phase found 5 high and 9 medium issues, all fixed (protected paths are also blocked as job context unless the owner writes `allowProtectedContext` with a reason on that job, and symlinks are resolved so a path that really points at a protected file or outside the project is refused): a broken profile now fails closed, the pointer and checks file are protected, the check runs on the final manifest and again at integrate, the base check is opt-in and runs in its own process group with a scrubbed environment, init writes never follow symlinks, and the repo map bounds its patterns and never reads symlinks or devices.
+- `swarm go "<goal>"` and `swarm "<goal>"` now accept goals that mention paths (`fix docs/a.md`): a sentence is a goal; one token with a slash or ending `.json`, an existing `.json` file, or a run id is not.
+- Added `swarm init --check`, a read-only health check of the setup (pointer, version, profile, checks, base check, map, ignores, agent pointers); it exits 1 only on a failure and leaves no journal line.
+- `validate`, `run` and lead child manifests refuse a job that writes or deletes a protected path (`protected-path`). `go` and `plan` use the profile's budget when no flag is given, plan lead jobs as `sensitive: false` when the profile says so, and show a `base-red` risk when the recorded base checks fail. The first run of `swarm go` in a new project initializes it without running the checks or building the map.
+
+## 1.69.0
+
+- Added plan preview and approval (Phase 11). `swarm plan "GOAL"` shows the leads and scopes, the job count, the lanes, estimated cost, time and peak concurrency, and risks, saves the plan, and runs nothing. `swarm go "GOAL"` prints the same preview and asks `Run? [y/N]`; `--yes` skips it, and with no terminal `--yes` also needs `--max-usd`. `swarm go --plan ID` runs exactly the saved plan (refused if the repo moved, `--accept-stale` overrides, or if the file was edited). After a run the estimate is shown beside the actuals and fed back into later estimates. See [plan-preview](docs/plan-preview.md).
+- A saved plan runs once, is checked against a hash of its manifest, goal, flags and HEAD, and its preview is recomputed at approval; caps on `go --plan` can only tighten the saved ones; paid lanes the preview cannot price are flagged. A Claude Opus review of this phase found 4 high and 8 medium issues, all fixed.
+- Fixed `swarm go "GOAL"`, which had never run for real (only against stubs). A real run on a throwaway repo found six faults, each fixed with a test: a lead was never told which files its scope holds (it cannot read any), so it planned folders instead of files; the lead prompt now lists the tracked files and says outputs are exact file paths; a lead that wrote a sentence in `report` made the child manifest invalid (it now means "short"); API-lane child jobs were given the CLI "finish with one JSON line" instruction, which made a small model leave its files out of the envelope; empty or untracked top-level folders became lead scopes the lead could not see; and a worker that also returned a file it was not asked for stopped integration (`dropped-writes`), so `go` now drops those files, goes on, and lists them as `droppedWrites`. Estimates are only recorded from completed runs, and the actual cost is the sum of the child jobs.
+- `.swarm/` no longer counts as uncommitted work when `go` checks the working tree (untracked `.swarm/` entries only).
+
+## 1.68.0
+
+- Hermes (Qwen3.8 Uncensored IQ3_XXS on dev2) is now on the `docs` and `test` routes, after Anthropic (`docs`: anthropic, hermes, cursor, codex; `test`: codex, anthropic, hermes, cursor). It scored 8/10 in two lane benchmark runs at one job at a time, which was the bar; `build`, `fix` and `review` still never use it, and `research` still starts with it. The Hermes lane default is now one job at a time (was 3).
+
+## 1.67.0
+
+- Added human jobs and the inbox (Phase 10c). A manifest job `{ "id", "type": "human", "title", "steps": [...] }` is a task only the owner can do. The run finishes every job that does not depend on it; the jobs that do wait in `.swarm/project/human-jobs.json`, and autopilot starts them once every human job in the group is done and the run that held them is integrated. Nothing is spent while they wait.
+- Added `swarm inbox [--json] [--all]` (what waits on you, most-blocking first, with the steps and the command to close each item; `--all` adds the projects in `.swarm-projects.json`), `swarm done ID`, `swarm decision "TEXT" --choice C [--option O]... [--id ID]` (record the default the swarm picked), and `swarm decide ID CHOICE` (confirm it; a different choice adds a backlog goal "Change decision ID to CHOICE").
+- Added `swarm backlog` (`add "GOAL" [--paths a/,b/] [--max-usd N]`, `remove ID`). When every live run is waiting on a person or a quota window and nothing is running, autopilot starts the next goal that does not overlap files the waiting runs write, from a clean `swarm/*` branch, inside its budget. A goal with no `--paths` starts only when nothing else is waiting.
+- Autopilot can send a macOS notification when a new inbox item would unblock 20 or more jobs, and one daily digest; off unless the machine config has `"notify": true`. It never notifies for an item that unblocks nothing.
+- Only one autopilot runs per project: `swarm autopilot` takes a lock file (`.swarm/project/autopilot.lock`, with its PID) and refuses to start while a live process holds it; a lock left by a dead process is cleared.
+- Fixed a test of the lane pause that failed on slow CI runners.
+
+## 1.66.0
+
+- Added orchestrator failover (Phase 10b). The runner now keeps a project journal (`.swarm/project/journal.ndjson`) written on every command, with secrets redacted. `swarm brief` prints a briefing of under 4 KB (goal, done, running, what needs the owner, the next 3 commands, the rules); `swarm handoff --to codex|cursor|claude|gemini` prints a paste-ready message; `swarm checkpoint` saves a snapshot; `swarm note` also writes to the journal. `coordination/HANDOFF.md` is regenerated from the journal after every command (a hand-written one is kept as `HANDOFF.previous.md`). `swarm init` now tells every agent to run `swarm brief` at session start, writes `GEMINI.md`, and installs a Claude Code `Stop` hook (in the git-ignored `.claude/settings.local.json`) that runs `swarm checkpoint`. See [failover](docs/failover.md).
+- Added `swarm autopilot`, a loop with no model: it integrates finished runs, resumes runs paused on a quota window, retries failed jobs once, and starts the next wave of `.swarm/project/plan.json`. It never merges, deploys, raises a cap or calls a model; cap pauses and second failures become blockers. It fails closed when the journal cannot be read or written, and what it starts keeps the run's spend caps (or `swarm go`'s default).
+- Fixed remote hosts, which never ran a job: the runner sent no command, so `swarm-remote-exec` waited forever (only stub transports had been tested). Hermes and Qwen jobs now run on a host that names their CLI in `commands`: one request with the command, message and environment, one reply with the exit code, output and sha256-checked files. `remote-exec` is one self-contained file, runs in a private workspace with the env allowlist, refuses symlinks, secret paths and traversal, limits output size, and kills leftover processes when the job ends. Hosts may set `remoteExec` (absolute path) and the ssh arguments are hardened like the Hermes path. A new test runs the real ssh transport against a real host (`tests/remote-exec-real.test.mjs`, skipped unless `SWARM_TEST_SSH_HOST` is set) and passed against dev2.
+- Fixed `swarm run` and `swarm go` refusing every manifest that has an `agent: "auto"` job ("Unsupported API adapter"): the provider check was run on `auto` itself, so the manifests `swarm go` plans could never start. Only the in-process tests had exercised it.
+- Fixed `swarm update` running the previous release's installer (the code already loaded), so install steps added by a new release, such as the `swarm` command and the completion file, never ran on the update that introduced them. It now runs the new release's `tools/install.mjs` in a fresh process.
+- The `swarm` command run from the shared install now works on the project you are standing in (the nearest folder with `.project-swarm.json` or `.git`), not on the install itself. A folder with `.git` but no `.project-swarm.json` reports "Initialized: no; run: swarm init" for that folder; only outside any git repo does it fall back to the install. `version`, `update` and `onboard` still act on the install.
+- Autopilot now integrates only from a clean `swarm/*` branch or a linked worktree that is not main/master. On main/master, any other branch, or with uncommitted changes it adds a blocker and does not integrate.
+- A Claude Opus security review of this phase found two high and several medium issues, all fixed: autopilot's limits failing open when the journal could not be read or written, a second hand-written `HANDOFF.md` being overwritten, a shared job folder and symlink-following writes in `remote-exec`, redaction gaps (bare `TOKEN=`, `API_KEY: v`, JSON keys, URL credentials, more token types, `--token VALUE`), forged events from a failed command's output, symlinks letting handoff, checkpoint or journal writes reach outside the project, and retries or waves dropping spend caps.
+
+## 1.65.0
+
+- API workers (Anthropic, OpenRouter, OpenAI, Gemini, Ollama, Lambda) and Hermes/Qwen can now change a large existing file with several edits. Before, only one find/replace per output was allowed, so a bug fix or refactor that needed two changes in one file failed with `edits[].path ... is duplicate` (9 of the 17 failures in the lane benchmark). Edits to one path are applied in order, each `find` must occur exactly once in the file as it stands after the earlier edits, at most 200 edits, and a path is never in both `files` and `edits`. If any edit does not apply the job fails and the file is left as it was (`edit-no-match: <file> (edit 2 of 3)`). Every tool-free worker is now told this rule in its prompt.
+- Fixed Hermes and Qwen dropping `edits`: the envelope was validated but only `files` were returned, so a worker that answered with edits was marked complete with no change applied.
+- Reran the lane benchmark for the lanes this affects; see `docs/state/lane-benchmark.md`.
+
+## 1.64.0
+
+- Hermes (and Qwen) can run on another machine over ssh. The machine config `cliHosts` names the host and the CLI's absolute path (`{"cliHosts":{"hermes":{"target":"user@host","command":"/path/hermes"}}}`); jobs and `swarm doctor hermes` then run there. The job text goes on stdin. The ssh process gets only a short environment allowlist, agent and X11 forwarding are off, the host key must be known, and no key or `.env` file is copied. Exit 255 fails that job as `cli host unreachable`; a bad `cliHosts` entry fails the job, not the run. A security review (Claude Opus) of this code found a missing allowlist on the doctor path, an ineffective `SendEnv=-*`, an ssh target that could start with `-`, and unpinned host-key and forwarding options; all are fixed.
+- Real Hermes prints `Warning: Unknown toolsets: none` on stdout before its first event, which the strict JSONL parser rejected, so no Hermes job could pass. The parser now ignores that exact line for Hermes and nothing else.
+- Routing now follows the lane benchmark (`docs/state/lane-benchmark.md`). The cheap order for code is anthropic (Haiku), cursor, codex, with Claude after two failures. Hermes is out of the default order and runs only for `research` jobs (it passed 2 of 10). OpenRouter runs only non-sensitive bookkeeping jobs (outputs must be plain relative bookkeeping paths: no `..`, no absolute path). The router itself now refuses a sensitive job for OpenRouter, OpenAI, Gemini and Lambda, as a second check beside manifest validation; a Claude Opus review of the routing change found that gap. Job type routes: `build`, `fix` and `docs` are anthropic, cursor, codex; `test` is codex, anthropic, cursor; `review` is codex; `research` is hermes.
+- Added the lane benchmark harness (`bench/lane-benchmark/`): 10 real tasks from this repo, two each of bug fix, new function, refactor, test-writing and docs, run on every lane and scored by real tests plus a review. First results: Codex, Cursor and Claude 10 of 10, Anthropic Haiku 9, Sonnet 8, OpenRouter 4, Hermes (2-bit qwen3.8) 2. Added to Phase 17 of the plan.
+
+## 1.63.0
+
+- Added a real `swarm` command. `swarm update` and `tools/install.mjs --user` now write `~/.local/bin/swarm`, a small script that runs the shared runner with the node it was installed with. It works in non-interactive shells, so Claude Code, Cursor and scripts can call `swarm` with no setup. A file already at that path that the installer did not write is never overwritten. `swarm doctor all` reports whether the command is installed and on PATH (`swarm-command-missing`, `swarm-not-on-path`); zsh reads `~/.zshenv` in non-interactive shells, so the PATH line goes there. Neither the installer nor doctor edits a shell profile.
+- `swarm` with no arguments prints a short status for the project: whether it is initialized, the last run, lanes up and down, today's spend, and the 5 most useful next commands (`--json` for scripts).
+- `swarm "goal"` is shorthand for `swarm go "goal"`. Only a single quoted argument with whitespace counts, so a mistyped one-word command never starts a paid run.
+- `swarm go` runs `swarm init` the first time in a project. The files init writes are committed as `swarm init` on the go branch, never on the branch you started from.
+- Added zsh completion: `swarm completion zsh` prints it, the installer writes it to `~/.project-swarm/completions/_swarm`, and run ids come from `swarm __complete runs`. Add `fpath=(~/.project-swarm/completions $fpath)` and `autoload -Uz compinit && compinit` to `~/.zshrc`.
+
+## 1.62.0
+
+- Added the `anthropic` lane: one-request, tool-free workers on your own Anthropic API credits through the Messages API. The key comes from the Keychain (service `project-swarm`, account `anthropic.api_key`) and is never sent to a worker. Sensitive jobs are allowed. Haiku 5.5 is the lane default, Sonnet 5.5 serves `tier: "mid"`, and Opus 5.5 runs only for a job with `tier: "expensive"`. Spend is capped machine-wide at $500 total and $20 a day, plus $5 a job, checked against a worst-case estimate before each request. Route order is now hermes, cursor, codex, anthropic, openrouter, claude. Auto jobs with `tier: "expensive"` still go to the Claude subscription.
+- Cursor workers read `CURSOR_API_KEY` from the Keychain (service `project-swarm`, account `cursor.api_key`) when it is not set, and run with `AGENT_CLI_CREDENTIAL_STORE=memory` so `cursor-agent` never runs `security` or saves a login. The Cursor sandbox also denies `/usr/bin/security` and the Keychain dialog agent, so a worker can no longer raise a macOS keychain dialog.
+- `doctor codex` no longer reports a healthy sandbox as broken. Its probe gave the sandboxed `node` stdout and stderr files in the OS tmp dir, which the seatbelt forbids, so node aborted at startup. It now uses pipes.
+- The OpenRouter daily cap is $5, down from $25, and can be lowered further in the machine config (`spend.lanes.openrouter.dailyUsd`).
+- Remote hosts are checked before any job is placed. A host that fails its ping is left out of the run (`hostsExcluded`, `host-unavailable` warning). ssh exit 255, a refused connection or a missing ssh client takes the host out and the job is placed again on a live host. Any other remote failure fails that one job, and a job with no usable host fails alone with `hosts-exhausted`. Nothing else is cancelled. A host entry can set `"enabled": false` to stay in the config without being used.
+- A failed Anthropic job now records its real cost instead of its reservation.
+- Added a live 50-job run to [the field report](docs/field-report.md): 50 of 50 jobs completed for $0.34 reported, with cost per tier.
+
+## 1.61.0
+
+- Added `swarm scale`. It runs 500 stub jobs with no model spend, at concurrency 500, in a throwaway repo and prints peak RAM, peak CPU, queue latency, and merge throughput. The measured run is in [the field report](docs/field-report.md). A live 50-job spread across every lane was not measured here: most lanes are not configured.
+
+## 1.60.0
+
+- Added `swarm init`. It links a project to the shared install, detects the stack, copies test and lint scripts and CI checks into `coordination/checks.json`, adds `.swarm/` to `.gitignore` and to an ESLint flat config or `pytest.ini` when that edit is obvious, writes agent pointers, and seeds `coordination/`. See [setup](docs/setup.md).
+- Added `swarm go "<goal>"`. A cheap planning step reads the repo's real top-level folders and splits the goal into leads with non-overlapping scopes (`--leads` auto, max 10; `--max-jobs` 25 per lead; `--concurrency` 8). Lane caps still limit how many jobs run at once. The run starts with a budget of $5 and 2,000,000 tokens; `--max-usd` and `--max-tokens` change it. A cap pause names the `swarm resume` command. `go` refuses a dirty tree, does the work on `swarm/go-<runId>`, commits there, and prints that branch plus the rollup. It does not move the branch you were on. A manifest path or a run id still uses the existing `go` command.
+
+## 1.59.0
+
+- Added remote hosts. A manifest or the shared config can name `hosts`: `local`, `ssh` (a `user@host` that already has a host key), or `sandbox` (a command argv). Each host has a capacity. Jobs stay on the local executor unless a host is set.
+- A remote job ships its copied workspace, runs there, and pulls back only its declared outputs. The pull is hash-checked. Secret paths (`.env`, `.ssh`, `.git`, and the rest of the reserved set) are not shipped, and the remote environment keeps only `PATH`, locale, `TERM`, `TZ`, and `SWARM_PORT_BASE`. API keys stay on the machine that already has them.
+- Each remote host is pinged on a heartbeat. A host is dead after 3 missed heartbeats in a row; one miss leaves its jobs in place. A dead host's in-flight jobs are placed again on a live host, so a mixed local and ssh run still finishes. See [remote hosts](docs/executors.md).
+- A sensitive job runs only on a local host, an ssh host, or a sandbox marked `trusted: true`.
+- Each remote job has an id. `swarm-remote-exec` exits and kills its child if the connection closes. When a dead host answers again, the runner kills any orphaned ids before reusing it, and counts spend that kill reports.
+
+## 1.58.0
+
+- Added lead agents. A `type: "lead"` job owns an `area` (goal, file scope, job and concurrency caps, allowed agents, budget) and writes only a child manifest. Lead scopes must not overlap each other or any parent worker's outputs.
+- The runner validates each child manifest before launching it: every output and delete is inside the lead's scope, job count and concurrency stay within the area, agents are allowed, and the budget stays within the area. Children cannot set checks, shell, network, or another contract, cannot weaken `sensitive`, and cannot contain leads (depth limit 2). Refusals fail the lead with `lead-child-invalid` and launch nothing; sibling leads continue.
+- Each child runs as `<parentId>-<leadId>` under the same caps, reservations, ledger, and cancel signal. A parent `--max-usd` or `--max-tokens` can lower a child's area budget but never lift it. A paused child holds its lead (`child-paused`); `resume` on the parent resumes the child without repeating the lead's model call.
+- Integrating a parent integrates each child run in order under the one lock, then the parent's own jobs; lead manifest files are never written to the project. Reruns skip already-integrated children.
+- Rollups add a bounded `leads` list (one line per lead in text) and `monitor --view` adds a leads line, so the orchestrator reads lead rollups instead of child reports. See [lead agents](docs/leads.md).
+- Lane caps and pauses are machine-wide. Every run on this machine — parent runs, lead child runs, and runs in other repositories — shares one lane file next to the shared install (`~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR`). It tracks each lane's in-flight count and its rate-limit or quota pause, under a lock, and drops slots whose process has died. A 429 or quota pause in one run pauses that lane for all of them. Deleting a project's `.swarm/` does not reset it.
+
+## 1.57.0
+
+- Added spend caps: per-run `budget.maxUsd` / `budget.maxTokens` (or `run --max-usd` / `--max-tokens`) and per-lane daily caps (`spend.lanes` in config; OpenRouter defaults to $5 per UTC day). At a cap the runner stops launching, lets in-flight jobs finish, and holds the rest; the run ends `paused` (exit code 75).
+- Daily lane caps are machine-wide. One locked spend store next to the shared install (`~/.project-swarm/spend/daily.json`, or `SWARM_SPEND_DIR`) is shared by every project, and deleting a project's `.swarm/` does not reset it.
+- Each job reserves an estimated cost before launch (from `maxCredits` or `maxOutputTokens` times the model rate, or the lane's `reserveUsd`, default $0.50). The reservation counts toward run and lane caps until the actual cost replaces it, so concurrent launches overshoot by at most one reservation.
+- A paid job with no reported cost is estimated from tokens × rate, or keeps its reservation as its cost. It is never counted as $0, and the estimate is flagged in the rollup and the ledger.
+- Added `swarm resume RUN`: it dispatches exactly the held jobs and their dependents under the same run id and leaves completed records unchanged. Going past a cap needs `--raise KEY=VALUE --reason TEXT`; the runner never raises a cap itself.
+- Quota exhaustion now holds jobs until the lane resets. `resume --wait` and `run --wait-quota` run the zero-model idle menu (configured local commands on `idle/<run>/<name>` branches, scrubbed env), wait for the reset, then resume.
+- Runs now write the usage ledger automatically (`docs/state/usage-ledger.md` when present, else `.swarm/usage-ledger.md`), one row per attempt without duplicates, and recompute the daily summary. Added `swarm ledger RUN` and `swarm idle RUN`. See [spend guard](docs/spend.md).
+
+## 1.56.0
+
+- Make integration batches crash-safe with atomic journals, automatic rollback on recovery, and SIGINT/SIGTERM rollback of queue writes, including bytes, new files, deletions, and modes.
+- Serialize integration and redcheck across every worktree of a repository with owner-recorded locks; clear dead local owners with a warning and refuse live owners with `integrate-locked`.
+- Added `integrate --queue` for large runs, with ordered batches and checks per batch.
+- Failed queue batches roll back and bisect to keep passing jobs and isolate check failures. Plain integration keeps its existing behavior.
+- Conflicting jobs preserve newer checkout content, requeue twice by default, then get one merge job. Unresolved merge jobs are flagged.
+- Added merge queue summary counts to `monitor --view` and rollup JSON. See [merge queue guidance](docs/merge-queue.md).
+
+## 1.55.1
+
+- Docs-only Codex and Cursor jobs are now told to edit their declared outputs (the old "read and grep only" wording made a worker refuse to edit).
+
+## 1.55.0
+
+- Sanitized and labeled untrusted worker text in rollups and sanitized monitor cells.
+- Added one report-only re-ask for otherwise complete strict jobs before `report-invalid`.
+- Added opt-in strict `report: "short"` at manifest and job level, with five-field worker reports and validation.
+- Saved valid short reports or derived legacy reports for worker attempts that ended complete, blocked, or failed. Jobs that never ran have no report.
+- Added `swarm rollup` for compact JSON or text summaries of status, lanes, spend, changed files, risks, and follow-ups.
+- Added lane, queue, merge, and spend lines to `monitor --view`; runs over 40 jobs show a bounded table and a rollup hint.
+- **Breaking:** explicit OpenAI, Gemini, and Lambda jobs now require `sensitive: false`, like OpenRouter; refusals use `sensitive-provider` while OpenRouter keeps `sensitive-openrouter`.
+- Added `swarm ask --not-sensitive`; sensitive questions routed to OpenRouter, OpenAI, Gemini, or Lambda refuse before any network call with `ask-sensitive-provider`.
+
+## 1.54.0
+
+- Added eight optional job types with prompt guidance and default timeouts.
+- Enforced type output rules, including read-only review and research jobs. Docs require documentation extensions or README.txt/CHANGELOG.txt basenames; docs/state/ is blocked.
+- Added type-specific cheap routing, with Codex for merge and lead. Remaining cheap lanes follow Hermes → Cursor → Codex → OpenRouter; paused cheap lanes wait. Claude requires two real cheap failures and no cheap candidate, unless the tier is expensive.
+- **Breaking:** jobs are sensitive by default. Explicit OpenRouter jobs must set `sensitive: false`; automatic routing also requires it for OpenRouter.
+- Attached preset skills when available and reported missing skills as warnings.
+- Added [job type guidance](docs/job-types.md) and one example per type.
+
+## 1.53.0
+
+- Raised manifest limits to 5000 jobs and global concurrency to 512; the default remains 2.
+- Added per-agent lanes with concurrency caps, optional requests-per-minute limits, backoff, and quota pauses.
+- Added `agent: "auto"` routing through configured lane models, with fallback after two failed or timed-out attempts on a lane.
+- Added `sensitive` routing protection that excludes OpenRouter and refuses explicit sensitive OpenRouter jobs.
+- Prepared workspaces and context lazily at dispatch and coalesced state writes for large runs. Saved state includes lane health, routes, attempts, and rate-limit retries.
+- Added [lane configuration and routing guidance](docs/lanes.md), including defaults and override examples.
+- Preserved run-start snapshots with lazy preparation; changed copied files fail the affected job with `snapshot-changed` before spawning.
+
+## 1.52.0
+
+- Added the `cursor` worker: `cursor-agent` runs as a worktree writer like codex, under `sandbox-exec` with the codex profile plus its install directory and `~/.cursor`, invoked as `-p --output-format json --model <model> --trust --workspace <worktree> --sandbox disabled --force <prompt>`. See [docs/providers.md](docs/providers.md#cursor-cli-cursor-macos-only).
+- The Keychain stays blocked; a cursor job authenticates only with `CURSOR_API_KEY` in an allowlisted worker environment. The key is refused in prompts and argv, redacted from logs and saved output, and a run that exposed it is refused by integrate and ship.
+- Cursor jobs fail fast with `cursor-not-installed` or `cursor-not-authenticated`, and `doctor cursor` checks the version and required flags without printing the key.
+- Local config `cursor` sets `model`, `timeoutMs`, `maxAttempts` and `allowedPaths`; the codex retry helper now takes `maxAttempts`, and cursor retries only transient transport errors. Documented tiers route `mid` to cursor and `expensive` to codex; automatic tier escalation is not built.
+- Worktree-writer gates (worktree use, `testEnv`, `readPaths`, `setup`, `after`, HEAD-only context, uncommitted-file warnings, shell-capable warnings) now cover cursor jobs, and `swarm board` jobs carry their agent so the Cursor lane guard names swarm-run cursor jobs.
+- `run` now checks Cursor lane claims before starting workers and refuses conflicts with `cursor-claim-conflict`; `validate` warns. Invalid claims use `cursor-claims-invalid`, and the manual `check-manifest` check is optional.
+
+## 1.51.1
+
+- `ask` runs a named CLI agent (e.g. `--tier cheap` or `--agent codex --model gpt-6-luna`) directly as a read-only job with no outputs when no read-only fallback is configured (no matching tier, or a tier without `fallback`), with an `ask-agent-direct` warning and `route.direct: true`, instead of refusing with `ask-agent-fallback-unconfigured`. A configured but malformed fallback still refuses. (lesson 417)
+
+## 1.51.0
+
+- Added the Cursor lane guard with advisory file claims in `coordination/cursor-claims.json`: `claim` before work, `check` before merge, `release` after merge, `check-manifest` before a swarm run, and `list` to inspect claims. See [docs/cursor-lane.md](docs/cursor-lane.md).
+- The guard falls back to the sibling `swarm.mjs` when a project has no `.project-swarm.json`; a present pin whose install is missing still fails.
+
+## 1.50.0
+
+- Vendored five worker skills from `mattpocock/skills` under the MIT License, pinned to commits `6fd947921b935b7e1e69293a200400f0fdd5c15f` and `153fc1b93de6584562765cdce299324e1ff9e661`; `installProject` copies each skill only when absent and keeps an existing skill untouched.
+- UI changes now require or warn for preview-harness coverage of affected rendered views, and validation identifies uncovered UI roots. (lesson 362)
+- Base checks whose only named tests are absent declared outputs are reported as pending rather than red. (lesson 363)
+- Jobs that do not own changelog or version files receive explicit ownership guidance and do not block on those files. (lesson 364)
+- Session metrics report follow-up rework by skill and mark red rate as not applicable when integration checks are empty. (lesson 365)
+- Test suites isolate provider-limit caches and global paths under per-test temporary homes and guard against real-home access. (lesson 366)
+- Monitoring reports idle seats, runnable unblocked work, and the hand steps associated with idle gaps. (lesson 369)
+- Version-bump jobs discover tests asserting the old active version and require the full suite as their release check. (lesson 371)
+- Ship records each failing test block with its name, location, and assertion and reruns only failed local files when requested. (lesson 372)
+- Validation reuses live output-conflict checks and reports both conflicts and the subset of jobs that can start; run accepts that subset. (lesson 374)
+- Note resolves task and handoff files under the configured coordination directory, while invalid lesson areas list allowed values. (lesson 375)
+- Job-level contracts are normalized, null tier reasons are ignored, and sibling outputs in context are reported as pending. (lesson 377)
+- CI checks expand shell globs and branch shipping infers head and base from the selected branch and default branch. (lesson 378)
+- Validation warns when identifier-like mechanisms named in a brief or prompt are absent from the repository. (lesson 379)
+- Integrated-tree audits block undeclared edits and rerun each job's reported check against the integrated tree. (lesson 380)
+- Local checks ignore swarm scratch copies and warn when check output cites a scratch path. (lesson 381)
+- CI failures after a zero-failure test summary are classified as timeouts and the failed job is retried once. (lesson 382)
+- Existing safeguards already cover lesson 370.
+- Existing safeguards already cover lesson 373.
+- Existing safeguards already cover lesson 376.
+
+## 1.48.0
+
+- Read-only ask follows a selected configured tier and reports ask-agent-fallback when an unsupported route uses its configured fallback. (lesson 357)
+- Prompt path validation accepts carried directories and matching globs while retaining missing-workspace refusals. (lesson 358)
+- Held summaries warn decision-value-not-in-diff for values absent from added diff lines; the contract template records decision-fixed constants and pinning tests. (lesson 359)
+- Integration refuses work-folder-reference in changed source and test files; validation warns work-folder-context for build scratch data. (lesson 360)
+- The note command appends real UTC timestamps to task or handoff files without executing note text. (lesson 361)
+
+## 1.47.0
+
+- `check-pins --core` reports `vendored-core-missing-runtime-wheels` when a vendored core requirement is neither vendored nor a direct dependency. (lesson 343)
+- The shared contract template records the accepting rule for externally validated values; scheduler-specific resource validation remains with its consumer. (lesson 345)
+- Document the existing human-review hold and three-field handoff; green checks do not authorize a held merge. (lesson 348)
+- Codex jobs can use `scope: "open"` with `outputDirs` for bounded tracked-file edits; `narrow-output-scope` warns about underspecified restrictive prompts. (lesson 351)
+- `doctor` reports missing executables from an optional toolchain inventory and displays reinstall guidance without executing it. (lesson 352)
+- Codex prepares narrow Vite cache write grants; preflight reports `vite-temp-not-writable` before dispatch. (lesson 353)
+- `ship --rerun-flaky-ci 1` permits one retry after three verified local passes and a base pass, recording a flake only after fresh CI succeeds. (lesson 354)
+- Mutant review warns `redundant-writer` about another call that may preserve the mutated effect. (lesson 355)
+- Worktree jobs now default outside the repository root; `worktreesOutsideRoot: false` preserves the in-root layout, and recorded legacy paths remain readable.
+
+Design-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them. (lesson 356)
+
+## 1.46.1
+
+- Claude `provider-limit` classification uses provider error events or standalone diagnostics on a failed exit; limit strings quoted from context files remain worker data. (lesson 347)
+- `integrate` reports parsed result keys, source and text on skill-check failures; result-shape mismatches warn when all outputs exist, with `--accept-result-shape` for explicit acceptance. Debugging attaches only for fix prompts or an explicit manifest skill selection. (lesson 349)
+- `ship --branch` refuses `branch-not-ahead` before checks when no commits are ahead of its base; `clean-branch --from REF --exclude GLOB` stages a rename-aware copy including additions, modifications and deletions on a clean destination. (lesson 350)
+
+## 1.46.0
+
+- `resultKeys missing` refusals (at dispatch and at integrate) now name the skills source directory, why the skill attached (`manifest skills list` or the matching `paths:` glob), and how to run without the skill; `attachSkillsForJob` exposes this via a new `attachedBy` field. (lesson 199)
+- `run` refuses with `no-commits` when the project's HEAD is unborn (no commits yet) and the run needs one (base checks, or a codex / claude-shell worktree job), naming `git commit --allow-empty` instead of surfacing git's own raw error; a copied-workspace run without checks still runs as before. (lesson 199)
+- `run --accept-red-base --reason` now records `acceptRedBase`, `acceptRedBaseReason` and `baseCheckFailures` in the run's state; `inspect` (not `status`) reports them when present. (lesson 199)
+
+## 1.45.0
+
+- Config `worktreesOutsideRoot: true` (default off) places codex and claude-shell job worktrees in a per-run scratch dir outside the repository root (`<scratch root>/worktrees/<repo>-<hash>/<run>/<job>`, override with config `worktreesDir`), so root-level lint, test and search tools never see swarm copies; `run` skips `swarm-dir-not-ignored` when it is on. (T86, lesson 330, decision #345)
+- `state.json` records each worktree job's real `worktreePath` before checkout; `inspect`, `integrate`, evidence and the no-JSON fallback read it through one `resolveWorktree` helper, and a run without the field still resolves `.swarm/runs/<id>/worktrees/<job>` (compatibility shim, removed one release after the default flips). `inspect` shows `worktree` for kept worktrees. (T86)
+- Checkout outside the root refuses with `worktree-disk-low` under 256 MiB free; `swarm orphans` lists scratch worktree dirs no run state points to and never deletes them. (T86)
+
+## 1.44.1
+
+- lesson add never fails on a malformed legacy markdown row: the legacy table is parsed only for the next id, a parse failure falls back to a regex scan of the ids and surfaces as warning legacy-table-unparsed (field lesson #346).
+- validate names the nearest known job field when a manifest uses an unknown one, for example editOutputs → outputs (field lesson #344).
+
+## 1.44.0
+
+- `scaffold job --command` adds command handler modules to context; `validate` warns `command-handler-not-in-job` when a command named in a job prompt has a handler in neither context nor outputs. (lesson 327)
+- `integrate --accept-blocked` excludes a blocked job's unwritten outputs, and `integrate --jobs` unselected jobs' outputs, from missing-output and undeclared-delete checks; a blocked job's written outputs still integrate, and one with no writes contributes no files or refusals. (lesson 328)
+- `ship` and `integrate` strip check-output lines whose paths start with `.swarm/` from pass/fail decisions and report one `check-hit-swarm-dir` warning with the count; `run` warns `swarm-dir-not-ignored` once when the root eslint/vitest/pytest config never names `.swarm`. Job worktrees stay under `.swarm/runs/<id>/worktrees/`. (lesson 330)
+- `ship` preflight reports `git-ignored-fixture` only for referenced paths that exist and are git-ignored; absent runtime paths are exempt, and `--exempt git-ignored-fixture:<file>=<reason>` remains available. (lesson 331)
+- `validate` warns `max-output-below-model-default` when an API/OpenRouter job explicitly sets `maxOutputTokens` below its model default, naming both values, from the same default table the API adapters use. (lesson 332)
+
+## 1.43.0
+
+- `integrate RUN --jobs <id,...>` now accepts named jobs through the CLI, with either value form before or after the run id. (lesson 324)
+- `validate` refuses oversized existing single-request API outputs with `output-cap-exceeded`; job `outputCapBytes` or config `outputCap` override the 61440-byte total and 15360-byte per-file defaults, while shell agents remain exempt. (lesson 325)
+- API requests record the last provider `finishReason` in job state, including length retries; `inspect` reports it for incomplete jobs. (lesson 325)
+- `lesson import --dry-run` previews lenient imports and private-row skips without writing; `--verbose` adds per-row verdicts. (lesson 326)
+
+## 1.42.0
+
+- `ship --wait-required-only` waits for protected required checks while optional checks continue; ordinary ship and unprotected branches retain the full wait.
+- `ticket` runs the guarded run, inspect, integrate, checks, bounded commit, and ship stages with a durable resume journal.
+- Shell worktrees link dependencies read-only or prepare isolated environments with `run --sync`; missing check environments refuse instead of counting as pre-existing failures.
+- Shell adapters retain streaming evidence, inspect shows failed stderr tails, and Codex retries one transient connection failure only before any output changes.
+- `scaffold job` validates context coverage and `scaffold pr` creates reviewable payloads whose mutation stub refuses required-section shipping.
+
+## 1.41.0
+
+- `lesson add` captures clock-stamped, private-safe lessons and routes rules into existing skills or gotchas with an 800-token skill cap.
+- `lesson list` / `lesson set` track lifecycle, version, and regression coverage; `run` warns about queued lessons.
+- `lesson manifest` emits a validated bounded fix with its regression test; `lesson check` reports stale queued lessons and missing installed tests.
+- `lesson publish --version V` appends safe shipped entries idempotently; `lesson import` preserves legacy ids and dates without duplicating rows.
+
+## 1.40.0
+
+- `integrate RUN --jobs <id,...>` integrates only the named complete jobs (and refuses with a message mentioning `--jobs` when a partial run is integrated without the flag), enabling batch runs where individual jobs can be integrated separately as they complete. (lesson 298)
+- `validate` now fails when an API job's declared outputs exceed its `maxOutputTokens` cap, estimated at ~500 tokens per output file. (lesson 294)
+- `validate`/`integrate` now refuse outputs under `shared/`, `fixtures/` or `tests/` containing terms from the private-names file (same list as the #254 DeepSeek guard). (lesson 293)
+- When the OpenRouter/API adapter rejects a structurally invalid envelope, the raw reply is now saved to `.swarm/runs/<id>/<job>/response-invalid.txt` for diagnosis. (lesson 296)
+- `tests/_isolate-config.mjs` now honours `SWARM_TEST_TMP` (or `TMPDIR`) for creating its test temp directory, enabling codex jobs to run tests in a sandbox-writable workspace. (lesson 299)
+- A codex job now gets a per-job scratch directory created outside the repository; the sandbox profile grants it in both raw and realpath forms (covering macOS's `/var` -> `/private/var`) plus ancestor file-read-metadata grants so the job's own upward directory walk can resolve it, with `TMPDIR`/`TMP`/`TEMP`/`SWARM_TEST_TMP` exported into the job's environment and the directory cleaned up afterward unless `SWARM_KEEP_TMP=1`. (lesson 308)
+- The batch-y integrate test fixtures now mirror the real run layout (job state under `.swarm/runs/<id>/<job>/`, real outputs under `.swarm/workspaces/<id>/<job>/`) with `baseHashes` computed as real sha256 digests of the fixture's committed bytes, instead of placeholder values that only happened to work by coincidence.
+
+## 1.39.0
+
+- `ship --preflight`: every pre-push content guard runs in one pass and reports all failures (E2)
+- A new top-level manifest `resources` (at most 50 file paths) names a file that should be copied
+  into every job's own workspace/worktree even when it is untracked; `validate`/`run` now refuse
+  `resource-missing: <path>` for a declared one absent from the repo root (`resource-is-directory:
+  <path>` for one naming a directory) and refuse `prompt-path-not-in-workspace: Job <id>'s prompt
+  names <file>, ...` when a job's own prompt names a real, on-disk repo-relative path covered by
+  neither tracked files, this job's own context, nor `manifest.resources` — the 281 incident spent
+  real shell-job dollars discovering a missing path only after the worker had already started.
+  (lesson 281)
+- A job may now declare `privateData: true`, withholding its own transcript (`response.txt`) and
+  failure log (`agent.log`) from disk (a fixed placeholder text is written instead; `inspect` shows
+  `transcript: "withheld"`); a new local config `privateData.paths` (glob list) now refuses
+  `privateData-required: Job <id> touches a configured private path without privateData: true`
+  before such a job ever dispatches. (lesson 282)
+- `validate`/`run` now refuse `<skill>: resultKeys missing <key>` before a job ever dispatches when
+  its own prompt's declared final-JSON shape (`Return JSON only, ...: {...}`) omits a key an
+  attached skill's own `checks.resultKeys` requires, closing the gap where only `integrate` caught
+  this — after the job had already spent. (lesson 283)
+- `templates/coordination/CONTRACT.md`'s own `## Release` section now names `ship --preflight` and
+  `swarm squash --branch` directly, instead of a batch rediscovering either by hand; no code change
+  (both already exist). (lesson 284)
+- A tool-free API job with `outputs: []` whose prompt plainly asks for real written content now
+  refuses `openrouter-empty-outputs-content: Job <id> has outputs: [] but its prompt asks for real
+  content; ...` before any request is ever sent; a truncated OpenRouter response's own error now
+  names the prompt's size (`... (prompt <n> chars)`). (lesson 285)
+- A plain `claude` job whose own CLI prints a weekly/usage/rate-limit message instead of
+  stream-json now resolves job status `provider-limit` (naming the reported reset time) instead of
+  a generic `Worker exited N`; `run`/`ask` now refuse `claude-provider-limit: resets <time>; pass
+  --ignore-provider-limit to proceed anyway` for any further claude job until that time, and
+  `board` reports the same marker. (lesson 286)
+- A shell job's sandbox now grants write access to a linked-worktree project root's real git dir
+  (its `gitDir`/`commonDir`), so a worker's own `git commit` there can actually succeed; `validate`
+  now warns `linked-worktree-commit: Job <id>'s prompt asks it to commit; ...` when a shell job's
+  prompt asks it to commit against such a root. (lesson 287)
+- A codex job's own prompt now carries a waiver for any doc its repo's own AGENTS.md names that is
+  not shown inline, in its declared context, or under `.swarm/skills` — it no longer needs to
+  refuse over a read it was never going to be denied; a root `AGENTS.workspace.md`, when present,
+  is now inlined directly into every codex prompt; `validate` now warns
+  `codex-required-read-missing: Job <id>: AGENTS.md names <file> (tracked), not in this job's
+  context` for a tracked AGENTS.md doc a codex job's own context omits. (lesson 288)
+- `swarm ship --preflight` is now accepted by the CLI parser (it was only reachable from `ship()` directly)
+
 ## 1.38.0
 
 - The default shell job scratch base (`SWARM_SCRATCH_ROOT`, else the existing `SWARM_INSTALL_ROOT` override, else `XDG_STATE_HOME`) is now `~/.project-swarm-scratch`, never `~/.project-swarm` (the install checkout itself, which can carry its own `.git`); `version --check` now proves this at install-check time, reporting `scratchOutsideRepo: true|false` (and, when false, `scratchRoot`) instead of only ever surfacing it on a shell job's first refusal. (lesson 280)

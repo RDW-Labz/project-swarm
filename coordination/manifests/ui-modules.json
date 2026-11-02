@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1.5
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "ui-png",
+      "type": "build",
+      "prompt": "Write tools/png-signature.mjs: decodePng, gridSignature and compareSignatures of the design (section png-signature). Use node:zlib and a CRC32 table of your own. Keep it under 9000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed.",
+      "context": [
+        "docs/plans/ui-check-design.md"
+      ],
+      "outputs": [
+        "tools/png-signature.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "ui-png-test",
+      "type": "build",
+      "prompt": "Write the test file for the png signature module (module written at the same time; use exactly the names in the design). The test file builds its own PNG fixtures with node:zlib (an encoder helper in the test: signature, IHDR, IDAT with filter 0 per row, IEND, CRC32). Cover: round trip of RGBA and RGB images, gray and gray-alpha, a palette image, filters 1 to 4 (build rows with each filter), a bad signature, a bad CRC, interlaced and 16-bit refused as png-unsupported, truncated pixel data, the size limits, gridSignature of a solid color and of a half-black image on a 4x4 grid, alpha composited on white, and compareSignatures for identical, opposite and different-size grids.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed.",
+      "context": [
+        "docs/plans/ui-check-design.md"
+      ],
+      "outputs": [
+        "tests/png-signature.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "ui-compare",
+      "type": "build",
+      "prompt": "Write tools/ui-compare.mjs: UI_DEFAULTS, validateUiConfig and compareScreen of the design (sections ui-compare and the Profile block ui). Keep it under 14000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed.",
+      "context": [
+        "docs/plans/ui-check-design.md"
+      ],
+      "outputs": [
+        "tools/ui-compare.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "ui-compare-test",
+      "type": "build",
+      "prompt": "Write the test file for the ui compare module (module written at the same time; use exactly the names in the design). Cover: config validation (defaults, unknown keys, duplicate ids, absolute and dotdot mockup paths, bad routes, bad base urls like https or a remote host, bad viewport, start argv rules, too many screens, undefined raw) and compareScreen for every hard failure and the passing case: unstyled page, missing fonts (with a loader hash name like __Figtree_a1b2c3 counted as Figtree, generic fonts ignored), horizontal overflow, text mismatch and the skip for tiny mockups, colors missing with the per-channel tolerance and the skip, visual score under minScore, and the parts numbers.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow the design exactly: export names, return shapes, reasons and limits are fixed.",
+      "context": [
+        "docs/plans/ui-check-design.md"
+      ],
+      "outputs": [
+        "tests/ui-compare.test.mjs"
+      ]
+    }
+  ]
+}

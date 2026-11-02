@@ -31,7 +31,7 @@ async function fixture(t) {
 const env = { OPENAI_API_KEY: 'secret-openai-credential' };
 const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const openaiBody = envelopeValue => ({ status: 'completed', model: 'resolved-model', usage: { input_tokens: 1, output_tokens: 1 }, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(envelopeValue) }] }] });
-const job = (overrides = {}) => ({ id: 'api-job', agent: 'openai', model: 'test-model', context: [], outputs: ['report.md'], prompt: 'Edit the report.', timeoutMs: 2000, ...overrides });
+const job = (overrides = {}) => ({ id: 'api-job', agent: 'openai', sensitive: false, model: 'test-model', context: [], outputs: ['report.md'], prompt: 'Edit the report.', timeoutMs: 2000, ...overrides });
 const manifest = jobs => ({ version: 1, concurrency: 1, jobs });
 
 // --- #185: API envelope `edits` form -----------------------------------------------------------
@@ -69,14 +69,15 @@ test('#185: a find occurring zero or more than once refuses the job as edit-no-m
 test('#185: validate warns large-output-whole for a big declared output on an API job with no edits form requested', async t => {
   const root = await fixture(t);
   await fs.writeFile(path.join(root, 'report.md'), 'x'.repeat(20001));
-  const report = await validateProject(root, manifest([job()]));
+  const fixtureJob = job({ outputCapBytes: { total: 61440, perFile: 30000 } });
+  const report = await validateProject(root, manifest([fixtureJob]));
   const warning = report.warnings.find(w => w.code === 'large-output-whole');
   assert.ok(warning, 'expected a large-output-whole warning');
   assert.equal(warning.jobId, 'api-job');
   assert.equal(warning.path, 'report.md');
   // A small output on the same job never warns.
   await fs.writeFile(path.join(root, 'report.md'), 'small');
-  const smallReport = await validateProject(root, manifest([job()]));
+  const smallReport = await validateProject(root, manifest([fixtureJob]));
   assert.ok(!smallReport.warnings.some(w => w.code === 'large-output-whole'));
 });
 

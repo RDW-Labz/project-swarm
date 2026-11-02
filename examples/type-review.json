@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-review",
+      "type": "review",
+      "agent": "auto",
+      "prompt": "Review the router for fallback and sensitive-job handling defects. Cite concrete findings.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": []
+    }
+  ]
+}

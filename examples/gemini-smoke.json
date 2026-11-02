@@ -5,6 +5,7 @@
     {
       "id": "gemini-smoke",
       "agent": "gemini",
+      "sensitive": false,
       "model": "gemini-2.5-flash",
       "prompt": "Write one sentence acknowledging this bounded communication test. Do not claim to run tests.",
       "context": [],

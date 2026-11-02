@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "f1-rules-fix",
+      "context": [
+        "tools/security-rules/semgrep-local.yml"
+      ],
+      "outputs": [
+        "tools/security-rules/semgrep-local.yml"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Return the complete new tools/security-rules/semgrep-local.yml with ONE fix: the rule swarm-js-exec-injection did not fire on cp.exec(\"ls \" + x) (a method call on a require-d child_process object). Make its pattern-either also match the method-call forms $CP.exec($A + $B), $CP.execSync($A + $B), $CP.exec(`...${$X}...`) and $CP.execSync(`...${$X}...`) (keep the bare exec forms too). Change nothing else; keep the file valid Semgrep YAML."
+    }
+  ]
+}

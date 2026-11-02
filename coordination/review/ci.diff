@@ -1,0 +1,276 @@
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index 8a99290..25565c3 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -32,7 +32,7 @@ export const COMMANDS = [
+   command('init', 'Initialize a project: profile, base check, repo map.', 'none', '--check --json --sensitive --not-sensitive --protect --max-usd --max-tokens --base-check --no-base-check --no-map'),
+   command('map', 'Build or refresh the repo map.', 'none', '--json'),
+   command('scale', 'Run stub jobs to measure scale.', 'none', '--jobs --concurrency'),
+-  command('go', 'Complete a manifest or goal.', 'goal', '--scope --leads --max-jobs --concurrency --max-usd --max-tokens --commit-message --repo --pr --require-section --mutants --merge-method --timeout --tag-timeout --no-flake-check --exempt --yes --plan --accept-stale --batch'),
++  command('go', 'Complete a manifest or goal.', 'goal', '--scope --skip-skeleton --leads --max-jobs --concurrency --max-usd --max-tokens --commit-message --repo --pr --require-section --mutants --merge-method --timeout --tag-timeout --no-flake-check --exempt --yes --plan --accept-stale --batch'),
+   command('plan', 'Preview a goal: leads, cost, time and risks. Nothing runs.', 'goal', '--leads --max-jobs --concurrency --max-usd --max-tokens --json --batch'),
+   command('note', 'Add a note to the task or handoff file.', 'goal', '--file'),
+   command('ask', 'Ask an agent a question.', 'goal', '--model --agent --tier --context --timeout --not-sensitive'),
+diff --git a/tools/init-profile.mjs b/tools/init-profile.mjs
+index e5502c3..d5657ea 100644
+--- a/tools/init-profile.mjs
++++ b/tools/init-profile.mjs
+@@ -1,12 +1,13 @@
+ // SPDX-License-Identifier: Apache-2.0
+ import { validateApprovalPolicy } from './approval-policy.mjs';
++import { validateCiConfig } from './ci-hooks.mjs';
+ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { sanitizeText } from './journal.mjs';
+ 
+ export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
+ const STATUSES = ['green', 'red', 'skipped', 'none'];
+-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval'];
++const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci'];
+ const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
+ const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
+ // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
+@@ -107,6 +108,11 @@ export function validateProfile(profile) {
+   if (stack) out.stack = stack;
+   const security = profile.security === undefined ? null : validateSecurity(profile.security, errors);
+   if (security) out.security = security;
++  if (profile.ci !== undefined) {
++    const checked = validateCiConfig(profile.ci);
++    for (const message of checked.errors) errors.push(`profile.ci: ${message}`);
++    if (checked.config) out.ci = checked.config;
++  }
+   if (profile.approval !== undefined) {
+     const checked = validateApprovalPolicy(profile.approval);
+     for (const message of checked.errors) errors.push(`profile.approval: ${message}`);
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 5fc63d3..6acd63d 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -117,7 +117,7 @@ function splitPrompt(scope, stage, only) {
+     'key (short unique name in this file), title (under 140 characters), type (build, test, docs, migration, design, contract or human),',
+     'epic (a feature group name), scopeRefs (requirement ids, at least one for build, test, docs, migration), acceptance (1 to 5 observable checks; required for build, test, migration),',
+     'files (the files this ticket writes; no folders, no absolute paths), context (files it reads), contracts (contract files it uses), dependsOn (keys of other tickets in this file),',
+-    'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps).',
++    'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
+     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
+     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
+     'Work only from the requirements below.',
+@@ -194,6 +194,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1 } = {}) {
+     };
+     if (raw.type === 'human') t.steps = strings(raw.steps);
+     if (raw.hard === true) t.hard = true;
++    if (raw.skeleton === true) t.skeleton = true;
+     const v = validateTicket(t);
+     if (!v.ok) errors.push(`${id}: ${v.errors[0]}`);
+     tickets.push(t);
+@@ -230,7 +231,8 @@ async function readStageFiles(root, runId) {
+ 
+ function treeReport(scope, tickets) {
+   const tree = checkTicketTree({ scope, tickets });
+-  const lines = [`coverage ${tree.coveragePct}% | ${tickets.length} tickets | errors ${tree.errors.length} | warnings ${tree.warnings.length}`];
++  const noSkeleton = tickets.length >= 30 && !tickets.some(t => t.skeleton);
++  const lines = [...(noSkeleton ? ['warning: no skeleton tickets: mark the thin vertical slice (database to API to screen to test) so connection bugs show on day 0'] : []), `coverage ${tree.coveragePct}% | ${tickets.length} tickets | errors ${tree.errors.length} | warnings ${tree.warnings.length}`];
+   for (const e of tree.errors.slice(0, 12)) lines.push(`  error ${e.code}: ${e.message}`);
+   if (tree.errors.length > 12) lines.push(`  ...and ${tree.errors.length - 12} more`);
+   return { tree, lines };
+@@ -451,7 +453,7 @@ async function withLock(root, fn) {
+ // `swarm go --scope`: builds a manifest from the ready tickets, marks them running (one ledger write) and
+ // returns the manifest path for the normal go path. Refuses an unapproved ledger, a ticket set changed since
+ // approval, or a scope file that is missing or changed since approval.
+-export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [] } = {}) {
++export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons = [], skipSkeleton = false } = {}) {
+   return withLock(root, async () => {
+     const ledger = await readLedger(root);
+     if (!ledger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+@@ -463,7 +465,17 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
+     const snapshot = await readText(path.join(root, ...SNAPSHOT));
+     if (snapshot === null || scopeHash(snapshot) !== ledger.scope.hash) throw fail('scope-snapshot', 'the approved scope snapshot is missing or does not match; run swarm scope approve --yes again');
+     const scope = parseScope(snapshot);
+-    const ready = readyTickets(ledger.tickets);
++    let ready = readyTickets(ledger.tickets);
++    // Skeleton first: while a skeleton ticket is open, only the skeleton (and what it depends on, and runner-made fix tickets) runs.
++    const open = ledger.tickets.filter(t => t.skeleton && !['done', 'cancelled'].includes(t.status));
++    if (open.length && !skipSkeleton) {
++      const byId = new Map(ledger.tickets.map(t => [t.id, t]));
++      const keep = new Set();
++      const visit = id => { if (keep.has(id) || !byId.has(id)) return; keep.add(id); for (const d of byId.get(id).dependsOn ?? []) visit(d); };
++      for (const t of ledger.tickets.filter(x => x.skeleton)) visit(t.id);
++      ready = ready.filter(t => keep.has(t.id) || t.origin === 'ci');
++      if (!ready.length) throw fail('scope-skeleton', `the skeleton is not finished (${open.map(t => t.id).slice(0, 5).join(', ')}) and nothing of it is ready; finish or unblock it, or use --skip-skeleton`);
++    }
+     const humans = ready.filter(t => t.type === 'human').length;
+     const { manifest, warnings, skipped } = ticketsToManifest(ready, { ledger, scope, ready: false, maxJobs, lessons });
+     manifest.jobs = manifest.jobs.filter(j => j.type !== 'human');
+@@ -486,6 +498,23 @@ export async function prepareScopeRun(root, { maxJobs, now = Date.now, lessons =
+   });
+ }
+ 
++// A ticket the runner makes from a failing check (smoke or preview hook). Next free id below T-9000; the approval is not touched (origin 'ci').
++export async function addCiFixTicket(root, partial) {
++  const ledger = await readLedger(root);
++  if (!ledger) return null;
++  const used = ledger.tickets.map(t => Number(t.id.slice(2))).filter(n => n < 9000);
++  const next = Math.max(0, ...used) + 1;
++  if (next >= 9000) return null;
++  const ticket = { ...partial, id: `T-${String(next).padStart(4, '0')}` };
++  const checked = validateTicket(ticket);
++  if (!checked.ok) throw fail('ticket-invalid', checked.errors[0]);
++  ledger.tickets.push(ticket);
++  ledger.updatedAt = new Date().toISOString();
++  await writeLedger(root, ledger);
++  await appendLog(root, { event: 'ci-fix-ticket', id: ticket.id });
++  return ticket.id;
++}
++
+ export async function ticketProgress(root) {
+   const ledger = await readLedger(root);
+   if (!ledger) return null;
+diff --git a/tools/scope-integrity.mjs b/tools/scope-integrity.mjs
+index a544ba1..e4e112f 100644
+--- a/tools/scope-integrity.mjs
++++ b/tools/scope-integrity.mjs
+@@ -95,7 +95,7 @@ export function checkTicketTree({ scope, tickets = [], sizeBudget } = {}) {
+     const good = refs.filter((r) => reqIds.has(r));
+     for (const r of good) covered.add(r);
+     for (const r of refs) if (!reqIds.has(r)) badRefs.push({ ticket: t.id, ref: r });
+-    if (!NO_REF_TYPES.has(t.type) && good.length === 0) untraced.push(t.id);
++    if (!NO_REF_TYPES.has(t.type) && t.origin !== 'ci' && good.length === 0) untraced.push(t.id);
+     if (NEEDS_ACCEPTANCE.has(t.type) && !(Array.isArray(t.acceptance) && t.acceptance.some((x) => typeof x === 'string' && x.trim()))) missingAcceptance.push(t.id);
+     for (const d of Array.isArray(t.dependsOn) ? t.dependsOn : []) if (!allIds.has(d)) unknownDeps.push({ ticket: t.id, dep: d });
+     if (!['S', 'M'].includes(t.size)) oversize.push(t.id);
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index fe9a83c..b86056c 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -25,6 +25,8 @@ import { initProject, checkProject, refreshRepoMap } from './init.mjs';
+ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
+ import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
+ import { createBatchController } from './adaptive-batch.mjs';
++import { runHook, shouldRun, fixTicketFromFailure } from './ci-hooks.mjs';
++import { addCiFixTicket } from './scope-commands.mjs';
+ import { protectedViolations, protectedPathHit, formatBaseCheck, validateProfile } from './init-profile.mjs';
+ import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
+ import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
+@@ -4487,6 +4489,33 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
+   const touched = new Set();           // files integrated earlier in this pass: the map does not know their new imports
+   let affectedSinceFull = false;       // true when the tree has only had affected-only checks since the last full run
+   const affectedBatchModes = new WeakMap();
++  // Phase 15: owner-configured smoke and preview hooks run after each green batch. A failure never rolls the batch back; it becomes a fix ticket.
++  const ciConfig = securityProfile?.ci;
++  let ciBatchNumber = 0;
++  const runCiHooks = async (batch, changes) => {
++    ciBatchNumber += 1;
++    queue.ci ??= [];
++    for (const kind of ['smoke', 'preview']) {
++      const hook = ciConfig?.[kind];
++      if (!hook || !shouldRun(hook.everyBatches ?? 1, ciBatchNumber)) continue;
++      const res = await runHook(kind, hook, { cwd: root, env: portEnv });
++      const record = { batch: ciBatchNumber, kind, status: res.status, exitCode: res.exitCode, durationMs: res.durationMs, ...(res.url ? { url: res.url } : {}) };
++      if (res.status !== 'passed') {
++        // The local brain condenses the log when it answers within 15 seconds; otherwise the redacted tail is used.
++        let summary = null;
++        try {
++          const { createProjectBrain } = await import('./brain-commands.mjs');
++          const { digest } = await import('./brain-tasks.mjs');
++          const project = createProjectBrain({ root });
++          try { summary = (await Promise.race([digest(project.ask, res.tail, { kind: 'tests' }), new Promise((_, reject) => setTimeout(() => reject(new Error('brain-timeout')), 15000))])).lines.join(' '); } finally { await project.close().catch(() => {}); }
++        } catch { /* the tail is used */ }
++        try { record.ticket = await addCiFixTicket(root, fixTicketFromFailure({ kind, batchNumber: ciBatchNumber, files: changes.map(change => change.file), tail: res.tail, summary })); } catch { /* no ledger or a full one: the warning below remains */ }
++        warnings.push(`ci-${kind}-${res.status}: batch ${ciBatchNumber}${record.ticket ? ` (fix ticket ${record.ticket})` : ''}`);
++        await appendEvent(root, { kind: 'ci-failure', hook: kind, batch: ciBatchNumber, status: res.status }, { best: true }).catch(() => {});
++      }
++      queue.ci.push(record);
++    }
++  };
+   const applyBatch = async (batch, { last = false, forceFull = false } = {}) => {
+     const ready = [];
+     for (const plan of batch) {
+@@ -4565,6 +4594,7 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
+       state.integratedNewFiles.push(...changes.filter(change => change.previous === null).map(change => change.file));
+     }
+     if (!failed) await journal.finish();
++    if (!failed && (ciConfig?.smoke || ciConfig?.preview)) await runCiHooks(batch, changes);
+     await persist();
+     if (failed && batch.length > 1) {
+       const middle = Math.ceil(batch.length / 2);
+@@ -7350,14 +7380,15 @@ async function mainInner() {
+   if(args[0]==='go'&&args.includes('--scope')){
+     root=await fs.realpath(root);
+     const {prepareScopeRun}=await import('./scope-commands.mjs');
+-    const rest=args.slice(1).filter(a=>a!=='--scope');
++    const skipSkeleton=args.includes('--skip-skeleton');
++    const rest=args.slice(1).filter(a=>a!=='--scope'&&a!=='--skip-skeleton');
+     const at=rest.indexOf('--max-jobs');
+     const maxJobs=at!==-1?Number(rest[at+1]):undefined;
+     if(at!==-1&&!(Number.isSafeInteger(maxJobs)&&maxJobs>0))fail('--max-jobs must be a positive whole number');
+     if(at!==-1)rest.splice(at,2);
+     try{
+       const {loadLessonsForNotes}=await import('./lessons-commands.mjs');
+-      const prepared=await prepareScopeRun(root,{maxJobs,lessons:await loadLessonsForNotes(root,ownRoot)});
++      const prepared=await prepareScopeRun(root,{maxJobs,skipSkeleton,lessons:await loadLessonsForNotes(root,ownRoot)});
+       process.stderr.write(`scope: ${prepared.ids.length} ticket(s) in this wave${prepared.humans?`; ${prepared.humans} human ticket(s) waiting`:''}. After the run: swarm scope sync RUN\n`);
+       args.splice(1,args.length-1,prepared.file,...rest);
+     }catch(error){fail(error.message,error.code);}
+@@ -7530,7 +7561,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | change "REASON" [FILE] [--yes] | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | change "REASON" [FILE] [--yes] | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
+diff --git a/tools/ticket-manifest.mjs b/tools/ticket-manifest.mjs
+index 42153a7..5f074af 100644
+--- a/tools/ticket-manifest.mjs
++++ b/tools/ticket-manifest.mjs
+@@ -38,6 +38,8 @@ function promptFor(t,reqs,lessons){
+     else lines.push(id+' (not found in scope)');
+   }
+   if((t.acceptance||[]).length){lines.push('Acceptance:');for(const a of t.acceptance)lines.push('- '+a);}
++  // A ticket the runner made from a failing check carries its failure summary (flat text, capped).
++  if(t.origin==='ci'&&typeof t.notes==='string'&&t.notes.trim())lines.push('Failure summary: '+t.notes.replace(/\s+/g,' ').trim().slice(0,600));
+   // Notes sit after the ticket text and before the job rule, so the job rule stays last.
+   if(lessons?.length){
+     const reqTexts=(t.scopeRefs||[]).map(id=>reqs.get(id)).filter(Boolean).flatMap(r=>[r.text,...(r.acceptance||[])]);
+diff --git a/tools/tickets.mjs b/tools/tickets.mjs
+index e9ead44..3d3b903 100644
+--- a/tools/tickets.mjs
++++ b/tools/tickets.mjs
+@@ -9,7 +9,7 @@ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'co
+ const RISKS = ['low', 'medium', 'high'];
+ const SIZES = ['S', 'M'];
+ const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
+-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps'];
++const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton'];
+ const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
+ const SECRET_NAMES = ['.project-swarm.json', '.env'];
+ const MOVES = {
+@@ -43,7 +43,8 @@ const badPath = p => {
+ };
+ 
+ export function ticketSetHash(tickets) {
+-  const picked = [...tickets].sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
++  // Tickets made by the runner from a check log (origin 'ci') are not part of what the owner approved.
++  const picked = [...tickets].filter(t => t.origin !== 'ci').sort(byId).map(t => Object.fromEntries(HASH_FIELDS.map(k => [k, t[k]])));
+   return createHash('sha256').update(canon(picked)).digest('hex');
+ }
+ 
+@@ -56,7 +57,7 @@ export function validateTicket(t) {
+   if (!Array.isArray(t.scopeRefs)) errors.push('scopeRefs must be an array');
+   else {
+     if (!t.scopeRefs.every(r => /^R-[0-9]{3,}$/.test(r))) errors.push('scopeRefs must contain R- ids');
+-    if (t.scopeRefs.length === 0 && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
++    if (t.scopeRefs.length === 0 && t.origin !== 'ci' && !['human', 'contract'].includes(t.type)) errors.push('scopeRefs must name at least one requirement');
+   }
+   if (t.acceptance !== undefined && !isStrArr(t.acceptance)) errors.push('acceptance must be an array of strings');
+   if (NEEDS_ACCEPTANCE.includes(t.type) && !(isStrArr(t.acceptance) && t.acceptance.length > 0)) errors.push('acceptance is required for build, test and migration tickets');
+@@ -67,6 +68,8 @@ export function validateTicket(t) {
+   for (const k of ['files', 'context', 'contracts']) if (isStrArr(t[k])) for (const p of t[k]) if (badPath(p)) errors.push(`${k} path not allowed: ${p}`);
+   if (!STATUSES.includes(t.status)) errors.push(`bad status: ${t.status}`);
+   if (t.sensitive !== undefined && typeof t.sensitive !== 'boolean') errors.push('sensitive must be a boolean');
++  if (t.skeleton !== undefined && typeof t.skeleton !== 'boolean') errors.push('skeleton must be a boolean');
++  if (t.origin !== undefined && t.origin !== 'ci') errors.push('origin must be ci when set');
+   if (t.type === 'human' && !(isStrArr(t.steps) && t.steps.length >= 1 && t.steps.length <= 30)) errors.push('human tickets need 1 to 30 steps');
+   return { ok: errors.length === 0, errors };
+ }

@@ -1,0 +1,314 @@
+diff --git a/docs/scope.md b/docs/scope.md
+index 88317eb..1d484d5 100644
+--- a/docs/scope.md
++++ b/docs/scope.md
+@@ -93,4 +93,5 @@ The route-level test of an integration ticket must be a test file (a tests, e2e
+ - The build check runs on every batch when `package.json` has a `build` script (`quality: {build: false}` turns it off). A ticket's named test files must exist before done.
+ - A ticket may list `deletes`; the worker deletes exactly those files. Deleting a manifest, lockfile, workflow or the profile is blocked by the security gate until `swarm integrate RUN --approve-manifest FILE`.
+ - `swarm tickets T-0007 --acceptance "check one ;; check two"` (todo, ready, blocked) or `--add-acceptance "check three"` (any status but running).
++- `swarm tickets T-0007 --risk high` changes a ticket's risk; `swarm tickets T-0007 --lane claude:opus` pins its lane (`claude`, `codex`, `cursor` or `anthropic`, optionally `:model`; `--lane auto` clears it; a lane that cannot run tests or delete files is refused for a ticket that needs that). Todo, ready or blocked tickets only. It previews first; `--yes` applies it, logs it (`ticket-edit` in `.swarm/project/tickets.log`) and seals an approved ledger again, because risk and lane are part of what was approved. `tickets --risk high` with no id still only filters the list.
+ - A ticket's e2e spec must be run by the project's e2e command; `scope check` warns when it would not be.
+diff --git a/tests/ticket-lane-risk.test.mjs b/tests/ticket-lane-risk.test.mjs
+new file mode 100644
+index 0000000..e46a168
+--- /dev/null
++++ b/tests/ticket-lane-risk.test.mjs
+@@ -0,0 +1,117 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { runScopeCommand } from '../tools/scope-commands.mjs';
++import { parseScope } from '../tools/scope.mjs';
++import { createLedger, writeLedger, readLedger, approveLedger, isApproved, validateTicket, parseLane } from '../tools/tickets.mjs';
++import { ticketsToManifest } from '../tools/ticket-manifest.mjs';
++
++const tk = (id, extra = {}) => ({ id, title: id, type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${id}.ts`], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status: 'ready', stage: 'S1', ...extra });
++async function project(t, tickets, approved = true) {
++  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'lane-risk-')));
++  t.after(() => fs.rm(root, { recursive: true, force: true }));
++  const ledger = createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets });
++  await writeLedger(root, approved ? { ...ledger, approved: approveLedger(ledger).approved } : ledger);
++  return root;
++}
++const run = (root, args) => runScopeCommand(root, 'tickets', args);
++const get = async (root, id) => (await readLedger(root)).tickets.find(x => x.id === id);
++
++test('tickets ID --risk previews, then changes risk with --yes: logged, approval sealed again', async t => {
++  const root = await project(t, [tk('T-0001')]);
++  const dry = await run(root, ['T-0001', '--risk', 'high']);
++  assert.match(dry.stdout, /risk: low {2}-> {2}high/);
++  assert.match(dry.stdout, /approval is renewed/);
++  assert.equal((await get(root, 'T-0001')).risk, 'low', 'a preview changes nothing');
++  const done = await run(root, ['T-0001', '--risk', 'high', '--yes']);
++  assert.equal(done.exitCode ?? 0, 0);
++  assert.equal((await get(root, 'T-0001')).risk, 'high');
++  assert.equal(isApproved(await readLedger(root)), true, 'the ledger is approved again over the new risk');
++  const log = await fs.readFile(path.join(root, '.swarm/project/tickets.log'), 'utf8').catch(() => '');
++  assert.match(log, /"fields":\["risk"\]/);
++  assert.match(log, /"reapproved":true/);
++});
++
++test('--lane pins the ticket lane: validated, hashed, and used by the manifest', async t => {
++  const root = await project(t, [tk('T-0001'), tk('T-0002', { tests: ['tests/a.test.ts'] })]);
++  assert.match((await run(root, ['T-0001', '--lane', 'gpt'])).stdout, /lane must be/);
++  assert.match((await run(root, ['T-0001', '--lane', 'openrouter'])).stdout, /lane must be/);
++  assert.match((await run(root, ['T-0002', '--lane', 'anthropic', '--yes'])).stdout, /cannot run tests/);
++  const before = (await readLedger(root)).approved.ticketsHash;
++  assert.equal((await run(root, ['T-0001', '--lane', 'claude:opus', '--yes'])).exitCode ?? 0, 0);
++  const ledger = await readLedger(root);
++  assert.equal(ledger.tickets[0].lane, 'claude:opus');
++  assert.equal(isApproved(ledger), true);
++  assert.notEqual(ledger.approved.ticketsHash, before, 'the lane is part of what was approved');
++  const scope = parseScope('# P\n\n## Requirements\n- R-001: x\n');
++  const contextEnv = { exists: () => true, sizes: {}, listFiles: () => [], profileContext: {} };
++  const job = ticketsToManifest([ledger.tickets[0]], { ledger: { tickets: [] }, scope, ready: true, contextEnv }).manifest.jobs[0];
++  assert.equal(job.agent, 'claude');
++  assert.equal(job.model, 'opus');
++  // Back to auto removes the field, so the hash is the original one again.
++  assert.equal((await run(root, ['T-0001', '--lane', 'auto', '--yes'])).exitCode ?? 0, 0);
++  assert.equal('lane' in (await get(root, 'T-0001')), false);
++  assert.equal((await readLedger(root)).approved.ticketsHash, before, 'clearing the lane restores the original hash');
++  assert.equal(ticketsToManifest([await get(root, 'T-0001')], { ledger: { tickets: [] }, scope, ready: true, contextEnv }).manifest.jobs[0].agent, 'auto');
++});
++
++test('only a todo, ready or blocked ticket changes; an unapproved ledger stays unapproved; bad values are refused', async t => {
++  const root = await project(t, [tk('T-0001', { status: 'done' }), tk('T-0002', { status: 'todo' })], false);
++  assert.match((await run(root, ['T-0001', '--risk', 'high', '--yes'])).stdout, /is done; only a todo/);
++  assert.match((await run(root, ['T-0002', '--risk', 'extreme', '--yes'])).stdout, /risk must be/);
++  assert.equal((await run(root, ['T-0002', '--lane', 'codex', '--yes'])).exitCode ?? 0, 0);
++  assert.equal(isApproved(await readLedger(root)), false);
++  assert.match((await run(root, ['T-0002', '--lane', 'codex', '--yes'])).stdout, /nothing to change/);
++  assert.deepEqual(parseLane('cursor:gpt-5.5'), { agent: 'cursor', model: 'gpt-5.5' });
++  assert.equal(parseLane('claude; rm'), null);
++  assert.equal(validateTicket(tk('T-9', { lane: 'bogus' })).ok, false);
++});
++
++test('a list filter still works: tickets --risk high without an id only filters', async t => {
++  const root = await project(t, [tk('T-0001', { risk: 'high' }), tk('T-0002')]);
++  const listed = await run(root, ['--risk', 'high']);
++  assert.match(listed.stdout, /T-0001/);
++  assert.doesNotMatch(listed.stdout, /T-0002/);
++  assert.equal((await get(root, 'T-0002')).risk, 'low');
++});
++
++test('review fixes: lane text is normalised, a model cannot start with a dash, sensitive tickets stay with known providers, flags are not mixed', async t => {
++  const root = await project(t, [tk('T-0001'), tk('T-0002', { sensitive: true })]);
++  assert.match((await run(root, ['T-0001', '--lane', 'claude:--dangerously-skip-permissions', '--yes'])).stdout, /lane must be/);
++  assert.equal((await run(root, ['T-0001', '--lane', ' codex ', '--yes'])).exitCode ?? 0, 0);
++  assert.equal((await get(root, 'T-0001')).lane, 'codex');
++  assert.match((await run(root, ['T-0001', '--lane', 'codex', '--yes'])).stdout, /nothing to change/);
++  assert.match((await run(root, ['T-0002', '--lane', 'cursor:gpt-5.5', '--yes'])).stdout, /sensitive/);
++  assert.equal((await run(root, ['T-0002', '--lane', 'cursor', '--yes'])).exitCode ?? 0, 0);
++  const mixed = await run(root, ['T-0001', '--lane', 'claude', '--files', 'src/x.ts', '--yes']);
++  assert.notEqual(mixed.exitCode ?? 0, 0);
++  assert.match(mixed.stdout + (mixed.stderr ?? ''), /cannot be combined/);
++  assert.equal((await get(root, 'T-0001')).lane, 'codex');
++  assert.equal(validateTicket(tk('T-9', { sensitive: true, lane: 'cursor:gemini-2.5-pro' })).ok, false);
++});
++
++test('manifest: the pin keeps the model when the agent is unchanged, drops it when the agent changes, and is ignored where it cannot work', () => {
++  const scope = parseScope('# P\n\n## Requirements\n- R-001: x\n');
++  const contextEnv = { exists: () => true, sizes: {}, listFiles: () => [], profileContext: {} };
++  const build = ticket => ticketsToManifest([ticket], { ledger: { tickets: [] }, scope, ready: true, contextEnv });
++  // A delete ticket is a claude/sonnet shell job; pinning plain claude keeps sonnet, pinning codex drops the model.
++  const del = tk('T-0001', { deletes: ['src/old.ts'], files: ['src/new.ts'] });
++  assert.equal(build({ ...del, lane: 'claude' }).manifest.jobs[0].model, 'sonnet');
++  const codex = build({ ...del, lane: 'codex' }).manifest.jobs[0];
++  assert.equal(codex.agent, 'codex');
++  assert.equal(codex.model, undefined);
++  // anthropic cannot delete files: the pin is ignored with a warning (validateTicket refuses it up front; this is a ledger edited by hand).
++  const bad = build({ ...del, lane: 'anthropic' });
++  assert.equal(bad.manifest.jobs[0].agent, 'claude');
++  assert.match(bad.warnings.join('\n'), /T-0001: lane anthropic ignored/);
++  // A sensitive job does not take a pinned cursor model.
++  const sensitive = build({ ...tk('T-0002', { lane: 'cursor:gpt-5.5' }), sensitive: true });
++  const job = sensitive.manifest.jobs[0];
++  assert.equal(job.sensitive, true);
++  assert.notEqual(job.model, 'gpt-5.5');
++  assert.match(sensitive.warnings.join('\n'), /ignored: this ticket is sensitive/);
++});
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index 9b539ba..d77deba 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -45,7 +45,7 @@ export const COMMANDS = [
+   command('squash', 'Squash a branch.', 'none', '--branch --base'),
+   command('clean-branch', 'Clean changes from a branch.', 'none', '--from --exclude'),
+   command('scope', 'Scope file: template, check, split into tickets, approve, sync.', 'none', '--out --stage --ingest --merge --yes --integrated'),
+-  command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --set --note --json --mark-deps --yes'),
++  command('tickets', 'List or show scope tickets and their status.', 'none', '--stage --status --type --risk --lane --set --note --json --mark-deps --yes'),
+   command('change', 'Record a scope change order.', 'none', '--yes'),
+   command('ui', 'Render design screens and compare them with the mockups.', 'none', '--base-url --json'),
+   command('watch', 'Open the read-only dashboard for a run (Run, Build Plan, Commands, Gallery).', 'run', '--all --tui --open --json'),
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 25175fd..8980ef6 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { randomBytes, createHash } from 'node:crypto';
+ import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText, isSensitiveText } from './scope.mjs';
+-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES } from './tickets.mjs';
++import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+ import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
+ import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
+ import { isSecretLooking } from './ignored-artifacts.mjs';
+@@ -44,7 +44,8 @@ export const SCOPE_USAGE = [
+   '       swarm scope security-review RUN     (records the verdicts of an Opus security review run)',
+   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
+   '       swarm scope contracts OPENAPI.json',
+-  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high] [--set STATUS] [--note TEXT] [--json]',
++  '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
++  '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--set STATUS] [--note TEXT] [--json]',
+   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
+   '       swarm tickets ID... --release [--note TEXT]     (clean release of held tickets: blocked, todo or review go back to ready with attempts, escalation and retry notes cleared)',
+   '       swarm tickets --mark-deps [ID...] [--yes]     (one time, older ledgers: mark blocked tickets with no reason as dependency-blocked so they unlock)',
+@@ -59,7 +60,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
+ const MAX_STAGE_TICKETS = 2000;
+ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+ const LOCK_STALE_MS = 10 * 60 * 1000;
+-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
++const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from']);
+ const execFileAsync = promisify(execFile);
+ const fail = (code, message) => Object.assign(new Error(message), { code });
+ const out = (text, exitCode = 0) => ({ stdout: text.endsWith('\n') ? text : `${text}\n`, exitCode });
+@@ -1503,6 +1504,45 @@ async function editTicketFiles(root, ledger, rest, flags) {
+   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+ }
+ 
++// The owner changes a ticket's risk or pins its lane. Both are in the ticket hash, so an approved ledger is sealed again over the change (your --yes is the approval) and the edit is logged.
++async function setTicketRoute(root, rest, flags) {
++  if (rest.length !== 1) return bad('tickets --lane/--risk needs one ticket id');
++  const risk = flags.risk;
++  const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
++  const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
++  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release'].filter(k => flags[k] !== undefined);
++  if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
++  if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
++  if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
++  try {
++    return await withLock(root, async () => {
++      const fresh = await readLedger(root);
++      const ticket = fresh.tickets.find(x => x.id === rest[0]);
++      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
++      if (!['todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a todo, ready or blocked ticket can change its risk or lane (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
++      if (lane !== undefined && lane !== 'auto' && ticket.sensitive === true && !laneOkForSensitive(parsedLane)) return out(`${ticket.id} is sensitive: lane ${lane} is not allowed (cursor only without a model)`, 1);
++      const next = { ...ticket };
++      if (risk !== undefined) next.risk = risk;
++      if (lane !== undefined) { if (lane === 'auto') delete next.lane; else next.lane = lane; }
++      const v = validateTicket(next);
++      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
++      const fields = [...(risk !== undefined ? ['risk'] : []), ...(lane !== undefined ? ['lane'] : [])];
++      const show = x => String(x ?? 'auto');
++      const summary = fields.map(k => `  ${k}: ${show(ticket[k] ?? (k === 'risk' ? undefined : 'auto'))}  ->  ${show(next[k] ?? (k === 'risk' ? undefined : 'auto'))}`).join('\n');
++      if (fields.every(k => (ticket[k] ?? null) === (next[k] ?? null))) return out(`${ticket.id}: nothing to change`);
++      const wasApproved = isApproved(fresh);
++      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${wasApproved ? ' (the approval is renewed over the change)' : ''}.`);
++      fresh.tickets = fresh.tickets.map(x => x.id === ticket.id ? next : x);
++      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
++      saved.updatedAt = new Date().toISOString();
++      await writeLedger(root, saved);
++      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields, before: Object.fromEntries(fields.map(k => [k, ticket[k] ?? null])), after: Object.fromEntries(fields.map(k => [k, next[k] ?? null])), note: flags.note ?? null, reapproved: wasApproved });
++      await refreshPlan(root);
++      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
++    });
++  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
++}
++
+ // A clean release of held tickets: back to ready with the failure history cleared, so the next wave starts them from the first level.
+ // Only tickets whose dependencies are done can be released; a running, done or cancelled ticket is left alone.
+ async function releaseTickets(root, ids, flags) {
+@@ -1538,6 +1578,7 @@ export async function runTicketsCommand(root, args) {
+   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+   if (flags['mark-deps']) return markDepsCommand(root, ledger, rest, flags);
+   if (flags.release === true) return releaseTickets(root, rest, flags);
++  if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
+   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
+   if (flags.set !== undefined) {
+     if (rest.length !== 1) return bad('tickets --set needs one ticket id');
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 8d95695..1ffe6b2 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -7494,7 +7494,7 @@ async function mainInner() {
+   // (Commands that print their own usage, such as ship and lesson, keep doing so.)
+   {
+     // Only a flag position counts: before any `--`, and not as the value of a flag that takes one (swarm tickets T-1 --note -h).
+-    const VALUE_FLAGS=new Set(['--note','--set','--out','--files','--context','--tests','--stage','--ingest','--status','--type','--risk','--max-jobs','--reason','--jobs','--evidence','--repo','--pr','--accept-failed-check','--plan','--leads','--concurrency','--max-usd','--max-tokens','--commit-message']);
++    const VALUE_FLAGS=new Set(['--note','--set','--out','--files','--context','--tests','--stage','--ingest','--status','--type','--risk','--lane','--max-jobs','--reason','--jobs','--evidence','--repo','--pr','--accept-failed-check','--plan','--leads','--concurrency','--max-usd','--max-tokens','--commit-message']);
+     const cut=args.indexOf('--');
+     const flagArgs=(cut===-1?args:args.slice(0,cut));
+     const helpAt=flagArgs.findIndex((a,i)=>i>0&&(a==='--help'||a==='-h')&&!VALUE_FLAGS.has(flagArgs[i-1]));
+diff --git a/tools/ticket-manifest.mjs b/tools/ticket-manifest.mjs
+index ebc045c..87737cb 100644
+--- a/tools/ticket-manifest.mjs
++++ b/tools/ticket-manifest.mjs
+@@ -1,4 +1,5 @@
+ // SPDX-License-Identifier: Apache-2.0
++import { parseLane, laneOkForSensitive } from './tickets.mjs';
+ import { looksLikeTestFile } from './wiring.mjs';
+ import * as scopeModule from './scope.mjs';
+ import { queryFromTicket, selectNotes, renderNotes } from './lesson-notes.mjs';
+@@ -163,6 +164,19 @@ export function ticketsToManifest(tickets,opts={}){
+       // Only a worker that edits in place can delete: a shell Claude job, like the test-running lane.
+       Object.assign(job,{agent:'claude',model:'sonnet',shell:true});delete job.cacheContext;
+     }
++    // The owner pinned this ticket's lane (swarm tickets ID --lane): it wins over routing and the profile's verify lane.
++    const lane=parseLane(t.lane);
++    if(lane){
++      const prev=job.agent;
++      const editsInPlace=['claude','codex','cursor'].includes(lane.agent);
++      if(job.sensitive===true&&!laneOkForSensitive(lane))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket is sensitive');
++      else if(!editsInPlace&&(vfields||deletes.length||job.shell))warnings.push(t.id+': lane '+t.lane+' ignored: this ticket needs a worker that runs commands or deletes files');
++      else{
++        job.agent=lane.agent;
++        if(lane.model)job.model=lane.model;else if(lane.agent!==prev)delete job.model;
++        if(vfields){if(lane.agent==='codex')delete job.after;else if(deps.length)job.after=deps;}
++      }
++    }
+     return job;
+   }).filter(Boolean);
+   const manifest={version:1,concurrency:maxJobs||64};
+diff --git a/tools/tickets.mjs b/tools/tickets.mjs
+index c436934..e47d775 100644
+--- a/tools/tickets.mjs
++++ b/tools/tickets.mjs
+@@ -12,8 +12,20 @@ export const STATUSES = ['todo', 'ready', 'running', 'review', 'done', 'blocked'
+ export const TICKET_TYPES = ['build', 'test', 'docs', 'migration', 'design', 'contract', 'human'];
+ const RISKS = ['low', 'medium', 'high'];
+ const SIZES = ['S', 'M'];
++// A ticket may pin its lane (agent, or agent:model). 'auto' is the default and is stored as no lane at all.
++export const TICKET_LANE_AGENTS = ['claude', 'codex', 'cursor', 'anthropic'];
++const WORKTREE_LANES = ['claude', 'codex', 'cursor'];
++export function parseLane(value) {
++  if (typeof value !== 'string') return null;
++  const m = /^([a-z]+)(?::([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/.exec(value.trim());
++  if (!m || !TICKET_LANE_AGENTS.includes(m[1])) return null;
++  return { agent: m[1], ...(m[2] ? { model: m[2] } : {}) };
++}
++export const laneText = lane => (lane ? `${lane.agent}${lane.model ? `:${lane.model}` : ''}` : null);
++// A sensitive ticket may only go to a lane that stays with a known provider: cursor routes to whatever model is named, so it only counts without one.
++export const laneOkForSensitive = lane => Boolean(lane) && (lane.agent !== 'cursor' || !lane.model);
+ const NEEDS_ACCEPTANCE = ['build', 'test', 'migration'];
+-const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
++const HASH_FIELDS = ['id', 'title', 'type', 'stage', 'scopeRefs', 'acceptance', 'files', 'context', 'contracts', 'dependsOn', 'size', 'risk', 'lane', 'sensitive', 'hard', 'steps', 'skeleton', 'tests', 'screens', 'integration', 'deletes', 'dependencies'];
+ const RESERVED_FIRST = ['.git', '.swarm', '.github-hooks-free'];
+ // Build output anywhere in a path, and any dot-env file, are never ticket files.
+ const BUILD_DIRS = ['.next', 'node_modules', 'dist'];
+@@ -76,6 +88,12 @@ export function validateTicket(t) {
+   if (t.size === 'L') errors.push('size L: split this ticket');
+   else if (!SIZES.includes(t.size)) errors.push(`bad size: ${t.size}`);
+   if (!RISKS.includes(t.risk)) errors.push(`bad risk: ${t.risk}`);
++  if (t.lane !== undefined) {
++    const lane = parseLane(t.lane);
++    if (!lane) errors.push(`bad lane: ${t.lane} (one of ${TICKET_LANE_AGENTS.join(', ')}, optionally agent:model; or leave it unset for auto)`);
++    else if (t.sensitive === true && !laneOkForSensitive(lane)) errors.push(`lane ${t.lane} is not allowed for a sensitive ticket (cursor only without a model)`);
++    else if (!WORKTREE_LANES.includes(lane.agent) && ((t.tests ?? []).length || (t.deletes ?? []).length)) errors.push(`lane ${lane.agent} cannot run tests or delete files; use claude, codex or cursor for this ticket`);
++  }
+   for (const k of ['dependsOn', 'files', 'context', 'contracts', 'tests', 'deletes', 'dependencies']) if (t[k] !== undefined && !isStrArr(t[k])) errors.push(`${k} must be an array of strings`);
+   if (isStrArr(t.dependencies)) {
+     if (t.dependencies.length > 10) errors.push('dependencies: at most 10 packages');

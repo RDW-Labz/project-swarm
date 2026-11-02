@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0114",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An idle window between hand steps went unnoticed until it had already cost real time, because nothing checked whether a job was actually running before the next hand step began.",
+  "rule": "Check that a job is running before any hand step, and account for idle time the moment it happens rather than only after the fact.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a coordinator now warns before certain hand steps when no job is running anywhere under its configured project roots, naming how long it has already been idle; a background-time reader now lists every idle gap of five minutes or more between recorded windows. Regression coverage is in `tests/field-lessons-batch-n.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "spend",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#114"
+  }
+}

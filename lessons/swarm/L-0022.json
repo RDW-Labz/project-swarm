@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0022",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A pinning test could never actually run against the file it pinned. A job's declared outputs included a file whose own regression tests needed a shell, but the worker assigned to write it had none, so nobody could ever exercise that pin.",
+  "rule": "Flag an output whose only tests a no-shell worker cannot run when that output is also the runner's own core module, and suggest a follow-up checker job instead of trusting an unverifiable pin.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate` warns to \"consider a checker job\" in that exact situation; `inspect` also reports cost per 1k output tokens per job whenever token usage is known, making a token-heavy job visible without hand computation. Documentation: manifest reference.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "spend",
+    "test",
+    "tokens",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#22"
+  }
+}

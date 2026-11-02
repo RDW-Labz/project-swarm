@@ -1,0 +1,1214 @@
+diff --git a/docs/budgets.md b/docs/budgets.md
+new file mode 100644
+index 0000000..68a33f3
+--- /dev/null
++++ b/docs/budgets.md
+@@ -0,0 +1,33 @@
++# Speed and accessibility budgets
++
++Spec: A2 in [plans/swarm-more-upgrades-spec.md](plans/swarm-more-upgrades-spec.md). On a preview deploy, Lighthouse and axe run on the key screens and the scores are held against budgets. A failure becomes a fix ticket and blocks only the pull request that finishes the last stage.
++
++## Set it up
++
++Add a `budgets` block to the project profile (`.project-swarm.json`):
++
++```json
++"budgets": {
++  "performance": 85,
++  "accessibility": 95,
++  "axeBlock": ["serious", "critical"],
++  "previewHosts": ["*.vercel.app"],
++  "screens": [{ "id": "home", "path": "/" }, { "id": "checkout", "path": "/checkout" }],
++  "lighthouse": { "argv": ["npx", "lighthouse@12", "{url}", "--output=json", "--output-path={out}", "--quiet", "--chrome-flags=--headless"], "timeoutSec": 300 },
++  "axe": { "argv": ["npx", "@axe-core/cli@4", "{url}", "--save", "{out}"], "timeoutSec": 300 }
++}
++```
++
++- Scores are whole numbers 0 to 100 (`performance`, `accessibility`, `bestPractices`, `seo`); with none set the budgets are performance 85 and accessibility 95. `axeBlock` lists the axe impacts that fail a screen (default serious and critical). Up to 10 screens.
++- The two commands are yours: each must contain `{url}` and `{out}` (the tool writes its JSON report there), must not be a shell or a production command, and any script they run becomes a protected path (a worker cannot edit what measures it). The defaults above are used when `lighthouse` or `axe` is left out; **they were not run against a real site when this was built**, so check them once with `swarm budgets check`.
++- `previewHosts` (for example `*.vercel.app`) lists the hosts a preview address taken from the deploy log may have. The log is text that build code can write, so **without `previewHosts` the automatic run after a preview measures nothing** (it warns `budgets-skipped`); `swarm budgets check --url` always measures the address you give it.
++- The address must be an `https` preview or a local `http://127.0.0.1` / `localhost` server, with no credentials in it.
++
++## What happens
++
++- **On a preview deploy:** when the `ci.preview` hook (see [ci-hooks.md](ci-hooks.md)) passes and prints its URL, the swarm runs both tools on every screen. A screen that fails, or whose tool could not run (no Chrome, a timeout), is recorded as failing: a tool that cannot run is never a pass. Each failing screen gets one fix ticket for the batch's files (not another while the first is open), and a `budgets-failed` warning.
++- **By hand:** `swarm budgets check --url PREVIEW_URL [--screens home,cart]` runs the same check and records it (no ticket, because a hand check names no files). `swarm budgets status` shows the latest result per screen.
++- **A tool that did not really measure is never a pass:** a missing or empty axe result, a Lighthouse runtime error, an error-status page, or a redirect to another host is `cannot-run`.
++- **The block:** `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage: every ticket of the highest stage is done or in review (fix tickets and proposals do not count) **and this run holds one of those tickets**. Earlier PRs, hotfixes and the fix-ticket PR pass. It refuses while a screen listed in the profile has a failing (or could-not-run) latest result, or was never measured. A screen that is no longer in the profile cannot block.
++- **Ways out:** fix the screen and run `swarm budgets check` again (a passing run clears it), or accept a failure with a reason: `swarm budgets accept SCREEN --reason TEXT --yes` (logged; it lasts until the screen's next measurement).
++- State is in `.swarm/project/budgets.json`; a result only replaces an older one.
+diff --git a/docs/models.md b/docs/models.md
+new file mode 100644
+index 0000000..68a33f3
+--- /dev/null
++++ b/docs/models.md
+@@ -0,0 +1,33 @@
++# Speed and accessibility budgets
++
++Spec: A2 in [plans/swarm-more-upgrades-spec.md](plans/swarm-more-upgrades-spec.md). On a preview deploy, Lighthouse and axe run on the key screens and the scores are held against budgets. A failure becomes a fix ticket and blocks only the pull request that finishes the last stage.
++
++## Set it up
++
++Add a `budgets` block to the project profile (`.project-swarm.json`):
++
++```json
++"budgets": {
++  "performance": 85,
++  "accessibility": 95,
++  "axeBlock": ["serious", "critical"],
++  "previewHosts": ["*.vercel.app"],
++  "screens": [{ "id": "home", "path": "/" }, { "id": "checkout", "path": "/checkout" }],
++  "lighthouse": { "argv": ["npx", "lighthouse@12", "{url}", "--output=json", "--output-path={out}", "--quiet", "--chrome-flags=--headless"], "timeoutSec": 300 },
++  "axe": { "argv": ["npx", "@axe-core/cli@4", "{url}", "--save", "{out}"], "timeoutSec": 300 }
++}
++```
++
++- Scores are whole numbers 0 to 100 (`performance`, `accessibility`, `bestPractices`, `seo`); with none set the budgets are performance 85 and accessibility 95. `axeBlock` lists the axe impacts that fail a screen (default serious and critical). Up to 10 screens.
++- The two commands are yours: each must contain `{url}` and `{out}` (the tool writes its JSON report there), must not be a shell or a production command, and any script they run becomes a protected path (a worker cannot edit what measures it). The defaults above are used when `lighthouse` or `axe` is left out; **they were not run against a real site when this was built**, so check them once with `swarm budgets check`.
++- `previewHosts` (for example `*.vercel.app`) lists the hosts a preview address taken from the deploy log may have. The log is text that build code can write, so **without `previewHosts` the automatic run after a preview measures nothing** (it warns `budgets-skipped`); `swarm budgets check --url` always measures the address you give it.
++- The address must be an `https` preview or a local `http://127.0.0.1` / `localhost` server, with no credentials in it.
++
++## What happens
++
++- **On a preview deploy:** when the `ci.preview` hook (see [ci-hooks.md](ci-hooks.md)) passes and prints its URL, the swarm runs both tools on every screen. A screen that fails, or whose tool could not run (no Chrome, a timeout), is recorded as failing: a tool that cannot run is never a pass. Each failing screen gets one fix ticket for the batch's files (not another while the first is open), and a `budgets-failed` warning.
++- **By hand:** `swarm budgets check --url PREVIEW_URL [--screens home,cart]` runs the same check and records it (no ticket, because a hand check names no files). `swarm budgets status` shows the latest result per screen.
++- **A tool that did not really measure is never a pass:** a missing or empty axe result, a Lighthouse runtime error, an error-status page, or a redirect to another host is `cannot-run`.
++- **The block:** `swarm ship` refuses with `budgets-failing` only for the PR that finishes the last stage: every ticket of the highest stage is done or in review (fix tickets and proposals do not count) **and this run holds one of those tickets**. Earlier PRs, hotfixes and the fix-ticket PR pass. It refuses while a screen listed in the profile has a failing (or could-not-run) latest result, or was never measured. A screen that is no longer in the profile cannot block.
++- **Ways out:** fix the screen and run `swarm budgets check` again (a passing run clears it), or accept a failure with a reason: `swarm budgets accept SCREEN --reason TEXT --yes` (logged; it lasts until the screen's next measurement).
++- State is in `.swarm/project/budgets.json`; a result only replaces an older one.
+diff --git a/tests/budgets.test.mjs b/tests/budgets.test.mjs
+new file mode 100644
+index 0000000..b208bf6
+--- /dev/null
++++ b/tests/budgets.test.mjs
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { hostAllowed, acceptBudgetFailures, validateBudgetsConfig, parseLighthouse, parseAxe, evaluateBudgets, runBudgets, recordBudgetResults, readBudgetState, openFailures, finishesLastStage, budgetShipGate, checkBaseUrl } from '../tools/budgets.mjs';
++import { runBudgetsCommand } from '../tools/budgets-commands.mjs';
++import { validateProfile } from '../tools/init-profile.mjs';
++import { shipRun } from '../tools/swarm.mjs';
++import { createLedger, writeLedger } from '../tools/tickets.mjs';
++
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'budgets-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const lh = (perf, a11y) => ({ categories: { performance: { score: perf }, accessibility: { score: a11y }, 'best-practices': { score: 1 }, seo: { score: 0.9 } } });
++const axeFile = violations => [{ violations }];
++// A fake tool runner: writes the JSON a tool would, for the screen in the URL.
++const fakeRun = table => async (cmd, args) => {
++  const out = args.find(a => a.endsWith('.json') && a.includes('.swarm/budgets-tmp'))?.replace(/^--out=/, '');
++  const url = args.find(a => a.startsWith('http'));
++  const key = `${cmd === 'lh' ? 'lighthouse' : 'axe'} ${new URL(url).pathname}`;
++  const body = table[key];
++  if (body === 'crash') return { code: 1, stdout: '', stderr: 'chrome not found\n' };
++  if (body === 'hang') return { code: null, timedOut: true, stdout: '', stderr: '' };
++  await fs.writeFile(out, JSON.stringify(body));
++  return { code: 0, stdout: '', stderr: '' };
++};
++const cfg = (extra = {}) => validateBudgetsConfig({ performance: 85, accessibility: 95, screens: [{ id: 'home', path: '/' }, { id: 'cart', path: '/cart' }], lighthouse: { argv: ['lh', '{url}', '--out={out}'] }, axe: { argv: ['ax', '{url}', '--save', '{out}'] }, ...extra });
++
++test('config: defaults, bounds, argv rules (needs {url} and {out}, no shell, no production), screens', () => {
++  const d = validateBudgetsConfig({});
++  assert.equal(d.ok, true);
++  assert.deepEqual([d.config.performance, d.config.accessibility], [85, 95]);
++  assert.deepEqual(d.config.axeBlock, ['serious', 'critical']);
++  assert.equal(d.config.lighthouse.argv[0], 'npx');
++  assert.match(validateBudgetsConfig({ performance: 101 }).errors[0], /0 to 100/);
++  assert.match(validateBudgetsConfig({ lighthouse: { argv: ['sh', '-c', 'x {url} {out}'] } }).errors.join(), /shell or a production/);
++  assert.match(validateBudgetsConfig({ lighthouse: { argv: ['lh', '{url}'] } }).errors.join(), /\{out\}/);
++  assert.match(validateBudgetsConfig({ axe: { argv: ['ax', '--save', '{out}'] } }).errors.join(), /\{url\}/);
++  assert.match(validateBudgetsConfig({ screens: [{ id: 'a', path: '../x' }] }).errors.join(), /screens entries/);
++  assert.match(validateBudgetsConfig({ screens: [{ id: 'a', path: '/' }, { id: 'a', path: '/b' }] }).errors.join(), /unique/);
++  assert.match(validateBudgetsConfig({ axeBlock: ['huge'] }).errors.join(), /axeBlock/);
++  assert.match(validateBudgetsConfig({ speed: 1 }).errors.join(), /unknown key/);
++});
++
++test('scores and violations are read from the tools\' own JSON and compared to the budgets', () => {
++  assert.deepEqual(parseLighthouse(lh(0.84, 0.97)), { performance: 84, accessibility: 97, bestPractices: 100, seo: 90 });
++  assert.equal(parseLighthouse({}).performance, null);
++  const axe = parseAxe(axeFile([{ id: 'color-contrast', impact: 'serious', nodes: [{}, {}] }, { id: 'region', impact: 'moderate', nodes: [{}] }]));
++  assert.deepEqual(axe.map(v => [v.id, v.impact, v.nodes]), [['color-contrast', 'serious', 2], ['region', 'moderate', 1]]);
++  const { config } = cfg();
++  const verdict = evaluateBudgets({ lighthouse: parseLighthouse(lh(0.84, 0.97)), axe }, config);
++  assert.equal(verdict.pass, false);
++  assert.deepEqual(verdict.failures.map(f => f.metric), ['performance', 'color-contrast']);
++  assert.equal(evaluateBudgets({ lighthouse: parseLighthouse(lh(0.9, 0.96)), axe: [] }, config).pass, true);
++  assert.equal(evaluateBudgets({ lighthouse: {}, axe: [] }, config).pass, false, 'a missing score is not a pass');
++});
++
++test('runBudgets: per screen results; a tool that crashes or hangs is cannot-run, never a pass; only https or local addresses', async t => {
++  const root = await tmp(t);
++  const { config } = cfg();
++  const run = fakeRun({ 'lighthouse /': lh(0.95, 0.99), 'axe /': axeFile([]), 'lighthouse /cart': lh(0.5, 0.99), 'axe /cart': 'crash' });
++  const results = await runBudgets({ root, baseUrl: 'https://app-git-x.vercel.app', config, run });
++  assert.deepEqual(results.map(r => [r.id, r.status]), [['home', 'passed'], ['cart', 'cannot-run']]);
++  assert.match(results[1].failures[0].message, /axe could not run: chrome not found/);
++  const hang = await runBudgets({ root, baseUrl: 'http://127.0.0.1:3000', config, run: fakeRun({ 'lighthouse /': 'hang', 'axe /': axeFile([]), 'lighthouse /cart': 'hang', 'axe /cart': axeFile([]) }) });
++  assert.match(hang[0].failures[0].message, /timed out/);
++  await assert.rejects(runBudgets({ root, baseUrl: 'http://example.com', config, run }), { code: 'budgets-url' });
++  assert.equal(checkBaseUrl('https://user:pw@x.dev'), null);
++  assert.equal(checkBaseUrl('https://x.dev/path/?q=1'), 'https://x.dev/path', 'a sub-path preview keeps its path');
++  assert.equal(checkBaseUrl('https://x.dev/'), 'https://x.dev');
++  assert.deepEqual(await fs.readdir(path.join(root, '.swarm/budgets-tmp')), [], 'temporary reports are removed');
++});
++
++test('state: the latest result per screen; a pass clears it; open failures are listed', async t => {
++  const root = await tmp(t);
++  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: 'a', status: 'failed', failures: [{ message: 'm' }] }, { id: 'cart', url: 'u', at: 'a', status: 'passed', failures: [] }]);
++  assert.deepEqual(openFailures(await readBudgetState(root)).map(o => o.id), ['home']);
++  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: 'b', status: 'passed', failures: [] }]);
++  assert.deepEqual(openFailures(await readBudgetState(root)), []);
++});
++
++test('the gate blocks only the PR that finishes the last stage, and only while a screen fails', () => {
++  const t = (id, stage, status) => ({ id, stage, status });
++  const midway = { tickets: [t('1', 'S1', 'done'), t('2', 'S2', 'running')] };
++  const finishing = { tickets: [t('1', 'S1', 'done'), t('2', 'S2', 'review'), t('3', 'S0', 'running'), t('4', 'S2', 'proposed')] };
++  const failing = { screens: { home: { status: 'failed', failures: [{ message: 'performance 60 is below the budget 85' }], ticket: 'T-0009' } } };
++  const budgets = { screens: [{ id: 'home', path: '/' }] };
++  assert.equal(finishesLastStage(midway), false);
++  assert.equal(finishesLastStage(finishing), true, 'fix tickets (S0) and proposals are not part of a stage');
++  assert.equal(budgetShipGate({ budgets, state: failing, ledger: midway }), null, 'an earlier PR is never blocked');
++  assert.match(budgetShipGate({ budgets, state: failing, ledger: finishing, runJobIds: ['2'] }).message, /budgets-failing: this PR finishes the last stage.*performance 60.*T-0009/);
++  assert.equal(budgetShipGate({ budgets, state: { screens: { home: { status: 'passed' } } }, ledger: finishing }), null);
++  // Only the PR that holds a last-stage ticket is THE PR that finishes it: a later hotfix or the fix-ticket PR passes.
++  assert.equal(budgetShipGate({ budgets, state: failing, ledger: finishing, runJobIds: ['3'] }), null);
++  // A screen the profile no longer lists cannot block; a screen never measured can; an accepted failure does not.
++  const renamed = { screens: { 'old-name': { status: 'failed', failures: [{ message: 'x' }] }, home: { status: 'passed' } } };
++  assert.equal(budgetShipGate({ budgets, state: renamed, ledger: finishing }), null);
++  assert.match(budgetShipGate({ budgets, state: { screens: {} }, ledger: finishing }).message, /never measured: home/);
++  assert.equal(budgetShipGate({ budgets, state: { screens: { home: { status: 'failed', failures: [], accepted: { at: 'a', reason: 'owner knows' } } } }, ledger: finishing }), null);
++  assert.equal(budgetShipGate({ budgets: undefined, state: failing, ledger: finishing }), null, 'no budgets in the profile: no gate');
++  assert.equal(budgetShipGate({ budgets, state: failing, ledger: null }), null);
++});
++
++test('swarm budgets check and status: profile required, results recorded, exit 1 when outside budget', async t => {
++  const root = await tmp(t);
++  assert.match((await runBudgetsCommand(root, ['check', '--url', 'https://x.dev'])).stdout, /no project profile/);
++  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none' }, budgets: { screens: [{ id: 'home', path: '/' }], lighthouse: { argv: ['lh', '{url}', '--out={out}'] }, axe: { argv: ['ax', '{url}', '--save', '{out}'] } } } }));
++  assert.equal((await runBudgetsCommand(root, ['check'])).exitCode, 2);
++  assert.equal((await runBudgetsCommand(root, ['check', '--url', 'http://example.com'])).exitCode, 2);
++  assert.match((await runBudgetsCommand(root, ['check', '--url', 'https://x.dev', '--screens', 'nope'])).stdout, /unknown screen/);
++  const bad = await runBudgetsCommand(root, ['check', '--url', 'https://x.dev'], { run: fakeRun({ 'lighthouse /': lh(0.7, 0.99), 'axe /': axeFile([]) }) });
++  assert.equal(bad.exitCode, 1);
++  assert.match(bad.stdout, /performance 70 is below the budget 85/);
++  assert.equal((await runBudgetsCommand(root, ['status'])).exitCode, 1);
++  const good = await runBudgetsCommand(root, ['check', '--url', 'https://x.dev'], { run: fakeRun({ 'lighthouse /': lh(0.99, 0.99), 'axe /': axeFile([]) }) });
++  assert.equal(good.exitCode, 0);
++  assert.match((await runBudgetsCommand(root, ['status'])).stdout, /all screens within budget/);
++});
++
++test('the profile validates the budgets block and protects a script the tools run', () => {
++  const base = { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none' } };
++  const ok = validateProfile({ ...base, budgets: { performance: 90, lighthouse: { argv: ['node', 'scripts/lh.mjs', '{url}', '{out}'] } } });
++  assert.deepEqual(ok.errors, []);
++  assert.equal(ok.profile.budgets.performance, 90);
++  assert.ok(ok.profile.protectedPaths.includes('scripts/lh.mjs'), 'a worker cannot edit the script that measures it');
++  assert.match(validateProfile({ ...base, budgets: { performance: 'high' } }).errors.join(), /profile\.budgets\.performance/);
++});
++
++test('shipRun refuses the last-stage PR while a screen fails its budget, and does not touch an earlier PR', async t => {
++  const root = await tmp(t);
++  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths: [], budget: { maxUsd: 5 }, baseCheck: { status: 'none' }, budgets: {} } }));
++  await fs.mkdir(path.join(root, '.swarm/runs/r1'), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs/r1/state.json'), JSON.stringify({ id: 'r1', root, status: 'complete', integratedAt: 'now', jobs: [{ id: 'T-0002' }] }));
++  const tk = (id, stage, status) => ({ id, title: id, type: 'build', epic: 'E', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${id}.ts`], context: [], contracts: [], dependsOn: [], size: 'S', risk: 'low', sensitive: false, status, stage });
++  await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S2', 'review')] }));
++  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: 'a', status: 'failed', failures: [{ message: 'accessibility 80 is below the budget 95' }] }]);
++  const exec = async () => ({ code: 0, stdout: '', stderr: '' });
++  await assert.rejects(shipRun(root, 'r1', { payloadPath: 'x.json' }, { exec }), { code: 'budgets-failing' });
++  await writeLedger(root, createLedger({ scope: { name: 'P', version: 1, hash: 'a'.repeat(64) }, tickets: [tk('T-0001', 'S1', 'done'), tk('T-0002', 'S2', 'running')] }));
++  await assert.rejects(shipRun(root, 'r1', { payloadPath: 'x.json' }, { exec }), error => error.code !== 'budgets-failing');
++});
++
++test('review fixes: previewHosts, empty or error reports are never a pass, accept with a reason, newer results win', async t => {
++  assert.equal(validateBudgetsConfig({ previewHosts: ['*.vercel.app', 'app.example.com'] }).ok, true);
++  assert.match(validateBudgetsConfig({ previewHosts: ['https://x'] }).errors.join(), /previewHosts/);
++  assert.equal(hostAllowed('https://app-git-x.vercel.app/p', ['*.vercel.app']), true);
++  assert.equal(hostAllowed('https://vercel.app', ['*.vercel.app']), false);
++  assert.equal(hostAllowed('https://evilvercel.app', ['*.vercel.app']), false);
++  assert.equal(hostAllowed('https://fast.example', ['*.vercel.app']), false);
++  const root = await tmp(t);
++  const { config } = cfg({ screens: [{ id: 'home', path: '/' }] });
++  const base = { 'lighthouse /': lh(0.99, 0.99) };
++  for (const [label, table, re] of [
++    ['empty axe', { ...base, 'axe /': [] }, /axe wrote no results/],
++    ['axe object without violations', { ...base, 'axe /': {} }, /axe wrote no results/],
++    ['lighthouse runtime error', { 'lighthouse /': { runtimeError: { code: 'NO_FCP', message: 'no paint' } }, 'axe /': axeFile([]) }, /Lighthouse reported an error: no paint/],
++    ['error status page', { 'lighthouse /': { ...lh(0.99, 0.99), audits: { 'http-status-code': { score: 0 } } }, 'axe /': axeFile([]) }, /error status/],
++    ['redirect off host', { 'lighthouse /': { ...lh(0.99, 0.99), finalDisplayedUrl: 'https://login.other.example/' }, 'axe /': axeFile([]) }, /redirected to another host/],
++  ]) {
++    const [r] = await runBudgets({ root, baseUrl: 'https://x.dev', config, run: fakeRun(table) });
++    assert.equal(r.status, 'cannot-run', label);
++    assert.match(r.failures[0].message, re, label);
++  }
++  const [ok] = await runBudgets({ root, baseUrl: 'https://x.dev', config, run: fakeRun({ ...base, 'axe /': axeFile([]) }) });
++  assert.equal(ok.status, 'passed');
++  // accept: only failing screens, until the next measurement
++  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-02T00:00:00.000Z', status: 'failed', failures: [{ message: 'm' }] }]);
++  assert.deepEqual(await acceptBudgetFailures(root, ['home', 'nope'], { reason: 'known and tracked' }), ['home']);
++  assert.deepEqual(openFailures(await readBudgetState(root)), []);
++  await recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-03T00:00:00.000Z', status: 'failed', failures: [{ message: 'again' }] }]);
++  assert.equal(openFailures(await readBudgetState(root)).length, 1, 'a new measurement clears the acceptance');
++  // an older result never replaces a newer one, in any order of arrival
++  await Promise.all([recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-05T00:00:00.000Z', status: 'passed', failures: [] }]), recordBudgetResults(root, [{ id: 'home', url: 'u', at: '2026-01-04T00:00:00.000Z', status: 'failed', failures: [{ message: 'old' }] }])]);
++  assert.equal((await readBudgetState(root)).screens.home.status, 'passed');
++  const cmd = await runBudgetsCommand(root, ['accept', 'home', '--reason', 'short']);
++  assert.equal(cmd.exitCode, 2);
++  assert.equal((await runBudgetsCommand(root, ['accept', 'home', '--reason', 'long enough reason'])).exitCode, 1, 'needs --yes');
++});
+diff --git a/tests/model-watch.test.mjs b/tests/model-watch.test.mjs
+new file mode 100644
+index 0000000..d7a2303
+--- /dev/null
++++ b/tests/model-watch.test.mjs
+@@ -0,0 +1,173 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { readState, weightBytes, fitsGpu, normalizeHf, watchModels, watchConfig, compareModels, isDue, fetchOpenCandidates, fetchApiModels, WATCH_DEFAULTS } from '../tools/model-watch.mjs';
++import { runModelsCommand } from '../tools/models-commands.mjs';
++import { readJournal } from '../tools/journal.mjs';
++import { collectInbox } from '../tools/inbox.mjs';
++
++const NOW = Date.UTC(2026, 9, 18);
++const DAY = 86400000;
++const tmp = async t => { const d = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'model-watch-'))); t.after(() => fs.rm(d, { recursive: true, force: true })); return d; };
++const hf = (id, extra = {}) => ({ id, downloads: 5000, createdAt: new Date(NOW - 10 * DAY).toISOString(), safetensors: { total: 30e9, parameters: { BF16: 30e9 } }, ...extra });
++const config = watchConfig({});
++
++test('fit: weights by dtype against the GPU memory, leaving room for the KV cache; unknown dtypes count as 16-bit; no size is unknown', () => {
++  assert.deepEqual(weightBytes({ parameters: { BF16: 30e9 } }), { bytes: 60e9, estimated: false });
++  assert.deepEqual(weightBytes({ parameters: { F8_E4M3: 30e9, BF16: 1e9 } }), { bytes: 32e9, estimated: false });
++  assert.deepEqual(weightBytes({ total: 10e9 }), { bytes: 20e9, estimated: true });
++  assert.equal(weightBytes(null), null);
++  assert.equal(weightBytes({ parameters: { BF16: -1 } }), null);
++  assert.equal(fitsGpu(60e9, config), true);
++  assert.equal(fitsGpu(80e9, config), false, '96 GB x 0.8 = 76.8 GB of weights at most');
++  assert.equal(fitsGpu(80e9, watchConfig({ modelWatch: { gpus: 2 } })), true);
++});
++
++test('listing rows: only public coding models with enough downloads, recent, with a well-formed id', () => {
++  assert.equal(normalizeHf(hf('acme/Super-Coder-30B'), config, NOW).fits, true);
++  assert.equal(normalizeHf(hf('acme/Huge-Coder-400B', { safetensors: { parameters: { BF16: 400e9 } } }), config, NOW).fits, false);
++  for (const bad of [hf('acme/chat-model'), hf('acme/x-coder', { gated: 'manual' }), hf('acme/x-coder', { private: true }), hf('acme/x-coder', { downloads: 3 }), hf('acme/x-coder', { createdAt: new Date(NOW - 400 * DAY).toISOString() }), hf('../etc/coder'), hf('a b/coder'), null, 'x']) assert.equal(normalizeHf(bad, config, NOW), null);
++  assert.equal(normalizeHf(hf('acme/x-coder', { safetensors: undefined }), config, NOW).fits, null, 'size unknown: not claimed to fit');
++});
++
++test('sources: Hugging Face and the Anthropic list are read defensively', async () => {
++  const ok = body => async () => ({ ok: true, status: 200, json: async () => body });
++  assert.equal((await fetchOpenCandidates({ fetchImpl: ok([hf('acme/a-coder'), { id: 'bad' }]), config, now: NOW })).length, 1);
++  await assert.rejects(fetchOpenCandidates({ fetchImpl: async () => ({ ok: false, status: 503 }), config, now: NOW }), /answered 503/);
++  await assert.rejects(fetchOpenCandidates({ fetchImpl: ok({ not: 'a list' }), config, now: NOW }), /no list/);
++  assert.deepEqual((await fetchApiModels({ fetchImpl: ok({ data: [{ id: 'claude-x-1' }, { id: 'Bad Id' }, { nope: 1 }] }), key: 'k' })).ids, ['claude-x-1']);
++  assert.equal((await fetchApiModels({ fetchImpl: ok({}), key: null })).skipped, 'no Anthropic key');
++});
++
++test('the first pass is a silent baseline; later passes put each NEW model that fits in the inbox as a decision, never rent anything, and honour the weekly interval', async t => {
++  const root = await tmp(t), home = await tmp(t);
++  const env = { SWARM_MODELS_DIR: path.join(home, 'models') };
++  let open = [normalizeHf(hf('acme/a-coder'), config, NOW)], api = { ids: ['claude-haiku-5-5'], skipped: null };
++  const sources = { open: async () => open, api: async () => api };
++  const run = (extra = {}) => watchModels({ root, sources, env, home, now: () => NOW + (extra.at ?? 0), force: extra.force, local: extra.local });
++  const first = await run();
++  assert.equal(first.baseline, true);
++  assert.deepEqual(first.decisions, []);
++  assert.equal((await readJournal(root, { limit: Infinity })).filter(e => e.kind === 'decision').length, 0, 'the baseline never floods the inbox');
++  // Not due yet.
++  const early = await run({ at: 2 * DAY });
++  assert.equal(early.ran, false);
++  assert.match(early.nextAt, /^2026-10-25/);
++  // A week later: one model fits, one is too big, one new API version.
++  open = [...open, normalizeHf(hf('acme/b-coder'), config, NOW), normalizeHf(hf('acme/huge-coder', { safetensors: { parameters: { BF16: 400e9 } } }), config, NOW)];
++  api = { ids: ['claude-haiku-5-5', 'claude-haiku-5-6'], skipped: null };
++  const second = await run({ at: 8 * DAY, local: { modelWatch: { evalCapUsd: 3 } } });
++  assert.equal(second.ran, true);
++  assert.deepEqual(second.newOpen.map(c => c.id), ['acme/b-coder', 'acme/huge-coder']);
++  assert.deepEqual(second.tooBig, ['acme/huge-coder']);
++  assert.equal(second.decisions.length, 2);
++  assert.match(second.decisions[0], /^model-hf-acme-b-coder-[0-9a-f]{8}$/);
++  assert.match(second.decisions[1], /^model-api-claude-haiku-5-6-[0-9a-f]{8}$/);
++  const events = (await readJournal(root, { limit: Infinity })).filter(e => e.kind === 'decision');
++  const bcoder = events.find(e => e.id === second.decisions[0]);
++  assert.match(bcoder.text, /acme\/b-coder.*fits 1 GPU/);
++  assert.match(bcoder.text, /cap you pre-approved: \$3.*swarm gpu bakeoff --models acme\/b-coder --max-usd 3.*Nothing was rented/);
++  assert.equal(bcoder.choice, 'skip', 'the default is to do nothing');
++  assert.deepEqual(bcoder.options, ['evaluate', 'skip']);
++  const items = await collectInbox([root], { listRuns: async () => [], readState: async () => null, readJournal, now: () => NOW });
++  assert.ok(items.some(i => i.id === second.decisions[0]), 'it shows in swarm inbox');
++  // The same models are never reported twice.
++  const third = await run({ at: 20 * DAY });
++  assert.deepEqual([third.newOpen, third.newApi, third.decisions], [[], [], []]);
++});
++
++test('without a pre-approved cap the advice says nothing was rented and how to set one; a failing source is a note, not a crash', async t => {
++  const root = await tmp(t), home = await tmp(t);
++  const env = { SWARM_MODELS_DIR: path.join(home, 'models') };
++  const baseModel = normalizeHf(hf('acme/base-coder'), config, NOW);
++  let rows = [baseModel];
++  const sources = { open: async () => rows, api: async () => { throw new Error('offline'); } };
++  await watchModels({ root, sources, env, home, now: () => NOW });
++  rows = [baseModel, normalizeHf(hf('acme/c-coder'), config, NOW)];
++  const r = await watchModels({ root, sources, env, home, now: () => NOW + 9 * DAY });
++  assert.match(r.notes.join(), /API models not checked: offline/);
++  const text = (await readJournal(root, { limit: Infinity })).find(e => /^model-hf-acme-c-coder-/.test(e.id)).text;
++  assert.match(text, /no cap is pre-approved \(set modelWatch\.evalCapUsd.*nothing was rented/);
++  assert.equal(watchConfig({ modelWatch: { evalCapUsd: -5, gpus: 'x' } }).evalCapUsd, null);
++  assert.equal(watchConfig({}).gpuMemGb, WATCH_DEFAULTS.gpuMemGb);
++  assert.equal(isDue({ lastRunAt: 'garbage' }, NOW, config), true);
++});
++
++test('compare: pass rate and cost from recorded eval runs, with thin evidence said out loud', () => {
++  const row = (model, passed, total, costUsd) => ({ models: [model], passed, total, costUsd });
++  const rows = [row('old', 8, 10, 0.01), row('old', 9, 10, 0.01), row('old', 7, 10, 0.01), row('new', 10, 10, 0.02), row('both', 1, 1, 0)];
++  rows.push({ models: ['old', 'new'], passed: 1, total: 1, costUsd: 0 });
++  const c = compareModels(rows, 'old', 'new');
++  assert.equal(c.ok, true);
++  assert.equal(c.points, 20, '100% vs 80%');
++  assert.match(c.message, /new beats old by 20 points.*100\.0% vs 80\.0%.*\$0\.0200 per eval run \(old: \$0\.0100\)\. Thin evidence: 3 and 1 run\(s\).*Switching is your decision/);
++  assert.equal(compareModels(rows, 'old', 'missing').ok, false);
++  assert.match(compareModels(rows, 'old', 'missing').message, /no recorded eval runs for missing/);
++  assert.match(compareModels(rows, 'new', 'old').message, /old is 20 points behind new/);
++});
++
++test('swarm models: watch (first run baseline), list, compare, usage', async t => {
++  const root = await tmp(t), home = await tmp(t);
++  const env = { SWARM_MODELS_DIR: path.join(home, 'models'), SWARM_CONFIG: path.join(home, 'none.json') };
++  const fetchImpl = async url => ({ ok: true, status: 200, json: async () => (String(url).includes('huggingface') ? [hf('acme/a-coder', { createdAt: new Date().toISOString() })] : { data: [] }) });
++  const first = await runModelsCommand(root, ['watch'], { fetchImpl, env, key: null });
++  assert.match(first.stdout, /First check: recorded 1 model\(s\) as the baseline/);
++  assert.match(first.stdout, /note: API models not checked: no Anthropic key/);
++  assert.match((await runModelsCommand(root, ['watch'], { fetchImpl, env, key: null })).stdout, /Checked recently/);
++  assert.equal((await runModelsCommand(root, ['watch', '--bogus'], { fetchImpl, env })).exitCode, 2);
++  assert.match((await runModelsCommand(root, ['list'], { env })).stdout, /hf:acme\/a-coder/);
++  await fs.mkdir(path.join(root, 'docs/state'), { recursive: true });
++  await fs.writeFile(path.join(root, 'docs/state/eval-scores.ndjson'), `${JSON.stringify({ models: ['a'], passed: 5, total: 10, costUsd: 0.01 })}\n${JSON.stringify({ models: ['b'], passed: 9, total: 10, costUsd: 0.03 })}\n`);
++  assert.match((await runModelsCommand(root, ['compare', 'a', 'b'], { env })).stdout, /b beats a by 40 points/);
++  assert.equal((await runModelsCommand(root, ['compare', 'a'], { env })).exitCode, 2);
++  assert.equal((await runModelsCommand(root, [], { env })).exitCode, 2);
++});
++
++test('review fixes: pagination to the age limit, packed dtypes, baseline only on a real answer, a decision cap, lastRunAt only after a real check, distinct ids, safe compare', async t => {
++  // pages are followed until the models are older than maxAgeDays
++  const page = (rows, next) => async url => ({ ok: true, status: 200, headers: { get: h => (h === 'link' && next ? `<${next}>; rel="next"` : null) }, json: async () => rows });
++  const calls = [];
++  const fetchImpl = async url => {
++    calls.push(String(url));
++    if (calls.length === 1) return page([hf('acme/new-coder', { downloads: 10 })], 'https://huggingface.co/api/models?cursor=2')(url);
++    if (calls.length === 2) return page([hf('acme/popular-coder', { downloads: 9000, createdAt: new Date(NOW - 100 * DAY).toISOString() }), hf('acme/ancient-coder', { createdAt: new Date(NOW - 900 * DAY).toISOString() })], 'https://huggingface.co/api/models?cursor=3')(url);
++    return page([], null)(url);
++  };
++  const found = await fetchOpenCandidates({ fetchImpl, config, now: NOW });
++  assert.deepEqual(found.map(c => c.id), ['acme/popular-coder'], 'a model that gained downloads after its upload is found; the new low-download one is not');
++  assert.equal(calls.length, 2, 'stops once a page reaches models older than maxAgeDays');
++  assert.equal(weightBytes({ parameters: { I32: 25e9 } }).bytes, 100e9, 'packed 4-bit weights count at their stored width');
++  assert.equal(fitsGpu(weightBytes({ parameters: { I32: 25e9 } }).bytes, config), false);
++  assert.equal(weightBytes({ parameters: { WEIRD: 10e9 } }).bytes, 40e9, 'an unknown dtype is counted wide, not narrow');
++  const root = await tmp(t), home = await tmp(t);
++  const env = { SWARM_MODELS_DIR: path.join(home, 'models') };
++  // an empty first answer baselines nothing; a total outage does not start the week
++  let rows = [], fail = false;
++  const sources = { open: async () => { if (fail) throw new Error('down'); return rows; }, api: async () => ({ ids: [], skipped: null }) };
++  await watchModels({ root, sources, env, home, now: () => NOW });
++  rows = [normalizeHf(hf('acme/a-coder'), config, NOW)];
++  const second = await watchModels({ root, sources, env, home, now: () => NOW + 8 * DAY });
++  assert.equal(second.baseline, true, 'the first non-empty answer is the baseline, not a flood of decisions');
++  assert.deepEqual(second.decisions, []);
++  fail = true;
++  const outage = await watchModels({ root, sources: { open: sources.open, api: async () => { throw new Error('down too'); } }, env, home, now: () => NOW + 20 * DAY });
++  assert.equal(outage.ran, true);
++  const after = await readState(env, home);
++  assert.equal(after.lastRunAt, new Date(NOW + 8 * DAY).toISOString(), 'a pass where nothing answered is not a check');
++  // at most five decisions per run; ids that differ only by case or punctuation stay distinct
++  fail = false;
++  rows = [...rows, ...Array.from({ length: 8 }, (_, n) => normalizeHf(hf(`acme/m${n}-coder`), config, NOW)), normalizeHf(hf('acme/B_Coder'), config, NOW), normalizeHf(hf('acme/b-coder'), config, NOW)];
++  const flood = await watchModels({ root, sources, env, home, now: () => NOW + 40 * DAY });
++  assert.equal(flood.decisions.length, 5);
++  assert.match(flood.notes.join(), /5 more new model\(s\) fit but only 5 were put in the inbox/);
++  const { default: crypto } = await import('node:crypto');
++  const slugOf = id => `${id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}-${crypto.createHash('sha256').update(id).digest('hex').slice(0, 8)}`;
++  assert.notEqual(slugOf('acme/B_Coder'), slugOf('acme/b-coder'));
++  // compare ignores malformed rows
++  const rowsC = [{ models: ['x'], passed: 'many', total: 10, costUsd: 0 }, { models: ['x'], passed: 20, total: 10, costUsd: 0 }, { models: ['x'], passed: 5, total: 10, costUsd: 0.01 }, { models: ['y'], passed: 9, total: 10, costUsd: 0.01 }];
++  assert.equal(compareModels(rowsC, 'x', 'y').points, 40, 'only the well-formed x row counts');
++});
+diff --git a/tools/budgets-commands.mjs b/tools/budgets-commands.mjs
+new file mode 100644
+index 0000000..5022ca8
+--- /dev/null
++++ b/tools/budgets-commands.mjs
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: Apache-2.0
++// swarm budgets check [--url URL] [--screens a,b] | status   (spec A2: speed and accessibility budgets)
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { runBudgets, recordBudgetResults, readBudgetState, openFailures, validateBudgetsConfig, finishesLastStage, checkBaseUrl, acceptBudgetFailures } from './budgets.mjs';
++import { appendLog } from './tickets.mjs';
++import { readLedger } from './tickets.mjs';
++
++export const BUDGETS_USAGE = 'Usage: swarm budgets check [--url PREVIEW_URL] [--screens home,cart]\n       swarm budgets status\nThe budgets live in the project profile (budgets: {performance, accessibility, axeBlock, screens, lighthouse, axe}); see docs/budgets.md.\n';
++const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
++
++async function profileBudgets(root) {
++  let pointer;
++  try { pointer = JSON.parse(await fs.readFile(path.join(root, '.project-swarm.json'), 'utf8')); } catch { return { error: 'no project profile (swarm init)' }; }
++  if (pointer?.profile?.budgets === undefined) return { error: 'the profile has no budgets block; add budgets to .project-swarm.json (docs/budgets.md)' };
++  const checked = validateBudgetsConfig(pointer.profile.budgets);
++  return checked.ok ? { config: checked.config } : { error: `the budgets block is invalid: ${checked.errors[0]}` };
++}
++
++const line = r => `${r.id}  ${r.status}  ${r.scores ? Object.entries(r.scores).filter(([, v]) => v !== null).map(([k, v]) => `${k} ${v}`).join(', ') : ''}${r.failures?.length ? `\n    ${r.failures.slice(0, 5).map(f => f.message).join('\n    ')}` : ''}`;
++
++export async function runBudgetsCommand(root, args, { run, now, onFailure } = {}) {
++  const [verb, ...rest] = args;
++  if (verb === 'accept') {
++    const flags = {}, ids = [];
++    for (let i = 0; i < rest.length; i += 1) { if (rest[i] === '--reason') flags.reason = rest[++i]; else if (rest[i] === '--yes') flags.yes = true; else ids.push(rest[i]); }
++    if (!ids.length) return out(`name at least one screen\n${BUDGETS_USAGE}`, 2);
++    if (Array.from(String(flags.reason ?? '').trim()).length < 8) return out('--reason TEXT is required (at least 8 characters: why this screen may ship over its budget)', 2);
++    if (flags.yes !== true) return out(`This lets ${ids.join(', ')} ship over its budget until its next measurement (reason: ${flags.reason}). Rerun with --yes to confirm; it is logged.`, 1);
++    const accepted = await acceptBudgetFailures(root, ids, { reason: flags.reason });
++    if (accepted.length) await appendLog(root, { event: 'budget-accepted', by: 'owner', screens: accepted, reason: String(flags.reason).slice(0, 300) });
++    return out(accepted.length ? `accepted: ${accepted.join(', ')} (until the next measurement)` : 'nothing to accept: those screens are not failing', accepted.length ? 0 : 1);
++  }
++  if (verb === 'status') {
++    const state = await readBudgetState(root);
++    const ids = Object.keys(state.screens);
++    if (!ids.length) return out('No budget runs yet. swarm budgets check --url PREVIEW_URL');
++    const { config: profileConfig } = await profileBudgets(root);
++    const open = openFailures(state, profileConfig ?? null);
++    const ledger = await readLedger(root).catch(() => null);
++    return out([...ids.sort().map(id => line({ id, ...state.screens[id] })), open.length ? `${open.length} screen(s) failing${finishesLastStage(ledger) ? ': the last stage is finished, so shipping is blocked until they pass' : ' (they block only the PR that finishes the last stage)'}` : 'all screens within budget'].join('\n'), open.length ? 1 : 0);
++  }
++  if (verb !== 'check') return out(`${verb ? `Unknown budgets command: ${verb}\n` : ''}${BUDGETS_USAGE}`, 2);
++  let url = null, screens = null;
++  for (let i = 0; i < rest.length; i += 1) {
++    if (rest[i] === '--url' && rest[i + 1]) url = rest[++i];
++    else if (rest[i] === '--screens' && rest[i + 1]) screens = rest[++i].split(',').map(s => s.trim()).filter(Boolean);
++    else return out(`Unknown argument: ${rest[i]}\n${BUDGETS_USAGE}`, 2);
++  }
++  if (!url) return out(`budgets check needs --url (a preview address, or a local http://127.0.0.1:PORT server)\n${BUDGETS_USAGE}`, 2);
++  if (!checkBaseUrl(url)) return out('the address must be an https preview or a local http server', 2);
++  const { config, error } = await profileBudgets(root);
++  if (error) return out(error, 1);
++  const unknown = (screens ?? []).filter(id => !config.screens.some(s => s.id === id));
++  if (unknown.length) return out(`unknown screen(s): ${unknown.join(', ')} (the profile lists ${config.screens.map(s => s.id).join(', ')})`, 2);
++  const results = await runBudgets({ root, baseUrl: url, config, screens, ...(run ? { run } : {}), ...(now ? { now } : {}) });
++  await recordBudgetResults(root, results);
++  if (onFailure) for (const r of results.filter(x => !x.pass)) await onFailure(r);
++  const failed = results.filter(r => !r.pass);
++  return out([...results.map(line), failed.length ? `${failed.length} of ${results.length} screen(s) outside budget` : `all ${results.length} screen(s) within budget`].join('\n'), failed.length ? 1 : 0);
++}
+diff --git a/tools/budgets.mjs b/tools/budgets.mjs
+new file mode 100644
+index 0000000..c4f2c46
+--- /dev/null
++++ b/tools/budgets.mjs
+@@ -0,0 +1,251 @@
++// SPDX-License-Identifier: Apache-2.0
++// Speed and accessibility budgets (spec A2). On a preview deploy, Lighthouse and axe run on the key screens and the scores are checked
++// against the project's budgets. A failure becomes a fix ticket (made by the caller); it blocks only the PR that finishes the last stage.
++// The tools are the owner's own commands (argv in the profile, like a ci hook); each writes its JSON report to {out}.
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { randomBytes } from 'node:crypto';
++import { isProductionArgv, defaultRun, filterEnv } from './ci-hooks.mjs';
++import { sanitizeWorkerText } from './worker-text.mjs';
++
++export const BUDGET_STATE = '.swarm/project/budgets.json';
++export const DEFAULT_LIGHTHOUSE = Object.freeze(['npx', 'lighthouse@12', '{url}', '--output=json', '--output-path={out}', '--quiet', '--chrome-flags=--headless']);
++export const DEFAULT_AXE = Object.freeze(['npx', '@axe-core/cli@4', '{url}', '--save', '{out}']);
++const IMPACTS = ['minor', 'moderate', 'serious', 'critical'];
++const SCORES = ['performance', 'accessibility', 'bestPractices', 'seo'];
++const KEYS = [...SCORES, 'axeBlock', 'screens', 'lighthouse', 'axe', 'previewHosts'];
++const HOST_RE = /^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]{0,120}[a-z0-9])?$/;
++const TOOL_KEYS = ['argv', 'timeoutSec'];
++const PROGRAM_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
++const SCREEN_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
++const PATH_RE = /^\/[A-Za-z0-9._~%/-]{0,200}$/;
++const isObj = v => typeof v === 'object' && v !== null && !Array.isArray(v);
++const control = s => /[\u0000-\u001f\u007f]/.test(s);
++
++function checkTool(name, raw, errors) {
++  if (raw === undefined) return { argv: [...(name === 'lighthouse' ? DEFAULT_LIGHTHOUSE : DEFAULT_AXE)], timeoutSec: 300 };
++  if (!isObj(raw)) { errors.push(`budgets.${name} must be an object`); return null; }
++  for (const key of Object.keys(raw)) if (!TOOL_KEYS.includes(key)) errors.push(`budgets.${name}.${key}: unknown key`);
++  const argv = raw.argv;
++  if (!Array.isArray(argv) || argv.length < 1 || argv.length > 20 || !argv.every(a => typeof a === 'string' && a.length > 0 && !control(a))) { errors.push(`budgets.${name}.argv must be 1 to 20 non-empty strings`); return null; }
++  if (!PROGRAM_RE.test(argv[0]) || argv[0].includes('..')) errors.push(`budgets.${name}.argv[0] must be a program name`);
++  if (isProductionArgv(argv)) errors.push(`budgets.${name}.argv must not be a shell or a production command`);
++  if (!argv.some(a => a.includes('{url}'))) errors.push(`budgets.${name}.argv must contain {url}`);
++  if (!argv.some(a => a.includes('{out}'))) errors.push(`budgets.${name}.argv must contain {out} (the tool writes its JSON report there)`);
++  const timeoutSec = raw.timeoutSec ?? 300;
++  if (!Number.isInteger(timeoutSec) || timeoutSec < 30 || timeoutSec > 1800) errors.push(`budgets.${name}.timeoutSec must be an integer 30 to 1800`);
++  return { argv, timeoutSec };
++}
++
++export function validateBudgetsConfig(raw) {
++  const errors = [];
++  if (!isObj(raw)) return { ok: false, config: null, errors: ['budgets must be an object'] };
++  for (const key of Object.keys(raw)) if (!KEYS.includes(key)) errors.push(`budgets.${key}: unknown key`);
++  const config = {};
++  for (const key of SCORES) {
++    if (raw[key] === undefined) continue;
++    if (!Number.isInteger(raw[key]) || raw[key] < 0 || raw[key] > 100) errors.push(`budgets.${key} must be a whole number 0 to 100`);
++    else config[key] = raw[key];
++  }
++  if (!SCORES.some(key => config[key] !== undefined) && raw.axeBlock === undefined) { config.performance = 85; config.accessibility = 95; }
++  const block = raw.axeBlock ?? ['serious', 'critical'];
++  if (!Array.isArray(block) || !block.every(i => IMPACTS.includes(i))) errors.push(`budgets.axeBlock must list impacts from ${IMPACTS.join(', ')}`);
++  else config.axeBlock = [...new Set(block)];
++  const screens = raw.screens ?? [{ id: 'home', path: '/' }];
++  if (!Array.isArray(screens) || screens.length < 1 || screens.length > 10) errors.push('budgets.screens must list 1 to 10 screens');
++  else {
++    const seen = new Set();
++    for (const s of screens) {
++      if (!isObj(s) || !SCREEN_ID_RE.test(s.id ?? '') || !PATH_RE.test(s.path ?? '') || String(s.path).includes('..') || seen.has(s.id)) { errors.push('budgets.screens entries need a unique id (lowercase words) and a path starting with /'); break; }
++      seen.add(s.id);
++    }
++    config.screens = screens.map(s => ({ id: s?.id, path: s?.path }));
++  }
++  // The hosts a preview URL taken from a deploy log may have (for example *.vercel.app). Without it the automatic run after a preview does not measure anything:
++  // a log is text a worker's build code can write, so its address is not trusted by default. A hand `swarm budgets check --url` is not held to this.
++  if (raw.previewHosts !== undefined) {
++    if (!Array.isArray(raw.previewHosts) || raw.previewHosts.length < 1 || raw.previewHosts.length > 10 || !raw.previewHosts.every(h => typeof h === 'string' && HOST_RE.test(h))) errors.push('budgets.previewHosts must list 1 to 10 hosts like app.example.com or *.vercel.app');
++    else config.previewHosts = [...new Set(raw.previewHosts)];
++  }
++  config.lighthouse = checkTool('lighthouse', raw.lighthouse, errors);
++  config.axe = checkTool('axe', raw.axe, errors);
++  return errors.length ? { ok: false, config: null, errors } : { ok: true, config, errors };
++}
++
++const score = v => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 100) : null);
++export function parseLighthouse(json) {
++  const c = isObj(json) && isObj(json.categories) ? json.categories : {};
++  return { performance: score(c.performance?.score), accessibility: score(c.accessibility?.score), bestPractices: score(c['best-practices']?.score), seo: score(c.seo?.score) };
++}
++
++// axe-core's own result object, or the CLI's array of them.
++export function parseAxe(json) {
++  const results = Array.isArray(json) ? json : [json];
++  const out = [];
++  out.ran = results.some(r => isObj(r) && Array.isArray(r.violations));
++  for (const result of results) {
++    for (const v of isObj(result) && Array.isArray(result.violations) ? result.violations : []) {
++      if (!isObj(v)) continue;
++      out.push({ id: sanitizeWorkerText(v.id ?? 'unknown', 80), impact: IMPACTS.includes(v.impact) ? v.impact : 'minor', nodes: Array.isArray(v.nodes) ? v.nodes.length : 0 });
++    }
++  }
++  return out;
++}
++
++export function evaluateBudgets({ lighthouse, axe }, config) {
++  const failures = [];
++  for (const key of SCORES) {
++    if (config[key] === undefined) continue;
++    const actual = lighthouse?.[key];
++    if (actual === null || actual === undefined) failures.push({ kind: 'lighthouse', metric: key, actual: null, budget: config[key], message: `${key}: no score in the Lighthouse report (budget ${config[key]})` });
++    else if (actual < config[key]) failures.push({ kind: 'lighthouse', metric: key, actual, budget: config[key], message: `${key} ${actual} is below the budget ${config[key]}` });
++  }
++  for (const v of axe ?? []) if ((config.axeBlock ?? []).includes(v.impact)) failures.push({ kind: 'axe', metric: v.id, impact: v.impact, nodes: v.nodes, message: `axe ${v.impact}: ${v.id} on ${v.nodes} element(s)` });
++  return { pass: failures.length === 0, failures };
++}
++
++// The base address a budget run may use: a preview (https) or a local server. No credentials in it.
++export function hostAllowed(url, hosts) {
++  let u;
++  try { u = new URL(String(url)); } catch { return false; }
++  return (hosts ?? []).some(h => (h.startsWith('*.') ? u.hostname.endsWith(h.slice(1)) && u.hostname.length > h.length - 1 : u.hostname === h));
++}
++
++export function checkBaseUrl(value) {
++  let u;
++  try { u = new URL(String(value)); } catch { return null; }
++  if (u.username || u.password || u.hash) return null;
++  const local = ['127.0.0.1', 'localhost'].includes(u.hostname);
++  if (!(u.protocol === 'https:' || (u.protocol === 'http:' && local))) return null;
++  return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
++}
++
++async function runTool(tool, url, out, { cwd, env, run }) {
++  const argv = tool.argv.map(a => a.replaceAll('{url}', url).replaceAll('{out}', out));
++  const res = await run(argv[0], argv.slice(1), { cwd, env: filterEnv(env), timeoutMs: tool.timeoutSec * 1000 });
++  if (res?.timedOut) return { ok: false, reason: 'timed out' };
++  const wrote = await fs.stat(out).then(s => s.size > 0, () => false);
++  if (res?.spawnError || (res?.code !== 0 && !wrote)) return { ok: false, reason: sanitizeWorkerText(`${res?.stderr ?? ''}`.split('\n').filter(Boolean).pop() ?? `exit ${res?.code}`, 200) };
++  try { return { ok: true, json: JSON.parse(await fs.readFile(out, 'utf8')) }; } catch { return { ok: false, reason: 'the tool wrote no readable JSON report' }; }
++}
++
++// Runs both tools on each screen of the base URL. A tool that cannot run is a `cannot-run` result for that screen, never a pass.
++export async function runBudgets({ root, baseUrl, config, screens = null, env = process.env, run = defaultRun, now = Date.now }) {
++  const base = checkBaseUrl(baseUrl);
++  if (!base) throw Object.assign(new Error('budgets: the address must be an https preview or a local http server'), { code: 'budgets-url' });
++  const dir = path.join(root, '.swarm', 'budgets-tmp');
++  await fs.mkdir(dir, { recursive: true });
++  const results = [];
++  for (const screen of config.screens.filter(s => !screens || screens.includes(s.id))) {
++    const url = `${base}${screen.path}`;
++    const stem = path.join(dir, `${screen.id}-${randomBytes(4).toString('hex')}`);
++    let lh, ax;
++    try {
++      lh = await runTool(config.lighthouse, url, `${stem}.lighthouse.json`, { cwd: root, env, run });
++      ax = await runTool(config.axe, url, `${stem}.axe.json`, { cwd: root, env, run });
++    } finally { await fs.rm(`${stem}.lighthouse.json`, { force: true }); await fs.rm(`${stem}.axe.json`, { force: true }); }
++    const at = new Date(now()).toISOString();
++    const cannot = reason => results.push({ id: screen.id, url, at, status: 'cannot-run', pass: false, failures: [{ kind: 'tool', metric: 'report', message: reason }] });
++    if (!lh.ok || !ax.ok) { cannot(`${!lh.ok ? 'Lighthouse' : 'axe'} could not run: ${!lh.ok ? lh.reason : ax.reason}`); continue; }
++    // An empty or error report is not a pass: axe must have looked at a page, Lighthouse must have scored the page we asked for (not a 404 or another host).
++    if (!parseAxe(ax.json).ran) { cannot('axe wrote no results (no violations list)'); continue; }
++    if (isObj(lh.json) && lh.json.runtimeError) { cannot(`Lighthouse reported an error: ${sanitizeWorkerText(lh.json.runtimeError.message ?? lh.json.runtimeError.code ?? 'runtime error', 120)}`); continue; }
++    if (isObj(lh.json) && lh.json.audits?.['http-status-code']?.score === 0) { cannot('the page answered with an error status (Lighthouse http-status-code)'); continue; }
++    const finalUrl = isObj(lh.json) ? lh.json.finalDisplayedUrl ?? lh.json.finalUrl : null;
++    if (typeof finalUrl === 'string') { try { if (new URL(finalUrl).host !== new URL(url).host) { cannot('the page redirected to another host'); continue; } } catch { /* an unreadable address is not a reason to refuse */ } }
++    const scores = parseLighthouse(lh.json);
++    const verdict = evaluateBudgets({ lighthouse: scores, axe: parseAxe(ax.json) }, config);
++    results.push({ id: screen.id, url, at, status: verdict.pass ? 'passed' : 'failed', pass: verdict.pass, scores, failures: verdict.failures.slice(0, 20) });
++  }
++  return results;
++}
++
++async function writeState(root, state) {
++  const file = path.join(root, BUDGET_STATE);
++  await fs.mkdir(path.dirname(file), { recursive: true });
++  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
++  await fs.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
++  await fs.rename(tmp, file);
++}
++
++export async function readBudgetState(root) {
++  try { const state = JSON.parse(await fs.readFile(path.join(root, BUDGET_STATE), 'utf8')); return isObj(state) && isObj(state.screens) ? state : { version: 1, screens: {} }; }
++  catch { return { version: 1, screens: {} }; }
++}
++
++// Writers in this process go one after another, and a result only replaces an older one (by `at`), so a slow manual check
++// can never put an old failure over a newer pass (or the reverse).
++let queue = Promise.resolve();
++const serial = fn => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run; };
++
++export function recordBudgetResults(root, results) {
++  return serial(async () => {
++    const state = await readBudgetState(root);
++    for (const r of results) {
++      const before = state.screens[r.id];
++      if (before && Date.parse(before.at) > Date.parse(r.at)) continue;
++      state.screens[r.id] = { at: r.at, url: r.url, status: r.status, scores: r.scores ?? null, failures: r.failures, ticket: r.status === 'passed' ? null : before?.ticket ?? null };
++    }
++    await writeState(root, state);
++    return state;
++  });
++}
++
++export function linkBudgetTicket(root, id, ticket) {
++  return serial(async () => {
++    const state = await readBudgetState(root);
++    if (!state.screens[id]) return;
++    state.screens[id].ticket = ticket;
++    await writeState(root, state);
++  });
++}
++
++// The owner's way out: a failing screen is accepted, with a reason, until its next measurement. Journaled by the caller.
++export function acceptBudgetFailures(root, ids, { reason, now = Date.now }) {
++  return serial(async () => {
++    const state = await readBudgetState(root);
++    const accepted = [];
++    for (const id of ids) {
++      const entry = state.screens[id];
++      if (!entry || entry.status === 'passed') continue;
++      entry.accepted = { at: new Date(now()).toISOString(), reason: sanitizeWorkerText(reason, 300) };
++      accepted.push(id);
++    }
++    await writeState(root, state);
++    return accepted;
++  });
++}
++
++// Only the screens the profile lists count (a renamed or removed screen cannot block anything), and an accepted failure does not block.
++export function openFailures(state, config = null) {
++  const listed = config ? new Set(config.screens.map(s => s.id)) : null;
++  return Object.entries(state.screens ?? {}).filter(([id, s]) => (!listed || listed.has(id)) && s.status !== 'passed' && !s.accepted).map(([id, s]) => ({ id, ...s }));
++}
++
++// The stage number of a ticket: S1 < S2 < ... Fix tickets (S0) and cancelled or proposed tickets are not part of a stage.
++const stageNumber = stage => { const m = /^S(\d+)$/.exec(String(stage ?? '')); return m ? Number(m[1]) : null; };
++function lastStageTickets(ledger) {
++  const live = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status) && stageNumber(t.stage) > 0);
++  if (!live.length) return [];
++  const last = Math.max(...live.map(t => stageNumber(t.stage)));
++  return live.filter(t => stageNumber(t.stage) === last);
++}
++
++// The stage is finished (every ticket done or in review). With `runJobIds`, also: this run holds one of its tickets, so it is THE PR that finishes it.
++export function finishesLastStage(ledger, runJobIds = null) {
++  const last = lastStageTickets(ledger);
++  if (!last.length || !last.every(t => ['done', 'review'].includes(t.status))) return false;
++  return !runJobIds || last.some(t => runJobIds.includes(t.id));
++}
++
++// Blocks only the PR that finishes the last stage: while a listed screen's latest result is failing (or could not run) and not accepted,
++// or a listed screen was never measured at all (a project that configured budgets and never measured must not ship its last stage unmeasured).
++export function budgetShipGate({ budgets, state, ledger, runJobIds = null }) {
++  if (!budgets) return null;
++  if (!finishesLastStage(ledger, runJobIds)) return null;
++  const open = openFailures(state, budgets);
++  const unmeasured = (budgets.screens ?? []).filter(s => !state.screens?.[s.id]).map(s => s.id);
++  if (!open.length && !unmeasured.length) return null;
++  const parts = [...open.slice(0, 3).map(o => `${o.id}: ${o.failures?.[0]?.message ?? o.status}`), ...(unmeasured.length ? [`never measured: ${unmeasured.slice(0, 5).join(', ')}`] : [])];
++  return { message: `budgets-failing: this PR finishes the last stage and ${open.length + unmeasured.length} screen(s) are over their speed or accessibility budget or were never measured (${parts.join('; ')}). Fix them${open[0]?.ticket ? ` (fix ticket ${open[0].ticket})` : ''}, then swarm budgets check --url PREVIEW_URL; or accept a failure with a reason: swarm budgets accept SCREEN --reason TEXT --yes` };
++}
+diff --git a/tools/ci-hooks.mjs b/tools/ci-hooks.mjs
+index 69f0b66..4e5c840 100644
+--- a/tools/ci-hooks.mjs
++++ b/tools/ci-hooks.mjs
+@@ -131,7 +131,7 @@ function safeTail(text) {
+   return t.slice(-TAIL_CHARS);
+ }
+ 
+-function filterEnv(env) {
++export function filterEnv(env) {
+   const out = {};
+   for (const [k, v] of Object.entries(env || {})) {
+     if (typeof v !== 'string' || SECRET_KEY_RE.test(k)) continue;
+@@ -140,7 +140,7 @@ function filterEnv(env) {
+   return out;
+ }
+ 
+-function defaultRun(command, args, options) {
++export function defaultRun(command, args, options) {
+   return new Promise((resolve) => {
+     let child;
+     try {
+diff --git a/tools/completion.mjs b/tools/completion.mjs
+index 4dd54db..8129449 100644
+--- a/tools/completion.mjs
++++ b/tools/completion.mjs
+@@ -54,6 +54,8 @@ export const COMMANDS = [
+   command('stop', 'Panic button: swarm stop --all cancels runs, stops autopilot and ends a rented GPU session.', 'none', '--all --status --clear --reason'),
+   command('backup', 'Snapshot swarm state (no secrets): backup, backup list, backup verify ID.', 'none', '--reason --json'),
+   command('restore', 'Restore swarm state from a backup (shows the plan until --yes).', 'none', '--yes'),
++  command('models', 'Model watch: new open coding models that fit our GPUs and new API versions, into the inbox; compare models from eval runs.', 'none', '--force --json'),
++  command('budgets', 'Speed and accessibility budgets: check a preview with Lighthouse and axe, show status.', 'none', '--url --screens'),
+   command('migrations', 'Check database migrations: down steps, destructive changes, up/down/up round trip.', 'none', '--yes --note'),
+   command('lessons', 'Structured lessons: list, show, add, check, stats, backfill, mine, notes.', 'none', '--stage --tag --caught-by --text --what --rule --fix --lane-model --ticket --requirement --guard-kind --guard-text --retries --minutes --usd --file --project --json --dry-run --min --include-guarded --write'),
+   command('eval', 'Golden eval set: list, validate, manifest, score, gate.', 'none', '--all --agent --model --out --record --update-baseline --reset-baseline'),
+diff --git a/tools/init-profile.mjs b/tools/init-profile.mjs
+index 32af841..6110ed5 100644
+--- a/tools/init-profile.mjs
++++ b/tools/init-profile.mjs
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ import { validateApprovalPolicy } from './approval-policy.mjs';
+ import { validateCiConfig } from './ci-hooks.mjs';
++import { validateBudgetsConfig } from './budgets.mjs';
+ import { validateVerifyConfig } from './verify-config.mjs';
+ import { validateUiConfig } from './ui-compare.mjs';
+ import { validateMigrationsConfig } from './migration-gate.mjs';
+@@ -10,7 +11,7 @@ import { sanitizeText } from './journal.mjs';
+ 
+ export const DEFAULT_PROFILE_BUDGET = Object.freeze({ maxUsd: 5, maxTokens: 2000000 });
+ const STATUSES = ['green', 'red', 'skipped', 'none'];
+-const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance'];
++const PROFILE_KEYS = ['stack', 'sensitive', 'protectedPaths', 'budget', 'baseCheck', 'security', 'approval', 'ci', 'verify', 'context', 'ui', 'quality', 'migrations', 'acceptance', 'budgets'];
+ const REQUIRED_KEYS = ['sensitive', 'protectedPaths', 'budget', 'baseCheck'];
+ const BASE_KEYS = ['status', 'ranAt', 'head', 'checks'];
+ // The pointer (profile) and the checks file decide what later runs may do and execute, so no job may rewrite them.
+@@ -218,6 +219,17 @@ export function validateProfile(profile) {
+       }
+     }
+   }
++  if (profile.budgets !== undefined) {
++    const checked = validateBudgetsConfig(profile.budgets);
++    for (const message of checked.errors) errors.push(`profile.${message}`);
++    if (checked.ok) {
++      out.budgets = checked.config;
++      // A script the budget tools run is protected like a ci hook's files.
++      for (const tool of [checked.config.lighthouse, checked.config.axe]) for (const entry of hookFiles(tool.argv)) {
++        try { const clean = normalizeProtectedPath(entry); if (!out.protectedPaths.includes(clean)) out.protectedPaths.push(clean); } catch { /* not a usable path */ }
++      }
++    }
++  }
+   if (profile.ci !== undefined) {
+     const checked = validateCiConfig(profile.ci);
+     for (const message of checked.errors) errors.push(`profile.ci: ${message}`);
+@@ -245,7 +257,7 @@ export function hookFiles(argv) {
+ // The package.json scripts a package-runner command runs (npm run X, npm test, pnpm X, yarn X): a batch must not change them (the gate checks).
+ export function hookScriptNames(profile) {
+   const names = new Set();
+-  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.ui?.start, ...Object.values(profile?.migrations?.commands ?? {})];
++  const argvs = [profile?.verify?.command, ...(profile?.verify?.setup ?? []), profile?.ci?.smoke?.argv, profile?.ci?.preview?.argv, profile?.budgets?.lighthouse?.argv, profile?.budgets?.axe?.argv, profile?.ui?.start, ...Object.values(profile?.migrations?.commands ?? {})];
+   for (const argv of argvs) {
+     if (!Array.isArray(argv) || !PACKAGE_RUNNERS.has(String(argv[0]).split('/').pop())) continue;
+     const rest = argv.slice(1).filter(item => typeof item === 'string' && !item.startsWith('-'));
+diff --git a/tools/model-watch.mjs b/tools/model-watch.mjs
+new file mode 100644
+index 0000000..46cf448
+--- /dev/null
++++ b/tools/model-watch.mjs
+@@ -0,0 +1,198 @@
++// SPDX-License-Identifier: Apache-2.0
++// Model watch (spec B3): once a week, look for new open coding models that fit our GPUs and new model versions on the API lanes,
++// and put each new one in the owner's inbox as a decision. Evaluating a candidate rents a GPU, so the watcher never does it:
++// it prints the exact command (with the owner's pre-approved cap, if any) and the owner approves any switch.
++// The first run only records what exists (a baseline), so it never floods the inbox.
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { randomBytes, createHash } from 'node:crypto';
++import { appendEvent } from './journal.mjs';
++
++export const WATCH_DEFAULTS = Object.freeze({ gpuMemGb: 96, gpus: 1, minDownloads: 1000, maxAgeDays: 120, evalCapUsd: null, intervalDays: 7 });
++const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\/[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
++const API_ID_RE = /^[a-z0-9][a-z0-9._-]{0,80}$/;
++const CODE_RE = /coder|code/i;
++// I32 and I64 hold packed 4-bit weights (AWQ, GPTQ) in the safetensors summary: counted at their full width, which is the memory they take.
++const BYTES_PER = { F64: 8, F32: 4, I64: 8, I32: 4, BF16: 2, F16: 2, I16: 2, U16: 2, F8_E4M3: 1, F8_E5M2: 1, F8_E8M0: 1, FP8: 1, I8: 1, U8: 1, BOOL: 1, I4: 0.5, U4: 0.5, NVFP4: 0.5, FP4: 0.5 };
++const DAY = 86400000;
++// The share of GPU memory the weights may take; the rest is for the KV cache and the server.
++const WEIGHT_SHARE = 0.8;
++const MAX_DECISIONS = 5;
++
++export function modelsDir(env = process.env, home = os.homedir()) { return env.SWARM_MODELS_DIR || path.join(home, '.project-swarm', 'models'); }
++const stateFile = (env, home) => path.join(modelsDir(env, home), 'watch.json');
++
++export function watchConfig(local = {}) {
++  const raw = local?.modelWatch && typeof local.modelWatch === 'object' ? local.modelWatch : {};
++  const num = (key, ok) => (ok(raw[key]) ? raw[key] : WATCH_DEFAULTS[key]);
++  const pos = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
++  return {
++    gpuMemGb: num('gpuMemGb', pos), gpus: num('gpus', v => Number.isInteger(v) && v > 0 && v <= 16), minDownloads: num('minDownloads', v => Number.isInteger(v) && v >= 0),
++    maxAgeDays: num('maxAgeDays', pos), intervalDays: num('intervalDays', pos), evalCapUsd: pos(raw.evalCapUsd) ? raw.evalCapUsd : null,
++  };
++}
++
++export async function readState(env = process.env, home = os.homedir()) {
++  try { const s = JSON.parse(await fs.readFile(stateFile(env, home), 'utf8')); return s && typeof s === 'object' && s.seen && typeof s.seen === 'object' && !Array.isArray(s.seen) ? { ...s, baselined: s.baselined && typeof s.baselined === 'object' && !Array.isArray(s.baselined) ? s.baselined : {} } : { version: 1, lastRunAt: null, seen: {} }; }
++  catch { return { version: 1, lastRunAt: null, seen: {} }; }
++}
++
++async function writeState(state, env, home) {
++  const file = stateFile(env, home);
++  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
++  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
++  await fs.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
++  await fs.rename(tmp, file);
++}
++
++export const isDue = (state, now, config) => !state.lastRunAt || now - Date.parse(state.lastRunAt) >= config.intervalDays * DAY || !Number.isFinite(Date.parse(state.lastRunAt));
++
++// Weight bytes from the Hugging Face safetensors summary: per-dtype parameter counts when given, else the total as 16-bit (flagged as an estimate).
++export function weightBytes(safetensors) {
++  if (!safetensors || typeof safetensors !== 'object') return null;
++  const by = safetensors.parameters;
++  if (by && typeof by === 'object') {
++    let total = 0;
++    for (const [dtype, count] of Object.entries(by)) {
++      if (!Number.isFinite(count) || count < 0) return null;
++      total += count * (BYTES_PER[String(dtype).toUpperCase()] ?? 4);
++    }
++    if (total > 0) return { bytes: total, estimated: false };
++  }
++  return Number.isFinite(safetensors.total) && safetensors.total > 0 ? { bytes: safetensors.total * 2, estimated: true } : null;
++}
++
++export function fitsGpu(bytes, config) {
++  return bytes <= config.gpuMemGb * config.gpus * 1e9 * WEIGHT_SHARE;
++}
++
++// Normalises one Hugging Face listing row; null for anything that is not a usable public coding model.
++export function normalizeHf(row, config, now) {
++  if (!row || typeof row !== 'object' || typeof row.id !== 'string' || !MODEL_ID_RE.test(row.id)) return null;
++  if (row.gated || row.private || row.disabled || !CODE_RE.test(row.id)) return null;
++  const downloads = Number.isFinite(row.downloads) ? row.downloads : 0;
++  const created = Date.parse(row.createdAt ?? '');
++  if (downloads < config.minDownloads) return null;
++  if (!Number.isFinite(created) || now - created > config.maxAgeDays * DAY) return null;
++  const w = weightBytes(row.safetensors);
++  return { id: row.id, downloads, createdAt: new Date(created).toISOString(), weightGb: w ? Math.round(w.bytes / 1e8) / 10 : null, estimated: w ? w.estimated : null, fits: w ? fitsGpu(w.bytes, config) : null };
++}
++
++// Newest first, followed page by page (the Link header) until the models are older than maxAgeDays: a model that crosses the download threshold
++// weeks after its upload is still in range, so the filter on downloads cannot miss it.
++export async function fetchOpenCandidates({ fetchImpl = fetch, config, now = Date.now(), maxPages = 10 }) {
++  let url = 'https://huggingface.co/api/models?pipeline_tag=text-generation&search=coder&sort=createdAt&direction=-1&limit=100&expand[]=safetensors&expand[]=downloads&expand[]=createdAt&expand[]=gated&expand[]=private';
++  const out = [];
++  for (let page = 0; page < maxPages && url; page += 1) {
++    const res = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout?.(20000) });
++    if (!res.ok) throw Object.assign(new Error(`model-watch: Hugging Face answered ${res.status}`), { code: 'model-watch-source' });
++    const rows = await res.json();
++    if (!Array.isArray(rows)) throw Object.assign(new Error('model-watch: Hugging Face gave no list'), { code: 'model-watch-source' });
++    out.push(...rows.map(row => normalizeHf(row, config, now)).filter(Boolean));
++    const oldest = rows.map(row => Date.parse(row?.createdAt ?? '')).filter(Number.isFinite).sort((a, b) => a - b)[0];
++    if (oldest !== undefined && now - oldest > config.maxAgeDays * DAY) break;
++    const link = typeof res.headers?.get === 'function' ? res.headers.get('link') : null;
++    const next = link ? /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] : null;
++    url = next && next.startsWith('https://huggingface.co/') ? next : null;
++  }
++  return out;
++}
++
++// The model ids the Anthropic API lists for this key (new versions show up here). No key: nothing to check, said so.
++export async function fetchApiModels({ fetchImpl = fetch, key }) {
++  if (!key) return { ids: [], skipped: 'no Anthropic key' };
++  const res = await fetchImpl('https://api.anthropic.com/v1/models?limit=100', { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, signal: AbortSignal.timeout?.(20000) });
++  if (!res.ok) throw Object.assign(new Error(`model-watch: the Anthropic models list answered ${res.status}`), { code: 'model-watch-source' });
++  const body = await res.json();
++  const ids = (Array.isArray(body?.data) ? body.data : []).map(m => m?.id).filter(id => typeof id === 'string' && API_ID_RE.test(id));
++  return { ids, skipped: null };
++}
++
++// Distinct per exact id: the readable part is only for the eye, the hash keeps ids that differ in case or punctuation apart.
++const slug = id => `${id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}-${createHash('sha256').update(id).digest('hex').slice(0, 8)}`;
++
++export function describeOpen(c, config) {
++  const size = c.weightGb === null ? 'size unknown' : `${c.weightGb} GB of weights${c.estimated ? ' (estimated)' : ''}`;
++  const fit = c.fits === null ? 'fit unknown' : c.fits ? `fits ${config.gpus} GPU(s) of ${config.gpuMemGb} GB` : `too big for ${config.gpus} GPU(s) of ${config.gpuMemGb} GB`;
++  return `New open coding model ${c.id}: ${size}, ${fit}, ${c.downloads} downloads. `;
++}
++
++export function evalAdvice(id, config) {
++  return config.evalCapUsd
++    ? `Evaluating it rents a GPU (cap you pre-approved: $${config.evalCapUsd}): swarm gpu bakeoff --models ${id} --max-usd ${config.evalCapUsd} (plan first, add --yes only when you agree). Nothing was rented.`
++    : `Evaluating it rents a GPU and no cap is pre-approved (set modelWatch.evalCapUsd in the local config): nothing was rented.`;
++}
++
++/**
++ * One watch pass. `sources` are injected: { open(): candidates, api(): { ids, skipped } }.
++ * Returns { ran, baseline, due, newOpen, newApi, decisions, notes }. The inbox gets one decision per new model that fits (or whose fit is unknown);
++ * a model that is too big is recorded and listed but is not worth the owner's time.
++ */
++export async function watchModels({ root, sources, local = {}, env = process.env, home = os.homedir(), now = Date.now, force = false, journal = appendEvent }) {
++  const config = watchConfig(local);
++  const state = await readState(env, home);
++  const t = now();
++  if (!force && !isDue(state, t, config)) return { ran: false, due: false, nextAt: new Date(Date.parse(state.lastRunAt) + config.intervalDays * DAY).toISOString(), config };
++  const notes = [];
++  // Each source is baselined on its own first SUCCESSFUL read, so an outage on the first run never makes the second report everything as new.
++  state.baselined ??= {};
++  let open = [], api = { ids: [], skipped: null };
++  let openOk = false, apiOk = false;
++  try { open = await sources.open(); openOk = true; } catch (error) { notes.push(`open models not checked: ${error.message}`); }
++  try { api = await sources.api(); apiOk = !api.skipped; } catch (error) { notes.push(`API models not checked: ${error.message}`); }
++  if (api.skipped) notes.push(`API models not checked: ${api.skipped}`);
++  // A source is baselined on its first NON-EMPTY successful read: an empty answer (a changed query, an outage that returned nothing) records nothing and baselines nothing.
++  const baselineOpen = openOk && !state.baselined.open && open.length > 0, baselineApi = apiOk && !state.baselined.api && api.ids.length > 0;
++  const isNewOpen = openOk && state.baselined.open === true, isNewApi = apiOk && state.baselined.api === true;
++  const baseline = (baselineOpen || baselineApi) && Object.keys(state.seen).length === 0;
++
++  const newOpen = [], newApi = [];
++  for (const c of open) {
++    const key = `hf:${c.id}`;
++    if (!state.seen[key]) { state.seen[key] = { firstSeen: new Date(t).toISOString(), ...c }; if (isNewOpen) newOpen.push(c); }
++  }
++  for (const id of api.ids) {
++    const key = `api:${id}`;
++    if (!state.seen[key]) { state.seen[key] = { firstSeen: new Date(t).toISOString(), id }; if (isNewApi) newApi.push(id); }
++  }
++  if (baselineOpen) state.baselined.open = true;
++  if (baselineApi) state.baselined.api = true;
++  const decisions = [];
++  if (root) {
++    // At most MAX_DECISIONS per run: the rest are listed in a note and recorded as seen (a flood is not a useful inbox).
++    const fitting = newOpen.filter(x => x.fits !== false);
++    for (const c of fitting.slice(0, MAX_DECISIONS)) {
++      const id = `model-hf-${slug(c.id)}`;
++      await journal(root, { kind: 'decision', id, text: `${describeOpen(c, config)}${evalAdvice(c.id, config)}`, choice: 'skip', options: ['evaluate', 'skip'], confirm: true }, { now: () => t });
++      decisions.push(id);
++    }
++    if (fitting.length > MAX_DECISIONS) notes.push(`${fitting.length - MAX_DECISIONS} more new model(s) fit but only ${MAX_DECISIONS} were put in the inbox: ${fitting.slice(MAX_DECISIONS, MAX_DECISIONS + 8).map(x => x.id).join(', ')}${fitting.length > MAX_DECISIONS + 8 ? ', ...' : ''} (swarm models list)`);
++    for (const id of newApi.slice(0, MAX_DECISIONS)) {
++      const did = `model-api-${slug(id)}`;
++      await journal(root, { kind: 'decision', id: did, text: `New model on the Anthropic API: ${id}. It is not used until you switch a lane to it (the lanes' model setting); compare it first with the eval set: swarm eval manifest --agent anthropic --model ${id}.`, choice: 'skip', options: ['evaluate', 'skip'], confirm: true }, { now: () => t });
++      decisions.push(did);
++    }
++  }
++  // A pass in which no source answered did not check anything: it does not start the week.
++  if (openOk || apiOk) state.lastRunAt = new Date(t).toISOString();
++  await writeState(state, env, home);
++  return { ran: true, baseline, newOpen, newApi, tooBig: newOpen.filter(x => x.fits === false).map(x => x.id), decisions, notes, config, seen: Object.keys(state.seen).length };
++}
++
++// "Model X beats the current one by Y points at $Z per eval run", from the recorded eval runs (docs/state/eval-scores.ndjson).
++export function compareModels(rows, current, candidate) {
++  const stat = model => {
++    const mine = rows.filter(r => Array.isArray(r.models) && r.models.length === 1 && r.models[0] === model && Number.isInteger(r.total) && r.total > 0 && Number.isInteger(r.passed) && r.passed >= 0 && r.passed <= r.total);
++    if (!mine.length) return null;
++    const passed = mine.reduce((s, r) => s + r.passed, 0), total = mine.reduce((s, r) => s + r.total, 0);
++    return { runs: mine.length, passRate: passed / total, avgCostUsd: mine.reduce((s, r) => s + (Number.isFinite(r.costUsd) ? r.costUsd : 0), 0) / mine.length };
++  };
++  const a = stat(current), b = stat(candidate);
++  if (!a || !b) return { ok: false, message: `no recorded eval runs for ${!a ? current : candidate}${!a && !b ? ` or ${candidate}` : ''} (swarm eval score RUN --record)` };
++  const points = Math.round((b.passRate - a.passRate) * 1000) / 10;
++  const verdict = points > 0 ? `${candidate} beats ${current} by ${points} points` : points < 0 ? `${candidate} is ${-points} points behind ${current}` : `${candidate} ties ${current}`;
++  const cost = `at $${b.avgCostUsd.toFixed(4)} per eval run (${current}: $${a.avgCostUsd.toFixed(4)})`;
++  const thin = Math.min(a.runs, b.runs) < 3 ? ` Thin evidence: ${a.runs} and ${b.runs} run(s); run the eval more before switching.` : '';
++  return { ok: true, points, current: a, candidate: b, message: `${verdict} (pass rate ${(b.passRate * 100).toFixed(1)}% vs ${(a.passRate * 100).toFixed(1)}%) ${cost}.${thin} Switching is your decision.` };
++}
+diff --git a/tools/models-commands.mjs b/tools/models-commands.mjs
+new file mode 100644
+index 0000000..bdc3fb2
+--- /dev/null
++++ b/tools/models-commands.mjs
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: Apache-2.0
++// swarm models watch [--force] [--json] | list | compare CURRENT CANDIDATE   (spec B3)
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { watchModels, fetchOpenCandidates, fetchApiModels, readState, watchConfig, compareModels } from './model-watch.mjs';
++import { loadLocalConfig } from './local-config.mjs';
++import { readAnthropicKey } from './anthropic.mjs';
++
++export const MODELS_USAGE = 'Usage: swarm models watch [--force] [--json]   (new open coding models that fit our GPUs and new API model versions, into the inbox; never rents)\n       swarm models list\n       swarm models compare CURRENT CANDIDATE   (from the recorded eval runs)\n';
++const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
++
++export async function runModelsCommand(root, args, { fetchImpl, env = process.env, now = Date.now, key } = {}) {
++  const [verb, ...rest] = args;
++  const local = (() => { try { return loadLocalConfig({ env }); } catch { return {}; } })();
++  if (verb === 'watch') {
++    const flags = new Set(rest);
++    for (const f of flags) if (!['--force', '--json'].includes(f)) return out(`Unknown flag: ${f}\n${MODELS_USAGE}`, 2);
++    const config = watchConfig(local);
++    const result = await watchModels({
++      root, local, env, now, force: flags.has('--force'),
++      sources: {
++        open: () => fetchOpenCandidates({ fetchImpl, config, now: now() }),
++        api: () => fetchApiModels({ fetchImpl, key: key === undefined ? readAnthropicKey(env) : key }),
++      },
++    });
++    if (flags.has('--json')) return out(JSON.stringify(result));
++    if (!result.ran) return out(`Checked recently; the next check is due ${result.nextAt} (swarm models watch --force to check now).`);
++    const lines = [result.baseline ? `First check: recorded ${result.seen} model(s) as the baseline. Only models that appear after this are reported.` : `${result.newOpen.length} new open coding model(s), ${result.newApi.length} new API model(s).`];
++    for (const c of result.newOpen) lines.push(`  ${c.id}  ${c.weightGb ?? '?'} GB  ${c.fits === false ? 'too big for our GPUs' : c.fits ? 'fits' : 'fit unknown'}  ${c.downloads} downloads`);
++    for (const id of result.newApi) lines.push(`  ${id}  (Anthropic API)`);
++    if (result.decisions.length) lines.push(`${result.decisions.length} decision(s) in your inbox (swarm inbox). The inbox item names the command to evaluate it; ${result.config.evalCapUsd ? `your pre-approved cap is $${result.config.evalCapUsd}` : 'no eval cap is pre-approved'}, and nothing was rented.`);
++    for (const note of result.notes) lines.push(`note: ${note}`);
++    return out(lines.join('\n'));
++  }
++  if (verb === 'list') {
++    const state = await readState(env);
++    const entries = Object.entries(state.seen).sort(([, a], [, b]) => String(b.firstSeen).localeCompare(String(a.firstSeen)));
++    if (!entries.length) return out('Nothing recorded yet. swarm models watch');
++    return out([`last check: ${state.lastRunAt ?? 'never'}`, ...entries.slice(0, 40).map(([k, v]) => `${k}  first seen ${String(v.firstSeen).slice(0, 10)}${v.fits === false ? '  (too big)' : ''}`)].join('\n'));
++  }
++  if (verb === 'compare') {
++    if (rest.length !== 2) return out(`compare needs two model names\n${MODELS_USAGE}`, 2);
++    let rows = [];
++    try { rows = (await fs.readFile(path.join(root, 'docs/state/eval-scores.ndjson'), 'utf8')).split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } }); } catch { /* none yet */ }
++    const result = compareModels(rows, rest[0], rest[1]);
++    return out(result.message, result.ok ? 0 : 1);
++  }
++  return out(`${verb ? `Unknown models command: ${verb}\n` : ''}${MODELS_USAGE}`, 2);
++}
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 2fcb3b1..1b304b5 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -4605,6 +4605,23 @@ async function applyQueuePlans(root, id, state, manifest, plans, { batchSize, ad
+         await appendEvent(root, { kind: 'ci-failure', hook: kind, batch: ciBatchNumber, status: res.status }, { best: true }).catch(() => {});
+       }
+       queue.ci.push(record);
++      // A preview that came up is measured: Lighthouse and axe on the key screens, against the profile's budgets.
++      if (kind === 'preview' && res.status === 'passed' && res.url && securityProfile?.budgets) {
++        try {
++          const { runBudgets, recordBudgetResults, hostAllowed } = await import('./budgets.mjs');
++          // The address comes from a deploy log, which build code can write: it is measured only when its host is one the owner listed.
++          if (!securityProfile.budgets.previewHosts) { warnings.push('budgets-skipped: set budgets.previewHosts (for example *.vercel.app) so a preview address from the deploy log can be trusted; swarm budgets check --url measures by hand'); continue; }
++          if (!hostAllowed(res.url, securityProfile.budgets.previewHosts)) { warnings.push(`budgets-skipped: the preview address host is not in budgets.previewHosts`); continue; }
++          const results = await runBudgets({ root, baseUrl: res.url, config: securityProfile.budgets, env: portEnv });
++          await recordBudgetResults(root, results);
++          for (const failed of results.filter(r => !r.pass)) {
++            const ticket = await ticketForBudgetFailure(root, failed, changes.map(change => change.file));
++            queue.ci.push({ batch: ciBatchNumber, kind: 'budgets', screen: failed.id, status: failed.status, ...(ticket ? { ticket } : {}) });
++            warnings.push(`budgets-${failed.status}: screen ${failed.id}${ticket ? ` (fix ticket ${ticket})` : ''}`);
++          }
++          if (results.every(r => r.pass)) queue.ci.push({ batch: ciBatchNumber, kind: 'budgets', status: 'passed', screens: results.length });
++        } catch (error) { warnings.push(`budgets-error: ${String(error.message).slice(0, 120)}`); }
++      }
+     }
+   };
+   const applyBatch = async (batch, { last = false, forceFull = false } = {}) => {
+@@ -7047,6 +7064,15 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
+   const state = await readState(root, id);
+   if (state.root !== root || state.id !== id) fail('Run belongs to another repository');
+   if (!state.integratedAt) fail('Run must be integrated before it can be shipped');
++  // Speed and accessibility budgets block only the PR that finishes the last stage.
++  {
++    const profile = await projectProfile(root);
++    if (profile?.budgets) {
++      const { budgetShipGate, readBudgetState } = await import('./budgets.mjs');
++      const gate = budgetShipGate({ budgets: profile.budgets, state: await readBudgetState(root), ledger: await (await import('./tickets.mjs')).readLedger(root).catch(() => null), runJobIds: (state.jobs ?? []).map(job => job.id) });
++      if (gate) fail(gate.message, 'budgets-failing');
++    }
++  }
+   const manifest = validateManifest(JSON.parse(await bytesAt(root, `.swarm/runs/${id}/manifest.json`, true)));
+   const checks = [...(manifest.checks ?? []), ...(flags.additionalChecks ?? [])];
+   validateManifest({ ...manifest, checks: flags.additionalChecks ?? [] });
+@@ -7109,6 +7135,20 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
+   });
+ }
+ 
++// A budget failure becomes a fix ticket once per screen: not while the screen's earlier fix ticket is still open. `files` are the batch's changed files (empty for a manual check: then no ticket, the failure is only recorded).
++async function ticketForBudgetFailure(root, result, files) {
++  if (!files.length) return null;
++  const { readBudgetState, linkBudgetTicket } = await import('./budgets.mjs');
++  const state = await readBudgetState(root);
++  const existing = state.screens[result.id]?.ticket;
++  const ledger = await (await import('./tickets.mjs')).readLedger(root).catch(() => null);
++  if (existing && ledger?.tickets.some(t => t.id === existing && !['done', 'cancelled'].includes(t.status))) return existing;
++  const summary = `screen ${result.id}: ${result.failures.slice(0, 5).map(f => f.message).join('; ')}`;
++  const ticket = await addCiFixTicket(root, { ...fixTicketFromFailure({ kind: 'budget', batchNumber: 0, files, summary }), title: `Fix speed/accessibility budget on screen ${result.id}`.slice(0, 140), acceptance: [`Screen ${result.id} is back within its Lighthouse and axe budgets.`] }).catch(() => null);
++  if (ticket) await linkBudgetTicket(root, result.id, ticket);
++  return ticket;
++}
++
+ // The agents a manifest names that have a provider to check. `auto` is not one: it is resolved to a
+ // real lane (with its configured model) by validateProject, and doctor has no such provider. Before
+ // this, any manifest with an `auto` job, including every manifest `swarm go` plans, died here with
+@@ -7529,7 +7569,7 @@ async function mainInner() {
+     const cut=args.indexOf('--');
+     const flagArgs=(cut===-1?args:args.slice(0,cut));
+     const helpAt=flagArgs.findIndex((a,i)=>i>0&&(a==='--help'||a==='-h')&&!VALUE_FLAGS.has(flagArgs[i-1]));
+-    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations'].includes(args[0]))args.splice(0,args.length,'--help');
++    if(helpAt!==-1&&['go','plan','scope','tickets','change','run','integrate','autopilot','merge','update','cancel','resume','sweep','backlog','ui','gallery','stop','backup','restore','migrations','budgets','models'].includes(args[0]))args.splice(0,args.length,'--help');
+   }
+   // Commands that act on the install itself keep the install root even when run from a project folder.
+   if(rootIndex===-1&&INSTALL_COMMANDS.includes(args[0]))root=defaultRoot(ownRoot);
+@@ -7541,6 +7581,22 @@ async function mainInner() {
+     const stopped=await(await import('./stop-all.mjs')).stopGuard(await fs.realpath(root));
+     if(stopped){process.stderr.write(`${JSON.stringify({status:'error',code:stopped.code,error:stopped.message})}\n`);process.exitCode=1;return;}
+   }
++  if(args[0]==='models'){
++    root=await fs.realpath(root);
++    const {runModelsCommand}=await import('./models-commands.mjs');
++    const res=await runModelsCommand(root,args.slice(1));
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
++  if(args[0]==='budgets'){
++    root=await fs.realpath(root);
++    const {runBudgetsCommand}=await import('./budgets-commands.mjs');
++    const res=await runBudgetsCommand(root,args.slice(1),{onFailure:r=>ticketForBudgetFailure(root,r,[])});
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
+   if(['stop','backup','restore','migrations'].includes(args[0])){
+     root=await fs.realpath(root);
+     const {runSafetyCommand}=await import('./safety-commands.mjs');
+@@ -7875,7 +7931,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | budgets check [--url URL] [--screens a,b] | budgets status | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');

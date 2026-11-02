@@ -2,6 +2,8 @@
 // Ships a reviewed run's integrated tree: push the branch, open or update a PR, wait for CI,
 // and merge when everything is green and nobody has asked for a human to look first. No shell:
 // git and gh are invoked through the injected `exec` with an argv array.
+import { runCiLocal } from './ci-local.mjs';
+import { checkRollup } from './merge-guard.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +16,15 @@ const execFileAsync = promisify(execFile);
 
 export const SHIP_DEFAULTS = Object.freeze({ pollMs: 20_000, timeoutMs: 45 * 60_000, noCiGraceMs: 5 * 60_000, mergeMethod: 'squash' });
 export const CHECKS_PLACEHOLDER = '<!-- swarm:checks -->';
+export const STUB_SECTION_RE = /<!-- swarm:stub(?:\s+[^>]*?)?\s*-->/;
+
+export function classifyCheckEnvironment({ exitCode, head }) {
+  const firstLines = String(head ?? '').replace(/\r\n/g, '\n').split('\n').slice(0, 3).join('\n');
+  if (exitCode === 127 || (exitCode === 2 && /Failed to spawn|command not found|No such file or directory/i.test(firstLines))) {
+    return { code: 'check-env-missing', hint: 'run uv sync --locked / npm ci in this worktree or pass --sync' };
+  }
+  return null;
+}
 export const SWARM_MARKER_RE = /<!-- swarm:[a-z0-9_-]+ -->/g;
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -187,6 +198,7 @@ export async function gitIgnoredFixtureWarnings(exec, fileTexts, root) {
       const candidate = match[1];
       if (seen.has(candidate)) continue;
       seen.add(candidate);
+      try { await fs.access(path.resolve(root, candidate)); } catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
       let result;
       try { result = await exec('git', ['check-ignore', '-q', '--', candidate], { cwd: root }); } catch { continue; }
       if (result && result.code === 0) warnings.push({ file, path: candidate });
@@ -436,6 +448,71 @@ export async function repoVisibility(exec, repo, { cwd } = {}) {
   }
 }
 
+// E2: every pre-push guard that inspects branch CONTENT (never CI/PR state) collected into one
+// pass, run in full every time — unlike ship()'s own sequential checks below, nothing here
+// short-circuits on the first hit, so a caller sees every violation at once instead of fixing them
+// one ship attempt at a time. Mirrors ship()'s own exemption handling (scratch/undocumented-binary/
+// git-ignored-fixture) so a used exemption excuses the same file here too.
+export async function preflightReport({
+  root, payloadBase, exec, env = process.env, home = os.homedir(),
+  privateNamesFile = null, integratedFiles = [], repo = null, exemptions = [],
+  authorEmailExec = defaultAuthorEmailExec, commitScanExec = defaultCommitScanExec,
+  body = '', requireSections = [],
+} = {}) {
+  const failures = [];
+  for (const section of requireSections) {
+    if (STUB_SECTION_RE.test(sectionContent(body, section) ?? '')) failures.push({ code: 'stub-section', section, reason: `stub-section: ${section}` });
+  }
+  const findExemption = (guard, file) => exemptions.find(exemption => exemption.guard === guard && exemption.file === file);
+
+  const list = await loadPrivateNames(root, privateNamesFile, { env, home });
+  if (list.found && list.pathGlobs.length) {
+    const changed = await changedFileNames(exec, root, payloadBase);
+    const pathHits = findPrivatePathHits(changed, list.pathGlobs);
+    if (pathHits.length) {
+      failures.push({ code: 'private-path-in-diff', reason: `private-path-in-diff: ${pathHits.map(hit => `${hit.file} matches path:${hit.glob}`).join(', ')}` });
+    }
+  }
+  if (list.found && list.terms.length) {
+    const visibility = repo ? await repoVisibility(exec, repo, { cwd: root }) : null;
+    if (visibility !== 'PRIVATE' && visibility !== 'INTERNAL') {
+      const addedByFile = await addedLinesForFiles(exec, root, payloadBase, integratedFiles);
+      const nameHits = findPrivateNameHits(addedByFile, list.terms);
+      if (nameHits.length) {
+        failures.push({ code: 'private-name-in-diff', reason: `private-name-in-diff: ${nameHits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}` });
+      }
+      const commitHits = await privateTermCommitHits(root, payloadBase, list.terms, { exec: commitScanExec });
+      if (commitHits.length) {
+        failures.push({ code: 'private-term-in-commit', reason: `private-term-in-commit: ${commitHits[0].sha} (term #${list.terms.indexOf(commitHits[0].term) + 1})` });
+      }
+    }
+  }
+
+  const emailMismatches = await authorEmailMismatches(root, payloadBase, { exec: authorEmailExec });
+  if (emailMismatches.length) {
+    failures.push({ code: 'author-email-mismatch', reason: `author-email-mismatch: ${emailMismatches.map(mismatch => `${mismatch.sha} (${mismatch.email})`).join(', ')}` });
+  }
+
+  const scratchFiles = (await addedScratchFiles(exec, root, payloadBase)).filter(file => !findExemption('scratch', file));
+  if (scratchFiles.length) {
+    failures.push({ code: 'scratch-file-in-diff', reason: `scratch-file-in-diff: ${scratchFiles.join(', ')}; scratch files (PR bodies, payloads, manifests, *.out) never enter a commit; remove it, or pass --exempt scratch:<file>=<reason>` });
+  }
+
+  const integratedTestFiles = await readAddedTestFileLines(exec, root, payloadBase, integratedFiles);
+  const undocumented = undocumentedBinaryWarnings(integratedTestFiles).filter(w => !findExemption('undocumented-binary', w.file));
+  if (undocumented.length) {
+    failures.push({ code: 'undocumented-binary', reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumented.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>` });
+  }
+
+  const gitIgnored = (await gitIgnoredFixtureWarnings(exec, integratedTestFiles, root)).filter(w => !findExemption('git-ignored-fixture', w.file));
+  if (gitIgnored.length) {
+    failures.push({ code: 'test-reads-git-ignored-path', reason: `test-reads-git-ignored-path: ${gitIgnored.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>` });
+  }
+
+  const decisionWarnings = await collectDecisionValueWarnings(root, payloadBase, body, exec);
+  return { ok: failures.length === 0, failures, ...(decisionWarnings.length ? { warnings: decisionWarnings } : {}) };
+}
+
 // Unified diff (-U0) added lines, each with the new-file line number it lands on.
 function parseAddedLines(diffText) {
   const added = [];
@@ -447,6 +524,67 @@ function parseAddedLines(diffText) {
     if (newLine !== null && line.startsWith('+')) { added.push({ line: newLine, text: line.slice(1) }); newLine++; }
   }
   return added;
+}
+
+const DECISION_NUMBER_RE = /[+-]?(?:\d+(?:\.\d+)?|\.\d+)/g;
+const URL_DESTINATION_RE = /\b(?:https?|ftp):\/\/[^\s<>()\[\]]+/gi;
+
+function decisionNumberTokens(text, { listNumbering = false } = {}) {
+  const source = String(text ?? '').split('\n').map(line => {
+    const withoutUrl = line.replace(URL_DESTINATION_RE, '');
+    return listNumbering ? withoutUrl.replace(/^\s*(?:[-+*]\s+)?\d+[.)]\s+/, '') : withoutUrl;
+  }).join('\n');
+  const tokens = [];
+  for (const match of source.matchAll(DECISION_NUMBER_RE)) {
+    const at = match.index ?? 0;
+    const value = match[0];
+    const before = source[at - 1] ?? '';
+    const after = source[at + value.length] ?? '';
+    if (/[A-Za-z0-9_]/.test(before) || /[A-Za-z0-9_]/.test(after)) continue;
+    if (before === '.' && /\d/.test(source[at - 2] ?? '')) continue;
+    if (after === '.' && /\d/.test(source[at + value.length + 1] ?? '')) continue;
+    tokens.push(value);
+  }
+  return tokens;
+}
+
+function decisionValueClaims(body) {
+  if (!isHeld(body)) return [];
+  const sections = [sectionContent(body, 'Summary'), sectionContent(body, 'Could break')].filter(Boolean);
+  return [...new Set(sections.flatMap(section => decisionNumberTokens(section, { listNumbering: true })))]
+    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+}
+
+export function decisionValueWarnings(body, diffText) {
+  const claimed = decisionValueClaims(body);
+  if (!claimed.length) return [];
+  const added = new Set(parseAddedLines(diffText).flatMap(entry => decisionNumberTokens(entry.text)));
+  const missing = claimed.filter(value => !added.has(value));
+  return missing.map(value => `decision-value-not-in-diff: held PR summary names ${value}, absent from added diff lines; quote the source constant and name its value-pinning test`);
+}
+
+export async function collectDecisionValueWarnings(root, payloadBase, body, exec) {
+  const claims = decisionValueClaims(body);
+  if (!claims.length) return [];
+  let baseSha;
+  try {
+    const baseRes = await exec('git', ['merge-base', `origin/${payloadBase}`, 'HEAD'], { cwd: root });
+    if (!baseRes || baseRes.code !== 0 || typeof baseRes.stdout !== 'string' || !baseRes.stdout.trim()) {
+      return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+    }
+    baseSha = baseRes.stdout.trim();
+  } catch {
+    return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+  }
+  try {
+    const diffRes = await exec('git', ['diff', `${baseSha}...HEAD`, '-U0', '--'], { cwd: root });
+    if (!diffRes || diffRes.code !== 0 || typeof diffRes.stdout !== 'string') {
+      return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+    }
+    return decisionValueWarnings(body, diffRes.stdout);
+  } catch {
+    return ['decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff'];
+  }
 }
 
 // Same no-usable-base fallback as readAddedTestFileLines/addedScratchFiles: without a real base to
@@ -722,6 +860,26 @@ export function parsePrPayload(text) {
   return { title: data.title, head: data.head, base: data.base, body: data.body };
 }
 
+// `--branch` is also a useful recovery path for a payload written before head/base were known.
+// Resolve the repository's configured default branch; never guess from a local branch name.
+export async function inferDefaultBranch(exec, root) {
+  try {
+    const symbolic = await exec('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root });
+    if (symbolic?.code === 0) {
+      const branch = /^refs\/remotes\/origin\/(.+)$/.exec(symbolic.stdout.trim())?.[1];
+      if (branch && HEAD_RE.test(branch)) return branch;
+    }
+  } catch { /* try the remote's human-readable fallback */ }
+  try {
+    const remote = await exec('git', ['remote', 'show', 'origin'], { cwd: root });
+    if (remote?.code === 0) {
+      const branch = /^\s*HEAD branch:\s*(\S+)/m.exec(remote.stdout)?.[1];
+      if (branch && HEAD_RE.test(branch)) return branch;
+    }
+  } catch { /* no usable default branch */ }
+  return null;
+}
+
 export function isHeld(body) {
   for (const line of String(body ?? '').split('\n')) {
     const trimmed = line.trim();
@@ -836,6 +994,7 @@ export async function verifyPreExistingOnBase({ root, argv, integratedFiles, bas
     if (!expanded || !expanded.length) return { checked: false };
     const result = await exec(expanded[0], expanded.slice(1), { cwd: checkout, ...(env ? { env } : {}) });
     const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+    if (classifyCheckEnvironment({ exitCode: result.code, head: output })) return { checked: false };
     const tests = [];
     for (const id of failingTests) tests.push({ id, baseStatus: await baseStatusForTest(id, output, result.code, checkout) });
     return { checked: true, alsoFails: result.code !== 0, output, tests };
@@ -860,7 +1019,180 @@ export function extractFailingTestFiles(text) {
     let match;
     while ((match = re.exec(source))) files.add(match[1]);
   }
+  for (const failure of extractFailureBlocks(source)) {
+    const location = String(failure.location ?? '');
+    const file = location.replace(/:\d+(?::\d+)?$/, '');
+    if (file && TEST_FILE_RE.test(file)) files.add(file);
+  }
   return [...files];
+}
+
+function safeTestFile(root, file) {
+  const value = String(file ?? '');
+  if (!value || value.includes('\\') || path.isAbsolute(value) || !TEST_FILE_RE.test(value)) return false;
+  const rootPath = path.resolve(root);
+  const candidate = path.resolve(rootPath, value);
+  const relative = path.relative(rootPath, candidate);
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+  return fs.stat(candidate).then(async info => {
+    if (!info.isFile()) return false;
+    const realRoot = await fs.realpath(rootPath);
+    const realCandidate = await fs.realpath(candidate);
+    const realRelative = path.relative(realRoot, realCandidate);
+    return Boolean(realRelative) && !realRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(realRelative);
+  }).catch(() => false);
+}
+
+function targetedRunner(argv) {
+  for (const token of argv ?? []) {
+    const name = path.basename(String(token));
+    if (name === 'pytest' || name.startsWith('pytest.')) return 'pytest';
+    if (name === 'vitest' || name.startsWith('vitest.')) return 'vitest';
+  }
+  return null;
+}
+
+function positiveTargetedPass(output, file, runner) {
+  const text = String(output ?? '');
+  if (!text.includes(file)) return false;
+  if (/\b0\s+passed\b/i.test(text)) return false;
+  if (runner === 'pytest') {
+    return /\b(?:[1-9]\d*\s+passed|PASSED\s+[^\n]*|[^\n]*\s+PASSED)\b/i.test(text);
+  }
+  if (runner === 'vitest') {
+    return /(?:✓|✔|\bPASS\b|\bpassed\b)[^\n]*|(?:Test Files|Tests)\s+\d+\s+passed/i.test(text);
+  }
+  return false;
+}
+
+async function cleanHeadAt(exec, root, expectedSha) {
+  try {
+    const status = await exec('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root });
+    if (!status || status.code !== 0 || String(status.stdout ?? '').trim() !== '') return false;
+    const head = await exec('git', ['rev-parse', 'HEAD'], { cwd: root });
+    return Boolean(head && head.code === 0 && head.stdout.trim() === expectedSha);
+  } catch {
+    return false;
+  }
+}
+
+function ciRollupIdentity(item) {
+  const values = [item?.id, item?.databaseId, item?.checkRunId, item?.detailsUrl, item?.target_url, item?.externalId];
+  return values.some(value => value != null) ? JSON.stringify(values) : null;
+}
+
+function ciRollupAttempt(item) {
+  for (const key of ['runAttempt', 'run_attempt', 'attempt']) {
+    if (Number.isFinite(Number(item?.[key]))) return Number(item[key]);
+  }
+  return null;
+}
+
+function freshCiAttemptObserved(beforeRollup, afterRollup, failedNames) {
+  const before = new Map((beforeRollup ?? []).map(item => [item.name ?? item.context ?? 'unknown', item]));
+  const names = new Set(failedNames ?? []);
+  for (const item of afterRollup ?? []) {
+    const name = item.name ?? item.context ?? 'unknown';
+    if (!names.has(name)) continue;
+    const previous = before.get(name);
+    if (!previous) return true;
+    const previousAttempt = ciRollupAttempt(previous);
+    const nextAttempt = ciRollupAttempt(item);
+    if (previousAttempt != null && nextAttempt != null && nextAttempt > previousAttempt) return true;
+    const previousIdentity = ciRollupIdentity(previous);
+    const nextIdentity = ciRollupIdentity(item);
+    if (previousIdentity != null && nextIdentity != null && previousIdentity !== nextIdentity) return true;
+  }
+  return false;
+}
+
+async function verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, checkArgvs, exec, checkEnv }) {
+  const failedNames = [...(ci?.failed ?? [])];
+  if (!failedNames.length) return { eligible: false, reason: 'no failed checks' };
+  if (failedNames.some(name => /(?:format|lint|build)/i.test(name))) return { eligible: false, reason: 'format, lint, or build failure' };
+
+  const failedItems = (ciRollup ?? []).filter(item => failedNames.includes(item.name ?? item.context ?? 'unknown'));
+  if (failedItems.length !== failedNames.length) return { eligible: false, reason: 'failed check is missing from the CI rollup' };
+  const itemRunIds = failedItems.map(item => runIdFromDetailsUrl(item.detailsUrl ?? item.target_url));
+  if (itemRunIds.some(id => !id)) return { eligible: false, reason: 'failed CI run is missing a run id' };
+  const runIds = [...new Set(itemRunIds)];
+
+  const logs = [];
+  for (const id of runIds) {
+    let logRes;
+    try { logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root }); } catch { return { eligible: false, reason: `failed log fetch for ${id}` }; }
+    if (!logRes || logRes.code !== 0) return { eligible: false, reason: `failed log fetch for ${id}` };
+    logs.push(logRes.stdout ?? '');
+  }
+  const files = [...new Set(logs.flatMap(extractFailingTestFiles))];
+  if (!files.length) return { eligible: false, reason: 'failed logs did not name a test file' };
+  for (const file of files) if (!await safeTestFile(root, file)) return { eligible: false, reason: `unsafe or missing test file ${file}` };
+
+  const targets = new Map();
+  for (const file of files) {
+    const argv = (checkArgvs ?? []).find(candidate => Array.isArray(candidate) && candidate.includes(file) && targetedRunner(candidate));
+    if (!argv) return { eligible: false, reason: `no explicitly file-targeted pytest or Vitest check for ${file}` };
+    targets.set(file, { argv: [...argv], runner: targetedRunner(argv) });
+  }
+
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed before probes' };
+  const localPassCounts = new Map();
+  for (const [file, target] of targets) {
+    let localPasses = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let result;
+      try {
+        const argv = expandArgvForRoot(target.argv, [file], root);
+        if (!argv) return { eligible: false, reason: `cannot expand check for ${file}` };
+        result = await exec(argv[0], argv.slice(1), { cwd: root, env: checkEnv });
+      } catch { continue; }
+      const output = `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`;
+      if (result && result.code === 0 && !classifyCheckEnvironment({ exitCode: result.code, head: output }) && positiveTargetedPass(output, file, target.runner)) localPasses += 1;
+    }
+    localPassCounts.set(file, localPasses);
+  }
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed after local probes' };
+
+  let baseSha;
+  try {
+    const baseRes = await exec('git', ['rev-parse', `origin/${payload.base}`], { cwd: root });
+    baseSha = baseRes?.code === 0 ? baseRes.stdout.trim() : null;
+  } catch { baseSha = null; }
+  if (!baseSha) return { eligible: false, reason: 'could not resolve immutable base SHA' };
+
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-flaky-base-'));
+  const checkout = path.join(temporary, 'base');
+  let added = false;
+  try {
+    const addRes = await exec('git', ['worktree', 'add', '--detach', checkout, baseSha], { cwd: root });
+    if (!addRes || addRes.code !== 0) return { eligible: false, reason: 'could not create base worktree' };
+    added = true;
+    for (const [file, target] of targets) {
+      const localPasses = localPassCounts.get(file) ?? 0;
+      let basePassed = false;
+      const filePath = path.resolve(checkout, file);
+      const relative = path.relative(path.resolve(checkout), filePath);
+      if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return { eligible: false, reason: `unsafe base test file ${file}` };
+      let info;
+      try { info = await fs.stat(filePath); } catch { return { eligible: false, reason: `base test file is absent: ${file}` }; }
+      if (!info.isFile()) return { eligible: false, reason: `base test file is absent: ${file}` };
+      let result;
+      try {
+        const argv = expandArgvForRoot(target.argv, [file], checkout);
+        if (!argv) return { eligible: false, reason: `cannot expand base check for ${file}` };
+        result = await exec(argv[0], argv.slice(1), { cwd: checkout, env: checkEnv });
+      } catch { return { eligible: false, reason: `base probe failed for ${file}` }; }
+      const output = `${result?.stdout ?? ''}\n${result?.stderr ?? ''}`;
+      basePassed = Boolean(result && result.code === 0 && !classifyCheckEnvironment({ exitCode: result.code, head: output }) && positiveTargetedPass(output, file, target.runner));
+      if (localPasses === 3 && basePassed) continue;
+      return { eligible: false, reason: `local or base probe lacked positive passing evidence for ${file}` };
+    }
+  } finally {
+    if (added) { try { await exec('git', ['worktree', 'remove', '--force', checkout], { cwd: root }); } catch { /* best effort */ } }
+    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+  }
+  if (!await cleanHeadAt(exec, root, sha)) return { eligible: false, reason: 'head or tracked tree changed after base probe' };
+  return { eligible: true, files, runIds, headSha: sha, baseSha, beforeRollup: ciRollup, failedNames };
 }
 
 // Field lesson #273: a test near the CI per-test timeout is a flake waiting to happen. Once CI is
@@ -920,6 +1252,42 @@ export function extractFailingTestIds(text) {
   return [...ids];
 }
 
+// Keep the structured part of every test-runner failure in the check record.  The retained tail
+// is intentionally small, so using it as the only evidence loses TAP YAML diagnostics and the
+// location/assertion that make a failure actionable.
+export function extractFailureBlocks(text) {
+  const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
+  const starts = [];
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s*not ok \d+ - .+/.test(lines[index]) || /^\s*(?:✖|FAIL\s+).+/.test(lines[index])) starts.push(index);
+  }
+  return starts.map((start, position) => {
+    const end = starts[position + 1] ?? lines.length;
+    const blockLines = lines.slice(start, end).join('\n').trim();
+    const first = lines[start].trim();
+    const name = /^not ok \d+ - (.+)$/.exec(first)?.[1]?.trim() ??
+      /^(?:✖|FAIL\s+)(.+)$/.exec(first)?.[1]?.trim() ?? first;
+    const location = blockLines.match(/(?:^|\n)\s*(?:location:\s*|❯\s*|at\s+)([^\s()]+:\d+(?::\d+)?)/m)?.[1] ??
+      blockLines.match(/\b((?:[A-Za-z]:)?[^\s()]+:\d+:\d+)\b/)?.[1] ?? null;
+    const assertion = blockLines.match(/(?:^|\n)\s*(operator:\s*[^\n]+)/i)?.[1]?.trim() ??
+      blockLines.match(/(?:^|\n)\s*((?:AssertionError|assert(?:ion)?(?:Error)?|expected:|actual:|Expected|Received)\b[^\n]*)/i)?.[1]?.trim() ??
+      blockLines.split('\n').slice(1).map(line => line.trim()).find(line => line && line !== '---' && line !== '...') ?? null;
+    return { name, location, assertion, block: blockLines };
+  });
+}
+
+function withFailureBlocks(check) {
+  if (!check || check.status !== 'failed') return check;
+  if (Array.isArray(check.failureBlocks)) return check;
+  const source = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout].filter(Boolean).join('\n');
+  const failureBlocks = extractFailureBlocks(source);
+  return failureBlocks.length ? { ...check, failureBlocks } : check;
+}
+
+function normalizeChecks(checks) {
+  return (Array.isArray(checks) ? checks : []).map(withFailureBlocks);
+}
+
 const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Field lesson #192: "fail" needs positive evidence (the same id fails on base); a test whose file
@@ -965,20 +1333,60 @@ export function failedRunIds(rollup, failedNames) {
   return [...ids];
 }
 
+function localFailedFiles(checks) {
+  const files = new Set();
+  for (const check of checks ?? []) {
+    if (check.status !== 'failed') continue;
+    const source = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout].filter(Boolean).join('\n');
+    for (const file of extractFailingTestFiles(source)) files.add(file);
+    for (const failure of check.failureBlocks ?? []) {
+      const file = String(failure.location ?? '').replace(/:\d+(?::\d+)?$/, '');
+      if (file && TEST_FILE_RE.test(file)) files.add(file);
+    }
+  }
+  return [...files];
+}
+
+function targetedLocalArgvs(checkArgvs, files) {
+  return (checkArgvs ?? []).map(argv => {
+    if (!Array.isArray(argv) || !argv.length) return argv;
+    const runner = targetedRunner(argv);
+    return runner && files.length ? [...argv, ...files] : argv;
+  });
+}
+
+export function classifyCiFailureLog(text) {
+  const source = String(text ?? '');
+  const zeroFailures = /(?:\b0\s+(?:failed|failures)\b|(?:tests?|suites?)\s*:\s*[^\n]*\b0\s+failed\b|\b(?:passed|pass)\b[^\n]*,\s*0\s+failed\b)/i.test(source);
+  const stepTimeout = /(?:action|step|job|runner)[^\n]*(?:timed out|timeout)|(?:timed out|timeout)[^\n]*(?:action|step|job|runner)/i.test(source);
+  return zeroFailures && stepTimeout ? 'timeout' : null;
+}
+
 // Field lesson #187: `ship --help`/`-h` prints this and exits 0 (the swarm.mjs dispatch calls
 // shipHelpRequested before parsing any other ship flag).
 export const SHIP_USAGE = [
   'Usage: swarm ship RUN --pr PAYLOAD.json [flags]',
   '       swarm ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [flags]',
   'Flags: [--repo OWNER/NAME] [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase]',
-  '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check]',
-  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--per-test-timeout SECONDS] [--accept-pre-existing] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
+  '       [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--wait-required-only]',
+  '       [--checks-from-ci [PATH]] [--rerun-flaky N] [--rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--accept-pre-existing] [--preflight] [--exempt GUARD:FILE=REASON]... [--private-names FILE]',
   `Exempt guards: ${EXEMPTION_GUARD_IDS.join(', ')}`,
+  'git-ignored-fixture: only existing ignored paths; --exempt git-ignored-fixture:<file>=<reason>.',
+  'check-hit-swarm-dir: ignores check lines whose path starts with .swarm/ and reports their count.',
   'Prints one JSON result naming its runId (or branch for --branch); exit 0 when merged, held or ready.',
 ].join('\n') + '\n';
 
 export function shipHelpRequested(args) {
   return (args ?? []).some(arg => arg === '--help' || arg === '-h');
+}
+
+export function swarmCheckWarnings(checks) {
+  const count = checks.reduce((sum, check) => {
+    const rawLines = [check.output, check.rawOutput, check.head, check.tail, check.stderr, check.stdout]
+      .filter(Boolean).join('\n').split('\n').filter(line => /(?:^|[\s:("'])[^\n]*\.swarm\//.test(line)).length;
+    return sum + Math.max(check.swarmLineCount ?? 0, rawLines);
+  }, 0);
+  return count ? ['check-hit-swarm-dir: ignored ' + count + ' check output lines under .swarm/'] : [];
 }
 
 export function renderChecks(results) {
@@ -991,7 +1399,9 @@ export function renderChecks(results) {
     // PR's own Checks section — reachable now that the base re-run can be scoped to just them.
     if (result.status === 'pre-existing' && result.failingTests?.length) line += ` — pre-existing on base: ${result.failingTests.map(t => t.id).join(', ')}`;
     lines.push(line);
-    if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
+    if (result.status === 'failed' && result.failureBlocks?.length) {
+      for (const failure of result.failureBlocks) lines.push(`failure: ${failure.name} @ ${failure.location ?? 'unknown'} — ${failure.assertion ?? 'assertion unavailable'}`);
+    } else if (result.status === 'failed' && result.tail) lines.push(...String(result.tail).split('\n').slice(-20));
   }
   return ['```', ...lines, '```'].join('\n');
 }
@@ -1053,6 +1463,7 @@ export async function ship(options) {
   const {
     root, payloadPath,
     requireSections = [],
+    waitRequiredOnly = false,
     merge = true,
     mergeMethod = SHIP_DEFAULTS.mergeMethod,
     pollMs = SHIP_DEFAULTS.pollMs,
@@ -1064,6 +1475,7 @@ export async function ship(options) {
     integratedFiles = [],
     packagingChanges = [], checkArgvs = [], extraWarnings = [],
     rerunFlaky,
+    rerunFlakyCi,
     // Field lesson #273: an explicit --per-test-timeout always wins over the local config default.
     perTestTimeoutSeconds,
     exemptions = [],
@@ -1079,6 +1491,9 @@ export async function ship(options) {
     privateNamesFile = null,
     authorEmailExec = defaultAuthorEmailExec,
     commitScanExec = defaultCommitScanExec,
+    // E2: `--preflight` runs every pre-push content guard in one pass and reports every failure
+    // instead of pushing; it never reaches the push/PR steps below.
+    preflight = false,
   } = options;
 
   let repo = options.repo;
@@ -1087,6 +1502,8 @@ export async function ship(options) {
   const checkEnv = toolchainCheckEnv({ env, home });
   const base = { ...(runId ? { runId } : {}), ...(branch ? { branch } : {}), warnings: [...portWarnings, ...extraWarnings], tag: { name: null, status: 'skipped', waitedSeconds: 0 }, status: null, repo, pr: null, url: null, sha: null, mergeSha: null, checks: null, ci: null, reason: null, portBase, privateNames: null, timing: { checksSeconds: 0, ciWaitSeconds: 0, attempts: 0, rerunCount: 0 } };
 
+  if (waitRequiredOnly) Object.assign(base, { requiredContexts: null, pendingAtMerge: [], waitedForRequiredOnly: false });
+
   if (!VALID_MERGE_METHODS.has(mergeMethod)) return { ...base, status: 'refused', reason: 'invalid merge method' };
   for (const [name, value] of [['pollMs', pollMs], ['timeoutMs', timeoutMs], ['noCiGraceMs', noCiGraceMs]]) {
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return { ...base, status: 'refused', reason: `invalid ${name}` };
@@ -1094,7 +1511,20 @@ export async function ship(options) {
 
   let payload;
   try {
-    payload = parsePrPayload(await fs.readFile(payloadPath, 'utf8'));
+    const payloadText = await fs.readFile(payloadPath, 'utf8');
+    let payloadData;
+    try { payloadData = JSON.parse(payloadText); } catch { payloadData = null; }
+    if (branch && payloadData && typeof payloadData === 'object' && !Array.isArray(payloadData)) {
+      if (typeof payloadData.head !== 'string' || payloadData.head.trim() === '') payloadData.head = branch;
+      if (typeof payloadData.base !== 'string' || payloadData.base.trim() === '') {
+        const defaultBranch = await inferDefaultBranch(exec, root);
+        if (!defaultBranch) return { ...base, status: 'refused', reason: 'cannot infer default branch for --branch; set payload base explicitly' };
+        payloadData.base = defaultBranch;
+      }
+      payload = parsePrPayload(JSON.stringify(payloadData));
+    } else {
+      payload = parsePrPayload(payloadText);
+    }
   } catch (err) {
     return { ...base, status: 'refused', reason: err.message };
   }
@@ -1110,6 +1540,45 @@ export async function ship(options) {
     repo = originRepo;
     base.repo = repo;
   } else if (originRepo && repo !== originRepo) base.warnings.push(`--repo ${repo} differs from origin ${originRepo}`);
+
+  if (waitRequiredOnly) {
+    try {
+      const required = await exec('gh', ['api', `repos/${repo}/branches/${encodeURIComponent(payload.base)}/protection/required_status_checks`], { cwd: root });
+      if (required.code !== 0) {
+        if (!/\bHTTP[ :]+404\b/.test(`${required.stderr ?? ''} ${required.stdout ?? ''}`)) throw new Error('required contexts request failed');
+      } else {
+        const data = JSON.parse(required.stdout);
+        if (data !== null) {
+          if (typeof data !== 'object' || Array.isArray(data) ||
+              (!Array.isArray(data.contexts) && !Array.isArray(data.checks)) ||
+              (data.contexts !== undefined && (!Array.isArray(data.contexts) || data.contexts.some(name => typeof name !== 'string' || !name))) ||
+              (data.checks !== undefined && (!Array.isArray(data.checks) || data.checks.some(check => typeof check?.context !== 'string' || !check.context)))) throw new Error('invalid required contexts response');
+          const names = [...new Set([...(data.contexts ?? []), ...(data.checks ?? []).map(check => check.context)])];
+          if (names.length) Object.assign(base, { requiredContexts: names, waitedForRequiredOnly: true });
+        }
+      }
+    } catch {
+      return { ...base, status: 'refused', code: 'required-contexts-unavailable', reason: 'required-contexts-unavailable: cannot read base branch protection' };
+    }
+  }
+
+  // E2: every pre-push content guard, collected and run without short-circuiting. `ship
+  // --preflight` prints this and exits without ever pushing; an ordinary ship still refuses on
+  // its own first hit (below, unchanged) but attaches the full `failures` list to that refusal.
+  const collectPreflight = () => preflightReport({
+    root, payloadBase: payload.base, exec, env, home,
+    privateNamesFile, integratedFiles, repo, exemptions, authorEmailExec, commitScanExec,
+    body: payload.body, requireSections,
+  });
+  if (preflight) {
+    const report = await collectPreflight();
+    const decisionWarnings = report.warnings ?? [];
+    process.stdout.write(`${JSON.stringify({ status: 'preflight', ok: report.ok, failures: report.failures, warnings: decisionWarnings, ...(waitRequiredOnly ? { requiredContexts: base.requiredContexts, pendingAtMerge: [], waitedForRequiredOnly: base.waitedForRequiredOnly } : {}) })}\n`);
+    process.exitCode = report.ok ? 0 : 1;
+    return { ...base, status: 'preflight', ok: report.ok, failures: report.failures, warnings: [...base.warnings, ...decisionWarnings] };
+  }
+
+  base.warnings.push(...await collectDecisionValueWarnings(root, payload.base, payload.body, exec));
 
   // Field lesson #197: a private-names list (`<root>/coordination/private-names.txt`, or
   // --private-names FILE) is scanned against only the lines this diff ADDS, and only for a repo
@@ -1130,6 +1599,7 @@ export async function ship(options) {
       return {
         ...base, status: 'refused', code: 'private-path-in-diff',
         reason: `private-path-in-diff: ${pathHits.map(hit => `${hit.file} matches path:${hit.glob}`).join(', ')}`,
+        failures: (await collectPreflight()).failures,
       };
     }
   }
@@ -1148,6 +1618,7 @@ export async function ship(options) {
         return {
           ...base, status: 'refused', code: 'private-name-in-diff',
           reason: `private-name-in-diff: ${hits.map(hit => `${hit.file}:${hit.line} (${hit.term})`).join(', ')}`,
+          failures: (await collectPreflight()).failures,
         };
       }
       // Field lesson #258: scans every commit ship would actually publish, not just the cumulative
@@ -1158,6 +1629,7 @@ export async function ship(options) {
         return {
           ...base, status: 'refused', code: 'private-term-in-commit',
           reason: `private-term-in-commit: ${commitHits[0].sha} (term #${list.terms.indexOf(commitHits[0].term) + 1})`,
+          failures: (await collectPreflight()).failures,
         };
       }
       base.privateNames = { checked: true, hits: 0 };
@@ -1222,6 +1694,7 @@ export async function ship(options) {
     return {
       ...base, status: 'refused', code: 'author-email-mismatch',
       reason: `author-email-mismatch: ${emailMismatches.map(mismatch => `${mismatch.sha} (${mismatch.email})`).join(', ')}`,
+      failures: (await collectPreflight()).failures,
     };
   }
 
@@ -1286,18 +1759,21 @@ export async function ship(options) {
     return {
       ...base, status: 'refused', code: 'scratch-file-in-diff',
       reason: `scratch-file-in-diff: ${scratchFiles.join(', ')}; scratch files (PR bodies, payloads, manifests, *.out) never enter a commit; remove it, or pass --exempt scratch:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
   if (undocumentedBinaries.length) {
     return {
-      ...base, status: 'refused',
+      ...base, status: 'refused', code: 'undocumented-binary',
       reason: `test file spawns undocumented binary with no fake/skip seam: ${undocumentedBinaries.map(w => `${w.file} -> ${w.bin}`).join(', ')}; fix the cause, or pass --exempt <guard>:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
   if (gitIgnoredFixtures.length) {
     return {
       ...base, status: 'refused', code: 'test-reads-git-ignored-path',
       reason: `test-reads-git-ignored-path: ${gitIgnoredFixtures.map(w => `${w.file} -> ${w.path}`).join(', ')}; move the fixture into a tracked path, or pass --exempt git-ignored-fixture:<file>=<reason>`,
+      failures: (await collectPreflight()).failures,
     };
   }
 
@@ -1307,8 +1783,43 @@ export async function ship(options) {
   if (packagingRefusals.length) return { ...base, status: 'refused', reason: `${packagingRefusals.join('; ')}; add a check that builds the package (uv build --wheel, npm pack --dry-run)` };
 
   const checksStart = now();
-  const checks = await runChecks({ env: checkEnv });
+  let checks = normalizeChecks(await runChecks({ env: checkEnv, retainFailures: true }));
+  let localRerunAttempts = 0;
+  let localRerunFiles = [];
+  const localRerunLimit = Number.isFinite(rerunFlaky) ? Math.max(0, rerunFlaky) : 0;
+  while (checks.some(check => check.status === 'failed') && localRerunAttempts < localRerunLimit) {
+    const failedTestFiles = localFailedFiles(checks);
+    if (!failedTestFiles.length) break;
+    localRerunFiles = failedTestFiles;
+    localRerunAttempts++;
+    checks = normalizeChecks(await runChecks({
+      env: checkEnv,
+      retainFailures: true,
+      onlyFiles: failedTestFiles,
+      failedTestFiles,
+      checkArgvs: targetedLocalArgvs(checkArgvs, failedTestFiles),
+    }));
+  }
+  if (localRerunAttempts) {
+    base.flakyRerun = {
+      attempts: localRerunAttempts,
+      result: checks.some(check => check.status === 'failed') ? 'failed' : 'passed',
+      tests: localRerunFiles,
+    };
+  }
   base.checks = checks;
+  base.warnings.push(...swarmCheckWarnings(checks));
+  for (let index = 0; index < checks.length; index++) {
+    const check = checks[index];
+    if (['cancelled', 'timeout', 'cleanup-failed'].includes(check.status)) continue;
+    const environment = classifyCheckEnvironment({ exitCode: check.exitCode, head: check.head ?? check.output ?? check.tail });
+    if (environment) checks[index] = { ...check, ...environment, status: 'check-env-missing' };
+  }
+  const missingEnvironment = checks.find(check => check.status === 'check-env-missing');
+  if (missingEnvironment) {
+    base.timing.checksSeconds = round1(now() - checksStart);
+    return { ...base, status: 'checks-failed', ...classifyCheckEnvironment({ exitCode: 127 }), reason: 'check-env-missing' };
+  }
 
   // Field lesson #177(c): before blocking on any failing check, verify it against the base
   // commit's own tree; one that fails there too is reported `pre-existing` (still listed, no
@@ -1353,6 +1864,8 @@ export async function ship(options) {
   if (usedExemptions.length) body = appendExemptionsSection(body, usedExemptions);
   if (checks.some(result => result.status === 'failed')) return { ...base, status: 'checks-failed', reason: 'checks failed' };
 
+  const stubSection = requireSections.find(section => STUB_SECTION_RE.test(sectionContent(body, section) ?? ''));
+  if (stubSection !== undefined) return { ...base, status: 'refused', code: 'stub-section', section: stubSection, reason: `stub-section: ${stubSection}`, failures: (await collectPreflight()).failures };
   const missing = missingSections(body, requireSections);
   if (missing.length > 0) {
     const reasons = missing.map(section => {
@@ -1410,6 +1923,13 @@ export async function ship(options) {
     }
   }
 
+  // Every command of the project's pull-request CI workflows runs here first, in CI order: a step nobody ran locally must not be the first run of it.
+  if (options.ciLocal !== false) {
+    const ci = await runCiLocal({ root, exec, env: checkEnv });
+    base.ciLocal = { ran: ci.ran, skipped: ci.skipped };
+    if (!ci.ok) return { ...base, status: 'refused', reason: `ci-local-failed: ${ci.failed} (${ci.command}) failed locally, so no PR was opened: ${ci.tail}` };
+  }
+
   let pushRes = await exec('git', ['push', 'origin', `HEAD:refs/heads/${payload.head}`], { cwd: root });
   if (pushRes.code !== 0) {
     // Field lesson 150: only a non-fast-forward-shaped rejection is a candidate for a lease push;
@@ -1463,6 +1983,7 @@ export async function ship(options) {
   // by reference with every already-built `{...base}` result, so updating it here still lands on a
   // terminal result this same call already returned.
   let ciWaitMs = 0;
+  let pendingOptional = [];
   async function waitForCi() {
     const roundStart = now();
     base.timing.attempts += 1;
@@ -1485,9 +2006,17 @@ export async function ship(options) {
         }
       }
       if (view) {
-        const summary = summarizeRollup(view.statusCheckRollup);
+        const fullRollup = Array.isArray(view.statusCheckRollup) ? view.statusCheckRollup : [];
+        let selectedRollup = base.requiredContexts ? fullRollup.filter(item => base.requiredContexts.includes(item.name ?? item.context)) : fullRollup;
+        const summary = summarizeRollup(selectedRollup);
+        if (base.requiredContexts) {
+          const missingNames = base.requiredContexts.filter(name => !selectedRollup.some(item => (item.name ?? item.context) === name));
+          summary.total += missingNames.length;
+          summary.pending += missingNames.length;
+        }
         const headMatches = view.headRefOid === sha;
-        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: view.statusCheckRollup };
+        if (headMatches && base.requiredContexts) pendingOptional = [...new Set(fullRollup.filter(item => !base.requiredContexts.includes(item.name ?? item.context) && summarizeRollup([item]).pending > 0).map(item => item.name ?? item.context ?? 'unknown'))];
+        if (headMatches && summary.total > 0 && summary.pending === 0) return { ci: summary, ciRollup: selectedRollup };
         const elapsed = now() - start;
         if (headMatches && summary.total === 0 && elapsed >= noCiGraceMs) return { terminal: { ...base, status: 'no-ci', reason: 'no CI detected', ci: summary } };
         if (elapsed >= timeoutMs) return { terminal: { ...base, status: 'timeout', reason: 'timed out waiting for checks', ci: summary } };
@@ -1516,17 +2045,83 @@ export async function ship(options) {
   // never touches (a flaky failure anywhere else in the repo) — which needs the failing-test log
   // fetch to happen FIRST, once per loop iteration, so both defaults can read from that one fetch
   // instead of the log fetch only ever running after the platform-only default was already decided.
-  let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false;
+  let rerunAttempts = 0, rerunTests = null, defaultRerunWarned = false, verifiedFlakyResult = null;
+  let ciTimeoutRetryUsed = false;
   while (ci.failed.length > 0) {
     // Field lesson 151: named up front so the next job starts from "this OS only", not a guess.
     const platformOnly = platformOnlyFailures(ciRollup);
     for (const entry of platformOnly) base.warnings.push(`platform-only failure: ${entry.os}: ${entry.testIds.join(', ')}`);
     const runIds = failedRunIds(ciRollup, ci.failed);
-    const logs = [];
+
+    // A runner can report a completely green test summary and then time out while the step is
+    // shutting down. Treat that as infrastructure timeout, retry the failed job once, and leave
+    // ordinary assertion failures on the real-red path below.
+    const failedLogs = [];
     for (const id of runIds) {
       const logRes = await exec('gh', ['run', 'view', id, '--repo', repo, '--log-failed'], { cwd: root });
-      if (logRes.code === 0) logs.push(logRes.stdout);
+      if (logRes.code === 0) failedLogs.push({ id, text: logRes.stdout ?? '' });
     }
+    const timeoutLogs = failedLogs.filter(log => classifyCiFailureLog(log.text) === 'timeout');
+    if (timeoutLogs.length) {
+      const timeoutNames = timeoutLogs.map(log => ciRollup.find(item => runIdFromDetailsUrl(item.detailsUrl ?? item.target_url) === log.id)?.name ?? log.id);
+      if (ciTimeoutRetryUsed) {
+        return { ...base, status: 'timeout', reason: `CI step timed out: ${timeoutNames.join(', ')}` };
+      }
+      ciTimeoutRetryUsed = true;
+      base.warnings.push(`ci-timeout: ${timeoutNames.join(', ')}; retrying failed job once`);
+      for (const id of [...new Set(timeoutLogs.map(log => log.id))]) await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root });
+      await sleep(pollMs);
+      const settled = await waitForCi();
+      if (settled.terminal) return settled.terminal;
+      ({ ci, ciRollup } = settled);
+      base.ci = ci;
+      if (ci.failed.length === 0) {
+        base.ciTimeoutRetry = { attempts: 1, result: 'passed', checks: timeoutNames };
+        break;
+      }
+      continue;
+    }
+
+    if (rerunFlakyCi === 1) {
+      const verifiedFlake = await verifiedFlakyEvidence({ root, repo, payload, sha, ci, ciRollup, checkArgvs, exec, checkEnv });
+      if (rerunFlakyCi === 1 && verifiedFlake.eligible) {
+        const verified = verifiedFlake;
+        rerunTests = verified.files;
+        base.warnings.push('rerun-flaky-ci: verified three local passes and a base pass; rerunning failed jobs once');
+        for (const id of verified.runIds) {
+        let rerun;
+        try { rerun = await exec('gh', ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: root }); } catch { rerun = null; }
+        if (!rerun || rerun.code !== 0) return { ...base, status: 'ci-failed', reason: `rerun-flaky-ci-failed: could not request rerun for ${id}` };
+        }
+        rerunAttempts = 1;
+        base.timing.rerunCount = 1;
+        await sleep(pollMs);
+        let settled = await waitForCi();
+        if (settled.terminal) return settled.terminal;
+        let fresh = settled;
+        if (fresh.ci.failed.length === 0 && !freshCiAttemptObserved(ciRollup, fresh.ciRollup, ci.failed)) {
+          await sleep(pollMs);
+          settled = await waitForCi();
+          if (settled.terminal) return settled.terminal;
+          fresh = settled;
+        }
+        ({ ci, ciRollup } = fresh);
+        base.ci = ci;
+        if (ci.failed.length > 0) return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+        if (!freshCiAttemptObserved((verified.beforeRollup ?? ciRollup), ciRollup, verified.failedNames)) {
+          base.warnings.push('rerun-flaky-ci-ineligible: fresh CI attempt was not observed');
+          return { ...base, status: 'ci-failed', reason: 'failed checks were not confirmed by a fresh CI attempt' };
+        }
+        const repeatOffenders = await recordFlakeHits(root, verified.files, () => new Date(now()).toISOString());
+        base.warnings.push(...repeatOffenders.map(o => `flake-repeat-offender: ${o.file} (${o.hits} hits); dispatch a fix job`));
+        verifiedFlakyResult = { headSha: verified.headSha, baseSha: verified.baseSha, runIds: verified.runIds };
+        break;
+      }
+      base.warnings.push(`rerun-flaky-ci-ineligible: ${verifiedFlake.reason}`);
+      return { ...base, status: 'ci-failed', reason: `failed checks: ${ci.failed.join(', ')}` };
+    }
+
+    const logs = failedLogs.map(log => log.text);
     rerunTests = [...new Set(logs.flatMap(extractFailingTestFiles))];
     const inDiff = rerunTests.some(test => integratedFiles.some(file => file === test || file.endsWith(`/${test}`) || test.endsWith(`/${file}`)));
     let effectiveRerunFlaky = rerunFlaky;
@@ -1559,7 +2154,11 @@ export async function ship(options) {
     ({ ci, ciRollup } = settled);
     base.ci = ci;
   }
-  if (rerunAttempts > 0) base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
+  if (verifiedFlakyResult) {
+    base.flakyRerun = { attempts: 1, result: 'passed', tests: rerunTests ?? [], evidence: verifiedFlakyResult };
+  } else if (rerunAttempts > 0) {
+    base.flakyRerun = { attempts: rerunAttempts, result: 'passed', tests: rerunTests ?? [] };
+  }
 
   // Field lesson #273: now that CI is fully green, read every check run's own FULL log (never
   // --log-failed — a passing run's own pytest --durations line only ever shows up there) and warn
@@ -1592,6 +2191,24 @@ export async function ship(options) {
   }
   if (merge === false) return { ...base, status: 'ready' };
 
+  // Never merge with a failing or pending check, required or not. --wait-required-only changes what ship waits for, not this rule; there is
+  // no flag to skip it. The PR is read again right before the merge (fresh checks, same head commit); checks that are only pending, typically
+  // optional ones after --wait-required-only, are waited for until timeoutMs has passed, failing checks refuse at once.
+  {
+    const guardStart = now();
+    for (;;) {
+      const viewRes = await exec('gh', ['pr', 'view', String(pr.number), '--repo', repo, '--json', 'state,headRefOid,mergeStateStatus,statusCheckRollup'], { cwd: root });
+      let fresh = null;
+      try { fresh = JSON.parse(viewRes.stdout); } catch { fresh = null; }
+      if (viewRes.code !== 0 || !fresh || typeof fresh !== 'object') return { ...base, status: 'ci-failed', reason: 'checks not green: the checks could not be read before merging' };
+      if (fresh.headRefOid !== sha) return { ...base, status: 'ci-failed', reason: 'checks not green: the PR head moved after the checks were read' };
+      const guard = checkRollup(fresh.statusCheckRollup);
+      if (guard.ok) break;
+      const reason = `checks not green: ${[...guard.failing.map(name => `${name} (failing)`), ...guard.pending.map(name => `${name} (pending)`)].join(', ') || 'no checks reported'}`;
+      if (guard.failing.length === 0 && guard.pending.length > 0 && now() - guardStart < timeoutMs) { await sleep(pollMs); continue; }
+      return { ...base, status: guard.failing.length === 0 && guard.pending.length > 0 ? 'ci-pending' : 'ci-failed', reason };
+    }
+  }
   const version = await releaseVersion(exec, root, payload.base);
   if (version) base.tag.name = `v${version}`;
   const mergeRes = await exec('gh', ['pr', 'merge', String(pr.number), '--repo', repo, `--${mergeMethod}`, '--match-head-commit', sha], { cwd: root });
@@ -1607,6 +2224,7 @@ export async function ship(options) {
   }
   if (!merged) return { ...base, status: 'merge-failed', reason: stepFailed('post-merge view', mergedRes, originRepo) };
   if (merged.state === 'MERGED') {
+    if (base.requiredContexts) base.pendingAtMerge = pendingOptional;
     if (version && tagTimeoutMs > 0) {
       const start = now();
       let waitedMs = 0;

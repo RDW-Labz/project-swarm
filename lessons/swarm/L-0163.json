@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0163",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A narrowed check environment warned about programs it never used at all. A check that ran with a deliberately narrowed set of paths warned about every common program missing from that narrowed set, even ones the check itself never invoked, so a real gap (the one program the check actually needed) was buried in noise about programs that were never relevant to it.",
+  "rule": "A missing-program warning belongs only to the program a check's own command line actually runs, not to every program a fixed list happens to name.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the warning now resolves the actual invoked program (skipping past a leading environment-variable prefix, and treating one particular tool as implying a second one underneath it) before checking whether that program, specifically, is missing. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#163"
+  }
+}

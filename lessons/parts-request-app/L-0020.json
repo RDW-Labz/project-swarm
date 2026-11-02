@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0020",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Workers embedded fixture self-tests inside migration files (0003,0004,0005,0007,0008); they used old columns, failed on first apply, and make migrations non-DDL",
+  "rule": "Migrations must contain DDL only; tests live in supabase/tests.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": "anthropic/claude-haiku-5-5",
+  "fix": "add rule to build prompts for migration tickets; reject DO $tests$ blocks in migration outputs",
+  "guard": {
+    "kind": "prompt-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "migration",
+    "tests-in-migrations"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 20"
+  }
+}

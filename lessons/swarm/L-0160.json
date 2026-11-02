@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0160",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A private term left a branch's history even though the final diff never showed it. A term that must never reach a public remote was added in one commit and removed again in a later commit of the same branch; the existing guard compared only the cumulative diff against the branch's base, which no longer contained the term at all, so the scan missed it and the term still travelled inside that first commit's own history once pushed.",
+  "rule": "A guard over what a branch will publish must judge every commit it will actually publish, not only the net change between endpoints.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: publishing now scans each commit's own added lines and message for a configured private term, refusing before any push and naming only the offending commit and the term's position in the list, never the term itself. Regression coverage is in `tests/field-lessons-batch-u.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#160"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0010",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "go --scope marks the wave running before the run is validated; a refusal at run stage left 10 tickets stuck in running and the next go said only human tickets are ready",
+  "rule": "A failed run-stage start must roll tickets back to ready.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "mark tickets running only after validate passes, or roll back on run-stage failure",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "go-scope",
+    "rollback",
+    "ticket-state"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 10"
+  }
+}

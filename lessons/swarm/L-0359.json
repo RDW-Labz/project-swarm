@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0359",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "Decision values need source evidence. Pin fixed constants with literal expected values in tests and quote the source values in review summaries. Warn when a held summary names a value absent from the added change.",
+  "rule": "Decision values need source evidence.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#359"
+  }
+}

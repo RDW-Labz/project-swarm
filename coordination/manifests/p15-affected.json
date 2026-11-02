@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-affected",
+      "type": "build",
+      "prompt": "Write the affected tests module, the affected.mjs part of section 9 of the design. Keep it under 12000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 9 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tools/affected.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-affected-test",
+      "type": "build",
+      "prompt": "Write the test file for the affected tests module, section 9 of the design (module written at the same time; use exactly the names there). Build small fake repo maps in the test. Cover every full-mode reason, the affected mode with direct tests, importer chains at depth 1 to 3, a cycle, testLinks, changed test files, a new test file, maxShare, and expandAffectedArgv in both modes and with an empty selection.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 9 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tests/affected.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-adaptive",
+      "type": "build",
+      "prompt": "Write the adaptive batch controller module, the adaptive-batch.mjs part of section 9 of the design. Keep it under 6000 characters.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 9 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tools/adaptive-batch.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-adaptive-test",
+      "type": "build",
+      "prompt": "Write the test file for the adaptive batch controller, section 9 of the design (module written at the same time; use exactly the names there). Cover the ladder up and down, streak reset, min and max limits, a custom start such as 4, validation errors, history and state.\nReturn each output file complete in files, never edits. ES modules, no dependencies, node:test and node:assert/strict for tests, no secrets in code or tests. Follow section 9 of the design exactly: export names, return shapes and rules are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tests/adaptive-batch.test.mjs"
+      ]
+    }
+  ]
+}

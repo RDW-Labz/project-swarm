@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0057",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A blocked job's useful outputs were lost because they could not be integrated. A job returned `blocked` but its declared outputs were still usable; they were abandoned entirely because the integration path had no way to accept them.",
+  "rule": "A blocked job's declared outputs are still integrated, with the same conflict and snapshot checks, instead of being discarded.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate --accept-blocked` integrates a blocked job's outputs and records `integrationStatus: 'integrated-blocked'`, carrying the blocked reason into the next job's evidence so a follow-up can understand what happened. Regression coverage is in `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing",
+    "path-safety"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#57"
+  }
+}

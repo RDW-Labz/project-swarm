@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-errors",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "production error text from outside becomes stored data and tickets",
+      "type": "review",
+      "prompt": "Review coordination/review/errors.diff (Phase 19 part 1: tools/errors.mjs, tools/errors-commands.mjs, the PROPOSAL_ORIGINS change in tickets.mjs/ticket-manifest.mjs/scope-integrity.mjs, profile `errors` block). Rules: (1) SCRUBBING is the privacy promise: find any way personal or secret data survives scrubText/normalizeRoute/parseFrames into errors.json, a ticket, the inbox decision, the digest or `swarm errors show`: emails in odd forms, phone formats, names in messages, tokens in cookies/headers/JSON bodies, base64, credit-card numbers, long ids not hex, IPv6 shorthand, query strings inside the message not only the route, file paths with usernames on Windows, regex backtracking (ReDoS) on 20 KB hostile text, unicode tricks that dodge the regexes; (2) untrusted text must never become instructions: titles/acceptance fixed, notes quoted; the proposal must be impossible to run before approval across every path (readyTickets, transition, ticketsToManifest, releaseReady, unlockReady, sync, autopilot, the PROPOSAL_ORIGINS generalisation: did it break existing comment-ticket behaviour or ci tickets?); (3) fingerprint/dedupe: collisions that hide a real new error, unbounded growth (MAX_GROUPS, seen keys, recent), two processes writing errors.json (serial only in-process), event key dedupe when requestId is missing, clock skew / future timestamps (a hostile event with at far in the future would set lastSeen and block reopen logic or fixedAt), at in the past; (4) severity: glob-to-regex safety (ReDoS, route normalised ':id' vs patterns), spike counting, notification flood control, the decision ids and journal text; (5) pull: command execution (argv from the profile, env scrubbed by filterEnv: does vercel still find its login? HOME is kept), timeouts, output size (stdout capped to the last 64KB by defaultRun: events at the start of a 1000-line pull may be lost!), default query, cwd; (6) the reopen logic correctness (fixedAt, ticketStatus, status transitions fixed/ignored/open). Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/errors.mjs", "tools/errors-commands.mjs", "tools/tickets.mjs", "tests/errors.test.mjs", "coordination/review/errors.diff"],
+      "outputs": [],
+      "timeoutMs": 1500000
+    }
+  ]
+}

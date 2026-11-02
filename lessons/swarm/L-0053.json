@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0053",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A side file, and a new registry entry, both escaped their guard tests. A second file of the same kind as an existing, guarded one (in the same directory) was missed by a whole-file/glob guard that only matched literal names, and a new entry added to a directory a test enumerated by listing/globbing broke that test without ever being in the job's own context or outputs.",
+  "rule": "A directory- or glob-level guard covers every same-kind file in it, and a job that adds to a registry a test enumerates owns that test too.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a whole-file/glob guard test now counts as covering a new same-kind output in the same directory, and `validate` warns `registry-pinning-tests` when a job's new file lands in a directory an existing test enumerates outside that job's own context, outputs, or `ignoreTests`. Regression coverage is in `tests/lessons120-context.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#53"
+  }
+}

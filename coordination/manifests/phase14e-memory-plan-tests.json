@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "tests-memory-plan",
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "context": [
+        "tests/gpu-bestof.test.mjs",
+        "tools/gpu.mjs",
+        "tools/gpu-bakeoff.mjs",
+        "docs/plans/swarm-gpu-memory-plan.md"
+      ],
+      "outputs": [
+        "tests/gpu-memory-plan.test.mjs"
+      ],
+      "prompt": "Write tests/gpu-memory-plan.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"). Read tools/gpu.mjs, tools/gpu-bakeoff.mjs and tests/gpu-bestof.test.mjs (fake deps style). Tests: (1) PINNED_IMAGE ends with @sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3. (2) remoteStartScript and containerStartScript (call them like tests/gpu-container.test.mjs does: model, gpus 1, maxModelLen 131072, perReplica 192, args, seconds 60, remotePortBase 8000, apiKey 'a'.repeat(48); docker mode also needs image PINNED_IMAGE) both contain '--gpu-memory-utilization 0.93', '--kv-cache-dtype fp8', '--enable-prefix-caching', '--mamba-cache-mode align', '--prefix-match-unit 64' and '--max-num-batched-tokens 16384', and neither contains '--gpu-memory-utilization 0.9 ' (old value). (3) env: containerStartScript with env { VLLM_HAS_FLASHINFER_CUBIN: '1' } puts 'VLLM_HAS_FLASHINFER_CUBIN=1' right after 'CUDA_VISIBLE_DEVICES=0 ' on the launch line; remoteStartScript puts '-e VLLM_HAS_FLASHINFER_CUBIN=1' on the docker run line; invalid env (lower-case name, value with a space or semicolon, nine entries) throws /gpu-env-invalid/ from both. (4) GPU_DEFAULTS.maxModelLen is 131072. (5) agentsPerGpu: levels with msPerToken 20, 30, 34, 36, 50 at 32,64,96,128,192 and zero errors give 96; a level with errorRate 0.1 and msPerToken 10 is ignored; none under 35 gives 0; when only tokPerSecPerAgent is given (30 means 33.3 ms) it still works. (6) measureThroughput (fake fetch returning usage completion_tokens, fake now) includes msPerToken equal to 1000 divided by tokPerSecPerAgent rounded to 1 decimal. (7) runUnderLoad starts the requested number of loops (count in-flight fake fetches with a counter that records the maximum concurrency reached while fn runs; make fn wait about 30 ms with a real setTimeout), returns fn's result, and after it returns no further requests are made (wait 30 ms and check the counter did not grow); with agents 0 it just returns fn's result; if fn throws the loops still stop and the error propagates. (8) runBakeoff with fake deps and a fake clock: sweep levels [32, 64, 96] where throughput returns msPerToken 20, 30, 40 (also tokPerSecPerAgent consistent): chosenAgents is 64, the result's agentsPerGpu is 64, benchmark runs for bestOf 1 and 3 inside deps.withLoad which is called with agents 64 each time (record the contexts), cacheStats is called once per level and each level has cacheHitRate; ranking: two candidates where the second has the lower cost per passing task ranks first; a candidate with optional: true is skipped with an error containing 'skipped' when (capUsd - spent) / hourlyUsd is below 1 hour (spend most of the cap with the first candidate by advancing the fake clock), and runs when plenty of cap remains. Keep each test short; use only exports that exist."
+    }
+  ]
+}

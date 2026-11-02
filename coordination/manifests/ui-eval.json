@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 0.5
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "ui-eval-styles",
+      "type": "build",
+      "prompt": "Author one golden eval task in the format of section 5 of the design (eval spec, starting repo, hidden test, known-good solution). The eval id is styles-wired-in-layout. Real lesson: a worker built UI pieces but never wired the styles into the app entry, so fonts and Tailwind were inactive on screen. The task: write src/app/styles-wired-in-layout.tsx, a Next.js root layout component (default export RootLayout taking children) that wires the global stylesheet and the design fonts. The starting repo has: src/app/globals.css (starts with an import of tailwindcss and defines CSS variables --font-display and --font-body for a font stack that uses var(--font-bricolage) and var(--font-figtree)), docs/design/tokens.json (names two fonts: Bricolage Grotesque for headings and Figtree for body), and package.json is NOT in the starting repo. The prompt tells the worker: write the root layout so the global stylesheet is imported, the two design fonts are loaded with next/font/google using the CSS variable option names --font-bricolage and --font-figtree, and the html element carries both font variable class names plus lang en. Do not reveal the lesson. The hidden test reads the output file as text and checks: an import of the global stylesheet (a line importing ./globals.css with either quote style, or the alias form), an import from next/font/google naming Bricolage_Grotesque and Figtree, the variable option values --font-bricolage and --font-figtree, both fonts' variable class names used on the html element (the text contains .variable twice), lang=\"en\", and an export default function. The spec has: version 1, id, title, tags (2 to 4), prompt, context (docs/design/tokens.json and src/app/globals.css), outputs (src/app/styles-wired-in-layout.tsx), check {argv: [node, --test, test/styles-wired-in-layout.test.mjs], timeoutSec: 30}. The hidden test is test/styles-wired-in-layout.test.mjs (node:test, node:assert/strict, node:fs; deterministic; fails when the file is missing, passes with the solution). The solution folder holds the correct layout file. Return each file complete in files, never edits.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/styles-wired-in-layout/eval.json",
+        "evals/styles-wired-in-layout/hidden/test/styles-wired-in-layout.test.mjs",
+        "evals/styles-wired-in-layout/solution/src/app/styles-wired-in-layout.tsx",
+        "evals/styles-wired-in-layout/repo/src/app/globals.css",
+        "evals/styles-wired-in-layout/repo/docs/design/tokens.json"
+      ]
+    }
+  ]
+}

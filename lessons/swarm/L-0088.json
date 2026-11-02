@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0088",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A failing check that was new to the change was excused as pre-existing, and merged. A guard meant to tell a flake apart from a real regression compared only exit codes, not which test actually failed, so two tests that existed only in the change being shipped were waved through as if they already failed before it; the same failure also happened only because a resolved tool directory was missing from the check's own environment.",
+  "rule": "A failing test is pre-existing only when that same test, by id, already failed on the unchanged base; a test absent from the base is never pre-existing, and a check's own resolved toolchain must reach every process it spawns.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: every failing check now records a per-test status of fail, pass, absent or unknown against a base run, and only a genuine base failure is treated as pre-existing; every spawned check inherits the same resolved toolchain location. Regression coverage is in `tests/ship-125.test.mjs` and `tests/wire-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "flaky-test",
+    "merge",
+    "merge-queue"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#88"
+  }
+}

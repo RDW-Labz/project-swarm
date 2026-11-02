@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0030",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "build",
+  "what": "Tickets blocked because a dependency failed stayed blocked after the dependency was fixed and done; the owner unblocked them one by one",
+  "rule": "A ticket blocked only by dependencies must become ready by itself as soon as all of them are done (in go --scope and in autopilot).",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "mark why a ticket is blocked (deps, failure, manual) and unlock deps-blocked tickets when their dependencies are done",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "autopilot",
+    "blocked",
+    "dependencies",
+    "unlock"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app S4 report, lesson 30"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 2.0
+  },
+  "jobs": [
+    {
+      "id": "review-hb1",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the hand-build guard decision logic",
+      "type": "review",
+      "prompt": "Review coordination/review/hb1.diff: the hand-build guard's shell analyzer (shell-writes.mjs), decision and state module (handbuild.mjs), hook (handbuild-guard.mjs) and commands (handbuild-commands.mjs). Promises: an orchestrator session cannot edit or shell-write the project checkout outside .swarm/ and docs/plans/ without an unexpired owner approval that names the file; it cannot approve its own request, edit the approval state or the guard's settings or scripts, or switch the guard off; what the analyzer cannot read fails closed; a bug in the guard fails open; normal test and build commands are not blocked. Look for: gaps in what the analyzer reads, false blocks of normal commands, approval matching and expiry errors, request validation gaps, races or unsafe writes in the state, log and journal. Report each real defect as one short finding: file, line, what is wrong, and the fix. Keep every finding brief and factual; do not write sample commands that bypass the guard, describe the class of gap instead. Finish with one JSON line verdict.",
+      "context": [
+        "coordination/review/hb1.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    },
+    {
+      "id": "review-hb2",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner-requested security review of the hook installer, decide path, process check and lane events",
+      "type": "review",
+      "prompt": "Review coordination/review/hb2.diff: the hook installer in install.mjs (ensureHookSpecs, ensureHandbuildGuard, removeHandbuildGuard), the decide() path for hand-build requests in inbox.mjs, live-processes.mjs and the update refusal in swarm.mjs, and the shell-write and blocked-event additions to orchestrator-events.mjs. Look for: the installer duplicating, dropping or mis-matching hooks, unsafe settings writes, the refresh-only rule, decide() letting a request be approved wrongly or twice, false or missed refusals in the process check, wrong counts or secrets stored in the lane events. Report each real defect as one short finding: file, line, what is wrong, and the fix. Keep every finding brief and factual; do not write sample commands that bypass the guard, describe the class of gap instead. Finish with one JSON line verdict.",
+      "context": [
+        "coordination/review/hb2.diff"
+      ],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

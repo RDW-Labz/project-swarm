@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Codex's outer macOS seatbelt, not its prompt or built-in sandbox, is the boundary.
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { REPORT_PROMPT_LINE } from './reports.mjs';
+import { mkdirSync, realpathSync, lstatSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { NO_STASH_LINE, MUTANTS_BY_HAND_LINE } from './swarm-env.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { execViaFile } from './cli-adapters.mjs';
+import { loadLocalConfig } from './local-config.mjs';
 
 const execGit = promisify(execFile);
 export const CODEX_MODEL = /^[A-Za-z0-9._:-]{1,80}$/;
@@ -27,7 +29,7 @@ export function effectiveDeniedHomeDirs(config = {}) {
   return [...DENIED_HOME_DIRS, ...extra];
 }
 const deniedPaths = (home, config = {}) => effectiveDeniedHomeDirs(config).map(part => path.join(home, part));
-const within = (file, parent) => file === parent || file.startsWith(`${parent}/`);
+const within = (file, parent) => { const rel = path.relative(parent, file); return rel === '' || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..'); };
 // Field lesson #255: both the raw and realpath'd form of the current process's own os.tmpdir(),
 // alongside /tmp and /private/tmp, since macOS resolves /tmp and /var through symlinks into
 // /private and a profile rule written against one spelling may not match the other at the VFS
@@ -52,10 +54,28 @@ export async function resolveReadPaths(paths = [], home = os.homedir(), config =
   // Reject aliases into denied directories as well as their literal spellings.
   return validateReadPaths(await Promise.all(validated.map(file => fs.realpath(file))), home, config);
 }
-export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, readPaths = [], config = {}, tmpRoots = defaultTmpRoots() }) {
+// extraWrites: absolute read+write grants an adapter adds on top of the codex baseline (the cursor
+// worker's ~/.cursor); validated like readPaths, so a denied home directory can never be granted.
+export function codexProfile({ home = os.homedir(), worktree, commonDir, metadataDir, scratchDir, readPaths = [], environmentReadPaths = [], cacheWritePaths = [], extraWrites = [], config = {}, tmpRoots = defaultTmpRoots() }) {
   home = sandboxPath(home);
-  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config)].map(sandboxPath);
-  const writes = [worktree, metadataDir, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), '/private/tmp', '/private/var/folders'].map(sandboxPath);
+  const extraWritePaths = validateReadPaths(extraWrites, home, config);
+  const reads = [worktree, commonDir, ...['.codex', '.nvm', '.cache', '.npm', '.local/share/uv', 'Library/Caches'].map(p => path.join(home, p)), ...validateReadPaths(readPaths, home, config), ...extraWritePaths].map(sandboxPath);
+  let scratchPaths = [];
+  if (scratchDir !== undefined) {
+    const raw = sandboxPath(scratchDir);
+    mkdirSync(raw, { recursive: true });
+    scratchPaths = [...new Set([raw, sandboxPath(realpathSync.native(raw))])];
+  }
+  const caches = validateReadPaths(cacheWritePaths, home, config);
+  if (caches.length && (caches.length !== 2 || new Set(caches.map(file => path.basename(file))).size !== 2)) throw viteCacheError(caches[0]);
+  for (const file of caches) {
+    const parent = path.dirname(file);
+    if (!VITE_CACHE_NAMES.includes(path.basename(file)) || ![path.join(worktree, 'node_modules'), ...environmentReadPaths].includes(parent) ||
+        lstatSync(file).isSymbolicLink() || !lstatSync(file).isDirectory() || realpathSync(file) !== file) throw viteCacheError(file);
+  }
+  if (caches.length && path.dirname(caches[0]) !== path.dirname(caches[1])) throw viteCacheError(caches[0]);
+  const environment = validateReadPaths([...new Set([...environmentReadPaths, ...caches.map(file => path.dirname(file))])], home, config);
+  const writes = [worktree, metadataDir, ...scratchPaths, ...caches, ...['.codex', '.cache', '.npm'].map(p => path.join(home, p)), ...extraWritePaths, '/private/tmp', '/private/var/folders'].map(sandboxPath);
   const filter = (kind, file) => `(${kind} "${sandboxPath(file)}")`;
   const ancestors = new Set([home]);
   for (const file of [...reads, metadataDir]) {
@@ -63,17 +83,41 @@ export function codexProfile({ home = os.homedir(), worktree, commonDir, metadat
     while (within(parent, home)) { ancestors.add(parent); if (parent === home) break; parent = path.dirname(parent); }
   }
   const writable = [...writes.map(file => filter('subpath', file)), '(literal "/dev/null")', '(regex #"^/dev/tty.*$")'].join(' ');
-  // Field lesson #255: read and exec are denied under every OS temp dir by default; codex has no
-  // job-scoped scratch dir of its own, so the only exception it needs is `worktree` and
-  // `commonDir` (metadataDir is always a subpath of commonDir), already granted below via `reads`
-  // wherever they happen to sit — a fixture root under the OS temp dir stays readable, but a
-  // sibling temp directory (another checkout's own scratch data) never does.
+  // Field lesson #255: read and exec are denied under every OS temp dir by default, with
+  // access to the worktree/commonDir and the one job-scoped scratch directory granted below.
+  // Sibling temp directories (another checkout's scratch data) remain denied.
   const tmpDeny = [...new Set(tmpRoots.map(sandboxPath))].map(file => filter('subpath', file)).join(' ');
+  // Lesson #299: sandbox-exec uses the last matching rule; this exact scratch grant must follow
+  // tmpDeny. Keep it in `writes` too so the later write restriction does not deny it again.
+  // macOS resolves /var into /private/var at the kernel boundary; grant both spellings.
+  const scratchAllow = scratchPaths.length ? `(allow file-read* file-write* process-exec ${scratchPaths.map(file => filter('subpath', file)).join(' ')})\n` : '';
+  // realpath needs metadata for every ancestor, including those hidden by tmpDeny.
+  const scratchAncestors = new Set();
+  for (const file of scratchPaths) {
+    for (let ancestor = file; ancestor !== path.parse(ancestor).root; ancestor = path.dirname(ancestor)) scratchAncestors.add(sandboxPath(ancestor));
+  }
+  const scratchMetadataAllow = scratchAncestors.size ? `(allow file-read-metadata ${[...scratchAncestors].map(file => filter('literal', file)).join(' ')})\n` : '';
+  const environmentAncestors = new Set();
+  for (const file of environment) {
+    for (let parent = path.dirname(file); ; parent = path.dirname(parent)) {
+      environmentAncestors.add(parent);
+      if (parent === path.parse(parent).root) break;
+    }
+  }
+  const environmentAllow = environment.map(file => `(allow file-read* ${filter('subpath', file)})\n(allow process-exec ${filter('subpath', file)})\n`).join('') +
+    (environmentAncestors.size ? `(allow file-read-metadata ${[...environmentAncestors].map(file => filter('literal', file)).join(' ')})\n` : '');
+  const environmentDeny = environment.map(file => `(deny file-write* ${filter('subpath', file)})\n`).join('');
+  const viteCacheAllow = caches.map(file => `(allow file-write* ${filter('subpath', file)})\n`).join('');
+  // A checkout under an OS temp root must not inherit that broad temporary-write grant.
+  // Keep only this job's worktree/metadata writable; the two cache exceptions follow below.
+  const checkoutDeny = caches.length ? `(deny file-write* (require-all ${filter('subpath', path.dirname(commonDir))} (require-not (require-any ${filter('subpath', worktree)} ${filter('subpath', metadataDir)}))))\n` : '';
   return `(version 1)\n(allow default)\n(deny file-read* file-write* ${filter('subpath', home)})\n` +
     `(deny file-read* process-exec ${tmpDeny})\n` +
+    scratchAllow + scratchMetadataAllow + environmentAllow +
     `(allow file-read* ${[...ancestors].map(file => filter('literal', file)).join(' ')} ${reads.map(file => filter('subpath', file)).join(' ')} ${filter('literal', path.join(home, '.gitconfig'))})\n` +
     `(allow process-exec ${reads.map(file => filter('subpath', file)).join(' ')})\n` +
     `(allow file-write* ${writable})\n(deny file-write* (require-not (require-any ${writable})))\n` +
+    checkoutDeny + environmentDeny + viteCacheAllow +
     `(deny file-read* file-write* ${deniedPaths(home, config).map(file => filter('subpath', file)).join(' ')})\n` +
     '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc"))\n';
 }
@@ -81,14 +125,42 @@ export function codexArgs(job, { profile, worktree, lastMessage, message }) {
   if (typeof job.model !== 'string' || !CODEX_MODEL.test(job.model)) throw Error('codex requires a valid explicit model');
   return ['-f', sandboxPath(profile), 'codex', 'exec', '-m', job.model, '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '--ephemeral', '-C', sandboxPath(worktree), '-o', sandboxPath(lastMessage), message];
 }
-export function codexMessage(job, { contract = null, gotchas = '', skills = '' } = {}) {
-  const base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. Do not delete files. Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
+// Field lesson #288: codexMessage's own "Read only the files in your context; other reads may be
+// denied" line reads as an absolute rule to a model that just saw its own repo's AGENTS.md demand
+// a doc not shown inline — it refuses instead of testing whether the read actually succeeds. This
+// waiver names the exact narrow case that is genuinely out of reach, so the rest of that sentence
+// stays true for everything else.
+export const CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE = "Any doc your own AGENTS.md names that is not shown inline above, not in your context list, and not under .swarm/skills lives outside this worktree; you do not need to fetch it or ask for it — proceed using only what is provided here.\n";
+export const CODEX_OWNERSHIP_LINE = 'CHANGELOG and version files are owned by another job; do not edit or block on them.\n';
+export function codexNeedsOwnershipInstruction(job, versionFiles = []) {
+  const outputs = new Set((job.outputs ?? []).map(file => String(file).replace(/\\/g, '/')));
+  const activeVersionFiles = [...new Set(versionFiles.map(file => String(file).replace(/\\/g, '/')))].filter(Boolean);
+  return activeVersionFiles.length > 0 && (!outputs.has('CHANGELOG.md') || activeVersionFiles.some(file => !outputs.has(file)));
+}
+export const DESIGN_ONLY_LINE = 'Docs-only job: edit your declared outputs; do not run tests or installs. A test failure in your sandbox is never a reason to block.\n';
+// A worktree writer (codex or cursor) whose outputs are all docs.
+export const isDesignOnlyCodexJob = job => ['codex', 'cursor'].includes(job.agent) && job.outputs.length > 0 && job.outputs.every(file => /\.md$/i.test(file) || (file.split('/')[0] === 'docs' && /\.json$/i.test(file)));
+export function codexMessage(job, { contract = null, gotchas = '', skills = '', agentsWorkspace = null, checks = [], versionFiles = [] } = {}) {
+  let base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. You may edit only these declared outputs: ${JSON.stringify(job.outputs)}. ${job.deletes?.length ? `You may delete exactly: ${JSON.stringify(job.deletes)}.` : 'Do not delete files.'} Run relevant project tests. Root uncommitted changes are not included.\nRead only the files in your context; other reads may be denied.\nIf a MUST or "do not" rule cannot be met inside your outputs, stop and return status "blocked" with the file you need; never work around a rule. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed declared paths and concise notes.\n\n`;
+  if (job.scope === 'open') base = `You are a fresh worker in a detached git worktree. Read these context files first: ${JSON.stringify(job.context)}. Your open scope directories are ${JSON.stringify(job.outputDirs)}. The frozen allowed files (tracked directory files plus explicit outputs) are ${JSON.stringify(job.outputs)}. You may read context and allowed files and edit only allowed files. New undeclared files are dropped writes. This is a proposal boundary, not per-file OS confinement. ${job.deletes?.length ? `You may delete exactly: ${JSON.stringify(job.deletes)}.` : 'Do not delete files.'} Run relevant project tests. Root uncommitted changes are not included. Deliver what you can and list what remains. Finish with exactly one JSON line {"files_changed":[...],"notes":[...]} listing changed allowed paths and unfinished work.\n\n`;
+  if (job.report === 'short') base = base.replace(/Finish with exactly one JSON line [^\n]+/, 'Return the short report requested in the task.');
   const contractSection = contract ? `Shared contract (${contract.path}). Read it first; it wins over any other file:\n${contract.text}\n\n` : '';
+  // Field lesson #288: a codex worktree already contains every tracked file at HEAD and already has
+  // .swarm/skills copied in, so a doc this repo's own AGENTS.md names is usually already readable;
+  // inlined directly (never relies on the worker thinking to go read it) when the run found one.
+  const agentsWorkspaceSection = agentsWorkspace ? `Required reading named by this repo's own AGENTS.md (${agentsWorkspace.path}); it is already in your worktree and readable, read it now:\n${agentsWorkspace.text}\n\n` : '';
+  const checkList = checks.length ? checks.map(check => `${check.name}: ${JSON.stringify(check.argv)}${check.integrateOnly || check.status === 'path-denied' || check.status === 'not run' || /skipped-integrate-only|integrate-only: path outside this worktree|path-denied/.test(check.name) || check.argv.some(arg => /^\{(?:integrated|new)(?::[^}]+)?\}$/.test(arg)) ? ' (not run: orchestrator-only or path-denied)' : ''}`).join('; ') : 'none declared; run relevant tests';
+  let checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return; report checksRun.\nReport checksRun as [{"name":"NAME","status":"passed|failed|not run"}]. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks.\n`;
+  if (job.report === 'short') checksLine = `Manifest checks: ${checkList}. Run these; fix red before you return. Checks marked not run must stay not run; do not evade path restrictions or run orchestrator-only checks. Summarize check results in your report.\n`;
+  const designOnly = isDesignOnlyCodexJob(job);
+  if (designOnly) { base = base.replace('Run relevant project tests.', 'Edit your declared outputs; do not run tests.'); checksLine = job.report === 'short' ? 'Manifest checks are not run for this docs-only job.\n' : 'Manifest checks are not run for this docs-only job; report checksRun with status "not run".\n'; }
   const testEnvironment = job.testEnv ? `Test environment (already set): ${Object.entries(job.testEnv).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : '';
   // Field lesson #163: codex has a shell too, and the stash stack is shared by every worktree.
   // Field lesson #170: never hand-revert a mutant with checkout/restore; run `swarm mutants`.
   // Field lesson #167: known platform gotchas for this project, when a .swarm/gotchas.md exists.
-  return `${base}${contractSection}${testEnvironment}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${job.prompt}\n`;
+  const taskPrompt = job.report === 'short' && !job.prompt.includes(REPORT_PROMPT_LINE) ? `${job.prompt}\n\n${REPORT_PROMPT_LINE}` : job.prompt;
+  const ownership = codexNeedsOwnershipInstruction(job, [...versionFiles, ...(job.versionFiles ?? [])]) ? CODEX_OWNERSHIP_LINE : '';
+  return `${designOnly ? DESIGN_ONLY_LINE : ''}${base}${ownership}${CODEX_OUT_OF_REPO_DOCS_WAIVER_LINE}${contractSection}${agentsWorkspaceSection}${testEnvironment}${checksLine}${NO_STASH_LINE}\n${MUTANTS_BY_HAND_LINE}\n${gotchas}${skills}TASK:\n${taskPrompt}\n`;
 }
 const tryObject = text => { try { const value = JSON.parse(text); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; } };
 const CODEX_FENCE = /```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n[ \t]*```/g;
@@ -173,6 +245,14 @@ export async function codexDirtyFiles(root, job) {
   }
   return dirty;
 }
+// The seatbelt profile only lets the worker write inside its worktree and scratch directories. The
+// default probe runner (`execViaFile`) hands the child stdout/stderr files in the OS tmp dir, which
+// the profile forbids, so even a healthy sandbox aborted node at startup (SIGABRT) and doctor
+// reported a broken sandbox for a machine where real Codex jobs ran. A pipe needs no file access.
+async function execPiped(command, args, options = {}) {
+  try { return await execGit(command, args, { ...options, encoding: 'utf8' }); }
+  catch (error) { throw Object.assign(Error(`${command} probe failed (${error.signal ?? error.code}): ${String(error.stderr ?? '').trim()}`), { stderr: error.stderr }); }
+}
 async function sandboxProbe(exec) {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-sandbox-'));
   const root = await fs.realpath(temporary);
@@ -188,7 +268,7 @@ async function sandboxProbe(exec) {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 }
 
-export async function codexDoctor({ platform = process.platform, exec = execViaFile } = {}) {
+export async function codexDoctor({ platform = process.platform, exec = execViaFile, sandboxExec = exec === execViaFile ? execPiped : exec } = {}) {
   if (platform !== 'darwin') return { agent: 'codex', status: 'unsupported', platform, configured: false, liveVerified: false, note: 'macOS seatbelt is required' };
   const options = { timeout: 10000, maxBuffer: 1024 * 1024 };
   await exec('/usr/bin/which', ['sandbox-exec'], options);
@@ -199,6 +279,205 @@ export async function codexDoctor({ platform = process.platform, exec = execViaF
   if (missing().length) help = await exec('codex', ['exec', '--help'], options).catch(() => ({ stdout: '' }));
   if (!help.stdout) throw Error('Codex help probe failed (no or empty output)');
   if (missing().length) throw Error(`Codex lacks required flags: ${missing().join(', ')}`);
-  const probe = await sandboxProbe(exec);
+  const probe = await sandboxProbe(sandboxExec);
   return { agent: 'codex', checks: [{ name: 'sandbox probe', status: probe }], status: probe === 'ok' ? 'compatible' : 'failed', platform, version: version.stdout.trim(), auth: 'login status succeeded', liveVerified: false };
+}
+
+// Only internal shell worktrees call this helper. The caller runs job.setup before link mode,
+// and after sync mode. runSetup owns setup.log, the setup env and the 600000 ms timeout.
+export async function prepareWorkspaceEnvironment(root, worktree, { sync = false, runSetup, home = os.homedir(), config = {} } = {}) {
+  const invalid = (file, cause) => Object.assign(new Error(`workspace-env-invalid: ${file}`, { cause }), { code: 'workspace-env-invalid', path: file });
+  const infoAt = async file => {
+    try { return await fs.lstat(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw invalid(file, error); }
+  };
+  const directory = async file => {
+    try {
+      const [real] = await resolveReadPaths([file], home, config);
+      if (!(await fs.stat(real)).isDirectory()) throw Error('dependency must be a directory');
+      return real;
+    } catch (error) { throw invalid(file, error); }
+  };
+  root = await fs.realpath(root);
+  worktree = await fs.realpath(worktree);
+  if (root === worktree) throw invalid(worktree);
+  const dependencies = [];
+  // Validate every destination before creating links or invoking an installer.
+  for (const name of ['.venv', 'node_modules']) {
+    const source = path.join(root, name), destination = path.join(worktree, name);
+    const targetInfo = await infoAt(destination);
+    if (targetInfo && !targetInfo.isDirectory() && !targetInfo.isSymbolicLink()) throw invalid(destination);
+    const target = targetInfo ? await directory(destination) : null;
+    if (sync) {
+      if (targetInfo?.isSymbolicLink() && !within(target, worktree)) throw invalid(destination);
+      continue;
+    }
+    const sourceInfo = await infoAt(source);
+    const real = sourceInfo ? await directory(source) : null;
+    if (targetInfo?.isSymbolicLink() && (!real || target !== real)) throw invalid(destination);
+    if (real && !targetInfo?.isDirectory()) dependencies.push({ destination, real, linked: Boolean(targetInfo) });
+  }
+  let setupResult = null;
+  if (sync) {
+    for (const [marker, argv] of [['pyproject.toml', ['uv', 'sync', '--locked']], ['package-lock.json', ['npm', 'ci']]]) {
+      if (!await infoAt(path.join(worktree, marker))) continue;
+      if (typeof runSetup !== 'function') throw Error('sync requires runSetup');
+      setupResult = await runSetup(argv);
+      if (setupResult?.status !== 'passed') return { environmentReadPaths: [], setupResult };
+    }
+    return { environmentReadPaths: [], setupResult };
+  }
+  for (const { destination, real, linked } of dependencies) {
+    if (!linked) {
+      try { await fs.symlink(real, destination, 'dir'); }
+      catch (error) { throw invalid(destination, error); }
+    }
+  }
+  return { environmentReadPaths: [...new Set(dependencies.map(item => item.real))], setupResult };
+}
+
+const VITE_CACHE_NAMES = ['.vite-temp', '.vite'];
+const viteCacheError = file => Object.assign(new Error(`vite-temp-not-writable: ${file}; prepare writable Vite caches or use an isolated dependency install`), { code: 'vite-temp-not-writable', path: file });
+async function viteCachePaths(worktree, { environmentReadPaths = [], home = os.homedir(), config = {}, fsImpl = fs, lstat = file => fsImpl.lstat(file), access = file => fsImpl.access(file, constants.W_OK), prepare = false, project = false } = {}) {
+  let checking = path.join(worktree, 'package.json');
+  const infoAt = async file => { try { return await lstat(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+  try {
+    const packageInfo = await infoAt(checking);
+    if (!packageInfo) return [];
+    if (packageInfo.isSymbolicLink() || !packageInfo.isFile() || packageInfo.size > 1024 * 1024) throw Error('unsafe package');
+    const pkg = JSON.parse(await fsImpl.readFile(checking, 'utf8'));
+    if (!['dependencies', 'devDependencies', 'optionalDependencies'].some(key => pkg[key] && ['vite', 'vitest'].some(name => Object.hasOwn(pkg[key], name)))) return [];
+    checking = path.join(worktree, 'node_modules');
+    const dependencyInfo = await infoAt(checking);
+    if (!dependencyInfo) {
+      // Do not synthesize an empty install. Preflight still identifies the missing cache.
+      if (prepare) return [];
+      await access(worktree);
+      throw viteCacheError(path.join(checking, VITE_CACHE_NAMES[0]));
+    }
+    const dependency = (validateReadPaths([await fsImpl.realpath(checking)], home, config))[0];
+    if (!(await lstat(dependency)).isDirectory()) throw Error('not a directory');
+    const localDependency = path.join(await fsImpl.realpath(worktree), 'node_modules');
+    if (!project && dependency !== localDependency && !environmentReadPaths.includes(dependency)) throw Error('unvalidated dependency link');
+    const paths = [];
+    for (const name of VITE_CACHE_NAMES) {
+      checking = path.join(dependency, name);
+      const info = await infoAt(checking);
+      if (info?.isSymbolicLink() || (info && !info.isDirectory())) throw Error('unsafe cache');
+      if (!info) {
+        await access(dependency);
+        if (!prepare) throw Error('missing cache');
+        await fsImpl.mkdir(checking);
+      }
+      // Check after creation as well: an existing link or a changed parent never grants an alias.
+      const after = await lstat(checking);
+      if (after.isSymbolicLink() || !after.isDirectory() || await fsImpl.realpath(checking) !== checking) throw Error('cache escaped dependency');
+      validateReadPaths([checking], home, config);
+      await access(checking);
+      paths.push(checking);
+    }
+    return paths;
+  } catch (error) { throw error.code === 'vite-temp-not-writable' ? error : viteCacheError(checking); }
+}
+
+export async function prepareViteCaches(worktree, options = {}) {
+  return { cacheWritePaths: await viteCachePaths(worktree, { ...options, prepare: true }) };
+}
+
+export async function viteCacheWarnings(root, manifest, options = {}) {
+  if (!manifest.jobs.some(job => ['codex', 'cursor'].includes(job.agent))) return [];
+  try { await viteCachePaths(root, { config: options.config ?? loadLocalConfig(), ...options, project: true }); return []; }
+  catch (error) { return [{ code: 'vite-temp-not-writable', path: error.path, message: error.message }]; }
+}
+
+// Synchronous append makes evidence visible before a caller applies its in-memory log cap.
+// Buffers preserve arbitrary child bytes and retain only a possible split-key suffix.
+export async function createAdapterLogSink(directory, { privateData = false, workerKey = null } = {}) {
+  const handles = new Map(), pending = new Map();
+  const key = workerKey ? Buffer.from(workerKey) : null;
+  const replacement = Buffer.from('[worker-key-redacted]');
+  let failure = null, closed = false;
+  const logError = (stream, cause) => {
+    failure ??= Object.assign(new Error(`adapter-log-failed: ${stream}`, { cause }), { code: 'adapter-log-failed', stream });
+    return failure;
+  };
+  const append = (stream, bytes) => {
+    try {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const written = writeSync(handles.get(stream), bytes, offset, bytes.length - offset);
+        if (!written) throw Error('empty log write');
+        offset += written;
+      }
+    } catch (error) { throw logError(stream, error); }
+  };
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    for (const stream of ['stderr', 'stdout']) {
+      try {
+        handles.set(stream, openSync(path.join(directory, `${stream}.txt`), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600));
+        pending.set(stream, Buffer.alloc(0));
+        if (privateData) append(stream, Buffer.from('[transcript withheld: job declared privateData: true]\n'));
+      } catch (error) { throw logError(stream, error); }
+    }
+  } catch (error) {
+    for (const [stream, handle] of handles) { try { closeSync(handle); } catch (problem) { logError(stream, problem); } }
+    throw failure ?? logError('stderr', error);
+  }
+  return {
+    write(stream, chunk) {
+      if (!handles.has(stream)) throw Error('unknown adapter stream');
+      if (failure) throw failure;
+      if (closed) throw logError(stream, Error('adapter log is closed'));
+      if (privateData) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (!key) { append(stream, bytes); return; }
+      const combined = Buffer.concat([pending.get(stream), bytes]);
+      let offset = 0, match;
+      while ((match = combined.indexOf(key, offset)) !== -1) {
+        append(stream, combined.subarray(offset, match));
+        append(stream, replacement);
+        offset = match + key.length;
+      }
+      let retained = Math.min(key.length - 1, combined.length - offset);
+      while (retained > 0 && !combined.subarray(combined.length - retained).equals(key.subarray(0, retained))) retained--;
+      append(stream, combined.subarray(offset, combined.length - retained));
+      pending.set(stream, Buffer.from(combined.subarray(combined.length - retained)));
+    },
+    async close() {
+      if (!closed) {
+        closed = true;
+        for (const [stream, handle] of handles) {
+          try { if (!failure) append(stream, pending.get(stream)); }
+          catch (error) { logError(stream, error); }
+          finally { try { closeSync(handle); } catch (error) { logError(stream, error); } }
+        }
+      }
+      if (failure) throw failure;
+    },
+  };
+}
+
+export const CODEX_BLIP_RE = /workspace routing discovery failed|Reconnecting\.\.\. 5\/5|Connection failed: error sending request/;
+// attempt owns fresh result filenames and returns validation failures with their stderr intact.
+// hasWrittenOutputs compares bytes AND modes against the immediate pre-launch snapshot,
+// including creation/deletion. onRetry persists retries/retryReason before the second launch.
+// maxAttempts (default 2: one retry) caps launches; only a transient blip matching blipRe, with no
+// output written, ever earns another. The cursor worker reuses this with its own label and regex.
+export const DEFAULT_MAX_ATTEMPTS = 2;
+export async function runCodexWithRetry(attempt, { hasWrittenOutputs, onRetry, cancelled = () => false, maxAttempts = DEFAULT_MAX_ATTEMPTS, blipRe = CODEX_BLIP_RE, label = 'codex-blip' }) {
+  const limit = Number.isSafeInteger(maxAttempts) && maxAttempts >= 1 ? maxAttempts : DEFAULT_MAX_ATTEMPTS;
+  let result = await attempt(0);
+  for (let index = 1; index < limit; index++) {
+    if (result.status !== 'failed' || result.cleanupError || result.refusedBeforeStart ||
+        result.terminationReason || result.cancelled || result.timedOut || result.code === 'adapter-log-failed' || await cancelled()) return result;
+    const match = blipRe.exec(`${result.stderr ?? ''}\n${result.blipText ?? ''}`);
+    if (!match) return result;
+    if (await hasWrittenOutputs()) return result;
+    if (await cancelled()) return result;
+    await onRetry(`${label}: ${match[0]}`, index);
+    if (await cancelled()) return result;
+    result = await attempt(index);
+  }
+  return result;
 }

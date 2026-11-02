@@ -124,6 +124,14 @@ A job whose prompt demands a JSON-only final reply but whose saved response neve
 
 `mutants --mutants-file FILE --mutant-check ARGVJSON` runs the same restore-and-byte-check mutation loop as `integrate --mutants`, directly against the current tree with no run id or manifest — useful for a quick kill/survive read before wiring either into a manifest. A `Ctrl-C` is caught so the in-flight mutant's own restore still completes before the process exits. See [manifest reference](manifest-reference.md#mutants-current-tree).
 
+Mutant review also emits the advisory `redundant-writer: <mutant> removes <callee>; another
+call at <file>:<line> may preserve the effect; target the shared store or reader` when a simple
+find/replace removes one dotted call expression and another non-test tracked source call remains.
+The review ignores declarations, duplicate locations and ordinary comment-only lines, and it
+does not prove semantic equivalence. It is bounded text evidence only: aliases, dynamic calls,
+multiline calls and complex syntax are explicitly unverified. Dry runs never mutate the tree;
+integrated review uses the proposed post-write overlay.
+
 ## Post-build mutants: parsed before any write, retryable if interrupted after
 
 Every mutants source (manifest `mutants`, a job's own `mutantsFile` output, and `--mutants-file`) is now parsed and validated — same shape, same combined cap — before `integrate --mutants` writes a single project file, not after. A `mutantsFile` output that fails to parse, including one carrying trailing text after an otherwise valid JSON value (a worker's own final-message line appended to its declared output instead of only sent as its reply), refuses integration with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; `integrate <run-id>` on a `partial` run is accepted as a retry, and a file that already carries the exact bytes this same run wrote is treated as already applied rather than a conflict. See [manifest reference](manifest-reference.md#post-build-mutants).
@@ -194,3 +202,7 @@ New `tools/session-metrics.mjs` writes and reads a small state.json-compatible `
   flow; ordinary integration still refuses failed runs.
 - Pin install snapshots used by live runs before promising safety across many
   successive upgrades.
+
+## Zero tests is a failure
+
+A check named `test`, `tests` or `test:...` that exits 0 but whose output shows no test ran (node:test `# tests 0`, vitest `No test files found`, jest `No tests found`, pytest `no tests ran`, go `no test files`) is reported as failed with `no-tests` and a note about the wrong runner. This closes the false green of running `node --test` on vitest files. `swarm scope approve` suggests the project's real command for the profile's `verify.command`.

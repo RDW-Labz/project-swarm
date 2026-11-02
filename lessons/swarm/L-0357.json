@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0357",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Read-only questions need explicit routing. Follow the selected tier and report any configured fallback before presenting its answer. An unsupported route must never silently choose another provider.",
+  "rule": "Read-only questions need explicit routing.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#357"
+  }
+}

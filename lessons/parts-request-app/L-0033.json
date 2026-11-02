@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0033",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "test",
+  "what": "The generated contract tests (contracts/contract.test.mjs) skip every test when CONTRACT_BASE_URL is unset, so 'node --test' printed pass 0 fail 0 skipped 4 and the npm script was green with zero checks. They also only ever run against the generated mock; the generated sample inputs (year 995, phone-42) are rejected by a real route, so they cannot check the real app, and I had to write app.contract.test.mjs with valid inputs per operation plus a runner that builds and starts the app.",
+  "rule": "The contract generator must start the mock itself on a free port, fail when any test skips or no test runs, and offer an app mode (real base URL, valid example inputs from the OpenAPI examples) so the real routes are checked against the contract.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Added scripts/contracts-run.mjs (mock and app modes, fails on skips or zero passes), contracts/app.contract.test.mjs, npm scripts test:contracts and test:contracts:app, both in CI.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "test",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#33"
+  }
+}

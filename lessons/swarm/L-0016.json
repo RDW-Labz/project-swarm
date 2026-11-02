@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0016",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A pre-existing flake looked like a regression. A wait equal to the test timeout (see entry 4) stopped `ship` on a repeated check; telling a flake already present on the base commit apart from an actual regression took 20 hand-run loops of the suite, twice.",
+  "rule": "Automatically compare a failing repeated check against the run's base commit before asking a human to hand-run anything.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a failing check with `repeat` reruns the named test file against a temporary checkout of the run's base commit and reports `flakeOnBase: {file, failed, runs}` plus a `flake on base: k/N (<file>)` line; entry 4's rule (keep waits below the test timeout) still stands. Documentation: verification.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "flaky-test",
+    "test",
+    "timeout"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#16"
+  }
+}

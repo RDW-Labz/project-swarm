@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0015",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "split",
+  "what": ".env.example listed as worker output: runner refuses reserved path; worker then reported blocked; I wrote the file by hand",
+  "rule": "Env template ticket needs a supported path.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "allow .env.example as placeholder-only output or have split use env.example.txt",
+  "guard": {
+    "kind": "scope-rule",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "env-template",
+    "reserved-path"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 15"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.0 },
+  "jobs": [
+    {
+      "id": "review-client-report",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "the last check before internal data reaches a paying client",
+      "type": "review",
+      "prompt": "Review coordination/review/client-report.diff (Phase 19 part 2: tools/client-report.mjs, tools/report-commands.mjs, wiring in swarm.mjs). The promise: a client report NEVER shows costs, internal notes, model names, ticket ids, paths or code; it is built from requirement text and stage names only; a scan refuses it; the owner approves a hash of exact files; nothing is sent. Look for: (1) ways internal data reaches the output: any field of scope or ledger that flows in (scope.name, stage titles, requirement text, decision lines, preview URL) and whether the scan covers the final rendered html AND txt; evasions of the scan: homoglyphs, zero-width chars, case, spaces inside words (cl aude), url/percent encoding, HTML entities, markdown, unicode digits, `$` variants (US$, 4.20 dollars, EUR), other model names (Gemini, Llama, o3, GPT4o, 'the AI'), paths without slash (page.tsx), Windows paths, ids in other forms (T0042, ticket #42), run ids; false positives that would block normal client text; (2) approval integrity: hash covers html+txt (not report.json), editing report.json status by hand, approving a different folder, a symlinked report dir or report.json (path traversal via the dir argument, DIR_RE), TOCTOU between scan and hash, approve scanning html text extraction correctness (tags stripped, entities decoded: could markup hide text from the scan or the client see text the scan did not?); (3) the HTML: escaping of every interpolated value, previewUrl in href (javascript: impossible? quotes), CSP-less static page with inline style only; (4) done-this-week logic from the ticket log (transition events, a done->review->done reopen, a log line forged by a worker? who can write tickets.log?), requirementWired use; (5) 'no network' claim: any import that could send; (6) file permissions, dir collision handling (client-DATE-2), clock. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/client-report.mjs", "tools/report-commands.mjs", "tests/client-report.test.mjs", "coordination/review/client-report.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

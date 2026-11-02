@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "id": "module",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14d-design.md specifies for tools/rented.mjs (section 1). Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Write only your declared output file. Keep code compact. Your file: tools/rented.mjs only.",
+      "context": [
+        "docs/plans/phase14d-design.md"
+      ],
+      "outputs": [
+        "tools/rented.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "tests-config",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14d-design.md specifies for tools/rented.mjs (section 1). Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Write only your declared output file. Keep code compact. Your file: tests/rented-config.test.mjs only: tests for validateRentedConfig, rentedSensitiveOk and RENTED_DEFAULTS, importing tools/rented.mjs by exported names only (someone else writes it from the same design). node:test and node:assert/strict, first line after the SPDX header `import \"./_isolate-config.mjs\";`, under 300 lines. Cover every rule and each error (bad endpoint forms incl. credentials, query, hash, path, http non-loopback, loopback http allowed; model pattern; numeric ranges; unknown keys; defaults; normalized fields).",
+      "context": [
+        "docs/plans/phase14d-design.md"
+      ],
+      "outputs": [
+        "tests/rented-config.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    },
+    {
+      "id": "tests-meter",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Build exactly what docs/plans/phase14d-design.md specifies for tools/rented.mjs (section 1). Plain ESM for Node 20+, no dependencies; first line of each new file is `// SPDX-License-Identifier: Apache-2.0`. Write only your declared output file. Keep code compact. Your file: tests/rented-meter.test.mjs only: tests for createRentalMeter, rentalDecision and formatRentalSummary, importing tools/rented.mjs by exported names only (someone else writes it from the same design). node:test and node:assert/strict, first line after the SPDX header `import \"./_isolate-config.mjs\";`, under 300 lines. Use an injected `now`. Cover: open/close idempotence, minimum billable time, clock going backwards, usd rounding, snapshot JSON, every rentalDecision reason and its order, no run cap refusal, the 80% warning from each of the three ratios and the pick of the highest, null when everything has room, summary lines.",
+      "context": [
+        "docs/plans/phase14d-design.md"
+      ],
+      "outputs": [
+        "tests/rented-meter.test.mjs"
+      ],
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      }
+    }
+  ]
+}

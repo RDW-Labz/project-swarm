@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0056",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Mutation checks ran against a red base and reported false coverage. A manifest check failed, but mutation checks still applied every mutant and reported each one killed — a result that looked like passing coverage but proved nothing, since a red base kills every mutant regardless of the guard being tested.",
+  "rule": "Mutants only count against a base that is actually green.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `integrate --mutants` refuses to start unless the unmutated tree passes all checks first; any non-test-failure exit (spawn error, usage error) is classified as `invalid`, never `killed`; `ship --require-section \"Mutation check\"` refuses outright when an integrated run's mutants came from a red base. Regression coverage is in `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "manifest",
+    "mutation-testing"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#56"
+  }
+}

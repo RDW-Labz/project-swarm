@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0140",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A sandboxed worker had no way to declare the few outside hosts one task genuinely needed, and a check known to only ever work outside the sandbox had no way to say so, leaving it either dropped from the plan or left to block a job it could never pass from inside.",
+  "rule": "A check known to run only at the later, unsandboxed step says so instead of gating a job that can never satisfy it from inside; a job that needs outside hosts still goes to a tool-enabled worker, since per-host access from the sandbox is not built yet.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a check may now be marked as running only at that later step, skipped by the sandboxed worker and named as such in its own instructions; the (still refused) allowed-host list now also refuses any entry not written as a secure, named address. Regression coverage is in `tests/field-lessons-batch-q.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#140"
+  }
+}

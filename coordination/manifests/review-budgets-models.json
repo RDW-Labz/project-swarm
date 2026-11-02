@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-budgets-models",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "runs owner-configured commands, ship gate, outbound network, inbox decisions",
+      "type": "review",
+      "prompt": "Review coordination/review/budgets-models.diff. Two features. (A2) tools/budgets.mjs, budgets-commands.mjs, profile validation (init-profile.mjs), the preview-hook wiring and ticketForBudgetFailure and the ship gate in tools/swarm.mjs, ci-hooks.mjs exports. Rules: the tool argv comes from the owner's profile and runs with a scrubbed env (filterEnv): check command-injection, {url}/{out} substitution (url and out are built by us: can a screen path or a preview URL smuggle an argument or shell metacharacter? argv is not shelled), the preview URL comes from a deploy log (untrusted): checkBaseUrl; temp files; a tool that cannot run must never count as a pass; the ship gate must block ONLY the PR that finishes the last stage and only on failing/cannot-run screens, never on stale state forever without a way out (is there one?), and must not break ship for projects without budgets; fix-ticket dedup; ledger/ticket creation under the lock. (B3) tools/model-watch.mjs, models-commands.mjs: outbound fetches (Hugging Face, Anthropic with the API key: key only to api.anthropic.com, never logged or stored, never in the journal/state), parsing of untrusted JSON (ids validated, text put in inbox decisions must not carry injection or control chars), the per-source baseline logic (no flood after an outage, no missed models), the 80% weight fit, state file permissions and atomic write, the weekly interval, and that nothing here can rent a GPU or change a lane model. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/budgets.mjs", "tools/budgets-commands.mjs", "tools/model-watch.mjs", "tools/models-commands.mjs", "tools/ci-hooks.mjs", "tools/init-profile.mjs", "tests/budgets.test.mjs", "tests/model-watch.test.mjs", "coordination/review/budgets-models.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

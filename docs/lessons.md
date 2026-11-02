@@ -2044,3 +2044,218 @@ rule is enforced or documented.
     flagged by name for a follow-up fix, instead of being rerun forever
     with nothing else ever changing. Regression coverage is in
     `tests/field-lessons-batch-w.test.mjs`.
+184. **A dispatched job's own prompt named a real file on disk that was
+    never actually copied into its workspace, because nothing tracked,
+    declared, or contextual named it either.** The file existed, so a
+    human reading the prompt assumed it would be there; the worker
+    discovered only after starting that it was not, after real money
+    had already been spent. Rule: a prompt naming a real, on-disk path
+    that is covered by neither tracked files, declared context, nor an
+    explicit declared resource is refused before dispatch, not
+    discovered by the worker. Enforcement: a new manifest field lists
+    extra files to copy into every job's own workspace; a missing
+    declared file (or one that names a directory) refuses at validate
+    time, and an un-declared path a prompt names that exists on disk
+    is refused the same way. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+185. **A worker's own transcript, saved to disk by default, sometimes
+    carried sensitive data a person never meant to leave their own
+    machine.** Every worker's reply and failure log were written to a
+    shared run directory the same way regardless of what they
+    contained. Rule: a job may declare that its own transcript must
+    never be written to disk, and a configured sensitive path may
+    require that declaration before a job touching it is allowed to
+    run at all. Enforcement: such a job's saved reply and failure log
+    are replaced with a fixed placeholder on disk (the real text is
+    still used in memory for that same run), and a job whose own
+    context or outputs match a configured sensitive path without the
+    declaration refuses before it ever starts. Regression coverage is
+    in `tests/field-lessons-batch-x.test.mjs`.
+186. **A job's own prompt asked its worker to return a JSON reply
+    missing a field a later check required, and nothing caught it
+    until well after the job had already been dispatched and paid
+    for.** The shape a result had to carry was only ever checked once
+    the run was already being integrated. Rule: a declared result
+    shape is checked against a prompt's own stated reply shape before
+    a job ever dispatches, not only once its real result is read back.
+    Enforcement: a job's own prompt is parsed for the JSON shape it
+    promises to return and compared against every attached
+    requirement at validate time, refusing before dispatch on a
+    mismatch. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+187. **A one-pass pre-push guard and a fresh-merge-base squash command
+    both already existed, but nothing pointed a batch at either one
+    before it shipped.** A batch re-learned, by hand, the order these
+    two steps should run in. Rule: a shared contract template names
+    the already-built tools to use, and in what order, instead of
+    leaving each batch to rediscover them. Enforcement: the shared
+    contract template's own release guidance now names both commands
+    directly. No code changed; this is a documentation-only entry.
+188. **A tool-free worker job with no declared output file was asked
+    for a substantial piece of real written content, which had
+    nowhere to go but a short, capped summary field.** The job could
+    only ever return a small fraction of what was asked for, silently
+    truncated, with no declared file to hold the rest. Rule: a job
+    with no declared output file may only ever be asked a short
+    question, never for substantial written content. Enforcement: a
+    job with no declared outputs whose prompt plainly asks for
+    written content (a summary, a report, a draft) now refuses before
+    any request is sent; a response that was cut off for running out
+    of room now states the size of what was sent in, so the cause is
+    provable instead of guessed at. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+189. **A worker CLI's own plan-limit message, printed instead of its
+    usual structured output, was scored as an ordinary job failure.**
+    The real cause (a provider-side quota, not a mistake in the job or
+    the worker) was buried under a generic exit-code error, and
+    nothing stopped the next job from being dispatched straight into
+    the same outage. Rule: a worker CLI's own quota or plan-limit
+    message is a provider outage, not a job failure, and once seen it
+    should stop further dispatches until the provider's own reported
+    reset time, not rely on a person noticing the pattern by hand.
+    Enforcement: this message is now detected and recorded with its
+    own distinct status and the provider's reported reset time; a
+    further dispatch that would need the same provider refuses until
+    that time unless explicitly overridden. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+190. **A sandboxed worker could read a project root's real git
+    metadata but not write to it, so a job asked to commit from a
+    linked working copy of that root could never actually succeed.**
+    The read access alone was not enough for the one operation a
+    commit actually needs. Rule: a sandbox that grants read access to
+    a linked working copy's real git metadata for one operation grants
+    write access for the same reason, scoped just as narrowly.
+    Enforcement: a worker's sandbox now grants write access to exactly
+    those paths when the project root is itself a linked working
+    copy; a warning names the grant whenever a job's own prompt asks
+    it to commit under this condition. Regression coverage is in
+    `tests/field-lessons-batch-x.test.mjs`.
+191. **A worker was told not to read anything outside a fixed list, then
+    handed a repository whose own instructions told it to read
+    something else first — and refused instead of testing whether that
+    read would actually succeed.** The blanket rule and the
+    repository's own real instructions pointed in different
+    directions, and the worker resolved the conflict by giving up.
+    Rule: a worker's own read restriction should name its real
+    exceptions up front, not leave a worker to infer when the rule
+    does not actually apply. Enforcement: a worker's own prompt now
+    states plainly which required reads named by the repository's own
+    instructions are genuinely out of reach, and inlines the ones that
+    are not; a warning separately names a required, trackable read
+    that a job's own declared inputs still omit. Regression coverage
+    is in `tests/field-lessons-batch-x.test.mjs`.
+192. **An output placed under a shared or test directory could still carry a
+    private term with nothing catching it before integration.** A job's
+    declared output landed under a shared skills directory or a fixtures/tests
+    path and carried a private name or term, the same category an existing
+    diff-wide scan already caught elsewhere, but that scan never looked at
+    these directories specifically. Rule: any output under a shared, fixtures
+    or tests path is scanned against the same private-names list used
+    elsewhere, before it is ever integrated. Enforcement: `validate`/
+    `integrate` now refuse `private-name` for an output under `shared/`,
+    `fixtures/` or `tests/` whose content matches a configured private term.
+    Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+193. **A job's declared outputs could exceed what the model could actually
+    return, discovered only once the request itself came back truncated.** An
+    API job's own declared output files, summed, exceeded its configured
+    output-token cap, so a run that looked valid at dispatch time was destined
+    to come back cut off. Rule: a job's declared outputs are sized against its
+    own output cap before it ever dispatches, not after. Enforcement:
+    `validate` now warns and refuses `output-cap-too-small` when a job's
+    estimated declared-output size exceeds its configured `maxOutputTokens`.
+    Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+194. **A skill's own required result keys were never checked against the
+    actual API envelope shape.** A job carried an attached skill that declared
+    required result keys, but the envelope schema built for an API job never
+    required them, so a reply missing one of those keys could still pass
+    validation. Rule: an attached skill's own required result keys are part of
+    the envelope's required schema, not a separate, unchecked promise. 
+    Enforcement: the API envelope now requires a `result` object, and
+    `validate` injects an attached skill's own `resultKeys` into that schema
+    before a job ever dispatches. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+195. **An invalid envelope reply left no trace once it was rejected.** When
+    the OpenRouter/API adapter rejected a structurally invalid envelope, the
+    raw reply that caused the rejection was discarded, leaving nothing to
+    diagnose beyond a generic error message. Rule: a rejected raw reply is
+    worth keeping, not discarding, since it is the only evidence of what the
+    model actually sent back. Enforcement: an invalid envelope's raw reply is
+    now saved to a per-run, per-job file for diagnosis instead of being
+    dropped. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+196. **A whole run had to be integrated together even when only some of its
+    jobs had actually finished.** A batch run with several jobs could not be
+    integrated at all once any one job failed, even though its other jobs had
+    completed cleanly and did not overlap in their outputs, forcing a wait for
+    a full re-run instead of taking the finished work. Rule: a batch run's own
+    complete, non-overlapping jobs can be integrated on their own, named
+    explicitly rather than assumed. Enforcement: `integrate RUN --jobs
+    <id,...>` integrates only the named complete jobs of a run whose other
+    jobs failed, refusing with a message naming the flag when a partial run is
+    integrated without it. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+197. **A sandboxed test run could not create its own temp directory where the
+    sandbox would actually allow it.** The test suite's own setup created its
+    temporary directory using the plain OS default, which a sandboxed worker
+    could not write to, so a sandboxed job attempting to run tests had no
+    writable location for them at all. Rule: a test suite's own temp directory
+    honors an explicit override before falling back to the OS default, so a
+    sandboxed caller can point it somewhere writable. Enforcement: the test
+    suite's shared setup now honors a dedicated test-temp environment variable
+    (falling back to the ordinary temp-directory variable) when creating its
+    own temp directory. Regression coverage is in
+    `tests/field-lessons-batch-y.test.mjs`.
+198. **A sandboxed job's scratch directory was not reliably reachable from
+    inside its own sandbox.** A per-job scratch directory created outside the
+    repository still was not consistently readable or writable from inside a
+    sandboxed job, because the directory could be granted only in the form it
+    was created with, while the job's own runtime resolved it through a
+    different, equivalent path (for example a symlinked temp root), and an
+    ancestor directory needed for the job's own path resolution was not
+    granted either. Rule: a scratch-directory grant covers every real path a
+    sandboxed job could use to reach it, including a resolved-symlink form and
+    the metadata reads its own ancestors need, and the job's environment names
+    that directory consistently. Enforcement: the sandbox profile now grants
+    a per-job scratch directory in both its raw and resolved-symlink forms,
+    plus ancestor file-read-metadata access; the job's environment exports the
+    standard temp-directory variables pointing at it, and the directory is
+    removed once the job finishes unless an explicit keep-temp override is
+    set. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.
+199. **Dispatch refusals must name the next action.** A coordinator linking a
+    fresh, empty project hit three refusals in a row, each costing a
+    source-code dive before the first run started: `bookkeeping-terse:
+    resultKeys missing status`; `fatal: ambiguous argument 'HEAD': unknown
+    revision`; and `Refusing: base is red (...); pass --accept-red-base with
+    --reason to run onto it anyway`, whose override then left no trace once
+    accepted. Rule: a refusal names where the thing came from and the one
+    command that resolves it, and an accepted override is recorded, not just
+    typed. Regression coverage is in `tests/dispatch-refusals.test.mjs`.
+343. **Vendored runtime dependencies need coverage.** Inspect a vendored package's runtime metadata and report requirements absent from both direct dependencies and vendored artifacts. A source override alone does not establish dependency coverage.
+345. **Externally validated values need an accepting rule.** Cite the consumer's validation rule or an existing example before choosing a contract value. Resource validation belongs to the consuming scheduler; the shared contract template records the evidence.
+348. **A human-review hold survives green checks.** A held change stops before automatic merge and includes what changed, what could break and verification evidence. A later merge needs explicit human authorization.
+351. **Exploratory work needs an honest file scope.** Declare plausible edits up front or allow tracked files within named directories. Keep collision and integration checks, report additional changes, and list unfinished work.
+352. **Build tools need durable storage and availability checks.** Keep toolchains outside temporary storage and report missing inventory executables before relying on them. Reinstall guidance is displayed for review, never executed from documentation.
+353. **Test caches need narrow write access.** Prepare the test bundler's cache directories and grant those locations explicitly when dependencies are shared read-only. Verify both permitted cache writes and denied dependency writes.
+354. **A retry needs evidence and a fresh result.** Confirm three passes on the same local commit and a base pass before one requested CI retry. Record a confirmed flake only after a fresh attempt succeeds.
+355. **A mutant must defeat every effective writer.** A second call may preserve behavior after one writer is removed. Review duplicate-call warnings and target the shared store or reader; a text match is advisory evidence.
+356. **Design-only jobs should not be blocked by sandbox tests.** Documentation-only Codex jobs read and grep without tests or installs; a sandbox test failure is not a reason to block the job.
+357. **Read-only questions need explicit routing.** Follow the selected tier and report any configured fallback before presenting its answer. An unsupported route must never silently choose another provider.
+358. **Directory references can describe real context.** Accept directory and glob references when they match carried files. Keep refusing real inputs that the worker will not receive.
+359. **Decision values need source evidence.** Pin fixed constants with literal expected values in tests and quote the source values in review summaries. Warn when a held summary names a value absent from the added change.
+360. **Tests need durable inputs.** Keep runtime and test fixtures in tracked locations that survive a clean checkout. Refuse source and test references to temporary coordinator material and warn about scratch data in build context.
+361. **Progress timestamps must come from a clock.** Append progress notes with a tool-generated UTC timestamp. A generated timestamp describes when the note was recorded, not when an earlier event occurred.
+362. **Rendered UI changes need preview coverage.** Require or warn for preview-harness checks covering affected views when rendered UI roots change, and identify UI roots without configured harness coverage.
+363. **Absent output tests are pending, not red.** Treat a base check as pending when every named test path is an absent declared job output, and refuse only on real failures.
+364. **Ownership guidance prevents false blocks.** Tell jobs when changelog or active version files belong to another job, and do not let that ownership rule block unrelated work.
+365. **Rework metrics need follow-up evidence.** Report follow-up edits within 24 hours by skill as the primary rework measure, and mark red rate not applicable when integration checks are empty.
+366. **Test state needs per-run isolation.** Keep provider-limit caches and global paths under a per-test temporary home, with a guard against resolving the real home during concurrent runs.
+369. **Idle seats need actionable attribution.** Report idle seats after five minutes, list runnable unblocked work, and attribute idle gaps to recorded hand steps.
+371. **Version bumps include active assertions.** Discover tests that assert the previous active version, include them in outputs or explicit ignores, and require the full suite for release checks.
+372. **Failure records need the failing assertion.** Preserve each failed test's name, location, and assertion, and rerun only failed local files when a flaky rerun is requested.
+374. **Validation should expose live conflicts.** Reuse the run-time output-conflict scan, return conflict details with the startable subset, and allow that subset to be selected directly.
+375. **Coordination notes belong in coordination.** Resolve task and handoff files under the configured coordination directory, refuse root-level replacements, and list allowed lesson areas on invalid input.
+377. **Manifest contracts need normalization.** Hoist job-level contracts, treat a null tier reason as absent, and label not-yet-created sibling outputs as pending.
+378. **CI checks must match shell expansion.** Expand CI globs as the shell does and infer shipping head and base from the selected branch and default branch.
+379. **Brief premises need cheap existence checks.** Warn when an identifier-like mechanism named in a brief or prompt is absent from the repository before expensive work begins.
+380. **Integrated edits must stay declared.** Block edits outside declared outputs and rerun each job's reported check against the integrated tree.
+381. **Checks must ignore swarm scratch copies.** Exclude scratch workspaces from local checks and warn when check output cites a scratch path.
+382. **Test summaries can precede timeouts.** Classify a CI step timeout after a zero-failure test summary as a timeout and retry the failed job once.

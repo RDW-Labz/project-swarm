@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "type-test",
+      "type": "test",
+      "agent": "auto",
+      "prompt": "Add tests for sensitive auto jobs and expensive tier routing.",
+      "context": [
+        "tools/router.mjs",
+        "tests/router.test.mjs"
+      ],
+      "outputs": [
+        "tests/router.test.mjs"
+      ]
+    }
+  ]
+}

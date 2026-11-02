@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "compare-module",
+      "context": [
+        "bench/lane-benchmark/lib.mjs",
+        "bench/gpu-bakeoff/hard-task.mjs"
+      ],
+      "outputs": [
+        "bench/gpu-bakeoff/compare-lanes.mjs"
+      ],
+      "prompt": "Write bench/gpu-bakeoff/compare-lanes.mjs (plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\"): a driver that runs the same 11 tasks (the 10 lane-benchmark tasks plus the hard task planWaves) on paid or subscription lanes so they can be compared with the rented GPU. Read bench/lane-benchmark/lib.mjs (LANES, buildBaseRepo, runLane) and bench/gpu-bakeoff/hard-task.mjs (runHardTask) in your context. Exports: (1) costPerMillionTokens({ hourlyUsd, tokensPerSecond }) = hourlyUsd / (tokensPerSecond * 3600) * 1e6 rounded to 4 decimals (the price of a token on a GPU kept fully busy). (2) summarizeLane({ lane, results, hard }): results is runLane's results array ({ taskId, pass, costUsd, tokens (number or an object with total_tokens or input_tokens and output_tokens), durationMs }), hard is runHardTask's result ({ passedAll, costUsd, tokens, seconds }) or null; returns { lane, tasks: results.length + (hard ? 1 : 0), passed: passing results plus (hard?.passedAll ? 1 : 0), passRate (passed/tasks, 4 decimals), costUsd: the sum of every known numeric costUsd (results and hard) or null when no cost was reported at all (subscription lanes), tokens: the sum of token numbers, costPerPassingUsd: costUsd / passed rounded to 4 decimals, or null when costUsd is null or passed is 0, seconds: sum of durations in seconds rounded to 1 decimal }. (3) qwenAtFullLoad({ detailsFile, hardTokens, hardPassed, passedLane, hourlyUsd, tokensPerSecond }): reads a details JSON (an array of { pass, tokens }) written by the bake-off, computes tokens = the sum of the lane tokens (tokens may be a number or null/undefined meaning 0) plus hardTokens, passed = passedLane + (hardPassed ? 1 : 0) (use the number of passing entries in the file when passedLane is undefined), and returns { tokens, passed, usdPerMillionTokens: costPerMillionTokens(...), costUsd: tokens / 1e6 * usdPerMillionTokens rounded to 4 decimals, costPerPassingUsd: costUsd / passed rounded to 4 decimals or null }. (4) renderComparison({ lanes, qwen, date }): markdown with a title, a table (Lane | Passed | Pass rate | Cost | Cost per passing task | Tokens | Time) with one row per summarized lane (cost 'subscription (not reported)' when null) plus a Qwen3.6 NVFP4 row for the GPU at full load (cost from qwenAtFullLoad, pass count from it) and a short paragraph that states how the Qwen number is computed (all tokens of the 11 tasks times the price of a token on a fully busy GPU at the hourly price and the measured output tokens per second at 128 agents) and that Haiku and Codex numbers are what the lanes reported. (5) A CLI main (only when the file is run directly: compare import.meta.url with process.argv[1] resolved): arguments --lanes (comma list, default 'anthropic-haiku,codex'), --runner (path to swarm.mjs, default the swarm.mjs next to ../../tools), --max-usd (default 1), --root (default process.cwd()). For each lane: buildBaseRepo(root, 'v1.65.0', a fresh temp dir) , runLane({ lane, repo, runner, maxUsd, baseInfo }), then runHardTask({ agent: LANES[lane].agent, model: LANES[lane].model, runner, maxUsd }) (catch a thrown error: hard = null and log it), summarizeLane; save each lane's raw results to docs/state/lane-comparison-details/<lane>.json; at the end compute qwenAtFullLoad with detailsFile docs/state/gpu-bakeoff-details-run4/qwen3.6-35b-a3b-nvfp4-bestof1.json, hardTokens 18445, hardPassed true, passedLane 7, hourlyUsd 1.807, tokensPerSecond 3718, write docs/state/lane-comparison.md from renderComparison and print it. Log progress to stderr. Keep it compact; do not edit tests."
+    }
+  ]
+}

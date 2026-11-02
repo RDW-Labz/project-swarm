@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0027",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "A worker's final answer, still not JSON, made the run look like it had no result at all. A prompt demanded JSON only, but the worker's final message still didn't parse, and the run recorded nothing usable even though the worker was still reachable.",
+  "rule": "Name the failure plainly and give a cheap, bounded chance to correct it on the same session before giving up.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: when a prompt demands JSON only and the final message does not parse, the job result is marked `resultMissing: true` in state and `inspect`; a `claude` agent gets one cheap re-ask on the same session, and that answer is used if it parses. Documentation: verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "build",
+    "prompt",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#27"
+  }
+}

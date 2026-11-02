@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-rented-bestof",
+      "context": [
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md: (1) insert, directly before the line \"## Using the winner: `swarm gpu up|down|status`\" (use that heading line as the anchor and keep it), a new section \"## Faster and cheaper on our own GPUs\" with two parts. Prefix caching: vLLM starts with --enable-prefix-caching; the rented lane sends the project's shared files first and the ticket's own task last, so every agent on a project reuses the cached prefix; list shared files first in a job's context; the bake-off and `swarm gpu status` show vLLM's own prefix-cache hit rate (target over 70% on a project run). Best-of-N: on this lane only (tokens are nearly free), set bestOf (1 to 8) on a job, or `swarm gpu up --best-of 3` for a default, and the lane asks the server for N answers in one request, runs the ticket's visible tests (the test files in the job's context) on each in a temporary git worktree with the answer applied, and keeps the smallest passing one; if none pass the job fails with best-of-failed and escalates to Haiku, then Codex as usual; a candidate that is not valid output is skipped; with no tests in context it picks the smallest valid one; it is never used on paid API lanes. (2) In the bullet list of the bake-off section, after the bullet that starts with a dash, a space, two asterisks, the words cost per passing task and two asterisks, add the bullet \"best-of-N gain: the same tasks at N=1 and N=3 (`--best-of 1,3` is the default; `--best-of 1` skips it), and the prefix cache hit rate after the run;\". In the file the bullet labels are wrapped in two asterisks on each side; copy the bullet label style exactly, so the new bullet is: dash, space, two asterisks, best-of-N gain, two asterisks, then a colon and the text. Use the line that starts the cost bullet as the anchor and add the new bullet on the line after the whole bullet.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-changelog-bestof",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. In the \"## 1.74.0\" section, after the bullet that starts \"- Small-model GPU swarm (Phase 14e)\", add this bullet: \"- Best-of-N and prefix caching on the rented GPU lane: a job (or `swarm gpu up --best-of N`) can ask for N answers in one request; the ticket's visible tests run on each in a temporary git worktree and the smallest passing one is kept, otherwise the job fails with `best-of-failed` and escalates as usual (rented lane only, never on paid lanes). The bake-off compares pass rate at N=1 and N=3 and reports vLLM's prefix-cache hit rate; servers start with `--enable-prefix-caching` and the rented lane sends the project's shared files first and the ticket last. A Claude Opus review of the lane found 1 high and 7 medium issues, all fixed: the dead-man timer is now the first line of the start script and a session is recorded before anything starts (so `gpu down` can always clean up), the bake-off refuses to replace a live session and its session is never auto-routed, a failed start tears down its tunnel and session, tunnel ports must be free and the tunnel must stay up, ssh runs with agent and X11 forwarding off and strict host keys, passwordless sudo is checked at start, the adapter refuses any rented job that is not `sensitive: false`, only connection failures move a request to another replica, and the tunnel pid is checked before it is signalled.\"\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docs-dogfood-bestof",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add these bullets right after the bullet that starts \"- Smoke test (1.73.0 from main\" (use that start text as the anchor and add after the whole bullet): \"- After the review (Opus, about $0.97: 1 high, 7 medium, 13 low): the fixes to tools/gpu.mjs and tools/gpu-commands.mjs, the best-of module, the cache module and 6 test files were swarm jobs (11 more jobs, all complete on the first try, about $0.06); the orchestrator fixed 2 things by hand: a dropped ssh target argument in the worker's rewrite of gpu.mjs (found by a worker-written test) and a test's timeout wording; the router, lanes, adapter and runner wiring (about 40 lines) was by hand.\" and \"- Total for 14e: 19 swarm jobs plus 1 review; hand-written: the first draft core and the wiring. First-try pass about 17 of 19 as written.\""
+    }
+  ]
+}

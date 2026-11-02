@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "concurrency": 7,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-scope",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/scope.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/scope.mjs exactly as docs/plans/phase13-design.md section 1 (the scope file and tools/scope.mjs) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-tickets",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tools/tickets.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/tickets.mjs exactly as docs/plans/phase13-design.md section 2 (tickets and the ledger) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-integrity",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/scope-integrity.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/scope-integrity.mjs exactly as docs/plans/phase13-design.md section 3 (integrity checks); it imports wavesOf from ./tickets.mjs and requirementText is not needed there (use scope.requirements directly) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-change",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/change-orders.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/change-orders.mjs exactly as docs/plans/phase13-design.md section 4 (change orders) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-day0",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/day0.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/day0.mjs exactly as docs/plans/phase13-design.md section 5 (day 0 checklist) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-approval",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/approval-policy.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/approval-policy.mjs exactly as docs/plans/phase13-design.md section 7 (approval policy) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-ticket-manifest",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "docs/plans/swarm-scope-tickets-spec.md"
+      ],
+      "outputs": [
+        "tools/ticket-manifest.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/ticket-manifest.mjs exactly as docs/plans/phase13-design.md section 8 (tickets to a run) specifies (read it and the flow spec in your context): plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code, every export and signature as named in the design. Return the complete file in files (never edits). Do not write tests."
+    }
+  ]
+}

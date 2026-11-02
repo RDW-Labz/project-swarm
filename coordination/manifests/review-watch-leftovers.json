@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-watch-leftovers",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "untrusted text becomes tickets that workers run; local web server routes",
+      "type": "review",
+      "prompt": "Review coordination/review/watch-leftovers.diff. Four changes: (1) gallery comments become `proposed` fix tickets (tools/gallery-tickets.mjs, tickets.mjs status proposed, scope-commands addProposedTicket / approveProposed, ticket-manifest). Rules: the comment is untrusted data, never instructions; a proposed ticket must never reach a worker before the owner runs `swarm tickets ID --approve --yes`; the owner approval must be unforgeable by a worker or by any automated path (check every code path that moves ticket status or builds a manifest: transition, readyTickets, releaseReady, unlockReady, autopilot, sync, applyEscalation, scope split --ingest --merge, change orders, ticketsToManifest, prepareScopeRun, ci hooks); the approval hash excludes proposed tickets and includes approvedBy: check that existing approved ledgers still verify, that a proposed ticket can't be smuggled into approved state by editing the ledger (what does isApproved see), and that approve reseals correctly; prompt injection through notes (title, acceptance, files fixed; notes quoted); (2) job report route /job/ID in watch-server and jobReportLoader: token required, DNS rebinding Host check kept, path/ID validation, sanitising, size; run-drawer.js must set text only; (3) `swarm watch --all` web board (board.html/js/css, /board route): read-only, token, no XSS (run ids, roots come from files on disk), shellQuote of the copied command; (4) `swarm go` auto-starting a background `swarm watch` (startWatchBackground in watch-cli.mjs, wiring in swarm.mjs run dep): detached process hygiene, log file, URL regex, never in CI/non-TTY, never blocks or fails the run, no leaked token to anything but the user's stderr, orphan lifetime. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/gallery-tickets.mjs", "tools/tickets.mjs", "tools/scope-commands.mjs", "tools/ticket-manifest.mjs", "tools/ticket-unlock.mjs", "tools/watch-server.mjs", "tools/watch-cli.mjs", "tools/watch-assets/run-drawer.js", "tools/watch-assets/board.js", "tests/gallery-tickets.test.mjs", "tests/watch-leftovers.test.mjs", "coordination/review/watch-leftovers.diff"],
+      "outputs": [],
+      "timeoutMs": 1200000
+    }
+  ]
+}

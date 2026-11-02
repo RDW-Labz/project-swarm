@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": { "maxUsd": 1.2 },
+  "jobs": [
+    {
+      "id": "review-spend-cap",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "a spend control that refuses runs, plus ledger arithmetic",
+      "type": "review",
+      "prompt": "Review tools/project-spend.mjs and coordination/review/spend-cap.diff (project-wide spend cap checked at run start in runManifestMain, projectMaxUsd in profile and config, the re-ask that keeps its retry when the cap refuses it, the swarm watch project total, and the usage ledger fixes in mergeLedger/parseLedgerRow). Rules that must hold: (1) a new run NEVER starts once the sum of all runs in .swarm/runs has reached the cap, whichever entry point starts it (run, go, autopilot, scope review re-asks, resume is allowed by design: check that a resumed or lead/child run cannot be used to spend past the cap without limit); (2) a malformed or unreadable cap must never silently mean no cap; unreadable run states must not make the total smaller without a trace; (3) --max-usd remains per run and unaffected; (4) the cap check cannot be dodged by the pointer file being missing or the profile failing validation (decide if that is safe); (5) a re-ask refused by the cap does not leave a .retried marker, and no other error path loses the retry; (6) the ledger: the summary total equals the sum of detail rows, a row with extra cells is parsed from the right correctly, header/divider/blank rows are never counted or reported as unreadable, and a 'date' of '-' cannot corrupt totals; (7) swarm watch snapshot gains project but nothing else changes, and never throws. Also look for races (two runs starting together both pass the check), cost of reading every state.json on each run start at 1000+ runs, and anything that costs money or blocks run start unexpectedly. Report each problem as HIGH, MEDIUM or LOW with file, line and a concrete failing scenario, and say what you checked that is fine. Do not edit files.",
+      "context": ["tools/project-spend.mjs", "tools/spend.mjs", "tools/watch-cli.mjs", "tests/project-spend.test.mjs", "coordination/review/spend-cap.diff"],
+      "outputs": [],
+      "timeoutMs": 900000
+    }
+  ]
+}

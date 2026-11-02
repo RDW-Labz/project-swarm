@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0154",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker process killed before it ever produced a final result still reported a cost of nothing, even though its own transcript showed real, substantial token usage. A cost is only ever read from a provider's own final result event; a killed, timed-out, or otherwise interrupted job never emits one, so its real spend went unrecorded.",
+  "rule": "A job's own transcript is real evidence of spend, even without a final result event.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a job that ends with no reported cost now has one estimated from its own transcript (summed per distinct exchange, at a fixed rate per model), naming the estimate as such rather than as a reported figure; a model this cannot rate warns rather than guessing. Regression coverage is in `tests/field-lessons-batch-t1.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "spend",
+    "test",
+    "tokens",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#154"
+  }
+}

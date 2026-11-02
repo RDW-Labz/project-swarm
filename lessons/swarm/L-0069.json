@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0069",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "A branch built outside the swarm could not be shipped by it. One slice was built by an outside worker in its own worktree, so that root had no swarm run and `ship` refused without a run id; the coordinator fell back to a hand push and PR, and the merge waited for a later turn.",
+  "rule": "Any finished branch is shippable, whoever built it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `ship --branch <b>` (no run id) runs the given `--check` argvs, fills the checks placeholder, and applies the same hold, required-section, lock, test-binary and packaging rules before push, PR, CI wait and merge. Regression coverage is in `tests/field-lessons-batch-e.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "ci",
+    "locking",
+    "merge",
+    "merge-queue",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#69"
+  }
+}

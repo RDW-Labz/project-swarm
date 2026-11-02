@@ -99,7 +99,7 @@ describe('L166: shipRun wires integratedFiles into ship(), so the #147 lock chec
     const pkgContent = JSON.stringify({ name: 'demo', version: '1.0.0' });
     const writeJob = fake(`fs.writeFileSync('package.json', ${JSON.stringify(pkgContent)}); ${doneResult}`);
     const state = await runManifest(root, { version: 1, jobs: [job] }, { spawnImpl: writeJob });
-    const integrated = await integrateRun(root, state.id);
+    const integrated = await integrateRun(root, state.id, { securityGate: { policy: { enabled: false } } });
     assert.equal(integrated.status, 'integrated', JSON.stringify(integrated));
     await git(root, ['add', 'package.json']);
     await git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'package.json']);

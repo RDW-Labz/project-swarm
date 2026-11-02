@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0174",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A live service's own checkout had its HEAD changed by hand to set up a comparison, sitting detached for a time before being restored. Nothing in the tooling stopped a person from treating a live service's checkout the same as a disposable one, even though changing its HEAD by hand risks the service reading a half-updated tree while it keeps running.",
+  "rule": "A checkout a running service depends on is never changed by hand; a standing warning names it before that happens again.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: validating or running a manifest now warns when its target root has a live service listening on its own configured port, naming both the root and the port and pointing at a worktree as the safe alternative, reusing the existing port-probing configuration instead of adding a second list to keep in sync. Regression coverage is in `tests/field-lessons-batch-w.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "test",
+    "updater"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#174"
+  }
+}

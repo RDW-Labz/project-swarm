@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0358",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Directory references can describe real context. Accept directory and glob references when they match carried files. Keep refusing real inputs that the worker will not receive.",
+  "rule": "Directory references can describe real context.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#358"
+  }
+}

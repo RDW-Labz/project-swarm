@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0052",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A check's interpreter was discovered missing only once integration ran it for real. A manifest check named `python3 -m X`, and the system `python3` on the machine that later ran it had no such module, so a job that was otherwise fine came back red.",
+  "rule": "A check's interpreter or module is confirmed present before the job that needs it ever starts.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `validate`/`preflight` probe each check's resolved interpreter (or import the named module, for a `python -m X` form) once and refuse a manifest naming one that can't be found. Regression coverage is in `tests/lessons120-context.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "manifest"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#52"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "L-0184",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A dispatched job's own prompt named a real file on disk that was never actually copied into its workspace, because nothing tracked, declared, or contextual named it either. The file existed, so a human reading the prompt assumed it would be there; the worker discovered only after starting that it was not, after real money had already been spent.",
+  "rule": "A prompt naming a real, on-disk path that is covered by neither tracked files, declared context, nor an explicit declared resource is refused before dispatch, not discovered by the worker.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a new manifest field lists extra files to copy into every job's own workspace; a missing declared file (or one that names a directory) refuses at validate time, and an un-declared path a prompt names that exists on disk is refused the same way. Regression coverage is in `tests/field-lessons-batch-x.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "manifest",
+    "path-safety",
+    "prompt",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#184"
+  }
+}

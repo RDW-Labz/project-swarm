@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0127",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A reasoning-capable worker was cut off mid-answer at a fixed output budget that never accounted for its own internal reasoning consuming part of that budget.",
+  "rule": "A reasoning model's output budget must cover its internal reasoning as well as its actual reply.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: reasoning-capable models now get a larger default output budget; a response cut off with literally no reply text at all now gets exactly one automatic retry at double the budget, still bounded by the same spending cap. Regression coverage is in `tests/field-lessons-batch-o.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "retries",
+    "spend",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#127"
+  }
+}

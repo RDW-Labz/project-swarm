@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "concurrency": 4,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "dfx-verify-config",
+      "type": "build",
+      "prompt": "Apply these items of the review fixes section of the design to the verify config module: Tests list (ticketTests keeps only listed paths that look like test files and do not start with a dash; the prompt line and the job command splice the tests with a dot-slash prefix) and testEnv (name substring rule, value rules: jwt shape, url with a password unless host is 127.0.0.1, localhost or ::1, and the secret scanner scanSecrets from the security scan module, which takes an array of objects with path and content and returns findings). Keep it under 17000 characters.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces).",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md",
+        "tools/verify-config.mjs",
+        "tools/security-scan.mjs"
+      ],
+      "outputs": [
+        "tools/verify-config.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "dfx-verify-config-test",
+      "type": "build",
+      "prompt": "Update the test file of the verify config module for the Tests list and testEnv items of the review fixes section of the design (the module is changed by another job at the same time; use exactly those rules). Keep tests that still apply; adjust expected prompt lines and commands to the dot-slash prefix. Add tests for: a listed path starting with a dash dropped, a listed path that is not a test file dropped, each testEnv name word rule, a jwt-shaped value, a url with a password to a remote host refused and to 127.0.0.1 accepted, a secret-looking value built at run time from pieces.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces).",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md",
+        "tools/verify-config.mjs",
+        "tests/verify-config.test.mjs"
+      ],
+      "outputs": [
+        "tests/verify-config.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "dfx-gitignore",
+      "type": "build",
+      "prompt": "Apply the smaller item about .gitignore defaults of the review fixes section of the design to the gitignore defaults module: when the existing file already has a negation line that starts with an exclamation mark and a dot-env prefix, do not add the dot-env wildcard line; report it in a new skipped array of the result ({ changed, added, skipped }). Keep everything else.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces).",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md",
+        "tools/gitignore-defaults.mjs"
+      ],
+      "outputs": [
+        "tools/gitignore-defaults.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "dfx-gitignore-test",
+      "type": "build",
+      "prompt": "Update the test file of the gitignore defaults module for the result shape with skipped and the negation rule (module changed by another job at the same time). Keep tests that still apply, add one for the negation case and one that skipped is empty otherwise.\nReturn each output file complete in files, never edits. Keep every existing export, behavior and test that the design does not change. ES modules, node:test, no secrets in code or tests (build secret-looking values at run time from pieces).",
+      "context": [
+        "docs/plans/dogfood-fixes-design.md",
+        "tools/gitignore-defaults.mjs",
+        "tests/gitignore-defaults.test.mjs"
+      ],
+      "outputs": [
+        "tests/gitignore-defaults.test.mjs"
+      ]
+    }
+  ]
+}

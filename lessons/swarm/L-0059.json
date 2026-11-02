@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0059",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A cancelled check process left its children running. A `cancel` command during an in-flight check killed the main process but left child processes orphaned, consuming resources and holding ports.",
+  "rule": "An in-flight check is killed as a process group, not left running after a run is cancelled.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `runCheck` spawns the check as a process group (not a bare child), and `cancel` kills the whole group, ensuring no child process survives after cancellation. Regression coverage is in `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "mutation-testing",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#59"
+  }
+}

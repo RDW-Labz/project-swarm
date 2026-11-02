@@ -1,0 +1,712 @@
+diff --git a/tests/env-example-context.test.mjs b/tests/env-example-context.test.mjs
+new file mode 100644
+index 0000000..0c20377
+--- /dev/null
++++ b/tests/env-example-context.test.mjs
+@@ -0,0 +1,72 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { runManifest, validateProject } from '../tools/swarm.mjs';
++import { protectedViolations } from '../tools/init-profile.mjs';
++
++const exec = promisify(execFile);
++const reply = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
++const job = (extra = {}) => ({ id: 'job-0', agent: 'ollama', model: 'test-model', prompt: 'Write out/0.txt', context: ['input.txt', '.env.example'], outputs: ['out/0.txt'], timeoutMs: 5000, ...extra });
++
++async function fixture(t, protectedPaths = ['.env', '.env.example', '.env.local']) {
++  const temp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-envex-')));
++  const root = path.join(temp, 'repo');
++  await fs.mkdir(root);
++  t.after(() => fs.rm(temp, { recursive: true, force: true }));
++  await fs.writeFile(path.join(root, 'input.txt'), 'original\n');
++  await fs.writeFile(path.join(root, '.env.example'), 'DATABASE_URL=\nSTRIPE_KEY=\n');
++  await fs.writeFile(path.join(root, '.env'), 'DATABASE_URL=postgres://real-secret\n');
++  await fs.writeFile(path.join(root, '.gitignore'), '.swarm/\n.env\n');
++  await fs.writeFile(path.join(root, '.project-swarm.json'), JSON.stringify({ version: 1, profile: { sensitive: true, protectedPaths, budget: { maxUsd: 5 }, baseCheck: { status: 'none' } } }));
++  await fs.writeFile(path.join(temp, 'config.json'), '{}');
++  await exec('git', ['init', '-q', root]);
++  await exec('git', ['-C', root, 'add', '.']);
++  await exec('git', ['-C', root, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'i']);
++  return { root, env: { ...process.env, SWARM_CONFIG: path.join(temp, 'config.json'), SWARM_SPEND_DIR: path.join(temp, 'spend') }, liveDir: path.join(temp, 'live') };
++}
++
++test('lesson 54: a protected .env.example is readable context, so a wave that lists it can start; it is still never writable', async t => {
++  const f = await fixture(t);
++  const profile = { protectedPaths: ['.env', '.env.example'] };
++  assert.deepEqual(protectedViolations(profile, [{ id: 'a', context: ['.env.example'], outputs: ['src/a.ts'] }]), []);
++  assert.equal(protectedViolations(profile, [{ id: 'a', context: ['.env.example'], outputs: ['.env.example'] }]).length, 1, 'writing the template is still refused');
++  assert.equal(protectedViolations(profile, [{ id: 'a', context: ['.env'], outputs: ['src/a.ts'] }]).length, 1, 'a real .env is never readable');
++  assert.equal(protectedViolations(profile, [{ id: 'a', context: ['.env.local'], outputs: ['src/a.ts'] }]).length, 0, 'not protected by name here');
++  await validateProject(f.root, { version: 1, jobs: [job({ prompt: 'p' })] });
++  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job({ context: ['input.txt', '.env'] })] }), /protected-path|Reserved or secret/);
++  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job({ outputs: ['.env.example'] })] }), /protected-path|Reserved or secret/);
++});
++
++test('lesson 54: the run itself reads the template into the worker (names only), never the real .env', async t => {
++  const f = await fixture(t);
++  let prompt = '';
++  const state = await runManifest(f.root, { version: 1, concurrency: 1, jobs: [job()] }, { ...f, fetchImpl: async (_url, request) => { prompt = request.body; return reply({ done: true, done_reason: 'stop', usage: { prompt_tokens: 60, completion_tokens: 40, total_tokens: 100 }, message: { content: JSON.stringify({ summary: 'done', files: [{ path: 'out/0.txt', content: 'x' }] }) } }); } });
++  assert.equal(state.status, 'complete', `${state.error} ${JSON.stringify(state.jobs.map(j => [j.status, j.error]))}`);
++  assert.match(prompt, /DATABASE_URL/, 'the worker saw the template');
++  assert.doesNotMatch(prompt, /real-secret/);
++});
++
++test('lesson 54: a symlink named like the template that leads to the real .env is still refused', async t => {
++  const f = await fixture(t);
++  await fs.rm(path.join(f.root, '.env.example'));
++  await fs.symlink('.env', path.join(f.root, '.env.example'));
++  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job()] }), /protected-path|Symlink|Reserved|secret|resolves/);
++});
++
++test('review fixes: a template that holds a real-looking secret value is not handed to a worker; a link from the template name to another secret is refused', async t => {
++  const f = await fixture(t);
++  await fs.writeFile(path.join(f.root, '.env.example'), `STRIPE_KEY=${['sk', 'live', '51H8aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789abcdefgh'].join('_')}\n`);
++  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job()] }), /real secret value|protected-path/);
++  await fs.writeFile(path.join(f.root, '.env.example'), 'STRIPE_KEY=\nPORT=3000\n');
++  await validateProject(f.root, { version: 1, jobs: [job()] });
++  await fs.writeFile(path.join(f.root, '.env.local'), 'X=1\n');
++  await fs.rm(path.join(f.root, '.env.example'));
++  await fs.symlink('.env.local', path.join(f.root, '.env.example'));
++  await assert.rejects(validateProject(f.root, { version: 1, jobs: [job()] }), /link to the secret|protected-path|Symlink|Reserved/);
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index e66eb40..6b5fe6a 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.110.0', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.111.0', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.110.0');
++  assert.equal(pkg.version, '1.111.0');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test tests/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.110\.0/);
+-  assert.match(readme, /Install from tag v1\.110\.0/);
++  assert.match(readme, /Use Project Swarm 1\.111\.0/);
++  assert.match(readme, /Install from tag v1\.111\.0/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.110\.0\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.111\.0\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index e687ff7..3e419e8 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.110.0', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.110.0 while 1.46.1 history remains', async () => {
++describe('release: 1.111.0', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.111.0 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.110.0');
+-    assert.equal(lock.version, '1.110.0');
+-    assert.equal(lock.packages[''].version, '1.110.0');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.110\.0\n/);
++    assert.equal(pkg.version, '1.111.0');
++    assert.equal(lock.version, '1.111.0');
++    assert.equal(lock.packages[''].version, '1.111.0');
++    assert.match(changelog, /^# Changelog\n\n## 1\.111\.0\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 20d6963..b54ba72 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.110.0');
+-  assert.equal(lock.version, '1.110.0');
+-  assert.equal(lock.packages[''].version, '1.110.0');
++  assert.equal(pkg.version, '1.111.0');
++  assert.equal(lock.version, '1.111.0');
++  assert.equal(lock.packages[''].version, '1.111.0');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.110\.0\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.111\.0\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 3551881..242cc71 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.110.0 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.111.0 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.110.0');
+-  assert.equal(lock.version, '1.110.0');
+-  assert.equal(lock.packages[''].version, '1.110.0');
++  assert.equal(pkg.version, '1.111.0');
++  assert.equal(lock.version, '1.111.0');
++  assert.equal(lock.packages[''].version, '1.111.0');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.110\.0\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.111\.0\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.110.0',
++    'README.md': '1.111.0',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.110.0',
+-    'tests/field-lessons-batch-x.test.mjs': '1.110.0',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.110.0',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.110.0',
++    'tests/field-lesson-t80-cli.test.mjs': '1.111.0',
++    'tests/field-lessons-batch-x.test.mjs': '1.111.0',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.111.0',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.111.0',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index 567a833..17c1454 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -365,14 +365,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.110.0', () => {
+-  test('package.json and package-lock.json are both at 1.110.0', async () => {
++describe('release: 1.111.0', () => {
++  test('package.json and package-lock.json are both at 1.111.0', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.110.0');
+-    assert.equal(lock.version, '1.110.0');
+-    assert.equal(lock.packages[''].version, '1.110.0');
++    assert.equal(pkg.version, '1.111.0');
++    assert.equal(lock.version, '1.111.0');
++    assert.equal(lock.packages[''].version, '1.111.0');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/lesson-34-eval.test.mjs b/tests/lesson-34-eval.test.mjs
+index ddf1443..5eee7e7 100644
+--- a/tests/lesson-34-eval.test.mjs
++++ b/tests/lesson-34-eval.test.mjs
+@@ -45,10 +45,18 @@ test('eval 34.1: split adds an integration ticket per requirement, and a require
+   // Old behavior: modules only, nothing mounts them, split accepted it.
+   const root = await project(t);
+   await fakeRun(root, 'r1', [MODULE]);
+-  const refused = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
+-  assert.equal(refused.exitCode, 1);
+-  assert.match(refused.stdout, /not wired.*R-001: build tickets but no integration ticket/s);
+-  assert.equal(await readLedger(root), null, 'no ledger is written for an unwired split');
++  // New behaviour (parts-app lesson 55): the split is kept, the wire manifest is written, and approval is held until the integration ticket exists.
++  const kept = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
++  assert.equal(kept.exitCode, 0, kept.stdout);
++  assert.match(kept.stdout, /wiring: 1 requirement\(s\) have modules but no integration ticket \(R-001\)/);
++  assert.match(kept.stdout, /Next: swarm run docs\/scope\/split\/wire-manifest\.json, then swarm scope split --ingest RUN --merge --wire/);
++  const wireManifest = JSON.parse(await fs.readFile(path.join(root, 'docs/scope/split/wire-manifest.json'), 'utf8'));
++  assert.match(wireManifest.jobs[0].prompt, /Write ONLY integration tickets/);
++  assert.equal((await readLedger(root)).tickets.length > 0, true, 'the split is not thrown away');
++  const held = await runScopeCommand(root, 'scope', ['approve', '--yes']);
++  assert.equal(held.exitCode, 1);
++  assert.match(held.stdout, /not approvable: 1 requirement\(s\) have modules but no integration ticket \(R-001\)/);
++  await fs.rm(path.join(root, '.swarm/project/tickets.json'));
+   // The prompt asks for it.
+   assert.match(buildSplitManifest(parseScope(SCOPE), {}).jobs[0].prompt, /integration ticket.*routes, pages or entry points.*route-level or end-to-end test/s);
+   // An integration ticket without a route-level test is refused too.
+diff --git a/tests/splitter-lesson-55.test.mjs b/tests/splitter-lesson-55.test.mjs
+new file mode 100644
+index 0000000..4338707
+--- /dev/null
++++ b/tests/splitter-lesson-55.test.mjs
+@@ -0,0 +1,138 @@
++// SPDX-License-Identifier: Apache-2.0
++// parts-app lessons 54-55: a Haiku split left tests without acceptance, wired nothing, and put tests before the modules they import.
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import { runScopeCommand, ticketsFromStageLists, buildSplitManifest } from '../tools/scope-commands.mjs';
++import { parseScope } from '../tools/scope.mjs';
++import { orderTestsAfterBuild } from '../tools/wiring.mjs';
++import { readLedger } from '../tools/tickets.mjs';
++
++const SCOPE = ['# Scope: Demo', 'Version: 1', '', '## Overview', 'Demo app.', '', '## Stages', '- S1: Core', '',
++  '## S1 Core', '### R-001 A user can create a request.', 'Acceptance:', '- Returns 201.', '- Rejects an empty body.', '',
++  '### R-002 A user can list requests.', 'Acceptance:', '- Returns the list.', '', '## Protected', '- .env', ''].join('\n');
++const scope = parseScope(SCOPE);
++const item = (key, extra = {}) => ({ key, title: key, type: 'build', scopeRefs: ['R-001'], acceptance: ['ok'], files: [`src/${key}.mjs`], size: 'S', risk: 'low', ...extra });
++const tmp = async t => { const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'l55-'))); t.after(() => fs.rm(root, { recursive: true, force: true })); return root; };
++async function fakeRun(root, id, items) {
++  const ws = `.swarm/workspaces/${id}/split-S1`;
++  await fs.mkdir(path.join(root, ws, 'docs/scope/split'), { recursive: true });
++  await fs.writeFile(path.join(root, ws, 'docs/scope/split/S1.json'), JSON.stringify(items));
++  await fs.mkdir(path.join(root, '.swarm/runs', id), { recursive: true });
++  await fs.writeFile(path.join(root, '.swarm/runs', id, 'state.json'), JSON.stringify({ id, jobs: [{ id: 'split-S1', status: 'complete', workspace: ws }] }));
++}
++
++test('a test or build ticket with no acceptance lines gets its requirement\'s own lines, said in a note; with none to copy it is still refused', () => {
++  const built = ticketsFromStageLists([{ stage: 'S1', items: [item('mod'), item('mod-test', { type: 'test', acceptance: [], files: ['tests/mod.test.mjs'], dependsOn: ['mod'] }), item('blank', { type: 'test', files: ['tests/b.test.mjs'], acceptance: ['  '], scopeRefs: ['R-001'] })] }], scope);
++  assert.deepEqual(built.errors, []);
++  const test_ = built.tickets.find(t => t.title === 'mod-test');
++  assert.deepEqual(test_.acceptance, ['Returns 201.', 'Rejects an empty body.']);
++  assert.ok(built.notes.some(n => /T-0002: no acceptance lines from the worker; copied 2 from R-001/.test(n)));
++  assert.deepEqual(built.tickets.find(t => t.title === 'blank').acceptance, ['Returns 201.', 'Rejects an empty body.'], 'blank lines count as none');
++  const bare = { ...scope, requirements: scope.requirements.map(r => (r.id === 'R-002' ? { ...r, acceptance: [] } : r)) };
++  const none = ticketsFromStageLists([{ stage: 'S1', items: [item('x', { acceptance: [], scopeRefs: ['R-002'] })] }], bare);
++  assert.match(none.errors[0], /acceptance is required/);
++  const buildBare = ticketsFromStageLists([{ stage: 'S1', items: [item('z', { acceptance: [] })] }], scope);
++  assert.match(buildBare.errors[0], /acceptance is required/, 'a module ticket is not given route-level lines it cannot meet before wiring');
++  const kept = ticketsFromStageLists([{ stage: 'S1', items: [item('y', { acceptance: ['mine'] })] }], scope);
++  assert.deepEqual(kept.tickets[0].acceptance, ['mine'], 'the worker\'s own lines are never replaced');
++});
++
++test('a test waits for the modules it tests; a test-first order from the worker is flipped, never a cycle; integration tickets and old tickets are left alone', () => {
++  const t = (id, type, deps = [], extra = {}) => ({ id, type, status: 'todo', scopeRefs: ['R-001'], dependsOn: deps, ...extra });
++  const added = [t('T-1', 'test', []), t('T-2', 'build', ['T-1']), t('T-3', 'build', []), t('T-4', 'build', ['T-3'], { integration: true })];
++  const notes = orderTestsAfterBuild(added, []);
++  assert.deepEqual(added[0].dependsOn.sort(), ['T-2', 'T-3']);
++  assert.deepEqual(added[1].dependsOn, [], 'the module no longer waits for its own test');
++  assert.deepEqual(added[3].dependsOn, ['T-3'], 'integration tickets are not touched');
++  assert.match(notes[0], /T-1: test ticket now waits for T-2, T-3.*T-2 no longer waits for it/);
++  assert.deepEqual(orderTestsAfterBuild(added, []), [], 'idempotent');
++  // An older done module is not given a dependency; a test of another requirement is not tied to this one.
++  const old = [t('T-0', 'build', [], { status: 'done' })];
++  const fresh = [t('T-9', 'test', [])];
++  orderTestsAfterBuild(fresh, old);
++  assert.deepEqual(fresh[0].dependsOn, []);
++  const other = [t('T-5', 'test', [], { scopeRefs: ['R-002'] }), t('T-6', 'build', [])];
++  orderTestsAfterBuild(other, []);
++  assert.deepEqual(other[0].dependsOn, []);
++  // A chain that already runs module -> other -> test is not turned into a loop.
++  const chain = [t('T-7', 'build', []), t('T-8', 'build', ['T-7']), t('T-10', 'test', ['T-8'])];
++  orderTestsAfterBuild(chain, []);
++  assert.equal(chain[0].dependsOn.includes('T-10'), false);
++});
++
++test('ingest orders the split worker\'s test-first tickets after the build tickets', async t => {
++  const root = await tmp(t);
++  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
++  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
++  const mount = item('mount', { integration: true, files: ['src/routes/r.mjs'], tests: ['tests/routes.test.mjs'], scopeRefs: ['R-001'] });
++  await fakeRun(root, 'r1', [item('mod', { dependsOn: ['mod-test'] }), item('mod-test', { type: 'test', acceptance: [], files: ['tests/mod.test.mjs'] }), mount, item('list', { scopeRefs: ['R-002'] }), item('list-mount', { integration: true, files: ['src/routes/list.mjs'], tests: ['tests/list.test.mjs'], scopeRefs: ['R-002'] })]);
++  const res = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
++  assert.equal(res.exitCode, 0, res.stdout);
++  assert.match(res.stdout, /note: T-0002: no acceptance lines from the worker; copied 2 from R-001/);
++  assert.match(res.stdout, /note: T-0002: test ticket now waits for T-0001/);
++  const ledger = await readLedger(root);
++  const mod = ledger.tickets.find(x => x.title === 'mod'), test_ = ledger.tickets.find(x => x.title === 'mod-test');
++  assert.deepEqual(test_.dependsOn, [mod.id]);
++  assert.deepEqual(mod.dependsOn, []);
++});
++
++test('a split with modules but no integration ticket is kept, the wire manifest is written, and approval is held; the prompt asks for acceptance and test order', async t => {
++  const root = await tmp(t);
++  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
++  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
++  await fakeRun(root, 'r1', [item('mod'), item('list', { scopeRefs: ['R-002'] }), item('list-mount', { integration: true, files: ['src/routes/list.mjs'], tests: ['tests/list.test.mjs'], scopeRefs: ['R-002'] })]);
++  const res = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1']);
++  assert.equal(res.exitCode, 0, res.stdout);
++  assert.match(res.stdout, /wiring: 1 requirement\(s\).*\(R-001\)/);
++  const manifest = JSON.parse(await fs.readFile(path.join(root, 'docs/scope/split/wire-manifest.json'), 'utf8'));
++  assert.match(manifest.jobs[0].prompt, /Existing module tickets of R-001/);
++  assert.deepEqual((await readLedger(root)).pendingWiring, ['R-001']);
++  assert.equal(await fs.stat(path.join(root, 'docs/scope/split/manifest.json')).then(() => true, () => false), false, 'the split manifest is not overwritten');
++  assert.equal((await runScopeCommand(root, 'scope', ['approve', '--yes'])).exitCode, 1);
++  const prompt = buildSplitManifest(scope, {}).jobs[0].prompt;
++  assert.match(prompt, /at least one acceptance line/);
++  assert.match(prompt, /A test never runs before the module it imports exists/);
++});
++
++test('a merge that would leave a requirement unwired is refused when the ledger is approved (the running build keeps its approval)', async t => {
++  const root = await tmp(t);
++  await fs.mkdir(path.join(root, 'docs/scope'), { recursive: true });
++  await fs.writeFile(path.join(root, 'docs/scope/scope.md'), SCOPE);
++  const wired = (key, req, file) => [item(key, { scopeRefs: [req] }), item(`${key}-mount`, { integration: true, files: [`src/routes/${file}.mjs`], tests: [`tests/${file}.test.mjs`], scopeRefs: [req] })];
++  await fakeRun(root, 'r1', wired('a', 'R-001', 'a'));
++  assert.equal((await runScopeCommand(root, 'scope', ['split', '--ingest', 'r1'])).exitCode, 0);
++  const only = (await readLedger(root)).tickets.filter(x => x.scopeRefs.includes('R-001'));
++  assert.ok(only.length);
++  // Approve by hand-sealing the half ledger is not needed: a merge of R-002 modules without a mount on an UNapproved ledger is kept.
++  await fakeRun(root, 'r2', [item('b', { scopeRefs: ['R-002'] })]);
++  const kept = await runScopeCommand(root, 'scope', ['split', '--ingest', 'r2', '--merge']);
++  assert.equal(kept.exitCode, 0, kept.stdout);
++  assert.deepEqual((await readLedger(root)).pendingWiring, ['R-002']);
++  const approvedNow = await runScopeCommand(root, 'scope', ['approve', '--yes']);
++  assert.equal(approvedNow.exitCode, 1);
++  assert.match(approvedNow.stdout, /not approvable: 1 requirement\(s\).*\(R-002\)/);
++});
++
++test('review fixes: template reads (names only, exactly the file, no secret folder), a key-looking value, a template word in front of a key extension, and migrations before tests', async () => {
++  const { isExampleFile, templateReadable } = await import('../tools/init-profile.mjs');
++  assert.equal(isExampleFile('.env.example'), true);
++  assert.equal(isExampleFile('config.example.json'), true);
++  for (const bad of ['server.example.pem', 'dev.sample.key', 'tls.template.p12', 'id_rsa.example', '.env', '.env.local', '.env.example.bak']) assert.equal(isExampleFile(bad), false, bad);
++  const profile = { protectedPaths: ['.env', '.env.example', 'secrets/', 'config/'] };
++  assert.equal(templateReadable(profile, '.env.example'), true, 'protected exactly by name: readable');
++  assert.equal(templateReadable(profile, 'secrets/x.example.json'), false, 'a secret folder above it');
++  assert.equal(templateReadable(profile, 'config/app.example.json'), false, 'a protected folder above it');
++  assert.equal(templateReadable(profile, '.git/hooks/pre-commit.sample'), false);
++  assert.equal(templateReadable(profile, '.env'), false);
++  assert.equal(templateReadable({ protectedPaths: [] }, 'app/.env.example'), true);
++  const t = (id, type, deps = [], extra = {}) => ({ id, type, status: 'todo', scopeRefs: ['R-001'], dependsOn: deps, ...extra });
++  const added = [t('T-1', 'test', []), t('T-2', 'migration', [])];
++  orderTestsAfterBuild(added, []);
++  assert.deepEqual(added[0].dependsOn, ['T-2'], 'a test waits for its migration too');
++  const indirect = [t('T-1', 'test', []), t('T-2', 'build', ['T-3']), t('T-3', 'docs', ['T-1'])];
++  assert.match(orderTestsAfterBuild(indirect, []).join(' '), /T-1: T-2 waits for this test through other tickets/);
++});
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index 88c3e3e..9ad5ccb 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.110.0');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.110\.0\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.111.0');
++  assert.match(changelog, /^# Changelog\n\n## 1\.111\.0\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/init-profile.mjs b/tools/init-profile.mjs
+index e7ddb1f..32af841 100644
+--- a/tools/init-profile.mjs
++++ b/tools/init-profile.mjs
+@@ -42,11 +42,33 @@ function secretEntries(file) {
+ 
+ // A template that holds names, not values (.env.example, .env.sample, config.example.json, terraform.tfvars.example): safe to READ as context.
+ // It is still protected from writes, and a file that merely sits next to a secret is not an example.
+-export function isExampleFile(file) {
++function looksLikeExample(file) {
+   const name = String(file).split('\\').join('/').split('/').pop().toLowerCase();
+   return /^\.env(?:\.[a-z0-9_-]+)*\.(?:example|sample|template|dist)$/.test(name) || /^[a-z0-9_.-]+\.(?:example|sample|template)(?:\.[a-z0-9]+)?$|^[a-z0-9_.-]+\.(?:example|sample|template)$/.test(name) && !/^\.env/.test(name) && !/(?:^|[._-])(?:id_rsa|id_dsa|id_ed25519|credentials|secrets?)(?:[._-]|$)/.test(name);
+ }
+ 
++export function isExampleFile(file) {
++  if (!looksLikeExample(file)) return false;
++  const name = String(file).split('\\').join('/').split('/').pop().toLowerCase();
++  if (name.startsWith('.env')) return true;
++  // server.example.pem, dev.sample.key: a template word in front of a key or certificate extension is still a key.
++  const stripped = name.replace(/\.(?:example|sample|template)(?=\.|$)/, '');
++  return !(SECRET_EXTENSIONS.includes(path.extname(name)) || SECRET_EXTENSIONS.includes(path.extname(stripped)) || SECRET_NAMES.includes(stripped));
++}
++
++// A names-only template that may be READ although the profile protects it: the protected entry must be exactly this file (never a folder, never
++// .git/ or .swarm/), and no folder above it may be a secret folder. Writes are never allowed by this.
++export function templateReadable(profile, file) {
++  const norm = path.posix.normalize(String(file).split('\\').join('/'));
++  if (!isExampleFile(norm)) return false;
++  const dir = path.posix.dirname(norm);
++  if (dir !== '.' && isSecretPath(`${dir}/x`)) return false;
++  const entry = protectedPathHit(profile, norm);
++  if (!entry) return true;
++  const key = entry.normalize('NFC').toLowerCase();
++  return !key.endsWith('/') && key === norm.normalize('NFC').toLowerCase();
++}
++
+ // True when a repo path names a secret: any .env file (env.example.txt is a template and is fine), keys, certificates, secret folders.
+ export function isSecretPath(file) {
+   const parts = String(file).split('\\').join('/').split('/');
+@@ -104,6 +126,8 @@ export function protectedViolations(profile, jobs) {
+       if (kind === 'context' && mayRead) continue;
+       const files = Array.isArray(job?.[field]) ? job[field] : [];
+       for (const file of files) {
++        // A names-only template (.env.example) is readable even when it is a protected path: protection is against writes, and the file holds no values.
++        if (kind === 'context' && typeof file === 'string' && templateReadable(profile, file)) continue;
+         const entry = typeof file === 'string' ? protectedPathHit(profile, file) : null;
+         if (entry) out.push({ job: id, path: file, entry, kind });
+       }
+diff --git a/tools/scope-commands.mjs b/tools/scope-commands.mjs
+index 8120789..7c84c13 100644
+--- a/tools/scope-commands.mjs
++++ b/tools/scope-commands.mjs
+@@ -26,7 +26,7 @@ import { doneEvidence, ticketTests, failedRunChecks } from './verify-config.mjs'
+ import { deriveQualityChecks, qualityEvidence } from './quality-checks.mjs';
+ import { nextStep, sizeTicket } from './escalation.mjs';
+ import { unlockReady, releaseReady } from './ticket-unlock.mjs';
+-import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
++import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets } from './wiring.mjs';
+ import { parseEnvNames, envNamesLine } from './env-names.mjs';
+ import { detectTestCommand } from './zero-tests.mjs';
+ import { execFile } from 'node:child_process';
+@@ -333,6 +333,7 @@ function splitPrompt(scope, stage, only, layout = '', wire = null, existing = nu
+     'size (S or M; never larger: split instead), risk (low, medium or high), sensitive (true for payments, auth or customer data), steps (only for human tickets: 1 to 30 short imperative steps), skeleton (true only on the tickets of the thinnest vertical slice of the first stage: database, API, screen and test, the smallest path through the product; omit it elsewhere).',
+     'Rules: every requirement is covered by at least one ticket; every ticket traces to a requirement; two tickets that can run at the same time never write the same file;',
+     'put shared types or contracts first and make the tickets that use them depend on them; add a test ticket for each requirement group.',
++    'Every build, test and migration ticket has at least one acceptance line (copy the requirement\'s own acceptance line when you have nothing more exact). A test never runs before the module it imports exists: prefer listing a module\'s test files in that build ticket\'s "tests" field over a separate test ticket, and when a separate test ticket is needed it is written to run after the build tickets it tests (the runner orders it after them).',
+     'A ticket of type contract writes exactly one OpenAPI 3 JSON file under contracts/ (for example contracts/api.json) using only paths (get, post, put, patch, delete, each with an operationId), components.schemas and local $ref; TypeScript, SQL and YAML types belong in build tickets that depend on the contract ticket.',
+     'Migration tickets write DDL only; their tests are separate tickets in a tests folder.',
+     'Keep every ticket small enough for one worker answer: at most 4 files, each file under about 12 KB when written; split a bigger feature into several tickets (the output of one worker is capped at about 15 KB per file).',
+@@ -439,7 +440,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
+     else keyToId.set(key, id);
+   }
+   n = startAt;
+-  for (const { stage, items } of lists) for (const raw of items) {
++  for (const { stage, items } of lists) for (let raw of items) {
+     const id = `T-${String(n).padStart(4, '0')}`;
+     n += 1;
+     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push(`${stage}: ticket ${id} is not an object`); continue; }
+@@ -451,6 +452,13 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
+     const unknown = strings(raw.dependsOn).filter(k => !keyToId.has(`${stage}/${k}`));
+     // A worker sometimes invents dependency keys (a ticket that is not in its file): they are dropped and reported, the split is not refused.
+     if (unknown.length) notes.push(`${id}: dropped dependsOn keys that name no ticket in the file: ${unknown.join(', ')}`);
++    // A worker (a small model especially) sometimes leaves a TEST ticket without acceptance lines (parts-app lesson 55): they are copied from its
++    // requirements' own acceptance, which is what a test checks. A build or migration ticket is not given them (the lines of a requirement are usually route-level
++    // and a module cannot meet them before it is wired): it is refused as before. With none to copy, the test ticket is refused too.
++    if (raw.type === 'test' && !strings(raw.acceptance).some(a => a.trim())) {
++      const copied = strings(raw.scopeRefs).flatMap(r => requirementText(scope, r)?.acceptance ?? []).slice(0, 5);
++      if (copied.length) { raw = { ...raw, acceptance: copied }; notes.push(`${id}: no acceptance lines from the worker; copied ${copied.length} from ${strings(raw.scopeRefs).join(', ')}`); }
++    }
+     const t = {
+       id, title: String(raw.title ?? ''), type: raw.type, stage, epic: String(raw.epic ?? 'E-00'),
+       scopeRefs: strings(raw.scopeRefs), acceptance: strings(raw.acceptance), files: strings(raw.files),
+@@ -616,10 +624,17 @@ async function cmdSplit(root, { rest, flags }) {
+     if (stray.length) return out(`split refused; a change order may only add tickets for requirements that have none (${[...pending].slice(0, 8).join(', ') || 'none'}). These tickets touch other requirements:\n${stray.slice(0, 10).map(t => `  ${t.title} (${t.scopeRefs.join(', ')})`).join('\n')}\nNothing was written; rerun the split job.`, 1);
+   }
+   addWiringDeps(built.tickets, existing?.tickets ?? []);
++  const orderNotes = orderTestsAfterBuild(built.tickets, existing?.tickets ?? []);
+   chainSharedFiles(built.tickets, existing?.tickets ?? []);
+   const touched = [...new Set(built.tickets.filter(t => t.type === 'build').flatMap(t => t.scopeRefs))];
+-  const unwired = wiringGaps([...(existing?.tickets ?? []), ...built.tickets], touched);
+-  if (unwired.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${unwired.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
++  const allForWiring = [...(existing?.tickets ?? []), ...built.tickets];
++  const unwired = wiringGaps(allForWiring, touched);
++  // A requirement with modules and no integration ticket is the common miss of a small model: the split is kept (not thrown away) and the wire manifest is written,
++  // so one more run adds the integration tickets. The ledger cannot be approved until they exist. Other wiring gaps (a test missing on an integration ticket) still refuse.
++  const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
++  // A merge into an APPROVED ledger keeps the old refusal: it would drop the approval of a build that may be running, for tickets that cannot be built yet.
++  const hardGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
++  if (hardGaps.length) return out(`split refused; the features are not wired (add an integration ticket per requirement, then split these stages again):\n${hardGaps.slice(0, 15).map(g => `  ${g.reason}`).join('\n')}`, 1);
+   let tickets = built.tickets;
+   if (!existing) tickets = [...tickets, ...checklistToTickets(day0Checklist(scope))];
+   const base = existing ?? createLedger({ scope: { name: scope.name, version: scope.version, hash, file }, tickets: [] });
+@@ -631,7 +646,19 @@ async function cmdSplit(root, { rest, flags }) {
+   await writeLedger(root, ledger);
+   await appendLog(root, { event: flags.merge ? 'split-merge' : 'split', tickets: tickets.length, run: flags.ingest, ok: tree.ok });
+   const gaps = tree.ok ? [] : ['Some requirements still have no tickets: run swarm scope split again (it splits only those), then --ingest RUN --merge.'];
+-  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...built.notes.slice(0, 10).map(n => `note: ${n}`), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, tree.ok ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
++  // Requirements the worker left without an integration ticket: the wire manifest is written now, so the next step is one run and one ingest.
++  let wireLines = [];
++  const missing = [...needsIntegration].filter(r => unwiredRequirements(ledger.tickets).includes(r)).sort();
++  if (missing.length) {
++    const wire = missing.map(req => ({ req, stage: scope.requirements.find(r => r.id === req)?.stage, modules: moduleTickets(ledger.tickets, req) }));
++    const wireManifest = buildSplitManifest(scope, { only: new Set(missing), layout: await projectLayout(root, scope, profile), wire });
++    // Its own file: the split manifest the owner may still need is never overwritten.
++    await writeFileSafe(root, `${SPLIT_DIR}/wire-manifest.json`, `${JSON.stringify(wireManifest, null, 2)}\n`);
++    ledger.pendingWiring = missing;
++    await writeLedger(root, ledger);
++    wireLines = [`wiring: ${missing.length} requirement(s) have modules but no integration ticket (${missing.slice(0, 8).join(', ')}); the ledger cannot be approved until they do.`, `Next: swarm run ${SPLIT_DIR}/wire-manifest.json, then swarm scope split --ingest RUN --merge --wire`];
++  }
++  return out([`ledger written: ${tickets.length} tickets added (not approved)`, ...notes.map(n => `note: ${n}`), ...[...built.notes, ...orderNotes].slice(0, 12).map(n => `note: ${n}`), ...(built.notes.length + orderNotes.length > 12 ? [`note: ...and ${built.notes.length + orderNotes.length - 12} more (copied acceptance lines and test ordering are in the ticket log)`] : []), ...lines, ...await toolConfigWarnings(root, ledger.tickets), ...gaps, ...wireLines, tree.ok && !wireLines.length ? 'Next: swarm scope approve' : ''].filter(Boolean).join('\n'));
+ }
+ 
+ async function cmdApprove(root, { rest, flags }) {
+@@ -641,6 +668,12 @@ async function cmdApprove(root, { rest, flags }) {
+   if (ledger.scope?.hash !== hash) return out('the scope file changed after the split; record it with swarm change "reason" (or re-split)', 1);
+   const { tree, lines } = treeReport(scope, ledger.tickets);
+   if (!tree.ok) return out(`not approvable:\n${lines.join('\n')}`, 1);
++  // A split that kept requirements without an integration ticket is held here, where it can still be fixed (swarm scope split --wire).
++  {
++    const unwiredNow = new Set(unwiredRequirements(ledger.tickets));
++    const open = [...new Set([...(ledger.wiring === true ? unwiredNow : []), ...(ledger.pendingWiring ?? []).filter(r => unwiredNow.has(r))])].filter(r => !builtRequirements(ledger.tickets, [r]).length).sort();
++    if (open.length) return out(`not approvable: ${open.length} requirement(s) have modules but no integration ticket (${open.slice(0, 8).join(', ')}). Run swarm scope split --wire, swarm run docs/scope/split/manifest.json, then swarm scope split --ingest RUN --merge --wire`, 1);
++  }
+   const uiProfile = await readProfile(root);
+   const knownScreens = new Set((uiProfile?.ui?.screens ?? []).map(screen => screen.id));
+   const unknownScreens = ledger.tickets.flatMap(t => (t.screens ?? []).filter(id => !knownScreens.has(id)).map(id => `${t.id}: ${id}`));
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 9e1e158..2fcb3b1 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -27,9 +27,9 @@ import { summarizeMap, mapIsFresh, readRepoMap } from './repo-map.mjs';
+ import { selectAffectedTests, expandAffectedArgv } from './affected.mjs';
+ import { createBatchController } from './adaptive-batch.mjs';
+ import { runHook, shouldRun, fixTicketFromFailure } from './ci-hooks.mjs';
+-import { redactText } from './lesson-schema.mjs';
++import { redactText, findUnsafeText } from './lesson-schema.mjs';
+ import { addCiFixTicket } from './scope-commands.mjs';
+-import { protectedViolations, protectedPathHit, isExampleFile, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
++import { protectedViolations, protectedPathHit, isExampleFile, isSecretPath as isProfileSecretPath, templateReadable, formatBaseCheck, validateProfile, hookFiles, hookScriptNames } from './init-profile.mjs';
+ import { resolveCliHosts, sshInvocation, sshEnv, remoteExec, cliHostFailure } from './cli-host.mjs';
+ import { isHumanJob, validateHumanJob, liftHumanJobs, addGroup, readStore as readHumanStore, humanGroupReady, updateGroup as updateHumanGroup } from './human-jobs.mjs';
+ import { createBatchCollector, batchEligible, BATCH_LIMITS } from './batch.mjs';
+@@ -924,8 +924,8 @@ async function expandJobContext(root, job) {
+   return [...new Set([...job.context, ...extra])];
+ }
+ 
+-async function safePath(root, value, { internal = false, parents = false } = {}) {
+-  const parts = relative(value, internal);
++async function safePath(root, value, { internal = false, parents = false, readOnly = false } = {}) {
++  const parts = relative(value, internal, { readOnly });
+   let current = root;
+   for (let index = 0; index < parts.length; index++) {
+     current = path.join(current, parts[index]);
+@@ -948,7 +948,8 @@ async function droppedBytesAt(root, value) {
+ }
+ 
+ async function bytesAt(root, value, internal = false) {
+-  const target = await safePath(root, value, { internal });
++  // Reading a names-only template (.env.example) is allowed; writing one never is (write() does not pass readOnly).
++  const target = await safePath(root, value, { internal, readOnly: true });
+   try {
+     const info = await fs.lstat(target);
+     if (!info.isFile() || info.size > MAX_FILE) fail(`Expected regular file of at most 16 MiB: ${value}`);
+@@ -956,13 +957,14 @@ async function bytesAt(root, value, internal = false) {
+   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+ }
+ 
+-async function write(root, value, bytes, internal = false, mode = 0o644) {
+-  const target = await safePath(root, value, { internal, parents: true });
++// `template`: the copy of a context file into a worker's own workspace may be a names-only template (.env.example); an output never is (outputs are validated before any copy).
++async function write(root, value, bytes, internal = false, mode = 0o644, { template = false } = {}) {
++  const target = await safePath(root, value, { internal, parents: true, readOnly: template });
+   const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+   try {
+     await fs.writeFile(temporary, bytes, { flag: 'wx', mode });
+     await fs.chmod(temporary, mode);
+-    await safePath(root, value, { internal });
++    await safePath(root, value, { internal, readOnly: template });
+     await fs.rename(temporary, target);
+   } catch (error) {
+     await fs.unlink(temporary).catch(() => {});
+@@ -2026,8 +2028,8 @@ async function reaskWorkerReport(job, result, workspace, options, launch) {
+     for (const [file, { bytes: before, mode }] of saved) {
+       const after = await bytesAt(workspace, file);
+       if (before === null ? after === null : after !== null && before.equals(after)) continue;
+-      if (before === null) await fs.rm(await safePath(workspace, file), { force: true });
+-      else await write(workspace, file, before, false, mode);
++      if (before === null) await fs.rm(await safePath(workspace, file, { readOnly: true }), { force: true });
++      else await write(workspace, file, before, false, mode, { template: true });
+       restored.push(file);
+     }
+     if (restored.length) result.reportReaskRestored = restored;
+@@ -2275,8 +2277,8 @@ async function executeClaudeShellJob(root, directory, job, proposalRoot, depende
+     // Unlike codex, the declared files start from the project's current bytes (uncommitted edits
+     // included), as in every other claude job, so integrate's base hashes describe what it saw.
+     for (const { file, bytes, mode } of options.snapshotFiles) {
+-      if (bytes === null) await fs.rm(await safePath(worktree, file), { force: true });
+-      else await write(worktree, file, bytes, false, mode);
++      if (bytes === null) await fs.rm(await safePath(worktree, file, { readOnly: true }), { force: true });
++      else await write(worktree, file, bytes, false, mode, { template: true });
+     }
+     // Copied once the worktree exists; the source dir was already read once per run, not per job.
+     if (options.skillsSourceDir) await copySkillsInto(options.skillsSourceDir, path.join(worktree, SKILLS_DIR_NAME));
+@@ -2939,13 +2941,13 @@ async function runManifestBody(root, manifest, { batchFlag = false, batchLimits,
+         const bytes = await bytesAt(root, file);
+         const hash = bytes === null ? null : digest(bytes);
+         if (hash !== snapshotHashes.get(file)) fail(`snapshot-changed: ${file}`);
+-        const mode = bytes === null ? 0o644 : (await fs.stat(await safePath(root, file))).mode & 0o777;
++        const mode = bytes === null ? 0o644 : (await fs.stat(await safePath(root, file, { readOnly: true }))).mode & 0o777;
+         if (job.context.includes(file)) contextHashes[file] = hash;
+         if (job.outputs.includes(file)) {
+           record.baseHashes[file] = hash; record.baseModes[file] = mode;
+           if (bytes !== null) await write(root, `${record.baseWorkspace}/${file}`, bytes, true, mode);
+         }
+-        if (bytes !== null && !usesWorktree(job)) await write(destination, file, bytes, false, mode);
++        if (bytes !== null && !usesWorktree(job)) await write(destination, file, bytes, false, mode, { template: true });
+         if (snapshotFiles && (job.context.includes(file) || job.outputs.includes(file))) snapshotFiles.push({ file, bytes, mode });
+         if (resourceFiles.includes(file)) resources.push({ file, bytes, mode });
+       }
+@@ -5678,7 +5680,7 @@ function pickJobRoute(job, lanes, options = {}) {
+ }
+ 
+ async function snapshotHash(root, file) {
+-  const target = await safePath(root, file);
++  const target = await safePath(root, file, { readOnly: true });
+   const hash = crypto.createHash('sha256');
+   try {
+     for await (const chunk of createReadStream(target)) hash.update(chunk);
+@@ -7388,7 +7390,15 @@ async function enforceProtectedPaths(root, jobs, { resources = [] } = {}) {
+         const real = await resolveReal(file);
+         if (real !== realRoot && !real.startsWith(realRoot + path.sep)) fail(`path-outside-project: job ${job.id} ${verb(kind)} ${file}, which resolves outside the project`, 'path-outside-project');
+         const relative = path.relative(realRoot, real).split(path.sep).join('/');
+-        const entry = profile && !(kind === 'context' && typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) ? protectedPathHit(profile, relative) : null;
++        // The real target decides: a template read stays allowed, a symlink that leads to a real secret or protected file does not.
++        const asTemplate = kind === 'context' && profile && templateReadable(profile, relative);
++        if (kind === 'context' && isExampleFile(file) && relative !== path.posix.normalize(file) && isProfileSecretPath(relative) && !isExampleFile(relative)) fail(`protected-path: job ${job.id} reads ${file}, which is a link to the secret ${relative}`, 'protected-path');
++        if (asTemplate && isExampleFile(relative)) {
++          // A template is names, not values: one that holds what looks like a real key is not handed to a worker.
++          const text = await fs.readFile(path.join(realRoot, relative), 'utf8').then(value => value.slice(0, 40000), () => null);
++          if (text !== null && findUnsafeText(text).length) fail(`protected-path: job ${job.id} reads ${file}, which holds what looks like a real secret value; empty the values (a template holds names only)`, 'protected-path');
++        }
++        const entry = profile && !(kind === 'context' && ((typeof job.allowProtectedContext === 'string' && job.allowProtectedContext.trim()) || asTemplate)) ? protectedPathHit(profile, relative) : null;
+         if (entry) fail(`protected-path: job ${job.id} ${verb(kind)} ${file} (resolves to ${relative}; protected: ${entry})`, 'protected-path');
+       }
+     }
+diff --git a/tools/wiring.mjs b/tools/wiring.mjs
+index 76ddcd6..e124c63 100644
+--- a/tools/wiring.mjs
++++ b/tools/wiring.mjs
+@@ -100,3 +100,35 @@ export function unwiredRequirements(tickets) {
+   const reqs = [...new Set(list.filter(buildOf).filter(t => t.integration !== true).flatMap(t => t.scopeRefs ?? []))];
+   return reqs.filter(r => !integrationTickets(list, r).length).sort();
+ }
++
++// Tests wait for the modules they test (parts-app lesson 55): a test ticket that runs before its module exists can only fail or block.
++// Every test ticket of `added` depends on the module tickets of its requirements (from `existing` and `added`); a module that was told to wait
++// for that test (a test-first order from the worker) has that dependency removed, so no cycle appears. Integration tickets are not touched
++// (they already wait for their modules). Mutates `added`; returns notes for the owner.
++export function orderTestsAfterBuild(added, existing = []) {
++  const all = [...existing, ...added];
++  const notes = [];
++  const byId = id => all.find(x => x.id === id) ?? { id };
++  const reaches = (from, target, seen = new Set()) => {
++    if (seen.has(from.id)) return false;
++    seen.add(from.id);
++    return (from.dependsOn ?? []).some(d => d === target || reaches(byId(d), target, seen));
++  };
++  const newIds = new Set(added.map(t => t.id));
++  for (const t of added) {
++    if (t.type !== 'test' || t.status === 'cancelled') continue;
++    // The modules a test checks: build tickets (not integration) and migrations of its requirements.
++    const prerequisites = req => [...moduleTickets(all, req), ...all.filter(x => x.type === 'migration' && x.status !== 'cancelled' && (x.scopeRefs ?? []).includes(req))];
++    const modules = [...new Set((t.scopeRefs ?? []).flatMap(prerequisites))].filter(m => m.id !== t.id && newIds.has(m.id));
++    const flipped = [], waits = [];
++    for (const m of modules) if ((m.dependsOn ?? []).includes(t.id)) { m.dependsOn = m.dependsOn.filter(d => d !== t.id); flipped.push(m.id); }
++    const indirect = [];
++    for (const m of modules) {
++      if (reaches(m, t.id)) { indirect.push(m.id); continue; }
++      if (!(t.dependsOn ?? []).includes(m.id)) { t.dependsOn = [...(t.dependsOn ?? []), m.id]; waits.push(m.id); }
++    }
++    if (indirect.length) notes.push(`${t.id}: ${indirect.join(', ')} waits for this test through other tickets, so the test could not be ordered after it; check that order`);
++    if (waits.length) notes.push(`${t.id}: test ticket now waits for ${waits.join(', ')} (a test runs after the module it tests)${flipped.length ? `; ${flipped.join(', ')} no longer waits for it` : ''}`);
++  }
++  return notes;
++}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0360",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Tests need durable inputs. Keep runtime and test fixtures in tracked locations that survive a clean checkout. Refuse source and test references to temporary coordinator material and warn about scratch data in build context.",
+  "rule": "Tests need durable inputs.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#360"
+  }
+}

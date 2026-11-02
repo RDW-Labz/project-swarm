@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0150",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker's own report of what it changed was a prose sentence, not a bare path, and a warning meant to flag an undeclared write instead fired on a file the job had actually declared. The report string carried a trailing status word or a trailing parenthetical the comparison never stripped, so it never matched the declared path it was actually describing.",
+  "rule": "A self-reported \"changed\" entry is normalized to its own path (trimmed, one trailing parenthetical dropped, one trailing status word dropped) before it is ever compared against what a job declared, or shown in a warning.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the dropped-write check now normalizes each entry first. Regression coverage is in `tests/field-lessons-batch-s.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#150"
+  }
+}

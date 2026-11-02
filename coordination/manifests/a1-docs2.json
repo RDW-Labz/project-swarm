@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs",
+        "tests/security-gate.test.mjs"
+      ],
+      "id": "a1d-doc",
+      "context": [
+        "docs/security-gate.md",
+        "tools/security-gate.mjs",
+        "tools/security-scan.mjs",
+        "tools/security-deps.mjs"
+      ],
+      "outputs": [
+        "docs/security-gate.md"
+      ],
+      "prompt": "IMPORTANT: return the complete file in files (one entry with the whole new content), never edits. Rewrite docs/security-gate.md so it matches the code in your context after a Claude Opus review fixed it (plain, short sentences; keep the existing structure and add what is new). It must say: the gate runs BEFORE the project checks, so a blocked batch never executes its own code (tests, installs, postinstall scripts), and it also runs with --no-checks; no file is skipped silently (NUL bytes become newlines, UTF-16 is decoded too, big files are scanned in windows, only a file beyond 20 windows is a block 'too large to scan'); the swarm-secret-allow marker only works on a line that already existed in the previous version of the file, otherwise ignore it (a worker cannot silence the gate), and allowedSecretFingerprints in the profile is the other way; fingerprints are an HMAC with a random per-project key in .swarm/project/security-key (mode 600), so a low-entropy secret cannot be recovered from a fingerprint; scan work per line is bounded; the rules list now includes OpenAI project keys, GitHub fine-grained tokens, GitLab tokens, npm tokens and unquoted env-style secrets, and every match on a line is reported; new dependencies are found in manifests in any folder (package.json including peerDependencies and overrides, requirements text files) and a version bump counts as new; specs from git, GitHub, file, link, tarball URLs or extra index URLs are blocked as non-registry (owner approval needed), an npm alias is checked under its target name, workspace specs pass; an exact pinned version is checked by that version's age and licence; registry calls have a 10 second timeout and a per-run cache; PyPI names are normalized; licences use a real SPDX expression parser (OR, AND, WITH, parentheses); vulnerabilities fail closed: when a dependency manifest or lockfile changed and no scanner produced a usable answer, or a scanner's output is unusable, the batch is blocked ('could not verify'), unless the profile sets requireVulnerabilityScan to false; with changed manifests only the vulnerabilities of the changed dependencies block, with only a lockfile change every high or critical one blocks; npm audit is pinned to the public registry; pip-audit runs with --no-deps --disable-pip and a minimal environment; the code scan (semgrep, with --metrics=off) is skipped for sensitive projects (the default) unless the profile sets codeScan to auto and codeScanSensitive to true, file paths are passed after --, tickets carry only the rule id, path and line; the policy keys now include requireVulnerabilityScan, codeScan and codeScanSensitive; queue state records which scanners were skipped (securityNotes), each batch records security passed or blocked, tickets are recorded only for a batch that stays merged. Known limits to state honestly: plain integrate without --queue is not gated (use the queue); yarn.lock, pnpm-lock.yaml, pyproject.toml, Pipfile, go.mod and Cargo.toml changes trigger the vulnerability requirement but their dependencies are not parsed for the new-package check; a weekly download count is only a signal; the gate scans only files a batch writes, not history; the profile file is read once when the queue starts (before any batch writes).\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/security-gate.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "a1d-changelog",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. In the \"## 1.79.0\" section add this bullet after the existing bullet: \"- A Claude Opus review of the gate found 7 high, 11 medium and 10 low issues; the high and medium ones are fixed: the gate runs before the project checks (a blocked batch never executes its own code); no file is skipped silently (NUL bytes, UTF-16, big files); workers cannot silence findings with the allow marker (it only works on lines that already existed); fingerprints are HMACs with a per-project key; bounded scan work per line; more secret rules and every match on a line; manifests in any folder, version bumps, non-registry and alias specs are checked or blocked; the vulnerability check fails closed; pip-audit runs without installing anything; semgrep runs with metrics off, never on sensitive projects unless the profile says so, and its messages never reach tickets; registry calls have a timeout and a per-run cache; licences use a real SPDX parser.\" \nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    }
+  ]
+}

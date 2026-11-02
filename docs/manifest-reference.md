@@ -1,6 +1,6 @@
 # Manifest reference
 
-A manifest is a JSON object with `version`, `jobs`, and optional `concurrency`. It contains task data, not shell commands or provider configuration.
+A manifest is a JSON object with `version`, `jobs`, and optional fields such as `concurrency`, `lanes`, and `report`. It contains task data and lane overrides, not shell commands or credentials.
 
 ```json
 {
@@ -25,8 +25,10 @@ Replace the example paths with files in your target project.
 ## Top-level fields
 
 - `version`: required, exactly `1`.
-- `jobs`: required array of 1–256 jobs.
-- `concurrency`: optional integer from 1 to 32; default is 2. The effective parallelism is never greater than the number of jobs.
+- `jobs`: required array of 1–5000 jobs.
+- `concurrency`: optional integer from 1 to 512; default is 2. This global capacity is also bounded by each agent's lane cap.
+- `lanes`: optional per-agent overrides for concurrency, requests per minute, backoff, quota pause, and routing model. Machine config applies first, then manifest overrides merge per field. See [lanes and routing](lanes.md).
+- `report`: optional, only `"short"` is allowed. Requires a valid short report from every worker job. Other values refuse with `report-invalid-mode`: `report must be "short"`. See [reports and rollups](reports.md).
 - `checks`: optional array of at most 10 post-integration checks, run by `integrate` after it writes files. See the Checks section below.
 - `mutants`: optional array of at most 32 mutation entries, checked by `integrate --mutants`. See the Mutation checks section below.
 - `mutantCheck`: optional, the single check run against each mutant in `mutants`. See the Mutation checks section below.
@@ -38,15 +40,20 @@ Unknown top-level fields are rejected.
 ## Job fields
 
 - `id`: required unique string, 1–80 characters. The first character is an ASCII letter or digit; remaining characters may also include `_` and `-`.
-- `agent`: required: `"claude"`, `"codex"`, `"hermes"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, or `"lambda"`.
-- `model`: required non-empty model identifier or alias, for every job on every agent. The runner never falls back to a CLI default — for Claude, that default is the user's own, often most expensive, configured model — so an omitted `model` is refused before any worker starts. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
+- `agent`: required: `"hermes"`, `"cursor"`, `"codex"`, `"claude"`, `"qwen"`, `"openai"`, `"gemini"`, `"ollama"`, `"lambda"`, `"openrouter"`, or `"auto"`. `"auto"` selects an eligible lane model at dispatch; validation reports the route it would pick now.
+- `model`: required non-empty model identifier or alias for every explicit agent. Omit it for `agent: "auto"`; supplying it refuses with `auto-model-forbidden`. The runner never falls back to a CLI default. The first character is an ASCII letter or digit; remaining characters may also include `.`, `_`, `:`, `/`, and `-`. Maximum length is 120 characters. Codex instead requires `/^[A-Za-z0-9._:-]{1,80}$/` and always passes `-m <job.model>`. Syntax validation does not prove provider availability.
+- `type`: optional string: `build`, `fix`, `test`, `review`, `research`, `docs`, `merge`, or `lead`. Sets prompt guidance, default timeout, skill, and automatic routing order; enforces declared output rules. See [job types](job-types.md).
+- `report`: optional, only `"short"` is allowed. Makes this job strict even when the manifest omits `report`. A job cannot opt out of manifest-level strict reporting. Missing or invalid reports fail an otherwise complete strict job with `report-invalid`; report status `blocked` blocks the job, and `failed` fails an otherwise complete job. See [reports and rollups](reports.md).
+- `sensitive`: optional boolean, sensitive by default. Only `sensitive: false` allows OpenRouter, OpenAI, Gemini, or Lambda. Explicit OpenAI, Gemini, and Lambda jobs without it refuse with `sensitive-provider`: `Job <id>: <agent> only gets jobs that set sensitive: false`. Explicit `agent: "openrouter"` without it refuses with `sensitive-openrouter`: `Job <id>: OpenRouter only gets jobs that set sensitive: false`.
 - `prompt`: required nonblank string of at most 100,000 characters. Include the task, expected output, and relevant acceptance criteria.
 - `context`: required array of explicit existing relative file paths, at most 100 entries. These files are copied for other workers; Codex receives them as a read-first list in its HEAD worktree.
 - `outputs`: required array of explicit relative file paths, at most 100 entries. Existing files are copied automatically; new files may be created. An empty array creates a job with no proposed files; Codex still has shell access inside its sandbox.
+- `scope`: optional Codex-only value. Omit it for today's explicit-output mode; `"open"` permits the bounded tracked-file scope named by `outputDirs` in addition to explicitly declared outputs. Unknown values and non-Codex open jobs refuse with `scope-open-invalid`.
+- `outputDirs`: required with `scope: "open"`; one to 20 unique safe relative directories. They cannot be absolute, drive-qualified, dotted/root, backslash-containing, traversing, globbed, symlinked, or contain reserved `.git`/`.swarm` segments. Invalid combinations refuse with `scope-open-invalid: Job <id>: scope open requires codex and non-empty outputDirs`; an unsafe directory refuses with `scope-open-path: Job <id>: <path> is not a safe tracked directory`; the expanded tracked regular-file list is capped at 100 files and refuses with `scope-open-too-large: Job <id>: expanded outputs exceed 100 files; narrow outputDirs`.
 - `readPaths`: optional for `codex` and claude `shell: true` jobs only, an array of at most 100 absolute read-only paths for extra toolchains. Quotes, backslashes, and control characters are refused. Paths under `~/Library/Keychains`, `~/.ssh`, `~/.aws`, `~/.config`, or any directory a project's own local config adds to `deniedHomeDirs`, are refused, including resolved aliases. Final sandbox denies override grants.
 - `maxOutputTokens`: optional for API jobs only, integer 256–32768, default 8192. This is an output limit, not a dollar budget; reasoning may consume the allowance.
 - `timeoutMs`: optional integer from 50 to 3,600,000 milliseconds. Default is 300,000 milliseconds, or five minutes.
-- `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. A named routing decision for the coordinator, not a model catalog lookup: setting `tier` never chooses, overrides, or resolves a model. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
+- `tier`: optional, one of `"cheap"`, `"mid"`, or `"expensive"`. Explicit agents keep their named model. With `agent: "auto"`, `tier: "expensive"` starts at Claude; other tiers use the normal lane order. It is validated metadata, shown in `preflight` and `inspect` output for review. See [the routing checklist](orchestration.md) for when to use each value.
 - `tierReason`: optional string, at most 2,000 characters. Required, and must be non-empty after trimming, whenever `tier` is `"expensive"`; the reason is what makes the choice inspectable instead of gut feel. Optional for `"cheap"`/`"mid"`.
 - `ignoreTests`: optional array of at most 100 explicit existing relative file paths, same path rules as `context`. Lists test files the job knowingly leaves uncovered by `context` — see "Context check" below. Give a reason in the `prompt` when you use it.
 - `after`: optional non-empty array of other job ids in the same manifest that must all reach `complete` before this job starts. See [After](#after) below.
@@ -57,12 +64,35 @@ Unknown top-level fields are rejected.
 - `networkAllow`: optional, claude `shell: true` jobs only, an array of at most 20 hostnames. In 1.19.0 only an empty array is accepted; any host is refused with `networkAllow is not yet supported` (shell jobs reach only `api.anthropic.com`).
 - `mutantsFile`: optional repo-relative path that must also be one of the job's own `outputs` (`Job <id>: mutantsFile must be one of its outputs`), collected automatically by `integrate --mutants` once that output exists; the job's own worker preamble states the exact required shape, `{"name","file","find","replace"}`, up front. See [post-build mutants](#post-build-mutants).
 - `contextGlob`: optional array of at most 20 simple globs, each exactly `dir/*.ext` or `dir/prefix*.ext` (no `**`, no mid-path wildcards; the directory follows the same path-safety rules as `context`). Expanded into `context` at validate/run time — never at manifest-write time — with the same byte-cap rules as `context`; a glob matching zero files is refused. `validate` echoes, per pattern, how many files it matched (`contextGlobCounts: [{"pattern", "count"}]`). See [Context check](#context-check).
+- `allowProtectedContext`: optional owner-written reason (1-200 characters). Paths in the project profile's `protectedPaths` (set by `swarm init`) are refused as this job's `context`, `contextGlob` matches and manifest `resources`; this reason lets that one job read them. It never allows writing or deleting a protected path, and lead child manifests may not set it. See [init](init.md).
+- `cacheContext`: optional, Anthropic lane only (`agent: "anthropic"` or `"auto"`): 1 to 10 unique paths that are also in `context`, files many jobs share (a contract, a style guide, the repo map). They are sent first, in their own prompt-cache block, so a big fan-out pays full price for them once and about a tenth after (below the model's minimum cacheable size the marker is ignored). Cache writes and reads are priced from the usage the API reports; the pre-request spend check still assumes full price.
 - `setup`: optional, `codex` jobs and claude `shell: true` jobs only (`Job <id>: setup is only supported for codex and claude shell jobs`) — an array of at most 5 argv arrays (same rules as one `checks` entry's `argv`), run once by the swarm parent outside the sandbox, in the job's own worktree, in order, after the worktree exists and before the worker starts. See [Setup](#setup) below.
 - `keepScratch`: optional boolean, claude `shell: true` jobs only (`Job <id>: keepScratch is only supported for claude shell jobs`, `Job <id>: keepScratch must be true or false`). Keeps the job's scratch dir (see "Scratch dir" under [Shell jobs](#shell-jobs) below) after the job ends instead of removing it; the path is recorded as `scratchDir` on the job record.
 
 **Precedence:** an explicit per-job `model` always wins. `tier` is descriptive, coordinator-facing routing guidance for choosing which provider/model to put in `model` (or which worker pool to dispatch to); the runner itself does not map `tier` to a model. A job may set both: `model` decides what actually runs, `tier`/`tierReason` document why that choice was made. A manifest with no `tier` field behaves exactly as before.
 
 Unknown job fields are rejected. Manifests cannot specify executable paths, arbitrary provider commands, environment variables, shell scripts, MCP servers, or additional tools.
+
+### Open output scope
+
+An open Codex job is still bounded: before context coverage, skill attachment, dirty-file
+checks, writer reservation, and snapshots, the runner freezes the sorted union of its
+explicit outputs and regular files tracked at `HEAD` under each `outputDirs` entry. Untracked,
+ignored, deleted, symlink and submodule paths are not added, and directory matching is
+segment-aware and case-insensitive. Explicit outputs may remain outside those directories;
+new undeclared files are never authorized. The frozen list is reused by inspect, integrate,
+redcheck and later review, so a newer `HEAD` cannot widen it. Additional changed files are
+reported in `filesChanged`; a proposed file outside the frozen list remains a dropped write.
+
+The default is explicit-output mode. A restrictive prompt containing `touch only` with fewer
+than three explicit outputs receives the advisory `narrow-output-scope` warning:
+`narrow-output-scope: Job <id> says touch only with fewer than three outputs; include every
+plausible file or use scope open with outputDirs`. The warning does not widen permissions.
+
+When every output of a Codex job is a Markdown file (or a JSON file under `docs/`), its brief
+also carries: `Docs-only job: edit your declared outputs; do not run tests or installs. A test failure
+in your sandbox is never a reason to block.` This is prompt guidance for documentation-only
+work; it does not change the job's file scope or claim that runtime checks passed.
 
 ## Shell jobs
 
@@ -111,6 +141,8 @@ Before starting any job, `run` (and therefore `go`) checks this same registry fo
 
 `validate` catches the milder, earlier case of the same problem: the manifest being validated declares an output file that an *already-open* run elsewhere in this same repository (another worktree or branch) also lists. Two open jobs each working from their own copy of one shared file collide on the next rebase or integrate — a hand union-merge of the two independent results can break the file's own syntax. This is only a warning, never a refusal (unlike the exact-collision case above): a genuinely shared file (a registry, an index) is sometimes integrated one job at a time on purpose. `{"code": "shared-output-across-open-jobs", "path", "runIds"}`, naming the other open run(s) and suggesting a per-job fragment file, combined in a later step, instead. (Two jobs of the *same* manifest sharing one output file is refused outright by `validate`/`run`'s existing case-insensitive writer-collision check, so that case never reaches this warning.) (lesson #165)
 
+`run` also checks `coordination/cursor-claims.json` under the project root before registering the run or starting workers. Claimed outputs refuse with `cursor-claim-conflict`; `validate` warns with the same code. Exact matches conflict, and jobs with `scope: "open"` also conflict when either path contains the other. A missing claims file means no claims. Read, parse or shape errors make `run` refuse and `validate` warn with `cursor-claims-invalid`. Release the claim with `python3 tools/cursor_lane_guard.py release <claim>` or drop the file from outputs. The [Cursor lane guard](cursor-lane.md) `check-manifest` command remains optional.
+
 ## Commands
 
 ```sh
@@ -118,7 +150,8 @@ node tools/swarm.mjs doctor all
 node tools/swarm.mjs doctor openai
 node tools/swarm.mjs validate examples/smoke.json
 node tools/swarm.mjs run examples/smoke.json
-node tools/swarm.mjs ask --model sonnet --context src/a.js,src/b.js "question"
+node tools/swarm.mjs ask --tier cheap --context src/a.js,src/b.js "question"
+node tools/swarm.mjs note --file coordination/TASK.md "recorded progress"
 node tools/swarm.mjs scout --model sonnet --brief docs/scout-brief-example.md "goal"
 node tools/swarm.mjs sweep --model sonnet --brief docs/scout-brief-example.md --goals docs/sweep-goals-example.json
 node tools/swarm.mjs status <run-id>
@@ -129,6 +162,8 @@ node tools/swarm.mjs wait <run-id>
 node tools/swarm.mjs wait <run-id> --timeout 300
 node tools/swarm.mjs inspect <run-id>
 node tools/swarm.mjs inspect <run-id> --results
+node tools/swarm.mjs rollup <run-id>
+node tools/swarm.mjs rollup <run-id> --text --top 10
 node tools/swarm.mjs integrate <run-id>
 node tools/swarm.mjs integrate <run-id> --no-checks
 node tools/swarm.mjs integrate <run-id> --require-checks
@@ -173,11 +208,23 @@ Each job record also carries `actualModel` (the model behind most of its `assist
 
 `wait <run-id> [--timeout SECONDS]` blocks, polling saved run status at most once a second, until the run reaches a terminal status (`complete`, `failed`, or `cancelled`); with no `--timeout` it waits indefinitely. It prints one compact JSON line, `{runId, status, durationMs, costUsd, tokens, costNotReported, warnings, jobs: [{id, status, costUsd, tokens, notes}]}`, where `costUsd` is the sum of the jobs' recorded provider costs when any are available, else `null`, `tokens` is the sum of the jobs' non-null `tokens` (else `null`), `costNotReported` lists the ids of jobs with no reported cost, `warnings` lists any model-mismatch strings (see above), and each job's `notes` come from the same final-JSON-line parsing as `inspect` (capped the same way). Exit code is `0` for `complete`, `1` for `failed`/`cancelled` (or an unknown run id), and `2` if `--timeout` expires first — in that case `status` in the printed line is still `running`.
 
+## Rollup
+
+`swarm rollup <run-id> [--text] [--top N]` reads saved run state without changing files. It prints compact JSON by default. `--text` prints a summary with attention items, risks, and follow-ups. An unknown run refuses as it does for `inspect`.
+
+`--top` accepts an integer from 1 to 50, default 10. The size budget may reduce the number of attention items shown. Text shows at most 15 attention items. `attentionMore` counts omitted attention items. See [reports and rollups](reports.md) for all JSON fields and a text example.
+
+`inspect` includes each job's saved `report` and `reportErrors` when present. Use rollup first for a large run, then inspect the jobs needing attention.
+
 ## Ask
 
-`ask --model M --context f1,f2,... [--agent claude] [--timeout S] "question"` builds one read-only job in memory — `id: ask-<timestamp>`, empty `outputs`, the given `context`, and the question plus a fixed suffix asking for one final JSON line — runs it like `run`, waits for it, and prints exactly one JSON line: `{"id","status","model","actualModel","modelMismatch","costUsd","contextFiles","warnings","result"}`, where `result` is the worker's parsed final JSON (or `null` plus `error`) and `contextFiles` is the exact context list the worker was given. It refuses with no `--model`, no `--context`, or an empty question. Exit code is `0` when the job completes, `1` otherwise. `--agent` defaults to `claude`; only `claude` and API agents are allowed, never `codex`. The run is saved under `.swarm/runs/` like any other run.
+`ask [--tier cheap|mid|expensive] [--model M [--agent A]] --context f1,f2,... [--timeout S] [--not-sensitive] "question"` builds one read-only job in memory — `id: ask-<timestamp>`, empty `outputs`, the given `context`, and the question plus a fixed suffix asking for one final JSON line — runs it like `run`, waits for it, and prints exactly one JSON line: `{"id","status","model","actualModel","modelMismatch","costUsd","contextFiles","warnings","result"}`, where `result` is the worker's parsed final JSON (or `null` plus `error`) and `contextFiles` is the exact context list the worker was given. A tier selects `config.tiers.<tier>.agent` and `.model`; it is mutually exclusive with explicit `--model` or `--agent`, while legacy explicit routes remain unchanged. With a selected unsupported agent (`codex`, `hermes`, or `qwen`), the matching tier must provide `fallback: {agent,model}`; the fallback is validated before launch and is reported in every answer branch as `route: {tier,requestedAgent,requestedModel,agent,model}` plus warning `ask-agent-fallback: <fromAgent>/<fromModel> -> <agent>/<model> (tier <tier>); using configured read-only fallback`. Native Codex read-only remains unsupported. Refusal messages are `ask-route-invalid: choose either --tier cheap|mid|expensive or --model with an optional supported --agent; configured routes require agent and model` and `ask-agent-fallback-unconfigured: no unique supported fallback for <fromAgent>/<fromModel>; select --tier and configure tiers.<tier>.fallback with agent and model`. Exit code is `0` when the job completes, `1` otherwise. `--agent` defaults to `claude`; only `claude` and API agents are allowed for execution. The run is saved under `.swarm/runs/` like any other run. Questions are sensitive by default; OpenRouter, OpenAI, Gemini, and Lambda require `--not-sensitive`, or refuse before any network call with `ask-sensitive-provider: <agent> needs --not-sensitive; the question and context would leave for a third-party API`.
 
 The prompt's fixed suffix (lesson #176) also tells the worker that any claim in its answer that something is missing, never called, omitted, or absent must carry `"basis":"context-only"` and name what it searched — a worker reading only a fixed context list cannot tell a genuine absence from a file it was never given. `warnings` gains `absence-claim-limited-context` whenever the worker's own answer text contains such a claim (a simple, case-insensitive, word-boundary scan for `missing`/`never`/`omits`/`not invoked`/`not called`/`lacks`/`drops`), independent of whether the worker actually added `"basis":"context-only"` — the warning is a flag for the reader, not a check on the worker's compliance.
+
+## Note
+
+`note [--file RELATIVE_PATH] "text"` appends exactly `- <timestamp> <text>\n`, using a tool-generated UTC ISO timestamp. The default target is `TASK.md`; `--file` may select a repository-relative `TASK.md` or `HANDOFF.md`, including a nested coordination path. Text must be nonblank, single-line literal data with no control characters. Refusals are `note-invalid-args: provide one non-empty single-line note; use note [--file TASK.md|HANDOFF.md] text`, `note-invalid-path: target must be a regular TASK.md or HANDOFF.md inside the project with existing non-symlink parents`, and `note-write-failed: could not append a clock-stamped note`.
 
 ```sh
 node tools/swarm.mjs ask --model haiku --context src/renderer.js "Any obvious performance bug here?"
@@ -247,6 +294,14 @@ Each run uses these project-local locations:
     shortlist.md
 ```
 
+Codex and Claude shell jobs created by a public run use an outside-root worktree by default:
+`<worktreesBase>/<repo>-<hash>/<run>/<job>`, where the base comes from local `worktreesDir`
+or the durable default. Set `worktreesOutsideRoot: false` in the local config to retain the
+historical `.swarm/runs/<run-id>/worktrees/<job-id>` layout. The saved `worktreePath` is
+recorded before checkout and is authoritative for later inspection and integration; legacy
+state without it uses the historical resolver fallback. Direct low-level adapter calls without
+an explicit worktree path retain their legacy fallback.
+
 The exact prompt, model response, and provider events are local evidence, not material to publish automatically. Provider metadata may contain usage and actual model identifiers when the provider emits them. API records contain a normalized event, numeric usage, and model identifier rather than raw HTTP responses or headers. API cost is unavailable, not inferred. Missing metadata must be reported as unavailable, not inferred from a requested alias.
 
 An overall successful run has `status: "complete"`; individual jobs may instead fail, time out, or be cancelled. For Claude, a zero subprocess exit code alone is insufficient: the runner requires a successful provider result event and rejects malformed output and missing results. Permission denials alone
@@ -265,15 +320,33 @@ A worker's own `blocked` envelope (its final JSON message with `{"status":"block
 
 ## Integration contract
 
-Integration requires a complete run from the same project, a matching saved manifest and worker record, and all declared output files. It validates every candidate and original target hash before writing any project output. If any target changed after the snapshot, integration stops with a conflict. It does not merge textual conflicts, propagate deletions, or import undeclared files.
+Plain `integrate` requires a complete run from the same project, a matching saved manifest and worker record, and all declared output files. It validates every candidate and original target hash before writing any project output. If any target changed after the snapshot, plain integration stops with a conflict. It does not merge textual conflicts, propagate deletions, or import undeclared files.
 
 An integration lock serializes integrations through this runner. Individual file replacements are atomic, with best-effort rollback on a caught write failure. This is not a transactional filesystem or protection against an unrelated process editing files concurrently. Keep a single coordinator for project writes and use normal version control.
 
-API jobs additionally require a complete, non-refused response and valid JSON with exactly `summary` and `files`. Each file contains only `path` and complete `content`; every declared output must occur exactly once. Responses are capped at 16 MiB, redirects are refused, and partial/truncated output is never integrated. Provider credentials/endpoints cannot appear as manifest configuration. See [provider setup](providers.md).
+API jobs additionally require a complete, non-refused response and valid JSON with exactly `summary` and `files`. Each file contains only `path` and complete `content`; every declared output must occur exactly once. A large existing output may instead be changed with `edits: [{path, find, replace}]`: as many edits as needed, also several for one path, applied in order, each `find` occurring exactly once in the file as it stands after the earlier edits (at most 200 edits). A path is never in both `files` and `edits`. If any edit does not apply, the job fails and the file is left unchanged. Hermes and Qwen workers use the same rule. Responses are capped at 16 MiB, redirects are refused, and partial/truncated output is never integrated. Provider credentials/endpoints cannot appear as manifest configuration. See [provider setup](providers.md).
 
 The `monitor` command is a single read-only snapshot, suitable for periodic coordinator polling. New runs record `queuedAt`, `startedAt`, `finishedAt`, `durationMs`, configured concurrency, and observed peak active jobs. Counts reflect recorded queue state, not proof that stale processes survived a coordinator crash. Numeric usage is grouped by provider without combining incompatible token fields or estimating missing costs. Older run records remain readable; unavailable historical timings remain null.
 
 `monitor <run-id>` still prints the JSON snapshot above by default; nothing about that output changed. Add `--view` for a human table instead: one row per job (`id`, `agent`, `model`, `tier`, `status`, elapsed/duration, declared output count), a summary line (running/done/failed/queued counts, total elapsed, peak concurrency), and, where recorded, usage per provider. Every status shows a symbol and a word together, never color alone, and color is used only on a TTY with `NO_COLOR` unset. Add `--watch [seconds]` (default 2) to keep `--view` re-rendering in place until the run reaches a terminal status or you press Ctrl+C; it only reads saved state and never starts, cancels, or integrates anything.
+
+### Integrate with a queue
+
+```sh
+swarm integrate <run-id> --queue --batch-size 10 --max-requeues 2
+```
+
+- `--queue`: integrate acceptable jobs in manifest order without requiring the whole run to be complete. Complete jobs are accepted; other statuses are skipped unless `--accept-blocked` accepts blocked jobs.
+- `--batch-size N`: jobs per batch, default 10. Requires an integer from 1 to 100; otherwise refuses with `queue-batch-invalid`.
+- `--max-requeues N`: conflict requeues before one merge job, default 2. Requires an integer from 0 to 5; otherwise refuses with `queue-requeues-invalid`. Zero goes straight to a merge job.
+- `--no-checks`: skip batch checks.
+- `--accept-blocked`: include blocked jobs under the existing blocked-output rules.
+
+`--jobs`, `--salvage`, and `--mutants` cannot be combined with `--queue`. Each refuses with code `queue-flag-unsupported` and message `queue-flag-unsupported: <flag> cannot be combined with --queue`.
+
+Conflicts never overwrite newer bytes or modes. Other validation gates still apply to the whole pass. Checks run once per batch. A failed batch is rolled back and bisected to isolate failing jobs; passing sub-batches stay applied. Conflicting jobs run again from the current checkout, then get one merge job if the requeue limit is exhausted.
+
+The command prints one JSON line with `status`, `runs`, `integrated`, `requeued`, `merged`, `checkFailed`, `flagged`, and `skipped`. It exits 0 for `integrated`, or 1 for `partial` when checks failed or merge jobs were flagged. The original run saves the driver result at `mergeQueue.summary`. See [merge queue guidance](merge-queue.md) for result shapes, saved progress, and monitor and rollup counts. Plain `integrate` without `--queue` keeps its existing behavior.
 
 ## Checks
 
@@ -298,7 +371,7 @@ Up to 10 checks per manifest. Inside `argv`, a whole item of exactly `{integrate
 
 The text `{root}` may also appear anywhere inside a `checks` or `mutantCheck` argv item — not only as a whole item — and is replaced with the run's absolute project root, for example `"CARGO_TARGET_DIR={root}/src-tauri/target"`. This keeps a project-relative build directory unique per run so two parallel runs never share (and corrupt) the same build folder. `{integrated}`/`{integrated:.ext}` still only expand a whole item, unchanged.
 
-Checks run with `cwd` at the project root, the coordinator's inherited environment plus `SWARM_PORT_BASE` (see [Ports](#ports) below), and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back the integration** — checks are reported, not a transactional gate. `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`).
+Checks run with `cwd` at the project root, the coordinator's inherited environment plus `SWARM_PORT_BASE` (see [Ports](#ports) below), and each check's own timeout; a later check still runs even if an earlier one fails, so a formatter can run before the tests that depend on its output. **Formatters may rewrite the files integration just wrote, and a failing check never rolls back plain integration** — checks are reported, not a transactional gate. Plain `integrate`'s own process exit code stays 0 when files integrate successfully regardless of check outcome; pass `--require-checks` to exit 1 when any check fails, times out, or errors. Pass `--no-checks` to skip them entirely (the result shows `checks: []`, `checksSkipped: true`, and `failures: []`). Queue mode instead rolls back failed batches and bisects them; see [Integrate with a queue](#integrate-with-a-queue).
 
 The result also gains `failures`: one compact entry per check whose status is `failed`, `timeout`, or `error` — `{"name", "lines": [...]}`, the last few lines of that check's own `tail` that look like a failure (matching `fail`/`error`/`assert`/`expected`/`✗`/`✕`, capped at 5) — so a coordinator does not need to open the full tail to see what broke. `failures` is `[]` when every check passed or was skipped. This same shape is what `--evidence` (above) expects a local JSON file to contain.
 
@@ -469,7 +542,7 @@ A mutant's `find` string sometimes only exists in code a build job generates, so
 
 Either way, each mutant's `find` is checked against the file's bytes exactly like a manifest-declared mutant, but the **parse and shape validation** happens before any file is written: a job's own `mutantsFile` output is read from the exact bytes about to be written (not re-read from the tree afterward), and `--mutants-file` is read and parsed the same way, up front. When the manifest declares no `mutantCheck`, pass `--mutant-check "<argv json>"` (a JSON array of argv strings, e.g. `--mutant-check '["npm","test"]'`) — `integrate --mutants` refuses with a clear message, and writes nothing, if neither a usable mutants source nor a `mutantCheck` is available. Restore-and-byte-check behavior for every mutant, from any source, is unchanged.
 
-**Integration is all-or-nothing.** Every mutants source, and every other precondition, is validated before the first project file is written; a bad shape (including a `mutantsFile` output whose worker appended trailing text after its own final JSON line — see [agent failure evidence](verification.md#agent-failure-evidence)) refuses cleanly with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; a later failure in any of those (rare, since every precondition above is already checked) leaves that marker in place rather than an ambiguous state. A subsequent `integrate <run-id>` on a `partial` run is accepted as a retry rather than refused `"Run already integrated"`, and a file that already carries the exact bytes this same run wrote is treated as already applied instead of a conflict. `integrationStatus` becomes `"complete"` only once the whole command, including any mutants, finishes.
+**Plain integration validates all candidates before writing.** Every mutants source, and every other precondition, is validated before the first project file is written; a bad shape (including a `mutantsFile` output whose worker appended trailing text after its own final JSON line — see [agent failure evidence](verification.md#agent-failure-evidence)) refuses cleanly with nothing written. Once files are written, the run's saved state gains `integrationStatus: "partial"`, persisted immediately, before `preChecks`/`checks`/mutants run; a later failure in any of those (rare, since every precondition above is already checked) leaves that marker in place rather than an ambiguous state. A subsequent `integrate <run-id>` on a `partial` run is accepted as a retry rather than refused `"Run already integrated"`, and a file that already carries the exact bytes this same run wrote is treated as already applied instead of a conflict. `integrationStatus` becomes `"complete"` only once the whole command, including any mutants, finishes.
 
 ## Context check
 
@@ -486,6 +559,12 @@ Either way, each mutant's `find` is checked against the file's bytes exactly lik
 Add the missing files to `context` directly, or declare `contextGlob` (see [Job fields](#job-fields)) so every matching file in the directory is included automatically and this warning has nothing left to report. `contextGlob` also accepts a filename prefix, `dir/prefix*.ext` (still exactly one directory, still no `**` or mid-path wildcards), for a directory that mixes several naming schemes. `validate`/`run` echo, per job, how many files each pattern actually matched: `contextGlobCounts: [{"pattern": "shots/*.png", "count": 4}]`.
 
 A directory can mix more filename prefixes than a job's `contextGlob` actually names — a review round declaring only one capture kind (say `shots/activity-*.png`) never learns that a second kind (`shots/scoreboard-*.png`) was also captured into the same directory. Multiple `contextGlob` entries against the same directory, each with its own prefix, already work; `validate`/`run` also warn `{"code": "context-glob-partial-dir", "jobId", "dir", "extension", "prefixes", "present", "total", "missing", "message"}` when that directory holds other files of the declared extension that match none of the job's declared prefixes, naming the covered prefixes and up to 5 uncovered files. Add one `contextGlob` entry per prefix actually present in the directory to close the gap.
+
+### Coordinator scratch references
+
+At the final pre-write gate, `integrate` scans proposed non-deletion bytes for changed `src/` and `tests/` files. A path-segment reference to `docs/_swarm` (including slash or backslash spellings, comments, and nested paths) refuses before any project write or deletion with `work-folder-reference: <file>:<line> references docs/_swarm; move runtime and test inputs to tracked tests/fixtures files`. Binary buffers containing NUL are skipped; deleted files and skipped jobs do not trigger this guard.
+
+`validate`/`preflight` add `work-folder-context` when a build job includes a non-documentation context path under `docs/_swarm` (for example JSON or Python data). Documentation-only jobs and `.md`, `.rst`, `.txt`, and `.adoc` paths are exempt. The warning is `work-folder-context: Job <id> includes <path> as non-documentation scratch input; copy required runtime or test data into tracked tests/fixtures files`.
 
 ## Ship
 
@@ -504,6 +583,22 @@ node tools/swarm.mjs ship <run-id> --repo OWNER/NAME --pr payload.json [--requir
 - `--timeout SECONDS` / `--poll SECONDS`: how long to wait for CI and how often to poll; defaults are 45 minutes and 20 seconds respectively (the grace period before an empty rollup counts as `no-ci` is five minutes and is not configurable from the CLI).
 - `--tag-timeout SECONDS`: how long to poll origin for a release tag after merging a PR whose diff changed `package.json`'s `version` (`git ls-remote --tags origin v<version>` every 10 seconds); default 180, `0` disables the wait.
 - `--no-flake-check`: disable the base-commit flake rerun described in [Flake on base](#flake-on-base) above.
+- `--rerun-flaky-ci 0|1`: opt into the bounded CI-flake evidence path for `ship` RUN and
+  `ship --branch`. `1` requires a safe file-targeted check to pass three times on the captured
+  head and once on the immutable base, then requests each failed run ID once and waits for a
+  fresh green attempt before recording a flake. `0` disables this path; omitting the option
+  preserves the legacy `--rerun-flaky` behavior byte-for-byte. The two explicit retry flags
+  cannot be combined (`rerun-flaky-ci-conflict`), and other values refuse with
+  `--rerun-flaky-ci requires 0 or 1`. Unknown logs, lint/build failures, missing IDs, missing
+  test execution evidence, dirty probes, stale heads, or a red fresh attempt remain
+  `ci-failed`; an eligible failure that cannot be retried warns
+  `rerun-flaky-ci-ineligible: <reason>`.
+
+When the PR body is held (its first nonblank line starts with `**needs `), `ship` and
+`preflight` inspect numeric claims in the Summary and Could break sections. Distinct signed
+decimal tokens are compared literally with numeric tokens on added content lines of the
+committed merge-base diff; URLs, list numbering, dotted versions, removed lines and hunk
+metadata are excluded. A missing token adds `decision-value-not-in-diff: held PR summary names <value>, absent from added diff lines; quote the source constant and name its value-pinning test`. If the committed diff cannot be read, the single advisory is `decision-value-diff-unavailable: cannot read the committed diff; verify decision values against source before handoff`. These warnings never release a hold, change the PR body, or claim unit conversion or semantic correctness; no diff is fetched for unheld or no-number bodies.
 
 `ship` prints one JSON line: `{status, repo, pr, url, sha, mergeSha, checks, ci, reason, portBase}`, where `status` is one of `merged | held | ready | refused | checks-failed | ci-failed | no-ci | timeout | merge-failed` and fields that do not apply are `null`. The re-run of `checks` gets its own `SWARM_PORT_BASE` (see [Ports](#ports) above), computed from the project root; a moved or exhausted block adds the same `port-block-moved`/`port-block-busy` warning `integrate` does. When the merged PR's diff changed `package.json`'s `version`, the result also gains `tag: {name: 'v<version>', status: 'found'|'missing'|'skipped', waitedSeconds}`; a `missing` tag also adds warning `release tag v<version> not on origin after <n>s`. A PR body whose first non-blank line starts with `**needs ` is never merged (`held`); a person merges it. Exit code is `0` for `merged`, `held`, or `ready`, and `1` for every other status.
 
@@ -546,7 +641,7 @@ node tools/swarm.mjs go <run-id> --commit-message "Add render review"
 
 ## Advisory preflight
 
-`node tools/swarm.mjs preflight <manifest>` validates without starting workers, then reports file byte breakdowns, repeated copied context, output/input snapshot hazards, task-size advisories, and each job's `agent`, `model`, `tier`, and `tierReason` (`null` when unset). It does not automatically split or dispatch tasks, and it does not choose or verify a tier; that stays the coordinator's judgment call against [the routing checklist](orchestration.md). See [active orchestration](orchestration.md) and [manager task contracts](managed-feature-plan.md).
+`node tools/swarm.mjs preflight <manifest>` validates without starting workers, then reports file byte breakdowns, repeated copied context, output/input snapshot hazards, task-size advisories, scratch-context warnings, and each job's `agent`, `model`, `tier`, and `tierReason` (`null` when unset). A held numeric summary also surfaces the bounded `decision-value-not-in-diff` or `decision-value-diff-unavailable` advisory described above. It does not automatically split or dispatch tasks, and it does not choose or verify a tier; that stays the coordinator's judgment call against [the routing checklist](orchestration.md). See [active orchestration](orchestration.md) and [manager task contracts](managed-feature-plan.md).
 
 `monitor` includes content-free CLI byte counts and output timestamps where observable. API requests without streaming report unavailable progress; neither output nor silence proves whether a worker is making useful progress.
 
@@ -583,3 +678,15 @@ Every `doctor` result (every agent) adds `toolchains: {dir, exists, tmpPaths}`
 only — it never changes `status`/`configured`. Onboarding prints one line:
 ok when the dir exists and nothing was found under `/tmp`, else `toolchains:
 move to <dir>` plus the offending paths.
+
+An optional project inventory at `coordination/toolchain-versions.md` is recognized only as
+one Markdown table headed `binary | version | reinstall`; a single surrounding backtick pair
+around a cell is allowed. `binary` is a basename, while `version` and `reinstall` are display
+text. A malformed or symlinked inventory warns
+`toolchain-inventory-invalid: coordination/toolchain-versions.md: expected binary | version |
+reinstall table`. `doctor` resolves each binary through the durable toolchains directory and
+then `PATH` (with platform-appropriate path separators and executable suffixes). A missing
+entry adds `toolchain-missing: <binary> (<version>); reinstall: <reinstall>` and returns its
+row with `found: null`. The text is never executed, and a found executable is not proof of
+version compatibility. Projects without the inventory retain the historical `toolchains`
+report shape.

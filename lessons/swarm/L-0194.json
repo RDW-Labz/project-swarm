@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0194",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A skill's own required result keys were never checked against the actual API envelope shape. A job carried an attached skill that declared required result keys, but the envelope schema built for an API job never required them, so a reply missing one of those keys could still pass validation.",
+  "rule": "An attached skill's own required result keys are part of the envelope's required schema, not a separate, unchecked promise.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the API envelope now requires a `result` object, and `validate` injects an attached skill's own `resultKeys` into that schema before a job ever dispatches. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "schema",
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#194"
+  }
+}

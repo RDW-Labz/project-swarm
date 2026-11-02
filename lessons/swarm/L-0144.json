@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0144",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A spend-cap contract said the cap held before each paid call, and the work that followed it checked the cap once per case using a one-call worst case, while a single case could make several paid calls in a row — a gap every worker's own regression tests missed, caught only at review.",
+  "rule": "A spend-cap or limit contract must name the exact unit that is checked (each paid call, not each case/task) and require one test where a single case makes several such calls, tripping the cap mid-way through that one case rather than only across accumulated cases.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shared contract template's own test-plan section now asks for exactly that. Template change only; no code check.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review",
+    "spend",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#144"
+  }
+}

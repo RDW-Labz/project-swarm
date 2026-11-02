@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0195",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "An invalid envelope reply left no trace once it was rejected. When the OpenRouter/API adapter rejected a structurally invalid envelope, the raw reply that caused the rejection was discarded, leaving nothing to diagnose beyond a generic error message.",
+  "rule": "A rejected raw reply is worth keeping, not discarding, since it is the only evidence of what the model actually sent back.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: an invalid envelope's raw reply is now saved to a per-run, per-job file for diagnosis instead of being dropped. Regression coverage is in `tests/field-lessons-batch-y.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#195"
+  }
+}

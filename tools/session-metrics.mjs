@@ -16,9 +16,11 @@ function recordPath(root, kind, id) {
   return path.join(root, SESSION_METRICS_DIR, kind, `${id}.json`);
 }
 
-export async function writeSessionMetric(root, kind, id, { startedAt, finishedAt = null, costUsd = null } = {}) {
+export async function writeSessionMetric(root, kind, id, { startedAt, finishedAt = null, costUsd = null, ...metadata } = {}) {
   if (typeof startedAt !== 'string' || !startedAt) throw new Error('writeSessionMetric requires startedAt');
-  const record = { kind, id, startedAt, finishedAt, costUsd };
+  // Keep newer fields (checks, jobs, attribution, and provider metadata) without changing the
+  // legacy record keys or requiring every writer to know about every metric version.
+  const record = { ...metadata, kind, id, startedAt, finishedAt, costUsd };
   const target = recordPath(root, kind, id);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.${Math.random().toString(16).slice(2)}.tmp`;
@@ -67,11 +69,66 @@ export function reworkBySkill(jobs) {
   return result;
 }
 
-// Row #210: a coordinator's own idle time between two recorded windows (whatever kind each is —
-// a run, checks, mutants, ask, scout) is exactly the gap between one record's end and the next
-// record's start; only a gap this long is worth a lesson row of its own, so anything shorter is
-// left out rather than padding the list with routine turnaround.
-export function idleGaps(records, { minMinutes = 5 } = {}) {
+function summarizeJobs(jobs) {
+  const list = Array.isArray(jobs) ? jobs : [];
+  const followedUp = job => list.some(other => other !== job && other.root === job.root && other.runId !== job.runId
+    && Date.parse(other.startedAt ?? other.finishedAt ?? '') > Date.parse(job.finishedAt ?? '')
+    && Date.parse(other.startedAt ?? other.finishedAt ?? '') - Date.parse(job.finishedAt ?? '') <= DAY_MS
+    && (other.outputs ?? []).some(file => (job.outputs ?? []).includes(file)));
+  const reworkJobs = list.filter(followedUp).length;
+  return { jobs: list.length, reworkJobs, reworkShare: list.length ? reworkJobs / list.length : null };
+}
+
+function failedCheck(check) {
+  if (!check || typeof check !== 'object') return false;
+  if (check.passed === false || check.ok === false) return true;
+  return ['failed', 'failed-check', 'red', 'error', 'timeout'].includes(check.status);
+}
+
+function metricJobs(input) {
+  if (Array.isArray(input)) return input.flatMap(record => record?.jobs ?? []);
+  if (Array.isArray(input?.jobs)) return input.jobs;
+  return (input?.records ?? []).flatMap(record => record?.jobs ?? []);
+}
+
+function metricIntegrates(input) {
+  if (Array.isArray(input?.integrates)) return input.integrates;
+  if (Array.isArray(input?.records)) return input.records.filter(record => record?.kind === 'integrate');
+  if (input?.kind === 'integrate') return [input];
+  return [];
+}
+
+// Lesson #365: rework is the useful primary health signal. `checksPassed` is deliberately not
+// consulted here: an integrate with no checks has no evidence for a red rate, even if an older
+// caller persisted a truthy checksPassed flag.
+export function summarizeSessionMetrics(input = {}) {
+  const jobs = metricJobs(input);
+  const integrates = metricIntegrates(input);
+  const checks = integrates.flatMap(integrate => Array.isArray(integrate?.checks) ? integrate.checks : []);
+  const reworkShare = reworkBySkill(jobs);
+  return {
+    reworkShare,
+    // Keep the explicit old name for consumers that adopted the helper before this summary.
+    reworkBySkill: reworkShare,
+    reworkShareOverall: summarizeJobs(jobs).reworkShare,
+    red_rate: checks.length ? checks.filter(failedCheck).length / checks.length : 'n/a: no integrate checks',
+  };
+}
+
+function timeValue(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  return Date.parse(value ?? '');
+}
+
+function stepTime(step) {
+  return timeValue(step?.at ?? step?.timestamp ?? step?.startedAt ?? step?.time);
+}
+
+// Lesson #369: a hand step is attribution, not a worker window. It is therefore attached to an
+// idle gap only when its timestamp falls inside that gap. Existing records without hand steps
+// retain their exact legacy shape.
+export function idleGaps(records, { minMinutes = 5, handSteps = [] } = {}) {
   const usable = (records ?? [])
     .filter(record => typeof record?.startedAt === 'string' && typeof record?.finishedAt === 'string')
     .sort((a, b) => (a.startedAt < b.startedAt ? -1 : a.startedAt > b.startedAt ? 1 : 0));
@@ -80,7 +137,50 @@ export function idleGaps(records, { minMinutes = 5 } = {}) {
     const start = usable[index - 1].finishedAt;
     const end = usable[index].startedAt;
     const minutes = (Date.parse(end) - Date.parse(start)) / 60000;
-    if (Number.isFinite(minutes) && minutes >= minMinutes) gaps.push({ start, end, minutes: Math.round(minutes * 10) / 10 });
+    if (Number.isFinite(minutes) && minutes >= minMinutes) {
+      const gap = { start, end, minutes: Math.round(minutes * 10) / 10 };
+      const steps = [...handSteps, ...(usable[index - 1].handSteps ?? []), ...(usable[index].handSteps ?? [])]
+        .filter(step => stepTime(step) >= Date.parse(start) && stepTime(step) <= Date.parse(end))
+        .map(step => typeof step === 'string' ? step : step.step ?? step.label ?? step.name ?? step.attribution)
+        .filter(Boolean);
+      if (steps.length) gap.handSteps = [...new Set(steps)];
+      gaps.push(gap);
+    }
   }
   return gaps;
 }
+
+function asNow(value) {
+  const result = timeValue(value);
+  return Number.isFinite(result) ? result : Date.now();
+}
+
+function taskIsRunnable(task) {
+  if (!task || task.blocked === true || task.unblocked === false || task.runnable === false) return false;
+  return !['blocked', 'complete', 'completed', 'done', 'closed', 'cancelled'].includes(task.status);
+}
+
+// Return event records instead of printing them so the monitor's JSON snapshot stays
+// machine-readable and callers can choose their own presentation.
+export function idleSeatEvents({ now = Date.now(), jobs = [], tasks = [], lastWorkerFinishedAt, idleSince, minMinutes = 5 } = {}) {
+  if (jobs.some(job => ['running', 'starting', 'in-progress'].includes(job?.status))) return [];
+  const nowMs = asNow(now);
+  const sinceMs = timeValue(lastWorkerFinishedAt ?? idleSince);
+  if (!Number.isFinite(sinceMs)) return [];
+  const idleMinutes = (nowMs - sinceMs) / 60000;
+  if (!Number.isFinite(idleMinutes) || idleMinutes < minMinutes) return [];
+  const runnableItems = (tasks ?? []).filter(taskIsRunnable);
+  return [{
+    type: 'idle-seat',
+    since: new Date(sinceMs).toISOString(),
+    at: new Date(nowMs).toISOString(),
+    idleMinutes: Math.round(idleMinutes * 10) / 10,
+    runnableTasks: runnableItems.map(task => task.id ?? task.taskId ?? task.key).filter(Boolean),
+    runnableItems,
+  }];
+}
+
+// Row #210: a coordinator's own idle time between two recorded windows (whatever kind each is —
+// a run, checks, mutants, ask, scout) is exactly the gap between one record's end and the next
+// record's start; only a gap this long is worth a lesson row of its own, so anything shorter is
+// left out rather than padding the list with routine turnaround.

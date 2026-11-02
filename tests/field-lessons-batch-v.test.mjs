@@ -232,6 +232,9 @@ describe('#272: ship refuses (inspect warns) a changed test file naming a git-ig
     await fs.writeFile(path.join(dir, 'tests/test_x.py'), 'FIXTURE = ".swarm-manifests/fixture.json"\n');
     git('add', 'tests/test_x.py');
     git('commit', '-q', '-m', 'add test');
+    // Lesson 331: only an ignored path that exists on disk is a fixture; create it here.
+    await fs.mkdir(path.join(dir, '.swarm-manifests'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.swarm-manifests/fixture.json'), '{}\n');
     const { exec, calls } = fakeShipExecWithIgnore({ ignoredPaths: ['.swarm-manifests/fixture.json'] });
     const result = await shipRepo(dir, { exec, integratedFiles: ['tests/test_x.py'] });
     assert.equal(result.status, 'refused', JSON.stringify(result));
@@ -256,6 +259,9 @@ describe('#272: ship refuses (inspect warns) a changed test file naming a git-ig
     const script = `fs.mkdirSync('tests',{recursive:true});fs.writeFileSync('tests/test_x.py','FIXTURE = ".swarm-manifests/fixture.json"\\n');${done}`;
     const state = await runManifest(root, manifest([job({ outputs: ['tests/test_x.py'] })]), { spawnImpl: fake(script) });
     assert.equal(state.status, 'complete', state.jobs[0].error ?? '');
+    // Lesson 331: only an ignored path that exists on disk is a fixture; create it here.
+    await fs.mkdir(path.join(root, '.swarm-manifests'), { recursive: true });
+    await fs.writeFile(path.join(root, '.swarm-manifests/fixture.json'), '{}\n');
     const exec = async (file, args) => {
       if (file === 'git' && args[0] === 'check-ignore') return ok('');
       throw new Error(`unexpected exec: ${file} ${args.join(' ')}`);

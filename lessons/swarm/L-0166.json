@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0166",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "review",
+  "what": "A red starting point silently blocked a run whose whole point was to fix it, or silently waved one through that could not tell the difference. A run meant to repair a known-broken starting point had to pass an explicit override every single time, even though the failures were already fully accounted for by what that run itself was about to change; separately, nothing checked a proposed test file for an import error before it was ever handed to a real test run, so a typo surfaced only much later.",
+  "rule": "A run may proceed past a known-bad starting point without a manual override only when every one of its failures is already covered by what that run itself declares it will change, and a proposed test file's own importability is worth checking cheaply before it is trusted.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a run now compares each failing check's own named locations against its own declared outputs and proceeds, with a logged warning, only when every location is covered; review separately performs a lightweight, collection-only dry run of a proposed test file, warning on a bad import or noting when the language's own collection tool is unavailable to check with. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "review"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#166"
+  }
+}

@@ -1,0 +1,447 @@
+diff --git a/tests/watch-ui.test.mjs b/tests/watch-ui.test.mjs
+index 3d6726b..8822997 100644
+--- a/tests/watch-ui.test.mjs
++++ b/tests/watch-ui.test.mjs
+@@ -360,3 +360,27 @@ test('review fixes in the page: one poll at a time, nothing rebuilt when nothing
+   assert.doesNotMatch(html, /id="liveChip"[^>]*role="status"/, 'a clock-like chip is not a live region');
+   assert.match(html, /id="deeplink" hidden/);
+ });
++
++test('the per-run page uses the board design system: shared tokens first, no navy palette, no corner brackets', async () => {
++  const dir = new URL('../tools/watch-assets/', import.meta.url);
++  const names = (await fs.readdir(dir)).filter(n => /\.(css|js|html)$/.test(n) && !/^(swarm-ui\.css|board\.(js|html)|project\.(js|html)|run\.(js|html)|robot-.*|board-lib\.js)$/.test(n));
++  const files = {};
++  for (const n of names) files[n] = await fs.readFile(new URL(n, dir), 'utf8');
++  const read = n => files[n];
++  const html = read('index.html');
++  assert.ok(html.indexOf('assets/swarm-ui.css') > -1 && html.indexOf('assets/swarm-ui.css') < html.indexOf('assets/watch.css'));
++  assert.doesNotMatch(html, /class="[^"]*\bhud\b/);
++  assert.match(html, /<header class="topbar">/);
++  assert.equal((html.match(/<button class="tab" role="tab"/g) ?? []).length, 4);
++  assert.match(html, /class="toggle-group"/);
++  // The old navy/lime palette and fonts are gone from every run-page file (the board's own files are out of this list).
++  const old = /#(?:0c1430|101b3e|15214a|1a2856|273770|33468a|dfe6fb|94a2cf|66739f|b9f25c|5aa8ff|3fd6c4|ffb547|ff8a6b|c39bff|f2d26b|ff5f6f)\b|rgba\((?:12, ?20, ?48|26, ?40, ?86|21, ?33, ?74|185, ?242, ?92|90, ?168, ?255)/i;
++  for (const n of names) { assert.doesNotMatch(read(n), old, n); assert.doesNotMatch(read(n), /Unbounded|JetBrains Mono|Figtree/, n); }
++  assert.doesNotMatch(read('watch.css'), /\.hud\b/);
++  assert.match(read('watch.css'), /prefers-reduced-motion/);
++  // Class names that swarm-ui.css gives another meaning (.seg is the board's 6px stacked bar) are not used as buttons by any run-page script.
++  for (const n of names.filter(x => x.endsWith('.js'))) assert.doesNotMatch(read(n), /el\('div', 'seg'\)|className = 'seg'/, n);
++  // The wrapper keeps the phone's safe-area padding (a `.wrap` class would override it).
++  assert.match(html, /<div class="app run">/);
++  assert.doesNotMatch(html, /class="app wrap"/);
++});
+diff --git a/tools/watch-assets/board.css b/tools/watch-assets/board.css
+index 50d2c87..d546a39 100644
+--- a/tools/watch-assets/board.css
++++ b/tools/watch-assets/board.css
+@@ -21,15 +21,17 @@
+ .board-entry .kind{font-size:12px;text-transform:uppercase;opacity:.8}
+ .board-link{color:inherit;text-decoration:underline}
+ 
+-.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;font-size:13px}
++.crumbs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+ .crumbs[hidden]{display:none}
+-.crumbs a{color:inherit}
+-.crumbs .back{padding:4px 10px;border-radius:999px;border:1px solid rgba(128,128,128,.4);text-decoration:none}
+-.crumbs .back:hover{background:rgba(128,128,128,.12)}
++.crumbs a{color:inherit;text-decoration:none}
++.crumbs a:hover{color:var(--fg);text-decoration:underline}
++.crumbs .back{display:inline-flex;align-items:center;min-height:32px;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--fg);text-decoration:none}
++.crumbs .back:hover{background:var(--card-2);text-decoration:none}
+ .crumbs .sep{opacity:.5}
+-.crumbs .here{opacity:.8;overflow-wrap:anywhere}
++.crumbs .here{color:var(--fg);overflow-wrap:anywhere}
++@media (max-width:640px){.crumbs .back{min-height:44px}}
+ 
+-.need{border:1px solid rgba(128,128,128,.3);border-left:4px solid #d9a400;border-radius:10px;padding:10px 12px;display:grid;gap:6px}
++.need{border:1px solid rgba(128,128,128,.3);border-left:4px solid var(--warn);border-radius:10px;padding:10px 12px;display:grid;gap:6px}
+ .need-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ .need-title,.need-next,.board-entry>span,.board-lane .name{overflow-wrap:break-word;word-break:normal;white-space:normal;min-width:0}
+ .need-next{opacity:.9;border-left:3px solid rgba(128,128,128,.4);padding-left:8px}
+@@ -39,4 +41,4 @@
+ .scratch-toggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+ .need-cmd{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+ .need-cmd code{padding:3px 6px;border-radius:6px;background:rgba(128,128,128,.15);overflow-wrap:anywhere}
+-.chip.needs-some{background:#d9a400;color:#111}
++.chip.needs-some{background:var(--warn);color:#1a1202}
+diff --git a/tools/watch-assets/index.html b/tools/watch-assets/index.html
+index 81cfed0..3bfcfb2 100644
+--- a/tools/watch-assets/index.html
++++ b/tools/watch-assets/index.html
+@@ -3,7 +3,9 @@
+ <head>
+ <meta charset="utf-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<meta name="color-scheme" content="dark">
+ <title>Swarm Watch</title>
++<link rel="stylesheet" href="assets/swarm-ui.css">
+ <link rel="stylesheet" href="assets/watch.css">
+ <link rel="stylesheet" href="assets/tabs.css">
+ <link rel="stylesheet" href="assets/plan.css">
+@@ -12,11 +14,11 @@
+ <link rel="stylesheet" href="assets/board.css">
+ </head>
+ <body>
+-<div class="wrap">
++<div class="app run">
+ <nav id="crumbs" class="crumbs" aria-label="Breadcrumb" hidden></nav>
+-<header class="top hud">
++<header class="topbar">
+     <div class="brand">
+-      <div class="logo" aria-hidden="true"><i>SW</i></div>
++      <div class="logo" aria-hidden="true">SW</div>
+       <div style="min-width:0">
+         <h1>Swarm Watch</h1>
+         <div class="goal" id="goal">go-7f3a · "Add order history, invoices and refunds to the dealer portal"</div>
+@@ -24,29 +26,29 @@
+     </div>
+     <div class="spacer"></div>
+     <div class="chips">
+-      <span class="chip live" id="status"><span class="dot pulse"></span>LIVE</span>
++      <span class="chip live" id="status"><span class="dot pulse" aria-hidden="true"></span>LIVE</span>
+       <span class="chip mono num" id="clock">00:00 elapsed</span>
+       <span class="chip mono" id="branch">branch -</span>
+     </div>
+   </header>
+   <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
+-    <button role="tab" data-tab="run" aria-selected="true">Run</button>
+-    <button role="tab" data-tab="plan" aria-selected="false">Build Plan</button>
+-    <button role="tab" data-tab="commands" aria-selected="false">Commands</button>
+-    <button role="tab" data-tab="gallery" aria-selected="false">Gallery</button>
++    <button class="tab" role="tab" data-tab="run" aria-selected="true" type="button">Run</button>
++    <button class="tab" role="tab" data-tab="plan" aria-selected="false" type="button">Build Plan</button>
++    <button class="tab" role="tab" data-tab="commands" aria-selected="false" type="button">Commands</button>
++    <button class="tab" role="tab" data-tab="gallery" aria-selected="false" type="button">Gallery</button>
+   </nav>
+   <main id="pane-run" class="pane" role="tabpanel">
+-  <section id="doneBanner" class="card hud" hidden></section>
++  <section id="doneBanner" class="card" hidden></section>
+ 
+ 
+   <section class="kpis" aria-label="Run summary">
+     <div class="kpi"><span class="label">Progress</span>
+       <div class="ringwrap">
+-        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#0c1430" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#3fd6c4"/><stop offset="1" stop-color="#b9f25c"/></linearGradient></defs></svg>
++        <svg class="ring" viewBox="0 0 54 54" aria-hidden="true"><circle cx="27" cy="27" r="22" fill="none" stroke="#23232a" stroke-width="7"/><circle id="ringArc" cx="27" cy="27" r="22" fill="none" stroke="url(#rg)" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 200" transform="rotate(-90 27 27)"/><defs><linearGradient id="rg" x1="0" x2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#34d399"/></linearGradient></defs></svg>
+         <div><div class="v num" id="kDone">0<small>/ 1,200</small></div><div class="sub" id="kPct">0% done</div></div>
+       </div>
+     </div>
+-    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#5aa8ff" stroke-width="2"/></svg></div></div>
++    <div class="kpi"><span class="label">In flight</span><div class="v num" id="kFlight">0</div><div class="sub"><span id="kPeak">peak 0</span><svg id="spark" width="80" height="22" viewBox="0 0 80 22" aria-hidden="true"><path id="sparkPath" fill="none" stroke="#60a5fa" stroke-width="2"/></svg></div></div>
+     <div class="kpi"><span class="label">First-try pass</span><div class="v num" id="kPass">–</div><div class="sub" id="kPassSub">retries 0 · failed 0</div></div>
+     <div class="kpi"><span class="label">Spend</span><div class="v num" id="kSpend">$0.00<small>/ $5</small></div><div class="bar"><span id="kSpendBar" style="width:0%; background:linear-gradient(90deg,var(--teal),var(--lime))"></span></div><div class="sub" id="kForecast">forecast –</div></div>
+     <div class="kpi"><span class="label">ETA</span><div class="v num" id="kEta">–</div><div class="sub" id="kRate">0 jobs/s</div></div>
+@@ -54,10 +56,10 @@
+   </section>
+ 
+   <section class="grid-main">
+-    <div class="card hud">
++    <div class="card">
+       <div class="card-head">
+         <div><h2>Swarm map</h2><div class="label" style="margin-top:4px">one square per job · grouped by lead</div></div>
+-        <div class="seg" role="group" aria-label="Color squares by">
++        <div class="toggle-group" role="group" aria-label="Color squares by">
+           <button id="cState" aria-pressed="true">By state</button>
+           <button id="cLane" aria-pressed="false">By lane</button>
+         </div>
+diff --git a/tools/watch-assets/plan-views.js b/tools/watch-assets/plan-views.js
+index 8c52798..fb197b9 100644
+--- a/tools/watch-assets/plan-views.js
++++ b/tools/watch-assets/plan-views.js
+@@ -114,7 +114,7 @@
+ 
+   function renderRequirements(container, plan) {
+     container.textContent = '';
+-    var bar = el('div', 'seg');
++    var bar = el('div', 'toggle-group');
+     bar.setAttribute('role', 'group');
+     bar.setAttribute('aria-label', 'Filter requirements');
+     [['all', 'All'], ['missing', 'Missing'], ['partial', 'Partial']].forEach(function (f) {
+@@ -235,7 +235,7 @@
+       var isBlocked = !!(blocked[e.from] && (blocked[e.to] || statusOf[e.to] === 'blocked'));
+       svg.appendChild(svgEl('line', {
+         x1: b.x + 130, y1: b.y + 15, x2: a.x, y2: a.y + 15,
+-        stroke: isBlocked ? '#ff5f6f' : '#66739f',
++        stroke: isBlocked ? '#fb7185' : '#82828d',
+         'stroke-width': isBlocked ? 2 : 1,
+         opacity: isBlocked ? 1 : 0.35
+       }));
+@@ -247,11 +247,11 @@
+       var label = String(n.id);
+       g.appendChild(svgEl('rect', {
+         x: p.x, y: p.y, width: 130, height: 30, rx: 8, ry: 8,
+-        fill: '#15214a',
+-        stroke: isBlocked ? '#ff5f6f' : '#33468a',
++        fill: '#111114',
++        stroke: isBlocked ? '#fb7185' : '#3a3a44',
+         'stroke-width': isBlocked ? 2 : 1
+       }));
+-      var t = svgEl('text', { x: p.x + 8, y: p.y + 19, 'font-size': 11, fill: '#dfe6fb' });
++      var t = svgEl('text', { x: p.x + 8, y: p.y + 19, 'font-size': 11, fill: '#ececf1' });
+       t.textContent = label.length > 18 ? label.slice(0, 17) + '…' : label;
+       g.appendChild(t);
+       var title = document.createElementNS(SVG_NS, 'title');
+diff --git a/tools/watch-assets/tabs.css b/tools/watch-assets/tabs.css
+index 4a834bc..290b8ed 100644
+--- a/tools/watch-assets/tabs.css
++++ b/tools/watch-assets/tabs.css
+@@ -1,11 +1,4 @@
+ :root{--drawer-w:420px}
+-.tabs{display:flex;gap:6px;align-items:center;padding:6px;margin-bottom:16px;border-radius:999px;background:linear-gradient(180deg,rgba(12,20,48,.9),rgba(12,20,48,.6));border:1px solid var(--line);overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;max-width:100%}
+-.tabs::-webkit-scrollbar{display:none}
+-.tabs button{all:unset;cursor:pointer;flex:none;position:relative;padding:9px 16px;border-radius:999px;font-family:var(--body);font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap;transition:color .2s,background .2s}
+-.tabs button:hover{color:var(--fg);background:rgba(90,168,255,.08)}
+-.tabs button:focus-visible{outline:2px solid var(--sky);outline-offset:2px;box-shadow:0 0 0 4px rgba(90,168,255,.25)}
+-.tabs button[aria-selected="true"]{color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));box-shadow:inset 0 0 0 1px var(--line2)}
+-.tabs button[aria-selected="true"]::after{content:"";position:absolute;left:14px;right:14px;bottom:-4px;height:3px;border-radius:3px;background:var(--lime);box-shadow:0 0 12px rgba(185,242,92,.5)}
+ .pane{display:grid;gap:16px;min-width:0;padding:4px 0}
+ .pane[hidden]{display:none!important}
+ .drawer{position:fixed;top:0;right:0;bottom:0;width:var(--drawer-w);max-width:100vw;z-index:50;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--card2),var(--bg) 85%);border-left:1px solid var(--line2);box-shadow:-18px 0 40px rgba(0,0,0,.4);color:var(--fg);transform:translateX(0);transition:transform .25s ease}
+@@ -16,18 +9,16 @@
+ .drawer-close:hover{color:var(--fg);border-color:var(--sky)}
+ .drawer-close:focus-visible{outline:2px solid var(--sky);outline-offset:2px}
+ .drawer-body{flex:1;overflow-y:auto;padding:16px 18px 28px;display:grid;gap:14px;align-content:start;overscroll-behavior:contain}
+-#doneBanner{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:16px 20px;border-radius:var(--r);border:1px solid rgba(185,242,92,.35);background:linear-gradient(120deg,rgba(185,242,92,.16),rgba(63,214,196,.08) 60%,rgba(21,33,74,.9));box-shadow:0 0 28px rgba(185,242,92,.12);color:var(--fg)}
++#doneBanner{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:16px 20px;border-radius:var(--r);border:1px solid rgba(52,211,153,.35);background:linear-gradient(120deg,rgba(52,211,153,.16),rgba(34,211,238,.08) 60%,rgba(17,17,20,.9));box-shadow:0 0 28px rgba(52,211,153,.12);color:var(--fg)}
+ #doneBanner[hidden]{display:none!important}
+ #doneBanner .label{color:var(--lime)}
+-.copy,.cm-copy,.gl-copy{all:unset;cursor:pointer;flex:none;align-self:center;display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line2);white-space:nowrap;transition:border-color .2s,color .2s,background .2s}
+-.copy:hover,.cm-copy:hover,.gl-copy:hover{border-color:var(--sky)}
++.copy,button.copy,.cm-copy,.gl-copy{all:unset;cursor:pointer;flex:none;align-self:center;display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--fg);background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line2);white-space:nowrap;transition:border-color .2s,color .2s,background .2s}
++.copy:hover,button.copy:hover,.cm-copy:hover,.gl-copy:hover{border-color:var(--sky)}
+ .copy:focus-visible,.cm-copy:focus-visible,.gl-copy:focus-visible{outline:2px solid var(--sky);outline-offset:2px}
+-.copy.copied,.cm-copy.copied,.gl-copy.copied{color:#0c1430;background:var(--lime);border-color:transparent}
++.copy.copied,button.copy.copied,.cm-copy.copied,.gl-copy.copied{color:#04130d;background:var(--lime);border-color:transparent}
+ .mono-box,.cm-cmd,.gl-cmd{display:flex;flex-direction:row;align-items:center;gap:10px;justify-content:space-between;min-width:0;padding:10px 12px;border-radius:var(--r-sm);background:var(--bg);border:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--fg)}
+ .mono-box code,.cm-cmd-box,.gl-cmd-text{flex:1 1 auto;min-width:0;font-family:var(--mono);white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+ @media (max-width:640px){
+-  .tabs{border-radius:var(--r-sm);padding:4px}
+-  .tabs button{padding:8px 13px;font-size:12px}
+   .drawer{width:100vw;max-width:100vw;border-left:none}
+   .drawer-head{padding:14px 16px}
+   .drawer-body{padding:14px 16px 24px}
+diff --git a/tools/watch-assets/watch.css b/tools/watch-assets/watch.css
+index c331d46..195b4aa 100644
+--- a/tools/watch-assets/watch.css
++++ b/tools/watch-assets/watch.css
+@@ -1,150 +1,121 @@
+-/* Layout: mission-control console. Header strip → KPI row → swarm map + lanes → waves/throughput + attention → leads + merge queue. Navy base, lime primary, one hue per lane. */
++/* SPDX-License-Identifier: Apache-2.0 */
++/* The per-run Watch page: its own layout on the Swarm Watch design system (docs/design/swarm-watch-design-system.md). swarm-ui.css is loaded first and supplies the tokens
++   and the shared components (card, chip, pill, btn, topbar, tabs, dot, focus ring); this file only adds what this page has of its own. Dark only, system fonts only. */
+ :root{
+-  color-scheme: dark;
+-  --bg:#0c1430; --bg2:#101b3e; --card:#15214a; --card2:#1a2856; --line:#273770; --line2:#33468a;
+-  --fg:#dfe6fb; --muted:#94a2cf; --faint:#66739f;
+-  --lime:#b9f25c; --lime-dim:#7fae3a; --sky:#5aa8ff; --teal:#3fd6c4; --amber:#ffb547; --coral:#ff8a6b; --lav:#c39bff; --gold:#f2d26b; --red:#ff5f6f;
+-  --queued:#34467e; --locked:#232f5c;
+-  --display:"Unbounded", "Figtree", system-ui, sans-serif;
+-  --body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+-  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+-  --r:18px; --r-sm:12px;
++  /* Names the other run-page style files (plan, commands, gallery, tabs, board) were written with, now pointing at the design system's tokens. */
++  --bg2:var(--bg-glow); --card2:var(--card-2); --line2:#3a3a44;
++  --lime:var(--accent); --lime-dim:#1f9d73; --sky:var(--info); --teal:#22d3ee; --amber:var(--warn); --coral:var(--gpu); --gold:#fcd34d; --red:var(--bad);
++  --queued:#3f3f4a; --locked:#26262d;
++  --display:var(--font); --body:var(--font);
+ }
+-*{box-sizing:border-box}
+ [hidden]{display:none!important}
+-html,body{min-height:100%}
+-body{
+-  margin:0; font-family:var(--body); color:var(--fg); font-size:14px;
+-  background:
+-    radial-gradient(1200px 600px at 85% -10%, rgba(90,168,255,.16), transparent 60%),
+-    radial-gradient(900px 500px at -10% 20%, rgba(185,242,92,.08), transparent 60%),
+-    linear-gradient(180deg, var(--bg2), var(--bg) 40%);
+-  background-color:var(--bg);
+-}
+-.wrap{max-width:1500px; margin:0 auto; padding-block:18px 40px; padding-left:max(16px, env(safe-area-inset-left,0px)); padding-right:max(16px, env(safe-area-inset-right,0px)); display:grid; gap:16px}
+-.mono{font-family:var(--mono)}
+-.num{font-variant-numeric:tabular-nums}
+-.label{font-family:var(--mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
++.app.run{display:grid; gap:14px; align-content:start}
++#tabs{padding:4px 4px 12px}
++#branch{overflow:hidden; text-overflow:ellipsis; max-width:100%}
++.label{font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:600}
++.goal{color:var(--muted); font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:52ch}
++.topbar{margin-bottom:0}
++.chip.live{color:#a7f3d0; background:linear-gradient(180deg,#0f3a2a,#0b2a1f); border-color:#1f6b4e}
++.chip.done{color:#a7f3d0; background:#0d2a20; border-color:#1f6b4e}
++.chip.demo{color:#fde68a; background:#2a2208; border-color:#6b5614}
++.chip.live .dot{background:var(--accent)}
++.pulse{animation:pulse 1.8s infinite}
+ 
+-/* Header */
+-.top{display:flex; flex-wrap:wrap; align-items:center; gap:14px 20px; padding:16px 20px; border-radius:var(--r);
+-  background:linear-gradient(120deg, rgba(26,40,86,.95), rgba(21,33,74,.85)); border:1px solid var(--line); position:relative}
+-.brand{display:flex; align-items:center; gap:12px; min-width:0}
+-.logo{width:38px; height:38px; border-radius:12px; display:grid; place-items:center;
+-  background:conic-gradient(from 200deg, var(--lime), var(--teal), var(--sky), var(--lav), var(--coral), var(--lime)); box-shadow:0 0 24px rgba(185,242,92,.25)}
+-.logo i{width:30px; height:30px; border-radius:9px; background:var(--card); display:grid; place-items:center; font-style:normal; font-family:var(--display); font-size:13px; color:var(--lime)}
+-.brand h1{font-family:var(--display); font-weight:700; font-size:18px; margin:0; letter-spacing:.01em}
+-.goal{color:var(--muted); font-size:13px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:52ch}
+-.top .spacer{flex:1}
+-.chips{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+-.chip{display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:999px; font-size:12px; font-weight:600;
+-  background:var(--card2); border:1px solid var(--line2); color:var(--fg); white-space:nowrap}
+-.chip.live{color:#0c1430; background:var(--lime); border-color:transparent}
+-.chip.live .dot{background:#0c1430}
+-.chip.done{background:rgba(185,242,92,.14); color:var(--lime); border-color:rgba(185,242,92,.35)}
+-.chip.demo{background:rgba(242,210,107,.12); color:var(--gold); border-color:rgba(242,210,107,.35)}
+-.dot{width:8px; height:8px; border-radius:50%; background:currentColor; display:inline-block}
+-.pulse{animation:pulse 1.4s ease-in-out infinite}
+-@keyframes pulse{0%,100%{opacity:1; transform:scale(1)}50%{opacity:.35; transform:scale(.7)}}
+-.seg{display:inline-flex; padding:3px; gap:2px; border-radius:999px; background:var(--bg); border:1px solid var(--line)}
+-.seg button{all:unset; cursor:pointer; padding:5px 11px; border-radius:999px; font-size:12px; font-weight:600; color:var(--muted); transition:background .2s, color .2s}
+-.seg button[aria-pressed="true"]{background:var(--card2); color:var(--fg); box-shadow:inset 0 0 0 1px var(--line2)}
+-.seg button:focus-visible, .btn:focus-visible{outline:2px solid var(--sky); outline-offset:2px}
+-.btn{all:unset; cursor:pointer; display:inline-flex; align-items:center; gap:7px; padding:7px 14px; border-radius:999px; font-size:12px; font-weight:700;
+-  background:linear-gradient(180deg, var(--card2), var(--card)); border:1px solid var(--line2); transition:transform .15s, border-color .2s}
+-.btn:hover{border-color:var(--sky); transform:translateY(-1px)}
++/* Toggle group (By state / By lane). Not .seg: that is the board's stacked bar. */
++.toggle-group{display:inline-flex; padding:3px; gap:2px; border-radius:var(--pill); background:var(--bg); border:1px solid var(--line)}
++.toggle-group button{all:unset; cursor:pointer; padding:5px 12px; border-radius:var(--pill); font-size:12px; font-weight:600; color:var(--muted); transition:background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease)}
++.toggle-group button:hover{color:var(--fg)}
++.toggle-group button[aria-pressed="true"]{background:var(--card-2); color:var(--fg); box-shadow:inset 0 0 0 1px var(--line)}
++.toggle-group button:focus-visible{box-shadow:var(--ring)}
+ 
+ /* Cards */
+-.card{background:linear-gradient(180deg, rgba(26,40,86,.9), rgba(21,33,74,.92)); border:1px solid var(--line); border-radius:var(--r); padding:16px 18px; min-width:0; position:relative}
+-.card h2{font-family:var(--display); font-weight:500; font-size:14px; margin:0; letter-spacing:.02em}
+-.card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; flex-wrap:wrap}
+-.hud::before,.hud::after{content:""; position:absolute; width:14px; height:14px; border-color:rgba(185,242,92,.55); border-style:solid; pointer-events:none}
+-.hud::before{top:8px; left:8px; border-width:2px 0 0 2px; border-radius:6px 0 0 0}
+-.hud::after{bottom:8px; right:8px; border-width:0 2px 2px 0; border-radius:0 0 6px 0}
++.card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap}
++.card-head h2{margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:600}
++.card-head .label{margin:0}
+ 
+ /* KPIs */
+ .kpis{display:grid; grid-template-columns:repeat(6, minmax(0,1fr)); gap:12px}
+-.kpi{padding:14px 16px; border-radius:var(--r); border:1px solid var(--line); background:linear-gradient(160deg, var(--card2), var(--card)); display:grid; gap:6px; align-content:start; min-width:0}
+-.kpi .v{font-family:var(--display); font-size:24px; font-weight:700; line-height:1.1}
+-.kpi .v small{font-family:var(--body); font-size:13px; font-weight:600; color:var(--muted); margin-left:4px}
+-.kpi .sub{font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+-.pill{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; font-family:var(--mono)}
+-.pill.good{background:rgba(185,242,92,.14); color:var(--lime)}
+-.pill.warn{background:rgba(255,181,71,.14); color:var(--amber)}
+-.pill.bad{background:rgba(255,95,111,.15); color:var(--red)}
+-.pill.info{background:rgba(90,168,255,.15); color:var(--sky)}
+-.pill.lav{background:rgba(195,155,255,.15); color:var(--lav)}
+-.bar{height:8px; border-radius:999px; background:var(--bg); overflow:hidden; position:relative}
+-.bar > span{position:absolute; inset:0 auto 0 0; border-radius:999px; transition:width .5s ease}
++.kpi{padding:14px; border-radius:var(--r); border:1px solid var(--line); background:linear-gradient(180deg,var(--card-2),var(--card)); display:grid; gap:6px; align-content:start; min-width:0}
++.kpi .v{font-size:24px; font-weight:700; line-height:1.15; margin:0; font-family:var(--mono); font-variant-numeric:tabular-nums}
++.kpi .v small{font-family:var(--font); font-size:12px; font-weight:500; color:var(--muted); margin-left:4px}
++.kpi .sub{font-size:12px; color:var(--faint); display:flex; gap:8px; align-items:center; flex-wrap:wrap; overflow-wrap:anywhere}
+ .ringwrap{display:flex; align-items:center; gap:12px}
+ .ring{width:54px; height:54px; flex:none}
+ svg text{font-family:var(--mono)}
++.bar{height:6px; border-radius:var(--pill); background:#23232a; overflow:hidden; position:relative; min-width:70px}
++.bar > span{position:absolute; inset:0 auto 0 0; border-radius:var(--pill); transition:width var(--dur-slow) var(--ease)}
+ 
+-/* Main grid */
+-.grid-main{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+-.grid-mid{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+-.grid-bottom{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:16px; align-items:start}
+-.legend{display:flex; flex-wrap:wrap; gap:10px 14px; font-size:12px; color:var(--muted)}
++/* Main grids */
++.grid-main,.grid-mid,.grid-bottom{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:14px; align-items:start}
++.legend{display:flex; flex-wrap:wrap; gap:8px 14px; font-size:12px; color:var(--muted)}
+ .legend span{display:inline-flex; align-items:center; gap:6px}
+ .sw{width:10px; height:10px; border-radius:3px; display:inline-block}
+ #mapWrap{position:relative}
+ #map{display:block; width:100%}
+-#tip{position:absolute; pointer-events:none; z-index:5; min-width:220px; max-width:300px; padding:10px 12px; border-radius:12px; background:rgba(12,20,48,.96); border:1px solid var(--line2); box-shadow:0 12px 30px rgba(0,0,0,.4); font-size:12px; display:grid; gap:4px}
++#tip{position:absolute; pointer-events:none; z-index:5; min-width:220px; max-width:300px; padding:10px 12px; border-radius:var(--r-sm); background:rgba(9,9,11,.96); border:1px solid var(--line); box-shadow:var(--shadow); font-size:12px; display:grid; gap:4px}
+ #tip b{font-family:var(--mono); font-size:12px}
+ 
+-/* Lanes */
+-.lanes{display:grid; gap:12px}
+-.lane{display:grid; gap:7px; padding:11px 12px; border-radius:var(--r-sm); background:rgba(12,20,48,.45); border:1px solid var(--line)}
++/* Lanes: one accent per lane, like the board */
++.lanes{display:grid; gap:10px}
++.lane{display:grid; gap:7px; padding:10px 12px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line)}
+ .lane-top{display:flex; align-items:center; gap:9px; min-width:0}
+-.lane-name{font-weight:700}
++.lane-name{font-weight:600}
+ .lane-model{color:var(--faint); font-family:var(--mono); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+ .lane-top .grow{flex:1; min-width:0}
+ .lane-nums{font-family:var(--mono); font-size:12px; color:var(--muted); white-space:nowrap}
+ .lane-meta{display:flex; flex-wrap:wrap; gap:6px; font-size:11px; color:var(--muted)}
+-.lane .bar{height:10px}
+-.lane .bar i{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--fg); opacity:.7; border-radius:2px; transition:left .5s ease}
++.lane .bar{height:8px}
++.lane .bar i{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--fg); opacity:.7; border-radius:2px; transition:left var(--dur-slow) var(--ease)}
+ .lane.off{opacity:.6}
+ 
+-/* Waves */
++/* Waves and charts */
+ .waves{display:grid; gap:10px}
+ .wave{display:grid; grid-template-columns:110px minmax(0,1fr) 92px; gap:12px; align-items:center}
+-.wave .bar{height:12px}
+-.wave .w-name{font-weight:700; font-size:13px}
+-.wave .w-name small{display:block; color:var(--faint); font-weight:500; font-size:11px}
+-.charts{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px}
++.wave .bar{height:10px}
++.wave .w-name{font-weight:600; font-size:13px}
++.wave .w-name small{display:block; color:var(--faint); font-weight:400; font-size:11px}
++.charts{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px}
+ .chart{display:grid; gap:6px; min-width:0}
+ .chart svg{width:100%; height:120px; display:block}
+ 
+-/* Attention */
++/* Needs attention */
+ .feed{display:grid; gap:8px; max-height:420px; overflow:auto; padding-right:4px}
+-.ev{display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; padding:9px 10px; border-radius:12px; background:rgba(12,20,48,.45); border:1px solid var(--line); animation:slidein .35s ease}
+-@keyframes slidein{from{opacity:.0; transform:translateY(-6px)} to{opacity:1; transform:none}}
++.ev{display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; padding:9px 10px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line); animation:slidein var(--dur-slow) var(--ease)}
++@keyframes slidein{from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:none}}
+ .ev .stripe{width:4px; border-radius:4px}
+ .ev .t{font-size:13px; font-weight:600; overflow-wrap:anywhere}
+ .ev .d{font-size:12px; color:var(--muted); overflow-wrap:anywhere}
+ .ev .w{font-family:var(--mono); font-size:11px; color:var(--faint)}
+-.untrusted{font-size:10px; font-family:var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--faint); border:1px dashed var(--line2); padding:1px 6px; border-radius:999px; margin-left:6px}
++.untrusted{font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); border:1px dashed var(--line); padding:1px 6px; border-radius:var(--pill); margin-left:6px}
+ 
+ /* Leads table */
+ .tablewrap{overflow-x:auto}
+ table{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
+-th{text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); font-weight:500; padding:0 10px 8px}
+-td{padding:10px; border-top:1px solid var(--line); vertical-align:middle; white-space:nowrap}
++th{text-align:left; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:0 10px 8px}
++td{padding:9px 10px; border-top:1px solid var(--line-soft); vertical-align:middle; white-space:nowrap}
+ td .bar{min-width:120px}
+-.lead-name{font-weight:700}
++.lead-name{font-weight:600}
+ .lead-scope{font-family:var(--mono); font-size:11px; color:var(--faint)}
+ 
+ /* Merge queue */
+ .mq-row{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px}
+-.mq-stat{padding:10px; border-radius:12px; background:rgba(12,20,48,.45); border:1px solid var(--line); display:grid; gap:2px}
+-.mq-stat b{font-family:var(--display); font-size:18px}
++.mq-stat{padding:10px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line); display:grid; gap:2px}
++.mq-stat b{font-family:var(--mono); font-size:18px; font-variant-numeric:tabular-nums}
+ .batches{display:flex; gap:5px; flex-wrap:wrap; margin-top:12px}
+-.batch{width:22px; height:22px; border-radius:7px; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; color:#0c1430; animation:pop .3s ease}
++.batch{width:22px; height:22px; border-radius:7px; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; color:var(--accent-ink); animation:pop var(--dur) var(--ease)}
+ @keyframes pop{from{transform:scale(.4); opacity:0} to{transform:none; opacity:1}}
+ 
+ .foot{display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; color:var(--faint); font-size:12px}
+-kbd{font-family:var(--mono); font-size:11px; padding:2px 7px; border-radius:6px; border:1px solid var(--line2); background:var(--card); color:var(--muted)}
++kbd{font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--muted)}
+ 
+ @media (max-width:1180px){ .kpis{grid-template-columns:repeat(3, minmax(0,1fr))} .grid-main,.grid-mid,.grid-bottom{grid-template-columns:minmax(0,1fr)} }
+-@media (max-width:640px){ .kpis{grid-template-columns:repeat(2, minmax(0,1fr))} .charts{grid-template-columns:1fr} .mq-row{grid-template-columns:repeat(2,minmax(0,1fr))} .wave{grid-template-columns:90px minmax(0,1fr) 70px} .goal{max-width:70vw} }
+-@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
++/* Phone: one column, comfortable touch targets */
++@media (max-width:640px){
++  .kpis{grid-template-columns:repeat(2, minmax(0,1fr))} .charts{grid-template-columns:1fr} .mq-row{grid-template-columns:repeat(2,minmax(0,1fr))}
++  .wave{grid-template-columns:90px minmax(0,1fr) 70px} .goal{max-width:70vw}
++  .toggle-group button, .btn{min-height:44px; display:inline-flex; align-items:center}
++  .kpi .v{font-size:21px}
++}
++/* Only things you can press get the 44 px minimum, not the read-only chips. */
++@media (max-width:960px){ .chip:not(button):not(a){min-height:0} .crumbs .back{min-height:44px} }
++@media (prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important; transition:none!important; scroll-behavior:auto!important} }

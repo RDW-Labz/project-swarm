@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker must return every declared output exactly once",
+  "detail": "tests failed: # todo 0 # duration_ms 715.57175",
+  "durationMs": 129135,
+  "tokens": null
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Worker returned malformed structured output",
+  "detail": "tests failed: # todo 0 # duration_ms 37.755167",
+  "durationMs": 33624,
+  "tokens": null
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 31.128666",
+  "durationMs": 129336,
+  "tokens": 33914
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 34.197291",
+  "durationMs": 104951,
+  "tokens": 27194
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 108963,
+  "tokens": 37467
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": false,
+  "status": "failed",
+  "error": "Rented server response incomplete, refused, truncated, or unexpected",
+  "detail": "not refactored: \"laneDefaults[lane]?.reserveUsd\" appears 2 times (was 2)",
+  "durationMs": 128683,
+  "tokens": null
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 29.92775",
+  "durationMs": 82736,
+  "tokens": 22596
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass; killed 0/4 mutants",
+  "durationMs": 57399,
+  "tokens": 16486
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "all 14 facts present",
+  "durationMs": 118551,
+  "tokens": 62253
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "failed",
+  "error": "Rented server response incomplete, refused, truncated, or unexpected",
+  "detail": "missing facts: ## Host failures | (?i)excluded|left out|not used|skipped | 255 | (?i)nothing else is cancelled|never cancel|not cancel | host-exit|any other code|one job | hosts-exhausted",
+  "durationMs": 101765,
+  "tokens": null
+ }
+]

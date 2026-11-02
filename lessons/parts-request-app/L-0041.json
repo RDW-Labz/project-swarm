@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "L-0041",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "scope",
+  "what": "S7 (1.98.0) hand fixes: (1) workers cannot npm install, so @supabase/ssr was missing and 3 tickets stayed in review (accept-failed-check typecheck); (2) design tickets are skipped by go --scope and ready->done is illegal, needed running->review->done by hand; (3) a ticket with deletes still gets the prompt 'Do not delete files' so the worker refused until the acceptance said it may; (4) typecheck run against stale .next/types failed the sync; (5) log-lint test failed on a timestamp .555Z matching /555/ (fixed by freezing the clock).",
+  "rule": "Document dependencies a ticket needs in the ticket and let a package.json ticket own them; design tickets should be buildable or closable by command; the deletes prompt must say the listed files may be deleted; typecheck for sync should ignore .next.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Installed deps by hand, closed T-0101 by hand, reworded T-0167 acceptance, deleted stale .next/types, froze the clock in log-lint.",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "installer",
+    "lint",
+    "prompt",
+    "review",
+    "scope",
+    "tool",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#41"
+  }
+}

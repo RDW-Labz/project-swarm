@@ -1,0 +1,121 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* The per-run Watch page: its own layout on the Swarm Watch design system (docs/design/swarm-watch-design-system.md). swarm-ui.css is loaded first and supplies the tokens
+   and the shared components (card, chip, pill, btn, topbar, tabs, dot, focus ring); this file only adds what this page has of its own. Dark only, system fonts only. */
+:root{
+  /* Names the other run-page style files (plan, commands, gallery, tabs, board) were written with, now pointing at the design system's tokens. */
+  --bg2:var(--bg-glow); --card2:var(--card-2); --line2:#3a3a44;
+  --lime:var(--accent); --lime-dim:#1f9d73; --sky:var(--info); --teal:#22d3ee; --amber:var(--warn); --coral:var(--gpu); --gold:#fcd34d; --red:var(--bad);
+  --queued:#3f3f4a; --locked:#26262d;
+  --display:var(--font); --body:var(--font);
+}
+[hidden]{display:none!important}
+.app.run{display:grid; gap:14px; align-content:start}
+#tabs{padding:4px 4px 12px}
+#branch{overflow:hidden; text-overflow:ellipsis; max-width:100%}
+.label{font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:600}
+.goal{color:var(--muted); font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:52ch}
+.topbar{margin-bottom:0}
+.chip.live{color:#a7f3d0; background:linear-gradient(180deg,#0f3a2a,#0b2a1f); border-color:#1f6b4e}
+.chip.done{color:#a7f3d0; background:#0d2a20; border-color:#1f6b4e}
+.chip.demo{color:#fde68a; background:#2a2208; border-color:#6b5614}
+.chip.live .dot{background:var(--accent)}
+.pulse{animation:pulse 1.8s infinite}
+
+/* Toggle group (By state / By lane). Not .seg: that is the board's stacked bar. */
+.toggle-group{display:inline-flex; padding:3px; gap:2px; border-radius:var(--pill); background:var(--bg); border:1px solid var(--line)}
+.toggle-group button{all:unset; cursor:pointer; padding:5px 12px; border-radius:var(--pill); font-size:12px; font-weight:600; color:var(--muted); transition:background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease)}
+.toggle-group button:hover{color:var(--fg)}
+.toggle-group button[aria-pressed="true"]{background:var(--card-2); color:var(--fg); box-shadow:inset 0 0 0 1px var(--line)}
+.toggle-group button:focus-visible{box-shadow:var(--ring)}
+
+/* Cards */
+.card-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap}
+.card-head h2{margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:600}
+.card-head .label{margin:0}
+
+/* KPIs */
+.kpis{display:grid; grid-template-columns:repeat(6, minmax(0,1fr)); gap:12px}
+.kpi{padding:14px; border-radius:var(--r); border:1px solid var(--line); background:linear-gradient(180deg,var(--card-2),var(--card)); display:grid; gap:6px; align-content:start; min-width:0}
+.kpi .v{font-size:24px; font-weight:700; line-height:1.15; margin:0; font-family:var(--mono); font-variant-numeric:tabular-nums}
+.kpi .v small{font-family:var(--font); font-size:12px; font-weight:500; color:var(--muted); margin-left:4px}
+.kpi .sub{font-size:12px; color:var(--faint); display:flex; gap:8px; align-items:center; flex-wrap:wrap; overflow-wrap:anywhere}
+.ringwrap{display:flex; align-items:center; gap:12px}
+.ring{width:54px; height:54px; flex:none}
+svg text{font-family:var(--mono)}
+.bar{height:6px; border-radius:var(--pill); background:#23232a; overflow:hidden; position:relative; min-width:70px}
+.bar > span{position:absolute; inset:0 auto 0 0; border-radius:var(--pill); transition:width var(--dur-slow) var(--ease)}
+
+/* Main grids */
+.grid-main,.grid-mid,.grid-bottom{display:grid; grid-template-columns:minmax(0,1.75fr) minmax(0,1fr); gap:14px; align-items:start}
+.legend{display:flex; flex-wrap:wrap; gap:8px 14px; font-size:12px; color:var(--muted)}
+.legend span{display:inline-flex; align-items:center; gap:6px}
+.sw{width:10px; height:10px; border-radius:3px; display:inline-block}
+#mapWrap{position:relative}
+#map{display:block; width:100%}
+#tip{position:absolute; pointer-events:none; z-index:5; min-width:220px; max-width:300px; padding:10px 12px; border-radius:var(--r-sm); background:rgba(9,9,11,.96); border:1px solid var(--line); box-shadow:var(--shadow); font-size:12px; display:grid; gap:4px}
+#tip b{font-family:var(--mono); font-size:12px}
+
+/* Lanes: one accent per lane, like the board */
+.lanes{display:grid; gap:10px}
+.lane{display:grid; gap:7px; padding:10px 12px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line)}
+.lane-top{display:flex; align-items:center; gap:9px; min-width:0}
+.lane-name{font-weight:600}
+.lane-model{color:var(--faint); font-family:var(--mono); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.lane-top .grow{flex:1; min-width:0}
+.lane-nums{font-family:var(--mono); font-size:12px; color:var(--muted); white-space:nowrap}
+.lane-meta{display:flex; flex-wrap:wrap; gap:6px; font-size:11px; color:var(--muted)}
+.lane .bar{height:8px}
+.lane .bar i{position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--fg); opacity:.7; border-radius:2px; transition:left var(--dur-slow) var(--ease)}
+.lane.off{opacity:.6}
+
+/* Waves and charts */
+.waves{display:grid; gap:10px}
+.wave{display:grid; grid-template-columns:110px minmax(0,1fr) 92px; gap:12px; align-items:center}
+.wave .bar{height:10px}
+.wave .w-name{font-weight:600; font-size:13px}
+.wave .w-name small{display:block; color:var(--faint); font-weight:400; font-size:11px}
+.charts{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px}
+.chart{display:grid; gap:6px; min-width:0}
+.chart svg{width:100%; height:120px; display:block}
+
+/* Needs attention */
+.feed{display:grid; gap:8px; max-height:420px; overflow:auto; padding-right:4px}
+.ev{display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; padding:9px 10px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line); animation:slidein var(--dur-slow) var(--ease)}
+@keyframes slidein{from{opacity:0; transform:translateY(-6px)} to{opacity:1; transform:none}}
+.ev .stripe{width:4px; border-radius:4px}
+.ev .t{font-size:13px; font-weight:600; overflow-wrap:anywhere}
+.ev .d{font-size:12px; color:var(--muted); overflow-wrap:anywhere}
+.ev .w{font-family:var(--mono); font-size:11px; color:var(--faint)}
+.untrusted{font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); border:1px dashed var(--line); padding:1px 6px; border-radius:var(--pill); margin-left:6px}
+
+/* Leads table */
+.tablewrap{overflow-x:auto}
+table{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
+th{text-align:left; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:0 10px 8px}
+td{padding:9px 10px; border-top:1px solid var(--line-soft); vertical-align:middle; white-space:nowrap}
+td .bar{min-width:120px}
+.lead-name{font-weight:600}
+.lead-scope{font-family:var(--mono); font-size:11px; color:var(--faint)}
+
+/* Merge queue */
+.mq-row{display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:10px}
+.mq-stat{padding:10px; border-radius:var(--r-sm); background:rgba(9,9,11,.45); border:1px solid var(--line); display:grid; gap:2px}
+.mq-stat b{font-family:var(--mono); font-size:18px; font-variant-numeric:tabular-nums}
+.batches{display:flex; gap:5px; flex-wrap:wrap; margin-top:12px}
+.batch{width:22px; height:22px; border-radius:7px; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; color:var(--accent-ink); animation:pop var(--dur) var(--ease)}
+@keyframes pop{from{transform:scale(.4); opacity:0} to{transform:none; opacity:1}}
+
+.foot{display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px; color:var(--faint); font-size:12px}
+kbd{font-family:var(--mono); font-size:11px; padding:1px 6px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--muted)}
+
+@media (max-width:1180px){ .kpis{grid-template-columns:repeat(3, minmax(0,1fr))} .grid-main,.grid-mid,.grid-bottom{grid-template-columns:minmax(0,1fr)} }
+/* Phone: one column, comfortable touch targets */
+@media (max-width:640px){
+  .kpis{grid-template-columns:repeat(2, minmax(0,1fr))} .charts{grid-template-columns:1fr} .mq-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .wave{grid-template-columns:90px minmax(0,1fr) 70px} .goal{max-width:70vw}
+  .toggle-group button, .btn{min-height:44px; display:inline-flex; align-items:center}
+  .kpi .v{font-size:21px}
+}
+/* Only things you can press get the 44 px minimum, not the read-only chips. */
+@media (max-width:960px){ .chip:not(button):not(a){min-height:0} .crumbs .back{min-height:44px} }
+@media (prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important; transition:none!important; scroll-behavior:auto!important} }

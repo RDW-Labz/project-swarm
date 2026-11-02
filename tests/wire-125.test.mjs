@@ -334,7 +334,7 @@ describe('generic-pins: check-pins is generic (no built-in package names), drive
     const { stdout } = await execFileAsync(process.execPath, [CLI, '--root', root, 'check-pins', '--json']);
     const result = JSON.parse(stdout);
     assert.equal(result.ok, true);
-    assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied']);
+    assert.deepEqual(result.skippedRules, ['library-exact-core-pin', 'wheel-requirement-unsatisfied', 'vendored-core-missing-runtime-wheels']);
 
     // The same fixture without the [tool.uv.sources] entry now fails pin-not-vendored, still with
     // no --core given.

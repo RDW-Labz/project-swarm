@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0134",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A declared output with a typo'd name that never existed anywhere was read, once nothing showed up for it, as a real deletion and blocked the whole change.",
+  "rule": "An output missing from both the starting state and the finished work was simply never written, not deleted, and a typo like this is worth flagging before anything even runs.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a declared test output absent from the starting state now warns up front; an output missing from both the starting state and the finished work is now treated as not written, never as a deletion. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#134"
+  }
+}

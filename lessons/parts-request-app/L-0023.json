@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0023",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "Scaffold ticket did not gitignore .next/; my own git add -A after next build committed the build cache (11 gitleaks hits, throwaway keys) and I had to filter-branch and force-push the stage branch",
+  "rule": "Scaffold/gitignore ticket must include .next/, node_modules/, *.tsbuildinfo, next-env.d.ts; integrate should refuse committing build output.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "default .gitignore for node stacks in swarm init; go/ship commit step should skip paths that look like build output",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "build-output",
+    "gitignore",
+    "secrets"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 23"
+  }
+}

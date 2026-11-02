@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0369",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "build",
+  "what": "Idle seats need actionable attribution. Report idle seats after five minutes, list runnable unblocked work, and attribute idle gaps to recorded hand steps.",
+  "rule": "Idle seats need actionable attribution.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "build"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#369"
+  }
+}

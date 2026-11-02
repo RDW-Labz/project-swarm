@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0046",
+  "project": "parts-request-app",
+  "date": "2026-10-18",
+  "stage": "scope",
+  "what": "S8: T-0170 mounted Call/Text/Email but no template chips, always passed email=null and name 'there'; the real e2e (T-0139) was written against the old monolith DOM and the page never exposed R-028 templates",
+  "rule": "Mount tickets must list every visible control from the scope (template chips, customer name, email) in acceptance, and the e2e ticket runs after the mounts, not alongside.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Added template chips, contact name, email and price to the reply section by hand; updated reply-flow.spec.ts to the StatusMenu",
+  "guard": {
+    "kind": "none",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "privacy",
+    "scope",
+    "tool"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "coordination/swarm-lessons.jsonl#46"
+  }
+}

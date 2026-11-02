@@ -4,6 +4,8 @@
 // process access beyond the explicit options callers pass in, so every code path here is
 // deterministic and directly testable against a fixture run view.
 
+import { sanitizeWorkerText } from './worker-text.mjs';
+
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const RESET = '\u001b[0m';
 
@@ -79,7 +81,7 @@ function buildColumns(jobs, width) {
     { key: 'out', label: 'OUT', align: 'right', flex: false, drop: true, get: job => String(job.outputCount ?? 0) },
   ];
   for (const column of columns) {
-    column.cells = jobs.map(column.get);
+    column.cells = jobs.map(job => sanitizeWorkerText(column.get(job)));
     const natural = Math.max(column.label.length, 0, ...column.cells.map(cell => visibleLength(cell)));
     column.width = column.flex ? Math.max(natural, 0) : natural;
     column.natural = natural;
@@ -110,10 +112,10 @@ function renderTable(jobs, width, color) {
   if (!columns.length) return [];
   const headerLine = columns.map(c => pad(truncate(c.label, c.width), c.width, c.align)).join('  ');
   const rows = jobs.map(job => columns.map(c => {
-    const raw = c.get(job);
+    const raw = sanitizeWorkerText(c.get(job));
     if (c.key === 'status') {
       const cell = statusCell(job.status);
-      const truncated = truncate(cell.plain, c.width);
+      const truncated = truncate(sanitizeWorkerText(cell.plain), c.width);
       return pad(colorize(truncated, cell.code, color), c.width, c.align);
     }
     return pad(truncate(raw, c.width), c.width, c.align);
@@ -130,6 +132,21 @@ function formatUsage(usageByProvider) {
     const fields = Object.entries(usageByProvider[provider]).map(([key, value]) => `${key} ${value}`).join(' ');
     return `${provider}: ${fields}`;
   }).join('  ·  ');
+}
+
+export function renderIdleSeatEvents(events, width = 100) {
+  const lines = [];
+  for (const event of events ?? []) {
+    if (event?.type !== 'idle-seat') continue;
+    const minutes = event.idleMinutes ?? '-';
+    lines.push(truncate(sanitizeWorkerText(`idle seat: no worker running for ${minutes}m`), width));
+    const tasks = event.runnableTasks ?? [];
+    lines.push(truncate(
+      sanitizeWorkerText(tasks.length ? `runnable unblocked TASK items: ${tasks.join(', ')}` : 'runnable unblocked TASK items: none'),
+      width,
+    ));
+  }
+  return lines;
 }
 
 // `view` mirrors summarizeRun's shape (id, status, concurrency, peakConcurrency, counts,
@@ -151,9 +168,26 @@ export function renderMonitorView(view, options = {}) {
     `elapsed ${formatDuration(view.elapsedMs ?? null)}  ·  peak concurrency ${view.peakConcurrency ?? 0}`,
     width,
   ));
+  if (view.pause) lines.push(truncate(`paused: ${view.pause.reasons.join(', ')} until ${view.pause.until ?? 'n/a'}; held ${view.pause.jobs.length} (${view.pause.jobs.slice(0, 5).join(', ')})`, width));
+  const leads = view.leads ?? jobs.filter(job => job.type === 'lead' || job.childRun || job.lead);
+  if (leads.length) lines.push(truncate(`leads  ${leads.length} (${leads.filter(lead => lead.status === 'complete').length} complete, ${leads.filter(lead => lead.status === 'running').length} running)`, width));
   const usage = formatUsage(view.usageByProvider);
   if (usage) lines.push(truncate(`usage  ${usage}`, width));
+  const lanes = Object.entries(view.lanes?.lanes ?? {});
+  if (lanes.length) lines.push(truncate('lanes  ' + lanes.map(([agent, lane]) => {
+    if (lane.state === 'paused') return `${agent} paused ${formatDuration(Math.max(0, (typeof lane.until === 'number' ? lane.until : Date.parse(lane.until)) - (options.now ?? Date.now())))}`;
+    if (lane.state === 'backoff') return `${agent} backoff`;
+    return `${agent} ${lane.inFlight}/${lane.concurrency} run${lane.queued > 0 ? `, ${lane.queued} queued` : ''}`;
+  }).join(' - '), width));
+  if (view.queued !== undefined) lines.push(truncate(`queue  ${view.queued} waiting`, width));
+  if (view.mergeQueue !== undefined || view.integratedAt !== undefined) {
+    const summary = view.mergeQueue?.summary;
+    lines.push(truncate(`merge  ${view.mergeQueue?.state ?? (view.integratedAt ? `integrated ${view.integratedAt}` : 'not integrated')}${summary ? ` - ${summary.integrated.length} integrated - ${summary.requeued.length} requeued - ${summary.flagged.length} flagged` : ''}`, width));
+  }
+  if (view.spend?.costUsd || view.spend?.tokens) lines.push(truncate(`spend  $${(view.spend.costUsd ?? 0).toFixed(2)} - tokens ${view.spend.tokens ?? 0}`, width));
+  lines.push(...renderIdleSeatEvents(view.idleSeatEvents ?? view.idleSeat ?? [], width));
   lines.push('');
-  lines.push(...renderTable(jobs, width, color));
+  lines.push(...renderTable(jobs.length > 40 ? jobs.filter(job => job.status !== 'complete').slice(0, 40) : jobs, width, color));
+  if (jobs.length > 40) lines.push(`... ${jobs.filter(job => job.status === 'complete').length} complete jobs hidden; swarm rollup ${view.id} --text for the summary`);
   return lines.join('\n');
 }

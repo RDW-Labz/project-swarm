@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0058",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A hash-shaped string in output was never flagged as possibly invented. A job's output contained a 40- or 64-character hexadecimal string that appeared nowhere verbatim in the job's own context files, suspiciously hash-shaped but never noticed to be unexplained.",
+  "rule": "An unexplained 40/64-hex string in an output is flagged as possibly invented.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `inspect`/`integrate` warn `invented-hash` when an output diff adds a 40-hex or 64-hex string not present verbatim in the job's own context files. Regression coverage is in `tests/lessons120-mutants.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#58"
+  }
+}

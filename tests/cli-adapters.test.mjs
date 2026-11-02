@@ -1,3 +1,4 @@
+import './_isolate-config.mjs';
 // SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ const events=agent=>[{type:'system',subtype:'init',model:'observed-model'},agent
 const lines=items=>items.map(event=>JSON.stringify(event)).join('\n')+'\n';
 for(const agent of ['hermes','qwen'])test(`${agent} fresh process consumes serialized context and returns validated files`,async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'input.md'),'selected source');let received;
- const state=await runManifest(root,manifest([job(agent)]),{spawnImpl:(command,args,options)=>{received={command,args,options};return spawn(process.execPath,['-e',`let input='';process.stdin.on('data',data=>input+=data);process.stdin.on('end',()=>{if(!input.includes('selected source'))process.exit(7);process.stdout.write(${JSON.stringify(lines(events(agent)))});});`],options);}});
+ const state=await runManifest(root,manifest([job(agent)]),{spawnImpl:(command,args,options)=>{received={command,args,options};return spawn(process.execPath,['-e',"let input='';process.stdin.on('data',data=>input+=data);process.stdin.on('end',()=>{if(!input.includes('selected source'))process.exit(7);process.stdout.write(process.argv[1]);});",lines(events(agent))],options);}});
  assert.equal(state.status,'complete');const saved=await fs.readFile(path.join(root,'.swarm/runs',state.id,agent,'message.txt'),'utf8');assert.ok(saved.includes('selected source'));assert.ok(saved.includes('schema'));assert.ok(!saved.includes('Never inspect parent'));assert.equal(received.command,agent);assert.equal(received.options.shell,false);assert.ok(received.args.includes('--safe-mode'));assert.equal(state.jobs[0].actualModel,'observed-model');await assert.rejects(fs.access(path.join(root,'report.md')));await integrateRun(root,state.id);assert.equal(await fs.readFile(path.join(root,'report.md'),'utf8'),'Reviewed.');assert.equal(state.summary.counts.complete,1);assert.ok(state.jobs[0].durationMs>=0);assert.ok(state.jobs[0].startedAt);
 });
 test('CLI arguments keep no-tools restrictions and avoid resume, yolo, shell and schema exemptions',()=>{
@@ -79,7 +80,7 @@ test('monitor reports real queue states, elapsed durations and numeric provider 
  const state={id:'x',status:'running',startedAt:new Date(1000).toISOString(),concurrency:4,peakConcurrency:2,jobs:[{id:'a',agent:'qwen',status:'complete',startedAt:new Date(1000).toISOString(),finishedAt:new Date(1200).toISOString(),durationMs:200,usage:{input_tokens:10,ignore:'private'}},{id:'b',agent:'hermes',status:'running',startedAt:new Date(1500).toISOString()},{id:'c',agent:'claude',status:'queued'}]};
  const report=summarizeRun(state,2000);assert.deepEqual(report.counts,{queued:1,running:1,complete:1,failed:0,timeout:0,cancelled:0,skipped:0});assert.equal(report.peakConcurrency,2);assert.equal(report.jobs[1].durationMs,500);assert.equal(report.jobs[2].durationMs,null);assert.deepEqual(report.usageByProvider.qwen,{input_tokens:10});
 });
-test('larger scheduler limits remain explicit and reject excessive workers/jobs',()=>{const jobs=Array.from({length:256},(_,i)=>({...job('qwen'),id:`job-${i}`,outputs:[]}));assert.equal(validateManifest({version:1,concurrency:32,jobs}).jobs.length,256);assert.throws(()=>validateManifest({version:1,concurrency:33,jobs}));assert.throws(()=>validateManifest({version:1,concurrency:2,jobs:[...jobs,{...job('qwen'),id:'last'}]}));});
+test('larger scheduler limits remain explicit and reject excessive workers/jobs',()=>{const jobs=Array.from({length:5000},(_,i)=>({...job('qwen'),id:`job-${i}`,outputs:[]}));assert.equal(validateManifest({version:1,concurrency:2048,jobs}).jobs.length,5000);assert.throws(()=>validateManifest({version:1,concurrency:2049,jobs}));assert.throws(()=>validateManifest({version:1,concurrency:2,jobs:[...jobs,{...job('qwen'),id:'last'}]}));});
 
 test('both new CLI adapters time out owned children and never expose partial files',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-cli-timeout-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'input.md'),'source');
@@ -95,7 +96,15 @@ test('#67: eight active jobs drain a larger queue with consistent observed count
  // happened, instead of hoping a fixed sleep outlasted the host's own scheduling latency.
  const markers=await fs.mkdtemp(path.join(os.tmpdir(),'swarm-eight-markers-'));t.after(()=>fs.rm(markers,{recursive:true,force:true}));
  const jobs=Array.from({length:24},(_,i)=>({...job('qwen'),id:`qwen-${i}`,outputs:[],timeoutMs:5000}));const emptyEvents=events('qwen');emptyEvents[1].result=JSON.stringify({summary:'done',files:[]});
- const script=`const fs=require('node:fs');const path=require('node:path');const dir=${JSON.stringify(markers)};fs.writeFileSync(path.join(dir,process.pid+'-'+Math.random().toString(36).slice(2)),'');const deadline=Date.now()+4000;(function poll(){let count=0;try{count=fs.readdirSync(dir).length;}catch{}if(count>=8||Date.now()>=deadline)process.stdout.write(${JSON.stringify(lines(emptyEvents))});else setTimeout(poll,5);})();`;
- const state=await runManifest(root,{version:1,concurrency:8,jobs},{onState:state=>snapshots.push(structuredClone(state.summary)),spawnImpl:(_command,_args,options)=>{active++;peak=Math.max(peak,active);const child=spawn(process.execPath,['-e',script],options);child.on('close',()=>active--);return child;}});
+ const script="const fs=require('node:fs');const path=require('node:path');const dir=process.argv[1];fs.writeFileSync(path.join(dir,process.pid+'-'+Math.random().toString(36).slice(2)),'');const deadline=Date.now()+4000;(function poll(){let count=0;try{count=fs.readdirSync(dir).length;}catch{}if(count>=8||Date.now()>=deadline)process.stdout.write(process.argv[2]);else setTimeout(poll,5);})();";
+ const state=await runManifest(root,{version:1,concurrency:8,jobs},{onState:state=>snapshots.push(structuredClone(state.summary)),spawnImpl:(_command,_args,options)=>{active++;peak=Math.max(peak,active);const child=spawn(process.execPath,['-e',script,markers,lines(emptyEvents)],options);child.on('close',()=>active--);return child;}});
  assert.equal(state.status,'complete');assert.equal(peak,8);assert.equal(state.peakConcurrency,8);assert.equal(active,0);assert.equal(state.summary.counts.complete,24);assert.ok(snapshots.some(s=>s.counts.running===8&&s.counts.queued>0));for(const snapshot of snapshots)assert.equal(Object.values(snapshot.counts).reduce((a,b)=>a+b,0),24);
+});
+
+test('parseExtraCli accepts the unknown-toolsets warning real Hermes prints on stdout, and nothing else that is not JSON',()=>{
+ const body=lines(events('hermes'));
+ const parsed=parseExtraCli('hermes',`Warning: Unknown toolsets: none\n${body}`,0,'test-model');
+ assert.equal(parsed.value.summary,value.summary);
+ assert.throws(()=>parseExtraCli('hermes',`Warning: something else\n${body}`,0,'test-model'),/Malformed CLI JSONL/);
+ assert.throws(()=>parseExtraCli('qwen',`Warning: Unknown toolsets: none\n${lines(events('qwen'))}`,0,'test-model'),/Malformed CLI JSONL/);
 });

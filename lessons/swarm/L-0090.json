@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "L-0090",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A release step had no `--help`, and an externally built run's own identity was unrecoverable. A release command failed outright on `--help`, and, separately, a run built outside the normal flow left no way to name which run had produced a given branch, costing a manual source read to piece it back together.",
+  "rule": "Every command answers `--help`, and every result names the run (or the branch) that produced it.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `--help`/`-h` now prints usage and exits cleanly before any other flag is parsed, and every release result carries its own run or branch identifier. Regression coverage is in `tests/ship-125.test.mjs` and `tests/wire-125.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "release",
+    "spend"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#90"
+  }
+}

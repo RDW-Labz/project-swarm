@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0035",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A cheap worker's own output file carried its final answer as a trailing line. A worker appended its last-message JSON to the end of its own JSON output file instead of only in its final reply, so that file no longer parsed as JSON; `integrate --mutants` still wrote every output to the tree before discovering the parse failure, leaving the same stuck, unretryable state as an externally supplied bad mutants file.",
+  "rule": "A JSON output file holds only its JSON; a worker's own result line belongs in its final message, never appended to a declared output.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: at job completion, any `.json` output that fails to parse (JSON.parse also refuses trailing data after an otherwise valid value) is recorded as warning `output-invalid-json: <path>`, shown by `inspect`, before integration ever attempts to use it. Documentation: verification.",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "mutation-testing",
+    "path-safety",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#35"
+  }
+}

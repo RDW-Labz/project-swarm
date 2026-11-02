@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: Apache-2.0
+// `swarm handbuild request | approve | deny | status | log | install | uninstall | off | on`: the hand-build guard's commands (see tools/handbuild.mjs and docs/handbuild-guard.md).
+import fs from 'node:fs';
+import path from 'node:path';
+import { appendEvent, sanitizeText } from './journal.mjs';
+import { createRequest, decideRequest, listRequests, activeApprovals, REASON_KINDS, KIND_LIST, MAX_MINUTES, DEFAULT_MINUTES, LOG_FILE, OFF_FILE } from './handbuild.mjs';
+import { ensureHandbuildGuard, removeHandbuildGuard, stableInstallDir } from './install.mjs';
+
+export const HANDBUILD_USAGE = [
+  'Usage: swarm handbuild request --kind swarm-cannot|emergency|secret|tiny --reason "why the swarm cannot do it" --files "src/a.ts,src/b.ts" [--minutes 30] [--git commit,push]',
+  '       swarm handbuild approve ID | deny ID      (the owner only: an orchestrator session cannot run these)',
+  '       swarm handbuild status [--json] | log [--json]',
+  '       swarm handbuild install | uninstall | off | on',
+  `Valid reasons (anything else: write a ticket instead): ${KIND_LIST.map(k => `${k}: ${REASON_KINDS[k]}`).join('; ')}. An approval covers only the files named, for at most ${MAX_MINUTES} minutes (default ${DEFAULT_MINUTES}), then expires.`,
+].join('\n') + '\n';
+
+const flagsOf = args => {
+  const flags = {}, rest = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a.startsWith('--')) { const k = a.slice(2); if (['json'].includes(k)) flags[k] = true; else { flags[k] = args[i + 1]; i += 1; } } else rest.push(a);
+  }
+  return { flags, rest };
+};
+const out = (stdout, exitCode = 0) => ({ stdout: stdout.endsWith('\n') ? stdout : `${stdout}\n`, exitCode });
+const describe = r => `${r.id}  ${r.status.padEnd(8)} ${r.kind}  ${r.files.join(', ')}${r.git?.length ? `  git: ${r.git.join(', ')}` : ''}${r.status === 'approved' ? `  until ${r.expiresAt}` : ''}\n    ${r.reason}`;
+
+export async function runHandbuildCommand(root, args, { installRoot, now = Date.now } = {}) {
+  const [sub, ...tail] = args;
+  const { flags, rest } = flagsOf(tail);
+  try {
+    if (sub === 'request') {
+      const r = createRequest(root, { kind: flags.kind, reason: flags.reason, files: flags.files, minutes: flags.minutes, git: flags.git }, { now });
+      const id = `handbuild-${r.id}`;
+      // It shows up in Needs you (the board and the phone) as a decision with approve and deny.
+      await appendEvent(root, { kind: 'decision', id, confirm: true, choice: 'deny', options: ['approve', 'deny'], text: sanitizeText(`Hand-build request (${r.kind}): ${r.reason} | files: ${r.files.join(', ')} | ${r.minutes} min${r.git.length ? ` | git: ${r.git.join(', ')}` : ''}. Recommendation: deny unless the swarm truly cannot do it; otherwise a ticket is the better route.`) }, { now });
+      return out(`hand-build request ${r.id} is waiting for the owner (it shows in Needs you on the board and the phone).\nThe owner approves with: swarm handbuild approve ${r.id}   (or: swarm decide ${id} approve)\nUntil then every edit of ${r.files.join(', ')} stays blocked.`);
+    }
+    if (sub === 'approve' || sub === 'deny') {
+      if (rest.length !== 1) return out(HANDBUILD_USAGE, 1);
+      const r = decideRequest(root, rest[0], sub, { now, by: 'owner' });
+      await appendEvent(root, { kind: 'decision', id: `handbuild-${r.id}`, confirmed: true, choice: sub, text: sanitizeText(`Hand-build request ${r.id}: ${sub}`) }, { now }).catch(() => {});
+      return out(sub === 'approve' ? `approved ${r.id}: ${r.files.join(', ')}${r.git.length ? ` and git ${r.git.join(', ')}` : ''} until ${r.expiresAt}; then it expires` : `denied ${r.id}`);
+    }
+    if (sub === 'status') {
+      const all = listRequests(root);
+      const live = activeApprovals(root, now());
+      if (flags.json) return out(JSON.stringify({ requests: all, active: live.map(r => r.id), off: fs.existsSync(path.join(root, OFF_FILE)) }));
+      return out([`guard: ${fs.existsSync(path.join(root, OFF_FILE)) ? 'OFF (.swarm/handbuild/off exists)' : 'on where the hook is installed (swarm handbuild install)'}`, `${live.length} live approval(s), ${all.filter(r => r.status === 'pending').length} pending`, ...all.slice(0, 20).map(describe)].join('\n'));
+    }
+    if (sub === 'log') {
+      let lines = [];
+      try { lines = fs.readFileSync(path.join(root, LOG_FILE), 'utf8').split('\n').filter(Boolean).slice(-200); } catch { /* none yet */ }
+      return out(flags.json ? `[${lines.join(',')}]` : lines.map(l => { try { const e = JSON.parse(l); return `${e.at}  ${e.event}${e.id ? ` ${e.id}` : ''}${e.tool ? ` ${e.tool}` : ''}${e.files?.length ? ` ${e.files.join(', ')}` : ''}${e.reason ? `  ${e.reason}` : ''}`; } catch { return l; } }).join('\n') || 'nothing logged yet');
+    }
+    if (sub === 'install') {
+      const r = await ensureHandbuildGuard(root, installRoot);
+      return out(r.status === 'skipped' ? `not installed: ${r.reason}` : `hand-build guard ${r.status} in ${root}/.claude/settings.local.json (it applies to new Claude Code sessions in this project)`, r.status === 'skipped' ? 1 : 0);
+    }
+    if (sub === 'uninstall') { const r = await removeHandbuildGuard(root); return out(`hand-build guard ${r.status}`); }
+    if (sub === 'off' || sub === 'on') {
+      const file = path.join(root, OFF_FILE);
+      if (sub === 'off') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, ''); } else fs.rmSync(file, { force: true });
+      return out(`hand-build guard ${sub}`);
+    }
+  } catch (error) {
+    if (/^handbuild-/.test(error.message)) return out(error.message.replace(/^handbuild-[a-z]+: /, ''), 1);
+    throw error;
+  }
+  return out(HANDBUILD_USAGE, sub ? 1 : 0);
+}

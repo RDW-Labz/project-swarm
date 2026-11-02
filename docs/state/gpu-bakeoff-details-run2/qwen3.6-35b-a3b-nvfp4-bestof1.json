@@ -1,0 +1,102 @@
+[
+ {
+  "taskId": "bug-percentile",
+  "type": "bug-fix",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 27373,
+  "tokens": 6248
+ },
+ {
+  "taskId": "bug-router-failover",
+  "type": "bug-fix",
+  "pass": false,
+  "status": "failed",
+  "error": "Rented server response incomplete, refused, truncated, or unexpected",
+  "detail": "tests failed: # todo 0 # duration_ms 39.582583",
+  "durationMs": 54068,
+  "tokens": null
+ },
+ {
+  "taskId": "new-parse-duration",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 39.316292",
+  "durationMs": 10278,
+  "tokens": 3561
+ },
+ {
+  "taskId": "new-cost-summary",
+  "type": "new-function",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 38.981375",
+  "durationMs": 19202,
+  "tokens": 4687
+ },
+ {
+  "taskId": "refactor-anthropic-rates",
+  "type": "refactor",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "not refactored: \"longInput\" appears 3 times (was 3)",
+  "durationMs": 6461,
+  "tokens": 5576
+ },
+ {
+  "taskId": "refactor-spend-reserve",
+  "type": "refactor",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "tests pass",
+  "durationMs": 7416,
+  "tokens": 15848
+ },
+ {
+  "taskId": "tests-model-matches",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 39.552125",
+  "durationMs": 12495,
+  "tokens": 4707
+ },
+ {
+  "taskId": "tests-npm-script",
+  "type": "test-writing",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "tests failed: # todo 0 # duration_ms 40.886125",
+  "durationMs": 10498,
+  "tokens": 5335
+ },
+ {
+  "taskId": "docs-anthropic-lane",
+  "type": "docs",
+  "pass": true,
+  "status": "complete",
+  "error": null,
+  "detail": "all 14 facts present",
+  "durationMs": 5528,
+  "tokens": 19438
+ },
+ {
+  "taskId": "docs-host-failures",
+  "type": "docs",
+  "pass": false,
+  "status": "complete",
+  "error": null,
+  "detail": "missing facts: host-exit|any other code|one job",
+  "durationMs": 7310,
+  "tokens": 6708
+ }
+]

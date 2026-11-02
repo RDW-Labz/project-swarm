@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0018",
+  "project": "parts-request-app",
+  "date": "2026-10-16",
+  "stage": "merge",
+  "what": "security gate has no per-package vulnerability exception; 5 dev-only highs in eslint-config-next chain must be recorded by hand in docs and will re-block later lockfile changes",
+  "rule": "Gate needs accepted exceptions with reason and review date.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "add security.acceptedAdvisories [{id,reason,reviewBy}] to the profile policy",
+  "guard": {
+    "kind": "lint",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "audit-exceptions",
+    "security-gate"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app swarm-lessons 18"
+  }
+}

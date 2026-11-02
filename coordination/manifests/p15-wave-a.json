@@ -1,0 +1,355 @@
+{
+  "version": 1,
+  "concurrency": 8,
+  "budget": {
+    "maxUsd": 3
+  },
+  "jobs": [
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-lesson-schema",
+      "type": "build",
+      "prompt": "Write the lesson schema module and its test file, section 1 of the design. scanSecrets from the security scan module takes an array of objects with path and content and returns an array of findings (empty when clean). Tests cover: a valid lesson passes; each unknown key, bad stage, bad id, long text and bad tag fails; every unsafe kind (email, home path, url with password, public IPv4, run id, long token, a secret built at run time) is found and redactText replaces the non-secret kinds; lessonPath rejects bad project or id; normalizeLesson defaults and ordering.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/security-scan.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-schema.mjs",
+        "tests/lesson-schema.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-lesson-store",
+      "type": "build",
+      "prompt": "Write the lesson store module and its test file, section 2 of the design. It imports validateLesson, lessonPath and normalizeLesson from the schema module (written at the same time; use exactly the names in section 1). Use temp folders in tests; test symlink skipping, the size limit, atomic write, overwrite refusal, ids, filters and stats. The ledger writer in the tickets module is a good pattern for the safe write.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "tools/tickets.mjs"
+      ],
+      "outputs": [
+        "tools/lesson-store.mjs",
+        "tests/lesson-store.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-lesson-backfill",
+      "type": "build",
+      "prompt": "Write the backfill module (the test file is written by another job), section 3 of the design. It imports redactText and validateLesson from the schema module and writeLesson and listLessons from the store module (written at the same time; use exactly the names in sections 1 and 2).\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "coordination/swarm-lessons.jsonl"
+      ],
+      "outputs": [
+        "tools/lesson-backfill.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-lesson-backfill-test",
+      "type": "build",
+      "prompt": "Write only the test file for the backfill module (the module is written by another job), section 3 of the design. It imports redactText and validateLesson from the schema module and writeLesson and listLessons from the store module (written at the same time; use exactly the names in sections 1 and 2). Tests use small inline samples of the numbered markdown format and of queue rows, not the real files: parse several entries including multi-line ones with links, check each field mapping, redaction of an email and a home path in a sample, idempotence of backfill in a temp folder, and dry run.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md",
+        "coordination/swarm-lessons.jsonl"
+      ],
+      "outputs": [
+        "tests/lesson-backfill.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-lesson-notes",
+      "type": "build",
+      "prompt": "Write the notes module and its test file, section 4 of the design (only the functions queryFromTicket, selectNotes and renderNotes; the manifest wiring is done by hand). Tests: tag, file and word scoring, the minimum score, dropped lessons skipped, tie order, limit, the character budget dropping whole lines, empty input giving an empty string.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tools/lesson-notes.mjs",
+        "tests/lesson-notes.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-evals-module",
+      "type": "build",
+      "prompt": "Write the eval module, section 5 of the design: validateEvalSpec, listEvals, checkEval, validateEval, evalManifest, scoreRun and compareBaseline. Keep it under 18000 characters; helper functions stay in this one file. The run function for checkEval is injectable: it receives (command, args, options) and returns a promise of { code, stdout, stderr }; the default uses node:child_process spawn with detached true and kills the process group on timeout.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tools/evals.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-evals-test",
+      "type": "build",
+      "prompt": "Write the test file for the eval module, section 5 of the design (module written at the same time; use exactly the names there). Use temp folders and a fake run function. Cover: spec validation errors, listing with an invalid task and a symlink, checkEval pass and fail and timeout handling and redaction of the tail, validateEval red and green, evalManifest shape, scoreRun on a fabricated run state with one complete job, one failed job and a bad run id, and compareBaseline regression.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "tests/evals.test.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-ticket-after-empty",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: A function toJob(ticket, inSet) builds a job object { id, title } from a ticket { id, title, dependsOn } and must add an after list holding only the dependencies that are in inSet (a Set of ids), and must leave the after field out completely when that list would be empty, because the manifest validator rejects an empty after. The starting file always sets after, even when empty, and keeps dependencies that are not in the set. Real lesson: the ticket manifest builder emitted an empty after and the validator rejected the manifest. The eval id is ticket-after-empty. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of toJob clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting toJob. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/ticket-after-empty/eval.json",
+        "evals/ticket-after-empty/repo/src/job.mjs",
+        "evals/ticket-after-empty/hidden/test/job.test.mjs",
+        "evals/ticket-after-empty/solution/src/job.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-hostname-check",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: A function isHost(url, host) must return true only when the parsed hostname of the URL equals host (compare lower case) and false for anything else, including strings that are not valid URLs, a host name that only appears in the path, query or fragment, user info tricks such as an address that has the wanted host before an at sign, and look-alike hosts that merely end or start with the wanted host. The starting file uses a substring test. Real lesson: CodeQL flagged substring checks of URLs, and they are a real security bug. The eval id is hostname-check. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of isHost clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting isHost. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/hostname-check/eval.json",
+        "evals/hostname-check/repo/src/host.mjs",
+        "evals/hostname-check/hidden/test/host.test.mjs",
+        "evals/hostname-check/solution/src/host.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-no-symlink-write",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: An async function writeNoFollow(dir, name, text) must write the file name inside dir, but must never write through a symlink: when the target already is a symlink (even a dangling one) it must reject with an error whose code is 'symlink' and leave whatever the link points at untouched; otherwise it writes atomically (temp file in dir, then rename) and replaces an existing regular file. The starting file uses a plain writeFile, which follows links. Real lesson: scope commands wrote build plans through a symlink at the target path. The eval id is no-symlink-write. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of writeNoFollow clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting writeNoFollow. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/no-symlink-write/eval.json",
+        "evals/no-symlink-write/repo/src/write.mjs",
+        "evals/no-symlink-write/hidden/test/write.test.mjs",
+        "evals/no-symlink-write/solution/src/write.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-safe-identifier",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: A function validatorSource(names) returns the text of a JavaScript module that exports one constant per schema name, named validate followed by the name, each equal to a small function that returns true. It must throw an Error (code 'bad-name') when any name does not match letter or underscore followed by letters, digits or underscores, before producing any text, and the output must never contain raw input text other than valid names. The starting file pastes names in without checking. Real lesson: a hostile OpenAPI schema name was pasted into generated source and would have run code on import. The eval id is safe-identifier. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of validatorSource clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting validatorSource. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/safe-identifier/eval.json",
+        "evals/safe-identifier/repo/src/gen.mjs",
+        "evals/safe-identifier/hidden/test/gen.test.mjs",
+        "evals/safe-identifier/solution/src/gen.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-approval-covers-tickets",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: Two functions in one module: approve(ledger, now) returns a new ledger with approved set to { at, scopeHash, ticketsHash } where ticketsHash is a sha256 hex of the tickets (sorted by id) using only the fields id, title, acceptance, files and dependsOn (sorted keys, status ignored), and isApproved(ledger) returns true only when approved exists, approved.scopeHash equals ledger.scopeHash and approved.ticketsHash equals the current tickets hash. Changing a status keeps the approval; changing an acceptance line, adding a ticket or changing the scope hash removes it. The starting file only checks that approved.at exists. Real lesson: a merge of new worker tickets kept the old approval so unapproved tickets ran. The eval id is approval-covers-tickets. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of approve clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting approve. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/approval-covers-tickets/eval.json",
+        "evals/approval-covers-tickets/repo/src/approval.mjs",
+        "evals/approval-covers-tickets/hidden/test/approval.test.mjs",
+        "evals/approval-covers-tickets/solution/src/approval.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-stale-lock",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: An async function withLock(file, fn, options) takes an exclusive lock by creating the lock file with the exclusive flag, runs fn, and always removes the lock afterwards, also when fn throws. When the lock file already exists and is younger than options.staleMs (default 600000) it must reject with an error whose code is 'busy' without running fn; when it is older it must take it over and run fn. The starting file never removes the lock when fn throws and never takes over a stale one. Real lesson: go --scope needed one wave at a time with a stale-lock takeover. The eval id is stale-lock. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of withLock clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting withLock. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/stale-lock/eval.json",
+        "evals/stale-lock/repo/src/lock.mjs",
+        "evals/stale-lock/hidden/test/lock.test.mjs",
+        "evals/stale-lock/solution/src/lock.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-path-inside-root",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: A function resolveInside(root, file) returns the absolute path of file inside root and throws an Error with code 'outside' when the result is not root itself or a path below root: relative parent segments, absolute paths elsewhere, and a sibling folder whose name merely starts with the root name (root /work/proj and file ../proj-evil/x) must all throw. The starting file compares with a plain startsWith on the root string, which lets the sibling through. Real lesson: scope commands accepted a scope path that escaped the project. The eval id is path-inside-root. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of resolveInside clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting resolveInside. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/path-inside-root/eval.json",
+        "evals/path-inside-root/repo/src/inside.mjs",
+        "evals/path-inside-root/hidden/test/inside.test.mjs",
+        "evals/path-inside-root/solution/src/inside.mjs"
+      ]
+    },
+    {
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "timeoutMs": 900000,
+      "id": "p15-eval-duplicate-keys",
+      "type": "build",
+      "prompt": "Author one golden eval task for the design's section 5 format (the spec file, the starting repo, a hidden test and a known-good solution). The task: A function mapKeys(items, startAt) takes tickets as { key } objects and returns { ids, errors }: ids is a Map from key to an id of the form T- followed by a four digit number counting up from startAt in item order, errors is an array of strings. A key that is not a non-empty string, or a key that was already used, adds an error and gets no id (the first use keeps its id). A key named __proto__ or constructor is an ordinary key. The starting file uses a plain object, lets later duplicates overwrite silently and breaks on the key __proto__. Real lesson: worker-written ticket lists had duplicate keys and wrong types that were silently accepted. The eval id is duplicate-keys. The spec has tags (2 to 4), title, a prompt for the worker under test (state the contract of mapKeys clearly in 3 to 8 sentences; do not mention the hidden test, and do not reveal the lesson), context listing the module path inside the starting repo, outputs listing the same module path, check argv node --test followed by the hidden test path inside the repo layout (the hidden folder is copied over the repo, so the hidden test path is test/<name>.test.mjs). The starting repo has only the buggy or empty module (an ES module file; no package.json) exporting mapKeys. The hidden test has at least 8 assertions covering normal cases, edge cases and the real failure. The solution is the corrected module and must pass the hidden test; the starting module must fail it. Make the hidden test deterministic and quick (under 2 seconds), using only node built-ins, and clean up temp folders it creates.\nReturn each output file complete in files, never edits. Use node:test and node:assert/strict for tests, ES modules, no dependencies, no secrets in code or tests (build any secret-looking test value at run time from pieces), and compare URLs by parsed hostname, never with includes. Follow the design exactly: export names, return shapes and error codes are fixed.",
+      "context": [
+        "docs/plans/phase15-lessons-design.md"
+      ],
+      "outputs": [
+        "evals/duplicate-keys/eval.json",
+        "evals/duplicate-keys/repo/src/intake.mjs",
+        "evals/duplicate-keys/hidden/test/intake.test.mjs",
+        "evals/duplicate-keys/solution/src/intake.mjs"
+      ]
+    }
+  ]
+}

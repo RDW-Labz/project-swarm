@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "concurrency": 3,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [
+        "tests/kickoff.test.mjs"
+      ],
+      "id": "docs-container",
+      "context": [
+        "docs/rented-gpu.md"
+      ],
+      "outputs": [
+        "docs/rented-gpu.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/rented-gpu.md insert, directly before the heading line \"## Renting the node (you do this; it costs money)\" (use it as the anchor and keep it), a new section \"## Container mode (Vast.ai and other container hosts)\" with: swarm gpu up --mode container is for a node that IS a container already running the pinned vLLM image (Vast container instances cannot run Docker, so the docker mode cannot be used there). The instance is created from the pinned image by digest (never a tag) with ssh access only and no mapped ports; swarm gpu up then starts vllm serve inside it (one per GPU, CUDA_VISIBLE_DEVICES, bound to 127.0.0.1 with the per-rental key kept in the server's environment, never on a command line). Exposure is checked as in docker mode (TCP probes from this computer, plus --probe-ports N,N for external ports the host maps), and the node-side check reads /proc/net/tcp and /proc/net/tcp6 (no ss or docker needed): any listener on a server port that is not loopback fails gpu up and stops the servers; the rental helper (bench/gpu-bakeoff/vast.mjs) then destroys the instance: run gpu up as \"swarm gpu up ... || node bench/gpu-bakeoff/vast.mjs destroy\". A container cannot be powered off, so the timer on the node only stops the servers; billing ends when the instance is destroyed, which the helper's detached reaper does at the deadline (it runs under caffeinate -i so the Mac cannot sleep) and gpu down tells you to do. Offers for container mode must be verified hosts with reliability of at least 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred, and 4 hours at their price must be at most 80% of the cap (node-search: node bench/gpu-bakeoff/vast.mjs search --mode container; rent: node bench/gpu-bakeoff/vast.mjs rent --mode container --offer ID --hours 4 --max-usd 15). The instance id is printed first and kept in ~/.project-swarm-scratch/vast-instance.json so it can be destroyed in the Vast console. The Vast API key lives in the Keychain (project-swarm / vast.api_key) and is read only by the helper.\nignoreTests: tests/kickoff.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "sensitive": true,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/t101-release.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "id": "docs-changelog-container",
+      "context": [
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "CHANGELOG.md"
+      ],
+      "prompt": "Edit CHANGELOG.md in place; change nothing else. Insert a new section directly after the line \"# Changelog\" (and a blank line) titled \"## 1.76.0\" with these bullets: \"- Container mode for rented GPUs (`swarm gpu up --mode container`, `--probe-ports`, `--ssh-port`): for nodes that are themselves a container running the pinned vLLM image (Vast.ai container instances, which cannot run Docker). `gpu up` starts `vllm serve` inside it (one per GPU, bound to 127.0.0.1, per-rental key only in the server environment); the exposure check reads `/proc/net/tcp` and `/proc/net/tcp6` instead of `ss` and also probes any ports you name; a failure stops the servers and removes the session; `gpu down` says to destroy the instance (a container cannot be powered off).\" and \"- Rental helper `bench/gpu-bakeoff/vast.mjs` (outside the runner; swarm itself still never rents): container-mode offer filter (verified, reliability 99% or more, RTX PRO 6000 S or WS, datacenter first, 4 hours within 80% of the cap), pinned-image create body with no mapped ports, instance id logged first, detached reaper under `caffeinate -i`, destroy command. The bake-off benchmark base is pinned to v1.65.0 (`--bench-ref`) and the rented lane gets the larger output cap.\" and \"- Fixed: `swarm gpu up --ssh-port` and root logins without sudo (Vast.ai VMs); sessions remember their ssh options so `down` and `status` reach nodes on other ports.\" Keep the \"## 1.75.0\" section below untouched.\nignoreTests: tests/anthropic-lane.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/codex-envelope.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lesson-t80-cli.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-aa-core.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ab-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ag-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ah-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-context.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-ai-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-o.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/field-lessons-batch-x.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/job-types.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/openrouter.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/router.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/t101-release.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration.\nignoreTests: tests/update.test.mjs — Existing test outside this job's declared outputs; the coordinator runs it after integration."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "docs-dogfood-container",
+      "context": [
+        "docs/state/dogfood.md"
+      ],
+      "outputs": [
+        "docs/state/dogfood.md"
+      ],
+      "prompt": "Return `edits` (exact old text found once, and its replacement) using the anchors given; change nothing else. In docs/state/dogfood.md, in the \"## Phase 14e notes\" section, add after the bullet that starts \"- Safety items (image digest\" (use that start as the anchor; add after the whole bullet) these bullets: \"- First Vast rental (read, then failed): the only verified VM-capable RTX PRO 6000 never started (Vast: GPU error, unable to start instance); two attempts, about $0.10, both destroyed, zero instances left. Cause: the docker mode needs a VM and Vast has almost none. Fix: container mode (pinned vLLM image as the instance, vllm serve started by gpu up, /proc/net/tcp exposure check).\" and \"- Container mode: 3 module rewrites, 2 test files (7 swarm jobs, all complete on the first try, about $0.05); the orchestrator only updated version pins and the completion flag list (about 3 lines).\" "
+    }
+  ]
+}

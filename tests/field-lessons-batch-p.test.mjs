@@ -77,9 +77,9 @@ test('#230: nonBookkeepingOutputs allows .swarm-manifests/*.md but still refuses
 });
 
 test('#230: validateManifest allows a deepseek job writing .swarm-manifests/*.md, refuses another .md naming the cheap-tier rule', () => {
-  const allowed = manifest([job({ agent: 'openrouter', model: 'deepseek/deepseek-chat', outputs: ['.swarm-manifests/notes.md'] })]);
+  const allowed = manifest([job({ agent: 'openrouter', sensitive: false, model: 'deepseek/deepseek-chat', outputs: ['.swarm-manifests/notes.md'] })]);
   assert.doesNotThrow(() => validateManifest(allowed));
-  const refused = manifest([job({ agent: 'openrouter', model: 'deepseek/deepseek-chat', outputs: ['docs/design.md'] })]);
+  const refused = manifest([job({ agent: 'openrouter', sensitive: false, model: 'deepseek/deepseek-chat', outputs: ['docs/design.md'] })]);
   assert.throws(() => validateManifest(refused), /cheap Claude tier/);
 });
 

@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "concurrency": 8,
+  "budget": {
+    "maxUsd": 1
+  },
+  "jobs": [
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-scope",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/scope.mjs"
+      ],
+      "outputs": [
+        "tests/scope.test.mjs"
+      ],
+      "prompt": "Write tests/scope.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/scope.mjs against docs/plans/phase13-design.md section 1 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover parseScope (name, version default 1, stages, requirements with acceptance and line numbers, external, sensitive, protected, a stage heading not in the list), checkScope for each code (missing-id, bad-id, duplicate-id, missing-acceptance, untestable-wording with and without a digit, bad-stage-order, unknown-stage, no-requirements, parse), ok true on a clean scope, requirementText, scopeHash stability under CRLF and trailing spaces, and SCOPE_TEMPLATE parsing without errors and failing checkScope only on its placeholders being filled? (assert parseScope(SCOPE_TEMPLATE).errors is an empty array). Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-tickets",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/tickets.mjs",
+        "tools/journal.mjs"
+      ],
+      "outputs": [
+        "tests/tickets.test.mjs"
+      ],
+      "prompt": "Write tests/tickets.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/tickets.mjs against docs/plans/phase13-design.md section 2 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Use a temp project root (fs.mkdtempSync, git init not needed). Cover validateTicket rules (an L size is refused with a hint to split, absolute and .. paths refused, a human ticket needs steps), createLedger, writeLedger/readLedger round trip (file mode 600, atomic), appendLog lines, transition (allowed and refused moves, deps rule for ready, done cannot move, logs written), readyTickets, wavesOf (layering, cancelled skipped, cycle throws code ticket-cycle), filterTickets, ledgerStats, renderBuildPlan contains percent done and the requirement table, approveLedger and isApproved. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-integrity",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/scope-integrity.mjs",
+        "tools/tickets.mjs",
+        "tools/scope.mjs"
+      ],
+      "outputs": [
+        "tests/scope-integrity.test.mjs"
+      ],
+      "prompt": "Write tests/scope-integrity.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/scope-integrity.mjs against docs/plans/phase13-design.md section 3 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover a clean tree (ok, 100 percent coverage), an uncovered requirement, an untraced build ticket, a bad ref, unknown dependency, a cycle, a same-wave file conflict and a folder-vs-file conflict (and no conflict when the two tickets are in different waves), oversize L (via validate-like size field), missing acceptance, summarizeTree numbers and risks, formatSummary under 40 lines. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-change",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/change-orders.mjs",
+        "tools/scope.mjs"
+      ],
+      "outputs": [
+        "tests/change-orders.test.mjs"
+      ],
+      "prompt": "Write tests/change-orders.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/change-orders.mjs against docs/plans/phase13-design.md section 4 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover diffScopes (added, removed, changed by text and by acceptance), impactAnalysis (cancel, reopen, retag, needTickets), nextChangeOrderId, applyChangeOrder (cancelled and reopened statuses, retag, scope meta replaced, change order recorded, history kept: cancelled tickets stay), and that applyChangeOrder does not mutate its input. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-day0",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/day0.mjs",
+        "tools/scope.mjs",
+        "tools/tickets.mjs"
+      ],
+      "outputs": [
+        "tests/day0.test.mjs"
+      ],
+      "prompt": "Write tests/day0.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/day0.mjs against docs/plans/phase13-design.md section 5 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover day0Checklist (stripe and email items found by keyword as whole words, stable H-001 ids in catalog order, an external entry with no catalog match gets a generic item, extra appended, a requirement mentioning \"stripes\" does not match stripe) and checklistToTickets (human ticket shape, ids from T-9001, steps present, validateTicket from ../tools/tickets.mjs accepts them). Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-approval",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/approval-policy.mjs"
+      ],
+      "outputs": [
+        "tests/approval-policy.test.mjs"
+      ],
+      "prompt": "Write tests/approval-policy.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/approval-policy.mjs against docs/plans/phase13-design.md section 7 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Cover DEFAULT_APPROVAL frozen, validateApprovalPolicy (unknown key, bad humanApprovals, negative change order limit, budget null or positive), needsHuman for every event kind including unknown kinds failing closed, merge-to-stage-branch needing both tests and review, change-order over and under the limit, spend over budget. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "test",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13t-ticket-manifest",
+      "context": [
+        "docs/plans/phase13-design.md",
+        "tools/ticket-manifest.mjs",
+        "tools/tickets.mjs",
+        "tools/scope.mjs"
+      ],
+      "outputs": [
+        "tests/ticket-manifest.test.mjs"
+      ],
+      "prompt": "Write tests/ticket-manifest.test.mjs (node:test, node:assert/strict, plain ESM, first line \"// SPDX-License-Identifier: Apache-2.0\"; add \"import './_isolate-config.mjs';\" as the second line only when the test touches the file system under a project root). Test tools/ticket-manifest.mjs against docs/plans/phase13-design.md section 8 (read both in your context; use only the exports that exist in the module, and where module and design differ trust the module's behaviour but never weaken a rule of the design). IMPORTANT: return the whole file in files, never edits. Build the scope text inline in the test as a template literal following the design format with a stage list S1 and S2, requirements R-001 to R-004 each with acceptance lines (one requirement mentions Stripe payments, one mentions an email provider). Cover ticketsToManifest (ready tickets only, the job fields, hard for high risk, after for deps inside the manifest, folder outputs skipped with a warning, design tickets skipped, human tickets emitted as human jobs, context includes contracts without duplicates, the manifest passes validateManifest from ../tools/swarm.mjs for a plain build ticket with files and context that exist (use a temp dir only if validateManifest needs files; otherwise just call it) ) and ticketOutcome. Keep each test short; about 12 to 20 tests."
+    },
+    {
+      "type": "build",
+      "agent": "anthropic",
+      "model": "claude-haiku-5-5",
+      "sensitive": true,
+      "maxOutputTokens": 32000,
+      "outputCapBytes": {
+        "total": 100000,
+        "perFile": 60000
+      },
+      "ignoreTests": [],
+      "id": "p13-contracts-schema",
+      "context": [
+        "docs/plans/phase13-design.md"
+      ],
+      "outputs": [
+        "tools/contracts-schema.mjs"
+      ],
+      "prompt": "IMPORTANT: this is a NEW file: return it in files (one entry with the whole content), never in edits. Write tools/contracts-schema.mjs: exports validateOpenApi, generateTypes, generateValidators, generateSeed, resolveRef, operationsOf, schemaNames as described in section 6. Plain ESM for Node 22, no dependencies, first line \"// SPDX-License-Identifier: Apache-2.0\", compact code. Read docs/plans/phase13-design.md section 6 in your context. The generated modules (returned as TEXT) must run on Node 22 with no dependencies when written to disk and imported."
+    }
+  ]
+}

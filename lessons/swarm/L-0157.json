@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0157",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A worker with shell access, given no synced local toolchain of its own, searched the wider disk and ran tests using another, unrelated checkout's leftover environment. , so its own claims of what passed or failed could not be trusted, and it read files well outside anything it was ever given.",
+  "rule": "A shell worker reads and runs only its own workspace, the shared toolchains directory, and ordinary system paths — never another checkout's environment found by searching.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the shell sandbox now denies reading or running anything under a shared temporary-files area apart from a job's own small scratch space; validation now warns when a shell job's own checks or instructions plainly need a toolchain sync step but declare none; and a job's own report of what it ran must name the actual program path used, with a warning when that path sits outside the job's own workspace. Regression coverage is in `tests/field-lessons-batch-t1.test.mjs` and `tests/field-lessons-batch-t2.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "sandbox",
+    "test",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#157"
+  }
+}

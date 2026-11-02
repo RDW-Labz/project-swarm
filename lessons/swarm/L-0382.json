@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0382",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "Test summaries can precede timeouts. Classify a CI step timeout after a zero-failure test summary as a timeout and retry the failed job once.",
+  "rule": "Test summaries can precede timeouts.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "proposed"
+  },
+  "tags": [
+    "ci",
+    "retries",
+    "test",
+    "timeout"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#382"
+  }
+}

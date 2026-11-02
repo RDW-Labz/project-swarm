@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0031",
+  "project": "parts-request-app",
+  "date": "2026-10-17",
+  "stage": "test",
+  "what": "The rendered UI check used the owner dev server already running on the base url, could not show a page in another state, and its evidence was rejected because the server was not its own",
+  "rule": "The UI check must start its own server on a free port, support pages with several states (query or test route), and count as evidence when it passes on the current code.",
+  "caughtBy": "owner",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "start the profile server on a free port with {port}, add mockupQuery and waitFor per screen",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "built"
+  },
+  "tags": [
+    "dev-server",
+    "evidence",
+    "multi-step",
+    "ui-check"
+  ],
+  "source": {
+    "kind": "manual",
+    "ref": "parts-request-app S4 report, lesson 31"
+  }
+}

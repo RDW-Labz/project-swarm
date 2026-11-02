@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0007",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "deploy",
+  "what": "A held-response fake froze state too soon. It built the response when the request arrived, so it could not reproduce service after a later event.",
+  "rule": "Held responses offer snapshot-at-release to model that real ordering.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Documentation: the skill's UI-test and fake guidance.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "deploy",
+    "release"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#7"
+  }
+}

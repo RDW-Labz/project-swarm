@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "L-0168",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "scope",
+  "what": "A worker's own line number attached to a path made that path look unfamiliar. A worker reporting what it changed sometimes appended a line number, or a line range, to an otherwise perfectly ordinary path, and that small addition was enough to make review treat a declared, expected path as if it were a surprise edit outside the job's own scope.",
+  "rule": "A trailing line reference is not part of a path's identity and must be removed before that path is judged against anything else.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: the same normalizing step that already trimmed other trailing decorations from a self-reported path now also strips a trailing line number or line range, so a path differing from a declared one only by that suffix is recognized as the same path. Regression coverage is in `tests/field-lessons-batch-v.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "path-safety",
+    "review",
+    "scope",
+    "worker-output"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#168"
+  }
+}

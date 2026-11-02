@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "L-0048",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "integration",
+  "what": "A check that never started looked like a check that failed. A missing tool or module produced the same generic status as a real assertion failure, so a red run could not be told apart from an environment that was never even ready to run it.",
+  "rule": "A check that could not start is distinct from one that ran and lost, and deserves one resync-and-retry before being reported red.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: `spawn-error` (could not spawn at all) and `unrunnable` (started but its own tool or module was missing) are now their own statuses, each triggering one automatic `preChecks` run plus a single retry; `integrate` gains `checksErrored` and the CLI exits non-zero on it regardless of `--require-checks`. Regression coverage is in `tests/lessons120-checks.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "integration",
+    "retries"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#48"
+  }
+}

@@ -55,7 +55,7 @@ test('claudeArgs: a web job gets WebSearch/WebFetch in --tools and --allowedTool
 });
 
 test('validate refuses web on a non-claude agent and a web job with outputs', () => {
-  assert.throws(() => validateManifest(manifest([job({ web: true, agent: 'openai', model: 'gpt' })])), /web is only supported for the claude agent/);
+  assert.throws(() => validateManifest(manifest([job({ web: true, agent: 'openai', sensitive: false, model: 'gpt' })])), /web is only supported for the claude agent/);
   assert.throws(() => validateManifest(manifest([job({ web: true, outputs: ['out.txt'] })])), /a web job must be read-only \(no outputs\)/);
 });
 

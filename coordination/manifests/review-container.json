@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "budget": {
+    "maxUsd": 2
+  },
+  "jobs": [
+    {
+      "id": "review-container",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "paid rental: exposure of a model server and leftover billing instances",
+      "type": "review",
+      "outputs": [],
+      "timeoutMs": 1800000,
+      "context": [
+        "tools/gpu.mjs",
+        "tools/gpu-commands.mjs",
+        "bench/gpu-bakeoff/vast.mjs",
+        "coordination/review/phase14e-container.diff"
+      ],
+      "prompt": "Focused safety review of the new CONTAINER MODE for rented GPUs (Vast.ai container instances): `swarm gpu up --mode container` (tools/gpu.mjs, gpu-commands.mjs) and the rental helper bench/gpu-bakeoff/vast.mjs (container offer filter, pinned-image create body, detached reaper under caffeinate, destroy). The owner's rules: instance image is the pinned vLLM image by digest (no tags); reach it only through Vast's SSH plus our tunnel; do not map the vLLM port publicly; vLLM binds 127.0.0.1 with the per-rental key; keep the exposure check so gpu up fails (and the instance is destroyed) if a server port is reachable from outside; offers must be verified, reliability >= 99%, RTX PRO 6000 S or WS (not Max-Q), datacenter preferred; keep the reaper, $15 cap and 4h limit; sensitive:false jobs only; nothing copied to the host. Review ONLY for (1) EXPOSURE: can vLLM end up reachable from outside (bind address, `--host`, Vast port mapping from the image EXPOSE, ssh_proxy vs ssh_direct, the /proc/net/tcp parser: hex byte order for IPv4 and the four-word IPv6 form, ::ffff: mapped, LISTEN state only, IPv6 any, a listener on a replica port by another process, vllm falling back to another port, /proc rows for tcp6 wildcard), whether TCP probes from this computer are meaningful for Vast (ssh host may be a proxy; mapped external ports) and what --probe-ports adds, whether the check can be skipped or passes by accident (fail-closed paths, a start that never binds), and what happens to the servers and session after gpu-exposed; the key handling in the start script (env var only, here-document, sed read, process environment visibility, log files `$HOME/.swarm-vllm-N.log` possibly containing the key or prompts, pkill -f pattern matching other processes or the script itself); (2) LEFTOVER INSTANCES / BILLING: every path in vast.mjs that can leave an instance running or billing (create succeeded but state write failed, rent crashing after create, reaper not started or killed, the reaper exiting early, wrong id, destroy retry/verification, destroy failing silently, instance stuck loading then running later, the 25-minute wait, SIGINT/Ctrl-C during rent, reaper under caffeinate when the Mac reboots or the session is killed), whether the 80%-of-cap math holds (price, disk, bandwidth), whether a second rental can orphan the first (single state file overwritten), the effect of `swarm gpu up ... || destroy` chaining, and what gpu down does and says in container mode; (3) the offer filter and create body (digest regex, no vm, no ports, ssh runtype), and API key handling (never printed or logged). Rank findings high, medium, low; for each: where (file:line), how it fails, smallest fix. End with a final single line of JSON: {\"status\":\"complete\",\"summary\":\"...\",\"findings\":{\"high\":N,\"medium\":N,\"low\":N}}."
+    }
+  ]
+}

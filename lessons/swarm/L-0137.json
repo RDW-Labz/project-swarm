@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "L-0137",
+  "project": "swarm",
+  "date": "2026-10-16",
+  "stage": "test",
+  "what": "A time-window check was exercised only ever by clocks already set to one particular time zone, so a real event that fell outside the window on a different clock went unnoticed by every test that covered it.",
+  "rule": "Code that judges a date or time window needs at least one test set to a different time zone, not only the zone every other test happens to use.",
+  "caughtBy": "unknown",
+  "cost": {
+    "retries": 0,
+    "minutes": 0,
+    "usd": 0
+  },
+  "laneModel": null,
+  "fix": "Enforcement: a shared checklist now calls this out explicitly, and validation warns when a change touching a time-window comparison has no test naming a different zone. Regression coverage is in `tests/field-lessons-batch-p.test.mjs`.",
+  "guard": {
+    "kind": "test-template",
+    "text": "",
+    "status": "shipped"
+  },
+  "tags": [
+    "test"
+  ],
+  "source": {
+    "kind": "backfill",
+    "ref": "docs/lessons.md#137"
+  }
+}
