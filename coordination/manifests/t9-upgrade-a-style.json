@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-upgrade-a-style",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Add the small styles for the new machine tags in upgrade A; do not change any other rule. In tools/watch-assets/cc-hive.css add: .hive-shell .hive-card .hive-machine{display:flex;align-items:center;gap:4px;margin-top:2px} ; .hive-shell .hive-pill--remote{--pc:var(--violet)} ; .hive-shell .hive-pill--drift{--pc:var(--amber)}. Keep every selector scoped under .hive-body or .hive-shell. In tools/watch-assets/cc-cockpit.css add a compact machine-meta line in the title block: .cc-cockpit-shell .machine-meta{margin-top:2px;font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)} (adjust the root scope to whatever the file already uses; do not add an unscoped selector). Do not touch the Hive/Cockpit layout, colors or any other file. Verify: node --import ./tests/_isolate-config.mjs --test tests/cc-hive-mount.test.mjs -> pass.",
+      "context": [
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-cockpit.css",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-cockpit.css"
+      ],
+      "timeoutMs": 900000,
+      "ignoreTests": [
+        "tests/command-center-perf-budget.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused CSS scope test runs here; perf suite runs in the full suite after integration."
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-upgrade-a-style",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cc-hive-mount.test.mjs"
+      ]
+    }
+  ]
+}

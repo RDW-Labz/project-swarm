@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-upgrade-a-machines",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Train 9 upgrade A: ONE BOARD FOR BOTH MACS, machine tag on everything. The peer merge already exists: tools/watch-cli.mjs createBoardApi calls mergeMachines() and sets snapshot.machines (array of { name, version, ok, error?, projectCount }), snapshot.drift ({ versions, drifted, newest }) and snapshot.peers; remote projects carry machine, version, remote: true and versionDrift: true. Do not change the peer network, the counts, direct-build behavior, the Hive ring or the layout targets. Only surface that data in the Command Center and tag the visible items.\n\n1) tools/command-center-snapshot.mjs:\n- Add top-level `machines` (board.machines when an array, else null) and `drift` (board.drift when an object, else null) to buildCommandCenterSnapshot.\n- buildProjectCard: add `machineVersion` from p.version (text field label 'Version'), `remote` when p.remote === true, and `versionDrift` when p.versionDrift === true. Keep the existing `machine` field. Add the same fields to the direct-build early return.\n- Add `machine` (and `machineVersion` when present) to every hive event from the project in hiveEvents(), so the session log can tag it.\n- buildProjectCockpit: add meta.machine, meta.machineVersion, meta.remote, meta.versionDrift from the project (keep meta.owner).\n\n2) tools/watch-assets/hive-panels.js:\n- deriveHiveView: when snap.machines is an array of objects use it (name/version/ok/error); otherwise derive objects from the project cards' machine/machineVersion. Add `drift` from snap.drift. Keep the existing view shape otherwise.\n- The All projects panel machines hint (currently 'read from ' + names) must show each machine's name and version, mark an unreachable peer, and append a compact drift marker when snap.drift.drifted (for example 'Bean.local v1.167.37 · mini v1.167.37'). Use textContent and existing classes; do not add hard-coded sample data.\n- Session log rows: when an event carries machine (or machineVersion), show it as a small muted tag on the row (a span with a hive-cap/hive-hint style); keep the existing row grid, title and category column. Do not add a machine tag when the event has none.\n\n3) tools/watch-assets/cc-hive-mount.js:\n- projectView/card: carry machineVersion, remote and versionDrift from the snapshot card. In buildCard add one compact machine line (mono, small, muted) with the host and version, plus a 'remote' pill and a 'drift' pill when those flags are true. Place it in the card body so it does not compete with the name/status; keep the card readable at the current sizes.\n- Keep the direct-build card behavior (it shows 'direct build' and no swarm counts); add the machine line there too.\n- Include machine/version/remote/versionDrift in the card paint signature so a peer refresh repaints.\n\n4) tools/watch-assets/cc-cockpit-mount.js + cockpit-view.js:\n- Pass meta.machine/machineVersion/remote/versionDrift to renderCockpit and render one compact machine tag in the title block (for example 'Bean.local · v1.167.37' with a drift/remote marker), styled like the existing small mono meta labels. Do not change the headline, counts, stage strip or columns.\n\n5) Tests (update existing expectations only where the new machine data legitimately changes them):\n- tests/command-center-counts.test.mjs or command-center-snapshot.test.mjs: a board with machines [{name:'Bean.local',version:'1.2.3',ok:true,projectCount:1},{name:'mini',version:'1.2.2',ok:true,projectCount:1}], drift {versions:['1.2.2','1.2.3'],drifted:true,newest:'1.2.3'} and projects tagged local/remote+versionDrift. Assert snapshot.machines/drift, card.machineVersion/remote/versionDrift, and an event machine.\n- tests/cc-hive-mount.test.mjs: a two-machine fixture; assert a remote project card shows the machine+version and remote/drift markers, the All projects machines hint lists both with versions and drift, and a session log row shows its machine tag.\n- tests/cc-cockpit-mount.test.mjs: a project payload with meta.machine/machineVersion/remote/versionDrift; assert the title machine tag.\n- tests/command-center-hive.test.mjs and command-center-hive-panels.test.mjs: update the machines view expectations to the object/version shape.\n\nCONSTRAINTS: no peer fetching in the Command Center; use only the board payload. No new dependencies; no hard-coded sample data in production paths; keep the payload money-free. Target look stays; the machine tags are small muted mono, not a new headline.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-counts.test.mjs tests/command-center-snapshot.test.mjs tests/command-center-hive.test.mjs tests/command-center-hive-panels.test.mjs tests/cc-hive-mount.test.mjs tests/cc-cockpit-mount.test.mjs tests/board-peers.test.mjs -> all pass.",
+      "context": [
+        "tools/command-center-snapshot.mjs",
+        "tools/board-peers.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tests/command-center-counts.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/board-peers.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tests/command-center-counts.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-lists.test.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused machine-tag tests run here; the listed suites run in the full suite after integration."
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-upgrade-a-machines",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-counts.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/board-peers.test.mjs"
+      ]
+    }
+  ]
+}
