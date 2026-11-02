@@ -184,6 +184,13 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | t9-bugs345: FILE ACCESS: your declared outputs are readable. Train 9, one release (1.167.36), four d | cursor | composer-2.5 | cancelled: exit 143: no stderr output; cancelled | - | subscription |
+| 2026-11-01 | - | t9-bugs345: Cockpit footer and Hive percent tooltip clarify cancelled vs live denominator; no percen | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | t9-tiles: directBuild zeroes stackCounts for summary tiles only; ticket columns unchanged; Regressio | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | bump16736: Bumped 1.167.35 → 1.167.36 in package.json, package-lock.json (root + packages[""]), READ | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | t9-ring-direct: Added max-height:1000px CSS: narrow canvas 300px + tighter stage gap/padding; deskto | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | t9-stale48: INBOX_BLOCKER_MAX_AGE_MS = 2 * 86400000 (48h); only blockers age-filtered; Auto-hide tes | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | reviewt9tin3: complete | claude | opus | pass | 1,806,692 | $1.50 |
 
 ## Daily summary
 
@@ -205,4 +212,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
 | 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
-| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-11-01 | cursor | 4 | 3 | 1 | 0 | subscription |
+| 2026-11-02 | claude | 1 | 1 | 0 | 1,806,692 | $1.50 |
+| 2026-11-02 | cursor | 2 | 2 | 0 | 0 | subscription |
+| **total** | all | 187 | 170 | 17 | 17,698,490 | $30.04 (incl. estimates) |
