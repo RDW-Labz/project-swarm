@@ -298,11 +298,12 @@ function openPrs(board) {
 /** Server-side extras for the Hive panels; every key is left out when the board payload cannot back it. */
 function buildHiveExtras(board, projects, nowMs) {
   const hive = {};
-  const hours = throughput24h(projects, nowMs);
+  const swarmProjects = projects.filter(p => !p.directBuild);
+  const hours = throughput24h(swarmProjects, nowMs);
   if (hours) hive.throughput24h = hours;
   let doneSum = 0;
   let anyDoneLast24h = false;
-  for (const p of projects) {
+  for (const p of swarmProjects) {
     if (typeof p?.doneLast24h === 'number' && Number.isFinite(p.doneLast24h)) {
       doneSum += p.doneLast24h;
       anyDoneLast24h = true;
@@ -314,7 +315,7 @@ function buildHiveExtras(board, projects, nowMs) {
   if (lanes) hive.lanes = lanes;
   const prs = openPrs(board);
   hive.prs = prs;
-  const events = hiveEvents(projects, prs, nowMs);
+  const events = hiveEvents(swarmProjects, prs, nowMs);
   if (events.length) hive.events = events;
   return hive;
 }

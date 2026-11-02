@@ -483,6 +483,21 @@ test('cc-hive.css scopes every selector under .hive-body or .hive-shell and load
   assert.deepEqual(bad, []);
 });
 
+test('cc-hive.css short viewport shrinks the ring without changing large-screen layout', async () => {
+  const css = await fs.readFile(hiveCssPath, 'utf8');
+  const narrowStart = css.indexOf('@media (max-height:1000px) and (max-width:1340px)');
+  const desktopStart = css.indexOf('@media (max-height:1000px) and (min-width:1341px)');
+  assert.ok(narrowStart >= 0, 'narrow short-viewport block');
+  assert.ok(desktopStart > narrowStart, 'desktop short-viewport block');
+  const narrow = css.slice(narrowStart, desktopStart);
+  const desktopEnd = css.indexOf('/* motion:', desktopStart);
+  const desktop = css.slice(desktopStart, desktopEnd >= 0 ? desktopEnd : undefined);
+  assert.match(narrow, /min\(100%,\s*300px\)/);
+  assert.match(narrow, /gap:\s*10px/);
+  assert.match(narrow, /padding:\s*2px\s+0\s+6px/);
+  assert.match(desktop, /clamp\(440px,\s*calc\(100vh\s*-\s*140px\),\s*680px\)/);
+});
+
 test('direct-build hive card hides swarm counts and percent tooltip names live tickets', async () => {
   const dom = createFakeDom();
   globalThis.document = dom.document;

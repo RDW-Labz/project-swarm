@@ -221,3 +221,38 @@ test('hive.doneLast24h sums board project doneLast24h fields', () => {
   const snap = buildCommandCenterSnapshot(board);
   assert.equal(snap.hive.doneLast24h, 3);
 });
+
+test('hive extras omit direct-build doneLast24h and ticket events', () => {
+  const board = {
+    at: '2026-10-26T12:00:00.000Z',
+    machine: { agents: { total: 0 } },
+    projects: [
+      {
+        id: 'swarm',
+        name: 'Swarm',
+        doneLast24h: 3,
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 1, done: 0, ready: 0, review: 1, blocked: 0, todo: 0,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1,
+        },
+        ledger: { tickets: [{ id: 'R-swarm', title: 'Swarm review', status: 'review' }] },
+      },
+      {
+        id: 'parts',
+        name: 'parts-request-app',
+        directBuild: true,
+        doneLast24h: 5,
+        agents: { total: 1 },
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        ledger: { tickets: [{ id: 'R-parts', title: 'Parts review', status: 'review' }] },
+      },
+    ],
+  };
+  const snap = buildCommandCenterSnapshot(board);
+  assert.equal(snap.hive.doneLast24h, 3, 'direct-build doneLast24h must not inflate the Hive counter');
+  const reviewEvents = snap.hive.events.filter(e => e.kind === 'review');
+  assert.equal(reviewEvents.length, 1);
+  assert.equal(reviewEvents[0].id, 'R-swarm');
+  assert.equal(reviewEvents[0].project, 'Swarm');
+});

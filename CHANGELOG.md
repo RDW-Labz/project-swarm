@@ -8,6 +8,7 @@ Train 9, tin 3: display accuracy and direct-build mode.
 - Direct-build mode: a project entry with directBuild true hides its swarm ticket counts in the Hive and Cockpit (header, tiles and totals), is skipped by the needs-you inbox, and still appears as a project; needs-you also auto-hides superseded or cancelled ticket rows and blockers older than 7 days;
 - Cancelled note: the Cockpit footer now states that cancelled tickets are not counted in the live ticket total or the percent (57 percent is 230 of 407, and the 407 already excludes the 13 cancelled); the Hive tooltip says live tickets;
 - Tests: numeric stage order, ticket-log done-24h count and snapshot sum, direct-build inbox/totals/card/Cockpit tiles, stale/superseded inbox filtering, and the cancelled note;
+- Hive ring: at window heights under 1000 px the ring shrinks (narrow-layout canvas 300 px; desktop stage capped) so the first row of project cards is visible without scrolling; large screens keep the full ring;
 - Version 1.167.36.
 
 ## 1.167.35
