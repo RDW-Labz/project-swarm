@@ -30,6 +30,16 @@ export const CATEGORY_PALETTE = ['#e8795a', '#d9a26a', '#5b8ee6', '#8fc46a', '#e
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const byIdDesc = (a, b) => byId(b, a);
 
+/** Stage category names (lowercase s<n>): numeric order; other names after, by localeCompare. */
+function compareStageCategoryNames(a, b) {
+  const ma = /^s(\d+)$/i.exec(String(a ?? ''));
+  const mb = /^s(\d+)$/i.exec(String(b ?? ''));
+  if (ma && mb) return Number(ma[1]) - Number(mb[1]) || String(a).localeCompare(String(b));
+  if (ma) return -1;
+  if (mb) return 1;
+  return String(a).localeCompare(String(b));
+}
+
 /** Stable colour for a category name. */
 export function categoryColour(name) {
   const key = String(name || 'other').toLowerCase();
@@ -74,6 +84,7 @@ export function cockpitCategories(ledger) {
     const n = of(t);
     if (!names.includes(n)) names.push(n);
   }
+  if (field === 'stage') names.sort(compareStageCategoryNames);
   return { field, names, of, colour: categoryColour };
 }
 

@@ -527,3 +527,72 @@ test('direct-build cockpit hides headline swarm counts', async () => {
   view.destroy();
   globalThis.document = prevDocument;
 });
+
+const STAGE_TOKEN = /\bS\d+\b/gi;
+
+function stageSuffixNums(text) {
+  return [...String(text).matchAll(/\bS(\d+)\b/gi)].map(m => Number(m[1]));
+}
+
+function stagesNumericOrder(text) {
+  const nums = stageSuffixNums(text);
+  if (nums.length < 3) return true;
+  for (let i = 1; i < nums.length; i += 1) {
+    if (nums[i] < nums[i - 1]) return false;
+  }
+  return true;
+}
+
+function walkLeafElements(node, fn) {
+  for (const c of node.children || []) {
+    if (c.children?.length) walkLeafElements(c, fn);
+    else fn(c);
+  }
+}
+
+test('renderProjectCockpit lists stage categories in numeric order on stack sub-line and multi-stage text', async () => {
+  const stageByTicket = ['S1', 'S10', 'S9', 'S8', 'S11', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7'];
+  const tickets = stageByTicket.map((stage, i) => ({
+    id: `T-${String(i + 1).padStart(2, '0')}`,
+    title: `Ticket ${i + 1}`,
+    status: i === 0 ? 'done' : 'todo',
+    stage,
+  }));
+  const board = fakeBoard({
+    progress: {
+      overall: 10,
+      stages: stageByTicket.map(id => ({ id, name: id })),
+    },
+    ledger: {
+      tickets,
+      scope: { stages: stageByTicket.map(id => ({ id, name: id })) },
+    },
+  });
+  const project = buildProjectCockpit(board, 'alpha');
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, {
+    document,
+    now: () => NOW,
+    glitch: () => false,
+    mountRobotHead,
+  });
+
+  const stageCountSpan = host.querySelector('.stripl .st');
+  const stackSub = host.querySelector('.stack .ck-hint');
+  assert.ok(stageCountSpan, 'expected stage-count span (.stripl .st)');
+  assert.ok(stackSub, 'expected stack sub-line (.stack .ck-hint)');
+  assert.ok(stagesNumericOrder(textOf(stageCountSpan)), textOf(stageCountSpan));
+  assert.ok(stagesNumericOrder(textOf(stackSub)), textOf(stackSub));
+
+  walkLeafElements(host, (el) => {
+    const t = textOf(el);
+    const hits = t.match(STAGE_TOKEN);
+    if (!hits || hits.length < 3) return;
+    assert.ok(stagesNumericOrder(t), `stage ids not numeric order: ${t}`);
+  });
+
+  view.destroy();
+  globalThis.document = prevDocument;
+});
