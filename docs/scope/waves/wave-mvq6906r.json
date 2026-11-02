@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0082",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0082: Per-checkout lock so only one base check runs per worktree at a time\nR-019 Base checks are honest.\n  - A cached red base is always re-run, and green stays cached.\n  - Base checks take a per-checkout lock, and a red base reports which check failed, its exit code and its last lines.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Base checks take a per-checkout lock, and a red base reports which check failed, its exit code and its last lines.\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- Derive the repo from the git remote instead of trusting a stale flag, and explain a redirect as a possible rename. [build, manifest]\n- Check that the tools a landing step depends on actually exist before doing any real work, and always show what came back, even when that is nothing. [build, manifest, path-safety]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/split-module.test.mjs"
+      ],
+      "outputs": [
+        "tools/base-check-lock.mjs"
+      ],
+      "acceptance": [
+        "Base checks take a per-checkout lock, and a red base reports which check failed, its exit code and its last lines."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

@@ -1,0 +1,394 @@
+diff --git a/tests/busy-marker.test.mjs b/tests/busy-marker.test.mjs
+new file mode 100644
+index 0000000..74b31c4
+--- /dev/null
++++ b/tests/busy-marker.test.mjs
+@@ -0,0 +1,50 @@
++// SPDX-License-Identifier: Apache-2.0
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import os from 'node:os';
++import { writeBusyMarker, liveBusyMarkers } from '../tools/busy-marker.mjs';
++
++async function tempDir(t) {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-busy-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  return fs.realpath(dir);
++}
++
++test('writeBusyMarker for current pid is listed by liveBusyMarkers', async t => {
++  const dir = await tempDir(t);
++  const root = await tempDir(t);
++  const command = 'node tools/swarm.mjs go --scope x';
++  const remove = await writeBusyMarker({ command, root, dir });
++  const live = await liveBusyMarkers({ dir });
++  assert.equal(live.length, 1);
++  assert.equal(live[0].pid, process.pid);
++  assert.equal(live[0].command, command);
++  assert.equal(live[0].root, root);
++  await remove();
++});
++
++test('dead pid marker is removed and not returned', async t => {
++  const dir = await tempDir(t);
++  const root = await tempDir(t);
++  const deadPid = 424242;
++  await writeBusyMarker({ command: 'node tools/swarm.mjs run x', root, pid: deadPid, dir });
++  const live = await liveBusyMarkers({ dir, isAlive: pid => pid === process.pid });
++  assert.deepEqual(live, []);
++  await assert.rejects(fs.access(path.join(dir, `${deadPid}.json`)));
++});
++
++test('remove deletes the marker and is safe to call twice', async t => {
++  const dir = await tempDir(t);
++  const root = await tempDir(t);
++  const remove = await writeBusyMarker({ command: 'node tools/swarm.mjs ship', root, dir });
++  await remove();
++  await assert.rejects(fs.access(path.join(dir, `${process.pid}.json`)));
++  await remove();
++});
++
++test('missing busy directory returns no markers', async t => {
++  const dir = path.join(await tempDir(t), 'no-such-busy');
++  assert.deepEqual(await liveBusyMarkers({ dir }), []);
++});
+diff --git a/tests/update-busy-marker.test.mjs b/tests/update-busy-marker.test.mjs
+new file mode 100644
+index 0000000..f819e42
+--- /dev/null
++++ b/tests/update-busy-marker.test.mjs
+@@ -0,0 +1,204 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs/promises';
++import fsSync from 'node:fs';
++import path from 'node:path';
++import os from 'node:os';
++import { fileURLToPath } from 'node:url';
++import { execFile, spawn } from 'node:child_process';
++import { promisify } from 'node:util';
++import { writeBusyMarker } from '../tools/busy-marker.mjs';
++
++const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const swarmPath = path.join(packageRoot, 'tools/swarm.mjs');
++const execFileAsync = promisify(execFile);
++
++async function tempDir(t) {
++  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-update-busy-'));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  return fs.realpath(dir);
++}
++
++function swarmEnv(busyDir, home, extra = {}) {
++  return { ...process.env, HOME: home, SWARM_BUSY_DIR: busyDir, ...extra };
++}
++
++async function isolatedSwarmFixture(t) {
++  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-busy-e2e-')));
++  t.after(() => fs.rm(dir, { recursive: true, force: true }));
++  const busyDir = path.join(dir, 'busy');
++  await fs.mkdir(busyDir, { recursive: true });
++  const configFile = path.join(dir, 'config.json');
++  await fs.writeFile(configFile, JSON.stringify({ machineConcurrency: 4, lanes: { anthropic: { model: 'm' } } }));
++  const env = {
++    ...process.env,
++    HOME: dir,
++    SWARM_BUSY_DIR: busyDir,
++    SWARM_CONFIG: configFile,
++    SWARM_BOARD_FILE: path.join(dir, 'board.json'),
++    SWARM_PROJECTS_FILE: path.join(dir, 'projects.json'),
++    SWARM_HISTORY_FILE: path.join(dir, 'h.ndjson'),
++    SWARM_LANES_DIR: path.join(dir, 'lanes'),
++    SWARM_SPEND_DIR: path.join(dir, 'spend'),
++    SWARM_PHONE_DIR: path.join(dir, 'phone'),
++  };
++  return { dir, busyDir, env };
++}
++
++function spawnClosePromise(child) {
++  return new Promise((resolve, reject) => {
++    child.on('error', reject);
++    child.on('close', (code, signal) => resolve({ code, signal }));
++  });
++}
++
++async function findBusyMarker(busyDir, predicate) {
++  let entries;
++  try {
++    entries = await fs.readdir(busyDir);
++  } catch {
++    return null;
++  }
++  for (const entry of entries) {
++    if (!entry.endsWith('.json')) continue;
++    const full = path.join(busyDir, entry);
++    let record;
++    try {
++      record = JSON.parse(await fs.readFile(full, 'utf8'));
++    } catch {
++      continue;
++    }
++    if (predicate(entry, record)) return { entry, record, full };
++  }
++  return null;
++}
++
++function waitForBusyMarker(busyDir, predicate) {
++  return new Promise((resolve, reject) => {
++    let watcher;
++    const finish = (hit, error) => {
++      try {
++        watcher?.close();
++      } catch {
++        /* closed */
++      }
++      if (error) reject(error);
++      else resolve(hit);
++    };
++    const probe = () =>
++      findBusyMarker(busyDir, predicate).then(hit => {
++        if (hit) finish(hit);
++      });
++    try {
++      watcher = fsSync.watch(busyDir, () => {
++        probe().catch(err => finish(null, err));
++      });
++    } catch (error) {
++      reject(error);
++      return;
++    }
++    probe().catch(err => finish(null, err));
++  });
++}
++
++async function runUpdate(busyDir, home, args = []) {
++  try {
++    return await execFileAsync(process.execPath, [swarmPath, 'update', ...args], {
++      cwd: packageRoot,
++      env: swarmEnv(busyDir, home),
++      encoding: 'utf8',
++    });
++  } catch (error) {
++    error.stdout ??= '';
++    error.stderr ??= '';
++    throw error;
++  }
++}
++
++test('update refuses when a live busy marker from another pid is present', async t => {
++  const busyDir = await tempDir(t);
++  const home = await tempDir(t);
++  const root = await tempDir(t);
++  const command = 'node tools/swarm.mjs go --scope x';
++  const remove = await writeBusyMarker({ command, root, dir: busyDir });
++  t.after(() => remove());
++  await assert.rejects(runUpdate(busyDir, home), error => {
++    assert.match(error.stderr, /update-refused/);
++    assert.match(error.stderr, new RegExp(`process\\s+${process.pid}`));
++    assert.match(error.stderr, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
++    assert.match(error.stderr, new RegExp(`\\(${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
++    return true;
++  });
++});
++
++test('update is not refused for a busy marker with a dead pid', async t => {
++  const busyDir = await tempDir(t);
++  const home = await tempDir(t);
++  const root = await tempDir(t);
++  await writeBusyMarker({ command: 'node tools/swarm.mjs run x', root, pid: 424242, dir: busyDir });
++  try {
++    const { stderr } = await runUpdate(busyDir, home);
++    assert.doesNotMatch(stderr, /update-refused/);
++  } catch (error) {
++    assert.doesNotMatch(error.stderr ?? '', /update-refused/);
++  }
++});
++
++test('update --force is not refused over a live busy marker', async t => {
++  const busyDir = await tempDir(t);
++  const home = await tempDir(t);
++  const root = await tempDir(t);
++  const remove = await writeBusyMarker({ command: 'node tools/swarm.mjs ship', root, dir: busyDir });
++  try {
++    const { stderr } = await runUpdate(busyDir, home, ['--force']);
++    assert.doesNotMatch(stderr, /update-refused/);
++  } catch (error) {
++    assert.doesNotMatch(error.stderr ?? '', /update-refused/);
++  } finally {
++    await remove();
++  }
++});
++
++test('with-concurrency writes a busy marker for the swarm pid while the wrapped command runs and removes it on exit', async t => {
++  const f = await isolatedSwarmFixture(t);
++  const holdScript = "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));";
++  const child = spawn(
++    process.execPath,
++    [swarmPath, 'with-concurrency', '1', '--', 'node', '-e', holdScript],
++    { cwd: packageRoot, env: f.env, stdio: ['pipe', 'ignore', 'pipe'] },
++  );
++  const closed = spawnClosePromise(child);
++  t.after(() => {
++    try {
++      child.kill('SIGKILL');
++    } catch {
++      /* gone */
++    }
++  });
++
++  const marker = await waitForBusyMarker(f.busyDir, () => true);
++  assert.equal(marker.entry, `${child.pid}.json`);
++  assert.equal(marker.record.pid, child.pid);
++  assert.match(marker.record.command, /with-concurrency/);
++
++  child.stdin.end();
++  await closed;
++  await assert.rejects(fs.access(path.join(f.busyDir, `${child.pid}.json`)));
++});
++
++test('run that fails immediately does not leave a busy marker behind', async t => {
++  const f = await isolatedSwarmFixture(t);
++  const missing = path.join(f.dir, 'no-such-manifest.json');
++  const child = spawn(
++    process.execPath,
++    [swarmPath, '--root', f.dir, 'run', missing],
++    { cwd: packageRoot, env: f.env, stdio: ['ignore', 'pipe', 'pipe'] },
++  );
++  const closed = spawnClosePromise(child);
++  const result = await closed;
++  assert.notEqual(result.code, 0);
++  const leftover = await findBusyMarker(f.busyDir, () => true);
++  assert.equal(leftover, null);
++});
+diff --git a/tools/busy-marker.mjs b/tools/busy-marker.mjs
+new file mode 100644
+index 0000000..5c4b6ef
+--- /dev/null
++++ b/tools/busy-marker.mjs
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: Apache-2.0
++import fs from 'node:fs/promises';
++import os from 'node:os';
++import path from 'node:path';
++import crypto from 'node:crypto';
++import { liveDir } from './board.mjs';
++
++export const BUSY_MARKER_VERBS = new Set(['go', 'run', 'integrate', 'autopilot', 'ship', 'scale', 'with-concurrency', 'ticket', 'sweep', 'resume']);
++
++export function busyDir(env = process.env, home = os.homedir()) {
++  if (env.SWARM_BUSY_DIR) return env.SWARM_BUSY_DIR;
++  const live = liveDir(env, home);
++  return path.join(path.dirname(live), 'busy');
++}
++
++function pidAlive(pid) {
++  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
++}
++
++export async function writeBusyMarker({ command, root, pid = process.pid, dir = busyDir() }) {
++  const realRoot = await fs.realpath(root);
++  const record = { pid, command, root: realRoot, startedAt: new Date().toISOString() };
++  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
++  await fs.chmod(dir, 0o700);
++  const target = path.join(dir, `${pid}.json`);
++  const temporary = `${target}.${crypto.randomBytes(4).toString('hex')}.tmp`;
++  try {
++    await fs.writeFile(temporary, `${JSON.stringify(record)}\n`, { flag: 'wx' });
++    await fs.rename(temporary, target);
++  } catch (error) {
++    await fs.unlink(temporary).catch(() => {});
++    throw error;
++  }
++  return async function remove() {
++    await fs.unlink(target).catch(error => { if (error.code !== 'ENOENT') throw error; });
++  };
++}
++
++export async function liveBusyMarkers({ dir = busyDir(), isAlive = pidAlive } = {}) {
++  let entries;
++  try { entries = await fs.readdir(dir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
++  const markers = [];
++  for (const entry of entries) {
++    if (!entry.endsWith('.json')) continue;
++    const target = path.join(dir, entry);
++    let record;
++    try { record = JSON.parse(await fs.readFile(target, 'utf8')); } catch { await fs.unlink(target).catch(() => {}); continue; }
++    if (!isAlive(record.pid)) { await fs.unlink(target).catch(() => {}); continue; }
++    markers.push({ pid: record.pid, command: record.command, root: record.root });
++  }
++  return markers;
++}
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 2ca4ee2..0f6a9e8 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -4,7 +4,7 @@
+ // Fresh, project-local workers. No daemon or terminal attachment; a worker shell exists only inside a sandbox (codex, claude shell jobs).
+ import { isBuildArtifact, withoutIgnored } from './ignored-artifacts.mjs';
+ import fs from 'node:fs/promises';
+-import { createReadStream, realpathSync, existsSync } from 'node:fs';
++import { createReadStream, realpathSync, existsSync, unlinkSync } from 'node:fs';
+ import path from 'node:path';
+ import os from 'node:os';
+ import crypto from 'node:crypto';
+@@ -85,6 +85,7 @@ import { prepareWorkspaceEnvironment, prepareViteCaches, isDesignOnlyCodexJob, c
+ import { readCursorKey, CURSOR_MODEL, CURSOR_BLIP_RE, requireCursorPlatform, requireCursorApiKey, resolveCursorBinary, cursorConfig, cursorProfile, cursorLaunchArgs, cursorMessage, cursorEnvironment, resolveCursorEnvelope, parseCursorOutput, redactCursorKey, cursorDoctor } from './cursor-adapter.mjs';
+ import { classifyCheckEnvironment, swarmCheckWarnings } from './ship.mjs';
+ import { findWriterConflicts, registerLiveRun, unregisterLiveRun, boardSummary, listLiveRuns, repoKey, repoPaths } from './board.mjs';
++import { BUSY_MARKER_VERBS, writeBusyMarker, liveBusyMarkers, busyDir } from './busy-marker.mjs';
+ import { acquireIntegrationLock } from './integration-lock.mjs';
+ export { acquireIntegrationLock } from './integration-lock.mjs';
+ import { writeSessionMetric } from './session-metrics.mjs';
+@@ -7389,6 +7390,15 @@ async function warnProjectVersionMismatch(root){
+   if(pointer.version!==installedVersion)process.stderr.write(`Warning: this project is linked to project-swarm ${pointer.version}, but the running install is ${installedVersion}; run \`swarm update\` in the install root to realign.\n`);
+ }
+ 
++function verbFromArgv(argv) {
++  for (let i = 0; i < argv.length; i += 1) {
++    if (argv[i] === '--root') { i += 1; continue; }
++    if (argv[i].startsWith('-')) continue;
++    return argv[i];
++  }
++  return null;
++}
++
+ // Journals every command (name, sanitized arguments, outcome) and what it produced, then refreshes
+ // coordination/HANDOFF.md. A journal problem never fails a command.
+ async function main() {
+@@ -7398,9 +7408,23 @@ async function main() {
+   const write = process.stdout.write.bind(process.stdout);
+   process.stdout.write = (chunk, ...rest) => { if (printed.length < 1_000_000) printed += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'); return write(chunk, ...rest); };
+   let status = 'ok';
++  let removeBusyMarker = null;
++  let busyMarkerPath = null;
++  const verb = verbFromArgv(argv);
++  if (verb && BUSY_MARKER_VERBS.has(verb)) {
++    try {
++      const at = argv.indexOf('--root');
++      const base = at !== -1 && argv[at + 1] ? path.resolve(argv[at + 1]) : resolveDefaultRoot(ownRoot, process.cwd());
++      const command = argv.join(' ').slice(0, 160);
++      removeBusyMarker = await writeBusyMarker({ command, root: base });
++      busyMarkerPath = path.join(busyDir(), `${process.pid}.json`);
++      process.on('exit', () => { if (busyMarkerPath) try { unlinkSync(busyMarkerPath); } catch { /* best effort */ } });
++    } catch { /* marker writing must never fail the command */ }
++  }
+   try { await mainInner(); }
+   catch (error) { status = 'error'; throw error; }
+   finally {
++    if (removeBusyMarker) try { await removeBusyMarker(); } catch { /* best effort */ }
+     process.stdout.write = write;
+     if (process.exitCode) status = 'error';
+     try {
+@@ -8257,6 +8281,8 @@ async function mainInner() {
+       for(const d of [launcher?.installRoot,path.join(os.homedir(),'.project-swarm')].filter(Boolean)){dirs.push(d);try{dirs.push(await fs.realpath(d));}catch{/* not there */}}
+       const busy=runningSwarmCommands({installDirs:[...new Set(dirs)]});
+       if(busy.length)fail(`update-refused: swarm will not update while work is running:\n${busy.map(b=>`  process ${b.pid}  ${b.command}`).join('\n')}\nWait for them to finish (a go --scope loop has no run between waves), or run swarm update --force yourself.`,'update-refused');
++      const markers=(await liveBusyMarkers()).filter(marker=>marker.pid!==process.pid);
++      if(markers.length)fail(`update-refused: swarm will not update while work is running:\n${markers.map(marker=>`  process ${marker.pid}  ${marker.command}  (${marker.root})`).join('\n')}\nWait for them to finish (a go --scope loop has no run between waves), or run swarm update --force yourself.`,'update-refused');
+     }
+     let target=root,note;
+     {

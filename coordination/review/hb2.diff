@@ -1,0 +1,368 @@
+diff --git a/tools/inbox.mjs b/tools/inbox.mjs
+index 3c66c95..554012c 100644
+--- a/tools/inbox.mjs
++++ b/tools/inbox.mjs
+@@ -207,6 +207,7 @@ export async function markDone(root, ref, deps) {
+ }
+ 
+ export async function decide(root, ref, choice, deps) {
++  if (String(ref ?? '').startsWith('handbuild-')) return decideHandbuild(root, String(ref), String(choice ?? '').trim(), deps);
+   const { readJournal, appendEvent, addGoal, now } = deps;
+   const id = String(ref ?? '');
+   const picked = String(choice ?? '').trim();
+@@ -227,3 +228,17 @@ export async function decide(root, ref, choice, deps) {
+   await appendEvent(root, { kind: 'decision', id, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
+   return { id, choice: picked, changed, goal };
+ }
++
++// A hand-build request is answered through the same inbox as everything else (the board's Needs you, the phone's one-time word, `swarm decide`): approve or deny. The choice is applied to
++// the guard's state, with no backlog goal made (it is not a plan decision).
++async function decideHandbuild(root, ref, picked, deps) {
++  const { readJournal, appendEvent, now } = deps;
++  const events = await readJournal(root, { limit: Infinity });
++  const item = openDecisions(events).find(event => String(event.id) === ref);
++  if (!item) throw new Error(`inbox-unknown: ${ref}`);
++  if (!['approve', 'deny'].includes(picked)) throw new Error(`inbox-choice-invalid: ${picked}`);
++  const { decideRequest } = await import('./handbuild.mjs');
++  decideRequest(root, ref.slice('handbuild-'.length), picked, { now, by: 'owner' });
++  await appendEvent(root, { kind: 'decision', id: ref, confirmed: true, choice: picked, text: sanitizeText(item.text ?? '') }, { now });
++  return { id: ref, choice: picked, changed: false, goal: null };
++}
+diff --git a/tools/install.mjs b/tools/install.mjs
+index a898f48..af95179 100644
+--- a/tools/install.mjs
++++ b/tools/install.mjs
+@@ -224,43 +224,31 @@ async function ensureCheckpointHook(root){
+  return {status:before.trim()?'updated':'created'};
+ }
+ 
+-// The Orchestrator lane's hooks (PreToolUse, PostToolUse, Stop, UserPromptSubmit) go in the same personal settings file: each runs tools/orchestrator-hook.mjs, which appends one small event
+-// (session, tool, a path inside the project) to .swarm/orchestrator/events.ndjson and prints nothing. The command points at the install's `current` folder, so it keeps working after
+-// `swarm update`; an entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
++// Hooks installed into the personal settings file `.claude/settings.local.json` (git-ignored, like the checkpoint hook): the Orchestrator lane's observer hooks (PreToolUse, PostToolUse,
++// Stop, UserPromptSubmit: tools/orchestrator-hook.mjs appends one small event, prints nothing) and the hand-build guard (a PreToolUse hook: tools/handbuild-guard.mjs). Each command points at
++// the install's `current` folder, so it keeps working after `swarm update`, and is wrapped so that a missing script (before the update that brings it) is a no-op, never an error.
++// An entry from an older install is replaced, anything else in the file is kept, and an unreadable settings file is left alone.
+ export const ORCHESTRATOR_HOOK_EVENTS=Object.freeze({PreToolUse:'pre',PostToolUse:'post',Stop:'stop',UserPromptSubmit:'prompt'});
+-const isOrchestratorHook=hook=>typeof hook?.command==='string'&&hook.command.includes('orchestrator-hook.mjs');
++export const GUARD_MATCHER='Edit|Write|MultiEdit|NotebookEdit|Bash';
++const hookCommand=(script,arg)=>`test -f ${JSON.stringify(script)} && node ${JSON.stringify(script)}${arg?` ${arg}`:''} || true`;
++const commandOf=hook=>typeof hook?.command==='string'?hook.command:'';
+ export function stableInstallDir(installRoot){
+  const parent=path.dirname(installRoot);
+  return path.basename(parent)==='versions'?path.join(path.dirname(parent),'current'):installRoot;
+ }
+-// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
+-// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
+-export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
+- try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
+- const script=path.join(stableInstallDir(installRoot),'tools','orchestrator-hook.mjs');
++async function readSettings(root){
+  const destination=await safeTarget(root,'.claude/settings.local.json',{createParents:true});
+  const before=await readOptional(destination);
+  let settings={};
+  if(before.trim()){
+-  try{settings=JSON.parse(before);}catch{return {status:'skipped',reason:'settings.local.json is not valid JSON'};}
+-  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {status:'skipped',reason:'settings.local.json is not an object'};
+- }
+- if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {status:'skipped',reason:'hooks is not an object'};
+- if(refreshOnly){
+-  const commands=Object.values(settings.hooks??{}).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(hook=>String(hook?.command??''));
+-  if(!commands.some(c=>c===CHECKPOINT_HOOK||c.includes('orchestrator-hook.mjs')))return {status:'absent'};
++  try{settings=JSON.parse(before);}catch{return {destination,before,problem:'settings.local.json is not valid JSON'};}
++  if(!settings||typeof settings!=='object'||Array.isArray(settings))return {destination,before,problem:'settings.local.json is not an object'};
+  }
++ if(settings.hooks!==undefined&&(typeof settings.hooks!=='object'||settings.hooks===null||Array.isArray(settings.hooks)))return {destination,before,problem:'hooks is not an object'};
+  settings.hooks??={};
+- let changed=false;
+- for(const [name,kind] of Object.entries(ORCHESTRATOR_HOOK_EVENTS)){
+-  if(settings.hooks[name]!==undefined&&!Array.isArray(settings.hooks[name]))return {status:'skipped',reason:`hooks.${name} is not a list`};
+-  const command=`node ${JSON.stringify(script)} ${kind}`;
+-  const list=settings.hooks[name]??=[];
+-  let found=false;
+-  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(isOrchestratorHook(hook)){found=true;if(hook.command!==command){hook.command=command;changed=true;}}
+-  if(!found){list.push({...(name==='PreToolUse'||name==='PostToolUse'?{matcher:'*'}:{}),hooks:[{type:'command',command}]});changed=true;}
+- }
+- if(!changed)return {status:'unchanged'};
++ return {destination,before,settings};
++}
++async function writeSettings(root,destination,settings,before){
+  // A temp file with its own name, created exclusively (a planted link at a fixed name cannot redirect the write), with the old file's mode, then renamed over.
+  let mode=0o600;
+  try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* a new file */}
+@@ -270,6 +258,58 @@ export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=fals
+  await ensureLocalSettingsIgnored(root);
+  return {status:before.trim()?'updated':'created'};
+ }
++// specs: [{event, matcher?, script, arg?}]. marker: the script name that identifies this feature's entries.
++async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
++ const read=await readSettings(root);
++ if(read.problem)return {status:'skipped',reason:read.problem};
++ const {destination,before,settings}=read;
++ if(refreshOnly){
++  const commands=Object.values(settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).map(commandOf);
++  if(!commands.some(c=>c.includes(CHECKPOINT_HOOK)||specs.some(sp=>c.includes(sp.script))))return {status:'absent'};
++ }
++ let changed=false;
++ for(const sp of specs){
++  if(settings.hooks[sp.event]!==undefined&&!Array.isArray(settings.hooks[sp.event]))return {status:'skipped',reason:`hooks.${sp.event} is not a list`};
++  const command=hookCommand(path.join(stableInstallDir(installRoot),'tools',sp.script),sp.arg);
++  const list=settings.hooks[sp.event]??=[];
++  let found=false;
++  for(const entry of list)for(const hook of Array.isArray(entry?.hooks)?entry.hooks:[])if(commandOf(hook).includes(sp.script)&&(!sp.arg||commandOf(hook).includes(` ${sp.arg} `)||commandOf(hook).includes(` ${sp.arg}`))){found=true;if(hook.command!==command){hook.command=command;changed=true;}}
++  if(!found){list.push({...(sp.matcher?{matcher:sp.matcher}:{}),hooks:[{type:'command',command}]});changed=true;}
++ }
++ if(!changed)return {status:'unchanged'};
++ return writeSettings(root,destination,settings,before);
++}
++const ORCHESTRATOR_SPECS=Object.entries(ORCHESTRATOR_HOOK_EVENTS).map(([event,arg])=>({event,matcher:event==='PreToolUse'||event==='PostToolUse'?'*':undefined,script:'orchestrator-hook.mjs',arg}));
++// An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
++// project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
++export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
++ try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
++ return ensureHookSpecs(root,installRoot,ORCHESTRATOR_SPECS,{refreshOnly});
++}
++// The hand-build guard: installed on request (`swarm handbuild install`) and by `swarm init` for a new project; `swarm update` only refreshes where it is already installed.
++export async function ensureHandbuildGuard(root,installRoot,{refreshOnly=false}={}){
++ if(refreshOnly){
++  const read=await readSettings(root);
++  if(read.problem)return {status:'skipped',reason:read.problem};
++  const has=Object.values(read.settings.hooks).flatMap(list=>Array.isArray(list)?list:[]).flatMap(entry=>Array.isArray(entry?.hooks)?entry.hooks:[]).some(hook=>commandOf(hook).includes('handbuild-guard.mjs'));
++  if(!has)return {status:'absent'};
++ }
++ return ensureHookSpecs(root,installRoot,[{event:'PreToolUse',matcher:GUARD_MATCHER,script:'handbuild-guard.mjs'}],{refreshOnly:false});
++}
++export async function removeHandbuildGuard(root){
++ const read=await readSettings(root);
++ if(read.problem)return {status:`not removed: ${read.problem}`};
++ const {destination,before,settings}=read;
++ let changed=false;
++ for(const [event,list] of Object.entries(settings.hooks)){
++  if(!Array.isArray(list))continue;
++  const kept=list.map(entry=>Array.isArray(entry?.hooks)?{...entry,hooks:entry.hooks.filter(hook=>!commandOf(hook).includes('handbuild-guard.mjs'))}:entry).filter(entry=>!Array.isArray(entry?.hooks)||entry.hooks.length>0);
++  if(kept.length!==list.length||JSON.stringify(kept)!==JSON.stringify(list)){settings.hooks[event]=kept;changed=true;}
++ }
++ if(!changed)return {status:'was not installed'};
++ await writeSettings(root,destination,settings,before);
++ return {status:'removed'};
++}
+ 
+ async function ensureLocalSettingsIgnored(root){
+  const destination=await safeTarget(root,'.gitignore');
+@@ -365,8 +405,9 @@ export async function installProject(targetDirectory,{source=packageRoot,agentFi
+  }
+  const claudeHook=agentFiles?await ensureCheckpointHook(root):null;
+  const orchestratorHooks=agentFiles?await ensureOrchestratorHooks(root,installRoot):null;
++ const handbuildGuard=agentFiles?await ensureHandbuildGuard(root,installRoot):null;
+  const gitignoreAdded=await ensureSwarmIgnore(root);
+- return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,gitignoreAdded};
++ return {status:'linked',root,install:installRoot,version:pkg.version,pointer:'.project-swarm.json',coordinationCreated:added.length>0,added,kept,agentFiles:agentPaths,claudeHook,orchestratorHooks,handbuildGuard,gitignoreAdded};
+ }
+ 
+ if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
+diff --git a/tools/live-processes.mjs b/tools/live-processes.mjs
+new file mode 100644
+index 0000000..413f1be
+--- /dev/null
++++ b/tools/live-processes.mjs
+@@ -0,0 +1,27 @@
++// SPDX-License-Identifier: Apache-2.0
++// Swarm commands that are running on this machine right now, found from the process list. A `swarm go --scope` loop between two waves has no run registered yet, so the board's live-run
++// list says "idle" while the machine is not: `swarm update` also looks here before it moves the install.
++import { execFileSync } from 'node:child_process';
++
++// The long-running commands: a loop, a run, an integration, a scale test, a guarded command, autopilot, a ship.
++const BUSY = /(?:^|[\s/])swarm(?:\.mjs)?\s+(?:--root\s+\S+\s+)?(go|run|integrate|autopilot|ship|scale|with-concurrency|ticket|sweep)(?:\s|$)/;
++
++export function runningSwarmCommands({ ps, selfPid = process.pid, installDirs = null } = {}) {
++  let text = '';
++  try { text = ps ? ps() : execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }); } catch { return []; }
++  const out = [];
++  for (const line of text.split('\n')) {
++    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
++    if (!m) continue;
++    const pid = Number(m[1]);
++    if (pid === selfPid || pid === process.ppid) continue;
++    const command = m[2];
++    // only a node process running swarm itself; not an editor, a grep or this ps
++    if (!/\bnode\b|\.mjs\b/.test(command) || /\bps\b|grep/.test(command.split(/\s+/)[0] ?? '')) continue;
++    // With installDirs: only commands running code from one of those installs (a run from a development checkout is not affected by updating an install).
++    if (installDirs && !installDirs.some(d => command.includes(`${d}/`) || command.includes(`${d}\\`))) continue;
++    const hit = BUSY.exec(command);
++    if (hit) out.push({ pid, command: command.replace(/\s+/g, ' ').slice(0, 160), verb: hit[1] });
++  }
++  return out;
++}
+diff --git a/tools/orchestrator-events.mjs b/tools/orchestrator-events.mjs
+index b31e8f5..55653da 100644
+--- a/tools/orchestrator-events.mjs
++++ b/tools/orchestrator-events.mjs
+@@ -6,7 +6,7 @@
+ import fs from 'node:fs';
+ import path from 'node:path';
+ 
+-export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt']);
++export const EVENT_KINDS = Object.freeze(['pre', 'post', 'stop', 'prompt', 'blocked']);
+ export const WRITE_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+ // Paths an orchestrator may write without the swarm having built them: tickets and plans.
+ export const ORCHESTRATOR_OWN = Object.freeze(['.swarm/', 'docs/plans/']);
+@@ -74,16 +74,26 @@ export function projectRootOf(cwd, exists = file => fs.existsSync(file)) {
+ }
+ 
+ /** One log line for a hook input, or null when the input is not a session event of an orchestrator. `kind` is pre | post | stop | prompt. */
+-export function buildEvent(kind, input, { root, now = Date.now } = {}) {
++export function buildEvent(kind, input, { root, now = Date.now, analyze } = {}) {
+   if (!EVENT_KINDS.includes(kind) || !input || typeof input !== 'object' || typeof input.session_id !== 'string' || !input.session_id) return null;
+   if (isWorkerCwd(input.cwd)) return null;
+   const event = { at: new Date(now()).toISOString(), s: input.session_id.slice(0, 80), e: kind };
+-  if (kind === 'pre' || kind === 'post') {
++  if (kind === 'pre' || kind === 'post' || kind === 'blocked') {
+     const tool = typeof input.tool_name === 'string' ? input.tool_name.slice(0, 60) : null;
+     if (!tool) return null;
+     event.t = tool;
+     const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+-    if (tool === 'Bash') event.c = maskCommand(ti.command);
++    if (tool === 'Bash') {
++      event.c = maskCommand(ti.command);
++      // A shell command that writes files in the project is a hand-built edit too (sed -i, a redirect, tee, mv, cp, rm...): the files are listed so the share built by hand is complete.
++      const a = typeof analyze === 'function' ? analyze(ti.command, { root, cwd: input.cwd }) : null;
++      if (a && (a.writes.length || a.git.length || a.inline || a.unknown)) {
++        if (a.writes.length) event.bf = a.writes.slice(0, 12);
++        if (a.git.length) event.bg = a.git;
++        if (a.inline || a.unknown) event.bu = 1;
++        if (a.writes.length || a.inline || a.unknown) event.hb = 1;
++      }
++    }
+     else {
+       const rel = insideProject(root, ti.file_path ?? ti.notebook_path ?? ti.path);
+       if (rel) { event.f = rel.slice(0, 200); if (isHandBuilt(tool, rel)) event.hb = 1; }
+@@ -155,7 +165,7 @@ export function sessionsOf(events, now = Date.now()) {
+   const bySession = new Map();
+   for (const e of ordered) {
+     let s = bySession.get(e.s);
+-    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, turnStartedAt: null, running: new Map() }; bySession.set(e.s, s); }
++    if (!s) { s = { id: e.s, firstAt: e.at, lastAt: e.at, last: e, transcript: null, handBuilt: 0, edits: 0, blocked: 0, turnStartedAt: null, running: new Map() }; bySession.set(e.s, s); }
+     s.lastAt = e.at; s.last = e;
+     if (e.tp) s.transcript = e.tp;
+     if (e.e === 'prompt') { s.turnStartedAt = e.at; s.running.clear(); }
+@@ -165,7 +175,8 @@ export function sessionsOf(events, now = Date.now()) {
+       else { const hit = [...s.running.entries()].reverse().find(([k, v]) => v.name === e.t && (v.byName || !e.u)); if (hit) s.running.delete(hit[0]); }
+     }
+     if (e.e === 'stop') { s.running.clear(); s.turnStartedAt = null; }
+-    if (e.e === 'post' && WRITE_TOOLS.includes(e.t) && e.f) { s.edits += 1; if (e.hb) s.handBuilt += 1; }
++    if (e.e === 'post' && ((WRITE_TOOLS.includes(e.t) && e.f) || (e.t === 'Bash' && e.hb))) { s.edits += 1; if (e.hb) s.handBuilt += 1; }
++    if (e.e === 'blocked') s.blocked += 1;
+   }
+   const out = [];
+   for (const s of bySession.values()) {
+@@ -179,16 +190,22 @@ export function sessionsOf(events, now = Date.now()) {
+     out.push({
+       id: s.id, state, lastAt: s.lastAt, since: state === 'working' ? doing.startedAt : state === 'thinking' ? (s.turnStartedAt ?? s.lastAt) : s.lastAt,
+       doing: doing ? { tool: doing.name, file: doing.file, command: doing.command, startedAt: doing.startedAt, parallel: tools.length } : null,
+-      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, shown: age <= SESSION_SHOWN_MS,
++      transcript: s.transcript, edits: s.edits, handBuilt: s.handBuilt, blocked: s.blocked, shown: age <= SESSION_SHOWN_MS,
+     });
+   }
+   return out.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
+ }
+ 
+-/** Distinct files edited by hand (outside .swarm/ and docs/plans/) and how many edits in all, from the events. */
++/** Distinct files edited by hand (outside .swarm/ and docs/plans/, by an edit tool or a shell command) and how many edits in all, from the events; also the attempts the guard blocked. */
+ export function handBuiltOf(events) {
+   const files = new Set();
+-  let edits = 0;
+-  for (const e of events) if (e.e === 'post' && e.hb && e.f) { files.add(e.f); edits += 1; }
+-  return { files: files.size, edits, list: [...files].slice(0, 50) };
++  let edits = 0, blocked = 0;
++  for (const e of events) {
++    if (e.e === 'blocked') { blocked += 1; continue; }
++    if (e.e !== 'post' || !e.hb) continue;
++    edits += 1;
++    if (e.f) files.add(e.f);
++    for (const f of Array.isArray(e.bf) ? e.bf : []) if (typeof f === 'string') files.add(f);
++  }
++  return { files: files.size, edits, blocked, list: [...files].slice(0, 50) };
+ }
+diff --git a/tools/swarm.mjs b/tools/swarm.mjs
+index 005a4f1..2ca4ee2 100644
+--- a/tools/swarm.mjs
++++ b/tools/swarm.mjs
+@@ -506,15 +506,19 @@ export async function promptPathsNotInWorkspaceWarnings(root, job, context, { tr
+   return hits;
+ }
+ 
+-// In-source tests (`if (import.meta.vitest)` blocks) in production files under src/: they ship in the build and break it. Tests live in their own files.
++// In-source tests (`if (import.meta.vitest)` blocks) in production files under src/: they ship in the build and break it. Only what a job CHANGED is looked at, and only a block the change ADDS
++// counts: a file that already had blocks from earlier waves can be edited again without being refused for them (the reviewers flag the ones already there).
++const countIn = bytes => (bytes && !bytes.includes(0) ? (bytes.toString('utf8').match(/import\.meta\.vitest\b/g) ?? []).length : 0);
+ export function inSourceTestHits(writes) {
+   const hits = [];
+-  for (const { file, bytes } of writes) {
++  for (const { file, bytes, previous } of writes) {
+     if (!/^src\//.test(file) || isTestFile(file) || bytes === null || bytes.includes(0)) continue;
++    if (countIn(bytes) <= countIn(previous)) continue;
++    const before = previous && !previous.includes(0) ? previous.toString('utf8').split('\n') : [];
+     const lines = bytes.toString('utf8').split('\n');
+-    for (const [index, line] of lines.entries()) {
+-      if (/import\.meta\.vitest\b/.test(line)) { hits.push({ code: 'in-source-test', file, line: index + 1, message: `in-source-test: ${file}:${index + 1} has an import.meta.vitest block; tests go in their own test file (the build ships src/), so remove it` }); break; }
+-    }
++    const index = lines.findIndex((line, i) => /import\.meta\.vitest\b/.test(line) && !before.includes(line));
++    const at = index === -1 ? lines.findIndex(line => /import\.meta\.vitest\b/.test(line)) : index;
++    hits.push({ code: 'in-source-test', file, line: at + 1, message: `in-source-test: ${file}:${at + 1} adds an import.meta.vitest block; tests go in their own test file (the build ships src/), so remove it` });
+   }
+   return hits;
+ }
+@@ -6871,6 +6875,7 @@ export async function bumpPointers(root){
+     if(!pointer||typeof pointer!=='object')continue;
+     // The Orchestrator lane's hooks are put (back) in place for every linked project on each update, whatever the pointer says.
+     try{const {ensureOrchestratorHooks}=await import('./install.mjs');const hooks=await ensureOrchestratorHooks(project,root,{refreshOnly:true});if(hooks.status==='created'||hooks.status==='updated')hooksSet.push(project);else if(hooks.status==='skipped')failed.push({project,error:`orchestrator hooks not installed: ${hooks.reason}`});}catch(error){failed.push({project,error:`orchestrator hooks: ${String(error.message).slice(0,160)}`});}
++    try{const {ensureHandbuildGuard}=await import('./install.mjs');const g=await ensureHandbuildGuard(project,root,{refreshOnly:true});if(g.status==='skipped')failed.push({project,error:`hand-build guard not refreshed: ${g.reason}`});}catch(error){failed.push({project,error:`hand-build guard: ${String(error.message).slice(0,160)}`});}
+     if(pointer.version===version)continue;
+     try{const {writePointer}=await import('./install.mjs');const written=await writePointer(project,{install:root,version});if(written.changed)bumped.push({project,from:pointer.version??null,to:version});}
+     catch(error){failed.push({project,error:String(error.message).slice(0,200)});}
+@@ -8073,6 +8078,13 @@ async function mainInner() {
+     if(out.exitCode)process.exitCode=out.exitCode;
+     return;
+   }
++  if(args[0]==='handbuild'){
++    const {runHandbuildCommand}=await import('./handbuild-commands.mjs');
++    const res=await runHandbuildCommand(root,args.slice(1),{installRoot:ownRoot});
++    process.stdout.write(res.stdout);
++    if(res.exitCode)process.exitCode=res.exitCode;
++    return;
++  }
+   if(['inbox','done','decide','decision','backlog','resolve'].includes(args[0])){
+     root=await fs.realpath(root);
+     const out=await runInboxCommand(root,args[0],args.slice(1),{installRoot:ownRoot});
+@@ -8175,7 +8187,7 @@ async function mainInner() {
+   // `swarm "goal sentence"` is shorthand for `swarm go "goal sentence"`. Only one argument with
+   // whitespace counts, so a mistyped one-word command never starts a paid run.
+   if(!args[0].startsWith('-')&&/\s/.test(args[0])&&isGoalArgument(args[0]))args.unshift('go');
+-  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] [--force] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
++  if(args[0]==='--help'||args[0]==='help'){process.stdout.write('Project Swarm\nRun swarm with no arguments for a short project status. swarm "goal" is shorthand for swarm go "goal".\nUsage: node tools/swarm.mjs [--root PROJECT] doctor [claude|codex|cursor|hermes|qwen|openai|gemini|ollama|lambda|openrouter|rented|all] [--probe-local] | validate MANIFEST [--evidence FILE] | preflight MANIFEST | board | orphans | run MANIFEST [--jobs <id,...>] [--sync] [--batch] [--evidence FILE] [--accept-red-base --reason TEXT] | status RUN | monitor RUN [--view] [--watch [SECONDS]] | wait RUN [--timeout SECONDS] | inspect RUN [--results] | rollup RUN [--text] [--top N] | integrate RUN [--queue [--batch-size N] [--max-requeues N] [--adaptive]] [--jobs <id,...>] [--no-checks|--require-checks] [--accept-failed-checks] [--mutants] [--mutants-file FILE] [--mutant-check ARGVJSON] [--no-flake-check] [--accept-blocked] [--salvage] [--accept-deviation] [--accept-result-shape] | mutants --mutants-file FILE [--mutant-check ARGVJSON] [--dry-run] | env [--print] | redcheck RUN [--base REF] [--commit SHA] --test <argv...> | cancel RUN | ship RUN [--wait-required-only] [--repo OWNER/NAME] --pr PAYLOAD.json [--require-section NAME]... [--no-merge] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--poll SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--accept-pre-existing] [--preflight] [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] | ship --branch BRANCH --pr PAYLOAD.json [--check ARGVJSON]... [--checks-from-ci [PATH]] [--rerun-flaky N | --rerun-flaky-ci 0|1] [--per-test-timeout SECONDS] [--exempt GUARD:FILE=REASON]... [--private-names FILE] [same ship flags] | gpu models|up|down|status|bakeoff [--target T --key K --model M --models a,b --hourly-usd N --max-usd N --max-hours H --gpus N --per-replica N --levels 1,50,200 --extra-quant --yes --json] | think "QUESTION" [--rounds N] [--json] | digest <file|run-id|-> [--kind log|diff|tests|run] [--json] | draft docs|pr|plan "BRIEF" [--context f1,f2] [--out FILE] [--json] | brain status|stats|test [--json] [--markdown] | init [--check [--json]] [--sensitive | --not-sensitive] [--protect PATH]... [--max-usd N] [--max-tokens N] [--base-check | --no-base-check] [--no-map] [--kit NAME --kit-source PATH_OR_GIT_URL [--name NAME] [--no-protect-kit]] | map [--json] | scale [--jobs N] [--concurrency N] | go MANIFEST|RUN|"GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--commit-message MSG] [--repo OWNER/NAME] [--pr PAYLOAD.json] [--require-section NAME]... [--mutants] [--merge-method squash|merge|rebase] [--timeout SECONDS] [--tag-timeout SECONDS] [--no-flake-check] [--exempt GUARD:FILE=REASON]... [--yes] [--plan ID] [--accept-stale] [--batch] [--scope] [--skip-skeleton] | scope template|check|split|approve|sync|contracts [FILE] [--out FILE] [--stage S1] [--ingest RUN] [--merge] [--yes] [--integrated] | tickets [ID] [--stage S1] [--status STATUS] [--type TYPE] [--risk RISK] [--set STATUS] [--note TEXT] [--json] | tickets --mark-deps [ID...] [--yes] | change "REASON" [FILE] [--yes] | merge PR [--repo OWNER/NAME] | stop --all|--status|--clear | backup [list|verify ID] [--reason TEXT] | restore ID [--yes] | migrations [check [--yes]|approve FILE [--note TEXT]] | projects [list|add PATH|remove ID] | history [--project P] [--kind K] [--q TEXT] [--from D] [--to D] [--csv] [--backfill] | budgets check [--url URL] [--screens a,b] | budgets status | errors pull [--dry-run] | errors ingest [FILE|-] | errors list|show|ignore|resolve|digest | report --client [--since DAYS] [--preview URL] [--approve [DIR]] [--status] | time log HOURS [NOTE] | time list | quote SCOPE.md | quote record|list|config | resolve BLOCKER_ID | handbuild request|approve|deny|status|log|install|uninstall|off|on | remote on|off|status|show|rotate | with-concurrency N -- COMMAND... | phone setup --repo OWNER/NAME | phone sync [--dry-run] | phone status | phone off | models watch [--force] [--json] | models list | models compare CURRENT CANDIDATE | ui check [SCREEN_ID...] [--base-url URL] [--json] | ui list | watch [RUN] [--all] [--tui] [--open] [--json] | gallery list|approve ID...|comment ID "text" | lessons list|show|add|check|stats|backfill|mine|notes [--stage S] [--tag T] [--caught-by C] [--text T] [--json] [--dry-run] [--min N] [--include-guarded] [--write] | eval list|validate|manifest|score|gate [ID] [--all] [--agent A] [--model M] [--out FILE] [--record] [--update-baseline] [--reset-baseline] | plan "GOAL" [--leads N|auto] [--max-jobs N] [--concurrency N] [--max-usd N] [--max-tokens N] [--json] | note [--file TASK.md|HANDOFF.md] "text" | ask --model M [--agent A] | ask (--tier cheap|mid|expensive) --context f1,f2,... [--timeout SECONDS] [--not-sensitive] "question" | scout --model M --brief FILE [--context f1,f2,...] [--timeout SECONDS] [--max-picks N] [--allow-license PKG=LICENSE]... [--licenses FILE|CSV] [--kind assets] "goal" | verify --orb [--scenario NAME] | check-pins [--root DIR] [--json] [--core NAME] [--app-prefix PREFIX] | sweep --model M --brief FILE --goals FILE [--max-usd N] [--concurrency N] [--top N] [--candidates N] [--known f1,f2,...] [--timeout SECONDS] | version [--check] | update [--projects DIR] [--yes] [--force] | squash --branch BRANCH [--base REF] | clean-branch --from REF [--exclude GLOB]... | onboard | completion zsh | brief [--json] | handoff --to codex|cursor|claude|gemini | handoff generate --stage S3 [--max-usd N] [--yes] [--dry-run] | handoff check --url URL [--propose] | handoff status | handoff final | checkpoint [--quiet] | autopilot [--once] [--interval SECONDS] [--max-steps N] | inbox [--json] [--all] | done ID | decide ID CHOICE | decision "TEXT" --choice C [--option O]... [--id ID] | backlog [add "GOAL" [--paths a/,b/] [--max-usd N]] | lesson add --area AREA --evidence TEXT --rule TEXT --fix TEXT [--public TEXT] | lesson list --queued|--shipped [--area AREA] [--older-than DAYS] | lesson set ID --status queued|built|shipped|dropped [--version V] [--test PATH] | lesson manifest ID --agent A --model M [--tier cheap|mid|expensive] | lesson check [--stale-days DAYS] [--installed DIR] | lesson publish --version V | lesson import [--from FILE] [--dry-run] [--verbose]\nBacklog: swarm backlog remove ID drops a queued goal.\nValidate/run: single-request API outputs default to 61440 bytes total and 15360 per file; override job outputCapBytes or config outputCap {total,perFile}. output-cap-exceeded: route this job to agent codex (edits in place) or split the outputs.\norphans   list scratch worktree dirs no run state points to (never deletes)\nLesson options (all verbs): [--file PATH] [--private-names FILE]; lesson --help, lesson -h, lesson VERB --help\n');process.stdout.write(TICKET_USAGE + SCAFFOLD_USAGE + 'Validate warnings: command-handler-not-in-job; max-output-below-model-default (configured and default token counts).\nIntegrate --accept-blocked applies a blocked job\'s written outputs and skips its unwritten ones; --jobs skips unnamed outputs.\nShip/integrate: check-hit-swarm-dir reports the count of ignored .swarm/ check lines.\nRun warning: swarm-dir-not-ignored when the root eslint/vitest/pytest config never names .swarm/.\nShip preflight: git-ignored-fixture requires an existing ignored target; --exempt git-ignored-fixture:<file>=<reason>.\n');return;}
+   if(args[0]==='lesson'){
+     try{
+       const { LESSON_USAGE, parseLessonArgs, runLessonCore, lessonError } = await import('./lessons.mjs');
+@@ -8231,13 +8243,21 @@ async function mainInner() {
+     // A running run keeps the code it started with, but a new version changes what its later steps and the next commands do: update only when the machine is idle, unless the owner forces it.
+     if(!force){
+       const {runs:liveNow}=await boardSummary();
+-      if(liveNow.length)fail(`update-refused: ${liveNow.length} run(s) are live, so swarm will not update now:\n${liveNow.map(r=>`  ${r.runId}  ${r.jobs.filter(j=>j.status==='complete').length}/${r.jobs.length} jobs  ${r.root}`).join('\n')}\nWait for them to finish (swarm watch --all), or run swarm update --force yourself.`,'update-refused');
++      if(liveNow.length)fail(`update-refused: swarm will not update while work is running:\n${liveNow.map(r=>`  run ${r.runId}  ${r.jobs.filter(j=>j.status==='complete').length}/${r.jobs.length} jobs  ${r.root}`).join('\n')}\nWait for them to finish (swarm watch --all), or run swarm update --force yourself.`,'update-refused');
+     }
+     root=await fs.realpath(root);
+     // `swarm update` moves the INSTALLED swarm (the one the swarm command on this machine runs). Run from a development checkout it must not touch that checkout
+     // (it would detach its branch): it finds the install through the launcher, and says so. (--root is refused for update: it always means the install.)
+     const bin=await import('./swarm-bin.mjs');
+     const launcher=await bin.readLauncher(os.homedir());
++    // A go --scope loop between two waves has no run registered: swarm commands running code from the install being updated are found in the process list.
++    if(!force){
++      const {runningSwarmCommands}=await import('./live-processes.mjs');
++      const dirs=[];
++      for(const d of [launcher?.installRoot,path.join(os.homedir(),'.project-swarm')].filter(Boolean)){dirs.push(d);try{dirs.push(await fs.realpath(d));}catch{/* not there */}}
++      const busy=runningSwarmCommands({installDirs:[...new Set(dirs)]});
++      if(busy.length)fail(`update-refused: swarm will not update while work is running:\n${busy.map(b=>`  process ${b.pid}  ${b.command}`).join('\n')}\nWait for them to finish (a go --scope loop has no run between waves), or run swarm update --force yourself.`,'update-refused');
++    }
+     let target=root,note;
+     {
+       if(launcher&&!launcher.installRoot)fail(`the swarm command (${launcher.path}) runs ${launcher.runner}, which is not <install>/current/tools/swarm.mjs, so swarm cannot tell which install to update; reinstall with: node tools/install.mjs --user`);

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0458",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": true,
+      "prompt": "Ticket T-0458: Write lane up and down events to the swarm event log and message bus when present\nR-084 Lane status is visible and only truly stuck cases alert the owner.\n  - Swarm Watch and Command Center show each lane with a colour dot and the reason; lane up and down events are written to the swarm event log and to the swarm message bus when it exists so every orchestrator sees the same status.\n  - Needs-you is raised only when every lane in a tier has been down for 30 minutes, or a lane needs the owner (login expired, billing).\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: A lane going down writes one event line with lane and reason\nThis ticket owns no test file: do not write tests, test blocks or import.meta.vitest in your source files, and do not run the test runner. Prove your work with the type check (and lint) and by reading your code against each line. A line that needs a test belongs to the test ticket; a reviewer checks the rest against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- A feature that talks to another machine is not done until a test runs it against a real host; stub transports prove only the scheduling around it. [build, sandbox, ssh-remote, tool]\n- Keep a worker's own failure reason next to the job record, and never let a later generic message stand in for a blocked envelope. [build, redaction, secrets, worker-output]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "outputs": [
+        "tools/self-manage/lane-events.mjs"
+      ],
+      "acceptance": [
+        "A lane going down writes one event line with lane and reason"
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

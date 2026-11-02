@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 2,
+  "jobs": [
+    {
+      "id": "T-0073",
+      "type": "test",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0073: Tests for quarantine moves, retry context, and partial-wave integration\nR-017 One bad ticket can't hold a wave.\n  - Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.\n  - Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.\n- AC2: Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A worker asked to add or change tested code needs a way to run the checks itself, inside a sandbox, and must report which checks it ran. [manifest, sandbox, test, worker-output]\n- Integration is all-or-nothing; every precondition, including a mutants file's shape, is checked before the first file is written. [manifest, mutation-testing, retries, test, worker-output]\n- Mutants only count against a base that is actually green. [integration, manifest, mutation-testing]\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/wave-pass-integrate.mjs",
+        "tools/wave-quarantine-types.mjs",
+        "tools/wave-quarantine.mjs",
+        "tools/wave-retry-context.mjs",
+        "tests/acceptance-provable.test.mjs"
+      ],
+      "outputs": [
+        "tests/wave-quarantine.test.mjs"
+      ],
+      "acceptance": [
+        "Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.",
+        "Passing tickets in a wave integrate through the merge queue while the failing one is bisected out."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}

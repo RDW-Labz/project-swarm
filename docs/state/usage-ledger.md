@@ -165,6 +165,40 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-25 | - | split-S11: Split R-081 to R-091 into 31 small build, test, integration and human tickets under the e | anthropic | claude-haiku-5-5 | pass | 49,600 | $0.01 |
+| 2026-10-26 | - | T-0068: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0068: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0068: complete | claude | sonnet | pass | 131,318 | $0.12 |
+| 2026-10-26 | - | acc-review-1793030244978-7e1c7464: T-0068 passes. The CLI wiring is visible in tools/swarm.mjs and c | claude | sonnet | pass | 24,947 | $0.03 |
+| 2026-10-26 | - | T-0288: Created contracts/command-center.json as an OpenAPI 3.1 contract for ticket T-0288. It defin | anthropic | claude-haiku-5-5 | pass | 22,423 | $0.01 |
+| 2026-10-26 | - | T-0291: Adds tools/watch-assets/classic-tab.js, a dependency-free ES module with two helpers: wrapCl | anthropic | claude-haiku-5-5 | pass | 4,443 | $0.00 |
+| 2026-10-26 | - | T-0307: Ticket T-0307: added tools/watch-assets/cc-glitch.js, a self-contained glitch wrapper that c | anthropic | claude-haiku-5-5 | pass | 4,480 | $0.00 |
+| 2026-10-26 | - | T-0311: Ticket T-0311: created tools/watch-assets/cc-tour.js as a complete new file with a skippable | anthropic | claude-haiku-5-5 | pass | 7,346 | $0.00 |
+| 2026-10-26 | - | T-0073: Wrote tests/wave-quarantine.test.mjs covering AC1 (quarantine moves and retry read-only cont | anthropic | claude-haiku-5-5 | pass | 29,789 | $0.01 |
+| 2026-10-26 | - | T-0073: Ticket T-0073, test job only. I added one AC2 test to tests/wave-quarantine.test.mjs showing | anthropic | claude-haiku-5-5 | pass | 28,509 | $0.01 |
+| 2026-10-26 | - | T-0452: Adds tools/self-manage/lane-monitor.mjs for ticket T-0452: discovers lanes from the config ( | anthropic | claude-haiku-5-5 | pass | 33,310 | $0.01 |
+| 2026-10-26 | - | acc-review-1793044990797-6052b64b: complete | claude | sonnet | pass | 16,365 | $0.03 |
+| 2026-10-26 | - | T-0455: Created tools/self-manage/reroute.mjs, the only declared output, as a pure routing helper fo | anthropic | claude-haiku-5-5 | pass | 25,444 | $0.00 |
+| 2026-10-26 | - | acc-review-1793045797928-57d828e4: T-0455 acceptance line 1 passes: down lanes get zero share and ze | claude | sonnet | pass | 35,754 | $0.11 |
+| 2026-10-26 | - | T-0319: complete | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-26 | - | T-0456: Adds tools/self-manage/job-retry.mjs for T-0456 (R-083, AC1). It exports retryJobsFromDownLa | anthropic | claude-haiku-5-5 | pass | 7,644 | $0.00 |
+| 2026-10-26 | - | T-0457: Added a lane recovery tracker in tools/self-manage/recovery.mjs. A down lane is re-added onl | anthropic | claude-haiku-5-5 | failed: Worker must return every declared output exactly once | - | unknown |
+| 2026-10-26 | - | T-0457: Added a lane recovery tracker in tools/self-manage/recovery.mjs. A down lane is re-added onl | anthropic | claude-sonnet-5-5 | pass | 3,980 | $0.02 |
+| 2026-10-26 | - | acc-review-1793047539747-39aedb76: Reviewed tools/self-manage/recovery.mjs for T-0457; the single ac | claude | sonnet | pass | 14,259 | $0.02 |
+| 2026-10-26 | - | T-0458: Implemented tools/self-manage/lane-events.mjs for T-0458 (AC1). It builds one single-line JS | anthropic | claude-haiku-5-5 | pass | 4,496 | $0.00 |
+| 2026-10-26 | - | sec-review-1793048317850-d2e5c631: T-0458 security review of tools/self-manage/lane-events.mjs: pass | claude | opus | pass | 14,404 | $0.05 |
+| 2026-10-26 | - | acc-review-1793048317850-d2e5c631: complete | claude | sonnet | pass | 13,699 | $0.02 |
+| 2026-10-26 | - | T-0121: Ticket T-0121: Render the Split quality panel with green, amber and red metrics per project | cursor | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-26 | - | T-0121: T-0121: SplitQualityPanel.render(host, splitQuality) draws all seven R-027 metrics with grad | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-26 | - | sec-review-rev-s10b: Reviewed 4 tickets from rev-s10b. T-0461 fails: the watchdog's leak check (pare | claude | opus | pass | 32,915 | $0.23 |
+| 2026-10-27 | - | T-0320: complete | cursor | claude-haiku-5-5 | failed: Worker must return every declared output exactly once | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | claude-sonnet-5-5 | failed: Worker must return every declared output exactly once | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | composer-2.5 | failed: exit 1: RetriableError: [resource_exhausted] Error; Cursor e | - | subscription |
+| 2026-10-27 | - | T-0320: complete | cursor | composer-2.5 | pass | - | $0.01 |
+| 2026-10-27 | - | T-0074: complete | claude | composer-2.5 | timeout: exit 143: no stderr output; timeout | - | subscription |
+| 2026-10-27 | - | T-0074: complete | claude | composer-2.5 | timeout: exit null: no stderr output; timeout | - | subscription |
+| 2026-10-27 | - | T-0074: complete | claude | sonnet | pass | 79,950 | $0.13 |
+| 2026-10-27 | - | T-0082: Ticket T-0082: Per-checkout lock so only one base check runs per worktree at a time | cursor | composer-2.5 | cancelled: exit 143: no stderr output; cancelled | - | subscription |
 
 ## Daily summary
 
@@ -182,4 +216,10 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-25 | anthropic | 1 | 1 | 0 | 49,600 | $0.01 |
+| 2026-10-26 | anthropic | 12 | 11 | 1 | 171,864 | $0.06 |
+| 2026-10-26 | claude | 10 | 8 | 2 | 283,661 | $0.61 |
+| 2026-10-26 | cursor | 3 | 2 | 1 | 0 | subscription |
+| 2026-10-27 | claude | 3 | 1 | 2 | 79,950 | $0.13 |
+| 2026-10-27 | cursor | 5 | 1 | 4 | 0 | $0.01 |
+| **total** | all | 195 | 170 | 25 | 15,296,450 | $27.49 (incl. estimates) |

@@ -1,0 +1,566 @@
+diff --git a/tools/handbuild-guard.mjs b/tools/handbuild-guard.mjs
+new file mode 100644
+index 0000000..6a03967
+--- /dev/null
++++ b/tools/handbuild-guard.mjs
+@@ -0,0 +1,45 @@
++#!/usr/bin/env node
++// SPDX-License-Identifier: Apache-2.0
++// Claude Code PreToolUse hook: the hand-build guard (see tools/handbuild.mjs). Reads the hook input on stdin and, for an edit or a shell command that would build by hand without an
++// approval, answers with a deny and the reason (what to do instead); otherwise it prints nothing. It is small and fast: it runs before every edit and shell command.
++// If it breaks, it lets the call through (and says nothing): a bug in the guard must never lock the owner out of their own project.
++import { projectRootOf, buildEvent, appendEvent } from './orchestrator-events.mjs';
++import { analyzeShell } from './shell-writes.mjs';
++import { guardDecision, logAction, OFF_FILE } from './handbuild.mjs';
++import fs from 'node:fs';
++import path from 'node:path';
++
++let raw = '';
++let truncated = false;
++process.stdin.setEncoding('utf8');
++process.stdin.on('data', chunk => { if (raw.length < 2000000) raw += chunk; else truncated = true; });
++process.stdin.on('end', () => {
++  try {
++    // Claude Code names the project in CLAUDE_PROJECT_DIR; a session that has moved into another folder (or a swarm workspace) is still guarded for the project it belongs to.
++    const fromEnv = process.env.CLAUDE_PROJECT_DIR && fs.existsSync(process.env.CLAUDE_PROJECT_DIR) ? fs.realpathSync(process.env.CLAUDE_PROJECT_DIR) : null;
++    if (truncated) {
++      const root = fromEnv ?? projectRootOf(process.cwd());
++      if (root && !fs.existsSync(path.join(root, OFF_FILE))) {
++        logAction(root, { event: 'blocked', by: 'guard', tool: 'unknown', reason: 'the hook input was too large for the guard to read' });
++        process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Hand-build guard: this tool call is too large for the guard to read, so it is refused. Write a ticket instead, or split the change.' } })}\n`);
++      }
++      process.exit(0);
++    }
++    const input = JSON.parse(raw);
++    const root = fromEnv ?? projectRootOf(input.cwd);
++    if (!root || fs.existsSync(path.join(root, OFF_FILE))) process.exit(0);
++    const tool = input.tool_name;
++    const decision = guardDecision({ tool, toolInput: input.tool_input, root, cwd: input.cwd });
++    if (decision.allow) {
++      if (decision.approval) logAction(root, { event: 'allowed', id: decision.approval, tool, files: decision.files });
++      process.exit(0);
++    }
++    logAction(root, { event: 'blocked', by: 'guard', tool, files: decision.files, reason: decision.reason.slice(0, 200) });
++    const event = buildEvent('blocked', input, { root, analyze: analyzeShell });
++    if (event) appendEvent(root, event);
++    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: decision.reason } })}\n`);
++  } catch { /* fail open */ }
++  process.exit(0);
++});
++process.stdin.on('error', () => process.exit(0));
++setTimeout(() => process.exit(0), 4000).unref();
+diff --git a/tools/handbuild.mjs b/tools/handbuild.mjs
+new file mode 100644
+index 0000000..d5ae1ef
+--- /dev/null
++++ b/tools/handbuild.mjs
+@@ -0,0 +1,213 @@
++// SPDX-License-Identifier: Apache-2.0
++// The hand-build guard: an orchestrator session may not build by hand. All build work goes through the swarm (a ticket); the only exceptions are a hand-build the owner approved, for
++// a valid reason, for named files, for a short time. This module is the state and the decision; tools/handbuild-guard.mjs is the Claude Code hook that asks it before every edit or shell
++// command, and tools/handbuild-commands.mjs is `swarm handbuild request | approve | deny | status | log`.
++//   Allowed without approval: reading, running tests and builds, writing under .swarm/ and docs/plans/ (tickets and plans), build output, anything outside the checkout, and swarm worker
++//   workspaces. Everything else in the checkout (an edit, a write, sed -i, a redirect, tee, mv or cp into it, rm, git commit/push...) needs an approval that names the file.
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { insideProject, ORCHESTRATOR_OWN, WRITE_TOOLS } from './orchestrator-events.mjs';
++import { execFileSync } from 'node:child_process';
++import { analyzeShell, writesAnything, TOOL_DIRS } from './shell-writes.mjs';
++
++export const STATE_FILE = '.swarm/handbuild/state.json';
++export const LOG_FILE = '.swarm/handbuild/log.ndjson';
++export const OFF_FILE = '.swarm/handbuild/off';
++export const MAX_MINUTES = 120;
++export const DEFAULT_MINUTES = 30;
++export const MAX_FILES = 20;
++export const PENDING_MS = 24 * 60 * 60 * 1000;
++
++/** The only valid reasons. Anything else: write a ticket instead. */
++export const REASON_KINDS = Object.freeze({
++  'swarm-cannot': 'the swarm cannot run it (no lane can do the work, or the swarm itself is what is broken)',
++  emergency: 'an emergency fix to something live, where waiting for a ticket costs more than the hand-build',
++  secret: 'it handles a secret or credential, which no worker may see',
++  tiny: 'a change of under 5 lines that the swarm is blocked from making',
++});
++export const KIND_LIST = Object.keys(REASON_KINDS);
++export const DENY_ADVICE = 'Hand-building is not allowed here: write a ticket instead (swarm tickets, swarm scope). If a valid reason applies, ask the owner: swarm handbuild request --kind <swarm-cannot|emergency|secret|tiny> --reason "why the swarm cannot do it" --files "src/a.ts,src/b.ts" --minutes 30';
++
++const isLink = p => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
++const safeDir = root => { const d = path.join(root, '.swarm', 'handbuild'); if (isLink(path.join(root, '.swarm')) || isLink(d)) throw Error('handbuild-path-unsafe'); fs.mkdirSync(d, { recursive: true }); return d; };
++const cleanText = (v, n) => String(v ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
++
++export function readState(root) {
++  try {
++    const file = path.join(root, STATE_FILE);
++    if (isLink(file)) return { version: 1, requests: {} };
++    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
++    return state && typeof state === 'object' && state.requests && typeof state.requests === 'object' && !Array.isArray(state.requests) ? state : { version: 1, requests: {} };
++  } catch { return { version: 1, requests: {} }; }
++}
++// One writer at a time: the lock file is created exclusively (a stale one, from a process that died, is taken over after 10 seconds), and the state is read again under it.
++function withStateLock(root, fn) {
++  const dir = safeDir(root);
++  const lock = path.join(dir, 'state.lock');
++  const started = Date.now();
++  for (;;) {
++    try { const fd = fs.openSync(lock, 'wx', 0o600); fs.closeSync(fd); break; }
++    catch (error) {
++      if (error.code !== 'EEXIST') throw error;
++      try { if (Date.now() - fs.statSync(lock).mtimeMs > 10000) fs.rmSync(lock, { force: true }); } catch { /* gone */ }
++      if (Date.now() - started > 5000) throw Error('handbuild-busy: another hand-build command is writing the state; try again');
++      const until = Date.now() + 20; while (Date.now() < until) { /* a short wait */ }
++    }
++  }
++  try { return fn(); } finally { fs.rmSync(lock, { force: true }); }
++}
++function writeState(root, state) {
++  const dir = safeDir(root);
++  const temp = path.join(dir, `state.json.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
++  fs.writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
++  fs.renameSync(temp, path.join(dir, 'state.json'));
++}
++
++/** One line to the guard's own log and one to the project journal (an `action` event), written synchronously: the guard runs inside a hook. Never throws. */
++export function logAction(root, entry, { now = Date.now } = {}) {
++  const at = new Date(now()).toISOString();
++  try {
++    const dir = safeDir(root);
++    const fd = fs.openSync(path.join(dir, 'log.ndjson'), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
++    try { fs.writeSync(fd, `${JSON.stringify({ at, ...entry })}\n`); } finally { fs.closeSync(fd); }
++  } catch { /* the journal line below still tries */ }
++  try {
++    const dir = path.join(root, '.swarm', 'project');
++    if (isLink(path.join(root, '.swarm')) || isLink(dir)) return;
++    fs.mkdirSync(dir, { recursive: true });
++    const line = { ts: at, kind: 'action', action: `handbuild-${entry.event}`, ...Object.fromEntries(Object.entries({ id: entry.id, by: entry.by, tool: entry.tool, files: entry.files, reason: entry.reason }).filter(([, v]) => v !== undefined).map(([k, v]) => [k, Array.isArray(v) ? v.map(x => cleanText(x, 120)).slice(0, 20) : cleanText(v, 300)])) };
++    const fd = fs.openSync(path.join(dir, 'journal.ndjson'), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
++    try { fs.writeSync(fd, `${JSON.stringify(line)}\n`); } finally { fs.closeSync(fd); }
++  } catch { /* best effort */ }
++}
++
++// ---- file patterns ---------------------------------------------------------------------------------------------------------------------------
++
++const toRegExp = pattern => {
++  const p = pattern.replace(/^\.\//, '');
++  if (p.endsWith('/')) return new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&')}`);
++  let out = '';
++  for (let i = 0; i < p.length; i += 1) {
++    if (p[i] === '*' && p[i + 1] === '*') { out += '.*'; i += 1; }
++    else if (p[i] === '*') out += '[^/]*';
++    else out += p[i].replace(/[.+^${}()|[\]\\?]/g, '\\$&');
++  }
++  return new RegExp(`^${out}$`);
++};
++export const matchesFile = (patterns, rel) => (patterns ?? []).some(p => toRegExp(String(p)).test(rel));
++
++// ---- the request -> approve flow ---------------------------------------------------------------------------------------------------------------
++
++function newId(now) { return `hb-${now.toString(36)}${Math.random().toString(36).slice(2, 5)}`; }
++
++/** Validates and stores a pending request. Throws an Error with a plain message for anything invalid (including a reason that is not on the list). */
++export function createRequest(root, { kind, reason, files, minutes, git }, { now = Date.now, by = 'orchestrator' } = {}) {
++  if (!KIND_LIST.includes(kind)) throw Error(`handbuild-kind: --kind must be one of ${KIND_LIST.join(', ')}. ${KIND_LIST.map(k => `${k}: ${REASON_KINDS[k]}`).join('; ')}. Anything else: write a ticket instead.`);
++  const why = cleanText(reason, 400);
++  if (why.length < 10) throw Error('handbuild-reason: --reason must say why the swarm cannot do it (at least 10 characters)');
++  const list = (Array.isArray(files) ? files : String(files ?? '').split(',')).map(f => cleanText(f, 200)).filter(Boolean);
++  if (!list.length) throw Error('handbuild-files: --files must name the files (comma separated)');
++  if (list.length > MAX_FILES) throw Error(`handbuild-files: at most ${MAX_FILES} files per request`);
++  for (const f of list) {
++    const segments = f.replace(/\/$/, '').split('/');
++    if (path.isAbsolute(f) || segments.includes('..') || f.includes('**') || /[*?[{]/.test(segments[0]) || (f.endsWith('/') && segments.length < 2)) throw Error(`handbuild-files: ${f} is not specific enough (name files, or a folder at least two levels deep, or a *.ext pattern inside a folder; a catch-all or a whole top-level folder is not a request)`);
++    if (isProtected(f.replace(/\/$/, ''))) throw Error(`handbuild-files: ${f} belongs to the owner (the guard's own state and settings, and .git); it cannot be requested`);
++  }
++  const mins = minutes === undefined ? DEFAULT_MINUTES : Number(minutes);
++  if (!Number.isInteger(mins) || mins < 1 || mins > MAX_MINUTES) throw Error(`handbuild-minutes: --minutes must be a whole number from 1 to ${MAX_MINUTES}`);
++  const ops = (Array.isArray(git) ? git : String(git ?? '').split(',')).map(g => g.trim()).filter(Boolean);
++  for (const g of ops) if (!['commit', 'push'].includes(g)) throw Error('handbuild-git: --git may name commit and push only');
++  return withStateLock(root, () => {
++  const state = readState(root);
++  const id = newId(now());
++  state.requests[id] = { id, kind, reason: why, files: list, git: ops, minutes: mins, status: 'pending', requestedAt: new Date(now()).toISOString(), requestedBy: cleanText(by, 40) };
++  // Old finished requests are dropped so the file stays small.
++  const done = Object.values(state.requests).filter(r => r.status !== 'pending' && r.status !== 'approved').sort((a, b) => String(a.requestedAt).localeCompare(String(b.requestedAt)));
++  for (const r of done.slice(0, Math.max(0, done.length - 50))) delete state.requests[r.id];
++  writeState(root, state);
++  logAction(root, { event: 'request', id, by, files: list, reason: `${kind}: ${why}` }, { now });
++  return state.requests[id];
++  });
++}
++
++/** approve | deny a pending request. An approval runs for `minutes` from now and covers only the files (and git operations) it names. */
++export function decideRequest(root, id, choice, { now = Date.now, by = 'owner' } = {}) {
++  return withStateLock(root, () => {
++  const state = readState(root);
++  const r = state.requests[id];
++  if (!r) throw Error(`handbuild-unknown: no hand-build request ${id}`);
++  if (r.status !== 'pending') throw Error(`handbuild-not-pending: ${id} is already ${r.status}`);
++  if (now() - Date.parse(r.requestedAt) > PENDING_MS) { r.status = 'expired'; writeState(root, state); throw Error(`handbuild-expired: ${id} waited more than 24 hours and expired; ask again if it is still needed`); }
++  if (!['approve', 'deny'].includes(choice)) throw Error('handbuild-choice: approve or deny');
++  r.status = choice === 'approve' ? 'approved' : 'denied';
++  r.decidedAt = new Date(now()).toISOString();
++  r.decidedBy = cleanText(by, 40);
++  if (choice === 'approve') r.expiresAt = new Date(now() + r.minutes * 60000).toISOString();
++  writeState(root, state);
++  logAction(root, { event: choice === 'approve' ? 'approve' : 'deny', id, by, files: r.files, reason: choice === 'approve' ? `until ${r.expiresAt}` : '' }, { now });
++  return r;
++  });
++}
++
++export function listRequests(root) { return Object.values(readState(root).requests).sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt))); }
++
++/** The live approvals (approved and not expired). */
++export function activeApprovals(root, now = Date.now()) { return listRequests(root).filter(r => r.status === 'approved' && Date.parse(r.expiresAt) > now); }
++
++// ---- the decision ----------------------------------------------------------------------------------------------------------------------------
++
++// The approval state is the owner's: no approval covers a write to it, to the guard's log, or to the hooks' own settings, and an orchestrator session cannot run the approval commands.
++export const PROTECTED = Object.freeze(['.swarm/handbuild', '.claude/settings.local.json', '.claude/settings.json', '.git/']);
++// Compared in lower case (the usual macOS volume is case-insensitive), and the folders that contain the guard's state are protected too, not only the files in them.
++const isProtected = rel => { const r = rel.toLowerCase(); return r === '.swarm' || r === '.claude' || PROTECTED.some(p => r === p || r.startsWith(p.endsWith('/') ? p : `${p}/`)); };
++// Outside the checkout too: the install (the guard's own scripts) and the user's own Claude settings could switch the hooks off.
++export const protectedAbsolute = (home = os.homedir()) => [path.join(home, '.project-swarm'), path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'settings.local.json'), ...(process.env.SWARM_INSTALL_DIR ? [process.env.SWARM_INSTALL_DIR] : [])];
++const underAbs = (abs, list) => list.some(prefix => abs === prefix || abs.startsWith(`${prefix}/`));
++const AllowRel = rel => { const r = rel.toLowerCase(); return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)); };
++
++/** { allow, reason, files, approval } for one tool call. `input` is the hook input (tool_name, tool_input, cwd). */
++export function guardDecision({ tool, toolInput, root, cwd, now = Date.now, home }) {
++  const ti = toolInput && typeof toolInput === 'object' ? toolInput : {};
++  const approvals = activeApprovals(root, now());
++  const covers = (rels, gitOps = []) => {
++    // every file and every git operation must be covered by one live approval
++    for (const rel of rels) if (!approvals.some(a => matchesFile(a.files, rel))) return { ok: false, missing: rel };
++    for (const op of gitOps) if (!approvals.some(a => a.git.includes(op) || (op !== 'push' && a.git.includes('commit') && ['add'].includes(op)))) return { ok: false, missing: `git ${op}` };
++    const used = approvals.find(a => rels.some(rel => matchesFile(a.files, rel)) || gitOps.some(op => a.git.includes(op)));
++    return { ok: true, approval: used?.id };
++  };
++  if (WRITE_TOOLS.includes(tool)) {
++    const raw0 = ti.file_path ?? ti.notebook_path ?? ti.path;
++    // a relative path means relative to the folder the session is in
++    const raw = typeof raw0 === 'string' && raw0 && !path.isAbsolute(raw0) ? path.resolve(cwd || root, raw0) : raw0;
++    const rel = insideProject(root, raw);
++    if (rel === null && typeof raw === 'string' && raw && underAbs(path.resolve(path.isAbsolute(raw) ? raw : path.join(cwd || root, raw)), protectedAbsolute(home))) return { allow: false, files: [], reason: `Hand-build guard: ${raw} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
++    if (rel !== null && isProtected(rel)) return { allow: false, files: [rel], reason: `Hand-build guard: ${rel} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
++    if (rel === null || AllowRel(rel)) return { allow: true };
++    const c = covers([rel]);
++    return c.ok ? { allow: true, files: [rel], approval: c.approval } : { allow: false, files: [rel], reason: `${DENY_ADVICE} (blocked: ${tool} ${rel})` };
++  }
++  if (tool === 'Bash') {
++    const a = analyzeShell(ti.command, { root, cwd, home: home ?? os.homedir(), protectedAbs: protectedAbsolute(home ?? os.homedir()) });
++    if (a.selfApproval) return { allow: false, files: [], reason: 'Hand-build guard: approving or denying a hand-build, or switching the guard off, is the owner\'s alone (swarm handbuild approve, or the phone). An orchestrator session cannot approve its own request.' };
++    if (a.protectedOutside.length) return { allow: false, files: [], reason: `Hand-build guard: ${a.protectedOutside.join(', ')} belongs to the owner (the swarm install and the user's Claude settings hold the guard itself); no approval covers it.` };
++    if (a.writes.some(isProtected)) return { allow: false, files: a.writes, reason: `Hand-build guard: ${a.writes.filter(isProtected).join(', ')} belongs to the owner (approvals and the guard's own settings); no approval covers it.` };
++    if (!writesAnything(a)) return { allow: true };
++    if (a.inline || a.unknown) {
++      const need = [a.inline ? 'an inline script that writes files' : null, a.unknown ? 'a write whose target is a variable or substitution' : null].filter(Boolean).join(' and ');
++      return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${need}; the guard cannot tell what it writes, so it needs an approval that names the files, or a ticket)` };
++    }
++    let staged = [];
++    if (a.git.includes('commit')) {
++      // a commit may carry only the files the approval names: the staged files (and, for -a, the tracked files with changes) are checked against it
++      const all = /\bcommit\b[^;&|]*\s-[A-Za-z]*a|--all\b/.test(String(ti.command ?? ''));
++      try { staged = execFileSync('git', ['diff', all ? '--name-only' : '--cached', ...(all ? ['HEAD'] : ['--name-only'])], { cwd: root, encoding: 'utf8', timeout: 3000 }).split('\n').filter(Boolean); }
++      catch { return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: git commit, and the guard could not read which files it would carry)` }; }
++    }
++    const c = covers([...a.writes, ...staged], a.git);
++    if (c.ok) return { allow: true, files: [...a.writes, ...staged], approval: c.approval };
++    return { allow: false, files: a.writes, reason: `${DENY_ADVICE} (blocked: ${[...a.writes.map(w => `writes ${w}`), ...a.git.map(g => `git ${g}`)].join(', ')})` };
++  }
++  return { allow: true };
++}
+diff --git a/tools/shell-writes.mjs b/tools/shell-writes.mjs
+new file mode 100644
+index 0000000..0f5499f
+--- /dev/null
++++ b/tools/shell-writes.mjs
+@@ -0,0 +1,290 @@
++// SPDX-License-Identifier: Apache-2.0
++// What a shell command writes in the project checkout, read from its text (no execution): redirects, tee, sed -i, mv and cp into the project, rm, touch, mkdir, curl -o, tar -x, git commands
++// that change the tree or history, and inline scripts that write files. Used by the hand-build guard (to block) and by the Orchestrator lane (so the hand-built share counts shell writes too).
++// It is a reader of command text, not a sandbox, and it fails closed on what it cannot read: a write whose target is a variable or a substitution, a `cd` it cannot follow, an interpreter
++// run on a script the orchestrator could have written (inside .swarm/ or docs/), `find -exec` / `xargs` of a writer. It reads inside `bash -c "..."`, `eval "..."`, `$(...)`, backticks,
++// subshells, here-documents (their text is data, not commands) and `cd DIR && ...`.
++import fs from 'node:fs';
++import path from 'node:path';
++import { ORCHESTRATOR_OWN, insideProject } from './orchestrator-events.mjs';
++
++// Build output and installed packages are written by tools, not by hand.
++export const TOOL_DIRS = Object.freeze(['node_modules/', '.next/', 'dist/', 'build/', 'coverage/', '.turbo/', '.cache/']);
++const GIT_TREE_OR_HISTORY = new Set(['commit', 'push', 'apply', 'am', 'merge', 'rebase', 'cherry-pick', 'reset', 'restore', 'revert', 'clean', 'rm', 'mv', 'pull', 'stash', 'worktree', 'submodule', 'config', 'filter-branch']);
++const WRAPPERS = new Set(['sudo', 'command', 'time', 'nohup', 'exec', 'env', 'nice', 'builtin', 'xargs', 'doas', 'stdbuf', 'timeout']);
++// Options of a wrapper that take a value (and, for timeout, the duration operand): they are skipped so the real command is found.
++const WRAPPER_VALUE_OPTS = { sudo: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U'], doas: ['-u', '-C'], env: ['-u', '-C'], nice: ['-n'], stdbuf: ['-i', '-o', '-e'], timeout: ['-s', '-k', '--signal', '--kill-after'], xargs: ['-n', '-I', '-L', '-P', '-s', '-d', '-E'] };
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const INTERPRETERS = new Set(['node', 'python', 'python3', 'ruby', 'perl', 'deno', 'bun', 'tsx', 'ts-node', 'php', 'sh', 'bash', 'zsh', 'dash', 'ksh']);
++const WRITERS = new Set(['rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'mv', 'cp', 'install', 'ln', 'tee', 'dd', 'sed', 'perl', 'patch', 'rsync', 'curl', 'wget', 'tar', 'unzip', 'git', 'ed', 'ex']);
++
++/** Splits a command line into simple commands (lists of words, quotes removed, redirection operators kept as words). Here-document bodies are skipped. `(`, `)` and a leading `{` separate commands. */
++export function tokenize(command) {
++  const commands = [];
++  let words = [], word = '', quote = null, hasWord = false;
++  const endWord = () => { if (hasWord) words.push(word); word = ''; hasWord = false; };
++  const endCommand = () => { endWord(); if (words.length) commands.push(words); words = []; };
++  const text = String(command ?? '');
++  const heredocs = [];
++  for (let i = 0; i < text.length; i += 1) {
++    const c = text[i], next = text[i + 1];
++    if (quote) {
++      if (c === quote) quote = null;
++      else if (c === '\\' && quote === '"' && next !== undefined) { word += next; i += 1; }
++      else word += c;
++      continue;
++    }
++    if (c === '"' || c === "'") { quote = c; hasWord = true; continue; }
++    if (c === '\\' && next !== undefined) { word += next; hasWord = true; i += 1; continue; }
++    if (c === ' ' || c === '\t') { endWord(); continue; }
++    if (c === '\n') {
++      endCommand();
++      // a here-document body (up to its delimiter line) is data
++      while (heredocs.length) {
++        const d = heredocs.shift();
++        let j = i + 1;
++        for (; j <= text.length; j += 1) {
++          const end = text.indexOf('\n', j);
++          const line = text.slice(j, end === -1 ? text.length : end);
++          if ((d.strip ? line.replace(/^\t+/, '') : line) === d.word) { i = end === -1 ? text.length : end; break; }
++          if (end === -1) { i = text.length; break; }
++          j = end;
++        }
++      }
++      continue;
++    }
++    if (c === ';') { endCommand(); continue; }
++    if (c === '(' || c === ')') { endCommand(); continue; }
++    if (c === '{' && !hasWord && (next === ' ' || next === '\n')) { endCommand(); continue; }
++    if (c === '}' && !hasWord && (next === undefined || next === ' ' || next === ';' || next === '\n')) { endCommand(); continue; }
++    if (c === '&' && next === '&') { endCommand(); i += 1; continue; }
++    if (c === '|') { endCommand(); if (next === '|' || next === '&') i += 1; continue; }
++    if (c === '&' && next !== '>' && text[i - 1] !== '>') { endCommand(); continue; }
++    if (c === '>' || c === '<') {
++      if (c === '<' && next === '<' && text[i + 2] !== '<') {
++        // here-document: remember its delimiter
++        endWord();
++        let j = i + 2, strip = false;
++        if (text[j] === '-') { strip = true; j += 1; }
++        while (text[j] === ' ') j += 1;
++        let dword = '', q = null;
++        for (; j < text.length; j += 1) { const ch = text[j]; if (q) { if (ch === q) q = null; else dword += ch; } else if (ch === '"' || ch === "'") q = ch; else if (/[\s;&|()<>]/.test(ch)) break; else dword += ch; }
++        heredocs.push({ word: dword, strip });
++        words.push('<<');
++        i = j - 1;
++        continue;
++      }
++      if (/^\d+$/.test(word) || word === '&') { const fd = word; word = ''; hasWord = false; words.push(fd); } else endWord();
++      let op = c;
++      if (c === '>' && (next === '>' || next === '|' || next === '&')) { op += next; i += 1; }
++      else if (c === '<' && next === '<') { op = '<<<'; i += 2; }
++      words.push(op);
++      continue;
++    }
++    word += c; hasWord = true;
++  }
++  endCommand();
++  return commands;
++}
++
++/** The text inside $(...) and `...` (one level, not inside single quotes), so a command run by substitution is read too. */
++function substitutions(text) {
++  const out = [];
++  const s = String(text ?? '');
++  let single = false;
++  for (let i = 0; i < s.length; i += 1) {
++    if (s[i] === "'") { single = !single; continue; }
++    if (single) continue;
++    if (s[i] === '$' && s[i + 1] === '(') {
++      let depth = 1, j = i + 2;
++      for (; j < s.length && depth > 0; j += 1) { if (s[j] === '(') depth += 1; else if (s[j] === ')') depth -= 1; }
++      out.push(s.slice(i + 2, j - 1));
++      i = j - 1;
++    } else if (s[i] === '`') {
++      const j = s.indexOf('`', i + 1);
++      if (j === -1) break;
++      out.push(s.slice(i + 1, j));
++      i = j;
++    }
++  }
++  return out;
++}
++
++const fsExists = p => { try { return fs.existsSync(p); } catch { return false; } };
++const SELF_WORDS = new Set(['approve', 'deny', 'off', 'on', 'uninstall']);
++// Inline code is read-only only when it names nothing that can write, run a program or load a module. Everything else fails closed.
++const INLINE_RISKY = /\b(?:require|import|importlib|open|file|fs|os|sys|subprocess|exec|eval|spawn|system|popen|write|unlink|remove|rename|rmdir|mkdir|process|child_process|deno|bun|globalthis|builtins|compile|__\w+__|shutil|pathlib|io|socket|net|http|fetch|chmod|chown|symlink|truncate|append|dump|save|put|copy|move|sh|bash|backtick|kernel|popen3|ruby|perl)\b|[`|]|>>?\s*['"A-Za-z./~$]/i;
++export const inlineLooksReadOnly = code => String(code ?? '').length <= 400 && !INLINE_RISKY.test(String(code ?? ''));
++const CODE_FLAGS = { node: ['-e', '--eval', '-p', '--print'], python: ['-c'], python3: ['-c'], ruby: ['-e'], perl: ['-e', '-E'], php: ['-r'], deno: ['eval'], bun: ['-e', '--eval'], tsx: ['-e', '--eval'], 'ts-node': ['-e', '--eval'] };
++const READ_ONLY_GIT = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'describe', 'blame', 'grep', 'shortlog', 'cat-file', 'rev-list', 'remote', 'fetch', 'add', 'switch', 'version', 'help', 'for-each-ref', 'merge-base', 'name-rev', 'show-ref', 'count-objects', 'whatchanged', 'reflog', 'diff-tree', 'diff-index', 'check-ignore', 'ls-remote', 'symbolic-ref']);
++
++/** { writes, git, inline, unknown, protectedOutside, selfApproval } for one command line. `protectedAbs`: absolute path prefixes (the install, the user's own Claude settings) no write may touch. */
++export function analyzeShell(command, { root, cwd = root, home = process.env.HOME || '/', protectedAbs = [], depth = 0 } = {}) {
++  const writes = new Set(), git = new Set(), protectedOutside = new Set();
++  let inline = false, unknown = false, selfApproval = false;
++  let here = cwd;           // the directory relative paths mean: `cd DIR` moves it, an unreadable cd makes it unknown
++  let hereKnown = true;
++  const merge = r => { r.writes.forEach(w => writes.add(w)); r.git.forEach(g => git.add(g)); r.protectedOutside.forEach(p => protectedOutside.add(p)); inline ||= r.inline; unknown ||= r.unknown; selfApproval ||= r.selfApproval; };
++  // The orchestrator's own folders and build output are free to write, except the guard's own state, and never the folders that contain it (.swarm itself).
++  const lowerRel = rel => rel.toLowerCase();
++  const allowedRel = rel => {
++    const r = lowerRel(rel);
++    if (r === '.swarm' || r === '.claude' || r === '.git' || r.startsWith('.git/') || r.startsWith('.swarm/handbuild')) return false;
++    return ORCHESTRATOR_OWN.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix)) || TOOL_DIRS.some(prefix => r === prefix.slice(0, -1) || r.startsWith(prefix));
++  };
++  const resolve = raw => {
++    let p = String(raw);
++    if (!p) return { skip: true };
++    if (/^\/dev\/(null|stdout|stderr|tty|fd\/)/.test(p) || p === '-') return { skip: true };
++    if (/[$`]/.test(p)) return { unknown: true };
++    if (p === '~' || p.startsWith('~/')) p = path.join(home, p.slice(2));
++    if (!path.isAbsolute(p) && !hereKnown) return { unknown: true };
++    const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(here || root, p);
++    const rel = insideProject(root, abs);
++    return rel === null ? { outside: true, abs } : { rel: rel };
++  };
++  const isProtectedAbs = abs => protectedAbs.some(prefix => abs === prefix || abs.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`) || abs.toLowerCase() === prefix.toLowerCase() || abs.toLowerCase().startsWith(`${prefix.toLowerCase()}/`));
++  const target = raw => {
++    // a pattern as a write target can reach files the guard cannot name
++    if (/[*?\[{]/.test(String(raw))) { const r0 = resolve(String(raw).replace(/[*?\[{].*$/, '')); if (r0.unknown || r0.rel !== undefined || r0.skip) { unknown = true; return; } }
++    const r = resolve(raw);
++    if (r.unknown) { unknown = true; return; }
++    if (r.outside) { if (isProtectedAbs(r.abs)) protectedOutside.add(r.abs); return; }
++    if (r.rel !== undefined && !allowedRel(r.rel)) writes.add(r.rel === '' ? '.' : r.rel);
++  };
++  // a command that writes files of its own choosing into a directory (a download, an extraction): the directory itself counts as written
++  const targetDir = dir => {
++    const r = resolve(dir);
++    if (r.unknown) { unknown = true; return; }
++    if (r.outside) { if (isProtectedAbs(r.abs)) protectedOutside.add(r.abs); return; }
++    if (r.rel !== undefined && (r.rel === '' || !allowedRel(r.rel) || lowerRel(r.rel) === '.swarm')) writes.add(r.rel === '' ? '.' : r.rel);
++    else if (r.rel !== undefined && lowerRel(r.rel).startsWith('.swarm')) { /* inside .swarm/ but not handbuild: free */ }
++  };
++  const recurse = text => { if (depth < 4) merge(analyzeShell(text, { root, cwd: here, home, protectedAbs, depth: depth + 1 })); else unknown = true; };
++  for (const sub of substitutions(command)) recurse(sub);
++  for (const words of tokenize(command)) {
++    for (let i = 0; i < words.length; i += 1) {
++      if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) target(words[i + 1]);
++    }
++    const plain = [];
++    for (let i = 0; i < words.length; i += 1) {
++      if (['>', '>>', '>|', '>&', '&>', '<', '<<', '<<<'].includes(words[i])) { i += 1; continue; }
++      if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
++      plain.push(words[i]);
++    }
++    // approving or denying a hand-build, or switching the guard off, is the owner's alone: found in the words, whatever the quoting
++    const lower = plain.map(w => w.toLowerCase());
++    const hb = lower.indexOf('handbuild');
++    if (hb !== -1 && lower.slice(hb + 1, hb + 3).some(w => SELF_WORDS.has(w))) selfApproval = true;
++    if (lower.some(w => w.startsWith('handbuild-')) && (lower.includes('decide') || lower.includes('decision'))) selfApproval = true;
++    // find the real command: skip assignments and wrappers (with the options of a wrapper that take a value)
++    let k = 0, wrapperName = null;
++    const wrappers = [];
++    for (;;) {
++      if (k >= plain.length) break;
++      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
++      if (WRAPPERS.has(plain[k])) { wrapperName = plain[k]; wrappers.push(wrapperName); k += 1; continue; }
++      if (wrapperName && plain[k].startsWith('-')) { const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]); k += takes ? 2 : 1; continue; }
++      if (wrapperName === 'timeout' && /^\d+[smhd]?$/.test(plain[k])) { k += 1; wrapperName = null; continue; }
++      break;
++    }
++    const cmd = path.basename(plain[k] ?? '');
++    const args = plain.slice(k + 1);
++    const operands = args.filter(a => a !== '' && !a.startsWith('-'));
++    if (cmd === 'cd' || cmd === 'pushd') {
++      const r = operands[0] === undefined ? { abs: home, outside: true } : resolve(operands[0]);
++      if (r.unknown) hereKnown = false;
++      else if (r.skip) { /* cd - : unknown place */ hereKnown = false; }
++      else if (r.outside) { here = r.abs; hereKnown = true; }
++      else { here = path.resolve(root, r.rel); hereKnown = true; }
++      continue;
++    }
++    if (SHELLS.has(cmd) && args.includes('-c')) { const at = args.indexOf('-c'); if (args[at + 1] !== undefined) recurse(args[at + 1]); continue; }
++    if (cmd === 'eval') { recurse(args.join(' ')); continue; }
++    if (cmd === 'find' && args.some(a => ['-delete', '-exec', '-execdir', '-ok', '-fprint', '-fprintf', '-fls'].includes(a))) {
++      const at = args.findIndex(a => a === '-exec' || a === '-execdir' || a === '-ok');
++      if (at !== -1) { const inner = args.slice(at + 1).filter(a => a !== ';' && a !== '+' && a !== '\\;'); recurse(inner.join(' ')); if (inner.some(a => WRITERS.has(path.basename(a)))) unknown = true; }
++      else unknown = true;
++      continue;
++    }
++    if (wrappers.includes('xargs') && WRITERS.has(cmd)) unknown = true;
++    if (cmd === 'awk' || cmd === 'gawk' || cmd === 'mawk' || cmd === 'nawk') {
++      const code = args.join(' ');
++      if (/system\s*\(|print[^;}]*>|printf[^;}]*>|-i\s*inplace|\|\s*["']|getline\s*<|close\s*\(/.test(code)) inline = true;
++      continue;
++    }
++    if (cmd === 'tee') operands.forEach(target);
++    else if (cmd === 'sed' && args.some(a => /^-[A-Za-z]*i/.test(a) || a === '--in-place' || a.startsWith('--in-place='))) {
++      // BSD sed takes the backup suffix as the next word (-i '' or -i .bak); GNU sed does not. A following word that is empty or starts with a dot is that suffix.
++      const rest = args.slice();
++      const at = rest.indexOf('-i');
++      if (at !== -1 && (rest[at + 1] === '' || /^\./.test(rest[at + 1] ?? ''))) rest.splice(at + 1, 1);
++      let usesE = false;
++      const files = [];
++      for (let j = 0; j < rest.length; j += 1) {
++        if (rest[j] === '-e' || rest[j] === '-f' || /^-[A-Za-z]*[ef]$/.test(rest[j])) { usesE = true; j += 1; continue; }
++        if (rest[j] !== '' && !rest[j].startsWith('-')) files.push(rest[j]);
++      }
++      files.slice(usesE ? 0 : 1).forEach(target);
++    } else if (cmd === 'perl' && args.some(a => /^-[A-Za-z]*i/.test(a))) operands.slice(args.some(a => a === '-e' || /^-[A-Za-z]*e$/.test(a)) ? 0 : 1).forEach(target);
++    else if (cmd === 'mv') operands.forEach(target);
++    else if (cmd === 'cp' || cmd === 'install' || cmd === 'ln' || cmd === 'rsync') {
++      const t = args.findIndex(a => a === '-t' || a === '--target-directory');
++      if (t !== -1 && args[t + 1]) targetDir(args[t + 1]); else if (operands.length) target(operands[operands.length - 1]);
++    } else if (['rm', 'rmdir', 'unlink', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'patch', 'ed', 'ex'].includes(cmd)) operands.forEach(target);
++    else if (cmd === 'dd') args.filter(a => a.startsWith('of=')).forEach(a => target(a.slice(3)));
++    else if (cmd === 'curl' || cmd === 'wget') {
++      for (let j = 0; j < args.length; j += 1) {
++        const a = args[j];
++        if (['-o', '--output', '--output-document'].includes(a) && args[j + 1] !== undefined) { target(args[j + 1]); j += 1; }
++        else if ((a === '-O' && cmd === 'wget') && args[j + 1] !== undefined) { target(args[j + 1]); j += 1; }
++        else if (['-P', '--directory-prefix'].includes(a) && args[j + 1] !== undefined) { targetDir(args[j + 1]); j += 1; }
++        else if (a === '-O' || a === '--remote-name') targetDir(here || root);
++        else if (/^--(?:output|output-document)=/.test(a)) target(a.split('=').slice(1).join('='));
++        else if (/^-o./.test(a)) target(a.slice(2));
++      }
++    } else if (cmd === 'tar') {
++      const mode = args[0] ?? '';
++      const extracts = /^-?[A-Za-z]*x[A-Za-z]*$/.test(mode) && !mode.startsWith('--') || args.includes('--extract');
++      if (extracts) { const c = args.findIndex(a => a === '-C' || a === '--directory'); targetDir(c !== -1 && args[c + 1] ? args[c + 1] : (here || root)); }
++    } else if (cmd === 'unzip') { const d = args.indexOf('-d'); targetDir(d !== -1 && args[d + 1] ? args[d + 1] : (here || root)); }
++    else if (cmd === 'git') {
++      let sub = null, at = -1;
++      for (let j = 0; j < args.length; j += 1) { if (['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(args[j])) { j += 1; continue; } if (!args[j].startsWith('-')) { sub = args[j]; at = j; break; } }
++      const rest = at === -1 ? [] : args.slice(at + 1);
++      if (sub === null) { /* git with only options (--version) */ }
++      else if (READ_ONLY_GIT.has(sub)) { /* reads, or only the index/refs */ }
++      else if (sub === 'checkout') {
++        const ops = rest.filter(a => !a.startsWith('-'));
++        // `git checkout X`: a branch, unless X (or more than one word, or `--`) names files that exist in the project, which it would restore
++        const pathy = rest.includes('--') || ops.length > 1 || ops.some(a => { const r = resolve(a); return r.rel !== undefined && fsExists(path.resolve(root, r.rel)); });
++        if (rest.some(a => a === '-b' || a === '-B') && !rest.includes('--')) { /* a new branch */ }
++        else if (pathy || rest.includes('-f') || rest.includes('--force')) git.add('checkout');
++      }
++      else if (sub === 'branch') { if (rest.some(a => ['-f', '-D', '-d', '-M', '-m', '-C', '-c', '--force', '--delete', '--move', '--copy', '--set-upstream-to', '-u', '--unset-upstream'].includes(a))) git.add('branch'); }
++      else if (sub === 'tag') { if (rest.some(a => !a.startsWith('-')) && !rest.some(a => a === '-l' || a === '--list')) git.add('tag'); }
++      else git.add(sub);
++    } else if (INTERPRETERS.has(cmd)) {
++      const codeFlags = CODE_FLAGS[cmd] ?? [];
++      const at = args.findIndex(a => codeFlags.includes(a));
++      if (at !== -1) {
++        // inline code: read-only only when it names nothing that can write or load a program; else it fails closed
++        if (!inlineLooksReadOnly(args[at + 1] ?? '')) inline = true;
++      } else {
++        // an interpreter run on a script: one the orchestrator could have written (.swarm/, docs/plans/) or one outside the checkout is unread, so it fails closed; repo scripts and tools are tests and builds
++        const script = operands.find(a => !/^[A-Za-z0-9_.-]+$/.test(a) || /\.\w+$/.test(a)) ?? operands[0];
++        if (script === undefined) inline = true;       // the program comes from standard input
++        else {
++          const r = resolve(script);
++          if (r.unknown) unknown = true;
++          else if (r.outside) { if (!/(^|\/)swarm\.mjs$/.test(r.abs) && !protectedAbs.some(prefix => r.abs.startsWith(prefix)) && !/\/node_modules\//.test(r.abs)) inline = true; }
++          else if (r.rel !== undefined && ORCHESTRATOR_OWN.some(prefix => r.rel.toLowerCase().startsWith(prefix)) && !/(^|\/)swarm\.mjs$/.test(r.rel)) inline = true;
++        }
++      }
++    }
++  }
++  return { writes: [...writes].sort(), git: [...git].sort(), inline, unknown, protectedOutside: [...protectedOutside].sort(), selfApproval };
++}
++
++/** True when a command writes anything the guard cares about. */
++export const writesAnything = a => a.writes.length > 0 || a.git.length > 0 || a.inline || a.unknown || a.protectedOutside.length > 0 || a.selfApproval;

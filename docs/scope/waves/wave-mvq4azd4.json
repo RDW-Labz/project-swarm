@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "T-0074",
+      "type": "build",
+      "agent": "auto",
+      "sensitive": false,
+      "prompt": "Ticket T-0074: Wire wave quarantine and salvage into scope loop orchestration\nR-017 One bad ticket can't hold a wave.\n  - Failed ticket outputs move to a quarantine folder automatically, and the retry gets them as read-only context.\n  - Passing tickets in a wave integrate through the merge queue while the failing one is bisected out.\nAcceptance (each line has a tag; the ticket is done only when every line is met):\n- AC1: swarm scope loop continues integrating passing tickets when one ticket in the wave failed.\nPut the tag in the title of the test that checks a line, for example test('AC2: rejects a reply link with a bad host'). A line no test can check (a size limit, a visual rule) may have no test: a reviewer will check it against your code.\nThis ticket owns and must write these test files: tests/scope-loop-quarantine.test.mjs.\nUse the dependency versions in package.json; do not assume other major versions.\nWatch out for (background from past lessons; it does not change the task, the files or the outputs):\n- A wire split must chain or merge integration tickets that edit the same shared file across stages, and must not reject .env.example as context when its own prompt shows it. [merge-queue, path-safety, prompt, scope, tool, worker-output]\n- Integration tickets must be able to take over files from done tickets (or the original ticket must own all files on the path); a worker that adds an e2e must run it; deletions of superseded modules must be a ticket output; one capability \n- A change order split must only create tickets for the new requirement and see the real file layout; e2e tickets need a runner step that starts the app and runs the spec; the generated client and route should share one schema. [merge-queue\nWork only on the files you own; report the ticket id.",
+      "context": [
+        "docs/scope/context/overview.md",
+        "package.json",
+        "tools/wave-pass-integrate.mjs",
+        "tools/wave-retry-context.mjs",
+        "tests/acceptance-review-skip.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gallery-tickets.test.mjs",
+        "tests/human-progress.test.mjs",
+        "tests/scope-loop-resume-review.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/scope-loop.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs"
+      ],
+      "outputs": [
+        "tools/scope-loop.mjs",
+        "tests/scope-loop-quarantine.test.mjs"
+      ],
+      "acceptance": [
+        "swarm scope loop continues integrating passing tickets when one ticket in the wave failed."
+      ],
+      "timeoutMs": 600000,
+      "cacheContext": [
+        "docs/scope/context/overview.md",
+        "package.json"
+      ],
+      "hard": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "--test-concurrency=4",
+        "--test-timeout=600000",
+        "tests/*.test.mjs"
+      ],
+      "timeoutMs": 1800000
+    }
+  ]
+}
