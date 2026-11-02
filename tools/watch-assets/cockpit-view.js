@@ -108,6 +108,12 @@ export function cockpitSubline(done, total) {
   return `${total} TICKETS · ${pct}% DONE · ${Math.max(0, total - done)} LEFT`;
 }
 
+function displayVersion(v) {
+  if (v == null || v === '') return '';
+  const s = String(v);
+  return s.startsWith('v') ? s : `v${s}`;
+}
+
 /** Orchestrator label to robot-head state: working, thinking, sleeping (all done, no session) or idle. */
 export function orchestratorHeadState(label, allDone) {
   const l = String(label || '').toLowerCase();
@@ -210,6 +216,17 @@ export function renderCockpit(host, data, opts) {
   h1.setAttribute('title', name);
   host.appendChild(h1);
   host.appendChild(mk('div', 'sub2', cockpitSubline(done, total)));
+
+  const meta = data?.meta && typeof data.meta === 'object' ? data.meta : {};
+  const machineParts = [];
+  if (meta.machine) machineParts.push(String(meta.machine));
+  if (meta.machineVersion) machineParts.push(displayVersion(meta.machineVersion));
+  if (machineParts.length) {
+    let tagText = machineParts.join(' · ');
+    if (meta.versionDrift) tagText += ' · drift';
+    if (meta.remote) tagText += ' · remote';
+    host.appendChild(mk('div', 'machine-meta hive-mono hive-hint', tagText));
+  }
 
   const cats = cockpitCategories(ledger);
 

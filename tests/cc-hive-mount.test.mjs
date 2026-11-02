@@ -361,7 +361,7 @@ test('Hive panels read the ledger: session log, hourly bars, per-project percent
   assert.equal(bars[18].getAttribute('data-tip'), '1 done, 6 h ago');
   const panels = collectText(host.querySelector('.hive-panels'));
   assert.match(panels, /2projects on the board/);
-  assert.match(panels, /read from host-a, host-b/);
+  assert.match(panels, /read from host-a · host-b/);
   assert.match(panels, /Alpha.*50%/s);
   assert.match(panels, /Beta.*100%/s);
   assert.match(panels, /no per-lane job counts in the board data/, 'lanes missing from the payload say so');
@@ -545,4 +545,58 @@ test('direct-build hive card hides swarm counts and percent tooltip names live t
   assert.ok(tipEl, 'percent tooltip element');
   assert.match(tipEl.getAttribute('data-tip') ?? '', /live tickets; cancelled not counted/);
   mounted.handle.destroy();
+});
+
+test('Hive tags remote projects and lists peer machines with drift on the board', async () => {
+  const dom = createFakeDom();
+  globalThis.document = dom.document;
+  await ensureHivePanels(dom.document);
+  const board = {
+    at: iso(NOW),
+    machine: { agents: { total: 0 } },
+    machines: [
+      { name: 'Bean.local', version: '1.167.37', ok: true, projectCount: 1 },
+      { name: 'mini', version: '1.167.36', ok: true, projectCount: 1 },
+    ],
+    drift: { versions: ['1.167.36', '1.167.37'], drifted: true, newest: '1.167.37' },
+    projects: [
+      {
+        id: 'local',
+        name: 'Local',
+        machine: 'Bean.local',
+        version: '1.167.37',
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 1, done: 0, ready: 0, review: 1, blocked: 0, todo: 0,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1,
+        },
+        ledger: { tickets: [{ id: 'R-1', title: 'Review me', status: 'review' }] },
+      },
+      {
+        id: 'remote',
+        name: 'Remote',
+        machine: 'mini',
+        version: '1.167.36',
+        remote: true,
+        versionDrift: true,
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 2, done: 2, ready: 0, review: 0, blocked: 0, todo: 0,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 0, percentDone: 100, counted: 2,
+        },
+      },
+    ],
+  };
+  const snap = buildCommandCenterSnapshot(board, { now: NOW });
+  const { host, handle } = await mount(dom, snap);
+  const remoteCard = host.querySelector('[data-project-id="remote"]');
+  const cardText = collectText(remoteCard);
+  assert.match(cardText, /mini · v1\.167\.36/);
+  assert.match(cardText, /remote/);
+  assert.match(cardText, /drift/);
+  const panels = collectText(host.querySelector('.hive-panels'));
+  assert.match(panels, /read from Bean\.local v1\.167\.37 · mini v1\.167\.36 · drift/);
+  const log = collectText(host.querySelector('.hive-slog'));
+  assert.match(log, /Bean\.local · v1\.167\.37/);
+  handle.destroy();
 });

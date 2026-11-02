@@ -321,6 +321,39 @@ test('renderProjectCockpit binds title, counters, columns, orchestrator, streams
   globalThis.document = prevDocument;
 });
 
+test('renderProjectCockpit shows a compact machine tag in the title block from meta', async () => {
+  const project = {
+    id: 'remote',
+    name: 'Remote',
+    ledger: { tickets: [{ id: 'T-1', title: 'One', status: 'done' }] },
+    sessions: [],
+    meta: {
+      project: 'Remote',
+      machine: 'mini',
+      machineVersion: '1.167.36',
+      remote: true,
+      versionDrift: true,
+    },
+    done: 1,
+    total: 1,
+    runStream: [],
+  };
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, {
+    document,
+    now: () => NOW,
+    glitch: () => false,
+    mountRobotHead,
+  });
+  const tag = host.querySelector('.machine-meta');
+  assert.ok(tag);
+  assert.match(textOf(tag), /mini · v1\.167\.36 · drift · remote/);
+  view.destroy();
+  globalThis.document = prevDocument;
+});
+
 test('renderProjectCockpit uses server readyIds for NEXT UP and header when ledger strips dependsOn', async () => {
   const project = {
     id: 'strip-ready',

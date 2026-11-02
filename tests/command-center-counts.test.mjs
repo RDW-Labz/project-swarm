@@ -256,3 +256,59 @@ test('hive extras omit direct-build doneLast24h and ticket events', () => {
   assert.equal(reviewEvents[0].id, 'R-swarm');
   assert.equal(reviewEvents[0].project, 'Swarm');
 });
+
+test('snapshot surfaces board machines, drift and per-project machine tags', () => {
+  const board = {
+    at: '2026-10-26T12:00:00.000Z',
+    machine: { agents: { total: 0 } },
+    machines: [
+      { name: 'Bean.local', version: '1.2.3', ok: true, projectCount: 1 },
+      { name: 'mini', version: '1.2.2', ok: true, projectCount: 1 },
+    ],
+    drift: { versions: ['1.2.2', '1.2.3'], drifted: true, newest: '1.2.3' },
+    projects: [
+      {
+        id: 'local',
+        name: 'Local',
+        machine: 'Bean.local',
+        version: '1.2.3',
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 1, done: 0, ready: 0, review: 1, blocked: 0, todo: 0,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 1, percentDone: 0, counted: 1,
+        },
+        ledger: { tickets: [{ id: 'L-1', title: 'Local review', status: 'review' }] },
+      },
+      {
+        id: 'remote',
+        name: 'Remote',
+        machine: 'mini',
+        version: '1.2.2',
+        remote: true,
+        versionDrift: true,
+        card: { blocked: { needYou: 0 }, now: {}, next: {} },
+        counts: {
+          total: 1, done: 1, ready: 0, review: 0, blocked: 0, todo: 0,
+          cancelled: 0, proposed: 0, superseded: 0, remaining: 0, percentDone: 100, counted: 1,
+        },
+      },
+    ],
+  };
+  const snap = buildCommandCenterSnapshot(board);
+  assert.deepEqual(snap.machines, board.machines);
+  assert.deepEqual(snap.drift, board.drift);
+  const local = snap.projects.find(p => p.id === 'local');
+  const remote = snap.projects.find(p => p.id === 'remote');
+  assert.equal(local.machineVersion.value, '1.2.3');
+  assert.equal(remote.machine.value, 'mini');
+  assert.equal(remote.remote, true);
+  assert.equal(remote.versionDrift, true);
+  const review = snap.hive.events.find(e => e.kind === 'review');
+  assert.equal(review.machine, 'Bean.local');
+  assert.equal(review.machineVersion, '1.2.3');
+  const cockpit = buildProjectCockpit(board, 'remote');
+  assert.equal(cockpit.meta.machine, 'mini');
+  assert.equal(cockpit.meta.machineVersion, '1.2.2');
+  assert.equal(cockpit.meta.remote, true);
+  assert.equal(cockpit.meta.versionDrift, true);
+});

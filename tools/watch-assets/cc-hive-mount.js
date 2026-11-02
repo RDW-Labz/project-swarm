@@ -491,6 +491,30 @@ function padPct(pct) {
   return pct >= 100 ? '1.00' : `.${String(Math.round(pct)).padStart(2, '0')}`;
 }
 
+function displayVersion(v) {
+  if (v == null || v === '') return '';
+  const s = String(v);
+  return s.startsWith('v') ? s : `v${s}`;
+}
+
+function appendMachineRow(doc, bd, p) {
+  const host = p.machine || p.raw?.machine?.value;
+  const ver = p.machineVersion || p.raw?.machineVersion?.value;
+  const remote = p.remote === true || p.raw?.remote === true;
+  const drift = p.versionDrift === true || p.raw?.versionDrift === true;
+  if (!host && !ver && !remote && !drift) return;
+  const row = h(doc, 'div', 'hive-machine');
+  const line = h(doc, 'span', 'hive-mono hive-hint');
+  const parts = [];
+  if (host) parts.push(host);
+  if (ver) parts.push(displayVersion(ver));
+  line.textContent = parts.join(' · ') || '—';
+  row.appendChild(line);
+  if (remote) row.appendChild(h(doc, 'span', 'hive-pill hive-pill--remote', 'remote'));
+  if (drift) row.appendChild(h(doc, 'span', 'hive-pill hive-pill--drift', 'drift'));
+  bd.appendChild(row);
+}
+
 function formatGenerated(at) {
   const ms = Date.parse(at);
   if (!Number.isFinite(ms)) return '';
@@ -952,6 +976,7 @@ export function renderHive(host, snapshot, deps) {
     card.appendChild(hd);
 
     const bd = h(doc, 'div', 'hive-card-bd');
+    appendMachineRow(doc, bd, p);
     const c = p.counts;
     const pills = h(doc, 'span', 'pills');
     if (p.needs > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--need', `${p.needs} need you`));
@@ -1026,7 +1051,11 @@ export function renderHive(host, snapshot, deps) {
   }
 
   function paintCards(v) {
-    const sig = JSON.stringify(v.projects.map((p) => [p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents, p.raw && p.raw.fails && p.raw.fails.value]));
+    const sig = JSON.stringify(v.projects.map((p) => [
+      p.id, p.name, p.cat, p.counts, p.pct, p.needs, p.agents,
+      p.raw && p.raw.fails && p.raw.fails.value,
+      p.machine, p.machineVersion, p.remote, p.versionDrift,
+    ]));
     const first = v.projects[0];
     const href = first
       ? `/command-center/project/${encodeURIComponent(first.id)}${win.location?.search || ''}`

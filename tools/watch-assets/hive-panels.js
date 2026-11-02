@@ -948,6 +948,29 @@
     };
   }
 
+  function versionDisplay(v) {
+    if (v === null || v === undefined || v === '') { return ''; }
+    var s = String(v);
+    return s.charAt(0) === 'v' ? s : 'v' + s;
+  }
+
+  function machinesHintText(machines, drift) {
+    if (!Array.isArray(machines) || !machines.length) { return 'machine names not reported'; }
+    var parts = [];
+    for (var i = 0; i < machines.length; i += 1) {
+      var m = machines[i];
+      if (!m || typeof m !== 'object') { continue; }
+      var label = m.name ? String(m.name) : 'unknown';
+      if (m.version) { label += ' ' + versionDisplay(m.version); }
+      if (m.ok === false) { label += ' (unreachable)'; }
+      parts.push(label);
+    }
+    if (!parts.length) { return 'machine names not reported'; }
+    var hint = 'read from ' + parts.join(' · ');
+    if (drift && drift.drifted) { hint += ' · drift'; }
+    return hint;
+  }
+
   /** One project for the Hive: ledger counts, percent, and the colour category the ring and card share. */
   function projectView(project) {
     var s = projectSignals(project);
@@ -969,6 +992,9 @@
       id: project.id,
       name: projectTitle(project),
       machine: project.machine && typeof project.machine.value === 'string' ? project.machine.value : '',
+      machineVersion: project.machineVersion && typeof project.machineVersion.value === 'string' ? project.machineVersion.value : '',
+      remote: project.remote === true,
+      versionDrift: project.versionDrift === true,
       counts: counts,
       counted: counted,
       pct: pct,
@@ -1030,9 +1056,31 @@
       if (!lanes.length) { lanes = null; }
     }
     var machines = [];
-    for (var m = 0; m < projects.length; m += 1) {
-      if (projects[m].machine && machines.indexOf(projects[m].machine) < 0) { machines.push(projects[m].machine); }
+    if (Array.isArray(snap.machines) && snap.machines.length && snap.machines[0] && typeof snap.machines[0] === 'object') {
+      for (var mi = 0; mi < snap.machines.length; mi += 1) {
+        var row = snap.machines[mi];
+        if (!row || typeof row !== 'object') { continue; }
+        machines.push({
+          name: row.name != null ? String(row.name) : '',
+          version: typeof row.version === 'string' ? row.version : (row.version != null ? String(row.version) : ''),
+          ok: row.ok !== false,
+          error: row.ok === false ? (row.error || 'unreachable') : null,
+          projectCount: typeof row.projectCount === 'number' ? row.projectCount : null,
+        });
+      }
+    } else {
+      var seen = {};
+      for (var mx = 0; mx < projects.length; mx += 1) {
+        var host = projects[mx].machine;
+        if (!host) { continue; }
+        var ver = projects[mx].machineVersion || '';
+        var key = host + '\0' + ver;
+        if (seen[key]) { continue; }
+        seen[key] = true;
+        machines.push({ name: host, version: ver, ok: true, error: null });
+      }
     }
+    var drift = snap.drift && typeof snap.drift === 'object' && !Array.isArray(snap.drift) ? snap.drift : null;
     var counted = projects.reduce(function (a, p) { return p.counted !== null ? a + p.counted : a; }, 0);
     var snapTotals = snap.totals && typeof snap.totals === 'object' ? snap.totals : null;
     var totalsFromSnap = snapTotals && typeof snapTotals.tickets === 'number';
@@ -1048,6 +1096,7 @@
       prs: Array.isArray(hive.prs) ? hive.prs : null,
       events: sessionEvents(projects, hive),
       machines: machines,
+      drift: drift,
       totals: totalsFromSnap ? {
         tickets: snapTotals.tickets,
         done: snapTotals.done,
@@ -1116,6 +1165,15 @@
         body.appendChild(document.createTextNode(' '));
       }
       body.appendChild(document.createTextNode(String(ev.title || '')));
+      if (ev.machine || ev.machineVersion) {
+        body.appendChild(document.createTextNode(' '));
+        var mtag = el('span', 'hive-cap hive-hint');
+        var mparts = [];
+        if (ev.machine) { mparts.push(String(ev.machine)); }
+        if (ev.machineVersion) { mparts.push(versionDisplay(ev.machineVersion)); }
+        mtag.textContent = mparts.join(' · ');
+        body.appendChild(mtag);
+      }
       var at = parseEventTime(ev.at);
       if (Number.isFinite(at) && Number.isFinite(nowMs)) {
         body.appendChild(document.createTextNode(' '));
@@ -1282,7 +1340,9 @@
     var big = el('div', 'hive-big', String(view.projectsTotal));
     big.appendChild(el('small', null, view.projectsTotal === 1 ? 'project on the board' : 'projects on the board'));
     all.appendChild(big);
-    all.appendChild(el('div', 'hive-hint hive-hint--machines', view.machines.length ? 'read from ' + view.machines.join(', ') : 'machine names not reported'));
+    var machinesHint = el('div', 'hive-hint hive-hint--machines');
+    machinesHint.textContent = machinesHintText(view.machines, view.drift);
+    all.appendChild(machinesHint);
     // Done per project: a compact two-column list. It sits under the right panel's step line, which plots the
     // same percentages in ring order, so the middle column keeps the target's big number, who bars and figures.
     var byproj = el('div', 'hive-dpp');

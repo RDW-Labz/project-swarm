@@ -171,6 +171,24 @@ test('deriveHiveView leaves missing data null so panels can say so', async () =>
   assert.equal(view.agents, 2, 'falls back to the project live-agent fields');
   assert.equal(view.needs, 1);
   assert.deepEqual([...view.events.map((e) => e.kind)], ['needs', 'run'], 'session log falls back to project signals');
+  assert.equal(view.machines.length, 0, 'machines list empty when snapshot and cards carry no hosts');
+});
+
+test('deriveHiveView reads machines and drift from the snapshot', async () => {
+  const { deriveHiveView } = await loadHivePanels();
+  const snap = hiveSnapshot();
+  snap.machines = [
+    { name: 'Bean.local', version: '1.2.3', ok: true, projectCount: 2 },
+    { name: 'mini', version: '1.2.2', ok: false, error: 'timeout', projectCount: 0 },
+  ];
+  snap.drift = { versions: ['1.2.2', '1.2.3'], drifted: true, newest: '1.2.3' };
+  const view = deriveHiveView(snap);
+  assert.equal(view.machines.length, 2);
+  assert.equal(view.machines[0].name, 'Bean.local');
+  assert.equal(view.machines[0].version, '1.2.3');
+  assert.equal(view.machines[1].ok, false);
+  assert.equal(view.machines[1].error, 'timeout');
+  assert.equal(view.drift.drifted, true);
 });
 
 test('renderHiveDashboard draws the session log, bars, project and lane rows, kv figures and the step chart', async () => {

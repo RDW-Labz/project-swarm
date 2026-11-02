@@ -254,7 +254,7 @@ test('session log rows carry the kind colour, ledger id, title and age; empty is
   const { renderSessionLog } = HivePanels;
   const host = makeElement('div');
   renderSessionLog(host, [
-    { kind: 'review', id: 'T-1', title: 'Look at it' },
+    { kind: 'review', id: 'T-1', title: 'Look at it', machine: 'Bean.local', machineVersion: '1.2.3' },
     { kind: 'done', id: 'T-2', title: 'Done thing', at: new Date(NOW - 5 * 60_000).toISOString() },
   ], NOW);
   assert.equal(host.children.length, 2);
@@ -263,6 +263,7 @@ test('session log rows carry the kind colour, ledger id, title and age; empty is
   assert.equal(host.children[1].children[0].style.color, 'var(--blue)');
   const text = collectText(host);
   assert.match(text, /T-2 Done thing 5 min ago/);
+  assert.match(text, /Bean\.local · v1\.2\.3/);
   const empty = makeElement('div');
   renderSessionLog(empty, [], NOW);
   assert.equal(collectText(empty), 'no ledger events yet');
