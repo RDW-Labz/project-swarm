@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.167.37
+
+Train 9 hotfix: the Cockpit ticket-stack stage list sorts numerically.
+- The Cockpit TICKET STACK sub-line and the other stage lists now sort stage ids S1, S2, ..., S11 numerically instead of ticket-id order (s1..s7, s10, s9, s8, s11); lane/area/type category order is unchanged;
+- Tests: a page-wide scan checks every stage list rendered on the Cockpit for numeric order, plus the stage-count span and the stack sub-line;
+- Version 1.167.37.
+
 ## 1.167.36
 
 Train 9, tin 3: display accuracy and direct-build mode.
