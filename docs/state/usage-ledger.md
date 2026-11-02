@@ -184,6 +184,10 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | t9-tin2-test-counts: Hive card test: tickets4, done2 of 4, 50%; panels test: Alpha 50%, ledger 8, le | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | reviewt9tin2: complete | claude | opus | pass | 688,216 | $0.86 |
+| 2026-11-01 | - | t9-tin2-cockpit-ready: buildProjectCockpit exposes readyIds from card.next.items ids; Cockpit column | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-01 | - | reviewt9tin2delta: complete | claude | opus | pass | 228,578 | $0.44 |
 
 ## Daily summary
 
@@ -205,4 +209,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
 | 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
-| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-11-01 | claude | 2 | 2 | 0 | 916,794 | $1.30 |
+| 2026-11-01 | cursor | 2 | 2 | 0 | 0 | subscription |
+| **total** | all | 184 | 168 | 16 | 16,808,592 | $29.84 (incl. estimates) |
