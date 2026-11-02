@@ -184,6 +184,9 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-28 | - | hangguard: withHangGuard races runManifest against a timer; denied-kill hang comment; self-test for | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2money: status blocked: tests/api-workers.test.mjs must assert day cap $20 (lines 18–22, 24–25); fi | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-28 | - | t2reviewgaps: B16: delete-only branch in cmdSync now uses the same security-review gate as the norma | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | t9-stage-list: cockpitCategories: when field is stage, sort names with compareStageCategoryNames (S< | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | bump16737: Version 1.167.37 in package.json and package-lock.json (root and packages[""].version).; | cursor | composer-2.5 | pass | - | subscription |
+| 2026-11-02 | - | reviewt9stage: complete | claude | opus | pass | 218,143 | $0.35 |
 
 ## Daily summary
 
@@ -205,4 +208,6 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-27 | cursor | 4 | 4 | 0 | 0 | subscription |
 | 2026-10-28 | claude | 1 | 1 | 0 | 1,097,737 | $1.50 |
 | 2026-10-28 | cursor | 12 | 11 | 1 | 0 | subscription |
-| **total** | all | 180 | 164 | 16 | 15,891,798 | $28.54 (incl. estimates) |
+| 2026-11-02 | claude | 1 | 1 | 0 | 218,143 | $0.35 |
+| 2026-11-02 | cursor | 2 | 2 | 0 | 0 | subscription |
+| **total** | all | 183 | 167 | 16 | 16,109,941 | $28.89 (incl. estimates) |
