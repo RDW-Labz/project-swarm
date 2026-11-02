@@ -260,6 +260,14 @@
   .hive-shell .hive-nav{min-width:min(220px,calc(100vw - 32px))}
 }
 
+@media (max-height:1000px) and (max-width:1340px){
+  .hive-shell .hive-stage{gap:10px;padding:2px 0 6px}
+  .hive-shell .hive-stage canvas{width:min(100%,300px)}
+}
+@media (max-height:1000px) and (min-width:1341px){
+  .hive-shell .hive-stage{height:clamp(440px,calc(100vh - 140px),680px)}
+}
+
 /* motion: off when the tab is hidden (the loop stops), paused by the user, or reduced motion is requested */
 .hive-body.motion-off *,.hive-body.motion-off *::before,.hive-body.motion-off *::after{animation:none!important;transition:none!important}
 @media (prefers-reduced-motion:reduce){.hive-body *,.hive-body *::before,.hive-body *::after{animation:none!important;transition:none!important}}

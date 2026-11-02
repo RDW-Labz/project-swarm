@@ -128,6 +128,15 @@ export function orchestratorCaption(label, allDone) {
   return l ? `${l.toUpperCase()} · NO SESSION ACTIVE` : 'NO SESSION ACTIVE';
 }
 
+export function compareStageIds(a, b) {
+  const ma = /^S(\d+)$/.exec(String(a ?? ''));
+  const mb = /^S(\d+)$/.exec(String(b ?? ''));
+  if (ma && mb) return Number(ma[1]) - Number(mb[1]) || String(a).localeCompare(String(b));
+  if (ma) return -1;
+  if (mb) return 1;
+  return String(a).localeCompare(String(b));
+}
+
 export function stageRingProgress(ledger) {
   const tickets = (ledger?.tickets ?? []).filter(t => !HIDDEN_STATUSES.includes(t.status));
   const byStage = {};
@@ -142,7 +151,9 @@ export function stageRingProgress(ledger) {
     : Array.isArray(ledger?.stages)
       ? ledger.stages
       : [];
-  const ids = stages.length ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean) : Object.keys(byStage).filter(k => k !== 'none').sort();
+  const ids = stages.length
+    ? stages.map(s => (typeof s === 'string' ? s : s.id)).filter(Boolean).sort(compareStageIds)
+    : Object.keys(byStage).filter(k => k !== 'none').sort(compareStageIds);
   return ids.map(id => {
     const row = byStage[id] ?? { total: 0, done: 0 };
     const total = row.total || 0;

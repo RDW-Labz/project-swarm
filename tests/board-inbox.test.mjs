@@ -412,3 +412,49 @@ test('feedback 5: test and temp projects are left out by default (lanes, totals,
   assert.match(html, /id="scratch"/);
   assert.match(await fs.readFile(path.join(assets, 'board.js'), 'utf8'), /scratch=1/);
 });
+
+test('direct-build projects are omitted from needs-you inbox', async (t) => {
+  const home = await tmp(t);
+  const A = proj(home, 'shop');
+  const direct = { ...proj(home, 'parts'), directBuild: true };
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const collect = async ([root]) => (root === A.root
+    ? [{ kind: 'human', id: 'h-1', title: 'Real task', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]
+    : [{ kind: 'human', id: 'h-2', title: 'Should not appear', steps: [], unblocks: 1, since: new Date(NOW).toISOString() }]);
+  const inbox = await boardInbox({ projects: [A, direct], now: NOW, collect, ledgerOf: async () => null, phoneDirectory: path.join(home, 'none') });
+  assert.deepEqual(inbox.items.map(i => i.id), ['h-1']);
+  assert.equal(inbox.total, 1);
+});
+
+test('needs-you auto-hide drops stale blockers and superseded ticket rows', async (t) => {
+  const home = await tmp(t);
+  const A = proj(home, 'a');
+  await fs.mkdir(path.join(A.root, '.swarm/project'), { recursive: true });
+  const scope = { name: 'a', version: 1, hash: 'a'.repeat(64) };
+  const eightDaysAgo = new Date(NOW - 8 * 86400000).toISOString();
+  const threeDaysAgo = new Date(NOW - 3 * 86400000).toISOString();
+  const twoDaysAgo = new Date(NOW - 2 * 86400000).toISOString();
+  const oneDayAgo = new Date(NOW - 86400000).toISOString();
+  const ledger = createLedger({
+    scope,
+    tickets: [
+      tk('T-9001', 'superseded'),
+      tk('T-9002', 'blocked', { blockReason: 'manual', holdQuestion: 'Still need you?' }),
+    ],
+  });
+  ledger.updatedAt = twoDaysAgo;
+  await writeLedger(A.root, ledger);
+  const collect = async () => [
+    { kind: 'blocker', id: 'old-block', title: 'Stale', since: eightDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-3d', title: 'Three days', since: threeDaysAgo, unblocks: 0 },
+    { kind: 'blocker', id: 'block-1d', title: 'One day', since: oneDayAgo, unblocks: 0 },
+  ];
+  const inbox = await boardInbox({
+    projects: [A],
+    now: NOW,
+    collect,
+    ledgerOf: async root => (root === A.root ? JSON.parse(await fs.readFile(path.join(A.root, '.swarm/project/tickets.json'), 'utf8')) : null),
+    phoneDirectory: path.join(home, 'none'),
+  });
+  assert.deepEqual(inbox.items.map(i => i.id).sort(), ['T-9002', 'block-1d']);
+});

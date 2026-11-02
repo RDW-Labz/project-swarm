@@ -92,6 +92,15 @@ function serverCounts(project) {
 
 /** Header counters, each with the ledger field it is read from. */
 function headerCounters(project, rowCounts) {
+  const directBuild = project?.directBuild === true;
+  if (directBuild) {
+    return [
+      { label: 'tickets', value: '—', tip: 'Swarm ticket counts hidden for direct-build projects.' },
+      { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+      { label: 'done', value: '—', color: 'var(--blue)', tip: 'Swarm ticket counts hidden for direct-build projects.' },
+      { label: 'need you', value: '—', color: '', tip: 'Swarm ticket counts hidden for direct-build projects.' },
+    ];
+  }
   const c = serverCounts(project);
   if (c) {
     const needsYou = typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)
@@ -611,14 +620,15 @@ export function renderProjectCockpit(host, project, deps) {
     paintSignature = signature;
     const ledger = p?.ledger ?? { tickets: [] };
     const headline = serverCounts(p);
+    const directBuild = p?.directBuild === true;
     const model = renderCockpit(titleHost, {
       ledger,
       sessions: p?.sessions ?? [],
       meta: p?.meta ?? {},
       name: p?.name,
       id: p?.id,
-      done: headline?.done ?? p?.done,
-      total: headline?.total ?? p?.total,
+      done: directBuild ? 0 : (headline?.done ?? p?.done),
+      total: directBuild ? 0 : (headline?.total ?? p?.total),
     }, { now: at });
     const readyFn = projectReadyFn(p);
     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
@@ -627,7 +637,7 @@ export function renderProjectCockpit(host, project, deps) {
     const orch = model.orchestrator;
     const allDone = model.total > 0 && model.done >= model.total;
     const cats = cockpitCategories(ledger);
-    const stackCounts = headline ? {
+    let stackCounts = headline ? {
       ready: headline.ready,
       running: columns.counts.running,
       review: headline.review,
@@ -637,12 +647,28 @@ export function renderProjectCockpit(host, project, deps) {
       cancelled: headline.cancelled,
       proposed: headline.proposed ?? 0,
     } : columns.counts;
+    if (directBuild) {
+      stackCounts = {
+        ready: 0,
+        running: 0,
+        review: 0,
+        blocked: 0,
+        todo: 0,
+        done: 0,
+        cancelled: 0,
+        proposed: 0,
+      };
+    }
     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
     const lead = columns.left[0];
     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
 
     text(crumbProject, model.name);
     paintCounters(headerCounters(p, counts));
+    if (directBuild) {
+      const sub2 = titleHost.querySelector('.sub2');
+      if (sub2) text(sub2, '— · SWARM COUNTS HIDDEN');
+    }
     text(metaDate, utcDate(at));
 
     patchPanel(colL, col => columns.left.length
@@ -662,7 +688,7 @@ export function renderProjectCockpit(host, project, deps) {
     patchPanel(wgrid, host => renderWorkerCards(host, cards));
     text(wCount, cards.length ? `${cards.length} LATEST · ${stackCounts.done} DONE` : '0 DONE');
 
-    text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
+    text(stackN, directBuild ? '—' : (model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS'));
     text(stackSub, cats.field && cats.names.length
       ? cats.names.join(' / ')
       : 'no lane or type recorded on these tickets');
@@ -677,7 +703,12 @@ export function renderProjectCockpit(host, project, deps) {
     const big = Math.max(...tiles.map(t => t.value));
     for (const t of tiles) t.hi = big > 0 && t.value === big;
     patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
-    text(footNote, `${stackCounts.cancelled} cancelled, left out of the percent${stackCounts.proposed ? ` · ${stackCounts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
+    const liveTotal = headline?.total ?? model.total;
+    const cancelClause = stackCounts.cancelled > 0
+      ? `${stackCounts.cancelled} cancelled, not counted in the ${liveTotal} live tickets or the percent · `
+      : '';
+    const directFoot = directBuild ? 'direct build: swarm counts hidden · ' : '';
+    text(footNote, `${directFoot}${cancelClause}${stackCounts.proposed ? `${stackCounts.proposed} proposed, not counted · ` : ''}data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
 
     layoutWire();
     if (firstPaint) {

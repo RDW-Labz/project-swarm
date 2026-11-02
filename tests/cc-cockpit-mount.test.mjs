@@ -11,7 +11,7 @@ import {
   orchestratorHeadState,
   orchestratorCaption,
 } from '../tools/watch-assets/cockpit-view.js';
-import { emptyReadyExplanation, STAGE_COLOURS } from '../tools/watch-assets/cockpit-lists.js';
+import { emptyReadyExplanation, STAGE_COLOURS, renderStackSummaryTiles } from '../tools/watch-assets/cockpit-lists.js';
 import { renderProjectCockpit } from '../tools/watch-assets/cc-cockpit-mount.js';
 
 const NOW = Date.UTC(2026, 9, 26, 20, 0, 0);
@@ -449,6 +449,81 @@ test('renderProjectCockpit view tabs use bare paths without window or defaultVie
   assert.equal(tabs[0].href, '/command-center');
   assert.equal(tabs[0].getAttribute('aria-current'), 'page');
   assert.equal(tabs[1].href, '/classic');
+  view.destroy();
+  globalThis.document = prevDocument;
+});
+
+test('cockpit footer explains cancelled tickets are outside live total and percent', async () => {
+  const board = fakeBoard({
+    counts: {
+      total: 407,
+      done: 230,
+      ready: 0,
+      review: 0,
+      blocked: 0,
+      todo: 177,
+      cancelled: 13,
+      proposed: 0,
+      superseded: 0,
+      remaining: 177,
+      percentDone: 57,
+      counted: 407,
+      needsYou: 0,
+      source: 'counts',
+    },
+    total: 407,
+    done: 230,
+    percentDone: 57,
+  });
+  const project = buildProjectCockpit(board, 'alpha');
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
+  const foot = textOf(host.querySelector('.ck-foot span'));
+  assert.match(foot, /13 cancelled, not counted in the 407 live tickets or the percent/);
+  view.destroy();
+  globalThis.document = prevDocument;
+});
+
+test('direct-build cockpit hides headline swarm counts', async () => {
+  const board = fakeBoard({
+    directBuild: true,
+    counts: {
+      total: 407, done: 230, ready: 40, review: 0, blocked: 0, todo: 137,
+      cancelled: 13, proposed: 0, superseded: 0, remaining: 177, percentDone: 57, counted: 407,
+      needsYou: 0,
+      source: 'counts',
+    },
+    total: 407,
+    done: 230,
+    percentDone: 57,
+  });
+  const project = buildProjectCockpit(board, 'alpha');
+  assert.equal(project.directBuild, true);
+  const { document, host, mountRobotHead } = setup();
+  const prevDocument = globalThis.document;
+  globalThis.document = document;
+  const view = renderProjectCockpit(host, project, { document, now: () => NOW, glitch: () => false, mountRobotHead });
+  assert.match(textOf(host.querySelector('.sub2')), /SWARM COUNTS HIDDEN/);
+  assert.equal(host.querySelector('.cnt .v[data-k="tickets"]').textContent, '—');
+  assert.match(textOf(host.querySelector('.ck-foot span')), /direct build: swarm counts hidden/);
+  assert.equal(textOf(host.querySelector('.stack .n')), '—');
+  // renderStackSummaryTiles: label in children[0], count in children[1] (.cockpit-metric-tile)
+  const tileValues = Object.fromEntries(
+    host.querySelectorAll('.cc-cockpit-stack-tiles .cockpit-metric-tile').map(t => [
+      textOf(t.children[0]).toLowerCase(),
+      textOf(t.children[1]),
+    ]),
+  );
+  assert.equal(tileValues.ready, '0');
+  assert.equal(tileValues.review, '0');
+  assert.equal(tileValues.waiting, '0');
+  assert.equal(tileValues['to do'], '0');
+  assert.equal(tileValues.done, '0');
+  assert.equal(tileValues.running, undefined);
+  assert.notEqual(tileValues.ready, '40');
+  assert.notEqual(tileValues.done, '230');
   view.destroy();
   globalThis.document = prevDocument;
 });

@@ -852,7 +852,7 @@ export function renderHive(host, snapshot, deps) {
     const defs = [
       ['projects', 'Registered top-level projects on this board.', 'stats.projectsTotal'],
       ['agents', 'Workers running right now, from the run folders.', 'stats.agentsLive'],
-      ['done 24h', 'Tickets the ledger marks done in the last 24 hours (some are bulk marks of work merged earlier).', 'hive.doneLast24h'],
+      ['done 24h', 'Tickets marked done in the last 24 hours from the project tickets log (when the board reports doneLast24h).', 'hive.doneLast24h'],
       ['need you', 'Open items waiting for you on the board.', 'stats.needsYouCount'],
     ];
     const els = {};
@@ -930,6 +930,7 @@ export function renderHive(host, snapshot, deps) {
   }
 
   function buildCard(p, index) {
+    const directBuild = p.raw?.directBuild === true;
     const card = h(doc, 'div', 'hive-card hive-node');
     card.style.setProperty('--c', p.color);
     card.tabIndex = 0;
@@ -955,7 +956,14 @@ export function renderHive(host, snapshot, deps) {
     const pills = h(doc, 'span', 'pills');
     if (p.needs > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--need', `${p.needs} need you`));
     if (p.agents > 0) pills.appendChild(h(doc, 'b', 'hive-pill hive-pill--live', `${p.agents} live`));
-    if (c) {
+    if (directBuild) {
+      bd.appendChild(h(doc, 'p', 'hive-muted', 'direct build'));
+      if (pills.firstChild) {
+        const row = h(doc, 'div', 'r');
+        row.appendChild(pills);
+        bd.appendChild(row);
+      }
+    } else if (c) {
       const rows = [
         ['tickets', c.total],
         ['done', `${c.done} of ${p.counted}`],
@@ -969,7 +977,7 @@ export function renderHive(host, snapshot, deps) {
         if (i === 0 && pills.firstChild) row.appendChild(pills);
         bd.appendChild(row);
       });
-    } else {
+    } else if (!directBuild) {
       bd.appendChild(h(doc, 'p', 'hive-muted', 'no ledger numbers yet'));
       if (pills.firstChild) {
         const row = h(doc, 'div', 'r');
@@ -977,7 +985,7 @@ export function renderHive(host, snapshot, deps) {
         bd.appendChild(row);
       }
     }
-    if (p.pct !== null) {
+    if (!directBuild && p.pct !== null) {
       // p(done) / bar / value, like the target's p(label) rows; the percent stays readable for screen readers.
       const pb = h(doc, 'div', 'pb');
       pb.appendChild(h(doc, 'b', null, 'p(done)'));
@@ -988,7 +996,7 @@ export function renderHive(host, snapshot, deps) {
       pb.appendChild(track);
       const em = h(doc, 'em', 'has-tip', padPct(p.pct));
       em.setAttribute('tabindex', '0');
-      em.setAttribute('data-tip', `${p.pct}% done: done divided by tickets that still count (cancelled left out).`);
+      em.setAttribute('data-tip', `${p.pct}% done: done divided by live tickets; cancelled not counted.`);
       pb.appendChild(em);
       pb.appendChild(h(doc, 'span', 'hive-sr', `${p.pct}% done`));
       bd.appendChild(pb);
