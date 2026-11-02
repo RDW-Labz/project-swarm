@@ -168,7 +168,7 @@ export async function writeLesson(root, lesson, { dir = 'lessons', overwrite = f
       });
     }
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => { console.error('[tools/lesson-store.mjs] handle.close:', norm.id, closeError?.message ?? closeError); });
     throw error;
   } finally {
     await fs.rm(tmp, { force: true });

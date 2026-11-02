@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain2guard",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner decision: invariants checklist review of the train 2 guard",
+   "prompt": "Checklist review of the orchestrator shell guard in release train 2 of Project Swarm (tools/shell-writes.mjs). Owner framing: this guard catches the orchestrator's own MISTAKES (an AI orchestrator accidentally writing outside its allowed areas); it is not a sandbox against attackers. Judge the code and the tests against the invariants below, and report for each one whether it HOLDS, with the function and line that enforce it and the test(s) that pin it. Do not design new attack scenarios; if you notice an unusual shell construct that is not covered, list it as a follow-up in one line. Context: coordination/review/train2-guard.diff (all guard changes in train 2 relative to main), the current tools/shell-writes.mjs, and the guard tests tests/t2-redirect-symlink.test.mjs, tests/t2-guard-cd-constructs.test.mjs, tests/om-redirect-realpath.test.mjs. Previous review rounds are summarised here: round 1 found redirect symlink issues, round 2 a cd -P issue, round 3 a logical-vs-physical cd issue; each was fixed. INVARIANTS: I1 Allowed areas: an auto-allowed redirect/write always lands, physically, inside the allowed areas listed in ORCHESTRATOR_MODE_DENY_REASON (never in .swarm/ outside its allowed subfolders, never in coordination/manifests/ except .json, never outside the project). I2 Directory agreement: after every cd the guard allows, the guard's working directory equals the shell's: cd through any symlinked component at or below the project root is refused; cd options are refused; a cd inside ( ) is scoped to the subshell; { } groups keep it. I3 Redirect targets: resolved component by component without lexical '..' collapsing; a leaf symlink (dangling or not) or a hard-linked leaf is refused; '..' after a symlinked component is refused. I4 A cd segment that carries its own redirect is refused. I5 Constructs the guard does not model (pushd/popd, sh -c / bash -c / eval, exec, builtin/command cd) are refused rather than guessed. I6 No regression: commands refused on main stay refused unless they are a redirect into an allowed area; commands allowed on main stay allowed (spot-check with the tests). I7 macOS: symlinks ABOVE the project root (/var, /tmp) do not cause refusals. Write ONLY coordination/review/train2-guard-checklist.json: {\"verdict\":\"pass\"|\"fail\",\"invariants\":[{\"id\":\"I1\",\"holds\":true|false,\"evidence\":\"function/line and test names\"}],\"followups\":[{\"file\":\"\",\"line\":0,\"note\":\"\"}],\"summary\":\"\"}. verdict is pass only if every invariant holds.",
+   "context": [
+    "coordination/review/train2-guard.diff",
+    "tools/shell-writes.mjs",
+    "tests/t2-redirect-symlink.test.mjs",
+    "tests/t2-guard-cd-constructs.test.mjs",
+    "tests/om-redirect-realpath.test.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train2-guard-checklist.json"
+   ],
+   "resultFile": "coordination/review/train2-guard-checklist.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

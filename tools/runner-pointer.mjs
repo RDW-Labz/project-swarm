@@ -199,7 +199,9 @@ export async function migrateRunnerPointer(root, { exec = execFileAsync } = {}) 
 export async function bootstrapProjectPointer(root, { install, version }) {
   const trackedPath = path.join(root, TRACKED_POINTER);
   let hasTracked = false;
-  try { await fs.access(trackedPath); hasTracked = true; } catch { /* new */ }
+  try { await fs.access(trackedPath); hasTracked = true; } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/runner-pointer.mjs] bootstrap access tracked pointer:', trackedPath, error?.message ?? error);
+  }
   if (!hasTracked) {
     // First link: tracked file names the install; release fields are also written locally (updates touch only the local file).
     await writeAtomicJson(trackedPath, { install, version }, { mode: 0o644 });

@@ -26,7 +26,11 @@ export async function resolveIntegrationLockBranch(root, { branch } = {}) {
   try {
     const ref = (await execFileAsync('git', ['-C', realRoot, 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' })).stdout.trim();
     if (ref) return { branchKey: ref, branchLabel: ref };
-  } catch { /* detached HEAD */ }
+  } catch (error) {
+    const exit = error?.code;
+    const silentGitExit = typeof exit === 'number' && exit !== 0;
+    if (!silentGitExit) console.error('[tools/integration-lock.mjs] resolveIntegrationLockBranch symbolic-ref:', error?.message ?? error);
+  }
   const detached = `detached:${realRoot}`;
   return { branchKey: detached, branchLabel: detached };
 }
@@ -62,8 +66,8 @@ export async function tryAcquireLock(lock, { owner, isAlive, now, staleMs, stale
       let existing;
       if (stat.isDirectory()) {
         try { existing = JSON.parse(await fsImpl.readFile(path.join(lock, 'owner.json'), 'utf8')); }
-        catch {
-          /* ownerless creation window */
+        catch (error) {
+          if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) console.error('[tools/integration-lock.mjs] tryAcquireLock owner.json:', error?.message ?? error);
         }
       }
       const valid = existing && typeof existing === 'object' && Number.isInteger(existing.pid) && existing.pid > 0 && typeof existing.host === 'string';

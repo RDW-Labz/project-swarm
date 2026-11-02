@@ -159,7 +159,9 @@ async function writeTempRegularFile(file, body) {
     await handle.close();
     return { tmp, final: file };
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch(closeError => {
+      console.error('[tools/ledger-merge.mjs] writeTempRegularFile handle.close:', closeError?.message ?? closeError);
+    });
     await fs.rm(tmp, { force: true });
     throw error;
   }
@@ -320,7 +322,7 @@ export async function mergeTicketLedgers({ mini, book, target, apply = false, ap
   if (apply) {
     let releaseLock;
     try {
-      releaseLock = await acquireAutopilotLock(target, lockOptions);
+      releaseLock = await acquireAutopilotLock(target, { ...(lockOptions ?? {}), env: lockOptions?.env ?? {} });
       await applyMergedOutputs(
         target,
         { ledger: mergedLedger, reviewRecords: mergedRecords, journalEvents: mergedJournal },

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "sec-review-t0176-recheck",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Recheck of a sensitive/high-risk ticket after fixes for the prior review's findings.",
+      "prompt": "Recheck T-0176 (tools/cluster-client.mjs) after fixes for a prior Opus review's findings: (1) added AbortSignal.timeout + mapped AbortError to 'cluster-request-timeout'; (2) added redirect:'error'; (3) added assertClusterCanonicalHost + buildClusterLedgerUrl validating hostname/pathname/no-credentials via new URL(); (4) wrapped readNodeRegistry in try/catch rethrowing a fixed 'cluster-registry-invalid' message; (5) added isStrongNodeSecret requiring 32+ hex or base64url chars. Confirm each of the 5 fixes actually closes the finding it targets, with no new gap introduced (e.g. does the host regex actually reject 'evil.example/x#' and 'trusted@evil.example'; does the timeout actually cover the res.text() read too; is the registry's raw error message never reachable from the thrown error). Report only real, concretely demonstrable remaining problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0176\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" only for a genuine remaining high or medium finding.",
+      "context": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    },
+    {
+      "id": "sec-review-t0410-recheck",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Recheck of a sensitive/high-risk ticket after fixes for the prior review's findings.",
+      "prompt": "Recheck T-0410 (tools/queue-commands.mjs claim routing) after fixes for a prior Opus review's findings: (1) isolatedGrantSpec is now validated BEFORE claim() runs, so a missing-env-value failure never touches the lease; (2) createJobGrant is wrapped in try/catch, and on failure the code now calls release(root, result.ticketId, result.fencingToken, {now}) to roll back the just-acquired lease before rethrowing; (3) readQueueProject's project-read now falls back to {} on any failure so legacy/non-isolated claims are unaffected. Confirm: the release() call actually uses the correct ticketId/fencingToken to release THIS job's own lease (not some other); the rollback path is actually exercised by the new test, not just asserted in prose; a legacy (non-isolated) project's claim output/exit code is truly unchanged from before. Report only real, concretely demonstrable remaining problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0410\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" only for a genuine remaining high or medium finding.",
+      "context": ["tools/queue-commands.mjs", "tests/job-sandbox-route.test.mjs", "tools/ledger-lease.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    },
+    {
+      "id": "sec-review-t0420-recheck",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Recheck of a sensitive ticket after a fix for the prior review's high-severity finding.",
+      "prompt": "Recheck T-0420 (tools/burst-gpu.mjs) after a fix for a prior Opus review's high-severity finding: the sensitivity guard changed from `ticket != null && ticket.sensitive !== false` to `ticket == null || ticket.sensitive !== false`. Confirm a null ticket, an undefined ticket, {sensitive:null}, and {sensitive:'false'} (string) are all now refused with 'not allowed on rented lane' and zero provision calls, and that an explicit {sensitive:false} ticket with passing gates still provisions exactly once (no over-correction that now blocks the legitimate case). Report only real, concretely demonstrable remaining problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0420\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" only for a genuine remaining high or medium finding.",
+      "context": ["tools/burst-gpu.mjs", "tests/burst-gpu.test.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    }
+  ]
+}

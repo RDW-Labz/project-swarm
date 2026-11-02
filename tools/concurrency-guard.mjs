@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveConfigPath } from './local-config.mjs';
 
@@ -15,9 +15,42 @@ const SELF = fileURLToPath(import.meta.url);
 const SWARM = path.join(path.dirname(SELF), 'swarm.mjs');
 export const GUARD_USAGE = 'Usage: swarm with-concurrency N -- COMMAND [ARGS...]   (N is 1 to 2048; the command is a swarm command; the old value is put back when it ends, whatever happens)';
 const MIN = 1, MAX = 2048;
+const TERM_TO_KILL_GRACE_MS = 30_000;
 
 export const markerPath = configFile => path.join(path.dirname(configFile), 'concurrency-restore.json');
 const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+// Normalize both identity fields alike; a reused pid is not the guarded child.
+function procField(pid, field) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const out = execFileSync('ps', ['-o', field, '-p', String(pid)], { encoding: 'utf8', timeout: 2000 });
+    const trimmed = out.trim();
+    return trimmed ? trimmed.replace(/\s+/g, ' ') : null;
+  } catch { return null; }
+}
+const defaultProcStart = pid => procField(pid, 'lstart=');
+export const defaultProcIdentity = (pid, procStart = defaultProcStart) => ({ start: procStart(pid), command: procField(pid, 'command=') });
+function matchesChild(marker, procIdentity) {
+  if (![marker.childProcStart, marker.childCommand].every(value => typeof value === 'string' && value.trim().length > 0)) return false;
+  try {
+    const identity = procIdentity(marker.childPid);
+    return marker.childProcStart === identity?.start && marker.childCommand === identity?.command;
+  } catch { return false; }
+}
+function signalChild(childPid, signal, { childPgid, kill = process.kill, child } = {}) {
+  if (!Number.isInteger(childPid) || childPid <= 0) return child?.kill(signal);
+  // Only markers from detached children authorize a group signal. Legacy markers
+  // retain their pid-only behavior; never trust an unrelated pgid in a marker.
+  if (childPgid === childPid) {
+    try { return kill(-childPid, signal); } catch (error) {
+      if (error?.code !== 'ESRCH' && error?.code !== 'EPERM') throw error;
+    }
+  }
+  try { return kill(childPid, signal); } catch (error) {
+    if (child && (error?.code === 'ESRCH' || error?.code === 'EPERM')) return child.kill(signal);
+    throw error;
+  }
+}
 
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 function writeJsonAtomic(file, value, mode = 0o600) {
@@ -47,12 +80,48 @@ const bootedAt = () => Date.now() - os.uptime() * 1000;
 const fromBeforeBoot = marker => { const at = Date.parse(marker?.at); return Number.isFinite(at) && at < bootedAt() - 5000; };
 
 /** Called at the start of every swarm command: a marker whose owner is gone is restored. */
-export function restoreIfStale(configFile) {
+export function restoreIfStale(configFile, { isAlive = alive, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart), kill = process.kill, exit = process.exit, now = Date.now } = {}) {
   try {
     const marker = readJson(markerPath(configFile));
     if (!marker) return null;
-    if (alive(marker.pid) && !fromBeforeBoot(marker)) return null;
-    return restore(configFile);
+    if (fromBeforeBoot(marker)) return restore(configFile);
+    if (isAlive(marker.pid)) {
+      // EPERM means another user's process, so it cannot own this guarded run.
+      try { kill(marker.pid, 0); return null; } catch { return restore(configFile); }
+    }
+    const child = marker.childPid;
+    if (!Number.isInteger(child) || child <= 0 || !matchesChild(marker, procIdentity) || !isAlive(child)) return restore(configFile);
+    // alive() treats EPERM as alive, but another user's process is not ours.
+    try { kill(child, 0); } catch { return restore(configFile); }
+    if (child === process.pid) {
+      process.stderr.write('[tools/concurrency-guard.mjs] this process is the orphaned command of a dead guarded run; the command was NOT run. machineConcurrency is still raised and will be restored by the watcher or the next command.\n');
+      return exit(143);
+    }
+    // Re-read before signalling and before writing: another restorer may have updated the marker.
+    const currentMarker = () => {
+      const fresh = readJson(markerPath(configFile));
+      return fresh?.pid === marker.pid && fresh?.childPid === child && fresh?.childPgid === marker.childPgid && fresh?.childProcStart === marker.childProcStart && fresh?.childCommand === marker.childCommand ? fresh : null;
+    };
+    const fresh = currentMarker();
+    if (!fresh) return null;
+    if (fresh.termSentAt === undefined) {
+      try { signalChild(child, 'SIGTERM', { childPgid: fresh.childPgid, kill }); } catch (error) {
+        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
+        throw error;
+      }
+      const sentAt = now();
+      const latest = currentMarker();
+      if (latest && latest.termSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, termSentAt: sentAt });
+    } else if (fresh.killSentAt === undefined && now() - fresh.termSentAt >= TERM_TO_KILL_GRACE_MS) {
+      try { signalChild(child, 'SIGKILL', { childPgid: fresh.childPgid, kill }); } catch (error) {
+        if (error?.code === 'EPERM' || error?.code === 'ESRCH') return restore(configFile);
+        throw error;
+      }
+      const sentAt = now();
+      const latest = currentMarker();
+      if (latest && latest.killSentAt === undefined) writeJsonAtomic(markerPath(configFile), { ...latest, killSentAt: sentAt });
+    }
+    return { restored: false, reason: 'orphaned command still running' };
   } catch { return null; }
 }
 
@@ -84,39 +153,46 @@ function watch(pid, configFile) {
       if (marker && marker.pid === pid) {
         // The wrapper died but its command may still be running at the raised value: stop it first (it would go on starting workers at the old setting), then put the value back.
         const child = marker.childPid;
-        if (Number.isInteger(child) && child > 0 && alive(child)) {
-          try { process.kill(child, 'SIGTERM'); } catch { /* gone */ }
+        if (Number.isInteger(child) && child > 0 && alive(child) && matchesChild(marker, defaultProcIdentity)) {
+          try { signalChild(child, 'SIGTERM', { childPgid: marker.childPgid }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] SIGTERM child:', error?.message ?? error); }
           for (let i = 0; i < 100 && alive(child); i += 1) await new Promise(resolve => setTimeout(resolve, 100));
-          if (alive(child)) { try { process.kill(child, 'SIGKILL'); } catch { /* gone */ } }
+          if (alive(child) && matchesChild(marker, defaultProcIdentity)) { try { signalChild(child, 'SIGKILL', { childPgid: marker.childPgid }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] watch SIGKILL child:', error?.message ?? error); } }
         }
         restore(configFile);
       }
-    } catch { /* the next command restores it */ }
+    } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] watch restore after wrapper death:', error?.message ?? error); }
     process.exit(0);
   }, 300);
 }
 
 /** Records the command's pid in the marker, so a watcher that outlives a crashed wrapper can stop it. */
-function noteChild(configFile, pid, childPid) {
-  try { const marker = readJson(markerPath(configFile)); if (marker?.pid === pid) writeJsonAtomic(markerPath(configFile), { ...marker, childPid }); } catch { /* best effort */ }
+function noteChild(configFile, pid, childPid, procIdentity = defaultProcIdentity) {
+  try {
+    const marker = readJson(markerPath(configFile));
+    if (marker?.pid === pid) {
+      const identity = procIdentity(childPid);
+      writeJsonAtomic(markerPath(configFile), { ...marker, childPid, childPgid: childPid, childProcStart: identity?.start ?? null, childCommand: identity?.command ?? null });
+    }
+  } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] noteChild marker write:', error?.message ?? error); }
 }
 
 /** Runs `swarm ARGS` with the value set; resolves with the child's exit code once the value is back. `spawnImpl` and `startWatcher` are replaceable for tests. */
-export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, startWatcher = true, stdio = 'inherit', now = Date.now }) {
+export async function runGuarded({ value, args, env = process.env, configFile = resolveConfigPath({ env }), spawnImpl = spawn, kill = process.kill, startWatcher = true, stdio = 'inherit', now = Date.now, procStart = defaultProcStart, procIdentity = pid => defaultProcIdentity(pid, procStart) }) {
   // The signal handlers go in BEFORE the value changes: a Ctrl-C in the moment between writing the value and starting the command must still reach the restore below
   // (without a handler the wrapper would die on the spot and leave the value to the watcher a few hundred milliseconds later).
   let child = null;
   let pending = null;
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  // Ctrl-C at a terminal reaches the whole foreground group, the command included: it gets a moment to end on its own before the signal is passed on (it would get SIGINT twice).
+  // The detached command is outside the terminal's foreground group. Keep the
+  // 200 ms grace for it to finish, then forward Ctrl-C to its entire group.
   let childExited = false;
-  const passOn = sig => { try { if (!childExited) child?.kill(sig); } catch { /* already gone */ } };
+  const passOn = sig => { try { if (child && !childExited) signalChild(child.pid, sig, { childPgid: child.pid, kill, child }); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] passOn signal to child:', error?.message ?? error); } };
   const handlers = signals.map(sig => [sig, () => { pending = pending ?? sig; if (!child) return; if (sig === 'SIGTERM') passOn(sig); else setTimeout(() => passOn(sig), 200).unref(); }]);
   for (const [sig, h] of handlers) process.on(sig, h);
   const dropHandlers = () => { for (const [sig, h] of handlers) process.off(sig, h); };
   let done = false;
   let applied;
-  const finish = () => { if (done) return; done = true; try { if (readJson(markerPath(configFile))?.pid === process.pid) restore(configFile); } catch { /* the next command restores it */ } };
+  const finish = () => { if (done) return; done = true; try { if (readJson(markerPath(configFile))?.pid === process.pid) restore(configFile); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/concurrency-guard.mjs] finish restore on exit:', error?.message ?? error); } };
   const onExit = () => finish();
   try { applied = apply(configFile, value, { now }); } catch (error) { dropHandlers(); throw error; }
   let watcher = null;
@@ -126,17 +202,17 @@ export async function runGuarded({ value, args, env = process.env, configFile = 
   let code;
   if (pending) code = codes[pending];
   else {
-    child = spawnImpl(process.execPath, [SWARM, ...args], { stdio, env });
+    child = spawnImpl(process.execPath, [SWARM, ...args], { detached: true, stdio, env });
     child.on('exit', () => { childExited = true; });
-    noteChild(configFile, process.pid, child.pid);
+    noteChild(configFile, process.pid, child.pid, procIdentity);
     // A signal that arrived while the command was starting is passed on now.
-    if (pending) { try { child.kill(pending); } catch { /* already gone */ } }
+    if (pending) passOn(pending);
     code = await new Promise(resolve => { child.on('error', () => resolve(127)); child.on('exit', (c, sig) => resolve(c ?? (sig ? 128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig] ?? 1) : 1))); });
   }
   dropHandlers();
   finish();
   process.off('exit', onExit);
-  try { watcher?.kill('SIGTERM'); } catch { /* it exits on its own once the pid is gone */ }
+  try { watcher?.kill('SIGTERM'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/concurrency-guard.mjs] stop watcher SIGTERM:', error?.message ?? error); }
   return { code, applied };
 }
 

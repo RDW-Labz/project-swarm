@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-25b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 25b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/gate-rerun.mjs, tools/init.mjs, tools/integration-lock.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/gate-rerun.mjs\nLogger prefix: console.error('[tools/gate-rerun.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (process kill / integration lock). Line 520 `} catch { /* fall through */ }` (killing `-child.pid`): SILENT-ESRCH (process group already dead), log the rest; no fallback value, falls through to the plain `child.kill(signal)` retry.\n- Line 526 `} catch { /* gone */ }` (`child.kill(signal)`): SILENT-ESRCH (process already exited), log the rest; no fallback value, function returns.\n\n### tools/init.mjs\nLogger prefix: console.error('[tools/init.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (process kill / integration lock). Line 72 `} catch { /* a broken package.json still leaves CI checks */ }`: SILENT-ENOENT/SyntaxError (package.json missing or malformed), log the rest; no fallback value, `checks` keeps whatever was pushed before the parse.\n- Line 158 inner `catch { /* gone */ }` in `const kill = signal => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* gone */ } } };`: SILENT-ESRCH (child already exited before the fallback `child.kill` call), log the rest; no fallback value.\n\n### tools/integration-lock.mjs\nLogger prefix: console.error('[tools/integration-lock.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (process kill / integration lock). Line 29 `} catch { /* detached HEAD */ }`: SILENT-<nonzero git exit code> (`git symbolic-ref --short HEAD` fails in detached HEAD), log the rest (e.g. git not found); no fallback value, falls through to the `detached:` key.\n- Line 65 `catch { /* ownerless creation window */ }` (reading lock dir's `owner.json`): SILENT-ENOENT/SyntaxError (owner.json not written yet, or a torn write during lock creation), log the rest; no fallback value, `existing` stays undefined so the lock is treated as ownerless.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/gate-rerun.mjs",
+        "tools/init.mjs",
+        "tools/integration-lock.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/gate-rerun.test.mjs",
+        "tests/integration-lock-branch.test.mjs",
+        "tests/integration-lock-enoent.test.mjs",
+        "tests/no-manifest-review-refs.test.mjs",
+        "tests/orchestrator-hook-import.test.mjs",
+        "tests/policy-commit-window.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

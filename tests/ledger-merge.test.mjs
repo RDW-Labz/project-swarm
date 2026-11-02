@@ -135,6 +135,52 @@ test('journal entries from both sides are preserved and time-ordered', async () 
   assert.deepEqual(journal.map(e => e.text), ['early-mini', 'mid-book', 'later-mini']);
 });
 
+test('apply:true does not inherit ambient SWARM_AUTOPILOT_PID for parent-lock allowance', async t => {
+  const holder = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1<<30)'], { stdio: 'ignore' });
+  await new Promise((resolve, reject) => {
+    holder.once('spawn', resolve);
+    holder.once('error', reject);
+  });
+  const prev = process.env.SWARM_AUTOPILOT_PID;
+  process.env.SWARM_AUTOPILOT_PID = String(holder.pid);
+  t.after(() => {
+    if (prev === undefined) delete process.env.SWARM_AUTOPILOT_PID;
+    else process.env.SWARM_AUTOPILOT_PID = prev;
+  });
+  try {
+    const mini = await setupRoot([baseTicket('T-0211', 'todo')]);
+    const book = await setupRoot([baseTicket('T-0212', 'todo')]);
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), 'ledger-merge-out-'));
+    const projectDir = path.join(target, '.swarm', 'project');
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, 'autopilot.lock'),
+      `${JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString() })}\n`,
+    );
+    await fs.writeFile(path.join(projectDir, 'marker.txt'), 'keep');
+
+    const mergePid = 88_888;
+    await assert.rejects(
+      () => mergeTicketLedgers({
+        mini,
+        book,
+        target,
+        apply: true,
+        lockOptions: {
+          pid: mergePid,
+          parentPid: holder.pid,
+          isAlive: pid => pid === holder.pid,
+        },
+      }),
+      err => err.code === 'autopilot-running',
+    );
+    assert.equal(await fs.readFile(path.join(projectDir, 'marker.txt'), 'utf8'), 'keep');
+    await assert.rejects(fs.access(ledgerPath(target)));
+  } finally {
+    holder.kill('SIGTERM');
+  }
+});
+
 test('apply:true refuses when target autopilot lock is held by a live process', async () => {
   const holder = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1<<30)'], { stdio: 'ignore' });
   await new Promise((resolve, reject) => {

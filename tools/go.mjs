@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { mainWorktreeRoot } from './project-spend.mjs';
 
 // A manifest path always carries a `.` (a `.json` extension); a run id never does, so this is
 // enough to tell the two positional shapes of `go`'s target apart without touching the filesystem.
@@ -75,6 +76,114 @@ async function gitInRoot(exec, root, args, { env } = {}) {
   return exec('git', ['-C', root, ...args], { cwd: root, env });
 }
 
+const INTEGRATE_COMMIT_BRANCHES_KEY = 'integrate.commitBranches';
+
+function integrateCommitBranchesInvalidReason(detail) {
+  return `.project-swarm.json ${INTEGRATE_COMMIT_BRANCHES_KEY} ${detail}`;
+}
+
+function validCommitBranchPatterns(value) {
+  if (!Array.isArray(value)) return null;
+  const patterns = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !entry) return null;
+    patterns.push(entry);
+  }
+  return patterns;
+}
+
+function patternMatchesBranch(branch, pattern) {
+  if (pattern.endsWith('*')) {
+    const prefix = pattern.slice(0, -1);
+    return branch.startsWith(prefix);
+  }
+  return branch === pattern;
+}
+
+function patternMatchesAnyProtected(pattern, protectedLower) {
+  for (const name of protectedLower) {
+    if (patternMatchesBranch(name, pattern)) return true;
+  }
+  return false;
+}
+
+function filterCommitBranchPatterns(patterns, protectedLower) {
+  return patterns.filter(pattern => pattern !== '*' && !patternMatchesAnyProtected(pattern, protectedLower));
+}
+
+export function branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable = true, protectedLower = null } = {}) {
+  const effective = remoteHeadReadable || !protectedLower
+    ? patterns
+    : filterCommitBranchPatterns(patterns, protectedLower);
+  for (const pattern of effective) {
+    if (patternMatchesBranch(branch, pattern)) return true;
+  }
+  return false;
+}
+
+export async function readIntegrateCommitBranches(root) {
+  const readPointer = async pointerFile => {
+    try {
+      const text = await fs.readFile(pointerFile, 'utf8');
+      try {
+        return { pointer: JSON.parse(text) };
+      } catch {
+        return { error: integrateCommitBranchesInvalidReason('is not valid JSON') };
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT') return { missing: true };
+      return { error: integrateCommitBranchesInvalidReason(`cannot be read (${error.code ?? 'error'})`) };
+    }
+  };
+
+  let result = await readPointer(path.join(root, '.project-swarm.json'));
+  if (result.missing) {
+    const mainRoot = await mainWorktreeRoot(root);
+    if (mainRoot && path.resolve(mainRoot) !== path.resolve(root)) {
+      result = await readPointer(path.join(mainRoot, '.project-swarm.json'));
+    }
+  }
+  if (result.error) return { patterns: [], error: result.error };
+  if (result.missing) return { patterns: [], error: null };
+
+  const raw = result.pointer?.integrate?.commitBranches;
+  if (raw === undefined) return { patterns: [], error: null };
+  const patterns = validCommitBranchPatterns(raw);
+  if (patterns === null) return { patterns: [], error: integrateCommitBranchesInvalidReason('must be an array of non-empty strings') };
+  return { patterns, error: null };
+}
+
+async function readIntegrateCommitBranchContext(exec, root, gitEnv) {
+  const protectedLower = new Set(['main', 'master']);
+
+  const initRes = await gitInRoot(exec, root, ['config', '--get', 'init.defaultBranch'], { env: gitEnv });
+  if (initRes.code === 0 && initRes.stdout?.trim()) {
+    protectedLower.add(initRes.stdout.trim().toLowerCase());
+  }
+
+  let remoteHeadReadable = false;
+  const refRes = await gitInRoot(exec, root, ['for-each-ref', '--format=%(symref)', 'refs/remotes/*/HEAD'], { env: gitEnv });
+  if (refRes.code === 0 && refRes.stdout) {
+    for (const line of refRes.stdout.split('\n')) {
+      const symref = line.trim();
+      if (!symref) continue;
+      const match = /^refs\/remotes\/[^/]+\/(.+)$/.exec(symref);
+      if (!match) continue;
+      remoteHeadReadable = true;
+      protectedLower.add(match[1].toLowerCase());
+    }
+  }
+
+  return { protectedLower, remoteHeadReadable };
+}
+
+function isProtectedBranch(branch, protectedLower) {
+  return protectedLower.has(branch.toLowerCase());
+}
+
+const DEFAULT_BRANCH_UNDETERMINED_SKIP =
+  'integrate.commitBranches would match via * or a default-branch pattern, but the default branch could not be determined (no remote HEAD); only swarm/* and explicitly named branches commit';
+
 export async function commitIntegratedRun(root, { runId, state, manifest, autoCommit = true, exec = commitExec, env, appendEvent, sleepMs = sleep } = {}) {
   const skipped = reason => ({ commit: { status: 'skipped', reason }, humanLine: `committed nothing: ${reason}` });
   if (autoCommit === false) return skipped('autoCommit disabled');
@@ -83,7 +192,29 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
   const branchRes = await gitInRoot(exec, root, ['symbolic-ref', '--short', 'HEAD'], { env: gitEnv });
   if (branchRes.code !== 0 || !branchRes.stdout?.trim()) return skipped('not on a branch');
   const branch = branchRes.stdout.trim();
-  if (!branch.startsWith('swarm/')) return skipped(`checkout is on ${branch}, not a swarm/* branch`);
+
+  const { protectedLower, remoteHeadReadable } = await readIntegrateCommitBranchContext(exec, root, gitEnv);
+  if (isProtectedBranch(branch, protectedLower)) {
+    return skipped(`checkout is on ${branch}, the main branch; integrate never commits there (not a swarm/* branch)`);
+  }
+
+  const { patterns, error: commitBranchesError } = await readIntegrateCommitBranches(root);
+  const onSwarmBranch = branch.startsWith('swarm/');
+  const warnings = [];
+  if (commitBranchesError) {
+    if (!onSwarmBranch) return skipped(commitBranchesError);
+    warnings.push(commitBranchesError);
+  }
+
+  const branchContext = { remoteHeadReadable, protectedLower };
+  const onNamedBranch = branchAllowedForIntegrateCommit(branch, patterns, branchContext);
+  if (!onSwarmBranch && !onNamedBranch) {
+    const wouldMatchIgnored = !remoteHeadReadable
+      && branchAllowedForIntegrateCommit(branch, patterns, { remoteHeadReadable: true })
+      && !branchAllowedForIntegrateCommit(branch, patterns, branchContext);
+    if (wouldMatchIgnored) return skipped(DEFAULT_BRANCH_UNDETERMINED_SKIP);
+    return skipped(`checkout is on ${branch}, not a swarm/* branch or a branch named in .project-swarm.json integrate.commitBranches`);
+  }
 
   const stagedRes = await gitInRoot(exec, root, ['diff', '--cached', '--name-only'], { env: gitEnv });
   if (stagedRes.code !== 0) return skipped('git could not read the index');
@@ -105,7 +236,9 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
   for (const file of candidates) {
     const tracked = await gitInRoot(exec, root, ['ls-files', '--error-unmatch', '--', file], { env: gitEnv });
     if (tracked.code !== 0) {
-      try { await fs.access(path.join(root, file)); toCommit.push(file); } catch { /* absent */ }
+      try { await fs.access(path.join(root, file)); toCommit.push(file); } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/go.mjs] access untracked file:', file, error?.message ?? error);
+      }
       continue;
     }
     const diff = await gitInRoot(exec, root, ['diff', '--quiet', 'HEAD', '--', file], { env: gitEnv });
@@ -131,7 +264,9 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
 
   if (commitRes.code !== 0) {
     const reason = firstLine(commitRes.stderr) || 'git commit failed';
-    await gitInRoot(exec, root, ['restore', '--staged', '--', ...toCommit], { env: gitEnv }).catch(() => {});
+    await gitInRoot(exec, root, ['restore', '--staged', '--', ...toCommit], { env: gitEnv }).catch((error) => {
+      console.error('[tools/go.mjs] restore staged after failed commit:', toCommit.join(', '), error?.message ?? error);
+    });
     return { commit: { status: 'failed', reason }, humanLine: `committed nothing: ${reason}` };
   }
 
@@ -148,8 +283,11 @@ export async function commitIntegratedRun(root, { runId, state, manifest, autoCo
       sha: sha.slice(0, 8),
       files: toCommit.length,
       text: humanLine,
-    }).catch(() => {});
+    }).catch((error) => {
+      console.error('[tools/go.mjs] integration event lost:', runId, error?.message ?? error);
+    });
   }
+  if (warnings.length) return { commit, humanLine, warnings };
   return { commit, humanLine };
 }
 

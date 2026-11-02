@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-tiles",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. The direct-build Cockpit hides the header counts but its stack summary tiles still show the ledger's swarm counts. Fix that display only.\n\nIn tools/watch-assets/cc-cockpit-mount.js renderProjectCockpit, when p.directBuild is true, build the stackCounts object used by the summary tiles as all zeros: ready, running, review, blocked, todo, done, cancelled, proposed all 0. Keep the existing header '—' counters, the 'SWARM COUNTS HIDDEN' subline, the 'direct build: swarm counts hidden' footer and the ticket rows visible. Do not change non-direct-build projects, counts math, or payloads.\n\nIn tests/cc-cockpit-mount.test.mjs extend the existing direct-build cockpit test: after mounting, assert the stack summary tiles show 0 rather than 40/230/13. Inspect the tile DOM in the file (renderStackSummaryTiles is imported) and query the rendered tile values. Keep the existing header/footer assertions. Run: node --import ./tests/_isolate-config.mjs --test tests/cc-cockpit-mount.test.mjs -> pass.",
+      "context": [
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/cc-cockpit-mount.test.mjs"
+      ],
+      "ignoreTests": [
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-cockpit.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused cockpit test runs here; the listed suites run in the full suite after integration.",
+      "timeoutMs": 900000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-tiles",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cc-cockpit-mount.test.mjs"
+      ]
+    }
+  ]
+}

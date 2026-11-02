@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import { validateRentedConfig, effectiveRentedRaw } from './rented.mjs';
 import { validateLocalLaneBlock, localLaneConcurrency, LOCAL_MODEL_PREFIX, localSlotRoom, attachLocalSlotMeta } from './local-lane.mjs';
-import { machineAllowance } from './project-priority.mjs';
+import { DEFAULT_MACHINE_SHARE_PRIORITY, machineAllowance } from './project-priority.mjs';
 import path from 'node:path';
 
 export { machineAllowance } from './project-priority.mjs';
@@ -28,6 +28,7 @@ export const LANE_DEFAULTS = Object.freeze(Object.fromEntries(LANE_AGENTS.map(ag
 
 // The claude lane also takes the models for tier "mid" and tier "expensive" jobs (the router falls back to `model`).
 const CLAUDE_TIER_FIELDS = Object.freeze(['midModel', 'expensiveModel']);
+const CLAUDE_EXTRA_FIELDS = Object.freeze(['shellPaused']);
 const LOCAL_LANE_FIELDS = Object.freeze(['endpoints', 'agencyConcurrency']);
 function invalid(agent, field, reason) {
   return Object.assign(new Error(`lanes-invalid: ${agent}.${field} ${reason}`), { code: 'lanes-invalid' });
@@ -56,6 +57,7 @@ function validate(agent, lane) {
     throw invalid(agent, 'model', 'must be null or a valid model name');
   }
   if (Object.hasOwn(lane, 'paused') && lane.paused !== true && lane.paused !== false) throw invalid(agent, 'paused', 'must be true or false');
+  if (agent === 'claude' && Object.hasOwn(lane, 'shellPaused') && lane.shellPaused !== true && lane.shellPaused !== false) throw invalid(agent, 'shellPaused', 'must be true or false');
 }
 
 export function resolveLanes({ config = {}, manifest = {}, env = process.env } = {}) {
@@ -76,7 +78,7 @@ export function resolveLanes({ config = {}, manifest = {}, env = process.env } =
       if (!object(override)) throw invalid(agent, 'value', 'must be an object');
       for (const [field, value] of Object.entries(override)) {
         if (agent === 'local' && LOCAL_LANE_FIELDS.includes(field)) continue;
-        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && CLAUDE_TIER_FIELDS.includes(field)) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
+        if (!Object.hasOwn(LANE_DEFAULTS[agent], field) && !(agent === 'claude' && (CLAUDE_TIER_FIELDS.includes(field) || CLAUDE_EXTRA_FIELDS.includes(field))) && !(agent === 'local' && LOCAL_LANE_FIELDS.includes(field))) throw invalid(agent, field, 'is unknown');
         if (field === 'backoff') {
           if (!object(value)) throw invalid(agent, field, 'must be an object');
           for (const [key, entry] of Object.entries(value)) {
@@ -301,6 +303,23 @@ function grantJobId(entry) {
   return typeof entry.jobId === 'string' && entry.jobId ? entry.jobId : null;
 }
 
+// Weight for `machineAllowance` on this claim: explicit machine fields, then this project's live slots or demand, else the default.
+function machineSharePriorityForClaim(store, project, machine) {
+  const explicit = machine?.priority ?? machine?.machineSharePriority;
+  if (explicit !== undefined) return explicit;
+  for (const held of Object.values(store.slots ?? {})) {
+    if (!Array.isArray(held)) continue;
+    for (const slot of held) {
+      if (slot?.project === project && slot.machineSharePriority !== undefined) return slot.machineSharePriority;
+    }
+  }
+  const demand = store.demand && typeof store.demand === 'object' && !Array.isArray(store.demand) ? store.demand : {};
+  for (const entry of Object.values(demand)) {
+    if (entry?.project === project && entry.machineSharePriority !== undefined) return entry.machineSharePriority;
+  }
+  return DEFAULT_MACHINE_SHARE_PRIORITY;
+}
+
 // One lock grants every slot this run can take. A per-job lock on a slow disk spaces
 // state writes past the coalesce window.
 export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', machine = null, now = Date.now, isAlive, local = null, jobIds = null } = {}) {
@@ -314,10 +333,9 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
     if (machine?.max) {
       const project = String(machine.project ?? '');
       const time = now();
-      const priority = machine.priority ?? machine.machineSharePriority;
+      const priority = machineSharePriorityForClaim(store, project, machine);
       const { allowed } = machineAllowance({
-        store, project, count: take, max: machine.max, isAlive: isAlive ?? pidAlive, time,
-        ...(priority !== undefined ? { priority } : {}),
+        store, project, count: take, max: machine.max, isAlive: isAlive ?? pidAlive, time, priority,
       });
       if (allowed < take) machineLimited = true;
       take = Math.min(take, allowed);
@@ -328,8 +346,7 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
       if (waitingFor > 0 && project) {
         store.demand[key] = {
           project, runId, agent, count: waitingFor, pid: process.pid, host: os.hostname(),
-          since: store.demand[key]?.since ?? time, at: time,
-          ...(priority !== undefined ? { machineSharePriority: priority } : {}),
+          since: store.demand[key]?.since ?? time, at: time, machineSharePriority: priority,
         };
       }
       else delete store.demand[key];
@@ -349,7 +366,7 @@ export function claimLaneSlots({ dir, agent, concurrency, count, runId = '', mac
         });
         if (room < 1) continue;
       }
-      const slotPriority = machine?.priority ?? machine?.machineSharePriority;
+      const slotPriority = machine?.max ? machineSharePriorityForClaim(store, String(machine.project ?? ''), machine) : undefined;
       let slot = {
         id: crypto.randomUUID(), pid: process.pid, host: os.hostname(), runId,
         ...(machine?.project ? { project: String(machine.project) } : {}),

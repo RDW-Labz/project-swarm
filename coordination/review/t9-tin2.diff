@@ -1,0 +1,1106 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 66095c2f..30cb84d3 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,13 @@
+ # Changelog
+ 
++## 1.167.35
++
++Train 9, tin 2: one source for all counts.
++- The Command Center now computes ticket counts once on the server from the full ledger: one live set (human tickets included; cancelled, proposed and superseded left out), one done count and percent, and one dependency-aware ready count. The Hive cards and panels and the Cockpit header, NOW card, ticket stack and footer render those same numbers; the cockpit no longer guesses needs-you from ticket statuses or counts every todo+ready as ready;
++- needs-you comes from the owner inbox on both pages (card.blocked.needYou); the snapshot exposes board totals and live patches recompute them, so counts cannot drift between a full rebuild and a change patch;
++- Tests: canonical counts over human/cancelled/proposed/superseded and dependency-aware ready, Hive/Cockpit parity on one fixture, stripped-ledger payloads, and full-rebuild vs patch totals;
++- Version 1.167.35.
++
+ ## 1.167.34
+ 
+ Train 9, tin 1: one board owner.
+diff --git a/README.md b/README.md
+index 5188ca4c..adcf8d35 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.34 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.35 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.34 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.35 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/package-lock.json b/package-lock.json
+index 3a8a57f7..61310792 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.34",
++  "version": "1.167.35",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.34",
++      "version": "1.167.35",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index 7aaebe93..1f13457a 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.34",
++  "version": "1.167.35",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/cc-hive-mount.test.mjs b/tests/cc-hive-mount.test.mjs
+index 330ccfb6..f87628a2 100644
+--- a/tests/cc-hive-mount.test.mjs
++++ b/tests/cc-hive-mount.test.mjs
+@@ -305,11 +305,11 @@ test('Hive shows four labelled counters, one card per project with its ledger nu
+   assert.equal(cards[1].getAttribute('data-project-id'), 'proj-b');
+   const alpha = collectText(cards[0]);
+   assert.match(alpha, /01Alpha/);
+-  assert.match(alpha, /tickets7/, 'tickets total counts every status but proposed');
+-  assert.match(alpha, /done2 of 6/, 'done of tickets that still count (cancelled left out)');
++  assert.match(alpha, /tickets4/, 'tickets total is the canonical live count from the ledger');
++  assert.match(alpha, /done2 of 4/, 'done of tickets that still count (cancelled left out)');
+   assert.match(alpha, /blocked1/);
+   assert.match(alpha, /in review1/);
+-  assert.match(alpha, /33%/);
++  assert.match(alpha, /50%/);
+   assert.equal(cards[0].getAttribute('data-status'), 'building');
+   const beta = collectText(cards[1]);
+   assert.match(beta, /DONE/);
+@@ -348,11 +348,11 @@ test('Hive panels read the ledger: session log, hourly bars, per-project percent
+   const panels = collectText(host.querySelector('.hive-panels'));
+   assert.match(panels, /2projects on the board/);
+   assert.match(panels, /read from host-a, host-b/);
+-  assert.match(panels, /Alpha.*33%/s);
++  assert.match(panels, /Alpha.*50%/s);
+   assert.match(panels, /Beta.*100%/s);
+   assert.match(panels, /no per-lane job counts in the board data/, 'lanes missing from the payload say so');
+-  assert.match(panels, /tickets in the ledger.*12/s);
+-  assert.match(panels, /tickets left to do.*4/s);
++  assert.match(panels, /tickets in the ledger.*8/s);
++  assert.match(panels, /tickets left to do.*2/s);
+   assert.match(panels, /held for you.*2/s);
+   assert.match(panels, /saved by the swarm.*not measured yet/s);
+   assert.ok(host.querySelector('svg'), 'completions-per-hour step chart');
+diff --git a/tests/command-center-counts.test.mjs b/tests/command-center-counts.test.mjs
+new file mode 100644
+index 00000000..394e4695
+--- /dev/null
++++ b/tests/command-center-counts.test.mjs
+@@ -0,0 +1,157 @@
++// SPDX-License-Identifier: Apache-2.0
++import './_isolate-config.mjs';
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import vm from 'node:vm';
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { ticketCountsOf } from '../tools/ticket-counts.mjs';
++import {
++  buildCommandCenterSnapshot,
++  buildProjectCockpit,
++  patchCommandCenterSnapshot,
++  mergeCardTicketCounts,
++} from '../tools/command-center-snapshot.mjs';
++
++const assets = fileURLToPath(new URL('../tools/watch-assets', import.meta.url));
++
++async function loadHivePanels() {
++  const code = await fs.readFile(path.join(assets, 'hive-panels.js'), 'utf8');
++  const sandbox = { module: { exports: {} }, exports: {} };
++  vm.runInNewContext(code, sandbox, { filename: 'hive-panels.js' });
++  return sandbox.module.exports;
++}
++
++test('ticketCountsOf: live set, human included, footer statuses, ready deps, rounding', () => {
++  const empty = ticketCountsOf(null);
++  assert.deepEqual(empty, {
++    total: 0, done: 0, ready: 0, review: 0, blocked: 0, todo: 0,
++    cancelled: 0, proposed: 0, superseded: 0, remaining: 0, percentDone: 0, counted: 0,
++  });
++
++  const ledger = {
++    tickets: [
++      { id: 'T-1', status: 'done', type: 'build' },
++      { id: 'T-2', status: 'cancelled', type: 'build' },
++      { id: 'T-3', status: 'proposed', type: 'build' },
++      { id: 'T-4', status: 'superseded', type: 'build' },
++      { id: 'T-5', status: 'review', type: 'human' },
++      { id: 'T-6', status: 'todo', type: 'build', dependsOn: ['T-7'] },
++      { id: 'T-7', status: 'todo', type: 'build' },
++      { id: 'T-8', status: 'ready', type: 'build', dependsOn: ['T-1'] },
++      { id: 'T-9', status: 'todo', origin: 'comment', type: 'build' },
++    ],
++  };
++  const c = ticketCountsOf(ledger);
++  assert.equal(c.total, 6, 'live tickets include human and exclude cancelled/proposed/superseded');
++  assert.equal(c.done, 1);
++  assert.equal(c.ready, 2, 'T-7 and T-8; T-6 waits on T-7; unapproved proposal not ready');
++  assert.equal(c.review, 1);
++  assert.equal(c.cancelled, 1);
++  assert.equal(c.proposed, 1);
++  assert.equal(c.superseded, 1);
++  assert.equal(c.percentDone, 17);
++  assert.equal(c.counted, c.total);
++});
++
++test('snapshot prefers board counts over byStatus and exposes totals', () => {
++  const board = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 0 } },
++    projects: [{
++      id: 'p',
++      name: 'P',
++      card: { blocked: { needYou: 3 }, now: { buildingTickets: 0 }, next: { ready: 99 } },
++      tickets: { byStatus: { done: 1, ready: 99, todo: 50 } },
++      counts: {
++        total: 10, done: 5, ready: 2, review: 1, blocked: 1, todo: 1,
++        cancelled: 0, proposed: 0, superseded: 0, remaining: 5, percentDone: 50, counted: 10,
++      },
++      ledger: { tickets: [{ id: 'X', status: 'ready' }] },
++    }],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  assert.equal(snap.projects[0].ticketCounts.total, 10);
++  assert.equal(snap.projects[0].ticketCounts.ready, 2);
++  assert.equal(snap.totals.tickets, 10);
++  assert.equal(snap.totals.percentDone, 50);
++});
++
++test('hive card and cockpit counts agree on one board fixture', async () => {
++  const board = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 1 } },
++    projects: [{
++      id: 'swarm',
++      name: 'project-swarm',
++      agents: { total: 1, jobs: { running: 1 } },
++      card: { blocked: { needYou: 8 }, now: { buildingTickets: 1 }, next: { ready: 70 } },
++      tickets: { byStatus: { done: 230, ready: 70, review: 20, blocked: 10, todo: 100, cancelled: 5 } },
++      counts: {
++        total: 408, done: 237, ready: 15, review: 12, blocked: 8, todo: 136,
++        cancelled: 3, proposed: 0, superseded: 0, remaining: 171, percentDone: 58, counted: 408,
++      },
++      ledger: {
++        tickets: Array.from({ length: 70 }, (_, i) => ({ id: `R-${i}`, status: 'ready', title: 'x' }))
++          .concat([{ id: 'D-1', status: 'done', title: 'd' }]),
++      },
++    }],
++  };
++  const snap = buildCommandCenterSnapshot(board);
++  const card = snap.projects[0].ticketCounts;
++  const cockpit = buildProjectCockpit(board, 'swarm');
++  assert.equal(cockpit.counts.total, card.total);
++  assert.equal(cockpit.counts.done, card.done);
++  assert.equal(cockpit.counts.percentDone, card.percentDone);
++  assert.equal(cockpit.counts.ready, card.ready);
++  assert.equal(cockpit.counts.needsYou, 8);
++  assert.notEqual(cockpit.counts.ready, 70, 'stripped ledger must not drive READY headline');
++  const { deriveHiveView } = await loadHivePanels();
++  const view = deriveHiveView(snap);
++  assert.equal(view.projects[0].counts.ready, card.ready);
++  assert.equal(view.totals.ready, snap.totals.ready);
++});
++
++test('patchCommandCenterSnapshot matches full rebuild for counts and totals', () => {
++  const base = {
++    at: '2026-10-26T12:00:00.000Z',
++    machine: { agents: { total: 2 } },
++    projects: [
++      { id: 'a', name: 'A', card: { blocked: { needYou: 1 }, now: {}, next: {} }, counts: { total: 4, done: 1, ready: 1, review: 0, blocked: 0, todo: 2, cancelled: 0, proposed: 0, superseded: 0, remaining: 3, percentDone: 25, counted: 4 } },
++      { id: 'b', name: 'B', card: { blocked: { needYou: 0 }, now: {}, next: {} }, counts: { total: 2, done: 2, ready: 0, review: 0, blocked: 0, todo: 0, cancelled: 0, proposed: 0, superseded: 0, remaining: 0, percentDone: 100, counted: 2 } },
++    ],
++  };
++  const snap = buildCommandCenterSnapshot(base);
++  const patchedBoard = {
++    ...base,
++    at: '2026-10-26T12:05:00.000Z',
++    projects: [
++      { ...base.projects[0], card: { blocked: { needYou: 5 }, now: {}, next: {} }, counts: { total: 10, done: 4, ready: 3, review: 1, blocked: 1, todo: 1, cancelled: 1, proposed: 0, superseded: 0, remaining: 6, percentDone: 40, counted: 10 } },
++      base.projects[1],
++    ],
++  };
++  patchCommandCenterSnapshot(snap, patchedBoard, ['a']);
++  const fresh = buildCommandCenterSnapshot(patchedBoard);
++  assert.deepEqual(snap.projects.find(p => p.id === 'a').ticketCounts, fresh.projects.find(p => p.id === 'a').ticketCounts);
++  assert.deepEqual(snap.totals, fresh.totals);
++  assert.equal(snap.stats.needsYouCount.value, 5);
++});
++
++test('stripped commandCenterLedger plus server counts: counts win for card shape', () => {
++  const project = {
++    id: 'x',
++    card: { blocked: { needYou: 2 } },
++    ledger: { tickets: [{ id: 'A', status: 'ready' }, { id: 'B', status: 'todo' }] },
++    counts: ticketCountsOf({
++      tickets: [
++        { id: 'A', status: 'ready' },
++        { id: 'B', status: 'blocked' },
++      ],
++    }),
++  };
++  const shaped = mergeCardTicketCounts(project, 0);
++  assert.equal(shaped.ready, 1);
++  assert.equal(shaped.total, 2);
++  assert.equal(shaped.needsYou, 2);
++});
+diff --git a/tests/command-center-snapshot.test.mjs b/tests/command-center-snapshot.test.mjs
+index 2d746a80..e78a47c4 100644
+--- a/tests/command-center-snapshot.test.mjs
++++ b/tests/command-center-snapshot.test.mjs
+@@ -78,20 +78,36 @@ test('buildCommandCenterSnapshot maps labelled stats and project cards', () => {
+   assert.ok(alpha.asks);
+   assert.ok(alpha.out);
+   assert.ok(alpha.fails);
+-  assert.equal(alpha.meter.value, 40);
++  assert.equal(alpha.meter.value, 50);
+ });
+ 
+-test('project cards carry ledger counts by status for the Hive', () => {
++test('project cards carry canonical counts from board counts, not byStatus alone', () => {
+   const board = fakeBoardPayload();
+-  board.projects[0].tickets.byStatus = { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, proposed: 9 };
++  board.projects[0].counts = {
++    total: 408, done: 237, ready: 15, review: 12, blocked: 8, todo: 136,
++    cancelled: 3, proposed: 2, superseded: 1, remaining: 171, percentDone: 58, counted: 408,
++  };
++  board.projects[0].tickets.byStatus = { done: 1, ready: 70, blocked: 1, review: 1, cancelled: 1, proposed: 9 };
++  board.projects[0].card.blocked.needYou = 8;
+   const snap = buildCommandCenterSnapshot(board);
+   const alpha = snap.projects.find(p => p.id === 'alpha');
+-  assert.deepEqual(alpha.ticketCounts, {
+-    total: 6, done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, remaining: 3,
+-    source: 'projects[0].tickets.byStatus',
+-  });
++  assert.equal(alpha.ticketCounts.total, 408);
++  assert.equal(alpha.ticketCounts.ready, 15);
++  assert.equal(alpha.ticketCounts.needsYou, 8);
++  assert.equal(alpha.ticketCounts.percentDone, 58);
++  assert.equal(alpha.ticketCounts.source, 'projects[0].counts');
++  assert.equal(snap.totals.tickets, 408);
++  assert.equal(snap.totals.needsYou, 8);
++});
++
++test('project cards fall back to byStatus when counts and ledger rows are absent', () => {
++  const board = fakeBoardPayload();
++  delete board.projects[1].ledger;
++  board.projects[1].tickets.byStatus = { done: 1, ready: 2, todo: 1 };
++  const snap = buildCommandCenterSnapshot(board);
+   const beta = snap.projects.find(p => p.id === 'beta');
+-  assert.equal(beta.ticketCounts, undefined, 'no counts: no field, not zeros');
++  assert.equal(beta.ticketCounts.total, 4);
++  assert.equal(beta.ticketCounts.source, 'projects[1].tickets.byStatus');
+ });
+ 
+ test('hive extras: completions per hour, session events, lanes and pull requests', () => {
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index e4fe2cd3..5d48f842 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.34', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.35', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.34');
++  assert.equal(pkg.version, '1.167.35');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.34/);
+-  assert.match(readme, /Install from tag v1\.167\.34/);
++  assert.match(readme, /Use Project Swarm 1\.167\.35/);
++  assert.match(readme, /Install from tag v1\.167\.35/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.34\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index 82e1df16..a091c9b6 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.34', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.34 while 1.46.1 history remains', async () => {
++describe('release: 1.167.35', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.35 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.34');
+-    assert.equal(lock.version, '1.167.34');
+-    assert.equal(lock.packages[''].version, '1.167.34');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.34\n/);
++    assert.equal(pkg.version, '1.167.35');
++    assert.equal(lock.version, '1.167.35');
++    assert.equal(lock.packages[''].version, '1.167.35');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 612d09b8..f7fa7539 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.34');
+-  assert.equal(lock.version, '1.167.34');
+-  assert.equal(lock.packages[''].version, '1.167.34');
++  assert.equal(pkg.version, '1.167.35');
++  assert.equal(lock.version, '1.167.35');
++  assert.equal(lock.packages[''].version, '1.167.35');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.34\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.35\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 8d0f7b0d..dc7a6eb5 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.34 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.35 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.34');
+-  assert.equal(lock.version, '1.167.34');
+-  assert.equal(lock.packages[''].version, '1.167.34');
++  assert.equal(pkg.version, '1.167.35');
++  assert.equal(lock.version, '1.167.35');
++  assert.equal(lock.packages[''].version, '1.167.35');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.34\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.34',
++    'README.md': '1.167.35',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.34',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.34',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.34',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.34',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.35',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.35',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.35',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.35',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index 7162ee91..a04cb6a4 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.34', () => {
+-  test('package.json and package-lock.json are both at 1.167.34', async () => {
++describe('release: 1.167.35', () => {
++  test('package.json and package-lock.json are both at 1.167.35', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.34');
+-    assert.equal(lock.version, '1.167.34');
+-    assert.equal(lock.packages[''].version, '1.167.34');
++    assert.equal(pkg.version, '1.167.35');
++    assert.equal(lock.version, '1.167.35');
++    assert.equal(lock.packages[''].version, '1.167.35');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index e03704aa..c5474737 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.34');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.34\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.35');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.35\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/board-data.mjs b/tools/board-data.mjs
+index b8c3e2d2..2270673a 100644
+--- a/tools/board-data.mjs
++++ b/tools/board-data.mjs
+@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
+ import path from 'node:path';
+ import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
+ import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
++import { ticketCountsOf } from './ticket-counts.mjs';
+ import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
+ import { isScratchRoot } from './projects.mjs';
+ import { listLessons } from './lesson-store.mjs';
+@@ -1049,8 +1050,9 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
+     machine: os.hostname(),
+     version: installedVersion,
+     pinnedVersion,
+-    stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
++    stage: tickets.stage, tickets, readyTickets,     idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
+     ledger: commandCenterLedger(ledger),
++    counts: ticketCountsOf(ledger),
+     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
+     liveCount: activeLiveRuns.length,
+     agents, cost,
+@@ -1393,6 +1395,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
+     idleWithReady: liveIds.size === 0 && readyTickets > 0,
+     tickets, ticketCounts: ticketsOf(ledger, scope),
+     ledger: commandCenterLedger(ledger),
++    counts: ticketCountsOf(ledger),
+     agents: agentsOf(runs, liveRunIds, now),
+     orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [] }; } })(),
+     runStream: runs.slice(-20).reverse().map(({ id, state }) => ({ id, title: txt(state.status, 30), body: `${(state.jobs ?? []).filter(job => job.status === 'complete').length}/${(state.jobs ?? []).length} jobs` })),
+diff --git a/tools/command-center-snapshot.mjs b/tools/command-center-snapshot.mjs
+index fd8d2218..3dfda359 100644
+--- a/tools/command-center-snapshot.mjs
++++ b/tools/command-center-snapshot.mjs
+@@ -1,6 +1,9 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // Board /api/board payload → Command Center snapshot and per-project cockpit data.
+ 
++import { ticketCountsOf } from './ticket-counts.mjs';
++import { readyTickets } from './tickets.mjs';
++
+ function num(v) {
+   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+ }
+@@ -33,6 +36,135 @@ function needsYouTotal(projects) {
+   return any ? total : null;
+ }
+ 
++const EXCLUDED_FROM_TOTAL = new Set(['cancelled', 'proposed', 'superseded']);
++
++function shapeFromStatusMap(by, { readyFromStatusOnly = false, tickets = null } = {}) {
++  if (!by || typeof by !== 'object') return null;
++  const get = (k) => (num(by[k]) ?? 0);
++  let total = 0;
++  for (const [status, count] of Object.entries(by)) {
++    if (EXCLUDED_FROM_TOTAL.has(status)) continue;
++    total += num(count) ?? 0;
++  }
++  const done = get('done');
++  const cancelled = get('cancelled');
++  const proposed = get('proposed');
++  const superseded = get('superseded');
++  const review = get('review');
++  const blocked = get('blocked');
++  const todo = get('todo');
++  let ready = get('ready');
++  if (tickets && !readyFromStatusOnly) {
++    ready = readyTickets(tickets).length;
++  } else if (readyFromStatusOnly) {
++    ready = get('ready');
++  }
++  const remaining = Math.max(0, total - done);
++  const percentDone = total ? Math.round((100 * done) / total) : 0;
++  return {
++    total,
++    done,
++    ready,
++    blocked,
++    review,
++    todo,
++    cancelled,
++    proposed,
++    superseded,
++    remaining,
++    percentDone,
++    counted: total,
++  };
++}
++
++function ticketCountsFromLedgerRows(rows) {
++  if (!Array.isArray(rows) || !rows.length) return null;
++  const tickets = rows.filter(t => t && typeof t === 'object');
++  const by = {};
++  for (const t of tickets) if (t.status) by[t.status] = (by[t.status] ?? 0) + 1;
++  const hasDeps = tickets.some(t => Array.isArray(t.dependsOn) && t.dependsOn.length);
++  const hasType = tickets.some(t => t.type != null);
++  const shaped = shapeFromStatusMap(by, {
++    readyFromStatusOnly: !hasDeps && !hasType,
++    tickets: hasDeps || hasType ? tickets : null,
++  });
++  return shaped;
++}
++
++function mergeCardTicketCounts(p, index) {
++  const prefix = `projects[${index}]`;
++  let base = null;
++  let source = null;
++  if (p?.counts && typeof p.counts === 'object') {
++    base = { ...p.counts };
++    source = `${prefix}.counts`;
++  } else {
++    const fromLedger = ticketCountsFromLedgerRows(p?.ledger?.tickets);
++    if (fromLedger) {
++      base = fromLedger;
++      source = `${prefix}.ledger.tickets`;
++    } else if (p?.tickets?.byStatus && Object.keys(p.tickets.byStatus).length) {
++      base = shapeFromStatusMap(p.tickets.byStatus, { readyFromStatusOnly: true });
++      source = `${prefix}.tickets.byStatus`;
++    }
++  }
++  if (!base) return null;
++  const needYou = p.card?.blocked?.needYou;
++  return {
++    total: base.total,
++    done: base.done,
++    ready: base.ready,
++    blocked: base.blocked,
++    review: base.review,
++    todo: base.todo ?? 0,
++    cancelled: base.cancelled,
++    proposed: base.proposed ?? 0,
++    superseded: base.superseded ?? 0,
++    remaining: base.remaining,
++    counted: base.counted ?? base.total,
++    percentDone: base.percentDone ?? (base.total ? Math.round((100 * base.done) / base.total) : 0),
++    ...(typeof needYou === 'number' && Number.isFinite(needYou) ? { needsYou: needYou } : {}),
++    source,
++  };
++}
++
++function snapshotTotals(cards) {
++  let tickets = 0;
++  let done = 0;
++  let ready = 0;
++  let review = 0;
++  let blocked = 0;
++  let todo = 0;
++  let cancelled = 0;
++  let needsYou = 0;
++  let any = false;
++  for (const card of cards) {
++    const c = card.ticketCounts;
++    if (!c || num(c.total) === null) continue;
++    any = true;
++    tickets += c.total;
++    done += c.done ?? 0;
++    ready += c.ready ?? 0;
++    review += c.review ?? 0;
++    blocked += c.blocked ?? 0;
++    todo += c.todo ?? 0;
++    cancelled += c.cancelled ?? 0;
++    if (typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)) needsYou += c.needsYou;
++  }
++  if (!any) return null;
++  return {
++    tickets,
++    done,
++    ready,
++    review,
++    blocked,
++    todo,
++    cancelled,
++    percentDone: tickets ? Math.round((100 * done) / tickets) : 0,
++    needsYou,
++  };
++}
++
+ function buildProjectCard(p, index) {
+   const prefix = `projects[${index}]`;
+   const card = {
+@@ -44,10 +176,17 @@ function buildProjectCard(p, index) {
+   if (live) card.liveAgents = live;
+   const need = field('Needs you', p.card?.blocked?.needYou, 'count', `${prefix}.card.blocked.needYou`, 'Inbox items waiting for the owner on this project.');
+   if (need) card.needsYou = need;
+-  const overall = p.progress?.overall;
+-  if (typeof overall === 'number' && Number.isFinite(overall)) {
+-    card.percentDone = textField('Done', `${Math.round(overall)}%`, `${prefix}.progress.overall`, 'Overall build progress percent from the project ledger.');
+-    card.meter = { label: 'done', value: Math.round(overall), source: `${prefix}.progress.overall` };
++  const ticketCountShape = mergeCardTicketCounts(p, index);
++  if (ticketCountShape) {
++    const pct = ticketCountShape.percentDone;
++    card.percentDone = textField('Done', `${Math.round(pct)}%`, `${ticketCountShape.source}.percentDone`, 'Percent of live ledger tickets marked done.');
++    card.meter = { label: 'done', value: Math.round(pct), source: `${ticketCountShape.source}.percentDone` };
++  } else {
++    const overall = p.progress?.overall;
++    if (typeof overall === 'number' && Number.isFinite(overall)) {
++      card.percentDone = textField('Done', `${Math.round(overall)}%`, `${prefix}.progress.overall`, 'Overall build progress percent from the project ledger.');
++      card.meter = { label: 'done', value: Math.round(overall), source: `${prefix}.progress.overall` };
++    }
+   }
+   const building = p.card?.now?.buildingTickets;
+   if (typeof building === 'number' && Number.isFinite(building)) {
+@@ -68,30 +207,13 @@ function buildProjectCard(p, index) {
+   if (typeof fails === 'number' && Number.isFinite(fails)) {
+     card.fails = textField('Fails', String(fails), `${prefix}.tickets.byStatus.failed`, 'Ledger tickets in failed status.');
+   }
+-  const counts = ticketCounts(p);
+-  if (counts) card.ticketCounts = { ...counts, source: `${prefix}.tickets.byStatus` };
++  if (ticketCountShape) card.ticketCounts = ticketCountShape;
+   return card;
+ }
+ 
+ const HOUR_MS = 3600000;
+ const DONE_AT_KEYS = ['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'];
+ 
+-/** Ticket counts by status for the Hive card and panels: the board's byStatus map, else the ledger rows. Null when neither exists. */
+-function ticketCounts(p) {
+-  let by = p?.tickets?.byStatus;
+-  if (!by || typeof by !== 'object' || !Object.keys(by).length) {
+-    const rows = Array.isArray(p?.ledger?.tickets) ? p.ledger.tickets : [];
+-    if (!rows.length) return null;
+-    by = {};
+-    for (const t of rows) if (t?.status) by[t.status] = (by[t.status] ?? 0) + 1;
+-  }
+-  const get = (k) => (num(by[k]) ?? 0);
+-  const total = Object.entries(by).reduce((a, [k, v]) => a + (k === 'proposed' ? 0 : (num(v) ?? 0)), 0);
+-  const cancelled = get('cancelled');
+-  const done = get('done');
+-  return { total, done, ready: get('ready'), blocked: get('blocked'), review: get('review'), cancelled, remaining: Math.max(0, total - done - cancelled) };
+-}
+-
+ function doneAtMs(t) {
+   for (const k of DONE_AT_KEYS) {
+     const ms = typeof t?.[k] === 'string' ? Date.parse(t[k]) : NaN;
+@@ -197,15 +319,16 @@ export function buildCommandCenterSnapshot(board, options = {}) {
+     if (!p || p.parentId) continue;
+     cards.push(buildProjectCard(p, i));
+   }
++  const totals = snapshotTotals(cards);
+   const nowMs = Number.isFinite(Date.parse(at)) ? Date.parse(at) : (options.now ?? Date.now());
+-  return { at, stats, projects: cards, hive: buildHiveExtras(board, projects, nowMs) };
++  return { at, stats, projects: cards, totals, hive: buildHiveExtras(board, projects, nowMs) };
+ }
+ 
+ /** Update only changed cards; aggregates are cheap reductions over the cached rows. */
+ export function patchCommandCenterSnapshot(snapshot, board, ids) {
+   const changed = new Set(ids);
+   const projects = board.projects ?? [];
+-  for (let i = 0; i < projects.length; i++) {
++  for (let i = 0; i < projects.length; i += 1) {
+     const p = projects[i];
+     if (!changed.has(p.id) || p.parentId) continue;
+     const index = snapshot.projects.findIndex(card => card.id === p.id);
+@@ -217,6 +340,7 @@ export function patchCommandCenterSnapshot(snapshot, board, ids) {
+   if (snapshot.stats.agentsLive) snapshot.stats.agentsLive.value = board.machine?.agents?.total ?? 0;
+   const needs = needsYouTotal(projects);
+   if (needs !== null) snapshot.stats.needsYouCount = field('Needs you', needs, 'count', 'projects[].card.blocked.needYou', 'Owner inbox items summed across projects.');
++  snapshot.totals = snapshotTotals(snapshot.projects);
+   snapshot.hive = buildHiveExtras(board, projects.filter(p => !p.parentId), Date.parse(board.at));
+   return snapshot;
+ }
+@@ -233,8 +357,6 @@ function ledgerFromProject(project) {
+   if (project?.tickets?.byStatus) {
+     for (const [status, count] of Object.entries(project.tickets.byStatus)) {
+       if (!count || status === 'proposed') continue;
+-      // Ready/blocked card rows are only a partial ledger. Fill the remaining
+-      // statuses too, so a newly completed ticket appears in the cockpit.
+       const present = tickets.filter(ticket => ticket.status === status).length;
+       for (let i = present; i < count; i += 1) tickets.push({ id: `${status}-${i}`, title: status, status });
+     }
+@@ -243,6 +365,42 @@ function ledgerFromProject(project) {
+   return { tickets, ...(scope ? { scope } : {}) };
+ }
+ 
++function cockpitCounts(project) {
++  const cardShape = mergeCardTicketCounts(project, 0);
++  if (cardShape) {
++    return {
++      total: cardShape.total,
++      done: cardShape.done,
++      ready: cardShape.ready,
++      blocked: cardShape.blocked,
++      review: cardShape.review,
++      todo: cardShape.todo ?? 0,
++      cancelled: cardShape.cancelled,
++      proposed: cardShape.proposed ?? 0,
++      superseded: cardShape.superseded ?? 0,
++      remaining: cardShape.remaining,
++      counted: cardShape.counted,
++      percentDone: cardShape.percentDone,
++      needsYou: cardShape.needsYou ?? (typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0),
++      source: cardShape.source,
++    };
++  }
++  const ledger = ledgerFromProject(project);
++  const fromLedger = ticketCountsFromLedgerRows(ledger.tickets);
++  if (fromLedger) {
++    return {
++      ...fromLedger,
++      needsYou: typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0,
++      source: 'ledger.tickets',
++    };
++  }
++  return {
++    ...ticketCountsOf(null),
++    needsYou: typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0,
++    source: 'empty',
++  };
++}
++
+ function runStreamItems(project) {
+   if (Array.isArray(project?.runStream)) return project.runStream;
+   const live = Array.isArray(project?.live) ? project.live : [];
+@@ -263,9 +421,7 @@ export function buildProjectCockpit(board, projectId) {
+   const project = (board?.projects ?? []).find(p => p && p.id === id);
+   if (!project) return null;
+   const ledger = ledgerFromProject(project);
+-  const live = (ledger.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
+-  const done = live.filter(t => t.status === 'done').length;
+-  const total = live.length;
++  const counts = cockpitCounts(project);
+   return {
+     id: project.id,
+     name: project.name ?? null,
+@@ -279,7 +435,11 @@ export function buildProjectCockpit(board, projectId) {
+     progress: project.progress ?? null,
+     stageRings: project.progress ?? null,
+     runStream: runStreamItems(project),
+-    done,
+-    total,
++    counts,
++    done: counts.done,
++    total: counts.total,
++    percentDone: counts.percentDone,
+   };
+ }
++
++export { ticketCountsOf, mergeCardTicketCounts, snapshotTotals };
+diff --git a/tools/ticket-counts.mjs b/tools/ticket-counts.mjs
+new file mode 100644
+index 00000000..54dbd2e4
+--- /dev/null
++++ b/tools/ticket-counts.mjs
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: Apache-2.0
++import { readyTickets } from './tickets.mjs';
++
++const EXCLUDED_FROM_TOTAL = new Set(['cancelled', 'proposed', 'superseded']);
++
++const empty = () => ({
++  total: 0,
++  done: 0,
++  ready: 0,
++  review: 0,
++  blocked: 0,
++  todo: 0,
++  cancelled: 0,
++  proposed: 0,
++  superseded: 0,
++  remaining: 0,
++  percentDone: 0,
++  counted: 0,
++});
++
++/** Canonical ticket headline counts for one ledger (live set, dependency-aware ready). */
++export function ticketCountsOf(ledger) {
++  if (!ledger || !Array.isArray(ledger.tickets) || !ledger.tickets.length) return empty();
++  const tickets = ledger.tickets.filter(t => t && typeof t === 'object');
++  const byStatus = Object.create(null);
++  for (const t of tickets) {
++    const s = t.status;
++    if (typeof s === 'string') byStatus[s] = (byStatus[s] ?? 0) + 1;
++  }
++  const live = tickets.filter(t => !EXCLUDED_FROM_TOTAL.has(t.status));
++  const total = live.length;
++  const done = live.filter(t => t.status === 'done').length;
++  const ready = readyTickets(tickets).length;
++  const review = live.filter(t => t.status === 'review').length;
++  const blocked = live.filter(t => t.status === 'blocked').length;
++  const todo = live.filter(t => t.status === 'todo').length;
++  const cancelled = byStatus.cancelled ?? 0;
++  const proposed = byStatus.proposed ?? 0;
++  const superseded = byStatus.superseded ?? 0;
++  const remaining = total - done;
++  const percentDone = total ? Math.round((100 * done) / total) : 0;
++  return {
++    total,
++    done,
++    ready,
++    review,
++    blocked,
++    todo,
++    cancelled,
++    proposed,
++    superseded,
++    remaining,
++    percentDone,
++    counted: total,
++  };
++}
+diff --git a/tools/watch-assets/cc-cockpit-mount.js b/tools/watch-assets/cc-cockpit-mount.js
+index f61a4ad0..8467bc15 100644
+--- a/tools/watch-assets/cc-cockpit-mount.js
++++ b/tools/watch-assets/cc-cockpit-mount.js
+@@ -23,7 +23,7 @@ import { mountAmbientMotion, reconcileDom } from './cc-hive-stage.js';
+ 
+ const TOUR_USER = 'anonymous';
+ const SVG_NS = 'http://www.w3.org/2000/svg';
+-const HIDDEN_STATUSES = ['cancelled', 'proposed'];
++const HIDDEN_STATUSES = ['cancelled', 'proposed', 'superseded'];
+ const TILE_COLOURS = { ready: '#2fe0a0', running: '#2fe0a0', review: '#ff4d7e', blocked: '#ffb62e', todo: '#a98bff', done: '#4d7cff' };
+ const LOOP_STEPS = ['you approve the scope', 'the split makes tickets', 'workers build in waves', 'checks gate every merge', 'the PR merges'];
+ const SOURCES_NOTE = 'Read from this project\'s ledger (tickets, stages and their lane or type), its orchestrator sessions and its run stream, as served by the Command Center. The pixel orchestrator, its orbit and the path to the running ticket are drawn here. One glitch in the app, on the SWARM wordmark: under 400 ms, off with reduced motion.';
+@@ -75,15 +75,33 @@ function liveTickets(ledger) {
+   return (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
+ }
+ 
++function serverCounts(project) {
++  const c = project?.counts;
++  if (!c || typeof c !== 'object' || typeof c.total !== 'number' || !Number.isFinite(c.total)) return null;
++  return c;
++}
++
+ /** Header counters, each with the ledger field it is read from. */
+-function headerCounters(project, counts) {
++function headerCounters(project, rowCounts) {
++  const c = serverCounts(project);
++  if (c) {
++    const needsYou = typeof c.needsYou === 'number' && Number.isFinite(c.needsYou)
++      ? c.needsYou
++      : (typeof project?.card?.blocked?.needYou === 'number' ? project.card.blocked.needYou : 0);
++    return [
++      { label: 'tickets', value: c.total, tip: 'Live tickets in this project ledger (cancelled, proposed and superseded left out).' },
++      { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
++      { label: 'done', value: c.done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
++      { label: 'need you', value: needsYou, color: needsYou ? 'var(--red)' : '', tip: 'Owner inbox items waiting on you for this project.' },
++    ];
++  }
+   const live = liveTickets(project?.ledger);
+   const total = project?.total ?? live.length;
+-  const done = project?.done ?? counts.done;
++  const done = project?.done ?? rowCounts.done;
+   const needsYou = live.filter(t => t.status === 'review' || (t.type === 'human' && t.status !== 'done')).length;
+   return [
+     { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
+-    { label: 'agents', value: counts.running, color: counts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
++    { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+     { label: 'done', value: done, color: 'var(--blue)', tip: 'Tickets marked done in this project ledger.' },
+     { label: 'need you', value: needsYou, color: needsYou ? 'var(--red)' : '', tip: 'Human tickets still open plus tickets waiting in review.' },
+   ];
+@@ -530,7 +548,7 @@ export function renderProjectCockpit(host, project, deps) {
+     });
+   }
+ 
+-  function paintNow(columns, model, runs) {
++  function paintNow(columns, model, runs, headline) {
+     patchPanel(nowHost, nowHost => {
+       clear(nowHost);
+       const name = model.name;
+@@ -540,7 +558,8 @@ export function renderProjectCockpit(host, project, deps) {
+         const running = lead.state === 'running';
+         const k = el(doc, 'div', 'k');
+         k.appendChild(el(doc, 'span', null, running ? 'NOW RUNNING' : 'NEXT UP'));
+-        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : columns.counts.ready}`));
++        const readyN = headline?.ready ?? columns.counts.ready;
++        k.appendChild(el(doc, 'span', 'cn', `1 / ${running ? columns.counts.running : readyN}`));
+         nowHost.appendChild(k);
+         const full = String(t.title || t.id).replace(/"/g, '');
+         nowHost.appendChild(el(doc, 'div', 'p', `${name} / ${t.stage ? `${t.stage} / ` : ''}${shortTitle(full)}`));
+@@ -577,18 +596,19 @@ export function renderProjectCockpit(host, project, deps) {
+   function paint(at) {
+     const p = projectRef;
+     const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
+-      p?.done, p?.total, p?.runStream, Math.floor(at / 60000)]);
++      p?.done, p?.total, p?.counts, p?.runStream, Math.floor(at / 60000)]);
+     if (signature === paintSignature) return;
+     paintSignature = signature;
+     const ledger = p?.ledger ?? { tickets: [] };
++    const headline = serverCounts(p);
+     const model = renderCockpit(titleHost, {
+       ledger,
+       sessions: p?.sessions ?? [],
+       meta: p?.meta ?? {},
+       name: p?.name,
+       id: p?.id,
+-      done: p?.done,
+-      total: p?.total,
++      done: headline?.done ?? p?.done,
++      total: headline?.total ?? p?.total,
+     }, { now: at });
+     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
+     const columns = cockpitLedgerRows(ledger, readyTickets, { perColumn: ROWS_PER_COLUMN });
+@@ -596,6 +616,16 @@ export function renderProjectCockpit(host, project, deps) {
+     const orch = model.orchestrator;
+     const allDone = model.total > 0 && model.done >= model.total;
+     const cats = cockpitCategories(ledger);
++    const stackCounts = headline ? {
++      ready: headline.ready,
++      running: columns.counts.running,
++      review: headline.review,
++      blocked: headline.blocked,
++      todo: headline.todo,
++      done: headline.done,
++      cancelled: headline.cancelled,
++      proposed: headline.proposed ?? 0,
++    } : columns.counts;
+     // the NOW RUNNING card, the highlighted row and the dotted path all follow this one ticket
+     const lead = columns.left[0];
+     activeId = lead && ['running', 'ready'].includes(lead.state) ? lead.ticket.id : null;
+@@ -615,28 +645,28 @@ export function renderProjectCockpit(host, project, deps) {
+     if (lab.getAttribute('data-orchestrator') !== orch.label) lab.setAttribute('data-orchestrator', orch.label);
+     text(labSub, orchestratorCaption(orch.label, allDone));
+     syncHead(orchestratorHeadState(orch.label, allDone), model.name, String(p?.id ?? model.name));
+-    paintNow(columns, model, runStreamItems(p, orch));
++    paintNow(columns, model, runStreamItems(p, orch), headline);
+ 
+     const cards = workerCards(ledger, at, 4);
+     patchPanel(wgrid, host => renderWorkerCards(host, cards));
+-    text(wCount, cards.length ? `${cards.length} LATEST · ${counts.done} DONE` : '0 DONE');
++    text(wCount, cards.length ? `${cards.length} LATEST · ${stackCounts.done} DONE` : '0 DONE');
+ 
+     text(stackN, model.total > 0 ? `${model.total} TICKETS` : 'NO TICKETS');
+     text(stackSub, cats.field && cats.names.length
+       ? cats.names.join(' / ')
+       : 'no lane or type recorded on these tickets');
+     const tiles = [
+-      ['ready', counts.ready],
+-      ...(counts.running ? [['running', counts.running]] : []),
+-      ['review', counts.review],
+-      ['waiting', counts.blocked, 'blocked'],
+-      ['to do', counts.todo, 'todo'],
+-      ['done', counts.done],
++      ['ready', stackCounts.ready],
++      ...(stackCounts.running ? [['running', stackCounts.running]] : []),
++      ['review', stackCounts.review],
++      ['waiting', stackCounts.blocked, 'blocked'],
++      ['to do', stackCounts.todo, 'todo'],
++      ['done', stackCounts.done],
+     ].map(([label, value, key]) => ({ label, value, color: TILE_COLOURS[key || label], footnote: `${value} ${label}` }));
+     const big = Math.max(...tiles.map(t => t.value));
+     for (const t of tiles) t.hi = big > 0 && t.value === big;
+     patchPanel(tilesHost, host => renderStackSummaryTiles(host, tiles));
+-    text(footNote, `${counts.cancelled} cancelled, left out of the percent${counts.proposed ? ` · ${counts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
++    text(footNote, `${stackCounts.cancelled} cancelled, left out of the percent${stackCounts.proposed ? ` · ${stackCounts.proposed} proposed, not counted` : ''} · data: this project's ledger, run folders and orchestrator sessions, read at ${utcClock(at)}`);
+ 
+     layoutWire();
+     if (firstPaint) {
+diff --git a/tools/watch-assets/cockpit-lists.js b/tools/watch-assets/cockpit-lists.js
+index 14c5888b..f25f40c5 100644
+--- a/tools/watch-assets/cockpit-lists.js
++++ b/tools/watch-assets/cockpit-lists.js
+@@ -10,7 +10,7 @@ export const COCKPIT_LISTS_CSS = '';
+ /** Stage colours: stage "S<n>" takes colour n mod 7 (the artifact's SC palette). */
+ export const STAGE_COLOURS = ['#2fe0a0', '#4d7cff', '#ffb62e', '#a98bff', '#ff4d7e', '#4ccce6', '#58627a'];
+ const GLYPH = { ready: '▶', running: '▶', review: '●', blocked: '■', todo: '○', done: '✓' };
+-const HIDDEN_STATUSES = ['cancelled', 'proposed'];
++const HIDDEN_STATUSES = ['cancelled', 'proposed', 'superseded'];
+ const STAMP_FIELDS = ['doneAt', 'completedAt', 'finishedAt', 'updatedAt', 'at'];
+ 
+ /** Ledger fields a ticket category is read from, in order: lane, area, type, then stage as the last resort. */
+@@ -306,7 +306,7 @@ export function emptyReadyExplanation(ledger, readyTicketsFn) {
+   const done = new Set(tickets.filter(t => t.status === 'done').map(t => t.id));
+   let blockedOnDeps = 0;
+   for (const t of tickets) {
+-    if (t.status === 'cancelled' || t.status === 'proposed' || t.status === 'done') continue;
++    if (t.status === 'cancelled' || t.status === 'proposed' || t.status === 'superseded' || t.status === 'done') continue;
+     const waiting = (t.dependsOn ?? []).filter(d => !done.has(d));
+     if (waiting.length) blockedOnDeps += 1;
+   }
+diff --git a/tools/watch-assets/hive-panels.js b/tools/watch-assets/hive-panels.js
+index 633d9596..10e6c139 100644
+--- a/tools/watch-assets/hive-panels.js
++++ b/tools/watch-assets/hive-panels.js
+@@ -932,6 +932,10 @@
+   function cardCounts(project) {
+     var c = project && project.ticketCounts;
+     if (!c || typeof c !== 'object' || nonNeg(c.total) === null) { return null; }
++    var counted = nonNeg(c.counted);
++    if (counted === null) {
++      counted = Math.max(0, c.total - (nonNeg(c.cancelled) || 0));
++    }
+     return {
+       total: c.total,
+       done: nonNeg(c.done) || 0,
+@@ -939,17 +943,21 @@
+       blocked: nonNeg(c.blocked) || 0,
+       review: nonNeg(c.review) || 0,
+       cancelled: nonNeg(c.cancelled) || 0,
+-      remaining: nonNeg(c.remaining) !== null ? c.remaining : Math.max(0, c.total - (nonNeg(c.done) || 0) - (nonNeg(c.cancelled) || 0)),
++      remaining: nonNeg(c.remaining) !== null ? c.remaining : Math.max(0, (counted !== null ? counted : c.total) - (nonNeg(c.done) || 0)),
++      counted: counted,
+     };
+   }
+ 
+   /** One project for the Hive: ledger counts, percent, and the colour category the ring and card share. */
+   function projectView(project) {
+     var s = projectSignals(project);
++    var c = project && project.ticketCounts;
+     var counts = cardCounts(project);
+-    var counted = counts ? counts.total - counts.cancelled : null;
++    var counted = counts ? counts.counted : null;
+     var pct = null;
+-    if (counts && counted > 0) { pct = Math.round((counts.done / counted) * 100); }
++    if (c && typeof c.percentDone === 'number' && Number.isFinite(c.percentDone)) {
++      pct = Math.round(c.percentDone);
++    } else if (counts && counted > 0) { pct = Math.round((counts.done / counted) * 100); }
+     else if (project.meter && typeof project.meter.value === 'number' && Number.isFinite(project.meter.value)) { pct = Math.round(project.meter.value); }
+     else if (project.percentDone && typeof project.percentDone.value === 'string' && Number.isFinite(parseInt(project.percentDone.value, 10))) { pct = parseInt(project.percentDone.value, 10); }
+     var cat = 'idle';
+@@ -1026,6 +1034,8 @@
+       if (projects[m].machine && machines.indexOf(projects[m].machine) < 0) { machines.push(projects[m].machine); }
+     }
+     var counted = projects.reduce(function (a, p) { return p.counted !== null ? a + p.counted : a; }, 0);
++    var snapTotals = snap.totals && typeof snap.totals === 'object' ? snap.totals : null;
++    var totalsFromSnap = snapTotals && typeof snapTotals.tickets === 'number';
+     return {
+       at: snap.at,
+       projects: projects,
+@@ -1038,7 +1048,15 @@
+       prs: Array.isArray(hive.prs) ? hive.prs : null,
+       events: sessionEvents(projects, hive),
+       machines: machines,
+-      totals: {
++      totals: totalsFromSnap ? {
++        tickets: snapTotals.tickets,
++        done: snapTotals.done,
++        ready: snapTotals.ready,
++        blocked: snapTotals.blocked,
++        review: snapTotals.review,
++        remaining: snapTotals.tickets - snapTotals.done,
++        counted: snapTotals.tickets,
++      } : {
+         tickets: sumField(projects, 'total'),
+         done: sumField(projects, 'done'),
+         ready: sumField(projects, 'ready'),

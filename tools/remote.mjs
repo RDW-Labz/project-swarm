@@ -88,7 +88,7 @@ export function realDeps(env = process.env) {
   const execp = (file, args, opts) => new Promise(resolve => execFile(file, args, { timeout: 30000, maxBuffer: 4 * 1024 * 1024, env, ...opts }, (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout ?? ''), stderr: String(stderr ?? error?.message ?? '') })));
   const find = async () => {
     if (env.SWARM_TAILSCALE_BIN) return env.SWARM_TAILSCALE_BIN;
-    for (const dir of String(env.PATH ?? '').split(path.delimiter)) { if (!dir) continue; const p = path.join(dir, 'tailscale'); try { await fs.access(p, 1); return p; } catch { /* next */ } }
+    for (const dir of String(env.PATH ?? '').split(path.delimiter)) { if (!dir) continue; const p = path.join(dir, 'tailscale'); try { await fs.access(p, 1); return p; } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') console.error('[tools/remote.mjs] find tailscale PATH probe:', error?.message ?? error); /* next */ } }
     try { await fs.access(MAC_APP_CLI, 1); return MAC_APP_CLI; } catch { return null; }
   };
   let bin;

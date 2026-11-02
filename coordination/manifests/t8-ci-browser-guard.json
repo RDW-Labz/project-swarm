@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-ci-browser-guard",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "CI is red on PR #484 only because the two new live-harness tests launch Playwright Chromium, and the npm test jobs do not install a browser. The local full suite passes. Fix the tests and the browser-smoke wiring.\n1. tests/command-center-live-latency.test.mjs and tests/command-center-soak.test.mjs: when the Playwright launch fails because the browser executable is missing (message contains 'Executable doesn't exist', 'Looks like Playwright was just installed', or the error is a browserType.launch error), call t.skip('playwright chromium not installed') and return instead of failing. Do not swallow other errors. Keep the existing assertions when Chromium is available. A small shared local helper in each file is fine.\n2. package.json: extend the `test:browser` script so the browser-smoke CI job (which runs `npx playwright install --with-deps chromium` and then `npm run test:browser`) also runs these two files: 'node --import ./tests/_isolate-config.mjs --test tests/browser/*.smoke.mjs tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs'. Keep every other script unchanged.\n3. Verify on this Mac: `node --import ./tests/_isolate-config.mjs --test tests/command-center-soak.test.mjs tests/command-center-live-latency.test.mjs` passes with the installed browser; and with `PLAYWRIGHT_BROWSERS_PATH=/tmp/empty-browsers` the same command reports skipped (create the empty dir). Do not change the harness behavior or thresholds.\n\nVerify: the two commands above, plus `npm run test:browser` (if the local browser is installed; it should pass or skip only the known toolchain cases). Report both outcomes.",
+      "context": [
+        "tests/command-center-live-latency.test.mjs",
+        "tests/command-center-soak.test.mjs",
+        "package.json",
+        ".github/workflows/ci.yml",
+        "tools/watch-soak.mjs",
+        "tools/watch-live-latency.mjs"
+      ],
+      "outputs": [
+        "tests/command-center-live-latency.test.mjs",
+        "tests/command-center-soak.test.mjs",
+        "package.json"
+      ],
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-w.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/kit-and-interview.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "ignoreTestsReason": "browser-guard test fix; focused harness runs here, full suite and CI before merge",
+      "timeoutMs": 1800000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t8-ci-browser-guard",
+      "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/command-center-soak.test.mjs", "tests/command-center-live-latency.test.mjs"]
+    }
+  ]
+}

@@ -40,14 +40,22 @@ export function realDeps() {
 
 async function profileOf(root) {
   let pointer = null;
-  try { const { readRunnerPointer } = await import('./runner-pointer.mjs'); pointer = await readRunnerPointer(root); } catch { /* no profile */ }
+  try { const { readRunnerPointer } = await import('./runner-pointer.mjs'); pointer = await readRunnerPointer(root); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/handoff-commands.mjs] readRunnerPointer:', error?.message ?? error, root);
+  }
   if (pointer?.profile?.handoff === undefined) return { config: {} };
   const checked = validateHandoffConfig(pointer.profile.handoff);
   return checked.ok ? { config: checked.config } : { error: `the handoff block of the profile is invalid: ${checked.errors[0]}` };
 }
 
 async function loadScope(root) {
-  const ledger = await readLedger(root).catch(() => null);
+  const ledger = await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+      console.error('[tools/handoff-commands.mjs] readLedger:', detail, root);
+    }
+    return null;
+  });
   const file = ledger?.scope?.file ?? DEFAULT_SCOPE_FILE;
   let text;
   try { text = await fs.readFile(path.join(root, file), 'utf8'); } catch { return { error: `no scope file at ${file}: the guides are written from the approved scope` }; }
@@ -144,7 +152,13 @@ async function check(root, args, deps) {
   const lines = results.map(r => `${r.ok ? 'ok  ' : 'FAIL'} ${r.guide}: ${r.route}${r.text ? ` "${r.text}"` : ''}${r.ok ? '' : ` (${r.reason})`}`);
   let filed = [];
   if (f.propose && failed.length) {
-    const ledger = await readLedger(root).catch(() => null);
+    const ledger = await readLedger(root).catch((error) => {
+      if (error?.code !== 'ENOENT') {
+        const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error);
+        console.error('[tools/handoff-commands.mjs] readLedger:', detail, root);
+      }
+      return null;
+    });
     const have = new Set((ledger?.tickets ?? []).filter(t => t.origin === 'handoff').map(t => t.source?.route));
     const { addProposedTicket } = await import('./scope-commands.mjs');
     for (const r of failed) { if (have.has(r.route)) continue; have.add(r.route); let id = null; try { id = await addProposedTicket(root, failureTicket(r)); } catch { id = null; } if (id) filed.push(typeof id === 'string' ? id : id.id ?? '?'); }

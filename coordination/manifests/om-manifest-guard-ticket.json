@@ -1,0 +1,63 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "omguardticket",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Follow-up to the orchestrator manifest guard. omSwarmSubcommandAllowed in tools/shell-writes.mjs now vets the manifest file named by 'swarm run' and 'swarm go' positionals with omRunManifestVetted (tools/om-manifest-guard.mjs). 'swarm ticket MANIFEST [--resume RUN] [--pr PAYLOAD]' is also allowed for the orchestrator and runs the manifest's checks, so it must be vetted the same way. Extend the check to sub === 'ticket': every positional word (non-flag words; skip the value after --resume, --pr and any other ticket flag that takes a value; read how orchestrator-allow.mjs parses ticket argv to match it) must pass omRunManifestVetted(ctx.root, word). Add an exported helper in tools/om-manifest-guard.mjs if you need one. Keep run/go behavior unchanged. Tests in tests/om-manifest-guard.test.mjs: 'swarm ticket coordination/manifests/m.json --pr p.json' with an unvetted checks argv is refused by orchestratorModeCommandAllowed; the same with the argv vetted in coordination/checks.json is allowed; a plain manifest is allowed. The ignored tests cover other guard behavior that must not change; the coordinator runs them all as checks.",
+   "context": [
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "outputs": [
+    "tools/om-manifest-guard.mjs",
+    "tools/shell-writes.mjs",
+    "tests/om-manifest-guard.test.mjs"
+   ],
+   "ignoreTests": [
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs",
+    "tests/split-module.test.mjs"
+   ],
+   "timeoutMs": 1800000
+  }
+ ],
+ "checks": [
+  {
+   "name": "om-guard",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-allow.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/auto-approve.test.mjs",
+    "tests/handbuild-guard.test.mjs",
+    "tests/handbuild-reason-words.test.mjs",
+    "tests/orchestrator-mode-default.test.mjs",
+    "tests/orchestrator-mode-review2.test.mjs",
+    "tests/orchestrator-mode-review3.test.mjs",
+    "tests/orchestrator-mode-review4.test.mjs",
+    "tests/orchestrator-mode-timeout.test.mjs",
+    "tests/shell-writes-accidents.test.mjs",
+    "tests/shell-writes-hardening.test.mjs",
+    "tests/shell-writes-quotes.test.mjs"
+   ]
+  }
+ ]
+}

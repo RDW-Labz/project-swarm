@@ -97,6 +97,12 @@ test('two concurrent isolated jobs cannot read each other DATABASE_URL value', a
   ]);
 
   assert.notEqual(grantA.envFile, grantB.envFile);
+  assert.notEqual(grantA.grantKey, grantB.grantKey);
+  assert.notEqual(grantA.secrets.DATABASE_URL, grantB.secrets.DATABASE_URL);
+  assert.notEqual(
+    grantA.containerEnv.SWARM_JOB_GRANT_KEY,
+    grantB.containerEnv.SWARM_JOB_GRANT_KEY,
+  );
 
   const grantModule = fileURLToPath(new URL('../tools/job-grants.mjs', import.meta.url));
   const workerScript = `
@@ -118,7 +124,19 @@ test('two concurrent isolated jobs cannot read each other DATABASE_URL value', a
     } catch (error) {
       peerDenied = error instanceof JobGrantAccessError;
     }
-    assert.equal(peerDenied, true, 'peer grant must not decrypt with this job key');
+    assert.equal(peerDenied, true, 'peer grant must not decrypt when job id mismatches');
+
+    let peerKeyDenied = false;
+    try {
+      await loadJobGrantSecrets({
+        ...process.env,
+        SWARM_JOB_ID: process.env.PEER_JOB_ID,
+        SWARM_JOB_GRANT_FILE: process.env.PEER_GRANT_FILE,
+      });
+    } catch (error) {
+      peerKeyDenied = error instanceof JobGrantAccessError;
+    }
+    assert.equal(peerKeyDenied, true, 'peer grant must not decrypt with this job key');
 
     const peerRaw = await fs.readFile(process.env.PEER_GRANT_FILE, 'utf8');
     assert.equal(grantPlaintextLeakCheck(peerRaw, process.env.PEER_SECRET_SNIPPET), false);
@@ -161,6 +179,7 @@ test('two concurrent isolated jobs cannot read each other DATABASE_URL value', a
       ...envA,
       EXPECTED_URL: urlA,
       OWN_TOKEN: 'token-a',
+      PEER_JOB_ID: grantB.jobId,
       PEER_GRANT_FILE: grantB.envFile,
       PEER_SECRET_SNIPPET: urlB,
       PEER_URL: urlB,
@@ -169,6 +188,7 @@ test('two concurrent isolated jobs cannot read each other DATABASE_URL value', a
       ...envB,
       EXPECTED_URL: urlB,
       OWN_TOKEN: 'token-b',
+      PEER_JOB_ID: grantA.jobId,
       PEER_GRANT_FILE: grantA.envFile,
       PEER_SECRET_SNIPPET: urlA,
       PEER_URL: urlA,
@@ -326,7 +346,7 @@ test('isolated job denies obfuscated git push argv forms before invocation', asy
   }
 });
 
-test('legacy (non-isolated) project jobs may still run git push as before', async t => {
+test('legacy (non-isolated) project jobs may still run git push as before', async () => {
   const project = { sandbox: { isolated: false } };
   const grant = await issueGrant('job-legacy-push', { project });
   assert.equal(grant.mode, 'legacy');
@@ -336,20 +356,15 @@ test('legacy (non-isolated) project jobs may still run git push as before', asyn
     command: 'git push origin main',
   });
   assert.equal(guard.proceed, true);
-  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'swarm-git-push-'));
-  t.after(() => fs.rm(repoDir, { recursive: true, force: true }));
-  await runChild(
-    `import { execSync } from 'node:child_process';
-     execSync('git init -q', { cwd: ${JSON.stringify(repoDir)} });
-     console.log('ok');`,
-    { PATH: process.env.PATH },
-  );
   const pushGuard = guardJobCommandExecution({
     project,
     grant,
     argv: ['git', 'push'],
   });
   assert.equal(pushGuard.proceed, true);
+  const runResult = await simulateServiceRun(['git', '--version'], { project, grant });
+  assert.equal(runResult.invoked, true, 'legacy guard must allow spawning the command');
+  assert.equal(runResult.code, 0);
 });
 
 test('isolated job detected via grant env handles is denied git push with explicit argv', async t => {

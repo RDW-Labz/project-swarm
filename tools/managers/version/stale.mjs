@@ -267,8 +267,10 @@ export async function collectStaleVersionFindings(options) {
       const finding = server ? staleServerFinding('stale-board', 'board', server) : null;
       if (finding) findings.push(finding);
     }
-  } catch {
-    /* no local board registry */
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.name !== 'SyntaxError') {
+      console.error('[tools/managers/version/stale.mjs] board registry:', error?.message ?? error);
+    }
   }
 
   try {
@@ -279,8 +281,15 @@ export async function collectStaleVersionFindings(options) {
       const finding = server ? staleServerFinding('stale-remote', 'remote', server) : null;
       if (finding) findings.push(finding);
     }
-  } catch {
-    /* remote off */
+  } catch (error) {
+    if (
+      error?.code !== 'ENOENT'
+      && error?.name !== 'SyntaxError'
+      && error?.code !== 'ECONNREFUSED'
+      && error?.cause?.code !== 'ECONNREFUSED'
+    ) {
+      console.error('[tools/managers/version/stale.mjs] remote board:', error?.message ?? error);
+    }
   }
 
   // This process (orchestrator) may itself be an older versions/<x> tree while current moved on.

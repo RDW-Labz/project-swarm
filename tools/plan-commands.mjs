@@ -71,7 +71,7 @@ export async function recordRun(root, plan, actual, { now = Date.now } = {}) {
     const calibration = await readCalibration(root);
     const estimate = { costUsd: plan.preview.estimate.costUsd, minutes: plan.preview.estimate.minutes, children: plan.preview.jobs.expectedChildren, leads: plan.preview.jobs.leads, appliedCostRatio: plan.appliedCostRatio ?? 1, appliedTimeRatio: plan.appliedTimeRatio ?? 1 };
     await writeCalibration(root, recordActual(calibration, { id: plan.id, estimate, actual: { ...actual, leads: plan.preview.jobs.leads }, at: new Date(now()).toISOString() }));
-  } catch { /* calibration is best effort */ }
+  } catch (error) { console.error('[tools/plan-commands.mjs] recordRun writeCalibration:', error?.message ?? error); /* calibration is best effort */ }
   return compare;
 }
 

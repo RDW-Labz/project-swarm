@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk2",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable). Only return blocked for a real design conflict inside these files.\nTrain 2 Opus security review (claude-opus-5-5, run 1793221468839-cfc492bd) found this BLOCKER; fix it exactly and minimally, in the surrounding style, and add the regression test. Never raise or change a cap value. Do not touch any other file. Existing tests in context must keep passing.\nBLOCKER 2 (spend past the $2.50 stop-mode daily limit): the resolved daily limit (tools/daily-limit.mjs resolveDailyLimit; default $2.50, mode stop, Chicago day, counts every paid lane together) is only enforced when a job reserves spend (tools/spend.mjs reserveSpend -> applyDailyLimit ~320, billedMeteredTodayUsd). Each paid API request in tools/api-adapters.mjs checks only its lane caps: Anthropic at ~665 and the length retry at ~717-726 (which doubles max_tokens and re-checks only the $5 job / $20 day / $500 total lane caps), OpenRouter at ~657 and ~708. The Anthropic ledger day is UTC (stamp.toISOString().slice(0,10)) while the limit's day is Chicago. Exploit: $2.00 billed today, a job reserves < $0.50, its first call hits max_tokens, the retry spends past $2.50; several concurrent jobs can reach the $20 lane day cap under a $2.50 stop limit. FIX: add ONE helper (in tools/spend.mjs, exported, e.g. assertDailyLimitBeforeSend({ root, lane, worstUsd, now, env })) that resolves the daily limit the same way reserveSpend does and, in stop mode, refuses (throw an Error with code 'daily-limit-stop' and a message naming billed, in-flight reserves if the store tracks them, worstUsd and the limit) when billedToday(Chicago day, all paid lanes, machine-wide, same source applyDailyLimit uses) + in-flight reserves of OTHER jobs + worstUsd > dailyLimitUsd; also refuse above hardCeilingUsd in any mode. Call it in tools/api-adapters.mjs immediately before EVERY paid send: Anthropic first request, Anthropic length retry (with the retry's own worst case), OpenRouter first request and its retry/continuation, and any other paid send you find in that file (rented/openai/gemini/lambda-hosted sends too if they go through a per-request path there). Keep the existing lane-cap checks as they are. Do not change caps, modes or the UTC lane ledgers. Tests in NEW tests/t2-daily-limit-per-request.test.mjs (first line import './_isolate-config.mjs';), using the fake fetch/ledger seams existing tests use (see tests/api-workers.test.mjs, tests/anthropic-lane.test.mjs, tests/spend.test.mjs): with $2.00 billed today and stop mode, an Anthropic job whose first call returns stop_reason max_tokens has its length retry refused with daily-limit-stop and no second fetch happens; a first request whose worst case would pass $2.50 is refused before fetch; same for OpenRouter; notify mode lets the retry through until the hard ceiling; a request well under the limit still sends. The ignored tests cover behaviour that must not change; the coordinator runs the full suite before ship.",
+      "context": [
+        "tools/daily-limit.mjs",
+        "tools/anthropic.mjs",
+        "tools/openrouter.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/train2-money.test.mjs"
+      ],
+      "outputs": [
+        "tools/spend.mjs",
+        "tools/api-adapters.mjs",
+        "tests/t2-daily-limit-per-request.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/adapters.test.mjs",
+        "tests/api-short-report.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/best-of-adapter.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/daily-limit-admission.test.mjs",
+        "tests/daily-limit-hardening-round3.test.mjs",
+        "tests/daily-limit-hardening-round4.test.mjs",
+        "tests/daily-limit-hardening.test.mjs",
+        "tests/dead-run.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-n.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/field-lessons-batch-y-adapters.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/flat-rate-reserve.test.mjs",
+        "tests/gpu-lineup.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/kickoff.test.mjs",
+        "tests/lanes-run.test.mjs",
+        "tests/local-lane-cache-context.test.mjs",
+        "tests/local-lane-review.test.mjs",
+        "tests/local-lane.test.mjs",
+        "tests/managers/r037-budget-lane.test.mjs",
+        "tests/multi-edit.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/paid-lane-pause.test.mjs",
+        "tests/phase10c.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/phase14.test.mjs",
+        "tests/policy-wiring-phase2.test.mjs",
+        "tests/project-cap-billed.test.mjs",
+        "tests/project-spend.test.mjs",
+        "tests/rented-run.test.mjs",
+        "tests/reports-run.test.mjs",
+        "tests/review-structured-verdict.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/worker-skills.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk2",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-daily-limit-per-request.test.mjs",
+        "tests/api-workers.test.mjs",
+        "tests/anthropic-lane.test.mjs",
+        "tests/spend.test.mjs",
+        "tests/spend-run.test.mjs",
+        "tests/train2-money.test.mjs",
+        "tests/daily-limit.test.mjs",
+        "tests/hard-cap.test.mjs",
+        "tests/batch-run.test.mjs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t8-live-feed",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "live board responsiveness; Opus review in train 8",
+      "sensitive": false,
+      "prompt": "FILE ACCESS: declared outputs are writable. Train 8 top priority: a board change (a job finishes, a run fails, something needs the owner) must show in the Command Center within a few seconds, not up to the 60 s snapshot cache TTL. Current behavior: one full board snapshot cached 60 s with stale-while-revalidate; the client polls every 5 s; a change after a build appears only after the next full rebuild (up to ~60 s + 5 s + 2.5 s). Do NOT shorten the cache to rebuild the whole snapshot often (that was the 44% CPU bug). Push changes through incrementally instead.\n\nDesign:\n1) Cheap change detection on the server (tools/watch-server.mjs, with whatever helpers fit in tools/board-data.mjs or a new module): every ~1 s, stat the board's small input set (each project's .swarm/project/tickets.json and .swarm/orchestrator/events.ndjson, .swarm/runs/*/state.json, the inbox/lanes/history files used by the board) and compare mtime+size to a cache. On a change, identify the affected project id(s) without building the full snapshot.\n2) Push: add a token/cookie-authenticated SSE endpoint for the Command Center (e.g. GET /api/command-center/events, same security headers, no token in logs) that sends a compact event when the inputs change: {kind:'cc-change', projects:[ids], at}. Keep the full 60 s snapshot cache for cold loads/consistency; on change, update the cached snapshot's affected project card and aggregate counters in place (build only the changed project(s), not all nine) so a later full request is current without a full rebuild.\n3) Client (command-center-boot.js/cc-hive-mount.js): subscribe to the events (EventSource with the page cookie; pause on document.hidden), and on a cc-change event fetch only the changed project(s) via /api/command-center/project?id= (or apply the event's card data) and patch the Hive project card/cockpit and the header counters (needs-you, done 24h) in place. Do not rebuild the DOM or the full snapshot. Keep the 5 s poll as a slower fallback; if the SSE drops, fall back to polling. Honor the reduced-motion/visibility behavior.\n4) Latency target: a ticket/run/inbox change is visible within 3 s. Add tests: a fixture board with a project; change a tickets.json and an inbox/state file; assert the event fires within ~1 s, names the right project, the cached full snapshot updates only that project when requested, and the client patch path runs without a full snapshot fetch. Test the SSE token/auth + security headers, and that no token appears in logs/URLs. Keep all existing command-center/watch-server/perf tests green.\nVerify: node --import ./tests/_isolate-config.mjs --test tests/command-center-live.test.mjs tests/watch-server.test.mjs tests/watch-token-urls.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-boot.test.mjs tests/command-center-perf-budget.test.mjs -> all pass. Report the detected latency and the design.",
+      "context": [
+        "tools/watch-server.mjs",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/board-data.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-cli.mjs",
+        "tools/watch-delta.mjs"
+      ],
+      "outputs": [
+        "tools/watch-server.mjs",
+        "tools/watch-assets/command-center-boot.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/board-data.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tests/command-center-live.test.mjs"
+      ],
+      "timeoutMs": 3600000,
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-accuracy-untracked.test.mjs",
+        "tests/board-card-ui.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-robots.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-assets-browser-safe.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused live/CC/server tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t8-live-feed",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-live.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-perf-budget.test.mjs"
+      ]
+    }
+  ]
+}

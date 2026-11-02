@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "verifyprov5",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "Follow-up to g-e19bbb50 in tools/verify-provenance.mjs (already integrated; read it and tests/verify-provenance.test.mjs, both your outputs and readable). verifyJobProvenance rebuilds a shell verify job and requires canonical equality, but two inputs differ from what prepareScopeRun (tools/scope-commands.mjs ~4055) and its callers in tools/swarm.mjs (~3097, ~3142) really use, so every real wave would be refused:\n1. Lessons: the wave is built with lessons: await loadLessonsForNotes(root, ownRoot) (tools/lessons-commands.mjs), where ownRoot in tools/swarm.mjs is path.dirname(path.dirname(fileURLToPath(import.meta.url))) - the install root, i.e. the parent of the tools/ folder. promptFor (tools/ticket-manifest.mjs ~228-270) puts selected lesson notes into the prompt. verifyJobProvenance passes lessons: []. Load lessons exactly the same way (lazy import of lessons-commands.mjs; compute the install root from verify-provenance.mjs's own import.meta.url the same way, since it also lives in tools/).\n2. In-wave dependencies: ticketsToManifest uses the set of tickets built together (inSet) to decide a job's after list, its agent/model/shell (deps.length) and its prompt line. verifyJobProvenance rebuilds one ticket alone. Change the API to verify a whole manifest at once: export async function verifyManifestProvenance(root, jobs) -> Map(jobObject -> {ok, reason}) (keep verifyJobProvenance(root, job) as a thin wrapper for one job). It reads ledger/snapshot/profile/lessons once, collects the tickets whose ids match ANY job id in the manifest (shell or not) and whose status is deliverable, rebuilds them together with one ticketsToManifest(thoseTickets, { ...same options, ready: false }), then compares each shell job with its rebuilt counterpart; all refusal reasons stay the same strings. Update orchestratorManifestGate in tools/om-manifest-guard.mjs to call verifyManifestProvenance once with the manifest's jobs instead of looping verifyJobProvenance; nothing else in that file changes.\nTests (add to tests/verify-provenance.test.mjs, keep every existing case): with a lessons file present whose note matches the ticket, the wave job built with the same lessons passes; a verify ticket depending on another ticket in the same manifest (so its job has after and the full promptLine) passes when both jobs are in the manifest; that same dependent shell job alone in a manifest is refused. Look at how tests/lessons*.test.mjs create lessons in a temp project; keep any install-root lessons out of the test by pointing the project root at a temp dir (the install-root lessons read only happens when installRoot differs from root - if that makes the test depend on this repo's own lessons, inject the install root through an optional third parameter used only by tests and say so).\nDo not touch any other file.",
+      "context": [
+        "tools/ticket-manifest.mjs",
+        "tools/lessons-commands.mjs",
+        "tools/tickets.mjs",
+        "tools/scope-commands.mjs",
+        "tests/om-manifest-guard.test.mjs"
+      ],
+      "outputs": [
+        "tools/verify-provenance.mjs",
+        "tools/om-manifest-guard.mjs",
+        "tests/verify-provenance.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "verify-prov",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/verify-provenance.test.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/orchestrator-hook-import.test.mjs",
+        "tests/verify-config.test.mjs",
+        "tests/scope-commands.test.mjs",
+        "tests/wave-prep-context.test.mjs",
+        "tests/wave-prep-robust.test.mjs",
+        "tests/swarm.test.mjs"
+      ]
+    }
+  ]
+}

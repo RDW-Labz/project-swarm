@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-core52-batch-13a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 13a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/swarm/core-52.mjs' section. Edit ONLY tools/swarm/core-52.mjs. Visibility only: do NOT change control flow, return values, throws, fail() calls, or user-facing messages.\n\nNo logger exists in this file. Use: console.error('[tools/swarm/core-52.mjs] <short context>:', error?.message ?? error)\n\nFlagged lines and what to do:\n1. Line 184 `catch { /* Not an existing repo-relative path. */ }`: the tokens are regex matches pulled out of prompt prose, so most are not real paths. Expected and silent: ENOENT, ENOTDIR, ENAMETOOLONG, and ANY rejection thrown by safePath's own validation (it calls the swarm fail() helper with messages like 'Symlink refused' / 'Non-directory parent' / invalid path; find fail()'s definition in tools/swarm/ and match its error shape \u2014 e.g. a specific class, code, or flag \u2014 rather than message text if possible). Log only anything else. Keep the comment.\n2. Lines 214 and 224 `text => { try { process.stderr.write(text); } catch { /* tests */ } }`: LEAVE BOTH UNCHANGED. They guard a stderr write itself; logging that failure to stderr is meaningless, and this is the server-restart path, which this round must not touch.\n3. Line 244 `catch { /* A tag-only remote need not have main. */ }` around `git show origin/main:package.json` + JSON.parse: a missing origin/main is expected (git exits non-zero; its stderr mentions e.g. 'invalid object name', 'does not exist', 'bad revision', or 'unknown revision'). Stay silent when error.stderr matches one of those; log anything else (including a SyntaxError from JSON.parse \u2014 main's package.json being corrupt is not expected). mainVersion stays null.\n4. Line 257 `fs.readFile(...'CHANGELOG.md'...).catch(()=>'')`: ENOENT silent, log anything else, still evaluate to ''.\n5. Line 435 `readLedger(root).catch(() => null)` inside the budgetShipGate call: this feeds a ship GATE; a ledger read failure silently changes what the gate sees. Log UNCONDITIONALLY, still evaluate to null.\n\nDo NOT touch any other catch. Do not refactor, reformat, rename, or change exports. Keep existing comments.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the tests that cover this file (grep tests/ for core-52.mjs and the names of the functions you touched) and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/swarm/core-52.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/update-pending-round2.test.mjs",
+        "tests/update-pending-round4.test.mjs"
+      ],
+      "ignoreTestsReason": "these reference core modules generically or through CLI entry points; covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "p2ledger",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable).\nREFACTOR PHASE 2, TESTS ONLY (owner order): write tests, change NO product code (the move into tools/state-store.mjs waits until train 2 ships and gets its own Opus review). Two kinds of tests: (1) CHARACTERIZATION: pin today's behaviour exactly (file paths, JSON shape, file mode such as 0o600/0o644 where set, lock file names, refusal codes and messages, recovery rules) so the later switch is byte-compatible; these must pass today. (2) KNOWN BUGS: a test that reproduces a real race or bug today must be declared with node:test's todo option, e.g. test('...', { todo: 'Phase 2: <bug id/summary>' }, async t => {...}), so the suite stays green while the failure is recorded; say in the todo text what the fixed behaviour must be. Real concurrency means child processes (spawn process.execPath with a small inline module or a fixture script under tests/fixtures/phase2/, which you may create ONLY if listed in your outputs), never Promise.all inside one process. Crash tests: kill the holder child with SIGKILL mid-write or while holding the lock (only the child you spawned, by its own pid), then show what the next writer does. Every test uses its own temp dir (fs.mkdtemp under os.tmpdir()) and removes it; no fixed sleeps as ordering: have children signal readiness over stdout or a file. Keep each test under 10 s. First line of every new test file: import './_isolate-config.mjs';\n\nScope for this job (refactor plan Phase 2 'tests to write first', real multi-process): (1) backlog add/remove in parallel (tools/backlog.mjs addGoal/removeGoal from several children): characterize what survives; lost updates today => todo. (2) ticket ledger writers: two children each doing readLedger -> modify one ticket -> writeLedger (tools/tickets.mjs), and transition() if it locks; the plan's bug B7 says two different locks guard tickets.json today: characterize which writers take which lock (scope-go.lock in tools/scope-commands.mjs withLock ~4035, any lock in tickets.mjs) and record lost updates as todo with 'tickets.json gets exactly one lock' as the fixed behaviour. (3) lease claim during a wave: tools/ledger-lease.mjs claim/renew/release from two children on the same ticket while a third child writes the ledger: fencing tokens stay strictly increasing and only one claim wins (characterize; races => todo). (4) characterize tickets.json and leases file format and mode. Skip 'board approve during sync' and 'two scope sync' (need a full scope fixture) - list them in your notes as not covered.",
+      "context": [
+        "tools/backlog.mjs",
+        "tools/tickets.mjs",
+        "tools/ledger-lease.mjs",
+        "tests/ledger-lease.test.mjs",
+        "tests/backlog.test.mjs"
+      ],
+      "outputs": [
+        "tests/phase2-ledger-multiprocess.test.mjs",
+        "tests/fixtures/phase2/ledger-writer.mjs"
+      ],
+      "timeoutMs": 3000000
+    }
+  ],
+  "checks": [
+    {
+      "name": "p2ledger",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/phase2-ledger-multiprocess.test.mjs"
+      ]
+    }
+  ]
+}

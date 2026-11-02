@@ -1,0 +1,124 @@
+{
+  "round": "6",
+  "hive": {
+    "scores": {
+      "fidelity": 1.8,
+      "polish": 2.6,
+      "motion": 2.3,
+      "data": 4.0,
+      "phone": 3.0
+    },
+    "overall": 2.4,
+    "fixes": [
+      {
+        "problem": "Project nodes are stacked in two straight columns (5 left, 4 right) instead of being placed AROUND the ring at even angles like the target's clock-face layout (top, upper-left/right, sides, lower-left/right, bottom).",
+        "where": "Main stage, both node columns",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Drop the two flex columns; make the stage position:relative with a fixed aspect, and absolutely position each node at angle a_i = -90deg + i*360/n on an ellipse (left: calc(50% + rx*cos(a)), top: calc(50% + ry*sin(a)), transform: translate(-50%,-50%)), with rx about 40% and ry about 38% of the stage so the nodes ring the core."
+      },
+      {
+        "problem": "The ring is small (about 220px) and plain: a dashed maroon band with a teal outline. The target's ring is huge (about 45% of the stage width) and glows pink/magenta, with a violet inner circle around the OPUS core and faint radial spokes.",
+        "where": "Centre of stage",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Size the ring with width: min(46vw, 560px); aspect-ratio: 1. Give it border: 3px solid #ff3d7f; box-shadow: 0 0 24px #ff3d7f, 0 0 80px rgba(255,61,127,.55), inset 0 0 60px rgba(255,61,127,.35). Add an inner .core circle about 40% of the ring with a 1.5px #8b6cff border and a violet glow, plus a repeating-conic-gradient layer for thin radial spokes at 0.08 opacity."
+      },
+      {
+        "problem": "Each node feeds the ring through a single thin yellow dotted line. The target has dense lane-coloured particle bursts flowing from each node into the ring rim.",
+        "where": "Space between the nodes and the ring",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Add one canvas under the nodes and spawn 30-60 particles per node along a slightly curved bezier from the node's inner edge to the ring rim. Colour each by the node's lane (safety pink, route blue, context green, control amber), draw with globalCompositeOperation 'lighter' and a 2-6px radial-gradient sprite, add a fan of short streak trails at the rim, and pause when motion is paused."
+      },
+      {
+        "problem": "The ring's label 'ANSWER BEFORE YOU SPEND' is flat text sitting above the ring, and a stream line crosses it. The target sets its spaced caps along the ring's arc.",
+        "where": "Above the ring, upper-left",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Render the label as SVG <text><textPath href='#ringArc'> on a circle path just outside the ring rim, with letter-spacing .5em, fill rgba(255,255,255,.7) and font-size 11px mono, starting at about 200deg so it wraps the top-left arc. Draw streams beneath it."
+      },
+      {
+        "problem": "The header doesn't follow the target. It has no one-line mono description and no small inline stat counters (label above number, with coloured numbers). Instead there are four large stat cards and nav pills, the wordmark is a lowercase serif rather than the bold italic script, and the lane legend sits in the header instead of on the row above the panels.",
+        "where": "Top 180px",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Lay the header out in one row: a script/italic wordmark at about 64px (pink 'jev' with a glow, white italic '+ opus'), then a two-line 14px mono description built from live counts, then four small counters (9px letter-spaced label over a 22px mono number, warm colours for needs-you and spend), then a LIVE dot. Collapse the big stat cards into these counters and move the lane legend down to the tagline row."
+      },
+      {
+        "problem": "The node cards are large tinted tiles with three boxed stat cells. In the target, cards are compact, with a solid lane-coloured title bar (number, name, lane tag), key/value mono rows and a p(x) progress bar with a value.",
+        "where": "Every project node",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Restructure each node: a header with background: var(--lane) and dark text (index, name, uppercase lane tag on the right). Below it a black body with three label/value rows in 11px mono for asks, out and fails (or status), then a footer row with a lane-coloured label, a 4px bar filled to the real ratio and the value. Use a 1.5px lane-coloured border with box-shadow 0 0 18px var(--lane-glow). Width about 260px."
+      },
+      {
+        "problem": "The lane legend + italic tagline row and the three dense bottom panels (session log with coloured category column + bar chart, all-gates with big number + who-answered bars, what-it-saved bars + step chart) are not visible in the first viewport.",
+        "where": "Below the stage (cut off at the 900px fold)",
+        "file": "tools/watch-assets/hive-panels.js, tools/watch-assets/cc-hive.css",
+        "change": "Once the stage is circular, cap its height so the legend/tagline row starts above the fold. Render the tagline in italic serif with per-word colours (violet, pink, white). Build the three panels as one bordered grid (grid-template-columns: 1.1fr 1fr 1fr) with 1px dividers: category words coloured by lane in the session log, a 40-bar lane-coloured mini histogram, a 64px italic pink big number, and an SVG step-line polyline in pink with a drop-shadow glow."
+      },
+      {
+        "problem": "On phone, the ring and nodes are pushed below the fold under a long needs-you list, project names truncate ('parts-request-...'), and the wordmark is small.",
+        "where": "Phone view, first screen",
+        "file": "tools/watch-assets/cc-hive.css, tools/watch-assets/cc-hive-mount.js",
+        "change": "At max-width 480px, show a compact ring (about 300px, with radial node dots in lane colours and short particle streams) straight after the header counters. Collapse the needs-you list to the top 2 plus a '+3 more' link. Let names wrap to 2 lines (white-space: normal; -webkit-line-clamp: 2) and set the wordmark to 40px."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "fidelity": 2.5,
+      "polish": 2.4,
+      "motion": 1.8,
+      "data": 3.6,
+      "phone": 3.6
+    },
+    "overall": 2.6,
+    "fixes": [
+      {
+        "problem": "The bottom area collides. The STAGE STACK card overlaps the worker-stream row and hides its third card, the run-stream card is squeezed into the robot column, and the '?' button covers the footer text. The target stacks the loop strip, then a 2x2 render-stream grid, then a full-width motion-stack band.",
+        "where": "Lower third, centre and bottom-left",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Take the stage stack and run stream out of the centre column and render, in normal flow below the ticket grid: the loop strip, then .render-stream with display: grid; grid-template-columns: 1fr 1fr and 4 cards, then .motion-stack as a full-width flex band (big count on the left, category tiles on the right). Remove any absolute/negative-margin positioning, and move the '?' button to right: 16px; bottom: 16px with z-index above the footer and padding-bottom on the footer."
+      },
+      {
+        "problem": "The ticket rows have no category tag and use status pills instead. In the target, each row has a coloured index chip whose colour comes from the category, a title, a muted sub-line, a check mark and a small uppercase category tag at the bottom right. The rows are also full-width, not staggered.",
+        "where": "Both ticket columns",
+        "file": "tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Render .row as a grid (chip | title/sub | check/tag). Fill the chip with var(--cat-color), pick the colour from the ticket's lane/category, and put the category name in 9px letter-spaced caps at the bottom right. Keep status as a check (done), a pulsing dot (running) or nothing (ready). Add a translateX offset per row (left column: indent that grows then shrinks; right column: mirrored) to recreate the target's bowed arc. Use a 1.5px border coloured by category at 0.5 alpha."
+      },
+      {
+        "problem": "There is no centred title box. The target has a boxed 'OPUS 5.5' title with a small orange subline above the robot; here there is only a small 'thinking' chip.",
+        "where": "Top of the centre column",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Add a .title-box above the robot: a 1.5px orange border, 4px radius, the model/orchestrator name in 28px letter-spaced mono caps, and a 9px orange caps subline built from the live lane names. Keep the 'thinking' state as a small chip inside or under it."
+      },
+      {
+        "problem": "The robot and its orbit don't match: a space-invader sprite with a thin white ellipse cutting through it, no warm radial glow and floor shadow, and no dotted path running from the robot to the active row.",
+        "where": "Centre column, robot",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Draw the target's block-creature silhouette (wide head, two black square eyes, side arms, four legs) as a CSS grid of #e07a5f cells, about 300px wide. Add a radial-gradient(circle, rgba(224,122,95,.25), transparent 60%) glow behind it and a dark ellipse floor shadow. Render the orbit as a tilted SVG ellipse (stroke rgba(255,255,255,.25)) behind the body. Add an SVG path with stroke-dasharray '1 6' and round caps from the orbit edge to the active row's chip, with node dots, recomputed on resize and on active-row change."
+      },
+      {
+        "problem": "The segmented multi-colour rule is a single orange bar plus a separate availability bar. The target uses short dashes coloured per lane, with the lane names above and 'LIVE SCAN / n OF m' on the right.",
+        "where": "Under the subhead",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Replace both bars with one .seg-rule using display: flex; gap: 6px. Render one 3px segment per ticket, coloured by its lane (dimmed to 0.3 alpha when not done), and put a 'LIVE SCAN / done OF total' mono label at the right end in orange/pink."
+      },
+      {
+        "problem": "Almost nothing moves between frames; the only change is a faint dimming of the RUNNING chips. The target implies a scanning active row, an advancing orbit and dotted path, and filling progress bars.",
+        "where": "Whole page",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Add @keyframes for: a dot travelling the orbit ellipse (offset-path, 6s linear infinite); a dash march on the dotted path (stroke-dashoffset, 1.2s linear infinite); a scanline sweep across the active row (linear-gradient background-position, 2.4s); a 2-frame robot leg bob (steps(2), 0.8s); and a subtle shimmer on progress bar fills. Respect prefers-reduced-motion and the pause toggle."
+      },
+      {
+        "problem": "The 'how the loop works' strip is a collapsed disclosure. The target shows an always-visible loop strip with an orange caps label and a '>'-separated sequence of steps, with the last step in orange.",
+        "where": "Below the ticket grid",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Render .loop-strip as an open bordered band: an orange 10px caps label on the left, a right-aligned caps note, and a row of 12px mono step labels separated by muted '>' glyphs, with the currently active stage highlighted in orange."
+      },
+      {
+        "problem": "The run stream card shows the run id twice ('17933130 17933130'), and the big empty area under the left ticket column wastes space.",
+        "where": "Centre run-stream card; lower-left grid",
+        "file": "tools/watch-assets/cockpit-view.js, tools/watch-assets/cockpit-lists.js",
+        "change": "Show the run id once, followed by the run's label/stage from the board. Balance the columns by splitting tickets ceil(n/2) per side (or up to 10 per column, as in the target) and let the grid height follow its content (align-items: start) so no empty panel remains."
+      }
+    ]
+  },
+  "notes": "Hive is still a two-column card list around a small flat ring: no particle streams, no orbital layout, a different header, and the bottom panels are below the fold. Cockpit has the right header typography and most of the parts, but its lower half overlaps, rows lack category tags, the title box and dotted path are missing, and the page is nearly static between frames."
+}

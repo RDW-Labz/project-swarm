@@ -1,32 +1,75 @@
 // SPDX-License-Identifier: Apache-2.0
 import http from 'node:http';
 import os from 'node:os';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { diffSnapshots, createThrottle } from './watch-delta.mjs';
 import { stripMoney } from './watch-cli.mjs';
 import { versionInfo } from './server-version.mjs';
 import { screenshotPath } from './watch-gallery.mjs';
 import { listProjects, projectsFile } from './projects.mjs';
-import { projectFamilyRoots } from './board-data.mjs';
+import { projectFamilyRoots, createBoardInputDetector } from './board-data.mjs';
 import { runDetail, RUN_ID } from './board-run.mjs';
 import { listPeers } from './board-peers.mjs';
+import { commandCenterEnabled } from './command-center-flag.mjs';
+import { buildCommandCenterSnapshot, buildProjectCockpit, patchCommandCenterSnapshot } from './command-center-snapshot.mjs';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
 };
 
 const SECURITY = {
   'Content-Security-Policy': `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
-  'Cache-Control': 'no-store',
+  'Cache-Control': 'no-cache',
+  Vary: 'Accept-Encoding',
 };
 
 const IDLE_FINISHED_MS = 10000;
+export const LIVE_FAMILY_WINDOW_MS = 10 * 60 * 1000;
+
+/** Bound the one-second detector; full snapshots still read the complete family. */
+export async function selectLiveFamilyRoots(root, {
+  env = process.env,
+  extraRoots = [],
+  now = Date.now,
+  windowMs = LIVE_FAMILY_WINDOW_MS,
+  familyRoots = null,
+} = {}) {
+  const roots = familyRoots ?? await projectFamilyRoots(root, { env, extraRoots });
+  const own = await realpath(root).catch(() => path.resolve(root));
+  const candidates = [...new Set([own, ...roots])];
+  const cutoff = now() - windowMs;
+  async function recent(file) {
+    try { return (await stat(file)).mtimeMs >= cutoff; }
+    catch { return false; }
+  }
+  const keep = await Promise.all(candidates.map(async member => {
+    if (member === own) return true;
+    const base = path.join(member, '.swarm');
+    const runs = path.join(base, 'runs');
+    const entries = await readdir(runs, { withFileTypes: true }).catch(() => []);
+    const newest = entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort().at(-1);
+    const files = [runs, path.join(base, 'project'), path.join(base, 'inbox'), path.join(base, 'orchestrator/events.ndjson')];
+    if (newest) files.push(path.join(runs, newest), path.join(runs, newest, 'state.json'));
+    return (await Promise.all(files.map(recent))).some(Boolean);
+  }));
+  return candidates.filter((_, index) => keep[index]);
+}
 
 export const WATCH_CORE_PATHS = Object.freeze(['/', '/api/snapshot', '/events']);
 
@@ -258,9 +301,57 @@ function watchCookie(header, expectedName) {
   return matches.length === 1 ? matches[0][1] : null;
 }
 
-function send(res, method, status, headers, body) {
-  res.writeHead(status, { ...SECURITY, ...headers });
-  res.end(method === 'HEAD' ? undefined : body);
+const COMPRESSIBLE = /^(?:text\/(?!event-stream)|application\/(?:json|javascript)|image\/svg\+xml)/;
+
+function acceptsGzip(header = '') {
+  const encodings = String(header).toLowerCase().split(',').map(part => {
+    const [name, ...params] = part.trim().split(';');
+    const quality = params.find(p => p.trim().startsWith('q='));
+    return [name, quality ? Number(quality.trim().slice(2)) : 1];
+  });
+  const explicit = encodings.find(([name]) => name === 'gzip');
+  return (explicit || encodings.find(([name]) => name === '*') || ['', 0])[1] > 0;
+}
+
+function representation(body, type) {
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body);
+  return {
+    body: bytes,
+    etag: `"${createHash('sha256').update(bytes).digest('hex')}"`,
+    gzip: COMPRESSIBLE.test(type) && bytes.length ? gzipSync(bytes) : null,
+  };
+}
+
+export function watchAssetCacheControl(name) {
+  if (name.startsWith('vendor/') || /\.(?:woff2?|ttf|otf)$/.test(name)) return 'public, max-age=31536000, immutable';
+  return /\.(?:m?js|css)$/.test(name) ? 'public, max-age=300, must-revalidate' : 'no-cache';
+}
+
+function send(res, method, status, headers, body, encoded = null) {
+  const out = { ...SECURITY, ...headers };
+  const req = res.req;
+  let bytes = body;
+  if (status === 200 && COMPRESSIBLE.test(out['Content-Type'] || '') && acceptsGzip(req?.headers['accept-encoding'])) {
+    bytes = encoded?.gzip ?? gzipSync(body);
+    out['Content-Encoding'] = 'gzip';
+    // Strong validators identify the selected wire representation.
+    if (out.ETag) out.ETag = out.ETag.slice(0, -1) + '-gzip"';
+  }
+  if (status === 200 && out.ETag && (method === 'GET' || method === 'HEAD')) {
+    const match = req?.headers['if-none-match'];
+    const since = req?.headers['if-modified-since'];
+    const unchanged = match !== undefined
+      ? String(match).split(',').some(tag => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === out.ETag)
+      : since && out['Last-Modified'] && Number.isFinite(Date.parse(since)) && Date.parse(since) >= Date.parse(out['Last-Modified']);
+    if (unchanged) {
+      delete out['Content-Length'];
+      res.writeHead(304, out);
+      return res.end();
+    }
+  }
+  if (bytes != null && status !== 304) out['Content-Length'] = Buffer.byteLength(bytes);
+  res.writeHead(status, out);
+  res.end(method === 'HEAD' || status === 304 ? undefined : bytes);
 }
 
 function sendText(res, method, status, msg) {
@@ -477,10 +568,23 @@ export function createWatchServer(opts) {
     remote,
     ownerActions,
     env = process.env,
+    commandCenter = commandCenterEnabled(env),
+    snapshotMaxStaleMs = 300000,
   } = opts;
 
   const token = fixedToken ?? randomBytes(24).toString('hex');
   const assets = new Map();
+  // One board and Hive representation, independent of project ids or query keys.
+  // Cockpit responses are derived on demand and never retained in a map.
+  let commandCenterCache = null;
+  let snapshotPending = null;
+  let changesSinceFullRebuild = false;
+  const snapshotTtlMs = 60000;
+  const ccStreams = new Set();
+  const inputDetector = createBoardInputDetector({ env });
+  let inputProjects = [];
+  const dirtyProjects = new Set();
+  let changesPending = null;
   let server = null;
   let port = 0;
   let url = null;
@@ -508,6 +612,31 @@ export function createWatchServer(opts) {
     },
   });
 
+  async function loadVendorAssets(vendorRoot, keyPrefix) {
+    let entries;
+    try {
+      entries = await readdir(vendorRoot, { withFileTypes: true });
+    } catch (err) {
+      if (err?.code === 'ENOENT') return;
+      throw err;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      if (entry.isSymbolicLink()) continue;
+      const key = `${keyPrefix}/${entry.name}`;
+      const full = path.join(vendorRoot, entry.name);
+      if (entry.isDirectory()) {
+        await loadVendorAssets(full, key);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entry.name === 'VENDOR.json') continue;
+      if (entry.name === 'LICENSE' || entry.name.startsWith('LICENSE-')) continue;
+      const ext = path.extname(entry.name);
+      if (!Object.hasOwn(TYPES, ext)) continue;
+      assets.set(key, await loadAsset(full, key, TYPES[ext]));
+    }
+  }
+
   async function loadAssets() {
     assets.clear();
     const entries = await readdir(assetDir, { withFileTypes: true });
@@ -515,17 +644,144 @@ export function createWatchServer(opts) {
       if (!entry.isFile()) continue;
       const ext = path.extname(entry.name);
       if (!Object.hasOwn(TYPES, ext)) continue;
-      const body = await readFile(path.join(assetDir, entry.name));
-      assets.set(entry.name, { type: TYPES[ext], body });
+      assets.set(entry.name, await loadAsset(path.join(assetDir, entry.name), entry.name, TYPES[ext]));
     }
-    const delta = await readFile(deltaFile);
-    assets.set('watch-delta.mjs', { type: TYPES['.js'], body: delta });
+    await loadVendorAssets(path.join(assetDir, 'vendor'), 'vendor');
+    assets.set('watch-delta.mjs', await loadAsset(deltaFile, 'watch-delta.mjs', TYPES['.js']));
+  }
+
+  async function loadAsset(file, name, type) {
+    const [body, info] = await Promise.all([readFile(file), stat(file)]);
+    const cacheControl = watchAssetCacheControl(name);
+    return { ...representation(body, type), type, lastModified: info.mtime.toUTCString(), cacheControl };
   }
 
   function sendAsset(res, method, name, headers = {}) {
-    const a = Object.hasOwn(Object.fromEntries(assets), name) ? assets.get(name) : undefined;
+    const a = assets.get(name);
     if (!a) return sendText(res, method, 404, 'not found');
-    send(res, method, 200, { 'Content-Type': a.type, 'Content-Length': a.body.length, ...headers }, a.body);
+    send(res, method, 200, {
+      'Content-Type': a.type, ETag: a.etag, 'Last-Modified': a.lastModified,
+      'Cache-Control': a.cacheControl, ...headers,
+    }, a.body, a);
+  }
+
+  function rebuildCommandCenterSnapshot() {
+    if (snapshotPending) return snapshotPending;
+    snapshotPending = new Promise(resolve => setImmediate(resolve)).then(async () => {
+      if (changesPending) await changesPending.catch(() => {});
+      const snapshot = await board.snapshot({ local: false, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const model = buildCommandCenterSnapshot(payload);
+      const entry = {
+        payload,
+        model,
+        encoded: representation(JSON.stringify(model), 'application/json'),
+        at: now(),
+      };
+      const localProjects = (payload.projects ?? []).filter(p => p.root && (!p.machine || p.machine === os.hostname()));
+      const extraRoots = localProjects.map(p => p.root);
+      inputProjects = (await Promise.all(localProjects.map(async p => {
+        const roots = await selectLiveFamilyRoots(p.root, { env, extraRoots });
+        return roots.map(root => ({ id: p.id, root }));
+      }))).flat();
+      const currentIds = new Set((payload.projects ?? []).map(p => p.id));
+      for (const id of dirtyProjects) if (!currentIds.has(id)) dirtyProjects.delete(id);
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
+      // The catch-up scan belongs to this snapshot; later detector ticks re-arm refresh.
+      changesSinceFullRebuild = false;
+      // A build finishing after shutdown must not keep the snapshot alive.
+      if (!closed) commandCenterCache = entry;
+      return entry;
+    }).finally(() => { snapshotPending = null; });
+    return snapshotPending;
+  }
+
+  function writeCommandCenterEvent(res, chunk) {
+    // Bound slow readers rather than letting an abandoned tab retain a queue.
+    if (res.writableLength > MAX_STREAM_BUFFER_BYTES) { ccStreams.delete(res); res.end(); return; }
+    try { res.write(chunk); } catch { ccStreams.delete(res); res.destroy(); }
+  }
+
+  function updateCommandCenterChanges() {
+    if (changesPending) return changesPending;
+    changesPending = (async () => {
+      if (!commandCenterCache || snapshotPending || closed) return;
+      for (const id of await inputDetector.scan(inputProjects)) {
+        dirtyProjects.add(id);
+        changesSinceFullRebuild = true;
+      }
+      if (!dirtyProjects.size) return;
+      const ids = [...dirtyProjects];
+      const entry = commandCenterCache;
+      const rows = await Promise.all(ids.map(async id => {
+        const detail = await board.project(id);
+        if (!detail) throw new Error('project unavailable');
+        const old = entry.payload.projects.find(p => p.id === id);
+        // The classic project API carries ticket rows plus a separate summary.
+        return { ...old, ...detail, tickets: Array.isArray(detail.tickets) ? detail.ticketCounts ?? old.tickets : detail.tickets ?? old.tickets };
+      }));
+      if (closed || commandCenterCache !== entry) return;
+      for (const row of rows) {
+        const index = entry.payload.projects.findIndex(p => p.id === row.id);
+        entry.payload.projects[index] = stripMoney(row);
+      }
+      const agents = entry.payload.machine?.agents;
+      if (agents) agents.total = entry.payload.projects.reduce((total, p) => total + (p.agents?.total ?? 0), 0);
+      entry.payload.at = new Date(now()).toISOString();
+      patchCommandCenterSnapshot(entry.model, entry.payload, ids);
+      entry.encoded = representation(JSON.stringify(entry.model), 'application/json');
+      for (const id of ids) dirtyProjects.delete(id);
+      const event = sse('cc-change', { kind: 'cc-change', projects: ids, at: entry.payload.at });
+      for (const res of ccStreams) writeCommandCenterEvent(res, event);
+    })().finally(() => { changesPending = null; });
+    return changesPending;
+  }
+
+  function openCommandCenterEvents(res, method) {
+    const headers = { ...SECURITY, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' };
+    if (method === 'HEAD') return send(res, method, 200, headers, '');
+    if (closed) return sendText(res, method, 503, 'shutting down');
+    if (ccStreams.size >= MAX_STREAMS) return sendText(res, method, 503, 'too many event streams');
+    res.writeHead(200, headers);
+    res.socket?.setTimeout(0);
+    res.socket?.setKeepAlive(true);
+    ccStreams.add(res);
+    res.on('close', () => { ccStreams.delete(res); lastActivity = now(); });
+    writeCommandCenterEvent(res, ': connected\n\n');
+  }
+
+  async function commandCenterResponse(pathname, q) {
+    // Preserve the explicit local-only view without retaining another snapshot
+    // or allowing query strings to grow cache keys. Normal dashboard requests
+    // always share the single default board below.
+    if (q.local === '1') {
+      const snapshot = await board.snapshot({ ...q, local: true, redact: true });
+      const payload = { ...snapshot, openRun: !remote, server: await versionInfo() };
+      const result = pathname.endsWith('/project')
+        ? buildProjectCockpit(payload, String(q.id ?? '')) : buildCommandCenterSnapshot(payload);
+      return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
+    }
+    let entry = commandCenterCache;
+    if (!entry) {
+      // Startup warming and all cold requests share the same build.
+      entry = await rebuildCommandCenterSnapshot();
+    } else if (now() < entry.at || now() - entry.at >= snapshotTtlMs) {
+      // Keep the previous snapshot available, including its validators, while
+      // a single refresh runs. Idle inputs get a deeper refresh at the backstop.
+      // A failure leaves the cached entry and its validators available.
+      if (!snapshotPending && (changesSinceFullRebuild || now() - entry.at >= snapshotMaxStaleMs)) {
+        void rebuildCommandCenterSnapshot().catch(() => {});
+      }
+    }
+    if (changesPending) await changesPending.catch(() => {});
+    if (!pathname.endsWith('/project')) return entry;
+    const id = String(q.id ?? '');
+    const cockpit = buildProjectCockpit(entry.payload, id);
+    const result = cockpit && { ...cockpit, card: entry.model.projects.find(p => p.id === id), stats: entry.model.stats, hive: entry.model.hive, at: entry.model.at };
+    return { encoded: result ? representation(JSON.stringify(result), 'application/json') : null };
   }
 
   async function payload() {
@@ -651,8 +907,9 @@ export function createWatchServer(opts) {
     const parts = pathname.split('/');
     const isJob = parts.length === 3 && parts[1] === 'job' && typeof getJobReport === 'function';
     const isBoard = pathname === '/board' && typeof getBoard === 'function';
-    const commandCenter = board ? parseCommandCenterPath(pathname) : null;
-    const isCommandCenter = commandCenter !== null;
+    const commandCenterPath = commandCenter && board ? parseCommandCenterPath(pathname) : null;
+    const isCommandCenter = commandCenterPath !== null;
+    const isCommandCenterApi = commandCenter && board && (pathname === '/api/command-center' || pathname === '/api/command-center/project' || pathname === '/api/command-center/events');
     // The board's own routes (all GET, all behind the token): data, one project, history, the CSV and the click-through to a run's own Watch page.
     // The remote board only reads: it never starts a run's own page on the computer ('/open/run') or a board.
     const boardRoutes = board ? watchBoardRoutePaths({ remote }).filter(pathname => pathname !== '/board') : [];
@@ -660,8 +917,8 @@ export function createWatchServer(opts) {
     // Navigation back to the board from a run page: where this page sits (project, run) and links that find or start the board.
     const isNav = Boolean(nav) && !remote && ['/api/nav', '/nav/board', '/nav/project'].includes(pathname);
     const isShot = parts.length === 4 && parts[1] === 'shot' && (parts[3] === 'mockup' || parts[3] === 'page');
-    if (pathname !== '/' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter) return sendText(res, method, 404, 'not found');
-    const isHtmlPage = (pathname === '/' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
+    if (pathname !== '/' && pathname !== '/classic' && pathname !== '/api/snapshot' && pathname !== '/events' && !isShot && !isJob && !isBoard && !isBoardRoute && !isNav && !isCommandCenter && !isCommandCenterApi) return sendText(res, method, 404, 'not found');
+    const isHtmlPage = (pathname === '/' || pathname === '/classic' || (isBoardRoute && (pathname === '/project' || pathname === '/run'))) || isCommandCenter;
     const queryToken = u.searchParams.get('t');
     const headerToken = req.headers['x-watch-token'];
     const cookieName = `swarm_watch_${port}`;
@@ -674,10 +931,20 @@ export function createWatchServer(opts) {
       return sendText(res, method, 403, 'forbidden');
     }
     lastActivity = now();
-    const pageHeaders = queryOk ? {
-      'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
-    } : {};
-    if (pathname === '/') return sendAsset(res, method, indexName, pageHeaders);
+    const pagePrivacyCache = isHtmlPage && (pathname === '/classic' || isWatchClassicPagePath(pathname))
+      ? { 'Cache-Control': 'no-store' }
+      : {};
+    const pageHeaders = {
+      ...pagePrivacyCache,
+      ...(queryOk ? {
+        'Set-Cookie': `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/${remote || String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim().toLowerCase() === 'https' ? '; Secure' : ''}`,
+      } : {}),
+    };
+    if (pathname === '/classic') return sendAsset(res, method, indexName, pageHeaders);
+    if (pathname === '/') {
+      if (commandCenter && board) return sendAsset(res, method, commandCenterPage, pageHeaders);
+      return sendAsset(res, method, indexName, pageHeaders);
+    }
     if (isCommandCenter) return sendAsset(res, method, commandCenterPage, pageHeaders);
     if (pathname === '/api/snapshot') return sendJson(res, method, await payload());
     if (pathname === '/events') return openEvents(res, method);
@@ -688,6 +955,16 @@ export function createWatchServer(opts) {
       const target = await nav.openBoard(pathname === '/nav/project' ? nav.project?.id ?? null : null);
       if (!target) return sendText(res, method, 404, 'not found');
       return send(res, method, 302, { Location: target, 'Content-Type': 'text/plain; charset=utf-8' }, 'redirecting');
+    }
+    if (isCommandCenterApi) {
+      if (pathname === '/api/command-center/events') return openCommandCenterEvents(res, method);
+      const q = Object.fromEntries(u.searchParams);
+      delete q.t;
+      const { encoded } = await commandCenterResponse(pathname, q);
+      if (!encoded) return sendText(res, method, 404, 'not found');
+      return send(res, method, 200, {
+        'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', ETag: encoded.etag,
+      }, encoded.body, encoded);
     }
     if (isBoardRoute) {
       const q = Object.fromEntries(u.searchParams);
@@ -765,6 +1042,11 @@ export function createWatchServer(opts) {
     if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
     heartbeatTimer = null;
     streamManager.close();
+    for (const res of ccStreams) res.end();
+    ccStreams.clear();
+    inputProjects = [];
+    dirtyProjects.clear();
+    commandCenterCache = null;
     if (server && server.listening) {
       await new Promise((resolve) => {
         server.close(() => resolve());
@@ -778,7 +1060,9 @@ export function createWatchServer(opts) {
     if (ticking || closed) return;
     ticking = true;
     try {
+      if (commandCenter && board) await updateCommandCenterChanges();
       const t = now();
+      if (ccStreams.size > 0) lastActivity = t;
       if (streamManager.size > 0) {
         await streamManager.pushUpdates();
       } else {
@@ -786,6 +1070,7 @@ export function createWatchServer(opts) {
           await close();
           return;
         }
+        if (!streamEverClosed) return;
         const run = (await getRunSnapshot()) ?? null;
         const finished = !!run && (run.status === 'complete' || run.status === 'failed');
         if (finished && streamEverClosed && t - noStreamSince >= IDLE_FINISHED_MS) {
@@ -824,8 +1109,14 @@ export function createWatchServer(opts) {
       tick();
     }, 1000);
     if (timer && typeof timer.unref === 'function') timer.unref();
-    heartbeatTimer = setIntervalFn(streamManager.writeHeartbeats, Math.max(1, heartbeatMs));
+    heartbeatTimer = setIntervalFn(() => {
+      streamManager.writeHeartbeats();
+      for (const res of ccStreams) writeCommandCenterEvent(res, ': ping\n\n');
+    }, Math.max(1, heartbeatMs));
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+    // Warm once without delaying listen or retrying in an idle loop. A cold
+    // request can join this attempt; a later request can retry a failed build.
+    if (commandCenter && board) void rebuildCommandCenterSnapshot().catch(() => {});
     return { url, port };
   }
 

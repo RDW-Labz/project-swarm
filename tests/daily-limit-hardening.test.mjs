@@ -136,9 +136,9 @@ describe('finding 2 budget set journal, log, and agent approval', () => {
 describe('finding 3 resolve sanitizes invalid layers', () => {
   it('falls back to defaults and reports invalid fields', () => {
     const r = resolveDailyLimit({ project: { usd: Number.NaN, mode: 'halt', ceilingUsd: 1 } });
-    assert.equal(r.dailyLimitUsd, 5);
+    assert.equal(r.dailyLimitUsd, 2.5);
     assert.equal(r.dailyLimitMode, 'stop');
-    assert.equal(r.hardCeilingUsd, 15);
+    assert.equal(r.hardCeilingUsd, 7.5);
     assert.ok(r.reports.length >= 1);
   });
 });
@@ -294,7 +294,8 @@ describe('finding 8 notify levels and human items', () => {
 });
 
 describe('refusal message documents owner approval', () => {
-  it('mentions approve-raise', () => {
+  it('mentions approve-raise and owner decides spend caps', () => {
     assert.match(agentBudgetRaiseRefusalMessage(), /approve-raise/);
+    assert.match(agentBudgetRaiseRefusalMessage(), /owner decides spend caps/i);
   });
 });

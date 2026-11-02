@@ -348,7 +348,12 @@ export async function scopeLoop({ maxWaves = DEFAULT_MAX_WAVES, deps, root: requ
         : `.swarm/acceptance-reviews/${waveId}-${safeReviewId(ticket.id)}.json`;
       const projectRoot = projectRootForReview(mainRoot, groupOptions);
       if (projectRoot && ticketFile && typeof deps.prepareAcceptanceReview !== 'function') {
-        const existing = await readReviewManifest(projectRoot, ticketFile).catch(() => null);
+        const existing = await readReviewManifest(projectRoot, ticketFile).catch((error) => {
+          if (error?.code !== 'ENOENT' && error?.code !== 'review-manifest') {
+            console.error('[tools/scope-loop.mjs] readReviewManifest:', error?.message ?? error);
+          }
+          return null;
+        });
         if (existing && !existing.jobs?.length) {
           await skipAcceptanceReview(ticket, new Error('acceptance review manifest has zero jobs'), wave);
           continue;

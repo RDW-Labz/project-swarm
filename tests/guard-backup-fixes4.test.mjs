@@ -10,7 +10,7 @@ import { holdsSwarmState, recordDeletion, deletionsLogFile } from '../tools/stat
 import * as lb from '../tools/ledger-backup.mjs';
 
 const PR_JSON =
-  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
 
 function greenPrView(over = {}) {
   return {
@@ -21,6 +21,8 @@ function greenPrView(over = {}) {
     headRefOid: 'abc',
     statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
     isCrossRepository: false,
+    title: 'Fix the widget',
+    body: '',
     ...over,
   };
 }

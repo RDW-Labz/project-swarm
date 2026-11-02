@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-gate-local",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "merge-gate trust source; Opus review in train 5",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: declared outputs are readable and writable. Tests first. This completes the train 5 run-record gate after the blocked clarification. The runner now writes `.swarm/runs/<runId>/review-record.json` itself (integrated: tools/swarm.mjs; format below). Replace the committed-record/free-JSON gate in tools/merge-guard.mjs with local run-state verification.\n\nRecord format written by the runner: {version:1, runId, jobId, agent, model, manifest:'.swarm/runs/<runId>/manifest.json', head:'<state.baseCommit>', status:'complete', resultFile:'<output path>', resultHash:'<sha256>', finishedAt, stateFile:'.swarm/runs/<runId>/state.json'}. `head` is the reviewed code head H (the root HEAD when the review started).\n\nGate v2-local design (release PRs only; semver title; non-release exempt):\n1) The PR body carries only a selector line `<!-- swarm-review: <result file path> -->`, e.g. coordination/review/train5-review.json. Ignore selectors inside fenced code blocks. The selector must be a safe repo-relative path under coordination/review ending in -review.json. No typed verdict or record is trusted.\n2) The PR head R is the result commit (the review result was integrated after the review). Fetch R's parents from GitHub; require exactly one parent H. Fetch the compare R^...R; require the ONLY changed file to be the selector result file. (Use the existing gh exec + contents/commits/compare API calls.)\n3) In the local merge root, read `.swarm/runs/*/review-record.json`. Find a record with `head === H`, `resultFile === selector`, `agent === 'claude'`, `/opus/i.test(model)`, `status === 'complete'`, and a matching local run state file (record.stateFile) whose `status === 'complete'`, `baseCommit === H`, and whose job with `id === record.jobId` is complete with the same agent/model. Refuse with distinct reasons when none: review-run-record-missing, review-run-state-mismatch, review-run-model-not-opus. If more than one matches, use the latest by finishedAt and require the same head.\n4) Fetch the selector file bytes at R; sha256 must equal record.resultHash. Parse the JSON: verdict exactly 'pass'; if `head` is present it must equal H. Refuse: result-hash-mismatch, result-verdict, result-head-mismatch, result-not-metadata-commit.\n5) The gate runs before any `gh pr merge`. Remove the old committed record/GitHub-record and free JSON block trust paths.\n\nTests (tests/merge-guard.test.mjs): build a fake local root with `.swarm/runs/<id>/review-record.json` and state.json (and a sibling run to prove selection by head/resultFile), and fake gh contents/commits/compare. Cases: matching local record + metadata-only result commit + pass result -> merged; no local record but a typed committed record or JSON block -> refused; model not opus -> refused; state baseCommit != H -> refused; result commit touching code -> refused; result hash/verdict/head mismatch -> refused; record head != H -> refused; non-release PR -> merged; selector inside a fenced block -> refused; null body -> refused. Keep the mechanical runMerge tests green. Verify: node --import ./tests/_isolate-config.mjs --test tests/merge-guard.test.mjs tests/review-record.test.mjs tests/guard-backup-fixes.test.mjs tests/guard-backup-fixes4.test.mjs tests/state-guard.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs",
+        "tests/review-record.test.mjs"
+      ],
+      "outputs": [
+        "tools/merge-guard.mjs",
+        "tests/merge-guard.test.mjs"
+      ],
+      "timeoutMs": 2700000,
+      "ignoreTests": [
+        "tests/fix-1167-12.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-guard.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused gate/record/merge tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-gate-local",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/merge-guard.test.mjs",
+        "tests/review-record.test.mjs",
+        "tests/guard-backup-fixes.test.mjs",
+        "tests/guard-backup-fixes4.test.mjs",
+        "tests/state-guard.test.mjs"
+      ]
+    }
+  ]
+}

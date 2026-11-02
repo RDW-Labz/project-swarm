@@ -1,0 +1,57 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv5C",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/needs-you-triage.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "outputs": [
+    "tools/needs-you-triage.mjs",
+    "tools/autopilot-ready-deps.mjs",
+    "tools/autopilot.mjs",
+    "tests/needs-you-triage.test.mjs"
+   ],
+   "prompt": "Fix review findings in the triage integrate handler and triage reporting (tools/autopilot-ready-deps.mjs, tools/needs-you-triage.mjs, tools/autopilot.mjs only the one call noted), tests added to tests/needs-you-triage.test.mjs (fakes only). 1 MEDIUM the integrate handler counts any result except failed or failed-check as ok: return ok ONLY when the integration really completed with checks passed (status integrated or merged with checksPassed true and nothing partial or queued; autopilot treats partial and queued as incomplete near tools/autopilot.mjs line 675 and checksPassed === false as failed), and give the SUCCESS close in tools/needs-you-triage.mjs (near line 698) an expiry like the swarm-fix close (24 hours) so integrateBlockerSuppressed never treats it as permanent: a partly integrated run must be raised again later. 2 MEDIUM when resolveRunForIntegrate cannot find the run return { ok: false, error: 'run not found' } before anything else; the empty-outputs refusal must not be skippable by a missing run. 3 LOW owner decision texts (including the one that carries the swarm-fix goal id) must be written to the journal as a note or update event on the item (a new small event kind or the existing item note path) so the reopened item shows the text; autopilot ignores the triage results object. 4 LOW when no project-swarm root is found, mark the item stuck in the triage state (exhausted without a goal) and log it once, never every step. 5 LOW tools/autopilot.mjs line near 689: pass the step's clock to integrateBlockerSuppressed as { now: nowFn } so fake-clock tests and production agree. Tests for each. Keep every existing test passing (tests/needs-you-triage.test.mjs, tests/autopilot-*.test.mjs, tests/inbox*.test.mjs, tests/journal*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-integrate-clean.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

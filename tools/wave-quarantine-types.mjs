@@ -186,7 +186,10 @@ async function atomicJsonWrite(absPath, data) {
     await fs.writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx', mode: 0o644 });
     await fs.rename(tmp, absPath);
   } catch (error) {
-    await fs.unlink(tmp).catch(() => {});
+    await fs.unlink(tmp).catch((unlinkError) => {
+      if (unlinkError?.code === 'ENOENT') return;
+      console.error('[tools/wave-quarantine-types.mjs] atomicJsonWrite unlink tmp:', unlinkError?.message ?? unlinkError, tmp);
+    });
     throw error;
   }
 }
@@ -260,7 +263,11 @@ export async function moveFailedTicketOutputsToQuarantine(args) {
     assertSafeProjectRel(source, 'output');
     const entry = waveQuarantineOutputEntry({ runId, ticketId, sourcePath: source });
     const fromAbs = projectAbsPath(root, source);
-    const stat = await fs.stat(fromAbs).catch(() => null);
+    const stat = await fs.stat(fromAbs).catch((error) => {
+      if (error?.code === 'ENOENT') return null;
+      console.error('[tools/wave-quarantine-types.mjs] stat ticket output:', error?.message ?? error, fromAbs);
+      return null;
+    });
     if (!stat?.isFile()) continue;
     await moveProjectFileIntoQuarantine(root, source, entry.path);
     outputs.push(entry);

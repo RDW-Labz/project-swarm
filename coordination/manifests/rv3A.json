@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "rv3A",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/generated-state.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "outputs": [
+    "tools/generated-state.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "prompt": "Fix review findings in tools/generated-state.mjs with tests added to tests/autopilot-integrate-clean.test.mjs. 9 LOW buildRealpathKey: for an output path whose file does not exist yet, realpath the nearest existing parent directory and append the remaining segments, so a new output under a symlinked directory is compared through the link; unmerged detection must treat every unmerged status code as unmerged (AA, DD, AU, UA, DU, UD, UU) and not rely on code.includes('U'). Keep every existing test passing (tests/autopilot-*.test.mjs, tests/generated-state*.test.mjs).",
+   "ignoreTests": [
+    "tests/generated-state.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

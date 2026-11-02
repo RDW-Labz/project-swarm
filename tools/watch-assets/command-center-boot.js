@@ -1,0 +1,567 @@
+// SPDX-License-Identifier: Apache-2.0
+/** Command Center page boot: Hive ↔ Project Cockpit, polling, palette, first-visit tour. */
+
+import { renderHive } from './cc-hive-mount.js';
+import { ccNavigate, ccPathFromState, ccStateFromPath } from './cc-hive-stage.js';
+
+const REFRESH_MS = 5000;
+const ROOT_TOUR_ATTR = 'data-tour';
+/** ES module graph warmed on Hive idle/hover without evaluating Cockpit code. */
+const COCKPIT_WARM_MODULES = [
+  './cc-cockpit-mount.js',
+  './cockpit-view.js',
+  './cockpit-lists.js',
+  './cockpit-orchestrator.js',
+  './orchestrator-view.js',
+  './robot-head.js',
+  './cc-ledger-browser.js',
+  './cc-glitch.js',
+  './cc-tour.js',
+];
+
+function resolveCommandCenterData() {
+  if (globalThis.CommandCenterData && typeof globalThis.CommandCenterData.parseCommandCenterSnapshot === 'function') {
+    return globalThis.CommandCenterData;
+  }
+  return null;
+}
+
+function readWatchToken(location) {
+  const loc = location || globalThis.location;
+  let queryValue = '';
+  try {
+    const params = new URLSearchParams(loc?.search || '');
+    queryValue = params.get('t') || '';
+  } catch {
+    queryValue = '';
+  }
+  if (queryValue) return queryValue;
+  try {
+    return globalThis.localStorage?.getItem('swarm-watch-token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function defaultFetchJson(url, deps) {
+  const fetchImpl = globalThis.fetch;
+  if (typeof fetchImpl !== 'function') {
+    return Promise.reject(new Error('fetch is not available'));
+  }
+  const loc = deps.location || globalThis.location;
+  const authValue = readWatchToken(loc);
+  return fetchImpl(url, {
+    method: 'GET',
+    cache: 'no-cache',
+    headers: { 'x-watch-token': authValue },
+  }).then((res) => {
+    if (!res || !res.ok) {
+      const status = res && typeof res.status === 'number' ? res.status : 'unknown';
+      throw new Error(`Command Center request failed (${status})`);
+    }
+    return res.json();
+  });
+}
+
+function defaultStorage() {
+  const mem = new Map();
+  return {
+    getItem(k) {
+      try {
+        return globalThis.localStorage?.getItem(k) ?? mem.get(k) ?? null;
+      } catch {
+        return mem.get(k) ?? null;
+      }
+    },
+    setItem(k, v) {
+      try {
+        globalThis.localStorage?.setItem(k, v);
+      } catch {
+        mem.set(k, v);
+      }
+    },
+  };
+}
+
+function clearHost(host) {
+  if (!host) return;
+  if (typeof host.replaceChildren === 'function') {
+    host.replaceChildren();
+    return;
+  }
+  while (host.firstChild) host.removeChild(host.firstChild);
+}
+
+function showShellMessage(host, document, text) {
+  clearHost(host);
+  const p = document.createElement('p');
+  p.className = 'cc-shell-message';
+  p.setAttribute('role', 'status');
+  p.textContent = text;
+  host.appendChild(p);
+}
+
+function projectLabel(project) {
+  if (!project || typeof project !== 'object') return '';
+  if (typeof project.name === 'string' && project.name.length) return project.name;
+  return String(project.id || '');
+}
+
+function paletteItemsFromProjects(projects) {
+  const list = Array.isArray(projects) ? projects : [];
+  return list.map((p) => ({
+    id: p.id,
+    label: projectLabel(p) || p.id,
+  })).filter((item) => typeof item.id === 'string' && item.id.length);
+}
+
+function applyTourMarkers(host, view) {
+  if (!host || !host.setAttribute) return;
+  if (view === 'hive') {
+    host.setAttribute(ROOT_TOUR_ATTR, 'hive');
+    const legend = host.querySelector?.('.hive-legend');
+    if (legend) legend.setAttribute(ROOT_TOUR_ATTR, 'legend');
+  } else if (view === 'cockpit') {
+    host.setAttribute(ROOT_TOUR_ATTR, 'cockpit');
+  }
+}
+
+function loadClassicScript(document, src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    (document.head || document.documentElement).appendChild(script);
+  });
+}
+
+async function ensureBrowserGlobals(document) {
+  if (!resolveCommandCenterData()) {
+    await loadClassicScript(document, '/assets/command-center-data.js');
+  }
+  if (!globalThis.HivePanels?.renderHivePanels) {
+    await loadClassicScript(document, '/assets/hive-panels.js');
+  }
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{
+ *   document?: Document,
+ *   fetchJson?: (url: string) => Promise<unknown>,
+ *   location?: Location,
+ *   history?: History,
+ *   now?: () => number,
+ *   setInterval?: typeof setInterval,
+ *   clearInterval?: typeof clearInterval,
+ *   setTimeout?: typeof setTimeout,
+ *   clearTimeout?: typeof clearTimeout,
+ *   requestAnimationFrame?: typeof requestAnimationFrame,
+ *   cancelAnimationFrame?: typeof cancelAnimationFrame,
+ *   matchMedia?: typeof matchMedia,
+ *   storage?: Storage,
+ * }} [deps]
+ */
+export function mountCommandCenter(root, deps = {}) {
+  const document = deps.document || globalThis.document;
+  const location = deps.location || globalThis.location;
+  const history = deps.history || globalThis.history;
+  const fetchJson = deps.fetchJson || ((url) => defaultFetchJson(url, { location }));
+  const now = typeof deps.now === 'function' ? deps.now : () => Date.now();
+  const setIntervalFn = deps.setInterval || globalThis.setInterval.bind(globalThis);
+  const clearIntervalFn = deps.clearInterval || globalThis.clearInterval.bind(globalThis);
+  const setTimeoutFn = deps.setTimeout || globalThis.setTimeout.bind(globalThis);
+  const clearTimeoutFn = deps.clearTimeout || globalThis.clearTimeout.bind(globalThis);
+  const requestAnimationFrame = deps.requestAnimationFrame || globalThis.requestAnimationFrame.bind(globalThis);
+  const cancelAnimationFrame = deps.cancelAnimationFrame || globalThis.cancelAnimationFrame.bind(globalThis);
+  const matchMedia = deps.matchMedia || globalThis.matchMedia.bind(globalThis);
+  const storage = deps.storage || defaultStorage();
+  const renderHiveView = deps.renderHive || renderHive;
+
+  let navState = ccStateFromPath(location?.pathname || '/command-center');
+  let viewHandle = null;
+  let viewKind = null;
+  let viewProjectId = null;
+  let palette = null;
+  let refreshTimer = null;
+  let tourStarted = false;
+  let popHandler = null;
+  let destroyed = false;
+  let refreshSequence = 0;
+  let cockpitModule = null;
+  let paletteModule = null;
+  let projectsForPalette = [];
+  let idleTour = null;
+  let parkedHive = null;
+  let cockpitPreloadedHrefs = null;
+  let cockpitPreloadLinks = [];
+  let cockpitWarmTimer = null;
+  let cockpitWarmScheduled = false;
+  let warmProjectId = null;
+  let hiveBody = null;
+  let events = null;
+  let patchPending = null;
+  const changedProjects = new Set();
+  const projectCache = new Map();
+  const projectRequests = new Map();
+  const loadCockpit = deps.loadCockpit || (() => import('./cc-cockpit-mount.js'));
+  const loadPalette = deps.loadPalette || (() => import('./command-palette.js'));
+  const loadTour = deps.loadTour || (() => import('./cc-tour.js'));
+  function schedulePromptCockpitWarm(projectId) {
+    if (destroyed || cockpitWarmScheduled) return;
+    cockpitWarmScheduled = true;
+    if (typeof projectId === 'string' && projectId.length) warmProjectId = projectId;
+    cockpitWarmTimer = setTimeoutFn(() => {
+      cockpitWarmTimer = null;
+      preloadCockpit(warmProjectId);
+    }, 300);
+  }
+
+  function preloadCockpit(projectId) {
+    if (destroyed) return;
+    if (deps.loadCockpit) {
+      cockpitModule ||= loadCockpit().catch(error => { cockpitModule = null; throw error; });
+      void cockpitModule.catch(() => {});
+    } else if (document.createElement) {
+      // Warm the ES module graph without evaluating Cockpit code on the Hive.
+      cockpitPreloadedHrefs ||= new Set();
+      for (const rel of COCKPIT_WARM_MODULES) {
+        const href = new URL(rel, import.meta.url).href;
+        if (cockpitPreloadedHrefs.has(href)) continue;
+        cockpitPreloadedHrefs.add(href);
+        const link = document.createElement('link');
+        link.rel = 'modulepreload';
+        link.href = href;
+        cockpitPreloadLinks.push(link);
+        (document.head || document.documentElement)?.appendChild(link);
+      }
+    }
+    if (projectId && !projectRequests.has(projectId)) {
+      const pending = fetchJson(`/api/command-center/project?id=${encodeURIComponent(projectId)}`)
+        .then(body => { if (body?.id === projectId && !(Date.parse(projectCache.get(projectId)?.at) > Date.parse(body.at))) projectCache.set(projectId, body); return body; })
+        .finally(() => projectRequests.delete(projectId));
+      projectRequests.set(projectId, pending);
+      void pending.catch(() => {});
+    }
+  }
+
+  function destroyView(parkHive = false) {
+    if (parkHive && viewKind === 'hive' && viewHandle?.suspend && root.removeChild) {
+      const nodes = Array.from(root.childNodes || root.children || []);
+      viewHandle.suspend();
+      for (const node of nodes) root.removeChild(node);
+      parkedHive = { nodes, handle: viewHandle };
+    } else if (viewHandle && typeof viewHandle.destroy === 'function') {
+      viewHandle.destroy();
+    }
+    viewHandle = null;
+    viewKind = null;
+    viewProjectId = null;
+  }
+
+  function syncPalette(projects) {
+    projectsForPalette = projects;
+    if (!paletteModule) return;
+    const items = paletteItemsFromProjects(projects);
+    if (palette) palette.unbind();
+    palette = paletteModule.createCommandPalette({
+      doc: document,
+      items,
+      platform: globalThis.navigator?.platform,
+      onNavigate: (item) => {
+        if (!item?.id) return;
+        openProject(item.id);
+      },
+    });
+    palette.bind();
+  }
+
+  function openProject(projectId) {
+    navState = ccNavigate(navState, { type: 'select-project', projectId });
+    const path = ccPathFromState(navState);
+    if (history?.pushState) history.pushState(null, '', path);
+    void refresh(false);
+  }
+
+  function goBack() {
+    navState = ccNavigate(navState, { type: 'back' });
+    const path = ccPathFromState(navState);
+    if (history?.pushState) history.pushState(null, '', path);
+    void refresh(false);
+  }
+
+  async function startTourIfNeeded() {
+    if (tourStarted) return;
+    tourStarted = true;
+    const start = async () => {
+      if (destroyed) return;
+      try {
+        const { maybeStartFirstVisit } = await loadTour();
+        if (!destroyed) maybeStartFirstVisit({ doc: document, storage, userId: 'anonymous' });
+      } catch { /* optional decoration in a partial DOM */ }
+    };
+    if (typeof globalThis.requestIdleCallback === 'function') {
+      idleTour = globalThis.requestIdleCallback(() => { idleTour = null; preloadCockpit(); void start(); });
+    } else {
+      await start();
+    }
+  }
+
+  async function refresh(isPoll) {
+    if (destroyed || (isPoll && document.hidden)) return;
+    const sequence = ++refreshSequence;
+    const CommandCenterData = resolveCommandCenterData();
+    if (!CommandCenterData) {
+      showShellMessage(root, document, 'Command Center data layer is not loaded yet.');
+      return;
+    }
+
+    navState = ccStateFromPath(location?.pathname || '/command-center');
+
+    try {
+      if (navState.view === 'cockpit') {
+        const projectId = navState.projectId;
+        const url = `/api/command-center/project?id=${encodeURIComponent(projectId)}`;
+        // Fetch data and code together, then paint the shell before optional decorations load.
+        const request = projectRequests.get(projectId) || fetchJson(url);
+        void request.catch(() => {});
+        const cockpit = await (cockpitModule ||= loadCockpit());
+        // Hover-prefetched project data can paint immediately; the current response follows independently.
+        const cached = projectCache.get(projectId);
+        if (cached && !destroyed && sequence === refreshSequence && (viewKind !== 'cockpit' || viewProjectId !== projectId)) {
+          destroyView(true); clearHost(root);
+          viewHandle = cockpit.renderProjectCockpit(root, cached, {
+            document, now, onBack: goBack, requestAnimationFrame, cancelAnimationFrame, matchMedia,
+          });
+          viewKind = 'cockpit'; viewProjectId = projectId;
+        }
+        let body = await request;
+        const latest = projectCache.get(projectId);
+        if (Date.parse(latest?.at) > Date.parse(body?.at)) body = latest;
+        if (destroyed || sequence !== refreshSequence) return;
+        if (!body || typeof body !== 'object' || body.id !== projectId) {
+          throw new Error('Project cockpit response was missing or invalid');
+        }
+        projectCache.set(projectId, body);
+        if (viewKind === 'cockpit' && viewProjectId === projectId && viewHandle?.update) {
+          viewHandle.update(body);
+        } else {
+          destroyView(true);
+          clearHost(root);
+          viewHandle = cockpit.renderProjectCockpit(root, body, {
+            document,
+            now,
+            onBack: goBack,
+            requestAnimationFrame,
+            cancelAnimationFrame,
+            matchMedia,
+          });
+          viewKind = 'cockpit';
+          viewProjectId = projectId;
+        }
+        applyTourMarkers(root, 'cockpit');
+        await startTourIfNeeded();
+        return;
+      }
+
+      let body = await fetchJson('/api/command-center');
+      if (Date.parse(hiveBody?.at) > Date.parse(body?.at)) body = hiveBody;
+      if (destroyed || sequence !== refreshSequence) return;
+      const snapshot = CommandCenterData.parseCommandCenterSnapshot(body);
+      hiveBody = body;
+      if (!Array.isArray(snapshot.projects) || snapshot.projects.length === 0) {
+        destroyView();
+        showShellMessage(
+          root,
+          document,
+          'No projects are on this board yet. Add a project in Swarm, then refresh this page.',
+        );
+        return;
+      }
+
+      syncPalette(snapshot.projects);
+
+      const hiveDeps = {
+        document,
+        now,
+        rawSnapshot: body,
+        requestAnimationFrame,
+        cancelAnimationFrame,
+        matchMedia,
+        onOpenProject: openProject,
+        preloadCockpit,
+      };
+
+      if (viewKind === 'hive' && viewHandle?.update) {
+        viewHandle.update(snapshot, body);
+      } else {
+        destroyView();
+        clearHost(root);
+        if (parkedHive) {
+          viewHandle = parkedHive.handle;
+          for (const node of parkedHive.nodes) root.appendChild(node);
+          parkedHive = null;
+          viewHandle.update(snapshot, body);
+          viewHandle.resume();
+        } else viewHandle = renderHiveView(root, snapshot, hiveDeps);
+        viewKind = 'hive';
+        viewProjectId = null;
+      }
+      applyTourMarkers(root, 'hive');
+      schedulePromptCockpitWarm(snapshot.projects[0]?.id);
+      await startTourIfNeeded();
+    } catch (err) {
+      if (destroyed || sequence !== refreshSequence) return;
+      destroyView();
+      parkedHive?.handle.destroy();
+      parkedHive = null;
+      const detail = err && err.message ? String(err.message) : 'Unknown error';
+      showShellMessage(
+        root,
+        document,
+        `Could not load the Command Center. ${detail} Try refreshing the page.`,
+      );
+    }
+  }
+
+  popHandler = () => {
+    navState = ccStateFromPath(location?.pathname || '/command-center');
+    void refresh(false);
+  };
+  globalThis.addEventListener?.('popstate', popHandler);
+
+  const onPaletteKey = async (event) => {
+    if (palette || event.key?.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return;
+    event.preventDefault?.();
+    try {
+      paletteModule = await loadPalette();
+      if (destroyed) return;
+      syncPalette(projectsForPalette);
+      const KeyboardEvent = document.defaultView?.KeyboardEvent || globalThis.KeyboardEvent;
+      if (KeyboardEvent) document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'k', ctrlKey: event.ctrlKey, metaKey: event.metaKey, bubbles: true,
+      }));
+    } catch { /* search can be retried */ }
+  };
+  document.addEventListener?.('keydown', onPaletteKey);
+
+  async function patchProjects() {
+    if (patchPending || destroyed || document.hidden) return patchPending;
+    patchPending = (async () => {
+      while (changedProjects.size && !destroyed && !document.hidden) {
+        const ids = [...changedProjects];
+        changedProjects.clear();
+        const bodies = await Promise.all(ids.map(id => fetchJson(`/api/command-center/project?id=${encodeURIComponent(id)}`)));
+        if (destroyed || document.hidden) return;
+        for (const body of bodies) {
+          if (!body?.id || !ids.includes(body.id)) continue;
+          projectCache.set(body.id, body);
+          if (viewKind === 'cockpit' && viewProjectId === body.id) viewHandle?.update?.(body);
+          if (!hiveBody || !body.card) continue;
+          hiveBody = { ...hiveBody,
+            projects: hiveBody.projects.map(p => p.id === body.id ? body.card : p),
+            at: body.at, stats: body.stats, hive: body.hive,
+          };
+        }
+        if (hiveBody) {
+          const snapshot = resolveCommandCenterData()?.parseCommandCenterSnapshot(hiveBody);
+          // Use the existing in-place update contract; preserve the stage and its
+          // motion/visibility lifecycle, including a Hive parked behind Cockpit.
+          if (snapshot && viewKind === 'hive') viewHandle?.update?.(snapshot, hiveBody);
+          if (snapshot && parkedHive) parkedHive.handle.update(snapshot, hiveBody);
+        }
+      }
+    })().catch(() => { /* the five-second poll reconciles a failed patch */ })
+      .finally(() => { patchPending = null; });
+    return patchPending;
+  }
+
+  function syncEvents() {
+    if (destroyed || document.hidden) {
+      events?.close();
+      events = null;
+      changedProjects.clear();
+      return;
+    }
+    const EventSource = deps.EventSource || globalThis.EventSource;
+    if (events || typeof EventSource !== 'function') return;
+    // The page exchanged its bootstrap token for an HttpOnly same-origin cookie.
+    // EventSource uses that cookie; credentials never enter its URL.
+    events = new EventSource('/api/command-center/events');
+    events.addEventListener('cc-change', event => {
+      if (destroyed || document.hidden) return;
+      try {
+        const change = JSON.parse(event.data);
+        if (change.kind !== 'cc-change' || !Array.isArray(change.projects)) return;
+        for (const id of change.projects) if (typeof id === 'string' && id.length) changedProjects.add(id);
+        void patchProjects();
+      } catch { /* malformed events leave polling available */ }
+    });
+    // Native EventSource reconnects automatically; polling remains active while
+    // disconnected and in browsers without EventSource.
+  }
+
+  function syncPolling() {
+    if (refreshTimer != null) clearIntervalFn(refreshTimer);
+    refreshTimer = document.hidden ? null : setIntervalFn(() => refresh(true), REFRESH_MS);
+  }
+  const onVisibility = () => {
+    syncPolling();
+    syncEvents();
+    if (!document.hidden) void refresh(false);
+  };
+  document.addEventListener?.('visibilitychange', onVisibility);
+  syncPolling();
+
+  const whenReady = refresh(false).then(() => syncEvents());
+
+  return {
+    whenReady,
+    destroy() {
+      destroyed = true;
+      refreshSequence++;
+      events?.close();
+      events = null;
+      changedProjects.clear();
+      if (refreshTimer != null) clearIntervalFn(refreshTimer);
+      refreshTimer = null;
+      if (idleTour != null) globalThis.cancelIdleCallback?.(idleTour);
+      idleTour = null;
+      if (cockpitWarmTimer != null) clearTimeoutFn(cockpitWarmTimer);
+      cockpitWarmTimer = null;
+      document.removeEventListener?.('visibilitychange', onVisibility);
+      document.removeEventListener?.('keydown', onPaletteKey);
+      if (palette) palette.unbind();
+      palette = null;
+      if (popHandler) globalThis.removeEventListener?.('popstate', popHandler);
+      popHandler = null;
+      destroyView();
+      parkedHive?.handle.destroy();
+      parkedHive = null;
+      for (const link of cockpitPreloadLinks) link.remove?.();
+      cockpitPreloadLinks = [];
+      cockpitPreloadedHrefs = null;
+      clearHost(root);
+    },
+    refresh: () => refresh(false),
+  };
+}
+
+const __ccAutoBoot = typeof process === 'undefined' || !process.env.SWARM_COMMAND_CENTER_BOOT_TEST;
+
+if (__ccAutoBoot && typeof document !== 'undefined') {
+  const root = document.getElementById('command-center-root');
+  if (root) {
+    ensureBrowserGlobals(document)
+      .then(() => mountCommandCenter(root, {}))
+      .catch(() => {
+        showShellMessage(
+          root,
+          document,
+          'Could not start the Command Center. Required scripts failed to load.',
+        );
+      });
+  }
+}

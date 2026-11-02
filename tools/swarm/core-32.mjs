@@ -1,5 +1,5 @@
 import { apiDoctor, probeLocalProvider } from '../api-adapters.mjs';
-import { containsKey, resolveWorkerKey } from '../claude-shell.mjs';
+import { containsKey, readWorkerKey } from '../claude-shell.mjs';
 import { execViaFile, EXTRA_CLI_AGENTS, extraCliDoctor } from '../cli-adapters.mjs';
 import { remoteExec, resolveCliHosts } from '../cli-host.mjs';
 import { codexDoctor } from '../codex-adapter.mjs';
@@ -25,7 +25,7 @@ export async function workerKeyGuard(root, id, state, { env = process.env, keyEx
   if (state.jobs.some(job => job.workerKeyExposed)) fail(`Refusing: run ${id} exposed the worker API key during a ${hasShell ? 'shell' : 'cursor'} job`);
   const keys = [];
   if (hasShell) {
-    try { keys.push(await resolveWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
+    try { keys.push(await readWorkerKey({ env, exec: keyExec, config: loadLocalConfig({ env }) })); } catch (error) { fail(`Refusing: cannot check run ${id} for the worker API key: ${error.message}`); }
   }
   { const cursorKey = hasCursor ? readCursorKey(env) : undefined; if (cursorKey) keys.push(cursorKey); }
   if (!keys.length) return;
@@ -52,7 +52,7 @@ export async function editInPlaceOnlyJobs(root, manifest, { env = process.env, h
     const cap = job.outputCapBytes ?? configured;
     const sizes = [];
     for (const file of job.outputs) {
-      try { const info = await fs.stat(await safePath(root, file)); if (info.isFile()) sizes.push(info.size); } catch { /* a file that does not exist yet has no size */ }
+      try { const info = await fs.stat(await safePath(root, file)); if (info.isFile()) sizes.push(info.size); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-32.mjs] output file stat:', error?.message ?? error); /* a file that does not exist yet has no size */ }
     }
     const total = sizes.reduce((sum, bytes) => sum + bytes, 0);
     if (sizes.some(bytes => bytes > cap.perFile || (total > cap.total && bytes > 0))) ids.add(job.id);

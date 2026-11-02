@@ -75,7 +75,10 @@ export async function squashBranch(root, { branch, base = 'origin/main', exec = 
   if (typeof branch !== 'string' || !branch.trim()) fail('swarm squash requires --branch');
   const currentBranch = (await exec('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' })).stdout.trim();
   if (currentBranch !== branch) fail(`swarm squash: HEAD is on ${currentBranch}, not --branch ${branch}; check it out first`);
-  const mergeBaseRes = await exec('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).catch(() => null);
+  const mergeBaseRes = await exec('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).catch((error) => {
+    console.error('[tools/swarm/core-12.mjs] merge-base HEAD and base failed:', String(error?.stderr || error?.message || error).trim());
+    return null;
+  });
   if (!mergeBaseRes) fail(`swarm squash: could not find a merge-base between HEAD and ${base}`);
   const mergeBase = mergeBaseRes.stdout.trim();
   const expectedFiles = new Set((await exec('git', ['-C', root, 'diff', '--name-only', mergeBase, 'HEAD'], { encoding: 'utf8' })).stdout.split('\n').map(l => l.trim()).filter(Boolean));
@@ -83,7 +86,9 @@ export async function squashBranch(root, { branch, base = 'origin/main', exec = 
   const stagedFiles = (await exec('git', ['-C', root, 'diff', '--name-only', '--cached'], { encoding: 'utf8' })).stdout.split('\n').map(l => l.trim()).filter(Boolean);
   const unexpected = stagedFiles.filter(file => !expectedFiles.has(file));
   if (unexpected.length) {
-    await exec('git', ['-C', root, 'reset', '--soft', 'HEAD@{1}'], { encoding: 'utf8' }).catch(() => {});
+    await exec('git', ['-C', root, 'reset', '--soft', 'HEAD@{1}'], { encoding: 'utf8' }).catch((error) => {
+      console.error('[tools/swarm/core-12.mjs] squash undo (reset --soft HEAD@{1}) FAILED, branch may still be reset to merge-base:', error?.message ?? error);
+    });
     fail(`squash-unexpected-files: ${unexpected.join(', ')}; undone, nothing committed`);
   }
   return { branch, mergeBase, files: stagedFiles };
@@ -116,12 +121,12 @@ export async function updateProjects(root,{projects,yes=false}={}){
   for(const projectDir of list){
     let project;
     try{project=await fs.realpath(projectDir);}catch{reports.push({project:projectDir,found:[],action:'missing'});continue;}
-    try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
+    try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch(error){console.error('[tools/swarm/core-12.mjs] refreshProjectInstallHooks failed:', error?.message ?? error, project);/* best effort */}
     let pointer=null;
     try{const {readRunnerPointer}=await import('../runner-pointer.mjs');pointer=await readRunnerPointer(project);}catch{pointer=null;}
     if(pointer&&isPinned(pointer)){
       const at=pinOf(pointer);
-      try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch{/* best effort */}
+      try{const {refreshProjectInstallHooks}=await import('../install.mjs');await refreshProjectInstallHooks(project,root,{refreshOnly:true});}catch(error){console.error('[tools/swarm/core-12.mjs] refreshProjectInstallHooks failed:', error?.message ?? error, project);/* best effort */}
       pinned.push({project,found:[],action:'pinned',pinnedAt:at});
       continue;
     }
@@ -346,7 +351,7 @@ async function collectOpenPolicyRequests(root) {
   let branch = '';
   try {
     branch = (await execFileAsync('git', ['-C', root, 'branch', '--show-current'], { encoding: 'utf8' })).stdout.trim();
-  } catch { /* no branch name */ }
+  } catch (error) { console.error('[tools/swarm/core-12.mjs] git branch --show-current failed:', error?.message ?? error); /* no branch name */ }
   const events = await readJournal(root, { limit: Infinity });
   const pendingHandbuild = new Map(
     listRequests(root)
@@ -437,7 +442,7 @@ async function refreshMapQuietly(root) {
   try {
     const head = (await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).then(out => out.stdout.trim(), () => null));
     if (head && !mapIsFresh(await readRepoMap(root), head)) await refreshRepoMap(root);
-  } catch { /* the map is a convenience, never a reason to fail a plan */ }
+  } catch (error) { console.error('[tools/swarm/core-12.mjs] refreshMapQuietly failed:', error?.message ?? error); /* the map is a convenience, never a reason to fail a plan */ }
 }
 
 export { collectOpenPolicyRequests, enforceProtectedPaths, extractChangelog, gitDirty, installNewRelease, raisedTodayUsdFromAutoDecisions, refreshMapQuietly };

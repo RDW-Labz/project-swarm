@@ -88,7 +88,12 @@ export async function resolveRegisteredProject(installRoot, token, { listProject
   }
   let resolved = null;
   if (path.isAbsolute(needle)) {
-    const real = await fs.realpath(needle).catch(() => null);
+    const real = await fs.realpath(needle).catch((error) => {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/pins.mjs] realpath needle:', needle, error?.message ?? error);
+      }
+      return null;
+    });
     if (real) resolved = entries.find(e => e.root === real);
   }
   if (!resolved) resolved = entries.find(e => e.id === needle || e.name === needle);
@@ -130,7 +135,9 @@ export async function ensureVersionInstalled(installRoot, version, { execFile = 
     const versionDir = await snapshotVersion(tmp, version, { versionsParent: installRoot });
     return { installed: true, versionDir };
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tmp, { recursive: true, force: true }).catch((error) => {
+      console.error('[tools/pins.mjs] rm tmp extract dir:', tmp, error?.message ?? error);
+    });
   }
 }
 
@@ -168,7 +175,9 @@ export async function listPinReport(installRoot) {
     try {
       const versionDir = await versionDirFor(installRoot, p.pinnedAt);
       if (versionDir) runnerVersion = await runnerVersionAtRoot(versionDir);
-    } catch { /* listing still shows the pointer version */ }
+    } catch (error) {
+      console.error('[tools/pins.mjs] runner version at pin:', p.pinnedAt, error?.message ?? error);
+    }
     mapped.push({
       project: p.project,
       name: path.basename(p.project),

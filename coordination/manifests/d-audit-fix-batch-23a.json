@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-23a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 23a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/executors.mjs, tools/remote-exec.mjs, tools/quotes.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/executors.mjs\nLogger prefix: console.error('[tools/executors.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (process kill + spend). Line 189 `try { await onOrphanSpend?.(spent); } catch { /* the spend is already on the pool */ }`: LOG-ALWAYS with entry.host.id and spent (a spend callback failed; keep the comment's meaning, entry.orphanSpend is unchanged).\n- Line 221 `if (!closed) timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);`: LOG-ALWAYS. If beat() rejects, the reschedule at its end never runs, so the heartbeat silently stops; that must be visible. Do NOT add rescheduling or any other behavior, only the log.\n- Line 270 `timer = setTimer(() => { beat().catch(() => {}); }, heartbeatMs);`: same as line 221, LOG-ALWAYS, no behavior change.\n\n### tools/remote-exec.mjs\nLogger prefix: console.error('[tools/remote-exec.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (process kill). This file may run on a remote host: log to stderr ONLY via console.error, never stdout. Line 95, signalGroup: the inner `catch { /* already gone */ }` around process.kill(pid, signal): SILENT-ESRCH (process already gone); log others (e.g. EPERM) with pid and signal. Do NOT touch the outer catch on line 95 (the one that falls back from -pid to pid).\n- Line 111 `try { fs.unlinkSync(file); } catch { /* already reaped */ }`: SILENT-ENOENT; log others with file.\n- Line 135 `} catch { /* the kill command will not find a pid */ }` around reading/rewriting the job record in stop(): SILENT-ENOENT (no record); log others (corrupt JSON, EACCES) with file, because then the cost is not preserved.\n\n### tools/quotes.mjs\nLogger prefix: console.error('[tools/quotes.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (owner pricing). Line 131 `try { const state = JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8')); ... } catch { /* an unreadable run is skipped */ }`: SILENT-ENOENT (a run dir without state.json); log others (corrupt state, EACCES) with id, since that run drops out of the price history. Still skip it.\n- Line 138 `try { return await fs.readFile(path.join(root, file), 'utf8'); } catch { /* the next one */ }`: SILENT-ENOENT; log others with file; keep trying the next one.\n- Line 156 `const ledger = await readLedger(root).catch(() => null);`: SILENT-ENOENT; log others with root; keep null.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/executors.mjs",
+        "tools/remote-exec.mjs",
+        "tools/quotes.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/estimates.test.mjs",
+        "tests/executors.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/remote-exec-real.test.mjs",
+        "tests/remote-exec.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/time-auto.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

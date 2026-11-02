@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24a-ledgerfix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, privacy fixup for batch 24a (from Opus review). Edit ONLY: tools/board-live.mjs. Logging only.\n\nreadLedger (tools/tickets.mjs:210) returns null for a missing ledger and rethrows a corrupt ledger's JSON.parse SyntaxError as is; V8 puts a slice of the file text in that message, so ledger contents can reach stderr.\nIn EVERY readLedger(...)/ledgerOf(...) `.catch((error) => { ... })` handler that this branch added in these files: when the error is a SyntaxError (error instanceof SyntaxError || error?.name === 'SyntaxError'), log the literal text 'corrupt ledger (SyntaxError)' instead of error.message; never print error.message for a SyntaxError. Keep the ENOENT silence, the other arguments (paths/ids), and `return null;` exactly as they are. Change nothing else.\n\nThen grep tests/ for each file's basename and run those with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. One-line summary per file.",
+      "context": [
+        "tools/tickets.mjs"
+      ],
+      "outputs": [
+        "tools/board-live.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/board-live.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

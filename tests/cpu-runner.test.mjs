@@ -109,14 +109,26 @@ test('runCpuRunnerJob still runs e2e when ticket tests fail', async () => {
 });
 
 test('runCpuRunnerJob uses elapsed time, not a fixed duration', async () => {
+  const SHORT_SLEEP_MS = 10;
+  const LONG_SLEEP_MS = 500;
+  const configuredGap = LONG_SLEEP_MS - SHORT_SLEEP_MS;
   const short = await runCpuRunnerJob({
-    ticketTestCommand: sleepMs(25),
+    ticketTestCommand: sleepMs(SHORT_SLEEP_MS),
     e2eSuiteCommand: 'exit 0',
   });
   const long = await runCpuRunnerJob({
-    ticketTestCommand: sleepMs(120),
+    ticketTestCommand: sleepMs(LONG_SLEEP_MS),
     e2eSuiteCommand: 'exit 0',
   });
-  assert.ok(long.ticketTests.durationMs > short.ticketTests.durationMs + 50);
-  assert.notEqual(short.ticketTests.durationMs, long.ticketTests.durationMs);
+  const shortDur = short.ticketTests.durationMs;
+  const longDur = long.ticketTests.durationMs;
+  assert.notEqual(shortDur, longDur);
+  assert.ok(
+    longDur >= shortDur * 3,
+    `expected long elapsed (${longDur}ms) >= 3× short (${shortDur}ms)`,
+  );
+  assert.ok(
+    longDur - shortDur >= configuredGap * 0.4,
+    `expected elapsed gap ≥ 40% of configured ${configuredGap}ms, got ${longDur - shortDur}ms`,
+  );
 });

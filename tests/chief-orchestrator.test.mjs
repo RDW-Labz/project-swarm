@@ -99,6 +99,22 @@ test('with two projects each having ready tickets and machine cap 4, the chief s
   assert.equal(started.alpha + started.beta, 4, 'does not exhaust the cap on one project first');
 });
 
+test('runChiefOnce reclaims a stale chief lock when the recorded pid is not alive', async t => {
+  const { home, configDir } = await tmpHome(t);
+  const env = { ...process.env, HOME: home, SWARM_CONFIG: path.join(configDir, 'config.json') };
+  await fs.writeFile(
+    chiefLockPath(configDir),
+    `${JSON.stringify({ pid: 999999, startedAt: '1970-01-01T00:00:00.000Z' })}\n`,
+  );
+  const counts = { a: 0 };
+  await runChiefOnce({
+    env,
+    projects: [{ project: 'a', ready: 1, start: n => { counts.a += n; } }],
+  });
+  assert.equal(counts.a, 1);
+  await assert.rejects(fs.access(chiefLockPath(configDir)), /ENOENT/);
+});
+
 test('runChiefOnce uses machineConcurrency from config when chief_orchestrator is on', async t => {
   const { home, configDir } = await tmpHome(t);
   const env = { ...process.env, HOME: home, SWARM_CONFIG: path.join(configDir, 'config.json') };
@@ -131,6 +147,36 @@ test('chiefOrchestratorStatus reports slot counts and share for multiple active 
     [
       { project: 'alpha', path: '/repos/alpha', slots: 2, share: 0.5 },
       { project: 'beta', path: '/repos/beta', slots: 1, share: 0.25 },
+    ],
+  );
+});
+
+test('chiefOrchestratorStatus rejects non-integer or negative slot counts', () => {
+  assert.throws(
+    () => chiefOrchestratorStatus({ machineCap: 4, projects: [{ project: 'bad', slotsInUse: 1.5 }] }),
+    (error) => error instanceof TypeError && /slots must be a non-negative integer/.test(error.message),
+  );
+  assert.throws(
+    () => chiefOrchestratorStatus({ machineCap: 4, projects: [{ project: 'bad', slotsInUse: -1 }] }),
+    (error) => error instanceof TypeError && /slots must be a non-negative integer/.test(error.message),
+  );
+});
+
+test('chiefOrchestratorStatus share at full cap when slots in use equal machineCap', () => {
+  const { machineCap, projects } = chiefOrchestratorStatus({
+    machineCap: 4,
+    projects: [
+      { project: 'alpha', slotsInUse: 2 },
+      { project: 'beta', slotsInUse: 2 },
+    ],
+  });
+  assert.equal(machineCap, 4);
+  assert.equal(projects.reduce((sum, row) => sum + row.share, 0), 1);
+  assert.deepEqual(
+    projects.map((row) => ({ project: row.project, slots: row.slots, share: row.share })),
+    [
+      { project: 'alpha', slots: 2, share: 0.5 },
+      { project: 'beta', slots: 2, share: 0.5 },
     ],
   );
 });

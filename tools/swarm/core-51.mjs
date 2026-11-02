@@ -1,12 +1,14 @@
 import { API_AGENTS, decodeContext } from '../api-adapters.mjs';
 import { listLiveRuns } from '../board.mjs';
-import { resolveRootGitInfo } from '../claude-shell.mjs';
+import { CLAUDE_SHELL_PAUSED, claudeShellPausedProblem, resolveRootGitInfo } from '../claude-shell.mjs';
 import { codexDirtyFiles, git, prepareWorkspaceEnvironment, resolveReadPaths } from '../codex-adapter.mjs';
 import { contextDirectoryWarnings, findUncoveredTests, isTestFile, listProjectFiles, registryPinningWarnings, suggestIgnoreTests } from '../context-check.mjs';
 import { windowsCiGotchasWarnings } from '../gotchas.mjs';
 import { resolveLanes } from '../lanes.mjs';
 import { loadLocalConfig } from '../local-config.mjs';
-import { defaultMaxOutputTokens } from '../openrouter.mjs';
+import { anthropicLanePausedProblem, ANTHROPIC_LANE_PAUSED } from '../anthropic.mjs';
+import { isHostedLambdaInference, pausedPaidLaneProblems } from '../paid-lane-pause.mjs';
+import { defaultMaxOutputTokens, openrouterLanePausedProblem, OPENROUTER_LANE_PAUSED } from '../openrouter.mjs';
 import { packagingWithoutBuildCheckWarning } from '../packaging-check.mjs';
 import { resolvePortBlock } from '../ports.mjs';
 import { loadRentedConfig, rentedSensitiveOk } from '../rented.mjs';
@@ -69,7 +71,7 @@ export async function runBaseChecks(root, manifest, { spawnImpl = spawn, gitImpl
   const checksKey = digest(JSON.stringify(checks.map(check => [check.name, check.argv, check.base ?? true])));
   const cached = await bytesAt(root, cacheRel, true);
   if (cached) {
-    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch { /* recompute below */ }
+    try { const record = JSON.parse(cached.toString('utf8')); if (record.checksKey === checksKey) return record; } catch (error) { console.error('[tools/swarm/core-51.mjs] unusable base-check cache:', error instanceof SyntaxError ? 'invalid JSON' : (error?.name ?? 'failed')); }
   }
   const failures = [];
   const failureLocations = {};
@@ -323,7 +325,7 @@ async function redcheckCommitRun(root, id, argv, { spawnImpl, timeoutMs, commit 
     result.status = 'error';
     result.tail = `${result.tail}\n${error.message}`.trim().slice(-2000);
   } finally {
-    if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch { /* best-effort cleanup */ } }
+    if (added) { try { await git(root, ['worktree', 'remove', '--force', worktree]); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-51.mjs] base-check worktree cleanup:', error?.code ?? 'failed'); } }
     if (temporary) await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
   }
   return result;
@@ -357,6 +359,25 @@ export async function validateProject(root, manifest, { exec = execFileAsync, li
     const byId = new Map(routes.map(route => [route.jobId, route]));
     manifest = { ...manifest, jobs: manifest.jobs.map(job => byId.has(job.id) ? withoutApiOnlyFields({ ...job, agent: byId.get(job.id).agent, model: byId.get(job.id).model }) : job) };
     validateManifest(manifest);
+  }
+  const machineConfig = loadLocalConfig({ env, home });
+  if (manifest.jobs.some(job => job.shell === true)) {
+    const shellPauseProblem = claudeShellPausedProblem(machineConfig);
+    if (shellPauseProblem) fail(shellPauseProblem, CLAUDE_SHELL_PAUSED);
+  }
+  if (manifest.jobs.some(job => job.agent === 'anthropic')) {
+    const problem = anthropicLanePausedProblem(machineConfig);
+    if (problem) fail(problem, ANTHROPIC_LANE_PAUSED);
+  }
+  if (manifest.jobs.some(job => job.agent === 'openrouter')) {
+    const problem = openrouterLanePausedProblem(machineConfig);
+    if (problem) fail(problem, OPENROUTER_LANE_PAUSED);
+  }
+  {
+    const problems = pausedPaidLaneProblems(manifest, machineConfig).filter(
+      ({ lane }) => lane !== 'lambda' || isHostedLambdaInference(env),
+    );
+    if (problems.length) fail(problems[0].message, problems[0].code);
   }
   scopeWarnings ??= manifest.jobs.map(narrowOutputScopeWarning).filter(Boolean);
   if (!scopesExpanded) manifest = await expandOpenScopes(root, manifest);

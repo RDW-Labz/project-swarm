@@ -53,7 +53,7 @@ async function readTicketEvents(root) {
       try {
         const event = JSON.parse(line);
         if (event && typeof event === 'object' && !Array.isArray(event)) events.push(event);
-      } catch { /* damaged log lines do not invalidate the panel */ }
+      } catch (parseError) { if (!(parseError instanceof SyntaxError)) console.error('[tools/split-quality.mjs] ticket event log line:', parseError?.message ?? parseError); }
     }
     return events;
   } catch {
@@ -63,7 +63,15 @@ async function readTicketEvents(root) {
 
 async function readProjectData(root, now, windowDays) {
   const [ledger, events, runs] = await Promise.all([
-    readLedger(root).catch(() => null),
+    readLedger(root).catch((error) => {
+      if (error?.code !== 'ENOENT') {
+        const detail = (error instanceof SyntaxError || error?.name === 'SyntaxError')
+          ? 'corrupt ledger (SyntaxError)'
+          : (error?.message ?? error);
+        console.error('[tools/split-quality.mjs] readLedger:', detail);
+      }
+      return null;
+    }),
     readTicketEvents(root),
     readRunStates(root).catch(() => []),
   ]);

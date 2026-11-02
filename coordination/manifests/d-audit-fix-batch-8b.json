@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-history-hooks",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/history-hooks.mjs (search for '### tools/history-hooks.mjs' - it lists exact line numbers and the catch form found there: try-catch-no-binding or dot-catch-noop-expr).\n\nThe file's own top comment says 'Always best effort: a failure here never touches the work' - every flagged catch here wraps a best-effort history/log write (recordHistory, registerProject, etc.) that must never block or fail the real run it's reporting on. Your fix must keep every one of these calls best-effort (no throw, same return value, same continuation) - you are only adding visibility, never turning a best-effort write into something that can fail the caller.\n\nFor EACH flagged line in tools/history-hooks.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. a history/projects file that may not exist yet (ENOENT), a scratch/test directory that intentionally has no history file configured. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally, narrow it to the specific expected case and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own - use `console.error('[tools/history-hooks.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call - do not just rename-and-ignore a binding.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above - these must all remain genuinely best-effort.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration and will send back any regression as a follow-up. List, in your final summary, which of the 7 flagged lines you narrowed (case a) vs. just added logging to (case b), with one line each.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/history-hooks.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": ["tests/split-module.test.mjs", "tests/board-page.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

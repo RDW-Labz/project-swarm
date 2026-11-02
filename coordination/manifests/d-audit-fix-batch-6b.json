@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-evals",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/evals.mjs (search for '### tools/evals.mjs' - it lists exact line numbers and the catch form found there, all dot-catch-noop-expr except one try-catch-no-binding).\n\nIMPORTANT - this file is sensitive: one flagged catch (around line 183 in the current file - re-find it by content, not by exact line number) is the inner fallback of `killGroup()` inside `defaultRun`, where a failed `process.kill(-child.pid, 'SIGKILL')` falls back to `child.kill('SIGKILL')`, and THAT call's own failure is the flagged silent catch (comment says 'already gone'). The expected case there is the process already being gone (ESRCH) - keep that silent, narrow to ESRCH specifically, and log anything else unexpected via console.error. Do not touch the outer `process.kill(-child.pid, 'SIGKILL')` try/catch (it already has real fallback logic, calling child.kill - that part is not flagged and must stay exactly as-is) and do not change the kill calls themselves, the timer/timeout logic, or what killGroup does.\n\nFor the other 7 flagged catches (all `.catch(() => {})`/noop-expr forms): these are best-effort fallbacks elsewhere in the file (not process-kill related) - read each one's surrounding function to understand what it guards.\n\nFor EACH flagged line in tools/evals.mjs only (do not touch any other file, do not touch anything beyond the flagged catch blocks):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - the process-already-gone case described above for killGroup's fallback, or a best-effort file/config read that may legitimately be missing (ENOENT), or similar. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but narrow to the specific expected error code and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own - use `console.error('[tools/evals.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call - do not just rename-and-ignore a binding (including via a `void error;` no-op - if a site should truly stay silent, say so in your summary and explain why rather than adding an unused binding).\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed via the claude CLI before merge given the sensitivity (process-kill), and will send back any issue as a follow-up. List, in your final summary, which of the 8 flagged lines you touched, case (a) vs (b), with one line each, and confirm killGroup's kill calls themselves are unchanged.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/evals.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": ["tests/split-module.test.mjs", "tests/evals-groups.test.mjs", "tests/evals.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

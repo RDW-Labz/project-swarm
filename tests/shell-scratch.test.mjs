@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { runManifest } from '../tools/swarm.mjs';
 import { createShellScratchDir, shellProfile, shellEnvironment, validateShellTestEnvKey } from '../tools/claude-shell.mjs';
 import { git } from '../tools/codex-adapter.mjs';
+import { withPaidKeys, assertPlainClaudeEnv } from './_plain-claude-env.mjs';
 
 const FAKE_KEY = 'sk-FAKE-scratch-0000';
 const FAKE_BIN = '/opt/fake-claude/bin/claude.exe';
@@ -173,13 +174,19 @@ test('scratch-inside-repo refuses the job before any worker spawns, the same sha
 // --- non-shell claude jobs: byte-identical, no scratch dir, no env change -------------------------
 
 test('non-shell claude jobs get no scratch dir and no env change: byte-identical to before', async t => {
+  withPaidKeys(t);
   const root = await repo(t);
   const seen = [];
   const plainJob = { id: 'writer', agent: 'claude', model: 'sonnet', prompt: 'Update the assigned file.', context: ['input.txt'], outputs: ['input.txt'], timeoutMs: 5000 };
   const spawnImpl = (command, args, options) => { seen.push({ command, args, options }); return spawn(process.execPath, ['-e', "console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'done'}))"], options); };
   const state = await runManifest(root, manifest([plainJob]), { spawnImpl, keyExec: noKeychain });
   assert.equal(state.status, 'complete');
-  assert.equal(seen[0].options.env, process.env, 'env is untouched: no scratch dir is merged in');
+  // the one intended env change, ambient paid keys never reach a subscription lane
+  try {
+    assertPlainClaudeEnv(seen[0].options.env);
+  } catch (error) {
+    assert.fail('env is untouched: no scratch dir is merged in', { cause: error });
+  }
   assert.equal('scratchDir' in state.jobs[0], false);
   assert.equal('shell' in state.jobs[0], false);
 });

@@ -91,7 +91,9 @@ export async function writeRunners(root, store) {
     await handle.close();
     await fs.rename(tmp, file);
   } catch (error) {
-    await handle.close().catch(() => {});
+    await handle.close().catch((closeError) => {
+      console.error('[tools/burst-lease.mjs] writeRunners handle.close:', closeError?.message ?? closeError);
+    });
     await fs.rm(tmp, { force: true });
     throw error;
   }

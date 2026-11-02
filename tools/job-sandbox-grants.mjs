@@ -56,7 +56,9 @@ export async function issueGrant(jobId, { project, adminExec } = {}) {
       await adminExec('REVOKE CONNECT ON DATABASE ' + quoteIdent(grant.database) + ' FROM PUBLIC');
       await adminExec('GRANT CONNECT ON DATABASE ' + quoteIdent(grant.database) + ' TO ' + quoteIdent(grant.role));
     } catch (err) {
-      await dropGrantResources(adminExec, grant).catch(() => {});
+      await dropGrantResources(adminExec, grant).catch((dropError) => {
+        console.error('[tools/job-sandbox-grants.mjs] issueGrant dropGrantResources:', dropError?.message ?? dropError);
+      });
       throw err;
     }
     registry.set(jobId, grant);

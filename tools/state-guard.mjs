@@ -167,7 +167,9 @@ export async function recordDeletion({ dir, caller, outcome, home, now = () => n
     } finally {
       await handle.close();
     }
-  } catch { /* never throws */ }
+  } catch (auditError) {
+    console.error('[tools/state-guard.mjs] recordDeletion', caller, outcome, auditError?.message ?? auditError);
+  }
 }
 
 export async function refuseStateHolderDeletion(dir, caller, { home, env = process.env, fs: fsImpl = fs, registryFile, now = () => new Date() } = {}) {

@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { boardFile, safeEnvSubset, serverMode } from './watch-cli.mjs';
 import { discoverRunningServers } from './server-discovery.mjs';
+import { defaultIsPortFree, readBoardIdentity } from './board-keepalive.mjs';
 
 export { safeEnvSubset, serverMode };
 export {
@@ -62,7 +63,15 @@ export async function removeRegistryRecord(file, { pid, url } = {}) {
     if (pid !== undefined && data.pid !== pid) return;
     if (url !== undefined && data.url !== url) return;
     await fs.rm(file, { force: true });
-  } catch { /* already gone */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (error instanceof SyntaxError) {
+        console.error('[tools/server-restart.mjs] corrupt registry (SyntaxError)');
+      } else {
+        console.error('[tools/server-restart.mjs] removeRegistryRecord:', error?.code ?? error?.name ?? 'unknown');
+      }
+    }
+  }
 }
 
 export async function removeRegistryRecordIfUnchanged(file, snapshot) {
@@ -237,7 +246,11 @@ export function installRunnerCandidates(installRoot) {
     for (const name of readdirSync(versionsDir)) {
       out.push(path.join(versionsDir, name, 'tools', 'swarm.mjs'));
     }
-  } catch { /* no versions dir */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/server-restart.mjs] versions dir:', error?.code ?? 'unknown');
+    }
+  }
   return out;
 }
 
@@ -630,8 +643,14 @@ export async function stealProcessLockIfStale(lockPath, opts = {}) {
         await fs.rm(stolen, { force: true });
         return false;
       }
-    } catch {
-      /* lock path absent after rename — expected */
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        if (error instanceof SyntaxError) {
+          console.error('[tools/server-restart.mjs] corrupt lock (SyntaxError)');
+        } else {
+          console.error('[tools/server-restart.mjs] stale lock re-read:', error?.code ?? error?.name ?? 'unknown');
+        }
+      }
     }
     await fs.rm(stolen, { force: true });
     return true;
@@ -646,7 +665,15 @@ export async function releaseProcessLock(lockPath, { pid = process.pid, clearRef
     const text = await fs.readFile(lockPath, 'utf8');
     const { pid: owner } = parseProcessLockPayload(text);
     if (owner === pid) await fs.rm(lockPath, { force: true });
-  } catch { /* already gone */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (error instanceof SyntaxError) {
+        console.error('[tools/server-restart.mjs] corrupt lock (SyntaxError)');
+      } else {
+        console.error('[tools/server-restart.mjs] releaseProcessLock:', error?.code ?? error?.name ?? 'unknown');
+      }
+    }
+  }
 }
 
 async function refreshProcessLockFile(lockPath, ownerIdentity) {
@@ -665,7 +692,11 @@ export function startProcessLockRefresh(lockPath, ownerIdentity, {
 } = {}) {
   if (!ownerIdentity?.pid) return () => {};
   const timer = setInterval(() => {
-    void refresh(lockPath, ownerIdentity).catch(() => {});
+    void refresh(lockPath, ownerIdentity).catch(error => {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/server-restart.mjs] lock refresh:', error?.code ?? error?.name ?? 'unknown');
+      }
+    });
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
@@ -679,7 +710,9 @@ export async function withProcessLock(lockPath, fn, {
   maxAgeMs = STALE_LOCK_MAX_AGE_MS,
   execFileImpl = execFileAsync,
 } = {}) {
-  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(() => {});
+  await fs.mkdir(path.dirname(lockPath), { recursive: true }).catch(error => {
+    console.error('[tools/server-restart.mjs] process lock dir:', error?.code ?? error?.name ?? 'unknown');
+  });
   const deadline = Date.now() + timeoutMs;
   let handle = null;
   let ownerIdentity = null;
@@ -773,6 +806,7 @@ export async function restartRegisteredServers({
   killImpl = (pid, signal) => process.kill(pid, signal),
   launchdBoardPlistExists,
   getuid,
+  platform = process.platform,
 } = {}) {
   const emit = line => {
     const text = line.endsWith('\n') ? line : `${line}\n`;
@@ -784,6 +818,7 @@ export async function restartRegisteredServers({
   const locked = await withRestartLock(installRoot, async () => {
   const pathEnv = registryEnv(env, home);
   const boardPath = boardFile(pathEnv, home);
+  const identity = await readBoardIdentity({ dir: path.dirname(boardPath), fs });
   const remotePath = remoteServerFile(pathEnv, home);
   const registryEntries = [
     await readKind(boardPath, 'board'),
@@ -833,7 +868,11 @@ export async function restartRegisteredServers({
     try {
       await fs.mkdir(path.dirname(stub), { recursive: true });
       await fs.writeFile(stub, 'export {}\n', { flag: 'wx' });
-    } catch { /* already present */ }
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        console.error('[tools/server-restart.mjs] test stub runner:', error?.code ?? 'unknown');
+      }
+    }
     ({ runner } = await resolveRunnerForRestart(installRoot, targetVersion));
   }
 
@@ -844,6 +883,7 @@ export async function restartRegisteredServers({
     } catch { /* no url */ }
   };
 
+  let launchdKicked = false;
   for (const { kind, file, record, fromDiscovery } of workByPid.values()) {
     const label = kind === 'board' ? 'board' : 'remote server';
     const hadTerminal = record.mode === 'terminal' || record.modeFromTty === true;
@@ -853,6 +893,50 @@ export async function restartRegisteredServers({
       emit(`${label} restart failed: invalid port ${record.port}${manual ? `; run by hand: ${manual}` : ''}`);
       servers.push({ kind, pid: record.pid, from: record.version, to: targetVersion, port: record.port, status: 'failed' });
       continue;
+    }
+
+    // launchd owns the lifecycle even when the registry still names an earlier pid.
+    // Never replace its job with a detached manual process.
+    if (kind === 'board' && platform === 'darwin' && record.version !== targetVersion
+      && (launchdBoardPlistExists ? launchdBoardPlistExists() : existsSync(defaultLaunchdBoardPlistPath(home)))) {
+      const uid = typeof getuid === 'function' ? getuid() : process.getuid();
+      const target = `gui/${uid}/com.project-swarm.board`;
+      let loaded = false;
+      let launchdPid = null;
+      let available = true;
+      try {
+        const { stdout } = await execFileImpl('launchctl', ['print', target], { timeout: 2000 });
+        const pidMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/m.exec(String(stdout));
+        launchdPid = pidMatch ? Number(pidMatch[1]) : null;
+        loaded = /^\s*state\s*=\s*running\s*$/m.test(String(stdout))
+          && launchdPid !== null;
+      } catch (error) {
+        // Missing/unsupported launchctl keeps the existing platform fallback.
+        available = !['ENOENT', 'ENOSYS', 'ENOTSUP'].includes(error?.code);
+      }
+      if (loaded && ((identity && identity.port === record.port) || launchdPid === record.pid)) {
+        if (launchdKicked) continue;
+        const from = record.version ?? null;
+        const port = record.port;
+        launchdKicked = true;
+        try {
+          await execFileImpl('launchctl', ['kickstart', '-k', target], { timeout: stopTimeoutMs });
+          const confirm = await pollNewVersion(record, targetVersion, { timeoutMs: stopTimeoutMs, sleep, fetchImpl });
+          if (!confirm.ok) throw new Error('board did not answer with the updated version');
+          emit(`board restarted through launchd: ${from ?? 'unknown'} to ${targetVersion} (port ${port})`);
+          servers.push({ kind: 'board', from, to: targetVersion, port, status: 'restarted-launchd' });
+        } catch (error) {
+          emit(`board restart through launchd failed: ${error.message}; try launchctl kickstart -k ${target}`);
+          servers.push({ kind: 'board', from, to: targetVersion, port, status: 'failed' });
+        }
+        continue;
+      }
+      if (!loaded && available && !(await defaultIsPortFree(record.port))) {
+        const hint = `launchctl bootstrap gui/${uid} ${shellQuote(defaultLaunchdBoardPlistPath(home))}`;
+        emit(`board launchd job is not loaded; port ${record.port} is busy. Run: ${hint} (or swarm watch --all --keep-up)`);
+        servers.push({ kind: 'board', from: record.version ?? null, to: targetVersion, port: record.port, status: 'launchd-not-loaded' });
+        continue;
+      }
     }
 
     const probe = pidAliveImpl === pidAlive ? pidProbe(record.pid) : (pidAliveImpl(record.pid) ? 'alive' : 'dead');
@@ -987,7 +1071,11 @@ export async function restartRegisteredServers({
         servers.push({ kind, pid: confirm.pid ?? newPid, from, to: targetVersion, port: confirmedPort, status: 'restarted' });
         started = true;
       } else if (newPid && pidAliveImpl(newPid)) {
-        try { killImpl(newPid, 'SIGTERM'); } catch { /* best effort */ }
+        try { killImpl(newPid, 'SIGTERM'); } catch (error) {
+          if (error?.code !== 'ESRCH') {
+            console.error('[tools/server-restart.mjs] stop replacement after failed restart:', error?.code ?? error?.name ?? 'unknown');
+          }
+        }
         await waitForExit(newPid, 3000, sleep, pidAliveImpl);
       }
     }

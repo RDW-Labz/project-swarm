@@ -336,7 +336,9 @@ function repositoryContains(root, files, token) {
       const stat = fs.statSync(path.join(root, file));
       if (!stat.isFile() || stat.size > CONTEXT_CHECK_LIMITS.maxTestBytes) continue;
       if (exact.test(fs.readFileSync(path.join(root, file), 'utf8'))) return true;
-    } catch { /* a concurrently removed file is absent for this advisory check */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/context-check.mjs] advisory file read:', error?.message ?? error);
+    }
   }
   return false;
 }
@@ -370,7 +372,9 @@ export function registryPinningWarnings(root, job, files = listProjectFiles(root
     try {
       fs.statSync(path.join(root, output));
       continue; // already exists: not a new file
-    } catch { /* does not exist yet */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/context-check.mjs] output stat:', output, error?.message ?? error);
+    }
     let dir = path.dirname(String(output).replace(/\\/g, '/'));
     while (dir && dir !== '.') {
       newDirs.add(dir);

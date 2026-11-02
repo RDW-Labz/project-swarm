@@ -1,0 +1,102 @@
+{
+  "round": "4",
+  "hive": {
+    "scores": {
+      "workflow": 2.6,
+      "layout": 2.2,
+      "readability": 3.0,
+      "data": 2.3,
+      "phone": 2.0,
+      "polish": 3.0
+    },
+    "overall": 2.5,
+    "fixes": [
+      {
+        "problem": "Project cards overlap each other (01/03/05 and 02/04 stack on top of one another) and every card clips its last 'fails' row at the bottom edge.",
+        "where": "Desktop hub panel, left and right card columns around the opus ring",
+        "file": "tools/watch-assets/cc-hive.css, cc-hive-mount.js",
+        "change": "Stop absolutely positioning cards with fixed top offsets. Put each side in a flex column: .hive-side{display:flex;flex-direction:column;gap:14px;justify-content:center}. Drop the fixed card height and use .hive-card{height:auto;min-height:0;overflow:visible}, with .hive-card .rows{display:grid;grid-template-columns:1fr auto;row-gap:6px;padding:10px 12px 12px}. Compute the SVG link endpoints in cc-hive-mount.js from getBoundingClientRect() after layout, not from preset coordinates."
+      },
+      {
+        "problem": "On phone, the project cards (the main content) are missing. The hub shows only the opus ring, with a yellow sliver of a clipped card along the bottom edge.",
+        "where": "Phone, hub panel under the stat cards",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "@media (max-width:640px){.hive-hub{display:flex;flex-direction:column;height:auto;overflow:visible}.hive-ring{width:180px;height:180px;margin:8px auto}.hive-side{position:static;width:100%}.hive-links{display:none}}. Order the cards so the ones that need the owner (asks>0) come first and render above the ring: .hive-side{order:-1}."
+      },
+      {
+        "problem": "The states contradict each other: 10 agents live and 6 need you, yet the ring says 'resting', the session log says 'No recent board events yet' / 'no throughput samples yet', and throughput shows tickets 0/5. Spend '41.8' has no unit. Every 'out' and 'fails' value is a bare dash.",
+        "where": "Ring centre, session log panel, throughput panel, spend stat card, card rows",
+        "file": "tools/watch-assets/hive-panels.js, cc-hive-mount.js",
+        "change": "Derive the ring state from agentsLive (>0 gives 'running · N agents' in a live chip). Feed the session log from the same board events that drive the agent count, and show a single short empty line only when that list is truly empty. Compute tickets done/total across all projects from the same source the Cockpit uses. Format spend with its unit, e.g. '$41.8' or '41.8k tok'. Render 0 instead of '—' when the value is known to be zero, and keep '—' only for null."
+      },
+      {
+        "problem": "Every project card is the same yellow 'CONTROL' header and the lane bars show control 10, others 0. The page reads as one colour, there are no robot-head assets, and the stat cards have no trend pills.",
+        "where": "Project cards, lanes-and-savings panel, stat row",
+        "file": "tools/watch-assets/hive-panels.js, cc-hive.css",
+        "change": "Colour the card header by the project's dominant lane (data-lane attribute driving --lane: var(--safety|--route|--context|--control)). Put the project's robot-head <img class=\"hive-bot\"> in the header at 28px with border-radius:8px. Make the header a status pill (running/needs you/failed) rather than repeating the lane name. Add .trend pills (e.g. '+2 since 1h' in --ok/--warn tints, border-radius:999px; font:600 11px/1 var(--mono)) to each stat card."
+      },
+      {
+        "problem": "Large dead areas sit above and below the hub. The 'live' chip floats alone at the right end of the stat row, and the bottom panels are cramped and clipped: the lanes list cuts off a 5th row and the throughput panel has an empty trailing box.",
+        "where": "Hub panel top/bottom, stat row right edge, bottom three panels",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Set .hive-hub{min-height:0;height:clamp(360px,52vh,480px)}. Move the live chip into the header next to the nav: .hive-live{position:static} inside .hive-nav. Make the stat row a grid: grid-template-columns:repeat(4,1fr). Give the bottom panels room: .hive-bottom{grid-template-rows:auto;align-items:stretch}, with .hive-panel{overflow:visible;min-height:auto}. Remove the empty placeholder box when there are no samples."
+      },
+      {
+        "problem": "There is no prioritised 'needs you / failed / next' list. The owner has to scan the cards to find the 6 asks, and the debug-ish caption 'Live board data from your Swarm watch server.' takes prime space.",
+        "where": "Header caption under the logo; no attention list exists",
+        "file": "tools/watch-assets/hive-panels.js, cc-hive.css",
+        "change": "Replace the caption with a compact 'Needs you' list (project bot, ask title, age, status pill, an 'Open' pill button that links to that project's Cockpit), sorted with failed first, then asks, then next. Place it as the first bottom panel, or as a right rail on desktop and directly under the stats on phone."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "workflow": 3.4,
+      "layout": 3.0,
+      "readability": 3.3,
+      "data": 2.6,
+      "phone": 3.2,
+      "polish": 3.1
+    },
+    "overall": 3.1,
+    "fixes": [
+      {
+        "problem": "Stray 'UNDEFINED , OS' renders as the headline subtitle in bold orange on both desktop and phone.",
+        "where": "Directly under '5 OF 14 TICKETS DONE'",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Build the subtitle from defined parts only: [project.name, stage].filter(Boolean).join(' · '). Omit the element entirely when that list is empty, and never interpolate raw undefined."
+      },
+      {
+        "problem": "The footer overlaps the bottom of the worker-stream cards, and the second row of cards is cut off at the viewport. The stage-stack labels truncate ('ACTIV', 'READY' clipped) and the worker cards truncate ticket ids to 'T-0…' / 'T-…'.",
+        "where": "Bottom strip: worker stream, run stream, stage stack, footer line",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": ".cockpit-footer{position:static;margin-top:16px}. .cockpit-bottom{padding-bottom:24px;overflow:visible}. Give the stage chips room: .stack-chip{min-width:64px;padding:8px 10px} .stack-chip .label{white-space:nowrap;font-size:10px;letter-spacing:.06em}. Give the ticket id its own column: .stream-card{grid-template-columns:auto 1fr auto} .stream-card .id{white-space:nowrap;min-width:6ch}."
+      },
+      {
+        "problem": "The tickets board leaves dead space: the left column ends after row 07 and the centre leaves a large empty area under 'Now loading'. Meanwhile the bottom strip is squeezed and the two 'loop' explainer panels take space without adding status.",
+        "where": "Main three-column board and the swarm/delivery loop row",
+        "file": "tools/watch-assets/cc-cockpit.css, cockpit-view.js",
+        "change": "Size the board to its content: .cockpit-board{align-items:start;min-height:0}. Move the run stream and stage stack under the mascot in the centre column (grid-template-areas:'done now queue' 'done run queue'). Collapse the two loop panels into one dismissible <details class=\"loop\"> line, closed by default."
+      },
+      {
+        "problem": "READY rows are low-contrast grey on grey, and running rows use a harsh white outline. The palette is almost all orange, with green used only for dots.",
+        "where": "Right ticket column (rows 10–14) and running rows 06–09",
+        "file": "tools/watch-assets/cc-cockpit.css, cockpit-lists.js",
+        "change": "Ready: .ticket[data-status=ready]{color:var(--text-2,#b8bcc8)} with a blue status pill (.pill--ready{background:rgba(96,165,250,.14);color:#93c5fd}). Running: replace the 1px white border with border-color:rgba(52,211,153,.55);box-shadow:0 0 0 1px rgba(52,211,153,.25) inset and a pulsing green .pill--running. Add a red .pill--failed and an amber .pill--needs so the status colours carry meaning."
+      },
+      {
+        "problem": "The header is inconsistent with Hive and partly noisy. The brand reads 'Swarm Watch' here and 'jev + opus' on Hive. Nav buttons are shouty uppercase. The 'OPUS 5.5 / SKILLS / ENGINES / TASTE / B-ROLL / WEB' crumb is unexplained. 'LIVE SCAN 5 OF 14' duplicates the headline, and the run stream shows a raw 22-character run id with an unexplained '1 OF 14'.",
+        "where": "Top bar, crumb row, right of headline, run stream card",
+        "file": "tools/watch-assets/cockpit-view.js, cc-cockpit-mount.js",
+        "change": "Use the same brand component and pill nav (Hive / Cockpit, sentence case) as Hive. Label the crumb row with a mono 'LANES' prefix, or drop it. Replace 'LIVE SCAN 5 OF 14' with a live chip ('live · 4 running'). Show the run as a short id (first 8 chars, full id in title=) and label its counter ('run 1 of 14 tickets' becomes 'jobs 2/6')."
+      },
+      {
+        "problem": "On phone, the nav (back/Hive) is missing at the top. The running tickets and anything that needs the owner fall below the fold, beneath the mascot and two loop paragraphs.",
+        "where": "Phone, top of page through the NOW tab",
+        "file": "tools/watch-assets/cc-cockpit.css, cockpit-view.js",
+        "change": "@media (max-width:640px){.cockpit-nav{display:flex;position:sticky;top:0;z-index:5;backdrop-filter:blur(8px)}.mascot{max-height:120px}.loop{display:none}}. In the NOW tab, render the running and needs-you ticket rows (min-height:44px) directly under the 'Now loading' card, before the search field."
+      }
+    ]
+  },
+  "notes": "Neither page is near the 4.5 bar. Hive's hub has overlapping, clipped project cards, an empty phone hub, and contradictory live/empty states. Cockpit is the stronger page, but it shows a stray 'UNDEFINED , OS', a clipped bottom strip and a mostly one-colour palette."
+}

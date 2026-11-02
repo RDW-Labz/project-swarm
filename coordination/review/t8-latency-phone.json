@@ -1,0 +1,14 @@
+{
+  "url": "http://127.0.0.1:59960/command-center?t=…&tour=0",
+  "profile": "phone",
+  "runs": 3,
+  "latenciesMs": [
+    717,
+    1002,
+    1001
+  ],
+  "medianMs": 1001,
+  "bootFullSnapshotFetches": 1,
+  "fullSnapshotFetchesAfterReady": 1,
+  "fullSnapshotFetchesDuringUpdates": 0
+}

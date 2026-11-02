@@ -41,7 +41,16 @@ export async function runModelsCommand(root, args, { fetchImpl, env = process.en
   if (verb === 'compare') {
     if (rest.length !== 2) return out(`compare needs two model names\n${MODELS_USAGE}`, 2);
     let rows = [];
-    try { rows = (await fs.readFile(path.join(root, 'docs/state/eval-scores.ndjson'), 'utf8')).split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } }); } catch { /* none yet */ }
+    try {
+      rows = (await fs.readFile(path.join(root, 'docs/state/eval-scores.ndjson'), 'utf8')).split('\n').filter(Boolean).flatMap(l => {
+        try { return [JSON.parse(l)]; } catch {
+          if (l.trim()) console.error('[tools/models-commands.mjs] corrupt eval-scores line (SyntaxError)');
+          return [];
+        }
+      });
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/models-commands.mjs] read eval-scores.ndjson:', error?.message ?? error);
+    }
     const result = compareModels(rows, rest[0], rest[1]);
     return out(result.message, result.ok ? 0 : 1);
   }

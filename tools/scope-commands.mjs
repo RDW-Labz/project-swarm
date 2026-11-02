@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { appTypes, runInterview, scopeFromAnswers } from './scope-interview.mjs';
 import readline from 'node:readline';
 import { SCOPE_TEMPLATE, parseScope, checkScope, scopeHash, requirementText } from './scope.mjs';
-import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS } from './tickets.mjs';
+import { readLedger, writeLedger, appendLog, createLedger, transition, readyTickets, filterTickets, ledgerStats, renderBuildPlan, pruneCancelledDeps, logPrune, approveLedger, isApproved, validateTicket, validateSetTransition, validateDeliveredTicket, verifyMergedPullRequests, applyDelivered, deliveredNote, ticketActor, STATUSES, parseLane, laneText, laneOkForSensitive, TICKET_LANE_AGENTS, readTicketLog, supersedeCandidates, applySupersedeStale } from './tickets.mjs';
 import { checkTicketTree, summarizeTree, formatSummary } from './scope-integrity.mjs';
 import { missingToolConfigs, toolConfigLines, projectFileList, existsIn, e2eSpecWarnings } from './tool-config.mjs';
 import { isSecretLooking } from './ignored-artifacts.mjs';
@@ -18,7 +18,7 @@ import { readRuns } from './quotes.mjs';
 import { diffScopes, impactAnalysis, nextChangeOrderId, applyChangeOrder } from './change-orders.mjs';
 import { day0Checklist, checklistToTickets } from './day0.mjs';
 import { validateApprovalPolicy, needsHuman } from './approval-policy.mjs';
-import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext } from './ticket-manifest.mjs';
+import { ticketsToManifest, ticketOutcome, criticalPathLength, normalizeCacheContext, parseCheckTimeoutMs, resolveTicketCheckTimeoutMs, isE2eSpecPath } from './ticket-manifest.mjs';
 import { safeWritableDir, assertRegularOrMissing, appendEvent } from './journal.mjs';
 import {
   ROOT_RULES,
@@ -27,6 +27,8 @@ import {
   buildRepairJobs,
   runRepairLoop,
   parkedBlockers,
+  repairTicketBatch,
+  refreshRejectedDependents,
 } from './split-repair.mjs';
 import { validateOpenApi, contractFiles } from './contracts.mjs';
 import { verifyContracts } from './contracts-verify.mjs';
@@ -45,7 +47,7 @@ import { CHEAP_LANE_ORDER, DEFAULT_MAX_FILES, adviseTicketLane, capBytesForLane,
 import { unlockReady, releaseReady } from './ticket-unlock.mjs';
 import { WIRING_PROMPT, WIRE_ONLY_PROMPT, wiringGaps, addWiringDeps, orderTestsAfterBuild, chainSharedFiles, builtRequirements, looksLikeTestFile, unwiredRequirements, moduleTickets, integrationTickets, alignTestTicketsWithBuildStages, reconcileTicketContext, peelProtectedOutputs, cascadeRejectedDependents } from './wiring.mjs';
 import { parseEnvNames, envNamesLine } from './env-names.mjs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, statSync, lstatSync, realpathSync, readdirSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { acceptanceLines, coverage, evaluate, reviewManifest as acceptanceManifest, parseAcceptanceVerdicts, readAcceptanceRecords, writeAcceptanceRecords } from './acceptance.mjs';
@@ -73,6 +75,7 @@ import {
   normTicketPath,
 } from './ticket-paths.mjs';
 import { simulateBeforeIngest } from './split-wave-sim.mjs';
+import { evaluateAutoApprove } from './split-auto-approve.mjs';
 import { parseUncovered } from './uncovered-tests.mjs';
 import { suggestIgnoreTests } from './context-check.mjs';
 import { API_AGENTS, decodeContext } from './api-adapters.mjs';
@@ -90,9 +93,10 @@ export const SCOPE_USAGE = [
   '       swarm scope acceptance-review RUN   (records the per-line verdicts of an acceptance review run)',
   '       swarm scope contracts OPENAPI.json',
   '       swarm tickets ID --approve [--yes]     (a ticket made from a gallery comment is proposed: you read it, name its files, approve it; no worker runs it before)',
-  '       swarm tickets ID --clear-note | --retry-note TEXT | --reopen --reason "why"   (drop or replace the note a failed attempt left; put a done ticket back to ready, logged)',
+  '       swarm tickets ID --clear-note | --retry-note TEXT | --note TEXT | --reopen --reason "why"   (--retry-note replaces the system note a failed attempt left, shown to the next worker as untrusted failure text; --clear-note removes that retry note and any owner guidance note; --note alone leaves guidance for the next worker)',
   '       swarm tickets ID --lane auto|claude|codex|cursor|anthropic[:MODEL] | --risk low|medium|high [--yes]   (logged; an approved ledger is sealed again)',
-  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
+  '       swarm tickets ID --check-timeout MS | --check-timeout auto [--yes]   (per-ticket merge-queue check timeout 60000–1800000 ms; logged; an approved ledger is sealed again)',
+  '       swarm tickets ID --set STATUS [--yes|--force] [--dry-run] [--note TEXT] [--question TEXT]     (hand status change: previews the move; --yes or --force applies; --note with --set ready, todo or blocked saves owner guidance for the next worker; with --set blocked, --question is stored on the ticket for the board; reviews for done are never skipped)',
   '       swarm tickets ID [ID...] --delivered PR[,PR] [--repo OWNER/NAME] [--dry-run] [--note TEXT] --yes     (merged PRs outside the ledger: marks todo, ready, blocked or running tickets done)',
   '       swarm tickets [ID] [--stage S1] [--status todo] [--type build] [--risk high (filter; with an ID use the --risk line above)] [--json]',
   '       swarm tickets ID --files a,b [--take-from TICKET] [--deletes x,y] [--dependencies pkg,pkg@^1] [--context c,d] [--tests t] [--acceptance "one || two"] [--add-acceptance TEXT] [--yes]     (change the file lists of a ticket that is not running; keeps an approved ledger approved)',
@@ -108,7 +112,7 @@ export const SCOPE_SUBCOMMANDS = [
   { name: 'template', summary: 'Print or write the scope template.', flags: ['--out'] },
   { name: 'check', summary: 'Validate the scope file.', flags: [] },
   { name: 'split', summary: 'Split the scope into tickets.', flags: ['--stage', '--ingest', '--merge', '--wire', '--all', '--max-repairs', '--accept-waves', '--accept-new-path'] },
-  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves'] },
+  { name: 'approve', summary: 'Approve the ticket ledger and seal the build plan.', flags: ['--yes', '--accept-waves', '--auto-ok'] },
   { name: 'gate', summary: 'Ticket-manager scope gate: list findings or fix duplicate file owners.', flags: ['--list', '--json', '--fix-owners', '--yes'] },
   { name: 'sync', summary: 'Sync ticket status from a run.', flags: ['--integrated', '--accept-unreviewed', '--accept-unmet', '--reason', '--yes'] },
   { name: 'security-review', summary: 'Record Opus security review verdicts for a run.', flags: [] },
@@ -125,7 +129,7 @@ const MAX_SPLIT_BYTES = 2 * 1024 * 1024;
 const MAX_STAGE_TICKETS = 2000;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs']);
+const FLAGS_WITH_VALUE = new Set(['--out', '--stage', '--ingest', '--status', '--type', '--risk', '--lane', '--check-timeout', '--set', '--note', '--question', '--max-jobs', '--files', '--context', '--tests', '--accept-failed-check', '--accept-unreviewed', '--accept-unmet', '--reason', '--deletes', '--dependencies', '--acceptance', '--add-acceptance', '--take-from', '--answers', '--retry-note', '--delivered', '--repo', '--accept-new-path', '--max-repairs', '--before']);
 const execFileAsync = promisify(execFile);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -135,7 +139,9 @@ function machineSlots(override) {
   try {
     const config = loadLocalConfig();
     configured = config?.machineConcurrency ?? config?.machine?.concurrency ?? config?.lanes?.machineConcurrency;
-  } catch { /* an absent or invalid local config uses the safe fallback */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] local config unreadable; using the default:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
   return Number.isInteger(configured) && configured > 0 ? configured : 8;
 }
 
@@ -675,7 +681,9 @@ function wavePrepContextBytes(context, root) {
   if (!root) return 0;
   let total = 0;
   for (const file of context ?? []) {
-    try { total += statSync(path.join(root, file)).size; } catch { /* missing */ }
+    try { total += statSync(path.join(root, file)).size; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] context size:', error?.code ?? 'unknown');
+    }
   }
   return total;
 }
@@ -829,13 +837,14 @@ function envLineFor(root) {
 // The quality checks (typecheck, lint, optional build) this project's profile and package.json give.
 export async function qualityFor(root, profile) {
   let pkg = null;
-  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+  try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json unreadable; quality checks use the defaults:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+  }
   return deriveQualityChecks({ pkg, hasTsconfig: existsSync(path.join(root, 'tsconfig.json')), manager: packageManagerOf(profile) ?? 'npm', config: profile?.quality ?? {} });
 }
 
 const SPEC_TESTS_TOKEN = '{tests}';
 const SPEC_AFFECTED_TOKEN = '{affected}';
-const E2E_SPEC_PATH = /(?:(^|\/)(e2e|playwright|cypress\/e2e)\/|\.e2e\.[cm]?[jt]sx?$)/i;
 const specTestArg = p => `./${p}`;
 
 async function readProjectChecks(root) {
@@ -843,10 +852,6 @@ async function readProjectChecks(root) {
     const parsed = JSON.parse(await fs.readFile(path.join(root, 'coordination/checks.json'), 'utf8'));
     return Array.isArray(parsed?.checks) ? parsed.checks : [];
   } catch { return []; }
-}
-
-function isE2eSpecPath(file) {
-  return E2E_SPEC_PATH.test(file);
 }
 
 function argvLooksE2e(argv) {
@@ -902,10 +907,15 @@ export function argvForTicketSpec(file, { profile, checks, pkg, files = [] } = {
   return null;
 }
 
-export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs } = {}) {
+export async function runTicketSpec(root, file, { profile, checks, pkg, files, timeoutMs, ticket } = {}) {
   const argv = argvForTicketSpec(file, { profile, checks, pkg, files });
   if (!argv?.length) return { ok: false, reason: `no runner configured for ${file}` };
-  const limit = timeoutMs ?? (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
+  let limit = timeoutMs;
+  if (limit === undefined && ticket && isE2eSpecPath(file)) {
+    const custom = resolveTicketCheckTimeoutMs(ticket, profile?.verify);
+    if (custom !== undefined) limit = custom;
+  }
+  if (limit === undefined) limit = (validateVerifyConfig(profile?.verify).value?.timeoutSec ?? 900) * 1000;
   try {
     const { exitCode, stdout, stderr } = await runCheckArgv(argv, { cwd: root, timeoutMs: limit });
     const tail = [stdout, stderr].filter(Boolean).join('\n').slice(-8000);
@@ -926,6 +936,19 @@ export function redactNote(text) {
     .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, '***')
     .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH|CREDENTIAL)[A-Za-z0-9_]*)(\s*[=:]\s*)\S+/gi, '$1$2***')
     .replace(/\b[A-Za-z0-9+/_-]{32,}={0,2}/g, '***');
+}
+
+/** Owner or orchestrator guidance for the next worker attempt (not the system retryNote). */
+export function applyOwnerNote(ticket, raw) {
+  const text = redactNote(String(raw ?? '')).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
+  if (!text) {
+    delete ticket.ownerNote;
+    delete ticket.ownerNoteAt;
+    return null;
+  }
+  ticket.ownerNote = text;
+  ticket.ownerNoteAt = new Date().toISOString();
+  return text;
 }
 
 // Ticket moves share the wave lock, so an owner command, a wave start and a sync cannot overwrite each other.
@@ -1043,6 +1066,53 @@ export function parseLooseJson(text) {
     }
     out = out.replace(/,(\s*[}\]])/g, '$1');
     try { return { value: JSON.parse(out), repaired: true }; } catch { throw first; }
+  }
+}
+
+async function readApprovedTicketsSnapshot(root) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, '.swarm', 'project', 'approved-tickets.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function lastApproveLogTicketsHash(root) {
+  const file = path.join(root, '.swarm', 'project', 'tickets.log');
+  let text;
+  try {
+    text = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  let last = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.event === 'approve' && typeof entry.ticketsHash === 'string') last = entry.ticketsHash;
+    } catch { /* skip malformed lines */ }
+  }
+  return last;
+}
+
+async function writeApprovedTicketsSnapshot(root, payload) {
+  const dir = await safeWritableDir(root, ['.swarm', 'project']);
+  const file = path.join(dir, 'approved-tickets.json');
+  await assertRegularOrMissing(file);
+  const tmp = path.join(dir, `.approved-tickets.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(payload, null, 2) + '\n');
+    await handle.sync();
+    await handle.close();
+    await fs.rename(tmp, file);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.rm(tmp, { force: true });
+    throw error;
   }
 }
 
@@ -1335,7 +1405,7 @@ export function ticketsFromStageLists(lists, scope, { startAt = 1, packageManage
   }
   for (const candidate of candidates) if (!rejectedById.has(candidate.id)) tickets.push(candidate.ticket);
   rejected.sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
-  return { tickets, errors, notes, copiedAcceptanceIds, rejected };
+  return { tickets, errors, notes, copiedAcceptanceIds, rejected, candidateTickets: candidates.map((candidate) => candidate.ticket) };
 }
 
 async function readStageFiles(root, runId) {
@@ -1421,11 +1491,38 @@ function tagIssueStages(issues, stageByTicket) {
   return issues.map(issue => (issue.stage ? issue : { ...issue, stage: issue.ticket ? stageByTicket.get(issue.ticket) ?? null : null }));
 }
 
+export function promotePathPendingTickets(pathPendingParked, tickets, { repoFiles, acceptNewPaths, pathExists }) {
+  const stillParked = [];
+  const promoted = [];
+  for (const entry of pathPendingParked) {
+    const ticket = entry.ticket;
+    const paths = validateTicketPaths(ticket, { exists: pathExists, allTickets: [...tickets, ticket], repoFiles });
+    const missing = (paths.errors ?? []).filter(err => err.reason === 'missing file');
+    const promote = (t) => {
+      if (!Object.hasOwn(t, 'pathPending')) return t;
+      const { pathPending: _drop, ...rest } = t;
+      return rest;
+    };
+    if (!missing.length) {
+      promoted.push(promote(ticket));
+      continue;
+    }
+    const cleared = missing.every(err => {
+      const norm = normTicketPath(err.path);
+      return acceptNewPaths.has(norm) || repoFiles.includes(norm);
+    });
+    if (cleared) promoted.push(promote(ticket));
+    else stillParked.push(entry);
+  }
+  return { tickets: [...tickets, ...promoted], pathPendingParked: stillParked };
+}
+
 function evaluateSplitIngest({
   root,
   lists,
   readErrors,
   scope,
+  scopeText = '',
   existing,
   profile,
   repoFiles,
@@ -1454,7 +1551,41 @@ function evaluateSplitIngest({
     const patch = ticketPatches.get(ticket.id);
     return patch ? { ...ticket, ...patch } : ticket;
   });
-  const rejected = [...built.rejected];
+  let rejected = [...built.rejected];
+  const pathExists = (p) => repoFiles.includes(normTicketPath(p));
+  const batchRepair = repairTicketBatch({
+    tickets,
+    ledgerTickets: existing?.tickets ?? [],
+    scopeText,
+    pathExists,
+    repoFiles,
+  });
+  built.notes.push(...batchRepair.notes);
+  const pathPendingParked = batchRepair.parked.filter((entry) => entry.parkedReason === 'path-not-in-repo-pending');
+  const hardParked = batchRepair.parked.filter((entry) => entry.parkedReason !== 'path-not-in-repo-pending');
+  tickets = batchRepair.tickets;
+  for (const entry of hardParked) {
+    rejected.push({ id: entry.ticket.id, title: entry.ticket.title ?? '', reason: entry.issues[0]?.reason ?? 'could not repair ticket' });
+  }
+  const repairedIds = new Set(batchRepair.notes.map(line => /^T-[0-9]+/.exec(line)?.[0]).filter(Boolean));
+  const refreshed = refreshRejectedDependents({
+    tickets,
+    rejected,
+    repairedIds,
+    candidateTickets: built.candidateTickets ?? [],
+    exists: pathExists,
+    pathOptions: { repoFiles },
+  });
+  tickets = refreshed.tickets;
+  rejected = refreshed.rejected;
+  const stillRejectedIds = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => stillRejectedIds.has(row.id));
+  built.notes.push(...refreshed.notes);
+  const pathPendingIds = new Set(pathPendingParked.map((entry) => entry.ticket.id));
+  tickets = [...tickets, ...pathPendingParked.map((entry) => entry.ticket)];
+  for (const entry of pathPendingParked) {
+    built.notes.push(`${entry.ticket.id}: path not in repo (pending path gate)`);
+  }
   const stageByTicket = ticketStageLookup(lists, startAt);
   for (const ticket of tickets) if (!stageByTicket.has(ticket.id)) stageByTicket.set(ticket.id, ticket.stage);
 
@@ -1479,6 +1610,8 @@ function evaluateSplitIngest({
   addWiringDeps(tickets, existing?.tickets ?? []);
   const orderNotes = orderTestsAfterBuild(tickets, existing?.tickets ?? []);
   tickets = finalizeSplitTestStages(tickets, existing?.tickets ?? [], { notes: built.notes, rejected });
+  const rejectedIdsAfterFinalize = new Set(rejected.map((row) => row.id));
+  built.rejected = built.rejected.filter((row) => rejectedIdsAfterFinalize.has(row.id));
   for (const entry of rejected) {
     if (!built.rejected.some(row => row.id === entry.id)) built.rejected.push(entry);
   }
@@ -1491,7 +1624,20 @@ function evaluateSplitIngest({
   const needsIntegration = new Set(unwiredRequirements(allForWiring).filter(r => touched.includes(r)));
   const hardWiringGaps = unwired.filter(g => !needsIntegration.has(g.req) || (existing && isApproved(existing)));
 
+  const pendingAfterGuards = pathPendingParked.map((entry) => ({
+    ...entry,
+    ticket: tickets.find((ticket) => ticket.id === entry.ticket.id) ?? entry.ticket,
+  }));
+  const readyTickets = tickets.filter((ticket) => !pathPendingIds.has(ticket.id));
+  const pathPromotion = promotePathPendingTickets(pendingAfterGuards, readyTickets, { repoFiles, acceptNewPaths, pathExists });
+  tickets = pathPromotion.tickets;
   const pathCheck = ticketPathCheckLines(tickets, repoFiles, root, acceptNewPaths);
+  for (const entry of pathPromotion.pathPendingParked) {
+    const paths = validateTicketPaths(entry.ticket, { exists: pathExists, allTickets: tickets, repoFiles });
+    for (const err of paths.errors ?? []) {
+      pathCheck.refusals.push(formatTicketPathRefusal(entry.ticket.id, err));
+    }
+  }
   const laneRefusals = [];
   const laneNotes = [];
   const sizes = contextEnvFor(root, profile).sizes;
@@ -1597,6 +1743,7 @@ function evaluateSplitIngest({
   const validTickets = tickets.filter(ticket => !badIds.has(ticket.id));
   return {
     tickets: validTickets,
+    pathPendingParked: pathPromotion.pathPendingParked,
     allTickets: tickets,
     issues,
     existing: existing?.tickets ?? [],
@@ -1614,7 +1761,7 @@ function evaluateSplitIngest({
   };
 }
 
-async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false }) {
+async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowIntegrationRepair = false, scopeText = '' }) {
   const history = [];
   let rounds = 0;
   let prevIssueKeys = null;
@@ -1623,6 +1770,20 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     const v = validate();
     const all = [...(v.issues ?? []), ...(v.stageIssues ?? [])];
     return { all, keys: [...all].map(i => [i.code, i.stage ?? '', i.ticket ?? '', i.path ?? '', i.req ?? '', i.reason ?? ''].join('|')).sort().join('\0'), v };
+  };
+
+  const applyTicketBatchRepair = (v) => {
+    const pool = v.allTickets ?? v.tickets ?? [];
+    if (!pool.length) return [];
+    const repaired = repairTicketBatch({
+      tickets: pool,
+      ledgerTickets: v.existing ?? [],
+      scopeText,
+      pathExists: (p) => (v.repoFiles ?? []).includes(normTicketPath(p)),
+      repoFiles: v.repoFiles ?? [],
+    });
+    if (repaired.notes.length && typeof v.setTickets === 'function') v.setTickets(repaired.tickets);
+    return repaired.notes;
   };
 
   const applyAutoFixPass = (v, allIssues) => {
@@ -1643,25 +1804,30 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
 
   const errorsInFirst = issues.length;
   applyAutoFixPass(v, issues);
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
   ({ all: issues, keys, v } = snapshot());
 
   if (!issues.length) {
     log?.({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
     history.push({ round: 0, errorsIn: errorsInFirst, errorsLeft: 0 });
-    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history };
+    return { tickets: v.tickets ?? [], parked: [], rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   const shouldRepair = issueList => issueList.some(issue => issue.fixable)
     || (allowIntegrationRepair && issueList.some(issue => issue.code === 'missing-integration' || issue.code === 'invalid-integration-test'));
 
   if (!shouldRepair(issues)) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   if (maxRepairs === 0) {
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+    ({ all: issues, keys, v } = snapshot());
     const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-    return { ...parkedResult, rounds: 0, history };
+    return { ...parkedResult, rounds: 0, history, repairNotes: v.repairNotes ?? [] };
   }
 
   prevIssueKeys = keys;
@@ -1690,21 +1856,26 @@ async function runIngestRepairLoop({ maxRepairs, validate, rerun, log, allowInte
     }
 
     applyAutoFixPass(v, issues);
+    v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
     ({ all: issues, keys, v } = snapshot());
 
     if (!issues.length) {
-      return { tickets: v.tickets ?? [], parked: [], rounds, history };
+      return { tickets: v.tickets ?? [], parked: [], rounds, history, repairNotes: v.repairNotes ?? [] };
     }
 
     if (keys === prevIssueKeys) {
+      v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+      ({ all: issues, keys, v } = snapshot());
       const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+      return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
     }
     prevIssueKeys = keys;
   }
 
+  v.repairNotes = [...(v.repairNotes ?? []), ...applyTicketBatchRepair(v)];
+  ({ all: issues, keys, v } = snapshot());
   const parkedResult = runRepairLoop({ maxRepairs: 0, validate, rerun: () => {}, log });
-  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])] };
+  return { ...parkedResult, rounds, history: [...history, ...(parkedResult.history ?? [])], repairNotes: v.repairNotes ?? [] };
 }
 
 async function defaultRunSplit(root, manifest) {
@@ -1797,10 +1968,14 @@ async function toolConfigWarnings(root, tickets) {
     const dir = near(file) ?? '.';
     if (infoFor.has(dir)) return infoFor.get(dir);
     let scripts = {}, configText = '';
-    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch { /* no package.json */ }
+    try { scripts = JSON.parse(readFileSync(path.join(root, dir, 'package.json'), 'utf8')).scripts ?? {}; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] package.json scripts unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     const names = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'cypress.config.ts', 'cypress.config.js'];
     for (const value of Object.values(scripts)) for (const m of String(value).matchAll(/--config[ =]+(\S+)/g)) names.push(m[1].replace(/^['"]|['"]$/g, ''));
-    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch { /* absent */ } }
+    for (const name of names) { try { configText += `${readFileSync(path.join(root, dir, name), 'utf8')}\n`; } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] e2e config unreadable:', error?.code ?? 'unknown');
+    } }
     const value = { scripts, configText };
     infoFor.set(dir, value);
     return value;
@@ -1840,7 +2015,9 @@ async function cmdNew(root, { flags }, deps = {}) {
   if (!built.ok) {
     // Keep what was typed, so fixing one line does not mean answering everything again.
     const saved = '.swarm/project/scope-answers.json';
-    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch { /* the message below still says what to fix */ }
+    try { const dir = await safeWritableDir(root, ['.swarm', 'project']); await fs.writeFile(path.join(dir, 'scope-answers.json'), `${JSON.stringify(raw, null, 2)}\n`); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not keep the scope answers:', error?.code ?? error?.name ?? 'unknown');
+    }
     return out(`The scope was not written:\n${built.errors.map(e => `  - ${e}`).join('\n')}\nYour answers are kept in ${saved}: fix them there and run swarm scope new --answers ${saved}`, 1);
   }
   await writeFileSafe(root, rel(path.relative(root, target)), built.text, { exclusive: true });
@@ -1861,7 +2038,7 @@ async function cmdCheck(root, { rest }) {
   const result = checkScope(scope);
   const lines = [`${file}: ${scope.requirements.length} requirements, ${scope.stages.length} stages, ${result.findings.length} findings`];
   for (const f of result.findings) lines.push(`  ${f.level} ${f.code}${f.id ? ` ${f.id}` : ''}: ${f.message} -> ${f.fix}`);
-  const led = await readLedger(root).catch(() => null);
+  const led = await readLedger(root).catch(error => { console.error('[tools/scope-commands.mjs] could not read the ticket ledger:', error instanceof SyntaxError ? 'corrupt ledger (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown')); return null; });
   if (led) lines.push(...await toolConfigWarnings(root, led.tickets));
   const items = day0Checklist(scope);
   if (items.length) lines.push(`Day 0: ${items.length} outside services need an owner: ${items.map(i => i.service).join(', ')}`);
@@ -1939,6 +2116,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
       lists: workingLists,
       readErrors,
       scope,
+      scopeText: text,
       existing,
       profile,
       repoFiles,
@@ -1969,6 +2147,10 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
             stage: ticket.stage,
             context: ticket.context,
             files: ticket.files,
+            contracts: ticket.contracts,
+            acceptance: ticket.acceptance,
+            screens: ticket.screens,
+            tests: ticket.tests,
           });
         }
       },
@@ -2034,6 +2216,7 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     validate,
     rerun,
     allowIntegrationRepair: typeof deps.runSplit === 'function',
+    scopeText: text,
     log: entry => { repairHistory.push(entry); },
   });
   ticketPatches.clear();
@@ -2075,7 +2258,11 @@ async function runSplitIngest(root, { scope, hash, text, file }, { flags }, deps
     }
   }
 
-  const repairLines = [`repair rounds: ${loopResult.rounds}`, ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`)];
+  const repairLines = [
+    `repair rounds: ${loopResult.rounds}`,
+    ...repairHistory.map(entry => `round ${entry.round}: ${entry.errorsIn} in -> ${entry.errorsLeft} left`),
+    ...(loopResult.repairNotes ?? []),
+  ];
   const parkedLines = loopResult.parked.length
     ? [`parked: ${loopResult.parked.length} ticket(s)`, ...loopResult.parked.map(({ ticket, issues: parkedIssues }) => `${ticket.id} (${ticket.title ?? 'untitled'}): ${(parkedIssues ?? []).map(i => i.reason ?? i.code).join('; ')}`)]
     : [];
@@ -2267,6 +2454,9 @@ async function cmdGate(root, { flags }) {
 }
 
 async function cmdApprove(root, { rest, flags }, deps = {}) {
+  if (flags['auto-ok'] === true && (flags.yes === true || flags['accept-waves'] === true)) {
+    return out('usage: swarm scope approve [--yes | --auto-ok] (--yes and --auto-ok and --accept-waves are mutually exclusive)', 1);
+  }
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   const { scope, hash, text, file } = await loadScope(root, rest[0] ?? ledger.scope?.file);
@@ -2302,7 +2492,8 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   const waveLine = waveSummary(waveSimulation);
   if (waveGateFails(waveSimulation) && flags['accept-waves'] !== true) return out(`${waveLine}\n${waveRefusal(waveSimulation, ledger.tickets).split('\n').slice(1).join('\n')}`, 1);
   const policy = await readApprovalPolicy(root);
-  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
+  const autoOk = flags['auto-ok'] === true;
+  if (needsHuman(policy, { kind: 'scope' }) && flags.yes !== true && !autoOk) return out(`${waveLine}\n${summary}\n\nThis needs your approval. Review it, then: swarm scope approve --yes`);
   const now = typeof deps.now === 'function' ? deps.now : typeof deps.now === 'number' ? () => deps.now : Date.now;
   const managerWarnings = [];
   const managerFindingLines = [];
@@ -2328,9 +2519,36 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   for (const warning of managerWarnings) {
     await appendLog(root, { event: 'manager-scope-gate-warning', warning, at: new Date(now()).toISOString() });
   }
-  const by = flags.yes === true ? 'owner' : 'policy';
+  let autoApproveLines = [];
+  if (autoOk) {
+    const priorSnapshot = await readApprovedTicketsSnapshot(root);
+    const approveLogTicketsHash = await lastApproveLogTicketsHash(root);
+    const evalProfile = await readProfile(root);
+    const evalResult = evaluateAutoApprove({ ledger, snapshot: priorSnapshot, profile: evalProfile, approveLogTicketsHash });
+    autoApproveLines = evalResult.conditions.map(c => `${c.name}: ${c.ok ? 'ok' : 'FAIL'} — ${c.detail}`);
+    if (!evalResult.ok) {
+      const newIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+      const failed = evalResult.conditions.filter(c => !c.ok);
+      const blockerText = `Split needs your approval: ${failed.map(c => `${c.name} (${c.detail})`).join('; ')}. Approve with: swarm scope approve --yes`;
+      await appendEvent(root, { kind: 'blocker', id: `auto-approve-refused-${newIds[0] ?? 'none'}`, text: blockerText });
+      await appendLog(root, { event: 'auto-approve-refused', conditions: evalResult.conditions });
+      return out(autoApproveLines.join('\n'), 1);
+    }
+    const newCoIds = (ledger.changeOrders ?? []).map(c => c.id).filter(id => !(priorSnapshot?.changeOrderIds ?? []).includes(id));
+    await appendLog(root, { event: 'auto-approve', by: 'orchestrator-auto', changeOrders: newCoIds, conditions: evalResult.conditions });
+    await appendEvent(root, { kind: 'note', text: `Auto-approved split for ${newCoIds.join(', ') || 'change order'}: all conditions passed (snapshot, change-order, no-done-cancelled, no-paid-lanes, no-migrations, no-deploy-or-main-merge)` });
+  }
+  const by = autoOk ? 'orchestrator-auto' : flags.yes === true ? 'owner' : 'policy';
   const next = approveLedger(ledger, { by, now: now() });
   next.scope = { ...next.scope, hash, file };
+  const approvedTicketsSnapshot = {
+    at: next.approved.at,
+    by: next.approved.by,
+    ticketsHash: next.approved.ticketsHash,
+    changeOrderIds: (next.changeOrders ?? []).map(c => c.id),
+    tickets: next.tickets,
+  };
+  await writeApprovedTicketsSnapshot(root, approvedTicketsSnapshot);
   await writeLedger(root, next);
   await writeFileSafe(root, '.swarm/project/scope.snapshot.md', text);
   await writeFileSafe(root, 'docs/scope/build-plan.md', renderBuildPlan(next, scope));
@@ -2347,8 +2565,10 @@ async function cmdApprove(root, { rest, flags }, deps = {}) {
   await appendLog(root, { event: 'approve', by, scopeHash: hash, ticketsHash: next.approved.ticketsHash });
   if (waveGateFails(waveSimulation)) await logAcceptedWaveSimulation(root, waveSimulation, ledger.tickets, 'scope approve');
   // A snapshot of swarm's own state at every approval (best effort; never blocks the approval).
-  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch { /* a failed backup must not undo an approval */ }
-  return out([waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
+  try { await (await import('./state-backup.mjs')).createBackup(root, { reason: 'scope approve' }); } catch (error) {
+    console.error('[tools/scope-commands.mjs] state backup after approve failed:', error?.code ?? error?.name ?? 'unknown');
+  }
+  return out([...(autoApproveLines.length ? [...autoApproveLines, ''] : []), waveLine, summary, '', 'approved. Build plan: docs/scope/build-plan.md', ...managerWarnings, ...managerFindingLines, ...await toolConfigWarnings(root, next.tickets), ...(uiNoScreens ? [`warning: ${uiNoScreens} ticket(s) write UI files but name no screens, so the rendered check does not gate them`] : []), ...(bigTickets.length ? [`warning: ${bigTickets.length} ticket(s) may be too big for one worker answer (more than 4 files or large files): ${bigTickets.slice(0, 8).join(', ')}; split them or they escalate to a stronger lane`] : []), ...laneWarnings, `Context files written: ${written.join(', ')}`, ...(missing.length ? [`warning: the scope's Context section names files that do not exist: ${missing.join(', ')}`] : []), ...(ignored.changed ? ['.gitignore: added the build output lines for this stack'] : []), ...(profile?.verify ? [] : [`warning: the profile has no verify block, so tickets are not test-gated (see docs/dogfood-fixes.md)${await detectedTestHint(root)}`]), 'Next: swarm go --scope'].join('\n'));
 }
 
 // A failed run or check sends the ticket back to ready one level higher (bigger output, then Codex, then Claude); only after the last level does it block. One locked ledger write.
@@ -2760,7 +2980,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
     const projectChecks = await readProjectChecks(root);
     let projectPkg = null;
     let projectFiles = [];
-    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch { /* no package.json */ }
+    try { projectPkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] project package.json unreadable:', error instanceof SyntaxError ? 'invalid JSON' : (error?.code ?? 'unknown'));
+    }
     try { projectFiles = await projectFileList(root, execFileAsync); } catch { /* not a git repo */ }
     const runSpec = deps.runTicketSpec ?? ((r, file, ctx) => runTicketSpec(r, file, { ...ctx, pkg: ctx.pkg ?? projectPkg, files: ctx.files ?? projectFiles }));
     // A profile that names a verify block but does not validate must not turn the test gate off.
@@ -2919,8 +3141,32 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         continue;
       }
       if (syncCheck.kind === 'delete-only') {
+        let reviewReason = securityReviewReason(t);
+        if (reviewReason && unreviewedOk.has(t.id)) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          const failing = record?.verdict === 'fail' && record.filesHash === now;
+          const passed = record?.verdict === 'pass' && record.filesHash === now;
+          if (!failing && !passed) { skippedReview.push(t.id); reviewReason = null; }
+        }
+        if (reviewReason) {
+          const record = reviewRecords.tickets[t.id];
+          const now = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? [])]);
+          if (t.securityReview?.state === 'blocked' && !(record && Date.parse(record.at) > Date.parse(t.securityReview.at))) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+          if (record?.verdict === 'fail' && record.filesHash === now) {
+            const found = (record.findings ?? []).map(f => `${f.severity} ${f.file}${f.line ? `:${f.line}` : ''} ${f.issue}${f.fix ? ` (fix: ${f.fix})` : ''}`).join('; ').slice(0, 500);
+            delete reviewRecords.tickets[t.id];
+            await writeReviewRecords(root, reviewRecords);
+            const result = await applyRetry(root, t.id, `failed checks: security review; ${found || 'the review failed this ticket'}`, rest[0]);
+            (result === 'blocked' ? blocked : retried).push(t.id);
+            continue;
+          }
+          if (!(record?.verdict === 'pass' && record.filesHash === now)) { needReview.push({ ticket: t, reason: reviewReason }); continue; }
+        }
         await lockedTransition(root, t.id, 'done', { by: 'sync', note: 'delete-only: files gone' });
         done.push(t.id);
+        if (skippedReview.includes(t.id)) await setSecurityReview(root, t.id, { state: 'accepted-unreviewed', reason: unreviewedReason, at: new Date().toISOString(), run: rest[0] });
+        else if (t.securityReview?.state === 'blocked') await setSecurityReview(root, t.id, undefined);
         continue;
       }
       // The test files a ticket names must exist in the tree: a ticket whose tests were never written is not done, whatever the suite says.
@@ -2948,7 +3194,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       if (specPaths.length) {
         let specStop = false;
         for (const f of specPaths) {
-          const outcome = await runSpec(root, f, specCtx);
+          const outcome = await runSpec(root, f, { ...specCtx, ticket: t });
           if (outcome?.failed) {
             const result = await applyRetry(root, t.id, `failed checks: ticket spec ${f}${outcome.tail ? `; ${String(outcome.tail).slice(-500)}` : ''}`, rest[0]);
             (result === 'blocked' ? blocked : retried).push(t.id);
@@ -3032,7 +3278,9 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
         const tests = ticketTests(t).filter(f => looksLikeTestFile(f) && !/[*?]|\/$/.test(f));
         const hashTests = [...new Set([...(t.tests ?? []), ...tests])];
         const sources = new Map();
-        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch { /* missing: nothing covered by it */ } }
+        for (const f of tests) { try { const full = path.join(root, f); const info = lstatSync(full); if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8')); } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] test source unreadable:', t.id, error?.code ?? 'unknown');
+        } }
         const cov = coverage({ ...t, tests }, sources);
         const hash = await filesHash(root, [...(t.files ?? []), ...(t.deletes ?? []), ...hashTests]);
         // A verdict belongs to the text of the line it judged: after the acceptance text was edited an old verdict for the same number is dropped.
@@ -3111,7 +3359,7 @@ async function cmdSync(root, { rest, flags }, deps = {}) {
       reviewLine = `${needReview.length} ticket(s) stay in review until an Opus security review passes: ${needReview.map(x => `${x.ticket.id} (${x.reason}${x.ticket.securityReview?.state === 'blocked' ? '; review-blocked: the last review gave no result' : ''})`).join('; ')}. Run: swarm run ${file}; then swarm scope security-review <that run id>; then swarm scope sync ${rest[0]} --integrated`;
     }
     await refreshPlan(root);
-    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(() => {});
+    if (done.length) await import('./history-hooks.mjs').then(async hooks => hooks.recordStageHistory(root, await readLedger(root))).catch(error => { console.error('[tools/scope-commands.mjs] recordStageHistory:', error?.code ?? error?.name ?? 'unknown'); });
     return out([`${done.length} ticket(s) marked done`,
       ...(notUnmet.length ? [`--accept-unmet: ${notUnmet.join(', ')} had no unmet line to accept (not in this run, not done, no lines unmet, or a failing line, which is never overridden)`] : []),
       ...(notAccepted.length ? [`--accept-unreviewed: ${notAccepted.join(', ')} did not skip a review (not in this run, not done, no review needed, a review already passed, or a failing review on this code: that one is never overridden)`] : []),
@@ -3196,6 +3444,110 @@ async function refreshPlan(root) {
 
 const row = t => `${t.id} ${t.status.padEnd(9)} ${t.stage} ${t.risk.padEnd(6)} ${t.type.padEnd(9)} ${t.title}`;
 
+const SUPERSEDE_OWNER_MSG = 'tickets supersede is owner-only; run from the owner terminal (not inside an agent or worker session)';
+const SUPERSEDE_AGENT_COMMANDS = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'chatgpt']);
+const SUPERSEDE_AGENT_MARKERS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'SWARM_WORKER', 'SWARM_JOB_ID', 'SWARM_RUN_ID'];
+
+function supersedeProcessInfo(pid) {
+  const options = { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'pipe'] };
+  return {
+    ppid: Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], options).trim()),
+    comm: execFileSync('ps', ['-o', 'comm=', '-p', String(pid)], options).trim(),
+  };
+}
+
+export function supersedeOwnerRefusal({
+  env = process.env,
+  isTTY = process.stdin.isTTY && process.stdout.isTTY,
+  ancestry,
+  processInfo = supersedeProcessInfo,
+} = {}) {
+  if (SUPERSEDE_AGENT_MARKERS.some(marker => env[marker] !== undefined)) return SUPERSEDE_OWNER_MSG;
+  const isAgent = command => SUPERSEDE_AGENT_COMMANDS.has(path.basename(command.trim()).toLowerCase());
+  if (ancestry !== undefined) {
+    if (ancestry.some(isAgent)) return SUPERSEDE_OWNER_MSG;
+  } else {
+    // A terminal allocated inside an agent still has that agent in its parent chain.
+    // Refuse if the chain cannot be inspected completely within the hop limit.
+    let pid = process.pid;
+    const seen = new Set();
+    try {
+      for (let hop = 0; hop < 32 && pid > 1; hop += 1) {
+        if (seen.has(pid)) return SUPERSEDE_OWNER_MSG;
+        seen.add(pid);
+        const { ppid, comm } = processInfo(pid);
+        if (typeof comm !== 'string' || !comm.trim() || isAgent(comm)) return SUPERSEDE_OWNER_MSG;
+        if (!Number.isInteger(ppid) || ppid < 1) return SUPERSEDE_OWNER_MSG;
+        pid = ppid;
+      }
+      if (pid !== 1) return SUPERSEDE_OWNER_MSG;
+    } catch {
+      return SUPERSEDE_OWNER_MSG;
+    }
+  }
+  if (!isTTY) return SUPERSEDE_OWNER_MSG;
+  return null;
+}
+
+let supersedeOwnerCheck = supersedeOwnerRefusal;
+
+// Test-only injection; calling without an argument restores the production gate.
+export function setSupersedeOwnerCheck(fn = supersedeOwnerRefusal) {
+  if (typeof fn !== 'function') throw new TypeError('supersede owner check must be a function');
+  supersedeOwnerCheck = fn;
+}
+
+const supersedeRow = c => `${c.id} ${c.status} ${c.stage} ${c.lastTouch} ${c.basis} ${c.title}`;
+
+async function supersedeStaleCommand(root, rest, flags) {
+  if (rest.length) return bad('tickets supersede does not take positional arguments');
+  if (flags.before === undefined) return out('tickets supersede requires --before DATE', 1);
+  const beforeMs = Date.parse(flags.before);
+  if (Number.isNaN(beforeMs)) return out(`unparseable --before date: ${flags.before}`, 1);
+  const denied = supersedeOwnerCheck();
+  if (denied) return out(denied, 1);
+  const ledger = await readLedger(root);
+  if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
+  let candidates;
+  try {
+    candidates = supersedeCandidates(ledger, await readTicketLog(root), { before: flags.before, stage: flags.stage });
+  } catch (error) {
+    if (error.code === 'supersede-before') return out(error.message, 1);
+    throw error;
+  }
+  const apply = flags.yes === true && flags['dry-run'] !== true;
+  if (!apply) {
+    if (flags.json) return out(JSON.stringify(candidates));
+    const lines = candidates.map(supersedeRow);
+    lines.push(`${candidates.length} stale ticket(s) would be superseded`);
+    if (flags['dry-run'] !== true && flags.yes !== true) lines.push('Rerun with --yes to supersede these tickets.');
+    return out(lines.join('\n'));
+  }
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const result = await withLock(root, async () => {
+          const freshLedger = await readLedger(root);
+          if (!freshLedger) throw fail('ledger-missing', 'no ticket ledger; run swarm scope split first');
+          const logEvents = await readTicketLog(root);
+          const freshCandidates = supersedeCandidates(freshLedger, logEvents, { before: flags.before, stage: flags.stage });
+          if (!freshCandidates.length) return { count: 0, ids: [] };
+          return applySupersedeStale(root, { before: flags.before, stage: flags.stage, ledger: freshLedger, logEvents });
+        });
+        if (!result.count) return out('no stale tickets to supersede');
+        await refreshPlan(root);
+        return out(`superseded ${result.count} stale ticket(s)`);
+      } catch (error) {
+        if (error.code !== 'scope-busy' || attempt === 4) throw error;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+  } catch (error) {
+    if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1);
+    throw error;
+  }
+}
+
 // One-time migration for ledgers made before blockReason existed: a blocked ticket with no reason, no attempts, no retry note and
 // dependencies was blocked by its dependencies (its job was skipped). Marking it `deps` lets it unlock by itself; ready ones unlock now.
 async function markDepsCommand(root, ledger, ids, flags) {
@@ -3249,7 +3601,9 @@ async function editTicketFiles(root, ledger, rest, flags) {
       try {
         scopeText = await readText(resolveInside(root, fresh.scope?.file ?? DEFAULT_SCOPE_FILE)) ?? '';
         if (scopeText) scope = parseScope(scopeText);
-      } catch { /* the ticket ledger remains editable when its scope is unavailable */ }
+      } catch (error) {
+        console.error('[tools/scope-commands.mjs] ticket scope unreadable; the ledger stays editable:', error instanceof SyntaxError ? 'corrupt scope (SyntaxError)' : (error?.code ?? error?.name ?? 'unknown'));
+      }
       const allowedRootFiles = await rootFilesForProject(root, { scope, scopeText, notes: rootFileNotes });
       const listsEdit = Object.keys(changes).length > 0;
       // The file lists only change before the work runs; a review or done ticket may only add acceptance lines (see below).
@@ -3337,7 +3691,7 @@ async function setTicketRoute(root, rest, flags) {
   const risk = flags.risk;
   const parsedLane = flags.lane === undefined || flags.lane === 'auto' ? null : parseLane(flags.lane);
   const lane = flags.lane === undefined ? undefined : flags.lane === 'auto' ? 'auto' : laneText(parsedLane) ?? flags.lane;
-  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered'].filter(k => flags[k] !== undefined);
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'check-timeout'].filter(k => flags[k] !== undefined);
   if (others.length) return bad(`tickets --lane/--risk cannot be combined with --${others[0]}; run them one at a time`);
   if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) return out('risk must be low, medium or high', 1);
   if (lane !== undefined && lane !== 'auto' && !parsedLane) return out(`lane must be auto or one of ${TICKET_LANE_AGENTS.join(', ')} (optionally agent:model, like claude:opus)`, 1);
@@ -3364,6 +3718,45 @@ async function setTicketRoute(root, rest, flags) {
       saved.updatedAt = new Date().toISOString();
       await writeLedger(root, saved);
       await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields, before: Object.fromEntries(fields.map(k => [k, ticket[k] ?? null])), after: Object.fromEntries(fields.map(k => [k, next[k] ?? null])), note: flags.note ?? null, reapproved: wasApproved });
+      await refreshPlan(root);
+      return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
+async function setTicketCheckTimeout(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --check-timeout needs one ticket id');
+  const raw = flags['check-timeout'];
+  const others = ['set', 'files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from', 'json', 'release', 'delivered', 'lane', 'risk'].filter(k => flags[k] !== undefined);
+  if (others.length) return bad(`tickets --check-timeout cannot be combined with --${others[0]}; run them one at a time`);
+  const clear = raw === 'auto';
+  let parsed;
+  if (!clear) {
+    parsed = parseCheckTimeoutMs(raw);
+    if (!parsed.ok) return out(parsed.error, 1);
+  }
+  try {
+    return await withLock(root, async () => {
+      const fresh = await readLedger(root);
+      const ticket = fresh.tickets.find(x => x.id === rest[0]);
+      if (!ticket) return out(`no ticket ${rest[0]}`, 1);
+      if (!['proposed', 'todo', 'ready', 'blocked'].includes(ticket.status)) return out(`${ticket.id} is ${ticket.status}; only a proposed, todo, ready or blocked ticket can change its check timeout (send it back with swarm tickets ${ticket.id} --set todo first)`, 1);
+      const next = { ...ticket };
+      if (clear) delete next.checkTimeoutMs;
+      else next.checkTimeoutMs = parsed.value;
+      const v = validateTicket(next);
+      if (!v.ok) return out(`refused: ${v.errors[0]}`, 1);
+      const before = ticket.checkTimeoutMs ?? null;
+      const after = next.checkTimeoutMs ?? null;
+      if (before === after) return out(`${ticket.id}: nothing to change`);
+      const summary = `  checkTimeoutMs: ${before ?? 'default'}  ->  ${after ?? 'default'}`;
+      const wasApproved = isApproved(fresh);
+      if (flags.yes !== true) return out(`${ticket.id}:\n${summary}\nRerun with --yes to apply${wasApproved ? ' (the approval is renewed over the change)' : ''}.`);
+      fresh.tickets = fresh.tickets.map(x => x.id === ticket.id ? next : x);
+      const saved = wasApproved ? approveLedger(fresh, { by: 'owner' }) : fresh;
+      saved.updatedAt = new Date().toISOString();
+      await writeLedger(root, saved);
+      await appendLog(root, { event: 'ticket-edit', id: ticket.id, by: 'owner', fields: ['checkTimeoutMs'], before: { checkTimeoutMs: before }, after: { checkTimeoutMs: after }, note: flags.note ?? null, reapproved: wasApproved });
       await refreshPlan(root);
       return out(`${ticket.id} updated:\n${summary}${wasApproved ? '\nThe ledger stays approved (sealed again over the change).' : ''}`);
     });
@@ -3399,6 +3792,24 @@ async function releaseTickets(root, ids, flags) {
   } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
 }
 
+// swarm tickets T-xxxx --note TEXT: owner guidance for the next worker (quoted in the job prompt; does not change retryNote).
+async function ownerNoteCommand(root, rest, flags) {
+  if (rest.length !== 1) return bad('tickets --note needs one ticket id');
+  try {
+    return await withLock(root, async () => {
+      const ledger = await readLedger(root);
+      const t = ledger.tickets.find(x => x.id === rest[0]);
+      if (!t) return out(`no ticket ${rest[0]}`, 1);
+      if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
+      const saved = applyOwnerNote(t, flags.note);
+      ledger.updatedAt = new Date().toISOString();
+      await writeLedger(root, ledger);
+      await appendLog(root, { event: 'owner-note', by: 'owner', id: t.id, action: saved ? 'set' : 'cleared' });
+      return out(saved ? `${t.id}: owner note saved` : `${t.id}: owner note cleared`);
+    });
+  } catch (error) { if (error.code === 'scope-busy') return out('another swarm go --scope is starting a wave; try again in a minute', 1); throw error; }
+}
+
 // swarm tickets T-xxxx --clear-note | --retry-note TEXT: the note a failed attempt left (it is quoted into the next attempt's prompt) can be dropped or replaced by the owner.
 async function retryNoteCommand(root, rest, flags) {
   if (rest.length !== 1) return bad('tickets --clear-note and --retry-note need one ticket id');
@@ -3409,7 +3820,11 @@ async function retryNoteCommand(root, rest, flags) {
       if (!t) return out(`no ticket ${rest[0]}`, 1);
       if (t.status === 'running') return out(`${t.id} is running: wait for the run to end first`, 1);
       const before = t.retryNote ?? null;
-      if (flags['clear-note'] === true) delete t.retryNote;
+      if (flags['clear-note'] === true) {
+        delete t.retryNote;
+        delete t.ownerNote;
+        delete t.ownerNoteAt;
+      }
       else {
         const text = String(flags['retry-note'] ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/[<>]/g, '').trim().slice(0, 600);
         if (!text) return out('--retry-note needs the new text (use --clear-note to remove it)', 1);
@@ -3484,7 +3899,9 @@ async function doneReviewRefusals(root, ledger, ticket) {
           const full = path.join(root, f);
           const info = lstatSync(full);
           if (info.isFile() && info.size <= 1_000_000) sources.set(f, readFileSync(full, 'utf8'));
-        } catch { /* missing */ }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] acceptance test source unreadable:', ticket.id, error?.code ?? 'unknown');
+        }
       }
       const hashTests = [...new Set([...(ticket.tests ?? []), ...tests])];
       const hash = await filesHash(root, [...(ticket.files ?? []), ...(ticket.deletes ?? []), ...hashTests]);
@@ -3505,7 +3922,7 @@ async function doneReviewRefusals(root, ledger, ticket) {
 }
 
 async function sensitiveDeliveredRefusals(root, ledger, ticket) {
-  if (ticket.sensitive !== true) return [];
+  if (ticket.sensitive !== true && !securityReviewReason(ticket)) return [];
   const reasons = await doneReviewRefusals(root, ledger, ticket);
   return reasons.filter(r => r.startsWith('Opus security review'));
 }
@@ -3574,6 +3991,10 @@ async function setTicketStatus(root, rest, flags) {
       return out(msg, 1);
     }
   }
+  if (to === 'superseded') {
+    const denied = supersedeOwnerCheck();
+    if (denied) return out(denied, 1);
+  }
   if (flags['dry-run'] === true) return out(`${preview}\n(dry-run: nothing changed)`);
   const confirmation = flags.force === true ? 'force' : flags.yes === true ? 'yes' : null;
   if (!confirmation) return out(`${preview}\nRerun with --yes or --force to apply.`, 1);
@@ -3584,7 +4005,7 @@ async function setTicketStatus(root, rest, flags) {
     holdQuestion = text;
   }
   try {
-    const t = await lockedTransition(root, rest[0], to, {
+    let t = await lockedTransition(root, rest[0], to, {
       by: 'owner',
       note: flags.note,
       ...(holdQuestion !== undefined ? { holdQuestion } : {}),
@@ -3592,6 +4013,17 @@ async function setTicketStatus(root, rest, flags) {
       source: 'tickets-set',
       confirmation,
     });
+    if (flags.note !== undefined && ['ready', 'todo', 'blocked'].includes(to)) {
+      t = await lockedUpdate(root, async () => {
+        const fresh = await readLedger(root);
+        const ticket = fresh.tickets.find(x => x.id === rest[0]);
+        applyOwnerNote(ticket, flags.note);
+        fresh.updatedAt = new Date().toISOString();
+        await writeLedger(root, fresh);
+        await appendLog(root, { event: 'owner-note', by: 'owner', id: ticket.id, action: ticket.ownerNote ? 'set' : 'cleared', source: 'tickets-set' });
+        return ticket;
+      });
+    }
     await refreshPlan(root);
     return out(`${t.id} is now ${t.status}`);
   } catch (error) {
@@ -3603,6 +4035,7 @@ async function setTicketStatus(root, rest, flags) {
 
 export async function runTicketsCommand(root, args) {
   const { flags, rest } = parseArgs(args);
+  if (rest[0] === 'supersede') return supersedeStaleCommand(root, rest.slice(1), flags);
   const ledger = await readLedger(root);
   if (!ledger) return out('no ticket ledger; run swarm scope split first', 1);
   if (flags['clear-note'] === true || flags['retry-note'] !== undefined) return retryNoteCommand(root, rest, flags);
@@ -3611,9 +4044,11 @@ export async function runTicketsCommand(root, args) {
   if (flags.release === true) return releaseTickets(root, rest, flags);
   if (flags.delivered !== undefined) return deliverTicketsCommand(root, rest, flags);
   if (flags.approve === true) return approveProposed(root, rest, flags);
+  if (flags['check-timeout'] !== undefined) return setTicketCheckTimeout(root, rest, flags);
   if (flags.lane !== undefined || (flags.risk !== undefined && rest.length === 1 && flags.set === undefined)) return setTicketRoute(root, rest, flags);
   if (['files', 'context', 'tests', 'deletes', 'dependencies', 'acceptance', 'add-acceptance', 'take-from'].some(k => flags[k] !== undefined)) return editTicketFiles(root, ledger, rest, flags);
   if (flags.set !== undefined) return setTicketStatus(root, rest, flags);
+  if (flags.note !== undefined && rest.length === 1) return ownerNoteCommand(root, rest, flags);
   if (rest.length === 1) {
     const t = ledger.tickets.find(x => x.id === rest[0]);
     if (!t) return out(`no ticket ${rest[0]}`, 1);
@@ -3736,7 +4171,7 @@ async function withLock(root, fn) {
     try { handle = await fs.open(lock, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.lstat(lock).catch(() => null);
+      const stat = await fs.lstat(lock).catch(error => { if (error?.code !== 'ENOENT') console.error('[tools/scope-commands.mjs] scope lock stat:', error?.code ?? 'unknown'); return null; });
       if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) await fs.rm(lock, { force: true });
       else throw fail('scope-busy', 'another swarm go --scope is starting a wave; try again in a minute');
     }
@@ -3823,7 +4258,9 @@ export async function revertWave(root, ids) {
   for (const id of ids) {
     const ledger = await readLedger(root);
     if (ledger?.tickets.find(t => t.id === id)?.status !== 'running') continue;
-    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch { /* a ticket that cannot move stays for the owner */ }
+    try { await lockedTransition(root, id, 'ready', { by: 'go', note: 'the wave did not start' }); back.push(id); } catch (error) {
+      console.error('[tools/scope-commands.mjs] could not move ticket back after a wave that did not start:', id, error?.code ?? error?.name ?? 'unknown');
+    }
   }
   if (back.length) await refreshPlan(root);
   return back;

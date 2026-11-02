@@ -155,10 +155,16 @@ export function createTestChecker({ root, exec = defaultExec, fsImpl = fsp, time
       if (tmp !== null) {
         try {
           await exec(['git', '-C', root, 'worktree', 'remove', '--force', tmp]);
-        } catch {}
+        } catch (error) {
+          if (typeof error?.code !== 'number' || error.code === 0) {
+            console.error('[tools/best-of.mjs] git worktree remove cleanup:', error?.message ?? error);
+          }
+        }
         try {
           await fsImpl.rm(tmp, { recursive: true, force: true });
-        } catch {}
+        } catch (error) {
+          console.error('[tools/best-of.mjs] fs.rm cleanup', tmp + ':', error?.message ?? error);
+        }
       }
     }
   };

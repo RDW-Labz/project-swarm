@@ -26,7 +26,9 @@ export async function doneTimes(root) {
     try {
       const e = JSON.parse(line);
       if (e.event === 'transition' && e.to === 'done' && typeof e.id === 'string') { const at = Date.parse(e.at); if (Number.isFinite(at)) times.set(e.id, Math.max(times.get(e.id) ?? 0, at)); }
-    } catch { /* a damaged line is skipped */ }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) console.error('[tools/client-report.mjs] damaged log line:', error?.message ?? error);
+    }
   }
   return times;
 }
@@ -162,7 +164,9 @@ export function scanClientText(text, { allowed = [] } = {}) {
 export function checkPreviewUrl(url) {
   if (typeof url !== 'string' || !/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/?$/.test(url)) return { ok: false, reason: 'the preview address must be https, a host only (no path, query or credentials)' };
   let host = url;
-  try { host = decodeURIComponent(new URL(url).hostname); } catch { /* as written */ }
+  try { host = decodeURIComponent(new URL(url).hostname); } catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof URIError)) console.error('[tools/client-report.mjs] preview url decode:', error?.message ?? error);
+  }
   const hit = [...scanClientText(host), ...scanClientText(host.replace(/[.-]/g, ' '))].find(p => p.what !== 'a web address');
   return hit ? { ok: false, reason: `the preview address holds ${hit.what} (use the production or a plain address)` } : { ok: true };
 }
@@ -240,7 +244,14 @@ export async function writeDraft(root, data, { now = Date.now, allowed = [] } = 
 
 async function loadReport(root, name) {
   const dirName = name === undefined || name === 'latest' ? (await listReports(root)).at(-1)?.dir : path.basename(String(name));
-  if (dirName && DIR_RE.test(dirName)) { const info = await fs.lstat(path.join(root, REPORTS_DIR, dirName)).catch(() => null); if (!info || info.isSymbolicLink() || !info.isDirectory()) return null; }
+  if (dirName && DIR_RE.test(dirName)) {
+    const reportDir = path.join(root, REPORTS_DIR, dirName);
+    const info = await fs.lstat(reportDir).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/client-report.mjs] lstat report dir:', reportDir, error?.message ?? error);
+      return null;
+    });
+    if (!info || info.isSymbolicLink() || !info.isDirectory()) return null;
+  }
   if (!dirName || !DIR_RE.test(dirName)) return null;
   const dir = path.join(root, REPORTS_DIR, dirName);
   try {

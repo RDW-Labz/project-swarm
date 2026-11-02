@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-core12-batch-12a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 12a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/swarm/core-12.mjs' section. Edit ONLY tools/swarm/core-12.mjs. Visibility only: do NOT change control flow, return values, throws, fail() messages, or what happens next.\n\nNo logger exists in this file. Use: console.error('[tools/swarm/core-12.mjs] <short context>:', error?.message ?? error)\n\nFlagged lines and what to do:\n1. Line 78 `exec('git', [... 'merge-base', 'HEAD', base]).catch(() => null)`: the next line fail()s on null, but the real git error is thrown away. Bind the error, log it (git's stderr if present: `String(error?.stderr || error?.message || error).trim()`), still return null so the fail() on line 79 runs unchanged.\n2. Line 86 `exec('git', [... 'reset', '--soft', 'HEAD@{1}']).catch(() => {})`: this is the UNDO of a squash. If it fails, the branch is left soft-reset to the merge-base while the fail() message below says \"undone\". Log UNCONDITIONALLY and loudly, e.g. '[tools/swarm/core-12.mjs] squash undo (reset --soft HEAD@{1}) FAILED, branch may still be reset to merge-base:' plus the error. Do not change the fail() message or add a throw.\n3. Lines 119 and 124 `catch{/* best effort */}` around refreshProjectInstallHooks: bind and log (include the project path). Keep the comment and continue as today.\n4. Line 349 `catch { /* no branch name */ }` around `git branch --show-current`: detached HEAD returns empty stdout, it does not throw, so an error here is unexpected. Bind and log, keep branch = ''.\n5. Line 440 `catch { /* the map is a convenience, never a reason to fail a plan */ }` in refreshMapQuietly: bind and log, never throw. Keep the comment.\n\nDo NOT touch any other catch (e.g. line 107's JSON.parse fallback, line 118, line 121). Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real console.error.\n\nThen run the tests that cover this file (grep tests/ for core-12 / squashBranch / updateProjects / refreshMapQuietly / collectOpenPolicyRequests) and confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/swarm/core-12.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ],
+      "ignoreTestsReason": "these reference core modules generically (source enumeration/hook paths), not the flagged catch behavior; full suite runs in CI"
+    }
+  ]
+}

@@ -82,7 +82,10 @@ export async function ciLocalPlan(root) {
   try { names = (await fs.readdir(path.join(root, WORKFLOW_DIR))).filter(n => /\.ya?ml$/.test(n)).sort(); } catch { return { steps: [], skipped: [], workflows: [] }; }
   const steps = [], skipped = [], workflows = [], seen = new Set();
   for (const name of names) {
-    const text = await fs.readFile(path.join(root, WORKFLOW_DIR, name), 'utf8').catch(() => '');
+    const text = await fs.readFile(path.join(root, WORKFLOW_DIR, name), 'utf8').catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/ci-local.mjs] read workflow file:', error?.message ?? error);
+      return '';
+    });
     if (!runsOnPullRequest(text)) continue;
     workflows.push(name);
     for (const step of workflowSteps(text)) {

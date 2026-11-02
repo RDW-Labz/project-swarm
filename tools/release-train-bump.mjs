@@ -101,7 +101,10 @@ export async function writeReleaseTrainStore(root, store) {
     await fs.writeFile(tmp, body, { flag: 'wx', mode: 0o644 });
     await fs.rename(tmp, storePath);
   } catch (error) {
-    await fs.unlink(tmp).catch(() => {});
+    await fs.unlink(tmp).catch((unlinkError) => {
+      if (unlinkError?.code === 'ENOENT') return;
+      console.error('[tools/release-train-bump.mjs] unlink tmp after failed write:', unlinkError?.message ?? unlinkError);
+    });
     throw error;
   }
 }

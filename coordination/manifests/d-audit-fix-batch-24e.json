@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24e",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24e (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/swarm/core-1.mjs, tools/swarm/core-11.mjs, tools/wave-quarantine-types.mjs, tools/wave-quarantine.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/swarm/core-1.mjs\nLogger prefix: console.error('[tools/swarm/core-1.mjs] <short context>:', error?.message ?? error)\n- Line 80 `for (const dir of dirs) { try { await fs.access(path.join(dir, program)); return true; } catch { /* try the next dir */ } }`: SILENT-ENOENT (program not present in this PATH dir), log the rest; no fallback value, loop tries the next dir. ALSO stay silent for EACCES and ENOTDIR (odd PATH entries or a non-executable candidate are normal); log anything else.\n- Line 236 `try { const event = JSON.parse(line); ... } catch { /* not a JSON event line */ }`: SILENT-SyntaxError (a stdout line from the CLI that isn't a JSON event), log the rest; no fallback value, loop continues to the next line.\n\n### tools/swarm/core-11.mjs\nLogger prefix: console.error('[tools/swarm/core-11.mjs] <short context>:', error?.message ?? error)\n- Line 90 `try { await executable(candidate); resolvedTool.path = candidate; break; } catch { /* next candidate */ }`: SILENT-ENOENT (candidate binary path doesn't exist), log the rest; no fallback value, loop tries the next candidate. ALSO stay silent for EACCES and ENOTDIR (odd PATH entries or a non-executable candidate are normal); log anything else.\n- Line 490 `} catch { /* no TASK.md, or nothing queued: no hint */ }`: SILENT-ENOENT (TASK.md not present), log the rest; keep `hint = null` fallback.\n\n### tools/wave-quarantine-types.mjs\nLogger prefix: console.error('[tools/wave-quarantine-types.mjs] <short context>:', error?.message ?? error)\n- Line 189 `await fs.unlink(tmp).catch(() => {});`: cleanup catch in an error path that rethrows the original error (`throw error;` on the next line) \u2014 LOG-ALWAYS with a different binding, include the tmp path; no fallback value, best-effort unlink. EXCEPTION: stay silent for error?.code === 'ENOENT' (tmp may never have been created); log anything else.\n- Line 263 `const stat = await fs.stat(fromAbs).catch(() => null);`: SILENT-ENOENT (ticket's declared output file was never created), log the rest; keep null fallback (guarded by `if (!stat?.isFile()) continue`).\n\n### tools/wave-quarantine.mjs\nLogger prefix: console.error('[tools/wave-quarantine.mjs] <short context>:', error?.message ?? error)\n- Line 68 `await fs.unlink(tmp).catch(() => {});`: cleanup catch in an error path that rethrows the original error (`throw error;` on the next line) \u2014 LOG-ALWAYS with a different binding, include the tmp path; no fallback value, best-effort unlink. EXCEPTION: stay silent for error?.code === 'ENOENT' (tmp may never have been created); log anything else.\n- Line 142 `const stat = await fs.stat(fromAbs).catch(() => null);`: SILENT-ENOENT (ticket's declared output file was never created), log the rest; keep null fallback (guarded by `if (!stat?.isFile()) continue`).\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/swarm/core-1.mjs",
+        "tools/swarm/core-11.mjs",
+        "tools/wave-quarantine-types.mjs",
+        "tools/wave-quarantine.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gc.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/om-manifest-guard.test.mjs",
+        "tests/run-cleanup.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/swarm-source-helper.test.mjs",
+        "tests/wave-quarantine.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

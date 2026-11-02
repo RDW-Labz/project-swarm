@@ -64,7 +64,9 @@ export function appendHistory(events, { file = historyFile(), now = Date.now } =
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       // A torn last line (a crash mid-write) must not swallow the next event: start on a fresh line.
       let lead = '';
-      try { const handle = await fs.open(file, 'r'); try { const { size } = await handle.stat(); if (size > 0) { const last = Buffer.alloc(1); await handle.read(last, 0, 1, size - 1); if (last[0] !== 10) lead = '\n'; } } finally { await handle.close(); } } catch { /* a new file */ }
+      try { const handle = await fs.open(file, 'r'); try { const { size } = await handle.stat(); if (size > 0) { const last = Buffer.alloc(1); await handle.read(last, 0, 1, size - 1); if (last[0] !== 10) lead = '\n'; } } finally { await handle.close(); } } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/history.mjs] history lead newline:', error?.message ?? error);
+      }
       await fs.appendFile(file, lead + fresh.map(e => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600 });
       return { added: fresh.length };
     } catch (error) { return { added: 0, error: String(error.message).slice(0, 200) }; }

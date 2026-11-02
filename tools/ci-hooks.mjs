@@ -171,8 +171,10 @@ export function defaultRun(command, args, options) {
       } catch {
         try {
           child.kill(sig);
-        } catch {
-          // already gone
+        } catch (error) {
+          if (error?.code !== 'ESRCH') {
+            console.error('[tools/ci-hooks.mjs] killGroup single-process kill:', error?.message ?? error);
+          }
         }
       }
     };

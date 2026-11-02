@@ -8,29 +8,21 @@
 
 /** Where the pointer last was on the page, NaN while it is away. */
 export const pointer = { x: NaN, y: NaN };
+import { mountAmbientMotion } from './cc-hive-stage.js';
 
 const subscribers = new Set      ();
-let frame = 0;
-let last = 0;
+let motion = null;
 let listening = false;
 
-function loop(now        ) {
-  frame = 0;
-  const dt = last ? Math.min(0.1, (now - last) / 1000) : 0;
-  last = now;
-  subscribers.forEach((fn) => fn(dt));
-  if (subscribers.size) frame = requestAnimationFrame(loop);
-}
-
 function start() {
-  if (frame || typeof document === 'undefined' || document.hidden) return;
-  last = 0;
-  frame = requestAnimationFrame(loop);
+  if (motion || typeof document === 'undefined') return;
+  motion = mountAmbientMotion({ element: document.documentElement, frameMs: 1000 / 15, freezeCss: false,
+    draw: dt => subscribers.forEach(fn => fn(dt)) });
 }
 
 function stop() {
-  if (frame) cancelAnimationFrame(frame);
-  frame = 0;
+  motion?.destroy();
+  motion = null;
 }
 
 function listen() {
@@ -46,10 +38,6 @@ function listen() {
   }, { passive: true });
   document.addEventListener('pointerleave', away);
   window.addEventListener('blur', away);
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) stop();
-    else if (subscribers.size) start();
-  });
 }
 
 export function subscribe(fn      )             {

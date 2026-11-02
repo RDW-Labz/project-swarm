@@ -1,0 +1,36 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain1b",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner speed plan: one Opus review of the combined release diff",
+   "prompt": "RE-REVIEW of release train 1 after fixes. Round 1 review (coordination/review/train1-review-r1.json) failed with 4 blockers: snapshot forgery, manifest-guard race, cancelled done work, default-branch detection. The diff (coordination/review/train1.diff) now also contains: orchestrator write denies for .swarm/project/approved-tickets.json, tickets.json, tickets.log; snapshot bound to the last approve-log ticketsHash; a runner-side orchestratorManifestGate called first in applyManifestJobTypes (tools/swarm/core-1.mjs) active when CLAUDECODE=1, orchestrator mode is on and the hook is installed; hook refusal of missing manifest-looking paths and of compound write+swarm-run commands; a vetted set that includes the swarm-generated quality checks and managedChecks(profile.verify) with a strict check-key allowlist; any cancel/vanish since the snapshot fails auto-approve; default branch from every remote HEAD plus init.defaultBranch, lone star ignored when unknown. First verify each round-1 blocker is actually closed (say so per blocker), then look for NEW blockers introduced by the fixes (e.g. can the gate be skipped by unsetting CLAUDECODE through an allowed command, can resume/integrate run unvetted commands, does the stricter vetting break legitimate swarm-generated manifests, regressions). Same pass bar and output shape as before; write ONLY coordination/review/train1-review.json.\n\nPass bar (owner): find BLOCKERS now (a way to bypass a guard or approval, money spent, wrong commits on protected branches, data loss, a crash on a normal path, a regression to existing behavior); everything else is a follow-up. Look hard at: ways to get an unvetted command run despite (3) (other manifest fields that run commands, --root pointing elsewhere, symlinks, TOCTOU, run ids that resolve to files, integrate/resume/redcheck of a run started before the guard); ways for the orchestrator to get an approval through (4) that the conditions should have stopped (snapshot forgery: can the orchestrator write .swarm/project/approved-tickets.json or the ledger directly? ticket fields that add paid lanes or migrations without matching the checks; flag/argv tricks); whether (2) can ever resolve a blocker that is still current; whether (1) can commit to a protected branch.\nWrite ONLY coordination/review/train1-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+   "context": [
+    "coordination/review/train1.diff",
+    "tools/go.mjs",
+    "tools/split-park-supersede.mjs",
+    "tools/inbox-commands.mjs",
+    "tools/om-manifest-guard.mjs",
+    "tools/shell-writes.mjs",
+    "tools/split-auto-approve.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tools/journal.mjs",
+    "coordination/review/train1-review-r1.json",
+    "tools/swarm/core-1.mjs",
+    "tools/orchestrator-hook.mjs",
+    "tools/scope-commands.mjs",
+    "tools/quality-checks.mjs",
+    "tools/verify-config.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train1-review.json"
+   ],
+   "resultFile": "coordination/review/train1-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

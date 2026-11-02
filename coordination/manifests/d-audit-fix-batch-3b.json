@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-phone",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; three fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/phone.mjs (search for '### tools/phone.mjs' - it lists exact line numbers and the catch form found there; several lines are listed TWICE because that one source line has two separate inline `.catch(() => {})` calls chained one after another - find and fix every one of them, not just the first per line).\n\nIMPORTANT - this file is sensitive: it handles the owner's phone-approval flow (GitHub-issue-based yes/no/word-confirmation for swarm decisions). Read the whole file first before changing anything, specifically `syncUnlocked` and its nested `execute()` function, to understand the real approval gate: the owner-identity/account-type/timing check (the `why` computation around line 233) and the one-time-word confirmation check (`same(token, rec.word)` around line 240) are NOT in the flagged-line list and must not be touched at all. Every flagged catch in this file is either (a) a best-effort config/state read with an existing fail-closed fallback (missing config/state is already treated as 'not set up' / 'no state yet', which is the SAFE direction), or (b) a post-decision GitHub notification/cleanup call (`comment(...)`/`closeIssue(...)`) that fires AFTER `rec.status` has already been written and saved - these never gate whether an action runs, they only control whether the owner sees a confirmation comment on GitHub. Your fix must preserve this exactly: never make a flagged catch's fix cause an unapproved action to run, and never make it cause an approved/already-recorded action's own execution (inside `execute()`) to be skipped or retried - you are only adding visibility to catches that happen before or after the real decision, not touching the decision itself.\n\nFor EACH flagged line in tools/phone.mjs only (do not touch any other file, do not touch the approval-gate logic described above even though it is in this file):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. config/state file doesn't exist yet (ENOENT), a GitHub label that may already exist, a GitHub comment/close call whose failure is already a safe no-op (the decision was already saved before it runs). For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally where a narrower code check makes sense (e.g. `error?.code === 'ENOENT'` for a file read), narrow it and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case (e.g. a GitHub API call failing for a reason other than 'not found yet'). Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own (checked) - use `console.error('[tools/phone.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable (`catch {}` / `catch { ... }` / `.catch(() => {})`), add a REAL binding and actually reference it in a console.error call where you are not simply preserving an already-safe silent fallback per (a) above - do not just rename-and-ignore a binding (e.g. `catch (error) { error; }` is never an acceptable fix).\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed before merge given the sensitivity, and will send back any issue as a follow-up. List, in your final summary, which of the flagged catch sites you touched, case (a) vs (b), with one line each, and confirm explicitly that you did not touch the `why` computation or the `same(token, rec.word)` check.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/phone.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/handbuild-channel.test.mjs",
+        "tests/handbuild-channels-hardening.test.mjs",
+        "tests/handbuild-hook-hardening.test.mjs",
+        "tests/managers/r039-visual-lessons.test.mjs",
+        "tests/phone.test.mjs",
+        "tests/scratch-inbox.test.mjs"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}

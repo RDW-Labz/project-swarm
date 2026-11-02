@@ -153,6 +153,46 @@
       ]
     },
     {
+      "name": "Instrument Serif italic (latin woff2)",
+      "version": "5.2.8 (Fontsource)",
+      "license": "OFL-1.1",
+      "source": "https://www.npmjs.com/package/@fontsource/instrument-serif/v/5.2.8",
+      "copyright": "Instrument Serif: Rodrigo Fuenzalida, Jordan Egstad (see the LICENSE file)",
+      "use": "Hive tagline",
+      "notes": null,
+      "licenseFiles": [
+        "fonts/LICENSE-instrument-serif"
+      ],
+      "files": [
+        {
+          "path": "fonts/instrument-serif-latin-400-italic.woff2",
+          "sha256": "5a51946dfffa82972bc98745359c46761515641fda557c25116459a9f83da4a7",
+          "bytes": 22128,
+          "gzip": 22196
+        }
+      ]
+    },
+    {
+      "name": "Playfair Display Variable italic (latin woff2)",
+      "version": "5.2.8 (Fontsource)",
+      "license": "OFL-1.1",
+      "source": "https://www.npmjs.com/package/@fontsource-variable/playfair-display/v/5.2.8",
+      "copyright": "Playfair Display: Claus Eggers Sørensen (see the LICENSE file)",
+      "use": "Hive logo and core title",
+      "notes": null,
+      "licenseFiles": [
+        "fonts/LICENSE-playfair-display"
+      ],
+      "files": [
+        {
+          "path": "fonts/playfair-display-latin-wght-italic.woff2",
+          "sha256": "54af24bd0f911f0fd7399d5445ea2023ff501d6a69f2d728f1213072f977ab14",
+          "bytes": 38804,
+          "gzip": 38878
+        }
+      ]
+    },
+    {
       "name": "Radix Colors, dark scales (slate, blue, green, amber, red, violet, cyan, teal)",
       "version": "3.0.0",
       "license": "MIT",

@@ -1,0 +1,112 @@
+{
+  "round": "9",
+  "hive": {
+    "scores": {
+      "fidelity": 4.1,
+      "polish": 4.2,
+      "motion": 4.4,
+      "data": 4.5,
+      "phone": 4.4
+    },
+    "overall": 4.2,
+    "fixes": [
+      {
+        "problem": "Particle streams read as clumpy sprays with blown-out white cores rather than the target's long, thin comet streams that flow from each card into the ring and continue toward the core.",
+        "where": "Between every project node and the ring, most visibly nodes 05, 06 and 02",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Emit particles along a quadratic bezier from the card's inner edge to the ring rim, 1-2px size, velocity along the path, and draw a 6-10px tail by re-plotting the previous position at lower alpha. Use the lane colour at ~0.8 alpha with additive blending only within 30px of the ring; drop the white-hot core blend. Let a thinner continuation stream run past the rim toward the core as in the target."
+      },
+      {
+        "problem": "Session log panel has a large empty gap (about 150px) between the last log row and the terminal line + bar chart; the target's log fills its panel.",
+        "where": "Bottom-left panel, below the fold",
+        "file": "tools/watch-assets/hive-panels.js, tools/watch-assets/cc-hive.css",
+        "change": "Make the log list flex:1 with overflow:hidden and feed it the full recent ledger event stream (all events in time order, not one summary row per project per state) so it fills the available height; alternatively stack the terminal line and chart directly after the list and let the panel grid use align-items:start."
+      },
+      {
+        "problem": "Mini bar chart is sparse: a handful of tall blue bars with tiny coloured stubs, where the target shows a dense multi-colour bar field spanning the panel width.",
+        "where": "Bottom of the session log panel",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Render one 3px bar per bucket across the full panel width (e.g. per project x status, or per ledger time slice), normalise heights to the bucket max so no single series dominates, colour each bar by lane and clamp heights to the chart box."
+      },
+      {
+        "problem": "Middle panel composition differs from the target: the big number should be followed by a two-part coloured sentence and a one-line lane list, and the extra 'DONE PER PROJECT' grid is not in the target.",
+        "where": "ALL PROJECTS panel, below the fold",
+        "file": "tools/watch-assets/hive-panels.js, tools/watch-assets/cc-hive.css",
+        "change": "Lay out: big pink number + 'projects.' + a second phrase in lane colour (e.g. live agent count), then a mono line listing the lanes separated by middle dots, a hairline, then the WHO IS BUILDING NOW bars. Move the done-per-project values into the third panel's step chart tooltip or drop the grid."
+      },
+      {
+        "problem": "Header carries extra chrome the target lacks (TOUR, '...' button, 'A run failed' toast) and the toast overlaps the stat row in the first frame.",
+        "where": "Top-right header",
+        "file": "tools/watch-assets/cc-hive-mount.js, tools/watch-assets/cc-hive.css",
+        "change": "Keep only the stat counters and LIVE in the header; move TOUR and the overflow button into the footer line next to PAUSE MOTION, and surface a failed run as a red state on the LIVE dot plus a 'failed' row in the session log instead of a header toast."
+      },
+      {
+        "problem": "Card glow is heavier and more saturated than the target's soft bloom; the neon halo bleeds into neighbouring streams.",
+        "where": "All nine project cards",
+        "file": "tools/watch-assets/cc-hive.css",
+        "change": "Use box-shadow: 0 0 0 1px var(--lane), 0 0 18px -2px color-mix(in srgb, var(--lane) 55%, transparent); remove the inner spread and keep the header bar flat-filled."
+      },
+      {
+        "problem": "The ring lacks the target's faint concentric dotted guide rings and radial tick marks under the arc label.",
+        "where": "Just outside the main ring, behind the arc text",
+        "file": "tools/watch-assets/cc-hive-mount.js",
+        "change": "Draw two dashed circles at ring radius +28px and +44px at 0.12 alpha and 60 short radial ticks at 0.18 alpha, rotating slowly with the label."
+      },
+      {
+        "problem": "DONE 24H stat shows a dash and several panel footnotes say 'no ... in the ledger' / 'not measured yet', which makes the bottom panels look unfinished.",
+        "where": "Header stat row and panel footers",
+        "file": "tools/watch-assets/hive-panels.js",
+        "change": "Derive done-in-24h from ticket completion timestamps where the ledger has them; when it cannot be derived, relabel the counter to a value the ledger does supply (e.g. DONE total) and consolidate the data-caveat notes into the single footer line."
+      }
+    ]
+  },
+  "cockpit": {
+    "scores": {
+      "fidelity": 4.5,
+      "polish": 4.4,
+      "motion": 4.0,
+      "data": 4.7,
+      "phone": 4.1
+    },
+    "overall": 4.4,
+    "fixes": [
+      {
+        "problem": "Headline and subhead are a wide heavy sans rather than the target's tall ultra-condensed grotesk.",
+        "where": "Top-left headline block",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "Load a condensed display face (font-stretch: condensed or a condensed family) for .headline and .subhead; set line-height .9, letter-spacing -0.01em, headline ~64px and subhead ~26px so the two lines match the target's height ratio."
+      },
+      {
+        "problem": "Motion between frames is limited to the orbit dot and path particle; nothing else on the page moves.",
+        "where": "Whole page",
+        "file": "tools/watch-assets/cc-cockpit-mount.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Add a slow bright sweep across the segmented rule (a 2px highlight segment every 4s), a box-shadow pulse on the active ticket row, a gentle float on the robot (translateY +/-3px over 3s), and an animated stripe on the NOW RUNNING jobs bar; transition progress bar widths on data refresh."
+      },
+      {
+        "problem": "Phone: the floating '?' help button sits over the index chips of the ticket rows at the bottom-left.",
+        "where": "Phone view, bottom-left over row 04",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "At max-width 480px move the help button to bottom-right with a 12px inset, shrink it to 32px, and add padding-bottom to the list so the last row clears it; or inline it in the breadcrumb bar."
+      },
+      {
+        "problem": "Phone: the breadcrumb stats wrap into two ragged lines with separators breaking mid-group.",
+        "where": "Phone view, top of page",
+        "file": "tools/watch-assets/cc-cockpit.css",
+        "change": "On phone keep the path on its own line and render the stats as a single nowrap row with overflow-x:auto and a fading right edge, or drop the date from the stats on phone and show it in the footer."
+      },
+      {
+        "problem": "The orbit ellipse is drawn fully in front of the robot; in the target the far half passes behind the body and only the near half crosses the legs.",
+        "where": "Centre column, robot stage",
+        "file": "tools/watch-assets/cockpit-view.js",
+        "change": "Split the ellipse into two arcs: draw the back arc (top half) before the robot sprite and the front arc (bottom half) after it, keeping the orbit dot on the same path so it disappears behind the body."
+      },
+      {
+        "problem": "Rule-row right label uses a red dot before '0 OF 1 STAGES DONE', which reads as an error; the target's equivalent is a plain live scan label.",
+        "where": "Right end of the segmented-rule label row",
+        "file": "tools/watch-assets/cockpit-lists.js, tools/watch-assets/cc-cockpit.css",
+        "change": "Use the orange accent (or green when live) for the dot and reserve red for failed states; keep the text in the orange mono style of the target."
+      }
+    ]
+  },
+  "notes": "Hive now has the ring composition, arc label, legend/tagline row and three panels in place; the remaining gap is stream rendering and panel density below the fold. Cockpit is close to the target in composition and data consistency, held back mainly by headline typography, light motion and two phone-layout overlaps."
+}

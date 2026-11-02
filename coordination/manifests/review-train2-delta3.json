@@ -1,0 +1,25 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "reviewtrain2delta3",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner rule: Opus round-4 delta review of train 2 guard fix",
+   "prompt": "Round-4 delta review of release train 2 of Project Swarm (guard). Round 3 (coordination/review/train2-delta2-review.json in context) found a NEW BLOCKER: cd tracking was physical while shell cd is logical, so `cd <protected>/L && cd .. && echo > f` with L a directory symlink diverged. coordination/review/train2-delta3.diff is the diff from round 3's head dcccb7a8 to the new head. The change closes the CLASS rather than modelling cd -L: in tools/shell-writes.mjs (1) any cd whose target walk passes through a symlinked component AT OR BELOW the project root is refused (omResolvePath reports sawSymlink; omResolveCd returns null), so logical and physical cwd are always identical after any allowed cd; OS-level symlinks above the root (darwin /var, /tmp) are ignored by starting the walk at realpath(root) for absolute in-project targets; (2) if the starting cwd differs from its realpath BELOW the root (path.relative lexical vs physical), any cd target containing '..' and any relative redirect starting with '..' is refused; (3) any cd segment carrying a redirect (any word with < or >) is refused, in omValidateTokenized/omCdStepAllowed, the standalone cd path, and orchestratorSwarmSubfolderBlocked. Unchanged since round 3: everything else, including all money/lane code (round-3 found no issue there).\nPass bar (owner): confirm the round-3 blocker is CLOSED, including both of your exploits (.swarm/project/L and a git-committed coordination/manifests/L, each with `cd L && cd .. && echo > f`) and the cd-segment redirect (`cd docs > .swarm/project/daily-limit.json`). Look hard for ANY remaining way the guard's idea of the cwd or of a redirect/write target can differ from the shell's (pushd/popd, subshells, CDPATH, $PWD/$OLDPWD use, `cd` via variables or command substitution, `builtin cd`, `command cd`, aliases, `exec`, `cd` inside `sh -c`), and for regressions that block ordinary orchestrator commands such as `cd /Users/x/scratch/train2 && node tools/x.mjs run m.json < /dev/null 2>&1 | tail -5`. Everything else is a follow-up.\nWrite ONLY coordination/review/train2-delta3-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"round3\":[{\"blocker\":1,\"status\":\"closed\"|\"open\",\"evidence\":\"\"}],\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail if the round-3 blocker is open or blockers is non-empty.",
+   "context": [
+    "coordination/review/train2-delta3.diff",
+    "coordination/review/train2-delta2-review.json",
+    "tools/shell-writes.mjs",
+    "tests/t2-redirect-symlink.test.mjs"
+   ],
+   "outputs": [
+    "coordination/review/train2-delta3-review.json"
+   ],
+   "resultFile": "coordination/review/train2-delta3-review.json",
+   "timeoutMs": 2400000
+  }
+ ]
+}

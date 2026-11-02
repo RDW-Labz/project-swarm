@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "lockfix5",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Simplify tools/autopilot-ready-deps.mjs: undo the early-exit and stderr work in readyAutopilotDeps startScope (no stderr pipe or file, no early-exit window, no timer, no spawnEarlyExitMs option, no closeStderrPipe helper) and return to the original behaviour: spawn detached with stdio 'ignore' and the original unref and success-via-microtask logic, exactly as in the version on origin/main. The only change that stays in this file: the env passed to the spawned go --scope child is { ...env, SWARM_AUTOPILOT_PID: String(selfPid) }. Then update tests/autopilot-ready-deps.test.mjs: remove the tests that cover the early-exit, stderr or timer behaviour (they belong to a later change) and keep or add one test that the spawned child's env carries SWARM_AUTOPILOT_PID equal to selfPid. Do not touch tools/autopilot-lock.mjs or tests/autopilot-lock-parent.test.mjs. Make tests/autopilot-ready-deps.test.mjs, tests/memory-fixes.test.mjs, tests/memory-wiring.test.mjs, tests/autopilot-wide-waves.test.mjs and tests/autopilot-lock-parent.test.mjs pass.",
+   "context": [
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-ready-deps.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/memory-wiring.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot-ready-deps.mjs",
+    "tests/autopilot-ready-deps.test.mjs"
+   ],
+   "timeoutMs": 1500000,
+   "ignoreTests": [
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/needs-you-triage.test.mjs",
+    "tests/split-module.test.mjs"
+   ]
+  }
+ ]
+}

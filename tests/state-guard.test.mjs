@@ -157,7 +157,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
   await fs.mkdir(path.join(wtRoot, '.swarm', 'project'), { recursive: true });
   await fs.writeFile(path.join(wtRoot, '.swarm', 'project', 'tickets.json'), '{}');
   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\nworktree ${wtRoot}\nbranch refs/heads/feat\n\n`;
-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
   const prViewBody = {
     state: 'OPEN',
     mergeable: 'MERGEABLE',
@@ -166,6 +166,8 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
     headRefOid: 'abc123',
     isCrossRepository: false,
     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    title: 'Fix the widget',
+    body: '',
   };
   const calls = [];
   const exec = async (command, args, opts = {}) => {
@@ -204,7 +206,7 @@ test('runMerge omits --delete-branch when head branch worktree holds state', asy
 test('runMerge uses --delete-branch when no state-holding worktree on head branch', async t => {
   const mergeRoot = await fs.mkdtemp(path.join(process.env.SWARM_TEST_TMP, 'sg-merge-root2-'));
   t.after(() => fs.rm(mergeRoot, { recursive: true, force: true }));
-  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+  const prViewFields = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
   const prViewBody = {
     state: 'OPEN',
     mergeable: 'MERGEABLE',
@@ -213,6 +215,8 @@ test('runMerge uses --delete-branch when no state-holding worktree on head branc
     headRefOid: 'abc123',
     isCrossRepository: false,
     statusCheckRollup: [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    title: 'Fix the widget',
+    body: '',
   };
   const porcelain = `worktree ${mergeRoot}\nbranch refs/heads/main\n\n`;
   const calls = [];

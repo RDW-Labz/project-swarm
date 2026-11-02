@@ -11,6 +11,7 @@ import { assertNoSkillSymlinks, attachSkillsForJob, listSkills, resolveSkillsDir
 import { ABSENCE_CLAIM_PATTERN, AGENTS_MD_DOC_RE, CHANGED_STATUS_WORD_RE, CORE_MODULE_PATH, DATACLASS_FIELD_RE, EVIDENCE_HEADING, FAILURE_LINE_RE, FAILURE_LOCATION_RE, HEX_HASH_RE, JSON_DEMAND_RE, MAX_NOTE_LEN, MAX_NOTES, PROGRESS_INTERVAL, RUNTIME_CHECK_RE, SECRET_PATTERN } from './patterns.mjs';
 import { progressReport } from './run-state.mjs';
 import { isWorktreeWriter } from './workspace.mjs';
+import { orchestratorManifestGate } from '../om-manifest-guard.mjs';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -76,7 +77,16 @@ const quotesRuntimeFailure = prompt => RUNTIME_CHECK_RE.test(prompt) || (/\btime
 const isDocOnlyJob = job => (job.outputs ?? []).length > 0 && job.outputs.every(file => /\.md$/i.test(file));
 
 async function programOnPath(program, dirs) {
-  for (const dir of dirs) { try { await fs.access(path.join(dir, program)); return true; } catch { /* try the next dir */ } }
+  for (const dir of dirs) {
+    try {
+      await fs.access(path.join(dir, program));
+      return true;
+    } catch (error) {
+      const code = error?.code;
+      if (code === 'ENOENT' || code === 'EACCES' || code === 'ENOTDIR') { /* try the next dir */ }
+      else console.error('[tools/swarm/core-1.mjs] programOnPath access:', error?.message ?? error);
+    }
+  }
   return false;
 }
 
@@ -232,7 +242,13 @@ const quotesJsonDemand = prompt => JSON_DEMAND_RE.test(prompt);
 function extractSessionId(stdout) {
   for (const line of stdout.split('\n')) {
     if (!line.trim()) continue;
-    try { const event = JSON.parse(line); if (typeof event.session_id === 'string' && event.session_id) return event.session_id; } catch { /* not a JSON event line */ }
+    try {
+      const event = JSON.parse(line);
+      if (typeof event.session_id === 'string' && event.session_id) return event.session_id;
+    } catch (error) {
+      if (error instanceof SyntaxError) { /* not a JSON event line */ }
+      else console.error('[tools/swarm/core-1.mjs] extractSessionId JSON.parse:', error?.message ?? error);
+    }
   }
   return null;
 }
@@ -450,6 +466,7 @@ function namedTestPaths(argv) {
 }
 
 async function applyManifestJobTypes(root, manifest, { env, home = os.homedir() }) {
+  await orchestratorManifestGate(root, manifest, env);
   const withReport = job => {
     if (manifest.report !== 'short' && job.report !== 'short') return job;
     if (API_AGENTS.includes(job.agent)) return { ...job, report: 'short' };

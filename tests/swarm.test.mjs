@@ -27,6 +27,37 @@ const manifest = jobs => ({ version: 1, concurrency: 2, jobs: jobs ?? [job()] })
 function fake(script) {
   return (_command, _args, options) => spawn(process.execPath, ['--input-type=module', '-e', `import fs from 'node:fs';\n${script}`], options);
 }
+
+// A denied kill once made the cancellation cleanup denial test hang for days when runManifest never returned.
+async function withHangGuard(promise, ms, onHang, purpose = 'Run') {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          onHang();
+          reject(new Error(`${purpose} did not finish within ${ms}ms`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test('withHangGuard fails fast on hang and passes through fast resolves', async () => {
+  let hangCount = 0;
+  await assert.rejects(
+    withHangGuard(new Promise(() => {}), 50, () => { hangCount++; }),
+    /did not finish within 50/,
+  );
+  assert.equal(hangCount, 1);
+  let hangCount2 = 0;
+  assert.equal(await withHangGuard(Promise.resolve('ok'), 50, () => { hangCount2++; }), 'ok');
+  assert.equal(hangCount2, 0);
+});
+
 const done = `console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:'Worker complete'}));`;
 const update = fake(`fs.writeFileSync('input.txt','updated'); ${done}`);
 
@@ -349,7 +380,7 @@ test('cancellation cleanup denial preserves its reason, fails the run, and does 
  const root=await fixture(t),controller=new AbortController();let child,launched=0;
  t.after(()=>{if(child?.pid)try{process.kill(process.platform==='win32'?child.pid:-child.pid,'SIGKILL');}catch{}});
  const provider=fake('setInterval(()=>{},1000)');
- const state=await runManifest(root,{...manifest([job(),job({id:'queued',outputs:[]})]),concurrency:1},{signal:controller.signal,spawnImpl:(...args)=>{launched++;child=provider(...args);setTimeout(()=>controller.abort(),40);return child;},killImpl:()=>{throw Object.assign(Error('denied'),{code:'EPERM'});}});
+ const state=await withHangGuard(runManifest(root,{...manifest([job(),job({id:'queued',outputs:[]})]),concurrency:1},{signal:controller.signal,spawnImpl:(...args)=>{launched++;child=provider(...args);setTimeout(()=>controller.abort(),40);return child;},killImpl:()=>{throw Object.assign(Error('denied'),{code:'EPERM'});}}),15000,()=>{if(child?.pid)try{process.kill(process.platform==='win32'?child.pid:-child.pid,'SIGKILL');}catch{}},'cancellation cleanup denial runManifest');
  assert.equal(state.status,'failed');assert.equal(state.jobs[0].status,'failed');assert.equal(state.jobs[0].terminationReason,'cancelled');assert.match(state.jobs[0].cleanupError,/EPERM/);assert.equal(state.jobs[1].status,'cancelled');assert.equal(launched,1);await assert.rejects(integrateRun(root,state.id));
 });
 

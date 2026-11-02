@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-classic-token",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "cheap",
+      "prompt": "Fix the delta-review blocker on the Cockpit Classic tab. tools/watch-assets/cc-cockpit-mount.js sets `classicTab.href = '/classic'` with no page token, so clicking Classic from the Cockpit requests /classic without ?t= and the watch server returns 403. The Hive tab does it correctly: `tabClassic.href = `/classic${win.location?.search || ''}`;`.\n\nIn cc-cockpit-mount.js: read the current search (doc.defaultView and doc.defaultView.location, or a win argument if the module already has one) and set BOTH `ccTab.href = '/command-center' + search` and `classicTab.href = '/classic' + search` so the token query is preserved. Keep the aria-current attribute.\n\nIn tests/command-center-routes-flag.test.mjs: replace the source regex that pins the tokenless href with a rendered assertion: mount/render the Cockpit with a fake defaultView location whose search is '?t=abc' and assert the Classic anchor href is '/classic?t=abc' and the Command Center anchor is '/command-center?t=abc'. Remove the old source regex (it cannot catch the token). Keep every other assertion.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/cc-cockpit-mount.test.mjs tests/command-center-routes-flag.test.mjs tests/cc-hive-mount.test.mjs tests/watch-assets.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tools/watch-assets/cc-hive-mount.js"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/command-center-routes-flag.test.mjs"
+      ],
+      "timeoutMs": 1200000
+    }
+  ],
+  "checks": [
+    { "name": "t5-classic-token", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/cc-cockpit-mount.test.mjs", "tests/command-center-routes-flag.test.mjs", "tests/cc-hive-mount.test.mjs", "tests/watch-assets.test.mjs"] }
+  ]
+}

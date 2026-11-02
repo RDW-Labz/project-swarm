@@ -68,6 +68,8 @@ Several projects can run at once. Each lane already has a machine-wide limit (ev
 - **Separate:** each project's spend caps (`projectMaxUsd`, `--max-usd`, lane daily caps) and its own `--concurrency` stay as they were; the machine limit only adds a ceiling and the sharing. A project is told apart by the id of its folder (the same id the Swarm Watch board uses).
 - **See it:** the Swarm Watch board shows "Workers held": how many of the limit are in use, which project holds how many and in which lane, and which projects are waiting ([watch.md](watch.md)).
 
+`swarm with-concurrency N -- COMMAND` runs COMMAND in its own detached process group. The wrapper stays in the terminal's foreground process group and forwards SIGINT (after a 200 ms grace), SIGTERM and SIGHUP to the command's whole group. Stdio stays attached so output is live, but the command is not the terminal's foreground process group, so terminal job control and terminal-generated signals hit the wrapper and are forwarded. On exit, the previous `machineConcurrency` value is restored.
+
 ## Rate limits and quota pauses
 
 Lane limits are machine-wide. Every run on this machine shares one lane file next to the shared install: `~/.project-swarm/lanes/lanes.json`, or `SWARM_LANES_DIR` when that is set. The file holds each lane's in-flight count and any rate-limit or quota pause. A lock keeps the counts exact, and a slot whose process has died is cleared on the next claim. A 429 or a quota pause in one run pauses that lane for every other run, including a lead's child runs and runs in other repositories. Deleting a project's `.swarm/` does not reset it. A run's own `concurrency` is still only that run's global cap.

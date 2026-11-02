@@ -154,7 +154,8 @@ export async function readAvailableMemory({
       const meminfoText = await run('read', ['/proc/meminfo']);
       const parsed = parseLinuxMeminfo(meminfoText);
       if (parsed) return parsed;
-    } catch {
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'EACCES') console.error('[tools/autotune.mjs] read /proc/meminfo:', error?.message ?? error);
       /* fall through */
     }
   }

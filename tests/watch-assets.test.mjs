@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
+import { parse } from 'acorn';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -94,16 +94,25 @@ test('no http(s) URL outside comment or SPDX lines in css and js files', () => {
   }
 });
 
+function jsParseSourceType(source) {
+  return /^\s*(?:import|export)\b/m.test(source) ? 'module' : 'script';
+}
+
 test('every js file parses as a classic script (syntax only)', () => {
   for (const name of files.filter((f) => f.endsWith('.js'))) {
-    // The board's own scripts are ES modules (import and export): their import lines and export keywords are dropped, the rest must still parse.
-    const source = read(name).replace(/^import [^\n]*;\n/gm, '').replace(/^export (?=function|const|class|let|var)/gm, '');
-    assert.doesNotThrow(() => new vm.Script(source, { filename: name }), name);
+    const source = read(name);
+    const sourceType = jsParseSourceType(source);
+    assert.doesNotThrow(
+      () => parse(source, { ecmaVersion: 'latest', sourceType }),
+      name,
+    );
   }
 });
 
 test('tab scripts register under one of the four tab names', () => {
-  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && f !== 'board-owner-actions.js' && f !== 'orchestrator-view.js' && !f.startsWith('robot-'));
+  // Command Center scripts (cc-*, command-center*, hive-*, cockpit-*, command-palette*) are not legacy tab panes and do not call register().
+  // classic-tab.js is the Classic tab ES module wrapper; it exports helpers and never calls register().
+  const tabFiles = files.filter((f) => f.endsWith('.js') && f !== 'app.js' && f !== 'run-drawer.js' && f !== 'board.js' && f !== 'project.js' && f !== 'project-live.js' && f !== 'nav.js' && f !== 'run.js' && f !== 'board-lib.js' && f !== 'board-owner-actions.js' && f !== 'orchestrator-view.js' && f !== 'classic-tab.js' && !f.startsWith('robot-') && !f.startsWith('cc-') && !f.startsWith('command-center') && !f.startsWith('hive-') && !f.startsWith('cockpit-') && !f.startsWith('command-palette'));
   assert.ok(tabFiles.length > 0, 'no tab scripts found');
   const re = /register\(\s*['"](run|plan|commands|gallery)['"]/;
   for (const name of tabFiles) {

@@ -1,0 +1,27 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "leakB",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 2400000,
+   "context": [
+    "tools/swarm/core-41.mjs",
+    "tools/cursor-adapter.mjs"
+   ],
+   "outputs": [
+    "tools/swarm/core-41.mjs",
+    "tests/cursor-process-group.test.mjs"
+   ],
+   "prompt": "Cursor lane process cleanup. Find where the cursor lane starts the cursor-agent child process for a job (search tools/swarm/core-41.mjs and the cursor adapter tools/cursor-adapter.mjs for spawn). Make the job's WHOLE process group die when the job ends: spawn the child with detached: true so it leads its own process group, record the pid, and when the job completes, fails, times out or is cancelled, kill the group with process.kill(-pid, 'SIGTERM'), wait up to 5 seconds, then process.kill(-pid, 'SIGKILL') if anything is still alive; never signal a group the lane did not create (validate pid > 1 and not our own group; ESRCH is fine), and never use shell strings. Make the kill function injectable and add tests in tests/cursor-process-group.test.mjs with fakes: group kill on complete, on timeout, on cancel, a dead group is not an error, an invalid pid is refused, SIGKILL follows only if the group survives SIGTERM. Keep every existing test passing.",
+   "ignoreTests": [
+    "tests/helpers/swarm-source.mjs",
+    "tests/lane-pass-routing-wiring.test.mjs",
+    "tests/swarm-source-helper.test.mjs"
+   ]
+  }
+ ]
+}

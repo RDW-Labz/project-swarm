@@ -9,12 +9,34 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ORCHESTRATOR_OWN, insideProject, realOf, projectRootOf } from './orchestrator-events.mjs';
+import {
+  swarmSubcommandAlwaysAllowed,
+  swarmArgvSubcommand,
+  readOnlyCommandAllowed,
+  helpOnly,
+  localTestRunAllowed,
+  localTestRunIsBare,
+  orchestratorOwnRel,
+  orchestratorOwnForbiddenWriteRel,
+  orchestratorBareTestScanRelPrefixes,
+  orchestratorSwarmSessionCwdOk,
+  orchestratorWriteAllowedRel,
+} from './orchestrator-allow.mjs';
+import { omRunManifestVetted, omSwarmRunGoPositionals, omSwarmTicketPositionals } from './om-manifest-guard.mjs';
+
+export { localTestRunAllowed };
 export const ORCHESTRATOR_MODE_OFF_FILE = '.swarm/orchestrator-mode/off';
 export const ORCHESTRATOR_TEST_MARKER_REL = '.swarm/orchestrator-mode/test-harness-signed';
 export const ORCHESTRATOR_TEST_MARKER_BODY = 'project-swarm-orchestrator-mode-test-harness-v1';
-export const SWARM_WORKER_RUN_ID_ENV = 'SWARM_WORKER_RUN_ID';
 export const ORCHESTRATOR_MODE_RULE_ID = 'orchestrator-mode';
-export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: make a ticket instead: swarm diagnose "<question>" or swarm ticket ... (see swarm diagnose --help). Hand shell work (scripts, test runs, debugging, edits) belongs to workers.';
+export const ORCHESTRATOR_MODE_DENY_REASON = 'Orchestrator mode: writes are only allowed under .swarm/ (except workspaces, worktrees, runs, backups, orchestrator-mode), docs/plans/, coordination/manifests/ (.json), coordination/HANDOFF*.md, docs/state/ (.md), and TASK.md at the project root — text formats md/json/jsonl/ndjson/yaml/yml only (never package.json). Swarm CLI commands are allowed. For anything else, make a ticket: swarm ticket ... or swarm tickets ... or swarm backlog add "goal" (see swarm tickets --help).';
+export const ORCHESTRATOR_SWARM_CWD_DENY_REASON = 'Orchestrator mode: swarm commands are only allowed with the session working directory at the project root; run cd followed by the project root path first.';
+/** Deny message for a swarm command run from a folder below the project root; prints the real root path. */
+export const orchestratorSwarmCwdDenyReason = root => {
+  let real = String(root ?? '');
+  try { real = fs.realpathSync.native(real); } catch { /* keep the given path */ }
+  return real ? `Orchestrator mode: swarm commands are only allowed from the project root: run cd ${real} first.` : ORCHESTRATOR_SWARM_CWD_DENY_REASON;
+};
 export const ORCHESTRATOR_COMMAND_MAX_BYTES = 100 * 1024;
 export const ORCHESTRATOR_COMMAND_MAX_SEGMENTS = 2000;
 export const ORCHESTRATOR_COMMAND_TOO_LONG_REASON = 'command too long for the guard: split it or make a ticket';
@@ -55,43 +77,13 @@ export function orchestratorResolvedRoot(cwd = process.cwd()) {
   return projectRootOf(cwd);
 }
 
-const runIdFromWorkerCwd = (root, cwd) => {
-  try {
-    const rootReal = fs.realpathSync.native(root);
-    const cwdReal = fs.realpathSync.native(cwd);
-    const rel = path.relative(rootReal, cwdReal);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    const norm = rel.split(path.sep).join('/');
-    const m = norm.match(/^\.swarm\/(?:workspaces|worktrees)\/([^/]+)(?:\/|$)/);
-    return m?.[1] ?? null;
-  } catch { return null; }
-};
-
-const runRecordExists = (root, runId) => {
-  try {
-    const runDir = path.join(fs.realpathSync.native(root), '.swarm', 'runs', runId);
-    return fs.existsSync(path.join(runDir, 'state.json')) || fs.existsSync(path.join(runDir, 'manifest.json'));
-  } catch { return false; }
-};
-
-/** True when `cwd` is a swarm worker workspace backed by run state under `.swarm/runs/<id>/` and the launcher run id matches. */
-export function isVerifiedSwarmWorkerCwd(root, cwd) {
-  const runId = runIdFromWorkerCwd(root, cwd);
-  if (!runId) return false;
-  const envRun = process.env[SWARM_WORKER_RUN_ID_ENV];
-  if (!envRun || String(envRun).trim() !== runId) return false;
-  return runRecordExists(root, runId);
-}
-
-const orchestratorWorkerSessionExempt = (root, cwd) => isVerifiedSwarmWorkerCwd(root, cwd);
-
-/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless `.swarm/orchestrator-mode/off` exists. Worker sessions are exempt only via launcher run id + run record. */
+/** Orchestrator mode is on by default at a swarm project root (`.swarm/` present) unless `.swarm/orchestrator-mode/off` exists. */
 export function orchestratorModeEnabled(root, cwd = root) {
   const projectRoot = root || orchestratorResolvedRoot(cwd);
   if (!projectRoot || !swarmProjectMarkers(projectRoot)) return false;
-  if (orchestratorWorkerSessionExempt(projectRoot, cwd)) return false;
   try {
-    return !fs.existsSync(path.join(fs.realpathSync.native(projectRoot), ORCHESTRATOR_MODE_OFF_FILE));
+    const rootReal = fs.realpathSync.native(projectRoot);
+    return !fs.existsSync(path.join(rootReal, ORCHESTRATOR_MODE_OFF_FILE));
   } catch { return false; }
 }
 
@@ -134,7 +126,8 @@ export function tokenize(command, { countSteps } = {}) {
   let piped = false;
   let sepAfter = null;
   let findExec = false;
-  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
+  let subshellBefore = [];
+  const endCommand = (pipe = false, sep = ';') => { endWord(); if (words.length) { words.piped = piped; words.sepAfter = sep; words.expands = expands; if (subshellBefore.length) { words.subshellBefore = subshellBefore; subshellBefore = []; } commands.push(words); } words = []; expands = []; piped = pipe; findExec = false; };
   const text = String(command ?? '');
   const heredocs = [];
   let heredocHead = 0;
@@ -184,7 +177,13 @@ export function tokenize(command, { countSteps } = {}) {
     if (c === '+' && findExec && !hasWord && (next === ' ' || next === '\t' || next === undefined || next === '\n')) {
       word = '+'; hasWord = true; endWord(); findExec = false; continue;
     }
-    if (c === '(' || c === ')') { endCommand(false, c); continue; }
+    if (c === '(' || c === ')') {
+      endCommand(false, c);
+      // Keep even leading/adjacent boundaries, which have no command words.
+      // A closing boundary applies after the preceding command's redirects.
+      subshellBefore.push(c);
+      continue;
+    }
     if (c === '{' && !hasWord && (next === ' ' || next === '\n')) { endCommand(); continue; }
     if (c === '}' && !hasWord && (next === undefined || next === ' ' || next === ';' || next === '\n')) { endCommand(); continue; }
     if (c === '&' && next === '&') { endCommand(false, '&&'); i += 1; continue; }
@@ -1315,9 +1314,17 @@ const omLauncherSwarmRunner = () => {
     const wrapper = path.join(os.homedir(), '.local', 'bin', 'swarm');
     const text = fs.readFileSync(wrapper, 'utf8');
     if (!text.includes('managed by project-swarm')) { omLauncherRunnerPath = null; return null; }
-    const m = /^exec "\$NODE" '((?:[^']|'\\'')*)'/m.exec(text);
-    if (!m) { omLauncherRunnerPath = null; return null; }
-    omLauncherRunnerPath = fs.realpathSync.native(m[1].replaceAll("'\\''", "'"));
+    const legacy = /^exec "\$NODE" '((?:[^']|'\\'')*)'/m.exec(text);
+    if (legacy) {
+      omLauncherRunnerPath = fs.realpathSync.native(legacy[1].replaceAll("'\\''", "'"));
+      return omLauncherRunnerPath;
+    }
+    const quoted = /^exec\s+"[^"]*"\s+"([^"]+)"\s/m.exec(text);
+    if (quoted) {
+      omLauncherRunnerPath = fs.realpathSync.native(quoted[1]);
+      return omLauncherRunnerPath;
+    }
+    omLauncherRunnerPath = null;
   } catch { omLauncherRunnerPath = null; }
   return omLauncherRunnerPath;
 };
@@ -1507,23 +1514,44 @@ const omGhApiArgsOk = rest => {
 
 const omGhAuthStatusOk = args => args.length === 0;
 
+const OM_GH_READ_ONLY_FLAGS = new Set([
+  '--json', '--jq', '--template', '--limit', '--app', '--hostname', '-q', '-t',
+]);
+
+const omGhReadOnlyFlagOk = a => {
+  const s = String(a);
+  if (s === '-R' || s === '--repo' || s === '--repository') return 'skip2';
+  if (s.startsWith('--repo=') || s.startsWith('--repository=')) return 'skip1';
+  if (s === '-w' || s === '--web' || s.startsWith('--we')) return 'deny';
+  const eq = s.indexOf('=');
+  const name = eq === -1 ? s : s.slice(0, eq);
+  if (OM_GH_READ_ONLY_FLAGS.has(name) || name.startsWith('--jq=') || name.startsWith('--template=')) {
+    return eq === -1 ? 'skip2' : 'skip1';
+  }
+  if (s === '--version' || s === '-v') return 'skip1';
+  if (s.startsWith('-')) return 'deny';
+  return 'pos';
+};
+
 const omGhReadOnly = (args, commandText, piped) => {
   if (omGhPrMerge(args)) return false;
   if (omGhWebFlag(args, commandText)) return false;
+  const pos = [];
   let i = 0;
-  while (i < args.length && args[i].startsWith('-')) {
-    if (args[i] === '-R' || args[i] === '--repo' || args[i] === '--repository') i += 2;
-    else if (args[i] === '-w' || args[i] === '--web' || args[i].startsWith('--we')) return false;
-    else return false;
+  while (i < args.length) {
+    const kind = omGhReadOnlyFlagOk(args[i]);
+    if (kind === 'deny') return false;
+    if (kind === 'skip2') { i += 2; continue; }
+    if (kind === 'skip1') { i += 1; continue; }
+    pos.push(args[i]);
+    i += 1;
   }
-  const pos = args.slice(i);
   if (pos[0] === 'api') return false;
   if (pos[0] === 'pr' && pos[1] === 'create') return false;
   if (pos[0] === 'auth' && pos[1] === 'status') return omGhAuthStatusOk(pos.slice(2));
   const sub = pos[0] === 'search' ? 'search' : (pos.length >= 2 ? `${pos[0]} ${pos[1]}` : pos[0] ?? null);
   if (sub === 'run watch') return false;
   if ((args.includes('--version') || args.includes('-v')) && pos.length === 0) return true;
-  if (pos.some(a => a.startsWith('-'))) return false;
   return sub !== null && OM_GH_ALLOWED.has(sub);
 };
 
@@ -1548,8 +1576,11 @@ const omGitSubAllowed = (sub, rest) => {
   if (rest.some(omArgPoisoned)) return false;
   const statusShort = new Set(['-s', '-b', '-u', '-v', '-z', '-t']);
   const statusLong = new Set(['--short', '--branch', '--porcelain', '--verbose', '--untracked-files', '--no-renames']);
-  const logShort = new Set(['-n', '-p', '--pretty', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9']);
-  const logLong = new Set(['--oneline', '--max-count', '--no-decorate', '--decorate', '--pretty', '--abbrev-commit', '--no-merges']);
+  const logShort = new Set(['-n', '-p', '--pretty', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9', '-i', '-E', '-F']);
+  const logLong = new Set([
+    '--oneline', '--max-count', '--no-decorate', '--decorate', '--pretty', '--abbrev-commit', '--no-merges',
+    '--grep', '--author', '--committer', '--since', '--until', '--after', '--before', '--all', '--walk-reflogs',
+  ]);
   const diffShort = new Set(['-U', '-u', '-w', '-b', '--stat', '-1', '-2', '-3', '-4', '-5']);
   const diffLong = new Set(['--stat', '--name-only', '--numstat', '--no-color', '--color']);
   const fetchShort = new Set(['-p', '-q', '-v', '-n']);
@@ -1558,7 +1589,15 @@ const omGitSubAllowed = (sub, rest) => {
     case 'status':
       return omGitOptsExact(rest, { shorts: statusShort, longs: statusLong });
     case 'log':
-      return omGitOptsExact(rest, { shorts: logShort, longs: logLong, valueShort: new Set(['-n']), valueLong: new Set(['--max-count', '--pretty']), numericShort: true });
+      return omGitOptsExact(rest, {
+        shorts: logShort,
+        longs: logLong,
+        valueShort: new Set(['-n']),
+        valueLong: new Set([
+          '--max-count', '--pretty', '--grep', '--author', '--committer', '--since', '--until', '--after', '--before',
+        ]),
+        numericShort: true,
+      });
     case 'diff':
     case 'show':
       return omGitOptsExact(rest, { shorts: diffShort, longs: diffLong, valueShort: new Set(['-U', '-u']), valueLong: new Set() });
@@ -1595,24 +1634,17 @@ const omGitInvocationAllowed = args => {
 };
 
 const omNodeRunsInstallSwarm = args => {
-  const install = omSwarmMjsRealpath();
-  if (!install) return false;
+  const runner = omLauncherSwarmRunner() ?? omSwarmMjsRealpath();
+  if (!runner) return false;
   const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
   if (scriptAt === -1) return false;
   if (scriptAt !== 0) return false;
   const script = args[scriptAt];
   try {
     const abs = path.isAbsolute(script) ? script : path.resolve(script);
-    return fs.realpathSync.native(abs) === install;
+    return fs.realpathSync.native(abs) === runner;
   } catch { return false; }
 };
-
-const OM_SWARM_ALLOWED_TOP = new Set([
-  'status', 'brief', 'board', 'watch', 'jobs', 'tickets', 'run', 'integrate', 'merge', 'update', 'note',
-  'version', 'doctor', 'rollup', 'scope', 'msg', 'diagnose', 'go', 'change', 'handbuild', 'ticket', 'ask',
-  'decision', 'handoff', 'lesson', 'backlog', 'time', 'decide',
-]);
-const OM_SWARM_DENIED_TOP = new Set(['init', 'mutants', 'mutant', 'scaffold', 'eval', 'shell', 'exec']);
 
 const omSwarmRootValueOk = (raw, ctx) => {
   if (!ctx?.root || raw === undefined) return false;
@@ -1624,8 +1656,6 @@ const omSwarmRootValueOk = (raw, ctx) => {
     return real === want;
   } catch { return false; }
 };
-
-const OM_SWARM_RUN_FLAGS = new Set(['--lane', '--ticket', '--job', '--run', '--worktree', '--yes', '--no', '--dry-run', '--json', '--quiet', '-q', '-j']);
 
 const omSwarmArgsAfterGlobals = (args, ctx) => {
   let i = 0;
@@ -1644,109 +1674,41 @@ const omSwarmArgsAfterGlobals = (args, ctx) => {
       i += 1;
       continue;
     }
-    if (a.startsWith('-')) return { ok: false };
     break;
   }
-  return { ok: true, i, sub: (args[i] ?? '').toLowerCase(), rest: args.slice(i + 1) };
+  const parsed = swarmArgvSubcommand(args.slice(i));
+  if (!parsed) return { ok: false };
+  if (parsed.kind === 'top') return { ok: true, i, sub: '', rest: [] };
+  return { ok: true, i, sub: parsed.sub, rest: parsed.rest };
 };
 
-const omSwarmScopeReadOnly = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === '--yes' || a.startsWith('--yes='))) return false;
-  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
-  if (!verb || ['show', 'list', 'status', 'read', 'check', 'help'].includes(verb)) return true;
-  return false;
-};
-
-const omSwarmRunIntegrateFlagsOk = rest => {
-  let i = 0;
-  while (i < rest.length) {
-    const a = String(rest[i]);
-    const low = a.toLowerCase();
-    const eq = low.indexOf('=');
-    const name = eq === -1 ? low : low.slice(0, eq);
-    if (OM_SWARM_RUN_FLAGS.has(name) || OM_SWARM_RUN_FLAGS.has(a)) {
-      if (eq === -1 && (a === '--lane' || a === '--ticket' || a === '--job' || a === '--run' || a === '--worktree')) {
-        if (i + 1 >= rest.length) return false;
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
+const omSwarmSubcommandAllowed = (args, ctx) => {
+  if (!orchestratorSwarmSessionCwdOk(ctx?.root, ctx?.cwd ?? ctx?.root)) return false;
+  const parsed = omSwarmArgsAfterGlobals(args, ctx);
+  if (!parsed.ok) return false;
+  const { sub, rest } = parsed;
+  if (!sub) return true;
+  if (!swarmSubcommandAlwaysAllowed(sub, rest)) return false;
+  const vetSwarmManifestPositionals = positionals => {
+    if (positionals === null) return false;
+    for (const word of positionals) {
+      if (!ctx?.root && String(word).toLowerCase().endsWith('.json')) return false;
+      const vetted = omRunManifestVetted(ctx?.root, word);
+      if (!vetted.ok) return false;
     }
-    if (a.startsWith('-')) return false;
-    i += 1;
+    return true;
+  };
+  if (sub === 'run' || sub === 'go') {
+    if (!vetSwarmManifestPositionals(omSwarmRunGoPositionals(sub, rest))) return false;
+  }
+  if (sub === 'ticket') {
+    if (!vetSwarmManifestPositionals(omSwarmTicketPositionals(rest))) return false;
   }
   return true;
 };
 
-const omSwarmDecideReadOnly = rest => {
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (lower.some(a => a === '--yes' || a.startsWith('--yes='))) return false;
-  const verb = lower.find(a => a !== '' && !a.startsWith('-'));
-  if (!verb) return true;
-  return ['show', 'list', 'status', 'read', 'check', 'help'].includes(verb);
-};
-
-const omSwarmRunLikeAllowed = (sub, rest) => {
-  if (!['run', 'integrate', 'merge', 'update', 'go'].includes(sub)) return true;
-  const lower = rest.map(w => String(w).toLowerCase());
-  if (sub === 'merge') return lower.length === 1 && /^\d+$/.test(lower[0]);
-  if (sub === 'update') return lower.length === 0;
-  if (sub === 'go') return lower.length === 0 || (lower.length === 1 && !lower[0].startsWith('-'));
-  if (sub === 'run' || sub === 'integrate') {
-    const pos = rest.filter(a => a !== '' && !a.startsWith('-'));
-    if (!pos.every(a => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(a))) return false;
-    return omSwarmRunIntegrateFlagsOk(rest);
-  }
-  return false;
-};
-
-const omSwarmSubcommandAllowed = (args, ctx) => {
-  const parsed = omSwarmArgsAfterGlobals(args, ctx);
-  if (!parsed.ok) return false;
-  const { sub, rest } = parsed;
-  if (!sub || OM_SWARM_DENIED_TOP.has(sub)) return false;
-  if (!OM_SWARM_ALLOWED_TOP.has(sub)) return false;
-  if (!omSwarmRunLikeAllowed(sub, rest)) return false;
-  if (sub === 'tickets') {
-    let i = 0;
-    while (i < rest.length) {
-      const a = String(rest[i]);
-      const low = a.toLowerCase();
-      if (low === '--status' || low === '--kind') {
-        if (i + 1 >= rest.length) return false;
-        i += 2;
-        continue;
-      }
-      if (low.startsWith('--status=') || low.startsWith('--kind=')) { i += 1; continue; }
-      if (!a.startsWith('-')) { i += 1; continue; }
-      return false;
-    }
-    return true;
-  }
-  if (sub === 'handbuild') {
-    const verb = String(rest[0] ?? '').toLowerCase();
-    if (!verb || verb === '--help' || verb.startsWith('-')) return true;
-    if (HANDBUILD_OWNER_VERBS.has(verb)) return false;
-    return SWARM_HANDBUILD_FILE_OPS.has(verb);
-  }
-  if (sub === 'change') {
-    const lower = rest.map(w => String(w).toLowerCase());
-    return !lower.some(a => a === '--yes' || a.startsWith('--yes='));
-  }
-  if (sub === 'scope') return omSwarmScopeReadOnly(rest);
-  if (sub === 'decide') return omSwarmDecideReadOnly(rest);
-  if (sub === 'run' || sub === 'integrate' || sub === 'merge' || sub === 'update') return true;
-  if (sub === 'jobs' || sub === 'board' || sub === 'watch' || sub === 'brief' || sub === 'status') return true;
-  if (sub === 'tickets') return true;
-  if (sub === 'msg' || sub === 'note' || sub === 'diagnose' || sub === 'ticket' || sub === 'ask') return true;
-  if (sub === 'version' || sub === 'doctor' || sub === 'rollup' || sub === 'go') return true;
-  if (sub === 'decision' || sub === 'handoff' || sub === 'lesson' || sub === 'backlog' || sub === 'time' || sub === 'decide') return true;
-  return false;
-};
-
 const omSwarmInvocation = (cmd, args, ctx) => {
+  if (!orchestratorSwarmSessionCwdOk(ctx?.root, ctx?.cwd ?? ctx?.root)) return false;
   if (cmd === 'swarm') return omSwarmSubcommandAllowed(args, ctx);
   if (cmd === 'node' && omNodeRunsInstallSwarm(args)) {
     const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
@@ -1755,6 +1717,61 @@ const omSwarmInvocation = (cmd, args, ctx) => {
   }
   return false;
 };
+
+const omSegmentIsSwarmInvocation = (plain, k) => {
+  const rawCmd = plain[k];
+  if (!rawCmd || /^\$/.test(rawCmd)) return false;
+  const cmd = path.basename(rawCmd);
+  const args = plain.slice(k + 1);
+  if (cmd === 'swarm') return true;
+  if (cmd === 'node' && omNodeRunsInstallSwarm(args)) return true;
+  return false;
+};
+
+/** True when a command runs swarm with an effective cwd below the project root (for clearer deny reasons). */
+export function orchestratorSwarmSubfolderBlocked(command, ctx = {}) {
+  if (!ctx?.root) return false;
+  const text = String(command ?? '');
+  if (!text.trim()) return false;
+  try {
+    const tokenized = tokenize(text);
+    if (tokenized.unclosedQuote) return false;
+    const baseCwd = ctx.cwd ?? ctx.root;
+    let cwd = baseCwd;
+    const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
+    const cwdStack = [];
+    for (const words of tokenized) {
+      for (const boundary of words.subshellBefore ?? []) {
+        if (boundary === '(') cwdStack.push(cwd);
+        else {
+          if (!cwdStack.length) return true;
+          cwd = cwdStack.pop();
+        }
+        local.cwd = cwd;
+      }
+      const { plain } = omPlainWords(words);
+      let k = 0;
+      while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+        k += 1;
+      }
+      if (k < plain.length && path.basename(plain[k]) === 'cd') {
+        if (omCdHasRedirect(words)) return true;
+        const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
+        if (omResolveCd(target, local) === null) return true;
+        if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) continue;
+        cwd = omResolveCd(target, { ...local, cwd });
+        local.cwd = cwd;
+        continue;
+      }
+      if (k < plain.length && omSegmentIsSwarmInvocation(plain, k)) {
+        if (!orchestratorSwarmSessionCwdOk(ctx.root, local.cwd ?? ctx.root)) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const omPlainWords = words => {
   const plain = [];
@@ -1788,6 +1805,101 @@ const omSwarmFreeTextHeredoc = words => {
   return OM_SWARM_FREE_TEXT_SUBS.has(sub);
 };
 
+const omRelUnderOmManifestWriteArea = rel => {
+  const norm = String(rel ?? '').replace(/\\/g, '/').toLowerCase();
+  return norm.startsWith('coordination/manifests/') || norm.startsWith('.swarm/');
+};
+
+const omWriteTargetEscapesProject = rel => rel === '..' || rel.startsWith('../') || path.isAbsolute(rel);
+
+// Keep the starting cwd's logical/physical mismatch across subsequent cd steps.
+const omStartingCwdSymlink = ctx => {
+  if (ctx.omStartingCwdSymlink !== undefined) return ctx.omStartingCwdSymlink;
+  const cwd = ctx.cwd ?? ctx.root;
+  if (!cwd || !ctx.root) return false;
+  try {
+    return path.relative(ctx.root, cwd) !== path.relative(fs.realpathSync.native(ctx.root), fs.realpathSync.native(cwd));
+  } catch { return false; }
+};
+
+const omResolvePath = (p, ctx, redirect = false) => {
+  if (redirect && !path.isAbsolute(p) && p.split(path.sep)[0] === '..' && omStartingCwdSymlink(ctx)) return null;
+  let cwdBase = ctx.cwd ?? ctx.root;
+  try {
+    cwdBase = fs.realpathSync.native(cwdBase);
+  } catch {
+    cwdBase = ctx.cwd ?? ctx.root;
+  }
+  let components = p.split(path.sep).filter(Boolean);
+  let resolved = path.isAbsolute(p) ? path.parse(p).root : cwdBase;
+  if (path.isAbsolute(p) && ctx.root) {
+    try {
+      const rootReal = fs.realpathSync.native(ctx.root);
+      for (const root of [path.resolve(ctx.root), rootReal]) {
+        const rootComponents = root.split(path.sep).filter(Boolean);
+        if (rootComponents.every((component, i) => components[i] === component)) {
+          // Ignore links above the project, preserving every component below it
+          // (including links followed by ..) for the walk.
+          components = components.slice(rootComponents.length);
+          resolved = rootReal;
+          break;
+        }
+      }
+    } catch { /* keep the absolute walk when the root cannot be resolved */ }
+  }
+  let sawSymlink = false;
+  for (let i = 0; i < components.length; i += 1) {
+    if (i >= 64) return null;
+    const component = components[i];
+    if (component === '..' && sawSymlink) return null;
+    const next = path.join(resolved, component);
+    try {
+      const stat = fs.lstatSync(next);
+      if (stat.isSymbolicLink()) {
+        // Redirects follow even dangling leaf symlinks. Refuse all redirect leaf links.
+        if (redirect && i === components.length - 1) return null;
+        sawSymlink = true;
+        try { resolved = fs.realpathSync.native(next); } catch { return null; }
+      } else {
+        if (redirect && i === components.length - 1 && stat.isFile() && stat.nlink > 1) return null;
+        resolved = next;
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') return null;
+      resolved = next;
+    }
+  }
+  return { resolved, sawSymlink };
+};
+
+const omWriteTargetRel = (raw, ctx, expands) => {
+  if (expands || /^\$/.test(String(raw ?? ''))) return null;
+  if (!ctx?.root) return null;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(ctx.root);
+  } catch {
+    return null;
+  }
+  let p = String(raw ?? '');
+  if (p.startsWith('~/')) p = `${os.homedir()}${path.sep}${p.slice(2)}`;
+  const resolved = omResolvePath(p, ctx, true);
+  if (resolved === null) return null;
+  const rel = path.relative(rootReal, resolved.resolved);
+  if (omWriteTargetEscapesProject(rel)) return null;
+  return rel.split(path.sep).join('/');
+};
+
+const omRedirectWriteTargetRel = (words, ctx) => {
+  const wordExp = words.expands ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      return omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+    }
+  }
+  return null;
+};
+
 const omRedirectTokenHarmless = (words, i) => {
   const w = words[i];
   if (w === '2>&1') return { skip: 0 };
@@ -1797,16 +1909,208 @@ const omRedirectTokenHarmless = (words, i) => {
   return null;
 };
 
-const omRedirectsForbidden = words => {
+const omTestRunnerRedirectForbidden = words => {
+  for (let i = 0; i < words.length; i += 1) {
+    const w = words[i];
+    if (w === '2>&1' || w === '2>' || /[<>]/.test(w) || w.includes('&')) return true;
+    if (/^\d+$/.test(w) && (words[i + 1] === '>&' || words[i + 1] === '>')) return true;
+  }
+  return false;
+};
+
+const omRedirectsForbidden = (words, ctx) => {
   let heredocOnly = false;
+  const wordExp = words.expands ?? [];
   for (let i = 0; i < words.length; i += 1) {
     const harmless = omRedirectTokenHarmless(words, i);
     if (harmless) { i += harmless.skip; continue; }
     const w = words[i];
     if (w === '<<') { heredocOnly = true; continue; }
+    if (['>', '>>', '>|', '>&', '&>'].includes(w) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+      if (rel === null) return true;
+      if (omRelUnderOmManifestWriteArea(rel)) return true;
+      if (orchestratorWriteAllowedRel(rel)) continue;
+      return true;
+    }
     if (/[<>]/.test(w) || w.includes('&')) return true;
   }
   if (heredocOnly) return !omSwarmFreeTextHeredoc(words);
+  return false;
+};
+
+const OM_AGENT_LAUNCH_WRAPPERS = new Set([
+  'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'stdbuf', 'caffeinate', 'sudo', 'xargs',
+  'builtin', 'setsid', 'chrt', 'doas',
+]);
+const OM_AGENT_CLI = new Set(['claude', 'codex', 'cursor-agent']);
+const OM_AGENT_LAUNCH_MAX_DEPTH = 4;
+
+const omAgentPackageToken = token => {
+  if (!token || token.startsWith('-')) return null;
+  const at = token.startsWith('@') ? token.indexOf('@', 1) : token.indexOf('@');
+  const pkg = at === -1 ? token : token.slice(0, at);
+  if (pkg === '@anthropic-ai/claude-code') return 'claude';
+  const base = path.basename(pkg);
+  if (OM_AGENT_CLI.has(base) || base === 'claude-code') return base === 'claude-code' ? 'claude' : base;
+  return null;
+};
+
+const omSkipPackageRunnerFlags = (plain, i) => {
+  while (i < plain.length) {
+    const a = plain[i];
+    if (a === '--') { i += 1; break; }
+    if (!a.startsWith('-')) break;
+    const takes = a === '-p' || a === '--package' || a === '--prefix' || a === '--node-options'
+      || a === '--workspace' || a === '-w' || a === '--cwd' || a === '-C';
+    i += takes ? 2 : 1;
+  }
+  return i;
+};
+
+const omPackageRunnerAgentArgs = (plain, programIndex) => {
+  const cmd = plain[programIndex];
+  let i = programIndex + 1;
+  if (cmd === 'npx' || cmd === 'bunx') {
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'pnpm') {
+    const sub = plain[i];
+    if (sub !== 'dlx' && sub !== 'exec') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'yarn') {
+    if (plain[i] !== 'dlx') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  if (cmd === 'npm') {
+    if (plain[i] !== 'exec') return null;
+    i += 1;
+    i = omSkipPackageRunnerFlags(plain, i);
+    const pkg = plain[i];
+    if (!omAgentPackageToken(pkg)) return null;
+    return plain.slice(i + 1);
+  }
+  return null;
+};
+
+const omSkipToAgentProgram = plain => {
+  let k = 0;
+  let wrapperName = null;
+  while (k < plain.length) {
+    if (SHELL_KEYWORDS.has(plain[k])) { k += 1; continue; }
+    if (!wrapperName && /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    if (OM_AGENT_LAUNCH_WRAPPERS.has(plain[k])) {
+      wrapperName = plain[k];
+      k += 1;
+      continue;
+    }
+    if (wrapperName === 'env') {
+      if (plain[k] === '-S' || plain[k] === '--split-string') {
+        return { index: k + 2, envSplit: plain[k + 1] };
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) { k += 1; continue; }
+    }
+    if (wrapperName === 'nice' && /^-\d+$/.test(plain[k])) { k += 1; continue; }
+    if (wrapperName === 'command' && (plain[k] === '-v' || plain[k] === '-V')) {
+      return { index: plain.length };
+    }
+    if (wrapperName && plain[k].startsWith('-')) {
+      const takes = (WRAPPER_VALUE_OPTS[wrapperName] ?? []).includes(plain[k]);
+      k += takes ? 2 : 1;
+      continue;
+    }
+    if (wrapperName === 'timeout' && /^\d+(?:\.\d+)?[smhd]?$/.test(plain[k])) {
+      k += 1;
+      wrapperName = null;
+      continue;
+    }
+    if (wrapperName) wrapperName = null;
+    break;
+  }
+  return { index: k };
+};
+
+const omNodeScriptIsAgent = scriptToken => {
+  if (!scriptToken || scriptToken.startsWith('-')) return false;
+  const base = path.basename(scriptToken);
+  if (base === 'claude' || OM_AGENT_CLI.has(base)) return true;
+  return base === 'cli.js' && /anthropic-ai\/claude-code/.test(scriptToken);
+};
+
+const omPlainWordsFromSegment = words => {
+  const plain = [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '&>', '<', '<<<', '<<'].includes(words[i])) {
+      if (words[i] !== '<<') i += 1;
+      continue;
+    }
+    if (/^\d+$/.test(words[i]) && ['>', '>>', '>&'].includes(words[i + 1])) continue;
+    plain.push(words[i]);
+  }
+  return plain;
+};
+
+const omAgentLaunchInText = (commandText, depth = 0) => {
+  if (depth > OM_AGENT_LAUNCH_MAX_DEPTH) return false;
+  const text = String(commandText ?? '');
+  if (!text) return false;
+  for (const sub of substitutions(text)) {
+    if (omAgentLaunchInText(sub, depth + 1)) return true;
+  }
+  for (const words of tokenize(text)) {
+    const plain = omPlainWordsFromSegment(words);
+    const { index, envSplit } = omSkipToAgentProgram(plain);
+    if (envSplit !== undefined && omAgentLaunchInText(envSplit, depth + 1)) return true;
+    if (index >= plain.length) continue;
+    const cmd = path.basename(plain[index]);
+    const args = plain.slice(index + 1);
+    if (OM_AGENT_CLI.has(cmd) || cmd === 'claude') return true;
+    if (omPackageRunnerAgentArgs(plain, index) !== null) return true;
+    if (cmd === 'node') {
+      const scriptAt = args.findIndex(a => a !== '' && !a.startsWith('-'));
+      if (scriptAt !== -1 && omNodeScriptIsAgent(args[scriptAt])) return true;
+    }
+    if (SHELLS.has(cmd)) {
+      const at = args.findIndex(codeFlagFor(cmd));
+      if (at !== -1 && args[at + 1] !== undefined && omAgentLaunchInText(args[at + 1], depth + 1)) return true;
+    }
+    if (cmd === 'eval' && args.length && omAgentLaunchInText(args.join(' '), depth + 1)) return true;
+  }
+  return false;
+};
+
+/** True when a command line launches a paid agent CLI (position-based; not mere mention of the word claude). */
+export function orchestratorModeAgentLaunchBlocked(command) {
+  try {
+    return omAgentLaunchInText(command, 0);
+  } catch {
+    return true;
+  }
+};
+
+const omOrchestratorClaudeHomeReadOk = (abs, home) => {
+  let homeReal;
+  try { homeReal = fs.realpathSync.native(home); } catch { return false; }
+  let absReal;
+  try { absReal = fs.realpathSync.native(abs); } catch { return false; }
+  const rel = path.relative(homeReal, absReal);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  const norm = rel.split(path.sep).join('/');
+  if (norm === '.claude.json') return false;
+  if (norm === '.claude/projects' || norm.startsWith('.claude/projects/')) return false;
+  if (norm === '.claude' || norm.startsWith('.claude/')) return true;
   return false;
 };
 
@@ -1824,7 +2128,150 @@ const omSensitiveAbs = (abs, home) => {
 const omOperandUnsafe = raw => {
   const s = String(raw ?? '');
   if (!s || s === '-') return false;
+  if (s === '~' || s.startsWith('~/')) return false;
   return /[$`*?[\{~]/.test(s);
+};
+
+const omPackageScripts = root => {
+  if (!root) return null;
+  try {
+    const p = path.join(fs.realpathSync.native(root), 'package.json');
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const scripts = data?.scripts;
+    return scripts && typeof scripts === 'object' && !Array.isArray(scripts) ? scripts : {};
+  } catch {
+    return null;
+  }
+};
+
+// Any file the orchestrator may write (docs/plans, .swarm, manifests, handoffs, TASK.md...) counts as code as a runner operand, whatever its extension.
+const omTestOperandOrchestratorOwnedRel = norm => orchestratorOwnRel(norm) || orchestratorWriteAllowedRel(norm);
+
+const OM_BARE_SCAN_MAX_DEPTH = 8;
+const OM_BARE_SCAN_MAX_ENTRIES = 5000;
+const OM_BARE_SCAN_SKIP_PREFIXES = [
+  '.swarm/workspaces/',
+  '.swarm/worktrees/',
+  '.swarm/runs/',
+  '.swarm/backups/',
+  '.swarm/orchestrator-mode/',
+];
+
+const omBareScanSkipRel = normRel => {
+  const norm = String(normRel ?? '').replace(/\\/g, '/').toLowerCase();
+  if (!norm) return true;
+  if (norm === 'node_modules' || norm.startsWith('node_modules/')) return true;
+  return OM_BARE_SCAN_SKIP_PREFIXES.some(p => norm === p.slice(0, -1) || norm.startsWith(p));
+};
+
+/** Fail closed: true when orchestrator-owned folders contain runnable code/tests (blocks bare test runs). */
+export function orchestratorOwnFoldersBlockBareTestRun(root) {
+  if (!root) return true;
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync.native(root);
+  } catch {
+    return true;
+  }
+  let entriesSeen = 0;
+  const scanDir = (absDir, relPosix, depth) => {
+    if (depth > OM_BARE_SCAN_MAX_DEPTH) return 'limit';
+    if (omBareScanSkipRel(relPosix)) return 'ok';
+    let names;
+    try {
+      names = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return 'error';
+    }
+    for (const ent of names) {
+      entriesSeen += 1;
+      if (entriesSeen > OM_BARE_SCAN_MAX_ENTRIES) return 'limit';
+      const name = ent.name;
+      const childRel = relPosix ? `${relPosix}/${name}` : name;
+      const normChild = childRel.replace(/\\/g, '/').toLowerCase();
+      if (omBareScanSkipRel(normChild)) continue;
+      const childAbs = path.join(absDir, name);
+      let st;
+      try {
+        st = fs.lstatSync(childAbs);
+      } catch {
+        return 'error';
+      }
+      if (st.isSymbolicLink()) {
+        if (orchestratorOwnForbiddenWriteRel(normChild)) return 'hit';
+        continue;
+      }
+      if (st.isDirectory()) {
+        const sub = scanDir(childAbs, normChild, depth + 1);
+        if (sub !== 'ok') return sub;
+        continue;
+      }
+      if (st.isFile() && orchestratorOwnForbiddenWriteRel(normChild)) return 'hit';
+    }
+    return 'ok';
+  };
+  const scanPrefixes = [
+    ...orchestratorBareTestScanRelPrefixes(),
+    ...TOOL_DIRS.map(d => String(d).toLowerCase()),
+  ];
+  for (const prefix of scanPrefixes) {
+    const relTop = prefix.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+    const abs = path.join(rootReal, ...relTop.split('/').filter(Boolean));
+    let st;
+    try {
+      st = fs.lstatSync(abs);
+    } catch (err) {
+      if (err?.code === 'ENOENT') continue;
+      return true;
+    }
+    if (!st.isDirectory()) continue;
+    const outcome = scanDir(abs, relTop, 0);
+    if (outcome === 'hit' || outcome === 'limit' || outcome === 'error') return true;
+  }
+  return false;
+}
+
+const omTestOperandOk = (raw, ctx) => {
+  if (!omReadOperandOk(raw, ctx)) return false;
+  if (!ctx.root || raw === '-' || raw === undefined) return true;
+  const home = ctx.home ?? os.homedir();
+  let p = String(raw);
+  if (p === '~' || p.startsWith('~/')) {
+    if (p === '~') return false;
+    p = path.join(home, p.slice(2));
+  }
+  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
+  let real;
+  try { real = fs.realpathSync.native(abs); } catch {
+    try {
+      real = fs.realpathSync.native(path.dirname(abs));
+    } catch {
+      const relGuess = insideProject(ctx.root, abs);
+      if (relGuess === null) return false;
+      return !omTestOperandOrchestratorOwnedRel(relGuess.replace(/\\/g, '/').toLowerCase());
+    }
+    if (omSensitiveAbs(real, home)) return false;
+    const relParent = insideProject(ctx.root, real);
+    if (relParent === null) return false;
+    return !omTestOperandOrchestratorOwnedRel(relParent.replace(/\\/g, '/').toLowerCase());
+  }
+  const rel = insideProject(ctx.root, real);
+  if (rel === null) return false;
+  return !omTestOperandOrchestratorOwnedRel(rel.replace(/\\/g, '/').toLowerCase());
+};
+
+const omOrchestratorTestRunAllowed = (segment, ctx) => {
+  if (!ctx?.root) return false;
+  const packageScripts = omPackageScripts(ctx.root);
+  const runCtx = {
+    ...ctx,
+    inProject: raw => omReadOperandOk(raw, ctx),
+    testOperandOk: raw => omTestOperandOk(raw, ctx),
+    packageScripts,
+  };
+  if (!localTestRunAllowed(segment, runCtx)) return false;
+  if (localTestRunIsBare(segment, runCtx) && orchestratorOwnFoldersBlockBareTestRun(ctx.root)) return false;
+  return true;
 };
 
 const omReadOperandOk = (raw, ctx) => {
@@ -1845,9 +2292,11 @@ const omReadOperandOk = (raw, ctx) => {
       return insideProject(ctx.root, abs) !== null;
     }
     if (omSensitiveAbs(real, home)) return false;
+    if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
     return insideProject(ctx.root, real) !== null;
   }
   if (omSensitiveAbs(real, home)) return false;
+  if (omOrchestratorClaudeHomeReadOk(real, home)) return true;
   return insideProject(ctx.root, real) !== null;
 };
 
@@ -1925,15 +2374,9 @@ const omJqOk = (args, ctx) => {
 const omCdTargetOk = (target, ctx) => {
   if (!ctx.root || !target || omOperandUnsafe(target)) return false;
   if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(String(target)) && !String(target).startsWith('~/')) return false;
-  const home = ctx.home ?? os.homedir();
-  let p = String(target);
-  if (p === '~' || p.startsWith('~/')) {
-    if (p === '~') return false;
-    p = path.join(home, p.slice(2));
-  }
-  const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
-  let real;
-  try { real = fs.realpathSync.native(abs); } catch { return false; }
+  if (target === '~') return false;
+  const real = omResolveCd(target, ctx);
+  if (real === null) return false;
   const rel = insideProject(ctx.root, real);
   if (rel === null) return false;
   const norm = rel.replace(/\\/g, '/').toLowerCase();
@@ -1941,11 +2384,51 @@ const omCdTargetOk = (target, ctx) => {
   return true;
 };
 
+const omRealOrNull = p => {
+  try { return fs.realpathSync.native(p); } catch { return null; }
+};
+
+const OM_CD_ROOT_ENV_FORMS = new Set(['$CLAUDE_PROJECT_DIR', '${CLAUDE_PROJECT_DIR}']);
+
+// Refuse all cd options, including `-`: the hook cannot model their semantics.
+const omCdHasDash = cdArgs => cdArgs.some(a => a.startsWith('-'));
+const omCdHasRedirect = words => words.some(w => /[<>]/.test(w));
+
+/** True when a `cd` target lands exactly on the project root (real path), by path, or "$CLAUDE_PROJECT_DIR". */
+const omCdRootTarget = (target, ctx) => {
+  if (!ctx?.root || target === undefined || target === '') return false;
+  const rootReal = omRealOrNull(ctx.root);
+  if (!rootReal) return false;
+  const t = String(target);
+  if (OM_CD_ROOT_ENV_FORMS.has(t)) {
+    const envDir = process.env.CLAUDE_PROJECT_DIR;
+    return !!envDir && omRealOrNull(envDir) === rootReal && omResolveCd(t, ctx) === rootReal;
+  }
+  if (omOperandUnsafe(t) || t === '~' || t.startsWith('~')) return false;
+  if (process.env.CDPATH && String(process.env.CDPATH).trim() && !path.isAbsolute(t)) return false;
+  return omResolveCd(t, ctx) === rootReal;
+};
+
+const omCdAllowed = (target, ctx) => omCdRootTarget(target, ctx) || omCdTargetOk(target, ctx);
+
+// A cd that is not the first half of `cd DIR && ...` only passes when it returns to the project root (a standalone `cd`, or before `;`).
+const omCdStepAllowed = (words, target, ctx) => {
+  if (omCdHasRedirect(words)) return false;
+  if (words.sepAfter === '&&') return omCdAllowed(target, ctx);
+  if (words.sepAfter !== ';' || words.piped) return false;
+  return omCdRootTarget(target, ctx);
+};
+
 const omResolveCd = (target, ctx) => {
   const home = ctx.home ?? os.homedir();
   let p = String(target);
-  if (p.startsWith('~/')) p = path.join(home, p.slice(2));
-  return path.isAbsolute(p) ? path.resolve(p) : path.resolve(ctx.cwd ?? ctx.root, p);
+  if (OM_CD_ROOT_ENV_FORMS.has(p)) p = process.env.CLAUDE_PROJECT_DIR ?? ctx.root;
+  // Do not normalize away links followed by .. before walking the target.
+  if (p.startsWith('~/')) p = `${home}${path.sep}${p.slice(2)}`;
+  if (p.split(path.sep).includes('..') && omStartingCwdSymlink(ctx)) return null;
+  const result = omResolvePath(p, ctx);
+  // Shell cd is logical: any link can make a later cd .. diverge from realpath.
+  return result === null || result.sawSymlink ? null : omRealOrNull(result.resolved);
 };
 
 const omNaturallySmall = (cmd, args) => {
@@ -1961,7 +2444,7 @@ const omNaturallySmall = (cmd, args) => {
 };
 
 const omSimpleCommandAllowed = (words, commandText, ctx) => {
-  if (omRedirectsForbidden(words)) return false;
+  if (omRedirectsForbidden(words, ctx)) return false;
   const { plain, expands } = omPlainWords(words);
   let k = 0;
   for (;;) {
@@ -1975,16 +2458,44 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (expands[k] || /^\$/.test(plain[k])) return false;
   const rawCmd = plain[k];
   if (rawCmd.includes('/') && rawCmd !== '2>&1') {
-    if (!(rawCmd.endsWith('swarm.mjs') && omNodeRunsInstallSwarm(plain.slice(k + 1)))) return false;
+    const trustedNode = path.basename(rawCmd) === 'node' && omTrustedCommandWordOk(rawCmd, 'node');
+    const trustedSwarmMjs = rawCmd.endsWith('swarm.mjs') && omNodeRunsInstallSwarm(plain.slice(k + 1));
+    if (!trustedNode && !trustedSwarmMjs) return false;
   }
   const cmd = path.basename(rawCmd);
   const args = plain.slice(k + 1);
+  const segment = plain.slice(k);
+  const trailingHelp = segment.length > 1 && ['-h', '--help', '--version'].includes(String(segment[segment.length - 1]));
+  if (trailingHelp) {
+    if (!helpOnly(segment)) return false;
+    const argsNoHelp = args.slice(0, -1);
+    if (cmd === 'git') return omGitInvocationAllowed(argsNoHelp);
+    if (cmd === 'gh') return omGhReadOnly(argsNoHelp, commandText, words.piped || words.sepAfter === '|');
+    if (omSwarmInvocation(cmd, argsNoHelp, ctx)) return true;
+    const base = segment.slice(0, -1);
+    if (ctx.root && readOnlyCommandAllowed(base)) {
+      if (['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) {
+        return omGrepRgOk(cmd, argsNoHelp) && omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      }
+      if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(argsNoHelp) && omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      if (cmd === 'ls') return omLsOk(argsNoHelp, ctx);
+      if (cmd === 'wc') return omFilterOperandsOk(cmd, argsNoHelp, ctx);
+      if (cmd === 'cat') {
+        const pos = argsNoHelp.filter(a => a !== '' && !a.startsWith('-'));
+        return pos.length > 0 && pos.every(p => omReadOperandOk(p, ctx));
+      }
+      return true;
+    }
+    return false;
+  }
   if (cmd === 'git' && !omTrustedCommandWordOk(rawCmd, 'git')) return false;
   if (cmd === 'gh' && !omTrustedCommandWordOk(rawCmd, 'gh')) return false;
   if (cmd === 'vercel' && !omTrustedCommandWordOk(rawCmd, 'vercel')) return false;
   if (cmd === 'node' && !omTrustedCommandWordOk(rawCmd, 'node')) return false;
   if (cmd === 'swarm' && !omSwarmCommandWordOk(rawCmd)) return false;
   if (cmd === 'cd') {
+    if (omCdHasRedirect(words)) return false;
+    if (omCdHasDash(args)) return false;
     const target = args.filter(a => a !== '' && !a.startsWith('-'))[0];
     return target !== undefined && omCdTargetOk(target, ctx);
   }
@@ -2017,6 +2528,18 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
   if (cmd === 'ls') return omLsOk(args, ctx);
   if (cmd === 'wc') return omFilterOperandsOk(cmd, args, ctx);
   const feedsPipe = words.sepAfter === '|';
+  if (ctx.root && readOnlyCommandAllowed(segment)) {
+    if (['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) {
+      return omGrepRgOk(cmd, args) && omFilterOperandsOk(cmd, args, ctx);
+    }
+    if (cmd === 'head' || cmd === 'tail') return omHeadTailLinesOk(args) && omFilterOperandsOk(cmd, args, ctx);
+    if (cmd === 'ls') return omLsOk(args, ctx);
+    if (cmd === 'wc') return omFilterOperandsOk(cmd, args, ctx);
+    if (cmd === 'cat') {
+      const pos = args.filter(a => a !== '' && !a.startsWith('-'));
+      return pos.length > 0 && pos.every(p => omReadOperandOk(p, ctx));
+    }
+  }
   if (!words.piped && !feedsPipe && ['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) return false;
   if (!words.piped && !feedsPipe && (cmd === 'cat' || cmd === 'cut' || cmd === 'sort' || cmd === 'uniq' || cmd === 'jq')) return false;
   if (feedsPipe && ['grep', 'egrep', 'fgrep', 'rg'].includes(cmd)) return omGrepRgOk(cmd, args) && omFilterOperandsOk(cmd, args, ctx);
@@ -2032,23 +2555,87 @@ const omSimpleCommandAllowed = (words, commandText, ctx) => {
     if (cmd === 'jq') return omJqOk(args, ctx);
     return omSortUniqOk(cmd, args);
   }
+  if (!words.piped && !feedsPipe && omOrchestratorTestRunAllowed(segment, ctx)) {
+    if (omTestRunnerRedirectForbidden(words)) return false;
+    return true;
+  }
   if (omNaturallySmall(cmd, args)) return true;
   if (cmd === 'true' || cmd === 'false' || cmd === ':') return true;
+  const redirectRel = omRedirectWriteTargetRel(words, ctx);
+  if (
+    redirectRel !== null
+    && orchestratorWriteAllowedRel(redirectRel)
+    && !omRelUnderOmManifestWriteArea(redirectRel)
+    && !words.piped
+    && !feedsPipe
+    && (cmd === 'echo' || cmd === 'printf')
+  ) {
+    return true;
+  }
   return false;
 };
 
-const omValidateTokenized = (tokenized, ctx) => {
+const OM_COMPOUND_SEPS = new Set(['&&', ';', '||', '|']);
+
+const omCommandIsCompound = (tokenized, commandText) => {
+  if (tokenized.length > 1) return true;
+  if (tokenized.some(w => OM_COMPOUND_SEPS.has(w.sepAfter))) return true;
+  if (/[^&]&[^&>]/.test(String(commandText ?? ''))) return true;
+  return false;
+};
+
+const omWordsRedirectManifestArea = (words, ctx) => {
+  const wordExp = words.expands ?? [];
+  for (let i = 0; i < words.length; i += 1) {
+    if (['>', '>>', '>|', '>&', '&>'].includes(words[i]) && words[i + 1] !== undefined && !/^&?\d+$/.test(words[i + 1])) {
+      const rel = omWriteTargetRel(words[i + 1], ctx, wordExp[i + 1]);
+      if (rel && omRelUnderOmManifestWriteArea(rel)) return true;
+    }
+  }
+  return false;
+};
+
+const omSegmentInvokesSwarmRunGoTicket = (words, ctx) => {
+  const { plain } = omPlainWords(words);
+  let k = 0;
+  while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+    k += 1;
+  }
+  if (k >= plain.length) return false;
+  const cmd = path.basename(plain[k]);
+  const args = plain.slice(k + 1);
+  return omSwarmInvocation(cmd, args, ctx);
+};
+
+const omCompoundManifestWriteWithSwarmBlocked = (commandText, tokenized, ctx) => {
+  if (!ctx?.root || !omCommandIsCompound(tokenized, commandText)) return false;
+  let hasSwarm = false;
+  for (const words of tokenized) {
+    if (omSegmentInvokesSwarmRunGoTicket(words, ctx)) hasSwarm = true;
+  }
+  if (!hasSwarm) return false;
+  const analysis = analyzeShell(String(commandText ?? ''), { root: ctx.root, cwd: ctx.cwd ?? ctx.root });
+  if ([...analysis.writes].some(omRelUnderOmManifestWriteArea)) return true;
+  for (const words of tokenized) {
+    if (omWordsRedirectManifestArea(words, ctx)) return true;
+  }
+  return false;
+};
+
+const omValidateTokenized = (tokenized, ctx, commandText = '') => {
+  if (omCompoundManifestWriteWithSwarmBlocked(commandText, tokenized, ctx)) return false;
   const baseCwd = ctx.cwd ?? ctx.root;
-  const cwdStack = [baseCwd];
+  const cwdStack = [];
   let cwd = baseCwd;
-  const local = { ...ctx, cwd };
-  let subshellDepth = 0;
+  const local = { ...ctx, cwd, omStartingCwdSymlink: omStartingCwdSymlink(ctx) };
   for (let wi = 0; wi < tokenized.length; wi += 1) {
     const words = tokenized[wi];
-    if (words.sepAfter === ')') {
-      subshellDepth = Math.max(0, subshellDepth - 1);
-      if (cwdStack.length > 1) cwdStack.pop();
-      cwd = cwdStack[cwdStack.length - 1];
+    for (const boundary of words.subshellBefore ?? []) {
+      if (boundary === '(') cwdStack.push(cwd);
+      else {
+        if (!cwdStack.length) return false;
+        cwd = cwdStack.pop();
+      }
       local.cwd = cwd;
     }
     const { plain } = omPlainWords(words);
@@ -2058,13 +2645,10 @@ const omValidateTokenized = (tokenized, ctx) => {
       k += 1;
     }
     if (k < plain.length && path.basename(plain[k]) === 'cd') {
-      if (subshellDepth > 0) return false;
-      if (words.sepAfter !== '&&') return false;
       const target = plain.slice(k + 1).filter(a => a !== '' && !a.startsWith('-'))[0];
-      if (!omCdTargetOk(target, local)) return false;
+      if (omCdHasDash(plain.slice(k + 1)) || !omCdStepAllowed(words, target, local)) return false;
       cwd = omResolveCd(target, { ...local, cwd });
       local.cwd = cwd;
-      cwdStack[cwdStack.length - 1] = cwd;
       continue;
     }
     if (!omSimpleCommandAllowed(words, '', local)) return false;
@@ -2079,8 +2663,6 @@ const omValidateTokenized = (tokenized, ctx) => {
         }
       }
     }
-    if (words.sepAfter === '(') subshellDepth += 1;
-    if (words.sepAfter === '(') cwdStack.push(cwd);
     if (words.sepAfter === '|') {
       let j = wi + 1;
       while (j < tokenized.length && tokenized[j - 1].sepAfter === '|') j += 1;
@@ -2110,6 +2692,7 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
   const text = String(command ?? '');
   if (!text.trim()) return true;
   if (orchestratorCommandTooLong(text)) return false;
+  if (orchestratorModeAgentLaunchBlocked(text)) return false;
   if (/<\(|>\(/.test(text)) return false;
   try {
     for (const sub of substitutions(text)) {
@@ -2117,7 +2700,19 @@ export function orchestratorModeCommandAllowed(command, ctx = {}) {
     }
     const tokenized = tokenize(text);
     if (tokenized.unclosedQuote) return false;
-    return omValidateTokenized(tokenized, ctx);
+    if (omValidateTokenized(tokenized, ctx, text)) return true;
+    if (tokenized.length !== 1) return false;
+    const words = tokenized[0];
+    const { plain } = omPlainWords(words);
+    let k = 0;
+    while (k < plain.length && (SHELL_KEYWORDS.has(plain[k]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k]))) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(plain[k])) return false;
+      k += 1;
+    }
+    const segment = plain.slice(k);
+    if (!omOrchestratorTestRunAllowed(segment, ctx)) return false;
+    if (omTestRunnerRedirectForbidden(words)) return false;
+    return true;
   } catch {
     return false;
   }

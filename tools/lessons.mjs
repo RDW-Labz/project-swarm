@@ -197,7 +197,10 @@ async function withStoreLock(file, action) {
   let handle;
   try { handle = await fs.open(lock, 'wx', 0o600); } catch { throw ioError('file'); }
   try { return await action(); }
-  finally { await handle.close().catch(() => {}); await fs.unlink(lock).catch(() => {}); }
+  finally {
+    await handle.close().catch((error) => { console.error('[tools/lessons.mjs] withStoreLock handle.close:', error?.message ?? error); });
+    await fs.unlink(lock).catch((error) => { console.error('[tools/lessons.mjs] withStoreLock fs.unlink(lock):', error?.message ?? error); });
+  }
 }
 
 // Prepare every replacement and rollback copy before changing any destination.
@@ -229,8 +232,8 @@ async function replaceFiles(changes) {
     throw ioError('file');
   } finally {
     for (const entry of staged) {
-      await fs.unlink(entry.next).catch(() => {});
-      if (!recoveryFailed) await fs.unlink(entry.backup).catch(() => {});
+      await fs.unlink(entry.next).catch((error) => { if (error?.code !== 'ENOENT') console.error('[tools/lessons.mjs] replaceFiles unlink temp:', error?.message ?? error); });
+      if (!recoveryFailed) await fs.unlink(entry.backup).catch((error) => { if (error?.code !== 'ENOENT') console.error('[tools/lessons.mjs] replaceFiles unlink backup:', error?.message ?? error); });
     }
   }
 }
@@ -408,9 +411,15 @@ export async function lessonAreas(root) {
     const entries = await fs.readdir(path.join(root, 'coordination', 'skills'), { withFileTypes: true });
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       if (!entry.isDirectory() || !AREA.test(entry.name) || areas.includes(entry.name)) continue;
-      try { if ((await fs.lstat(path.join(root, 'coordination', 'skills', entry.name, 'SKILL.md'))).isFile()) areas.push(entry.name); } catch { /* no skill file */ }
+      try {
+        if ((await fs.lstat(path.join(root, 'coordination', 'skills', entry.name, 'SKILL.md'))).isFile()) areas.push(entry.name);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/lessons.mjs] lessonAreas SKILL.md lstat:', error?.message ?? error);
+      }
     }
-  } catch { /* no skills folder */ }
+  } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/lessons.mjs] lessonAreas skills readdir:', error?.message ?? error);
+  }
   return areas;
 }
 

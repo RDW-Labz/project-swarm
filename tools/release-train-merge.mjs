@@ -154,7 +154,9 @@ async function atomicWriteReleaseTrainStore(root, text) {
     await fs.writeFile(tmp, text, { flag: 'wx', mode: 0o644 });
     await fs.rename(tmp, abs);
   } catch (error) {
-    await fs.unlink(tmp).catch(() => {});
+    await fs.unlink(tmp).catch((unlinkError) => {
+      if (unlinkError?.code !== 'ENOENT') console.error('[tools/release-train-merge.mjs] atomic write tmp unlink:', unlinkError?.message ?? unlinkError);
+    });
     throw error;
   }
 }

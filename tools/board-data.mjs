@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { runTotals, jobSpend, laneDayTotals } from './spend.mjs';
 import { readLedger, readyTickets as ticketsReadyToRun } from './tickets.mjs';
+import { ticketCountsOf } from './ticket-counts.mjs';
 import { mainWorktreeRoot, projectSummary, worktreeFamily } from './project-spend.mjs';
 import { isScratchRoot } from './projects.mjs';
 import { listLessons } from './lesson-store.mjs';
@@ -28,6 +29,101 @@ import { splitQuality } from './split-quality.mjs';
 import { readScorecards, scorecardHistory } from './benchmark-scorecard.mjs';
 import { handledForProject } from './handled.mjs';
 import { overviewPinnedVersion } from './pins.mjs';
+import { historyFile as boardHistoryFile } from './history.mjs';
+
+/** Metadata only on idle ticks. Directory listings also catch atomic replacement/new runs.
+ * Families are resolved by the server once per full snapshot, never in this loop. */
+export function createBoardInputDetector({ env = process.env, lanesFile = path.join(lanesDir(env), 'lanes.json'), historyFile = boardHistoryFile(env) } = {}) {
+  const previous = new Map();
+  let shared = new Map();
+  const sharedProjects = new Map();
+  async function stamp(file) {
+    try { const s = await fs.stat(file); return `${s.mtimeMs}:${s.size}`; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return '-'; throw error; }
+  }
+  async function tree(dir, depth = 2) {
+    const rows = [[dir, await stamp(dir)]];
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return rows; throw error; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.isSymbolicLink()) continue;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory() && depth > 0) rows.push(...await tree(file, depth - 1));
+      else if (entry.isFile()) rows.push([file, await stamp(file)]);
+    }
+    return rows;
+  }
+  async function projectStamp(root) {
+    const base = path.join(root, '.swarm');
+    const files = ['orchestrator/events.ndjson', 'orchestrator/state.json', 'orchestrator/inbox.json', 'orchestrator/inbox.ndjson', 'inbox.json', 'inbox.ndjson', 'state.json'];
+    const rows = await Promise.all(files.map(async file => [file, await stamp(path.join(base, file))]));
+    for (const dir of ['project', 'inbox', 'handbuild']) rows.push(...await tree(path.join(base, dir)));
+    const runs = path.join(base, 'runs');
+    let entries = [];
+    try { entries = await fs.readdir(runs, { withFileTypes: true }); }
+    catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
+    rows.push(...await Promise.all(entries.filter(e => e.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))
+      .map(async e => [e.name, await stamp(path.join(runs, e.name, 'state.json'))])));
+    return JSON.stringify(rows);
+  }
+  return {
+    async scan(projects) {
+      const changed = new Set();
+      const nextPrevious = new Map();
+      const rootRequests = new Map();
+      await Promise.all(projects.map(async p => {
+        if (!p.root) return;
+        const key = `${p.id}:${p.root}`;
+        if (!rootRequests.has(p.root)) rootRequests.set(p.root, projectStamp(p.root));
+        const value = await rootRequests.get(p.root);
+        if (previous.has(key) && previous.get(key) !== value) changed.add(p.id);
+        nextPrevious.set(key, value);
+      }));
+      // Shared stores are parsed only when their metadata changes, then partitioned
+      // by project. A slot release must not rebuild every project on the board.
+      const nextShared = new Map();
+      const nextSharedProjects = new Map(sharedProjects);
+      for (const file of [lanesFile, historyFile]) {
+        const value = await stamp(file);
+        nextShared.set(file, value);
+        if (shared.get(file) === value) continue;
+        const byProject = new Map(projects.map(p => [p.id, []]));
+        const append = (id, value) => { if (byProject.has(id)) byProject.get(id).push(value); };
+        const body = await fs.readFile(file, 'utf8').catch(error => {
+          if (error.code === 'ENOENT') return ''; throw error;
+        });
+        if (file === lanesFile) {
+          const lanes = body ? JSON.parse(body) : {};
+          for (const [lane, slots] of Object.entries(lanes.slots ?? {})) for (const slot of slots ?? []) append(slot.project, { lane, slot });
+          for (const item of Object.values(lanes.demand ?? {})) append(item.project, item);
+        } else {
+          for (const line of body.split('\n')) {
+            try { const item = JSON.parse(line); append(item.projectId, item); } catch { /* partial append */ }
+          }
+        }
+        const next = new Map([...byProject].map(([id, rows]) => [id, JSON.stringify(rows)]));
+        const old = sharedProjects.get(file);
+        for (const [id, value] of next) if (old?.has(id) && old.get(id) !== value) changed.add(id);
+        nextSharedProjects.set(file, next);
+      }
+      // Commit fingerprints together so a partial/failed read cannot swallow a change.
+      previous.clear();
+      for (const [key, value] of nextPrevious) previous.set(key, value);
+      shared = nextShared;
+      for (const [key, value] of nextSharedProjects) sharedProjects.set(key, value);
+      return [...changed];
+    },
+  };
+}
+
+function commandCenterLedger(ledger) {
+  return { tickets: (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').map(t => ({
+    id: txt(t.id, 80), title: txt(t.title, 140), status: txt(t.status, 20),
+    stage: txt(t.stage, 40),
+    ...Object.fromEntries(['doneAt', 'completedAt', 'closedAt', 'finishedAt', 'updatedAt'].filter(k => typeof t[k] === 'string' && Number.isFinite(Date.parse(t[k]))).map(k => [k, t[k]])),
+  })) };
+}
 
 const DAY = 86400000;
 export const UNTRACKED_HEADLINE_MS = 7 * DAY;
@@ -442,8 +538,6 @@ export function laneIdleReasons({ running = {}, configured = {}, pauses = {}, de
   return out;
 }
 
-// Parsed run states are remembered by path, size and modification time: a poll costs one stat per run, and a run that finished is read once.
-const stateCache = new Map();
 export async function readRunStates(root, { limit = 5000 } = {}) {
   const dir = path.join(root, '.swarm', 'runs');
   let ids = [];
@@ -455,15 +549,15 @@ export async function readRunStates(root, { limit = 5000 } = {}) {
       if (folder.isSymbolicLink() || !folder.isDirectory()) continue;
       const file = path.join(dir, id, 'state.json');
       const stat = await fs.stat(file);
-      let hit = stateCache.get(file);
-      if (!hit || hit.size !== stat.size || hit.mtimeMs !== stat.mtimeMs) {
-        const state = JSON.parse(await fs.readFile(file, 'utf8'));
-        hit = { size: stat.size, mtimeMs: stat.mtimeMs, state: state && typeof state === 'object' && !Array.isArray(state) && (state.jobs === undefined || Array.isArray(state.jobs)) ? state : null };
-        if (stateCache.size > 20000) stateCache.clear();
-        stateCache.set(file, hit);
+      const state = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (state && typeof state === 'object' && !Array.isArray(state)
+        && (state.jobs === undefined || Array.isArray(state.jobs))) {
+        runs.push({ id, state, mtimeMs: stat.mtimeMs });
       }
-      if (hit.state) runs.push({ id, state: hit.state, mtimeMs: stat.mtimeMs });
-    } catch { /* an unreadable run is not counted here; projectSummary reports it */ }
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR' && error?.name !== 'SyntaxError') console.error('[tools/board-data.mjs] readRunStates run folder:', error?.message ?? error);
+    }
   }
   return runs;
 }
@@ -475,7 +569,10 @@ export async function projectFamilyRoots(root, { ownOnly = false, env = process.
   const realRoot = await fs.realpath(root).catch(() => path.resolve(root));
   if (ownOnly || await mainWorktreeRoot(realRoot)) return [realRoot];
   let members;
-  try { members = await worktreeFamily(realRoot, { all: true, env }); } catch { members = [realRoot]; }
+  try { members = await worktreeFamily(realRoot, { all: true, env }); } catch (error) {
+    console.error('[tools/board-data.mjs] projectFamilyRoots worktreeFamily:', error?.message ?? error);
+    members = [realRoot];
+  }
   const roots = new Set();
   for (const member of members ?? []) roots.add(await fs.realpath(member).catch(() => path.resolve(member)));
   const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
@@ -490,9 +587,13 @@ export async function projectFamilyRoots(root, { ownOnly = false, env = process.
     try {
       for (const name of await fs.readdir(scratchRoot)) {
         const candidate = path.join(scratchRoot, name);
-        try { if ((await fs.stat(candidate)).isDirectory()) addScratch(candidate); } catch { /* a scratch entry can disappear during a poll */ }
+        try { if ((await fs.stat(candidate)).isDirectory()) addScratch(candidate); } catch (error) {
+          if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectFamilyRoots scratch entry:', error?.message ?? error);
+        }
       }
-    } catch { /* an absent scratch root is normal */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectFamilyRoots readdir scratch:', error?.message ?? error);
+    }
   }
   return [...roots];
 }
@@ -513,7 +614,7 @@ export function ticketDoneAtMs(value) {
   return Number.isFinite(at) ? at : NaN;
 }
 
-export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
+async function familyRootsForTicketLog(roots, { env = process.env } = {}) {
   const scanRoots = new Set();
   const addRoot = async candidate => {
     if (!candidate) return;
@@ -524,7 +625,9 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
   if (anchor && !(await mainWorktreeRoot(anchor))) {
     try {
       for (const member of await worktreeFamily(anchor, { all: true, env })) await addRoot(member);
-    } catch { /* family metadata unreadable */ }
+    } catch (error) {
+      console.error('[tools/board-data.mjs] familyRootsForTicketLog worktreeFamily:', error?.message ?? error);
+    }
     const scratch = env?.SWARM_SCRATCH_ROOT || env?.SWARM_SCRATCH_DIR;
     if (scratch) {
       const scratchRoot = await fs.realpath(scratch).catch(() => path.resolve(scratch));
@@ -533,11 +636,44 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
           const candidate = path.join(scratchRoot, name);
           try {
             if ((await fs.stat(candidate)).isDirectory()) await addRoot(candidate);
-          } catch { /* scratch entry can disappear */ }
+          } catch (error) {
+            if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog scratch entry:', error?.message ?? error);
+          }
         }
-      } catch { /* absent scratch root */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyRootsForTicketLog readdir scratch:', error?.message ?? error);
+      }
     }
   }
+  return scanRoots;
+}
+
+const DONE_LOG_FUTURE_MS = 5 * 60 * 1000;
+
+/** Unique ticket ids marked done in tickets.log within the last 24 hours (family roots, same scan as lastTicketFinishedAt). */
+export async function doneLast24hCount(roots, { now = Date.now(), env = process.env } = {}) {
+  let scanRoots;
+  try { scanRoots = await familyRootsForTicketLog(roots, { env }); } catch { return 0; }
+  const merged = new Map();
+  for (const root of scanRoots) {
+    try {
+      for (const [id, at] of await doneTimes(root)) {
+        const ms = ticketDoneAtMs(at);
+        if (id && Number.isFinite(ms)) merged.set(String(id), Math.max(merged.get(String(id)) ?? 0, ms));
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] doneLast24hCount doneTimes:', error?.message ?? error);
+    }
+  }
+  const since = now - DAY;
+  const until = now + DONE_LOG_FUTURE_MS;
+  let count = 0;
+  for (const ms of merged.values()) if (ms >= since && ms <= until) count += 1;
+  return count;
+}
+
+export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process.env } = {}) {
+  const scanRoots = await familyRootsForTicketLog(roots, { env });
   const doneIds = new Set();
   for (const ledger of ledgers) for (const ticket of ledger?.tickets ?? []) if (ticket?.status === 'done' && ticket.id) doneIds.add(String(ticket.id));
   let newest = 0;
@@ -546,7 +682,9 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
     if (id && Number.isFinite(at)) { doneIds.add(String(id)); newest = Math.max(newest, at); }
   };
   for (const root of scanRoots) {
-    try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch { /* missing tickets.log */ }
+    try { for (const [id, at] of await doneTimes(root)) add(id, at); } catch (error) {
+      if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] lastTicketFinishedAt doneTimes:', error?.message ?? error);
+    }
   }
   for (const ledger of ledgers) {
     const history = Array.isArray(ledger?.history) ? ledger.history : Array.isArray(ledger?.history?.events) ? ledger.history.events : [];
@@ -567,7 +705,10 @@ export async function lastTicketFinishedAt(roots, runs, ledgers, { env = process
 }
 
 async function familyLedgers(roots) {
-  return Promise.all(roots.map(async root => await readLedger(root).catch(() => null)));
+  return Promise.all(roots.map(async root => await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] familyLedgers readLedger:', error?.message ?? error);
+    return null;
+  })));
 }
 
 function finishedProgress(raw) {
@@ -664,6 +805,7 @@ async function scopeFor(root, ledger) {
   const file = path.resolve(root, relative);
   const base = path.resolve(root);
   if (file !== base && !file.startsWith(`${base}${path.sep}`)) return null;
+  // A ledger may name a scope document elsewhere inside its project root.
   try { return parseScope(await fs.readFile(file, 'utf8')); } catch { return null; }
 }
 
@@ -835,7 +977,10 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const ownOnly = worktree || Boolean(await mainWorktreeRoot(project.root));
   const roots = familyRoots ?? await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
   const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots });
-  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
+  const ledgers = ownOnly ? [await readLedger(project.root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectOverview readLedger:', error?.message ?? error);
+    return null;
+  })] : await familyLedgers(roots);
   const liveStateRuns = [];
   const liveStateByRecord = new Map();
   for (const record of liveRuns) {
@@ -859,14 +1004,23 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   });
   const liveIds = new Set(activeLiveRuns.map(r => r.runId));
   let selected;
-  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch (error) {
+    console.error('[tools/board-data.mjs] projectOverview ledgerRoot:', error?.message ?? error);
+    selected = { root: project.root, ledger: await readLedger(project.root).catch((readError) => {
+      if (readError?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectOverview readLedger fallback:', readError?.message ?? readError);
+      return null;
+    }) };
+  }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const spend = await summary(project.root).catch(error => ({ spendUsd: null, capUsd: null, capError: String(error.message).slice(0, 120) }));
   const capBasis = spend.capBasis ?? (typeof spend.billedUsd === 'number' ? 'billed' : 'billed+list');
   const capUsedUsd = capBasis === 'billed' ? spend.billedUsd : spend.spendUsd;
   const overviewSpend = { usd: capUsedUsd ?? spend.usd ?? spend.spendUsd ?? null, capUsd: spend.capUsd ?? null, reached: spend.reached ?? false, why: spend.why ?? null, capBasis };
-  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly, prState }).catch(() => null);
+  const rawProgress = await buildProgress({ root: project.root, projectId: project.id, now, historyFile, spend: overviewSpend, deploy: deployStatus ? deployStatus(project.root) : null, ownOnly, prState }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectOverview buildProgress:', error?.message ?? error);
+    return null;
+  });
   const progress = rawProgress ? { ...finishedProgress(rawProgress), overall: boardPercent(rawProgress), _rawFinished: rawProgress.finished } : null;
   const progressFinished = progress?._rawFinished ?? false;
   if (progress) delete progress._rawFinished;
@@ -874,6 +1028,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const agents = agentsOf(liveRunsForAgents, liveIds, now);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
+  const doneLast24h = await doneLast24hCount(roots, { now, env });
   const ticketFinishedMs = Date.parse(ticketFinishedAt ?? '') || 0;
   const lastActivityMs = Math.max(
     0,
@@ -895,8 +1050,14 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     const red = metrics.filter(metric => metric?.grade === 'red');
     const amber = metrics.find(metric => metric?.grade === 'amber');
     return { grade: result?.grade ?? 'unknown', reds: red.length, worst: red[0]?.label ?? amber?.label ?? null };
-  }).catch(() => null);
-  const handled = await handledForProject(project.root, { now }).catch(() => null);
+  }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectOverview splitQuality:', error?.message ?? error);
+    return null;
+  });
+  const handled = await handledForProject(project.root, { now }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectOverview handledForProject:', error?.message ?? error);
+    return null;
+  });
   const pinnedVersion = await pinnedVersionFor(project.root);
   const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state.jobs) ? r.state.jobs.length : 0));
   const card = await buildWatchCard({
@@ -916,10 +1077,13 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
   const installedVersion = await swarmPackageVersion();
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    directBuild: Boolean(project.directBuild),
     machine: os.hostname(),
     version: installedVersion,
     pinnedVersion,
-    stage: tickets.stage, tickets, readyTickets, idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
+    stage: tickets.stage, tickets, readyTickets,     idleWithReady: activeLiveRuns.length === 0 && readyTickets > 0,
+    ledger: commandCenterLedger(ledger),
+    counts: ticketCountsOf(ledger),
     live: liveRuns.map(r => { const hit = liveStateRuns.find(x => x.id === r.runId && x.liveRoot === r.root) ?? liveStateRuns.find(x => x.id === r.runId); const jobs = hit?.state.jobs ?? []; return { runId: r.runId, startedAt: r.startedAt ?? hit?.state.startedAt ?? null, status: txt(hit?.state.status ?? 'running', 30), jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length }; }),
     liveCount: activeLiveRuns.length,
     agents, cost,
@@ -933,6 +1097,7 @@ export async function projectOverview(project, liveRuns, { now = Date.now(), sum
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
+    doneLast24h,
     checkouts: roots.length,
     activity,
     idle,
@@ -952,7 +1117,8 @@ export function underfilledWaves(counts, slots) {
 }
 
 // The whole board: machine totals (sums of the project numbers) and one overview per registered project.
-export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined } = {}) {
+export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summary, historyFile = undefined, workers = null, lanes = null, laneState = null, worktreeRoot = mainWorktreeRoot, deployStatus = null, env = process.env, prState = undefined, profile } = {}) {
+  const started = performance.now();
   const overviews = [];
   const realRoot = async root => await fs.realpath(root).catch(() => path.resolve(root));
   const inputProjects = Array.isArray(projects) ? projects : [];
@@ -1008,7 +1174,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
       : live.filter(r => family.has(r.root));
     const activeMine = candidates.filter(record => activeRunState(record.state));
     const mine = activeMine.length ? activeMine : candidates;
-    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState }));
+    overviews.push(await projectOverview(project, mine, { now, summary, historyFile, deployStatus, slots: workers?.max ?? null, worktree: Boolean(parentIds[i] || linkedRows[i]), env, familyRoots: parentIds[i] || !linkedRows[i] ? [...family] : null, extraRoots: inputProjects.map(item => item.root), prState, profile }));
     const familyIds = new Set([project.id]);
     for (const root of family) {
       const member = registered.get(root);
@@ -1025,7 +1191,8 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   for (let i = 0; i < inputProjects.length; i += 1) {
     const parentId = parentIds[i];
     if (!parentId) continue;
-    const child = overviews[i];
+    const child = byId.get(inputProjects[i].id);
+    if (!child) continue;
     child.parentId = parentId;
     child.worktree = true;
     const parentOverview = byId.get(parentId);
@@ -1040,9 +1207,15 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
     overview.progress.headline += ` (incl. ${count} worktree${count === 1 ? '' : 's'})`;
   }
   let heldWorkers = { total: 0, max: workers?.max ?? null, byProject: {} };
-  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: workers?.max ?? null }); } catch { /* empty lane store */ }
+  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: workers?.max ?? null }); } catch (error) {
+    console.error('[tools/board-data.mjs] boardSnapshot workersHeld:', error?.message ?? error);
+  }
   let inboxSnapshot = { items: [] };
-  try { inboxSnapshot = await boardInbox({ projects: inputProjects, now, env }); } catch { /* inbox unavailable */ }
+  try {
+    inboxSnapshot = await boardInbox({ projects: inputProjects, now, env });
+  } catch (error) {
+    console.error('[tools/board-data.mjs] boardSnapshot boardInbox:', error?.message ?? error);
+  }
   for (let i = 0; i < overviews.length; i += 1) {
     enrichWatchCard(overviews[i].card, { held: heldWorkers, familyProjectIds: overviewFamilyIds[i], projectId: overviews[i].id, inbox: inboxSnapshot });
   }
@@ -1102,7 +1275,10 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   machine.liveRuns = live.filter(run => activeRunState(run.state)).length;
   for (const key of ['todayUsd', 'weekUsd', 'flatRateTodayUsd', 'flatRateWeekUsd', 'allUsd', 'paidUsd', 'paidEstimatedUsd', 'flatRateListUsd']) machine.cost[key] = Math.round(machine.cost[key] * 1e6) / 1e6;
   // One session can be in two projects' logs: the machine totals count each message once over all transcripts.
-  { const c = transcripts.size ? combinedUsage([...transcripts], { now }) : { todayListUsd: 0, allListUsd: 0 }; machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd; }
+  {
+    const c = await combinedUsage([...transcripts], { now });
+    machine.orchestrator.todayListUsd = c.todayListUsd; machine.orchestrator.allListUsd = c.allListUsd;
+  }
   for (const o of overviews) if (o.orchestrator) delete o.orchestrator.transcripts;
   { const t = machine.orchestrator.handBuiltFiles + machine.orchestrator.swarmBuiltFiles; machine.orchestrator.swarmPct = t ? Math.round(machine.orchestrator.swarmBuiltFiles * 100 / t) : null; machine.orchestrator.handPct = t ? Math.round(machine.orchestrator.handBuiltFiles * 100 / t) : null; }
   machine.orchestrator.sessions.sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
@@ -1144,6 +1320,7 @@ export async function boardSnapshot({ projects, liveRuns, now = Date.now(), summ
   } catch {
     machine.laneIdle = {};
   }
+  profile?.({ kind: 'board', ms: performance.now() - started });
   return { at: new Date(now).toISOString(), machine, projects: overviews };
 }
 
@@ -1152,9 +1329,18 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   const ownOnly = await boardOwnOnly(project.root);
   const roots = await projectFamilyRoots(project.root, { ownOnly, env, extraRoots });
   const runs = await readProjectRunStates(project.root, { ownOnly, env, familyRoots: roots, limit: 200 });
-  const ledgers = ownOnly ? [await readLedger(project.root).catch(() => null)] : await familyLedgers(roots);
+  const ledgers = ownOnly ? [await readLedger(project.root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectDetail readLedger:', error?.message ?? error);
+    return null;
+  })] : await familyLedgers(roots);
   let selected;
-  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch { selected = { root: project.root, ledger: await readLedger(project.root).catch(() => null) }; }
+  try { selected = await ledgerRoot(project.root, { ownOnly }); } catch (error) {
+    console.error('[tools/board-data.mjs] projectDetail ledgerRoot:', error?.message ?? error);
+    selected = { root: project.root, ledger: await readLedger(project.root).catch((readError) => {
+      if (readError?.code !== 'ENOENT') console.error('[tools/board-data.mjs] projectDetail readLedger fallback:', readError?.message ?? readError);
+      return null;
+    }) };
+  }
   const ledger = selected.ledger;
   const scope = await scopeFor(selected.root, ledger);
   const tickets = (ledger?.tickets ?? []).filter(t => t && typeof t === 'object').slice(0, 1000).map(t => { const stageId = effectiveStage(scope, t); return { id: txt(t.id, 20), title: txt(t.title, 140), status: txt(t.status, 20), stage: stageDisplay(scope, stageId), stageId, risk: txt(t.risk, 10) }; });
@@ -1170,13 +1356,26 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     if (!raw) return null;
     const overall = boardPercent(raw);
     return { ...raw, finished: finishedProgress(raw)?.finished ?? false, overall, percent: { ...raw.percent, overall } };
-  }).catch(() => null);
-  const split = await splitQuality({ root: project.root, now, slots }).catch(() => null);
-  const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch(() => null);
-  const handled = await handledForProject(project.root, { now, limit: 20 }).catch(() => null);
+  }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectDetail buildProgress:', error?.message ?? error);
+    return null;
+  });
+  const split = await splitQuality({ root: project.root, now, slots }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectDetail splitQuality:', error?.message ?? error);
+    return null;
+  });
+  const benchmarks = await readScorecards(project.root).then(input => scorecardHistory(input)).catch((error) => {
+    console.error('[tools/board-data.mjs] projectDetail readScorecards:', error?.message ?? error);
+    return null;
+  });
+  const handled = await handledForProject(project.root, { now, limit: 20 }).catch((error) => {
+    console.error('[tools/board-data.mjs] projectDetail handledForProject:', error?.message ?? error);
+    return null;
+  });
   const pinnedVersion = await pinnedVersionFor(project.root);
   const lastRun = runs.slice().sort((a, b) => (Date.parse(b.state?.startedAt ?? '') || 0) - (Date.parse(a.state?.startedAt ?? '') || 0))[0]?.state ?? null;
   const ticketFinishedAt = await lastTicketFinishedAt(roots, runs, ledgers, { env });
+  const doneLast24h = await doneLast24hCount(roots, { now, env });
   const progressFinished = progress?.finished ?? false;
   const recentJobCounts = runs.slice().sort((a, b) => (Date.parse(a.state?.startedAt ?? '') || 0) - (Date.parse(b.state?.startedAt ?? '') || 0)).slice(-6).map(r => (Array.isArray(r.state?.jobs) ? r.state.jobs.length : 0));
   let card = await buildWatchCard({
@@ -1194,9 +1393,13 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     historyFile,
   });
   let heldWorkers = { total: 0, max: slots ?? null, byProject: {} };
-  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: slots ?? null }); } catch { /* empty lane store */ }
+  try { heldWorkers = await workersHeld({ dir: lanesDir(env), max: slots ?? null }); } catch (error) {
+    console.error('[tools/board-data.mjs] projectDetail workersHeld:', error?.message ?? error);
+  }
   let inboxSnapshot = { items: [] };
-  try { inboxSnapshot = await boardInbox({ projects: [project], now, env }); } catch { /* inbox unavailable */ }
+  try { inboxSnapshot = await boardInbox({ projects: [project], now, env }); } catch (error) {
+    console.error('[tools/board-data.mjs] projectDetail boardInbox:', error?.message ?? error);
+  }
   enrichWatchCard(card, { held: heldWorkers, familyProjectIds: [project.id], projectId: project.id, inbox: inboxSnapshot });
   const installedVersion = await swarmPackageVersion();
   const lastActivityMs = Math.max(0, ...runs.map(runActivityMs), ...ledgers.map(item => Date.parse(item?.updatedAt ?? '') || 0), Date.parse(ticketFinishedAt ?? '') || 0);
@@ -1215,6 +1418,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
   ).full;
   return {
     id: project.id, name: txt(project.name, 80), root: project.root,
+    directBuild: Boolean(project.directBuild),
     machine: os.hostname(),
     version: installedVersion,
     pinnedVersion,
@@ -1224,6 +1428,12 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     activity,
     idleWithReady: liveIds.size === 0 && readyTickets > 0,
     tickets, ticketCounts: ticketsOf(ledger, scope),
+    ledger: commandCenterLedger(ledger),
+    counts: ticketCountsOf(ledger),
+    agents: agentsOf(runs, liveRunIds, now),
+    orchestrator: (() => { try { return projectOrchestrator(project, { runs, now }); } catch { return { sessions: [] }; } })(),
+    runStream: runs.slice(-20).reverse().map(({ id, state }) => ({ id, title: txt(state.status, 30), body: `${(state.jobs ?? []).filter(job => job.status === 'complete').length}/${(state.jobs ?? []).length} jobs` })),
+    live: runs.filter(run => liveRunIds.has(run.id) && activeRunState(run.state)).map(({ id, state }) => ({ runId: id, status: state.status, jobs: (state.jobs ?? []).length, done: (state.jobs ?? []).filter(job => job.status === 'complete').length })),
     runs: runs.slice().reverse().map(({ id, state }) => {
       const jobs = state.jobs ?? [];
       return { runId: id, status: txt(state.status, 30), live: liveRunIds.has(id), startedAt: state.startedAt ?? null, finishedAt: state.finishedAt ?? null, jobs: jobs.length, done: jobs.filter(j => j.status === 'complete').length, failed: jobs.filter(j => ['failed', 'timeout'].includes(j.status)).length, costUsd: Math.round(runTotals(state).usd * 1e6) / 1e6 };
@@ -1232,6 +1442,7 @@ export async function projectDetail(project, { now = Date.now(), liveRunIds = ne
     lastRunAt: lastRun?.startedAt ?? null,
     lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : null,
     lastTicketFinishedAt: ticketFinishedAt,
+    doneLast24h,
     checkouts: roots.length,
     untracked: untrackedOnDisk,
     splitQuality: split,
@@ -1255,7 +1466,10 @@ export async function historyEventsOf(project) {
     const usd = runTotals(state).usd;
     if (usd > 0) events.push({ ...base, kind: 'spend', key: `spend:${project.id}:${id}`, at: state.finishedAt ?? state.startedAt, run: id, usd, title: `Run ${id} spent $${usd.toFixed(2)}` });
   }
-  const ledger = await readLedger(project.root).catch(() => null);
+  const ledger = await readLedger(project.root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] historyEventsOf readLedger:', error?.message ?? error);
+    return null;
+  });
   const live = (ledger?.tickets ?? []).filter(t => !['cancelled', 'proposed'].includes(t.status));
   for (const stage of [...new Set(live.map(t => t.stage).filter(s => stageNumber(s) > 0))]) {
     const mine = live.filter(t => t.stage === stage);
@@ -1272,7 +1486,9 @@ export async function workersHeld({ dir, max = null, invalid = false, isAlive: p
   const seen = new Map();
   const isAlive = pid => { if (!seen.has(pid)) seen.set(pid, probe(pid)); return seen.get(pid); };
   let store = null;
-  try { store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); } catch { /* no workers have ever been claimed */ }
+  try { store = JSON.parse(await fs.readFile(path.join(dir, 'lanes.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] workersHeld read lanes.json:', error?.message ?? error);
+  }
   const host = os.hostname();
   const byProject = dict();
   let total = 0;
@@ -1303,10 +1519,14 @@ export async function laneUsage({ laneToday = {}, jobsToday = {}, configured = [
   const day = new Date(now).toISOString().slice(0, 10);
   const midnight = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + 1);
   let store = null;
-  try { store = JSON.parse(await fs.readFile(path.join(spendDirectory, 'daily.json'), 'utf8')); } catch { /* nothing was ever spent */ }
+  try { store = JSON.parse(await fs.readFile(path.join(spendDirectory, 'daily.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] laneUsage read daily.json:', error?.message ?? error);
+  }
   const spent = store && typeof store.entries === 'object' && store.entries ? laneDayTotals(store, { day }) : {};
   let lanes = null;
-  try { lanes = JSON.parse(await fs.readFile(path.join(lanesDirectory, 'lanes.json'), 'utf8')); } catch { /* no lane has been used */ }
+  try { lanes = JSON.parse(await fs.readFile(path.join(lanesDirectory, 'lanes.json'), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] laneUsage read lanes.json:', error?.message ?? error);
+  }
   const names = new Set([...Object.keys(laneToday), ...Object.keys(jobsToday), ...configured, ...Object.keys(spent), ...Object.keys(caps), ...Object.entries(lanes?.pauses ?? {}).filter(([, v]) => Number.isFinite(v?.until) && v.until > now).map(([k]) => k)]);
   const rows = [];
   for (const agent of [...names].sort()) {
@@ -1328,7 +1548,10 @@ export async function enrichRunEvents(events, projects) {
   const titles = new Map();
   const titlesOf = async project => {
     if (!titles.has(project.id)) {
-      const ledger = await readLedger(project.root).catch(() => null);
+      const ledger = await readLedger(project.root).catch((error) => {
+        if (error?.code !== 'ENOENT') console.error('[tools/board-data.mjs] enrichRunEvents readLedger:', error?.message ?? error);
+        return null;
+      });
       titles.set(project.id, new Map((ledger?.tickets ?? []).filter(t => t && typeof t.id === 'string').map(t => [t.id, t.title])));
     }
     return titles.get(project.id);

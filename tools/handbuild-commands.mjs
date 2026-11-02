@@ -87,7 +87,7 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
     if (sub === 'approve' || sub === 'deny') {
       if (rest.length !== 1) return out(HANDBUILD_USAGE, 1);
       const r = decideRequest(root, rest[0], sub, { now, by: 'owner' });
-      await appendEvent(root, { kind: 'decision', id: `handbuild-${r.id}`, confirmed: true, choice: sub, text: sanitizeText(`Hand-build request ${r.id}: ${sub}`) }, { now }).catch(() => {});
+      await appendEvent(root, { kind: 'decision', id: `handbuild-${r.id}`, confirmed: true, choice: sub, text: sanitizeText(`Hand-build request ${r.id}: ${sub}`) }, { now }).catch((error) => { console.error('[tools/handbuild-commands.mjs] approve/deny appendEvent:', error?.message ?? error, r.id); });
       return out(sub === 'approve' ? `approved ${r.id}: ${r.files.join(', ')}${r.git.length ? ` and git ${r.git.join(', ')}` : ''} until ${r.expiresAt}; then it expires` : `denied ${r.id}`);
     }
     if (sub === 'status') {
@@ -96,7 +96,9 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
       let hookSettings = {};
       try {
         hookSettings = JSON.parse(fs.readFileSync(path.join(root, '.claude', 'settings.local.json'), 'utf8'));
-      } catch { /* no local settings */ }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') console.error('[tools/handbuild-commands.mjs] settings.local.json:', error?.message ?? error, path.join(root, '.claude', 'settings.local.json'));
+      }
       const hookCommand = readGuardHookCommandFromSettings(hookSettings);
       const hookInfo = installRoot ? guardHookPathStatus({ hookCommand, installRoot }) : null;
       const swarmHooks = installRoot ? collectSwarmHookStatuses(hookSettings, installRoot) : [];
@@ -131,7 +133,7 @@ export async function runHandbuildCommand(root, args, { installRoot, env = proce
     }
     if (sub === 'log') {
       let lines = [];
-      try { lines = fs.readFileSync(path.join(root, LOG_FILE), 'utf8').split('\n').filter(Boolean).slice(-200); } catch { /* none yet */ }
+      try { lines = fs.readFileSync(path.join(root, LOG_FILE), 'utf8').split('\n').filter(Boolean).slice(-200); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/handbuild-commands.mjs] read LOG_FILE:', error?.message ?? error, path.join(root, LOG_FILE)); }
       return out(flags.json ? `[${lines.join(',')}]` : lines.map(l => { try { const e = JSON.parse(l); return `${e.at}  ${e.event}${e.id ? ` ${e.id}` : ''}${e.tool ? ` ${e.tool}` : ''}${e.files?.length ? ` ${e.files.join(', ')}` : ''}${e.reason ? `  ${e.reason}` : ''}`; } catch { return l; } }).join('\n') || 'nothing logged yet');
     }
     if (sub === 'install') {

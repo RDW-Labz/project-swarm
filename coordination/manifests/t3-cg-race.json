@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t3-cg-race",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "expensive",
+      "tierReason": "process-kill race in the guarded runner; needs an Opus review before merge",
+      "prompt": "Fix the two remaining full-suite failures in tests/concurrency-guard.test.mjs on train 3. Full suite result: 7289 pass, 1 fail, 1 cancelled; both are this file. Owner rules: root cause, no retries, no skips, no quarantine, no longer timeouts.\n\n1) PRODUCT BUG (recorded in TASK.md as HOLD FOR OPUS, process-kill): the guarded wrapper W writes the marker, starts its watcher and spawns command C. If W is SIGKILLed before C finishes its own startup restoreIfStale(), C sees W dead, restores the config and removes the marker at its own startup, then keeps executing; the watcher starts later, finds no marker, and the orphan keeps running after the value went back. Fix in tools/concurrency-guard.mjs restoreIfStale():\n- If the marker's childPid equals process.pid, this process IS the orphaned command: stop before executing anything. Exit with code 0 (a short stderr note is fine, existing log style), and do NOT restore or remove the marker; the watcher or the next command restores after the child is gone.\n- If the marker's childPid names another live process, do not restore or remove the marker while it is alive: send it SIGTERM once, return { restored: false, reason: 'orphaned command still running' } and let the watcher or the next command retry. Do not block or sleep in this path.\n- Keep the power-cut path exactly as now: dead owner, no live child -> restore and remove the marker. Keep restore() idempotent and the existing guard-busy semantics for a live owner.\n- watch() already stops a live child before restoring; leave that behavior, reuse a tiny helper only if it keeps the diff small.\n\n2) TEST HANG: the last test 'Ctrl-C: a command that ends on its own after the terminal signal gets no second signal; one that keeps running gets exactly one' (~line 200) uses fake EventEmitter children, so the runGuarded 200 ms passOn timer is the only pending handle and it is unref'd; under load the event loop empties and the test is cancelled with 'Promise resolution is still pending but the event loop has already resolved'. Keep a ref'd keepalive timer alive around awaiting the second runGuarded result (const keep = setTimeout(() => {}, 5000) before await second; clearTimeout(keep) after). Keep every existing assertion unchanged.\n\n3) Add focused regression tests in the same test file: (a) a stale marker whose childPid is the current process stops the command before it executes (call restoreIfStale in a spawned node process and assert it exits without running the command and leaves the marker in place); (b) a stale marker naming another live child is left in place, its child receives SIGTERM, and the config is not restored. Keep the new tests deterministic (spawn real processes; no fixed long sleeps where a poll can be used).\n\nVerify before finishing: node --import ./tests/_isolate-config.mjs --test tests/concurrency-guard.test.mjs (all pass), then STRESS_ROUNDS=3 STRESS_CONCURRENCY=8 npm run test:stress (all rounds pass). Report the exact commands and the counts.",
+      "context": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs",
+        "tools/stress-tests.mjs"
+      ],
+      "outputs": [
+        "tools/concurrency-guard.mjs",
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/s13-blockers.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; the focused concurrency-guard file plus test:stress run here, full suite runs before merge"
+    }
+  ]
+}

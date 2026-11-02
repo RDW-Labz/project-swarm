@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-22e",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 22e (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/security-gate.mjs, tools/split-module.mjs, tools/swarm/core-21.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/security-gate.mjs\nLogger prefix: console.error('[tools/security-gate.mjs] <short context>:', error?.message ?? error)\n- Line 170 `finally{if(baselineTmp)try{rmSync(baselineTmp,{...});}catch{/* best effort */}}`: LOG-ALWAYS with baselineTmp (force means ENOENT never throws; a failure leaks a temp dir). Keep the file's compact style on that line.\n- Line 200 `finally{if(tmp)try{rmSync(tmp,{...});}catch{/* best effort */}}`: LOG-ALWAYS with tmp.\n- Line 307 `try{rmSync(tmp,{recursive:true,force:true});}catch{}`: LOG-ALWAYS with tmp.\n\n### tools/split-module.mjs\nLogger prefix: console.error('[tools/split-module.mjs] <short context>:', error?.message ?? error)\n- Line 47 `} catch { // ignore }` around enumerating Object.getOwnPropertyNames(globalThis) into BUILTIN_GLOBALS: cannot normally throw, so LOG-ALWAYS.\n- Line 932 `} catch { // ignore }` in removeSmokeVerifyTemp around existsSync + unlinkSync: SILENT-ENOENT (raced removal); log others with tempPath.\n- Line 977 `} catch { // ignore }` around the acorn parse that collects import/export ranges: SILENT-SyntaxError (invalid source is expected); log others.\n\n### tools/swarm/core-21.mjs\nLogger prefix: console.error('[tools/swarm/core-21.mjs] <short context>:', error?.message ?? error)\n- Line 144 `try { if (added) await gitImpl(root, ['worktree', 'remove', '--force', checkout]); } catch { /* best-effort cleanup */ }`: LOG-ALWAYS with checkout (a leaked git worktree).\n- Line 145 `await fs.rm(temporary, {...}).catch(() => {});`: LOG-ALWAYS with temporary.\n- Line 166 `try { raw = await fs.readFile(resolved, 'utf8'); } catch { /* fall back to this run's own outputs below */ }`: SILENT-ENOENT; log others with resolved; keep the fallback.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/security-gate.mjs",
+        "tools/split-module.mjs",
+        "tools/swarm/core-21.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/batch-a-eval.test.mjs",
+        "tests/dependency-diff.test.mjs",
+        "tests/dogfood-fixes.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/helpers/swarm-source.mjs",
+        "tests/lesson-39-eval.test.mjs",
+        "tests/lesson-40-eval.test.mjs",
+        "tests/lifecycle-list-shared.test.mjs",
+        "tests/no-manifest-review-refs.test.mjs",
+        "tests/security-gate.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/split-scan.test.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

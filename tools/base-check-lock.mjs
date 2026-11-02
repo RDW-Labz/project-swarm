@@ -14,6 +14,16 @@ import { recordBaseCheckFailure, failureLocationsForFailures } from './base-chec
 const LOCK_FILE = 'base-check.lock';
 const STALE_MS = 60000;
 
+const loggedCodes = new Set();
+
+function logOnce(context, error) {
+  const code = error?.code ?? error?.name ?? 'unknown';
+  const key = `${context}:${code}`;
+  if (loggedCodes.has(key)) return;
+  loggedCodes.add(key);
+  console.error(`[tools/base-check-lock.mjs] ${context}:`, error?.message ?? error);
+}
+
 /** Lock file path relative to the checkout root (under `.swarm/project/`). */
 export const BASE_CHECK_LOCK_REL = '.swarm/project/base-check.lock';
 
@@ -76,7 +86,9 @@ async function writeCacheRecord(root, cacheRel, record) {
     await fs.writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx' });
     await fs.rename(temporary, target);
   } catch (error) {
-    await fs.unlink(temporary).catch(() => {});
+    await fs.unlink(temporary).catch((unlinkError) => {
+      if (unlinkError.code !== 'ENOENT') console.error('[tools/base-check-lock.mjs] writeCacheRecord cleanup:', unlinkError?.message ?? unlinkError);
+    });
     throw error;
   }
 }
@@ -85,7 +97,10 @@ async function readOwner(file) {
   try {
     const owner = JSON.parse(await fs.readFile(file, 'utf8'));
     if (owner && typeof owner === 'object' && Number.isInteger(owner.pid) && owner.pid > 0 && typeof owner.host === 'string') return owner;
-  } catch { /* unreadable or missing */ }
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.name !== 'SyntaxError') logOnce('readOwner', error);
+    /* unreadable or missing */
+  }
   return null;
 }
 
@@ -105,7 +120,10 @@ async function tryTakeLock(file, { pid, startedAt }) {
       try {
         const owner = await readOwner(file);
         if (owner?.pid === pid && owner.host === os.hostname()) await fs.rm(file, { force: true });
-      } catch { /* already gone */ }
+      } catch (error) {
+        if (error.code !== 'ENOENT') console.error('[tools/base-check-lock.mjs] release:', error?.message ?? error);
+        /* already gone */
+      }
     };
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
@@ -127,7 +145,10 @@ export async function acquireBaseCheckLock(root, { pid = process.pid, isAlive = 
     const release = await tryTakeLock(file, { pid, startedAt: new Date(now()).toISOString() });
     if (release) return release;
     const owner = await readOwner(file);
-    const stat = await fs.stat(file).catch(() => null);
+    const stat = await fs.stat(file).catch((statError) => {
+      if (statError.code !== 'ENOENT') logOnce('acquire stat', statError);
+      return null;
+    });
     const stale = !owner
       || (owner.host === os.hostname() && !isAlive(owner.pid))
       || (stat && now() - stat.mtimeMs > STALE_MS);

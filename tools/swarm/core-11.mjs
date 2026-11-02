@@ -87,7 +87,15 @@ async function toolchainInventory(root, { env, home, platform, fsImpl, access })
       const suffixes = /\.(exe|cmd)$/i.test(row.binary) ? [''] : ['', '.exe', '.cmd'];
       resolvedTool = { path: null };
       for (const candidate of dirs.flatMap(dir => suffixes.map(suffix => paths.join(dir, row.binary + suffix)))) {
-        try { await executable(candidate); resolvedTool.path = candidate; break; } catch { /* next candidate */ }
+        try {
+          await executable(candidate);
+          resolvedTool.path = candidate;
+          break;
+        } catch (error) {
+          const code = error?.code;
+          if (code === 'ENOENT' || code === 'EACCES' || code === 'ENOTDIR') { /* next candidate */ }
+          else console.error('[tools/swarm/core-11.mjs] resolve toolchain candidate:', error?.message ?? error);
+        }
       }
     } else resolvedTool = await resolveToolchainBin(row.binary, { env, home, access: executable });
     row.path = resolvedTool.path;
@@ -487,7 +495,10 @@ export async function noJobRunningWarning({ root, env = process.env, home = os.h
     const text = await fs.readFile(taskFile ?? path.join(root, NEXT_TASK_FILE), 'utf8');
     const ticket = nextQueuedTicketHint(text);
     if (ticket) hint = `swarm next --from ${NEXT_TASK_FILE}: ${ticket.id} — ${ticket.step}`;
-  } catch { /* no TASK.md, or nothing queued: no hint */ }
+  } catch (error) {
+    if (error?.code === 'ENOENT') { /* no TASK.md, or nothing queued: no hint */ }
+    else console.error('[tools/swarm/core-11.mjs] read TASK.md hint:', error?.message ?? error);
+  }
   return { code: 'no-job-running', idleMinutes, ...(hint ? { hint } : {}), message: `no-job-running: no run under the configured root(s) is active${idleMinutes !== null ? ` (idle ${idleMinutes} min)` : ''}${hint ? `; ${hint}` : ''}` };
 }
 

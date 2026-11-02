@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t2blk1",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "sensitive": true,
+      "prompt": "FILE ACCESS: your declared outputs are in your worktree and you MAY read and edit them (context plus your own outputs are readable). Only return blocked for a real design conflict inside these files.\nTrain 2 Opus security review (claude-opus-5-5, run 1793221468839-cfc492bd) found this BLOCKER; fix it exactly and minimally, in the surrounding style, and add the regression test. Never raise or change a cap value. Do not touch any other file. Existing tests in context must keep passing.\nBLOCKER 1 (key reaches a paused paid lane): tools/paid-lane-pause.mjs isHostedLambdaInference(env) returns !env.SWARM_LAMBDA_URL, so ANY set SWARM_LAMBDA_URL counts as self-hosted, including https://api.lambda.ai or any other remote paid origin. Both callers skip the pause check because of it: tools/api-adapters.mjs:101 (apiConfiguration, before LAMBDA_API_KEY is read) and tools/swarm/core-51.mjs:378 (validateProject's lambda filter). Exploit: lanes.lambda.paused=true + SWARM_LAMBDA_URL=https://api.lambda.ai + LAMBDA_API_KEY => validate passes and the key goes to the paused hosted lane. FIX in tools/paid-lane-pause.mjs only (both callers already use the predicate): decide from the URL, not presence. Self-hosted ONLY when SWARM_LAMBDA_URL parses as a URL whose hostname is loopback (localhost, 127.0.0.0/8, ::1, [::1]); anything else (unset, unparsable, any other host) is hosted => the pause check applies. Keep the exported name and signature so callers are unchanged. Tests in NEW tests/t2-lambda-hosted.test.mjs (first line import './_isolate-config.mjs';): predicate cases (unset, https://api.lambda.ai, https://evil.example, http://localhost:8000, http://127.0.0.1:9000, http://[::1]:8000, garbage string); with lanes.lambda.paused true and SWARM_LAMBDA_URL=https://api.lambda.ai, apiConfiguration for lambda throws lambda-lane-paused before reading LAMBDA_API_KEY and pausedPaidLaneProblems/validate refuse (use the same config/env injection the existing tests/paid-lane-pause.test.mjs uses); a loopback URL while paused still works as self-hosted. The ignored tests cover behaviour that must not change; the coordinator runs the full suite before ship.",
+      "context": [
+        "tools/api-adapters.mjs",
+        "tools/swarm/core-51.mjs",
+        "tests/paid-lane-pause.test.mjs"
+      ],
+      "outputs": [
+        "tools/paid-lane-pause.mjs",
+        "tests/t2-lambda-hosted.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "t2blk1",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/t2-lambda-hosted.test.mjs",
+        "tests/paid-lane-pause.test.mjs",
+        "tests/paid-lane-paused.test.mjs"
+      ]
+    }
+  ]
+}

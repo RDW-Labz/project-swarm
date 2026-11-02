@@ -84,7 +84,7 @@ try {
       const page = await context.newPage();
       try {
         await page.goto(screen[side + 'Url'], { waitUntil: 'load', timeout: spec.timeoutMs });
-        if (screen.waitFor) { try { await page.waitForSelector(screen.waitFor, { timeout: 15000 }); } catch (waitError) { /* the metrics show what is missing */ } }
+        if (screen.waitFor) { try { await page.waitForSelector(screen.waitFor, { timeout: 15000 }); } catch (waitError) { if (waitError?.name !== 'TimeoutError' && !/timeout/i.test(String(waitError?.message ?? ''))) console.error('[tools/ui-check.mjs] waitForSelector:', waitError?.message ?? waitError); } }
         await page.waitForTimeout(600);
         const file = path.join(spec.out, screen.id, side + '.png');
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -108,12 +108,12 @@ async function atomicWrite(root, segments, text) {
   const tmp = path.join(dir, `.${segments.at(-1)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   const handle = await fs.open(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o644);
   try { await handle.writeFile(text); await handle.sync(); await handle.close(); await fs.rename(tmp, file); }
-  catch (error) { await handle.close().catch(() => {}); await fs.rm(tmp, { force: true }); throw error; }
+  catch (error) { await handle.close().catch(closeError => { console.error('[tools/ui-check.mjs] atomicWrite handle.close:', closeError?.message ?? closeError); }); await fs.rm(tmp, { force: true }); throw error; }
 }
 
 // Process groups started by a run, killed on exit, Ctrl-C or SIGTERM.
 const live = new Set();
-function killLive() { for (const pid of live) { try { process.kill(-pid, 'SIGKILL'); } catch { /* gone */ } } live.clear(); }
+function killLive() { for (const pid of live) { try { process.kill(-pid, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/ui-check.mjs] killLive process.kill:', error?.message ?? error); } } live.clear(); }
 function withSignals(fn) {
   const onSignal = signal => { killLive(); process.removeListener('SIGINT', onSigint); process.removeListener('SIGTERM', onSigterm); process.kill(process.pid, signal); };
   const onSigint = () => onSignal('SIGINT');
@@ -128,7 +128,7 @@ function runProcess(command, args, { cwd, env, timeoutMs }) {
     const child = spawn(command, args, { cwd, env, shell: false, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     live.add(child.pid);
     let stdout = '', stderr = '', settled = false, timedOut = false;
-    const kill = signal => { try { process.kill(-child.pid, signal); } catch { try { child.kill(signal); } catch { /* gone */ } } };
+    const kill = signal => { try { process.kill(-child.pid, signal); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/ui-check.mjs] runProcess process.kill:', error?.message ?? error); try { child.kill(signal); } catch (fallbackError) { if (fallbackError?.code !== 'ESRCH') console.error('[tools/ui-check.mjs] runProcess child.kill:', fallbackError?.message ?? fallbackError); } } };
     const done = code => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(hard); live.delete(child.pid); resolve({ code, stdout, stderr, timedOut }); };
     const timer = setTimeout(() => { timedOut = true; kill('SIGKILL'); }, timeoutMs);
     const hard = setTimeout(() => done(null), timeoutMs + 5000);
@@ -166,14 +166,14 @@ async function ensureServer(config, baseUrl, fetchImpl, { cwd, log, explicitBase
   let exited = false;
   child.on('error', () => { exited = true; });
   child.on('exit', () => { exited = true; });
-  const stop = async () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } live.delete(child.pid); await handle.close().catch(() => {}); await fs.rm(logDir, { recursive: true, force: true }); };
+  const stop = async () => { try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/ui-check.mjs] ensureServer stop process.kill:', error?.message ?? error); } live.delete(child.pid); await handle.close().catch(closeError => { console.error('[tools/ui-check.mjs] ensureServer stop handle.close:', closeError?.message ?? closeError); }); await fs.rm(logDir, { recursive: true, force: true }); };
   const deadline = Date.now() + config.timeoutSec * 1000;
   while (Date.now() < deadline && !exited) {
     // Only an answer while our own child is still running counts: another process on the port is not evidence.
     if (await answers(ready, fetchImpl) && !exited) { log?.(`dev server started: ${startArgv.join(' ')}`); return { stop, started: true, base: baseUrl }; }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
-  const tail = (await fs.readFile(logFile, 'utf8').catch(() => '')).slice(-400);
+  const tail = (await fs.readFile(logFile, 'utf8').catch(readError => { if (readError?.code === 'ENOENT') return ''; console.error('[tools/ui-check.mjs] ensureServer log tail read:', readError?.message ?? readError); return ''; })).slice(-400);
   await stop();
   throw fail('ui-server', `${exited ? 'the dev server command exited' : `the dev server did not answer within ${config.timeoutSec} seconds`} (${ready})${tail ? `: ${tail.replace(/\s+/g, ' ')}` : ''}`);
 }
@@ -259,15 +259,15 @@ async function finishUiCheck(root, { chosen, shots, shotsDir, tree, serverStarte
         const b = await fs.readFile(shot.page.screenshot);
         visual = compareSignatures(gridSignature(decodePng(a)), gridSignature(decodePng(b))).score;
         // The screenshots are kept for the owner to look at, written by this process (never by the browser script).
-        await atomicWrite(root, ['.swarm', 'ui', screen.id, 'mockup.png'], a).catch(() => {});
-        await atomicWrite(root, ['.swarm', 'ui', screen.id, 'page.png'], b).catch(() => {});
+        await atomicWrite(root, ['.swarm', 'ui', screen.id, 'mockup.png'], a).catch(writeError => { console.error('[tools/ui-check.mjs] finishUiCheck mockup.png write:', writeError?.message ?? writeError); });
+        await atomicWrite(root, ['.swarm', 'ui', screen.id, 'page.png'], b).catch(writeError => { console.error('[tools/ui-check.mjs] finishUiCheck page.png write:', writeError?.message ?? writeError); });
       } catch (error) { verdict = { pass: false, score: 0, reasons: [`could not compare the screenshots: ${error.code ?? error.message}`], parts: null }; }
       verdict ??= compareScreen({ mockup: shot.mockup.metrics, page: shot.page.metrics, visual }, { minScore: screen.minScore, text: screen.text });
     }
     // tree: the exact code state this verdict is about; serverStarted: false means a server that was already running answered.
     const entry = { pass: verdict.pass, score: Number(verdict.score.toFixed(3)), reasons: verdict.reasons, parts: verdict.parts, at, tree, serverStarted };
     results.screens[screen.id] = entry;
-    await atomicWrite(root, ['.swarm', 'ui', screen.id, 'report.json'], `${JSON.stringify({ id: screen.id, route: screen.route, mockup: screen.mockup, ...entry }, null, 2)}\n`).catch(() => {});
+    await atomicWrite(root, ['.swarm', 'ui', screen.id, 'report.json'], `${JSON.stringify({ id: screen.id, route: screen.route, mockup: screen.mockup, ...entry }, null, 2)}\n`).catch(writeError => { console.error('[tools/ui-check.mjs] finishUiCheck report.json write:', writeError?.message ?? writeError); });
     lines.push({ id: screen.id, ...entry });
   }
   await atomicWrite(root, ['.swarm', 'ui', 'results.json'], `${JSON.stringify(results, null, 2)}\n`);

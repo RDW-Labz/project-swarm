@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "cism2",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Two small config edits, no other change. (1) In package.json add one script entry test:browser with the value node --test --test-timeout=300000 tests/browser/command-center.smoke.mjs placed after the existing test entry; add no dependency and change no other field. (2) In .github/workflows/ci.yml add a NEW job named browser-smoke after the existing test job: runs-on ubuntu-latest, timeout-minutes 15, one matrix-free configuration with node version 22 only, steps that use exactly the same pinned action references (with the same commit SHAs and comments) as the existing test job for checkout and setup-node, then run: npm ci --ignore-scripts, then run: npx playwright install --with-deps chromium, then run: npm run test:browser. Keep the permissions, triggers and the existing test job unchanged and keep the final comment line of the file. Make sure tests that read the workflow or package.json still pass. Tests must not contain credential-looking literals: build any fake secret-like value at run time and never assign quoted secret-looking strings to variables named like token, secret, password or key (a page token for the test server is generated with crypto.randomBytes at run time). Keep every existing test passing.",
+   "context": [
+    "package.json",
+    ".github/workflows/ci.yml",
+    "tests/_isolate-config.mjs"
+   ],
+   "outputs": [
+    "package.json",
+    ".github/workflows/ci.yml"
+   ],
+   "timeoutMs": 1800000
+  }
+ ]
+}

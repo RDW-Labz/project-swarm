@@ -24,7 +24,9 @@ const heldRegistrationLock = { tail: Promise.resolve() };
 
 function withHeldLock(fn) {
   const run = heldRegistrationLock.tail.then(fn, fn);
-  heldRegistrationLock.tail = run.catch(() => {});
+  heldRegistrationLock.tail = run.catch(error => {
+    console.error('[tools/update-pending.mjs] withHeldLock queue tail:', error?.message ?? error);
+  });
   return run;
 }
 
@@ -74,13 +76,19 @@ export async function readLivePending(installRoot, opts = {}) {
   try {
     record = await readPendingRaw(installRoot);
   } catch {
-    await removePendingRecord(installRoot).catch(() => {});
+    await removePendingRecord(installRoot).catch(error => {
+      if (error?.code === 'ENOENT') return;
+      console.error('[tools/update-pending.mjs] readLivePending corrupt cleanup:', error?.message ?? error);
+    });
     warn('update-pending: removed corrupt pending record');
     return null;
   }
   if (!record) return null;
   if (!isPendingRecordLive(record, opts)) {
-    await removePendingRecord(installRoot).catch(() => {});
+    await removePendingRecord(installRoot).catch(error => {
+      if (error?.code === 'ENOENT') return;
+      console.error('[tools/update-pending.mjs] readLivePending stale cleanup:', error?.message ?? error);
+    });
     return null;
   }
   return record;
@@ -123,7 +131,10 @@ async function atomicWritePending(installRoot, record, { createOnly = false } = 
     await fs.rename(temporary, target);
     await fs.chmod(target, 0o600);
   } catch (error) {
-    await fs.unlink(temporary).catch(() => {});
+    await fs.unlink(temporary).catch(unlinkError => {
+      if (unlinkError?.code === 'ENOENT') return;
+      console.error('[tools/update-pending.mjs] atomicWritePending temp unlink:', unlinkError?.message ?? unlinkError);
+    });
     throw error;
   }
 }
@@ -211,7 +222,7 @@ export async function unregisterHeldLauncher(installRoot, launcherPid) {
 
 export async function waitBeforeLaunchingWork(installRoot, {
   env = process.env,
-  write = text => { try { process.stderr.write(text); } catch { /* tests */ } },
+  write = text => { try { process.stderr.write(text); } catch (error) { void error; /* tests: stderr may be non-writable; no log here (same stream) */ } },
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   launcherPid = process.pid,
 } = {}) {
@@ -348,7 +359,7 @@ export async function waitForMachineIdleWhilePending(installRoot, {
   pendingRecord,
   describeBusy,
   env = process.env,
-  write = text => { try { process.stderr.write(text); } catch { /* tests */ } },
+  write = text => { try { process.stderr.write(text); } catch (error) { void error; /* tests: stderr may be non-writable; no log here (same stream) */ } },
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   now = () => Date.now(),
   timeoutMinutes = DEFAULT_WHEN_IDLE_TIMEOUT_MINUTES,
@@ -394,7 +405,7 @@ export async function runWhenIdleUpdate({
   performUpdate,
   describeBusy,
   env = process.env,
-  write = text => { try { process.stderr.write(text); } catch { /* tests */ } },
+  write = text => { try { process.stderr.write(text); } catch (error) { void error; /* tests: stderr may be non-writable; no log here (same stream) */ } },
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   onAbort,
 } = {}) {
@@ -421,7 +432,10 @@ export async function runWhenIdleUpdate({
   const cleanup = async () => {
     if (removed) return;
     removed = true;
-    await removePendingRecord(installRoot).catch(() => {});
+    await removePendingRecord(installRoot).catch(error => {
+      if (error?.code === 'ENOENT') return;
+      console.error('[tools/update-pending.mjs] runWhenIdleUpdate cleanup:', error?.message ?? error);
+    });
   };
 
   const detachAbortHandlers = () => {

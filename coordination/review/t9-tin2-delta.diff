@@ -1,0 +1,227 @@
+diff --git a/tests/cc-cockpit-mount.test.mjs b/tests/cc-cockpit-mount.test.mjs
+index efc80fbd..706d3e96 100644
+--- a/tests/cc-cockpit-mount.test.mjs
++++ b/tests/cc-cockpit-mount.test.mjs
+@@ -321,6 +321,75 @@ test('renderProjectCockpit binds title, counters, columns, orchestrator, streams
+   globalThis.document = prevDocument;
+ });
+ 
++test('renderProjectCockpit uses server readyIds for NEXT UP and header when ledger strips dependsOn', async () => {
++  const project = {
++    id: 'strip-ready',
++    name: 'Strip',
++    ledger: {
++      tickets: [
++        { id: 'R-1', title: 'Ready one', status: 'ready' },
++        { id: 'T-1', title: 'Todo blocked in full ledger', status: 'todo' },
++      ],
++    },
++    sessions: [],
++    meta: { project: 'Strip' },
++    readyIds: ['R-1'],
++    counts: {
++      total: 9,
++      done: 3,
++      ready: 1,
++      review: 0,
++      blocked: 0,
++      todo: 1,
++      cancelled: 0,
++      proposed: 0,
++      superseded: 0,
++      remaining: 6,
++      percentDone: 33,
++      counted: 9,
++      needsYou: 7,
++    },
++    card: { blocked: { needYou: 7 } },
++    total: 9,
++    done: 3,
++    percentDone: 33,
++    runStream: [],
++  };
++  const { document, host, mountRobotHead } = setup();
++  const prevDocument = globalThis.document;
++  globalThis.document = document;
++  const view = renderProjectCockpit(host, project, {
++    document,
++    now: () => NOW,
++    glitch: () => false,
++    mountRobotHead,
++  });
++  const counter = k => {
++    const cnt = host.querySelector('.cnt');
++    for (const cell of cnt.children) {
++      for (const child of cell.children) {
++        if (child.getAttribute?.('data-k') === k) return textOf(child);
++      }
++    }
++    return '';
++  };
++  assert.equal(counter('tickets'), '9');
++  assert.equal(counter('done'), '3');
++  assert.equal(counter('need you'), '7');
++  assert.match(textOf(host.querySelector('.now .k')), /NEXT UP/);
++  assert.match(textOf(host.querySelector('.now .k')), /1 \/ 1/);
++  assert.equal(textOf(host.querySelector('.now .t')), 'R-1');
++  const leftIds = ticketIds(host.querySelector('#tickets-left'));
++  assert.deepEqual(leftIds, ['R-1']);
++  assert.ok(!leftIds.includes('T-1'));
++  const tileValues = Object.fromEntries(
++    host.querySelectorAll('.cockpit-metric-tile').map(t => [textOf(t.children[0]).toLowerCase(), textOf(t.children[1])]),
++  );
++  assert.equal(tileValues.ready, '1');
++  view.destroy();
++  globalThis.document = prevDocument;
++});
++
+ test('renderProjectCockpit shows short muted lines when the project has no tickets', async () => {
+   const project = buildProjectCockpit(fakeBoard({
+     orchestrator: { sessions: [] },
+diff --git a/tests/cc-hive-mount.test.mjs b/tests/cc-hive-mount.test.mjs
+index f87628a2..90217d30 100644
+--- a/tests/cc-hive-mount.test.mjs
++++ b/tests/cc-hive-mount.test.mjs
+@@ -230,6 +230,20 @@ function boardFixture() {
+         progress: { overall: 40 },
+         card: { blocked: { needYou: 0 }, now: { buildingTickets: 1 }, next: { ready: 3 } },
+         tickets: { byStatus: { done: 2, ready: 1, blocked: 1, review: 1, cancelled: 1, failed: 1 } },
++        counts: {
++          total: 4,
++          done: 2,
++          ready: 0,
++          blocked: 1,
++          review: 1,
++          todo: 0,
++          cancelled: 0,
++          proposed: 0,
++          superseded: 0,
++          remaining: 2,
++          percentDone: 50,
++          counted: 4,
++        },
+         ledger: {
+           tickets: [
+             { id: 'T-1', title: 'One', status: 'done', doneAt: iso(NOW - 30 * 60000) },
+diff --git a/tests/command-center-counts.test.mjs b/tests/command-center-counts.test.mjs
+index 394e4695..0afd5aba 100644
+--- a/tests/command-center-counts.test.mjs
++++ b/tests/command-center-counts.test.mjs
+@@ -143,15 +143,27 @@ test('stripped commandCenterLedger plus server counts: counts win for card shape
+     id: 'x',
+     card: { blocked: { needYou: 2 } },
+     ledger: { tickets: [{ id: 'A', status: 'ready' }, { id: 'B', status: 'todo' }] },
+-    counts: ticketCountsOf({
+-      tickets: [
+-        { id: 'A', status: 'ready' },
+-        { id: 'B', status: 'blocked' },
+-      ],
+-    }),
++    counts: {
++      total: 9,
++      done: 4,
++      ready: 0,
++      review: 0,
++      blocked: 0,
++      todo: 1,
++      cancelled: 0,
++      proposed: 0,
++      superseded: 0,
++      remaining: 5,
++      percentDone: 44,
++      counted: 9,
++    },
+   };
+   const shaped = mergeCardTicketCounts(project, 0);
+-  assert.equal(shaped.ready, 1);
+-  assert.equal(shaped.total, 2);
++  assert.equal(shaped.ready, 0, 'server ready wins over stripped rows that look ready');
++  assert.equal(shaped.total, 9, 'server total differs from two stripped rows');
++  assert.equal(shaped.done, 4);
+   assert.equal(shaped.needsYou, 2);
++  assert.equal(shaped.source, 'projects[0].counts');
++  const fromLedger = mergeCardTicketCounts({ ...project, counts: undefined }, 0);
++  assert.notEqual(fromLedger?.total, 9, 'ledger fallback is distinguishable');
+ });
+diff --git a/tools/command-center-snapshot.mjs b/tools/command-center-snapshot.mjs
+index 3dfda359..e390c540 100644
+--- a/tools/command-center-snapshot.mjs
++++ b/tools/command-center-snapshot.mjs
+@@ -422,6 +422,10 @@ export function buildProjectCockpit(board, projectId) {
+   if (!project) return null;
+   const ledger = ledgerFromProject(project);
+   const counts = cockpitCounts(project);
++  const nextItems = project?.card?.next?.items;
++  const readyIds = Array.isArray(nextItems)
++    ? nextItems.map(item => item?.id).filter(id => id != null && String(id) !== '').map(String)
++    : null;
+   return {
+     id: project.id,
+     name: project.name ?? null,
+@@ -436,6 +440,7 @@ export function buildProjectCockpit(board, projectId) {
+     stageRings: project.progress ?? null,
+     runStream: runStreamItems(project),
+     counts,
++    readyIds,
+     done: counts.done,
+     total: counts.total,
+     percentDone: counts.percentDone,
+diff --git a/tools/watch-assets/cc-cockpit-mount.js b/tools/watch-assets/cc-cockpit-mount.js
+index 8467bc15..9ecfc9fd 100644
+--- a/tools/watch-assets/cc-cockpit-mount.js
++++ b/tools/watch-assets/cc-cockpit-mount.js
+@@ -75,6 +75,15 @@ function liveTickets(ledger) {
+   return (ledger?.tickets ?? []).filter(t => t && !HIDDEN_STATUSES.includes(t.status));
+ }
+ 
++/** Server dependency-aware ready set when present; otherwise ledger-row readyTickets. */
++function projectReadyFn(project) {
++  if (Array.isArray(project?.readyIds)) {
++    const ids = new Set(project.readyIds.map(id => String(id)).filter(Boolean));
++    return (tickets) => (tickets ?? []).filter(t => t && ids.has(String(t.id)));
++  }
++  return readyTickets;
++}
++
+ function serverCounts(project) {
+   const c = project?.counts;
+   if (!c || typeof c !== 'object' || typeof c.total !== 'number' || !Number.isFinite(c.total)) return null;
+@@ -98,7 +107,8 @@ function headerCounters(project, rowCounts) {
+   const live = liveTickets(project?.ledger);
+   const total = project?.total ?? live.length;
+   const done = project?.done ?? rowCounts.done;
+-  const needsYou = live.filter(t => t.status === 'review' || (t.type === 'human' && t.status !== 'done')).length;
++  const needYouRaw = project?.card?.blocked?.needYou;
++  const needsYou = typeof needYouRaw === 'number' && Number.isFinite(needYouRaw) ? needYouRaw : 0;
+   return [
+     { label: 'tickets', value: total, tip: 'Tickets that still count in this project ledger (cancelled and proposed left out).' },
+     { label: 'agents', value: rowCounts.running, color: rowCounts.running ? 'var(--green)' : '', tip: 'Tickets with status running in the ledger right now.' },
+@@ -596,7 +606,7 @@ export function renderProjectCockpit(host, project, deps) {
+   function paint(at) {
+     const p = projectRef;
+     const signature = JSON.stringify([p?.id, p?.name, p?.ledger, p?.sessions, p?.meta,
+-      p?.done, p?.total, p?.counts, p?.runStream, Math.floor(at / 60000)]);
++      p?.done, p?.total, p?.counts, p?.readyIds, p?.runStream, Math.floor(at / 60000)]);
+     if (signature === paintSignature) return;
+     paintSignature = signature;
+     const ledger = p?.ledger ?? { tickets: [] };
+@@ -610,8 +620,9 @@ export function renderProjectCockpit(host, project, deps) {
+       done: headline?.done ?? p?.done,
+       total: headline?.total ?? p?.total,
+     }, { now: at });
++    const readyFn = projectReadyFn(p);
+     // one ordered ledger list drives both columns, the NOW card, the header, the stream count and the stack
+-    const columns = cockpitLedgerRows(ledger, readyTickets, { perColumn: ROWS_PER_COLUMN });
++    const columns = cockpitLedgerRows(ledger, readyFn, { perColumn: ROWS_PER_COLUMN });
+     const { counts } = columns;
+     const orch = model.orchestrator;
+     const allDone = model.total > 0 && model.done >= model.total;
+@@ -636,7 +647,7 @@ export function renderProjectCockpit(host, project, deps) {
+ 
+     patchPanel(colL, col => columns.left.length
+       ? renderTicketColumn(col, columns.left, { side: 'L', activeId, categoryOf: cats.of })
+-      : renderReadyEmptyState(col, ledger, readyTickets));
++      : renderReadyEmptyState(col, ledger, readyFn));
+     patchPanel(colR, col => renderTicketColumn(col, columns.right, { side: 'R', activeId, categoryOf: cats.of, more: columns.more, emptyText: 'No review, blocked or finished tickets yet.' }));
+     const rowsR = columns.right.length + (columns.more ? 1 : 0);
+     colL.classList.toggle?.('spread', columns.left.length >= SPREAD_MIN_ROWS);

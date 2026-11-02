@@ -1,0 +1,338 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Command Center phone layout (390px viewport, R-079). Pairs with shared.css. */
+
+@media (max-width: 390px) {
+  html {
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+
+  body.cc-body,
+  body.hive-body {
+    overflow-x: hidden;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .hive-shell,
+  .shell,
+  .cc-app {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    box-sizing: border-box;
+  }
+
+  .hive-shell {
+    padding: 8px 8px 12px;
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
+
+  .hive-chrome,
+  .hive-chrome-top,
+  .hive-stat-strip,
+  .hive-panels-wrap,
+  .hive-stage,
+  .hive-panels,
+  .cc-panels,
+  .cc-panel,
+  .band-header,
+  .band-main,
+  .band-bottom,
+  .panel-cockpit {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .hive-chrome-top {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 8px;
+  }
+
+  .hive-nav {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .cc-nav .cc-tab,
+  .hive-nav .cc-tab,
+  .cc-btn,
+  .hive-nav .cc-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .hive-stat-strip .cc-stat {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .hive-stat-strip .cc-stat .val,
+  .hive-stat-strip .cc-live {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .hive-stat-strip .cc-live {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .hive-illus,
+  .cc-illus-banner,
+  .hive-legend,
+  .cc-legend {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .hive-stage.hive-phone {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-x: hidden;
+    overflow-y: visible;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .hive-stage.hive-phone .hive-core-ui {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+    margin: 6px auto 8px;
+    width: min(60vw, calc(100% - 16px));
+    height: min(60vw, calc(100% - 16px));
+    max-width: min(60vw, calc(100% - 16px));
+    max-height: min(60vw, calc(100% - 16px));
+    flex: none;
+    overflow: hidden;
+  }
+
+  .hive-stage.hive-phone .hive-toolgate-callout {
+    max-width: min(220px, calc(100% - 16px));
+    right: 6px;
+    left: auto;
+    overflow-wrap: anywhere;
+  }
+
+  .hive-stage.hive-phone #hive-nodes,
+  .hive-nodes {
+    position: relative;
+    inset: auto;
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    align-content: start;
+    padding: 0 4px 10px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .hive-stage.hive-phone .hive-node,
+  .hive-node {
+    position: relative !important;
+    left: auto !important;
+    top: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: 100%;
+    height: auto !important;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .hive-node-bd {
+    overflow: visible;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .hive-node-hd,
+  .hive-kv,
+  .hive-kv dt,
+  .hive-kv dd,
+  .hive-meter {
+    min-width: 0;
+  }
+
+  .hive-kv dd,
+  .hive-meter .num {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .hive-panels,
+  .cc-panels,
+  .cc-panels--hive {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .hive-panels .cc-panel,
+  .cc-panel {
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .event-log li,
+  .event-log li > span,
+  .lane-row,
+  .lane-row .name,
+  .lane-row .num,
+  .lane-track,
+  .stat-lines .row,
+  .stat-lines .row .num,
+  .saving-row,
+  .saving-row .lbl,
+  .saving-row .num,
+  .term-prompt,
+  .term-block {
+    min-width: 0;
+  }
+
+  .event-log li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .lane-row {
+    grid-template-columns: minmax(0, 56px) minmax(0, 1fr) auto;
+  }
+
+  .mini-chart,
+  canvas.mini-chart {
+    max-width: 100%;
+    width: 100%;
+    height: auto;
+    box-sizing: border-box;
+  }
+
+  .hive-footer,
+  .cc-footer {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  /* Cockpit (external stylesheet for watch-hosted mockup) */
+  .shell {
+    padding: 0 8px 10px;
+    width: 100%;
+  }
+
+  .shell > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .panel-cockpit,
+  .phone-panel,
+  .phone-panel[data-active="true"] {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  .view-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 2px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .view-tabs [role="tab"] {
+    flex: 1 1 0;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 8px 2px;
+    font-size: 0.58rem;
+    box-sizing: border-box;
+  }
+
+  .btn-pill,
+  .nav-actions .btn-pill,
+  .ticket-row,
+  .ticket-search input {
+    min-height: 44px;
+    min-width: 44px;
+    box-sizing: border-box;
+  }
+
+  .cockpit-nav a {
+    min-height: 44px;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 6px;
+    box-sizing: border-box;
+  }
+
+  .nav-actions .btn-pill {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .cockpit-hero h1,
+  .cockpit-nav,
+  .scan-live,
+  .now-title,
+  .stream-card,
+  .metric-tile,
+  .stack-metrics,
+  .ticket-col--phone .ticket-row,
+  .stage-wrap--phone,
+  .mascot-stage--phone {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .cockpit-hero .headline-line,
+  .cockpit-hero .tagline {
+    overflow-wrap: anywhere;
+  }
+
+  .stream-section--phone .stream-card {
+    min-height: 44px;
+  }
+
+  .stack-block--phone .stack-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .stack-block--phone .metric-tile {
+    min-width: 0;
+    padding: 10px 8px;
+  }
+
+  .stack-block--phone .metric-tile .m-val {
+    overflow-wrap: anywhere;
+  }
+
+  .phone-now-rows .ticket-row {
+    min-height: 44px;
+  }
+}

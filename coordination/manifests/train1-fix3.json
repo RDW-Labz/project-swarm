@@ -1,0 +1,42 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "fixverifyshell",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "prompt": "Opus re-review blocker in the orchestrator manifest gate (tools/om-manifest-guard.mjs, vetJobs, used by omRunManifestVetted and orchestratorManifestGate). vetJobs refuses every job with shell: true or a model ending in -shell. But the swarm's OWN verify jobs have that shape: tools/ticket-manifest.mjs (line ~345) merges verifyJobFields(ticket, profile.verify) from tools/verify-config.mjs into a ticket's job, and with the default verify agent 'claude' that sets shell: true and model 'sonnet-shell' (plus setup, testEnv, timeoutMs). So in orchestrator mode 'swarm go --scope' would throw for every test-gated ticket.\nFix (option a, fail closed): a job with shell: true or a -shell model is allowed only when ALL of these hold: (1) the job id names a ticket in the approved ledger (.swarm/project/tickets.json via readLedger-style sync read; the ledger must be approved: use isApproved from tools/tickets.mjs if it can be called synchronously, otherwise compare ledger.approved.ticketsHash with ticketSetHash(ledger.tickets)); (2) const v = verifyJobFields(ledgerTicket, profile.verify) is non-null; (3) the job's agent, model, shell, setup (deep-equal, missing = missing), testEnv (deep-equal) and timeoutMs equal v's fields exactly. Anything else with shell stays refused with the current reason. The ledger and profile are outside the orchestrator write allowlist (see orchestratorWriteAllowedRel), which is what makes them trustworthy here. The setup argv list of such a job counts as vetted only through this match (do not add verify.setup to the general vetted set for other jobs beyond what is already there).\nTests in tests/om-manifest-guard.test.mjs: temp project with profile.verify {command:[npx,vitest,run,{tests}]} (agent defaults to claude), an approved ledger (build it with createLedger/approveLedger from tools/tickets.mjs and write it to .swarm/project/tickets.json) holding ticket T-0001 of type test with tests:['tests/a.test.ts']; a job {id:'T-0001', ...verifyJobFields fields} passes omRunManifestVetted and orchestratorManifestGate (CLAUDECODE=1, mode on, hook installed); the same job with model changed to opus-shell, or with an extra setup argv, or with id T-9999, or with the ledger unapproved, is refused; a hand-written job {id:'x', shell:true} is refused. tests/split-module.test.mjs only checks module names.",
+   "context": [
+    "tools/verify-config.mjs",
+    "tools/ticket-manifest.mjs",
+    "tools/tickets.mjs",
+    "tools/orchestrator-allow.mjs",
+    "tests/orchestrator-mode.test.mjs"
+   ],
+   "outputs": [
+    "tools/om-manifest-guard.mjs",
+    "tests/om-manifest-guard.test.mjs"
+   ],
+   "ignoreTests": [
+    "tests/split-module.test.mjs"
+   ],
+   "timeoutMs": 2400000
+  }
+ ],
+ "checks": [
+  {
+   "name": "verifyshell",
+   "argv": [
+    "node",
+    "--import",
+    "./tests/_isolate-config.mjs",
+    "--test",
+    "tests/om-manifest-guard.test.mjs",
+    "tests/orchestrator-mode.test.mjs",
+    "tests/orchestrator-allow.test.mjs"
+   ]
+  }
+ ]
+}

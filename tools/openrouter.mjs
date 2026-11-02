@@ -109,13 +109,25 @@ export function assertBookkeepingOnly(job) {
   if (bad.length) fail(`Job ${job.id}: ${job.model} is for bookkeeping jobs only (PR payloads, changelogs, mutants files, metrics, .swarm-manifests/*.md); a contract or other .md with design content goes to a cheap Claude tier instead; refused outputs: ${bad.join(', ')}`);
 }
 
+export const OPENROUTER_LANE_PAUSED = 'openrouter-lane-paused';
+export function openrouterLanePausedProblem(config) {
+  if (config?.lanes?.openrouter?.paused !== true) return null;
+  return `${OPENROUTER_LANE_PAUSED}: the paid openrouter lane is paused and no key was read`;
+}
+export function assertOpenrouterLaneNotPaused(config) {
+  const problem = openrouterLanePausedProblem(config);
+  if (problem) throw Object.assign(new Error(problem), { code: OPENROUTER_LANE_PAUSED });
+}
+
 // The key: env first (tests, CI), else the keychain on macOS. Never logged, never returned
 // in any result.
-export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync, config } = {}) {
+export function readOpenRouterKey(env = process.env, { platform = process.platform, exec = execFileSync, config, loadConfig = loadLocalConfig, home } = {}) {
+  const resolvedConfig = config ?? loadConfig({ env, home: home ?? env?.HOME });
+  assertOpenrouterLaneNotPaused(resolvedConfig);
   const fromEnv = env[OPENROUTER_KEY_ENV];
   if (typeof fromEnv === 'string' && fromEnv.length) return fromEnv;
   if (env.SWARM_OPENROUTER_NO_KEYCHAIN === '1' || platform !== 'darwin') return null;
-  const item = openRouterKeyItem(config ?? loadLocalConfig({ env }));
+  const item = openRouterKeyItem(resolvedConfig);
   try {
     const out = exec('/usr/bin/security', ['find-generic-password', '-s', item.service, '-a', item.account, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
     const key = String(out).trim();

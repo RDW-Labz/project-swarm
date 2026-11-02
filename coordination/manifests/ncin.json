@@ -1,0 +1,52 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ncin",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "mid",
+   "timeoutMs": 3000000,
+   "context": [
+    "tools/autopilot.mjs",
+    "tools/generated-state.mjs"
+   ],
+   "outputs": [
+    "tools/autopilot.mjs",
+    "tools/generated-state.mjs",
+    "tests/autopilot-integrate-clean.test.mjs"
+   ],
+   "prompt": "Autopilot integrate must not be blocked by unrelated local files. Today tools/autopilot.mjs integrationBlocker treats any dirty checkout (integrateCheckoutDirtyFromPorcelain, filterGeneratedStatus from tools/generated-state.mjs) as a blocker, so the main checkout (the ledger root), which always has untracked files such as notes, scratch folders and local settings, leaves completed runs 'not integrated' and floods Needs-you (items integrate-checkout-RUN). Fix: 1) the dirty check ignores untracked files completely (git status --porcelain --untracked-files=no) and ignores the generated state paths already filtered (handoff files, the usage ledger, everything under .swarm), and only a TRACKED modified, staged or conflicted file, a merge or rebase in progress, or a detached HEAD counts as dirty; additionally compute the paths the run would write (the job outputs of that run) and block only when one of THOSE paths is itself modified or untracked-and-present in the checkout (a real collision), naming the paths in the blocker text; never stash, reset, clean or delete anything. 2) A run with no integratable outputs (a splitter run whose outputs are ticket JSON files that are ingested with swarm scope split --ingest, an acceptance-review or security-review run, a run that failed or was cancelled) must never produce an integrate or integrate-checkout item at all, and any existing open item of that kind for such a run is closed automatically with a note. 3) Keep the other integration rules (only on a swarm/* branch or linked worktree, not main). Tests in tests/autopilot-integrate-clean.test.mjs with injected deps: untracked junk does not block, a tracked modification of an unrelated file blocks only if listed as the run's output path or conflicting, a collision on an output path blocks and names it, splitter and review runs produce no item and an old item is closed, nothing is ever stashed or removed. Keep every existing test passing (tests/autopilot-*.test.mjs, tests/generated-state*.test.mjs).",
+   "ignoreTests": [
+    "tests/autopilot-blocker-resolved.test.mjs",
+    "tests/autopilot-busy.test.mjs",
+    "tests/autopilot-ledger-only.test.mjs",
+    "tests/autopilot-lock.test.mjs",
+    "tests/autopilot-no-outputs.test.mjs",
+    "tests/autopilot-policy-pass.test.mjs",
+    "tests/autopilot-quiet-poll.test.mjs",
+    "tests/autopilot-readonly-runs.test.mjs",
+    "tests/autopilot-retry-duplicates.test.mjs",
+    "tests/autopilot-start-ready.test.mjs",
+    "tests/autopilot-wide-waves.test.mjs",
+    "tests/autopilot.test.mjs",
+    "tests/b7-review-fixes.test.mjs",
+    "tests/brain-commands.test.mjs",
+    "tests/fixtures/ledgers/roadmap-ledger.json",
+    "tests/generated-state.test.mjs",
+    "tests/integrate-autocommit.test.mjs",
+    "tests/ledger-merge.test.mjs",
+    "tests/lessons-28-32-eval.test.mjs",
+    "tests/memory-fixes.test.mjs",
+    "tests/phase10c.test.mjs",
+    "tests/policy-wiring-phase2.test.mjs",
+    "tests/run-kind-nonintegrating.test.mjs",
+    "tests/safety-commands.test.mjs",
+    "tests/scope-loop.test.mjs",
+    "tests/split-module.test.mjs",
+    "tests/wave-batch.test.mjs"
+   ]
+  }
+ ]
+}

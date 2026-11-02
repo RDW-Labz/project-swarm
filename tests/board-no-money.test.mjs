@@ -22,6 +22,7 @@ const deltaFile = fileURLToPath(new URL('../tools/watch-delta.mjs', import.meta.
 const SOURCE_FORBIDDEN = [
   [/usd\s*\(/, 'usd( helper'],
   [/'\$'\s*\+/, '$ + number formatting'],
+  [/String\.fromCharCode\s*\(\s*36\s*\)/, 'runtime dollar'],
   [/list value/i, 'list value'],
   [/\bBilled\b/, 'Billed'],
   [/tile\s*\(\s*['"]Cost['"]/, 'Cost tile label'],

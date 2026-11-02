@@ -1,0 +1,19 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "hookimporttest",
+   "agent": "cursor",
+   "model": "composer-2.5",
+   "tier": "cheap",
+   "prompt": "Fix one test in tests/orchestrator-hook-import.test.mjs: 'validate refuses unvetted checks argv under CLAUDECODE with hook installed' fails on GitHub CI (ubuntu and macOS, Node 20/22) with: {\"status\":\"error\",\"error\":\"Check interpreter probe failed: check \\\"evil\\\" needs sh, which was not found\"}. validate runs a check-interpreter probe before the orchestrator manifest gate, and on CI the probe cannot resolve `sh`, so the refusal comes from the probe instead of the gate the test means to exercise. Change the unvetted check to use the Node binary itself so the probe always resolves it, e.g. argv [process.execPath, '-e', '1'] (or ['node', '-e', '1'] if the probe resolves node on PATH in this test's env; prefer process.execPath for robustness), keep it NOT listed in the project's coordination/checks.json so it stays unvetted, and keep the assertion that the output matches /orchestrator-manifest-unvetted|not a vetted command/ and the status is non-zero. Change nothing else in the file.",
+   "context": [],
+   "outputs": ["tests/orchestrator-hook-import.test.mjs"],
+   "timeoutMs": 900000
+  }
+ ],
+ "checks": [
+  { "name": "hook-import", "argv": ["node", "--import", "./tests/_isolate-config.mjs", "--test", "tests/orchestrator-hook-import.test.mjs"] }
+ ]
+}

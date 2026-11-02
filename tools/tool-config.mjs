@@ -41,7 +41,7 @@ export const existsIn = root => spec => {
         for (const inner of readdirSync(path.join(root, entry.name), { withFileTypes: true })) if (spec.has.test(`${entry.name}/${inner.name}`) || (inner.isFile() && spec.has.test(inner.name))) return true;
       }
     }
-  } catch { /* unreadable: treat as missing */ }
+  } catch (error) { if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') console.error('[tools/tool-config.mjs] existsIn readdir:', error?.message ?? error); /* unreadable: treat as missing */ }
   return false;
 };
 

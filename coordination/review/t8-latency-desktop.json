@@ -1,0 +1,14 @@
+{
+  "url": "http://127.0.0.1:59960/command-center?t=…&tour=0",
+  "profile": "desktop",
+  "runs": 3,
+  "latenciesMs": [
+    191,
+    1010,
+    1002
+  ],
+  "medianMs": 1002,
+  "bootFullSnapshotFetches": 1,
+  "fullSnapshotFetchesAfterReady": 1,
+  "fullSnapshotFetchesDuringUpdates": 0
+}

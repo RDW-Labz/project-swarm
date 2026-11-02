@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t9-ring-direct",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "type": "fix",
+      "prompt": "FILE ACCESS: your declared outputs are readable. Two display fixes for the 1.167.36 release.\n\nA) HIVE RING AT SHORT WINDOWS: the Hive ring is too large below ~1000 px viewport height, pushing the first row of project cards below the fold. In tools/watch-assets/cc-hive.css add a height breakpoint; do not change behavior above 1000 px (large screens keep the full ring):\n- @media (max-height:1000px) and (max-width:1340px): the narrow layout's ring is the first grid row (the canvas). Set the canvas width to min(100%,300px) instead of 420px and tighten the stage gap/padding (gap:10px; padding:2px 0 6px) so the first card row is visible without scrolling.\n- @media (max-height:1000px) and (min-width:1341px): the desktop ellipse geometry reads the stage height (hiveGeometry uses the canvas/stage height), so cap the stage height to clamp(440px, calc(100vh - 140px), 680px). This shrinks the ring and the vertical spread; the first card row stays at the top of the stage.\n- Keep the existing >1000px rules untouched. Add a test in tests/cc-hive-mount.test.mjs that reads tools/watch-assets/cc-hive.css and asserts the max-height:1000px block contains the narrow canvas width (300px) and the desktop stage height cap; keep the existing selector-scope test.\n\nB) DIRECT-BUILD HIVE EXTRAS: direct-build projects must not contribute swarm counters or swarm ticket events to the Hive. In tools/command-center-snapshot.mjs buildHiveExtras, filter out projects with directBuild true before computing throughput24h, the doneLast24h sum and hiveEvents. Keep lanes, open PRs and non-direct projects unchanged. In tests/command-center-counts.test.mjs add a test with a normal project (doneLast24h 3 and a review ticket in its ledger) and a direct-build project (doneLast24h 5 and a review ticket of its own): assert hive.doneLast24h is 3 (not 8) and the session log has only the normal project's review event. Keep the existing tests.\n\nC) CHANGELOG.md: add exactly one bullet to the existing ## 1.167.36 entry, immediately before its '- Version 1.167.36.' line: '- Hive ring: at window heights under 1000 px the ring shrinks (narrow-layout canvas 300 px; desktop stage capped) so the first row of project cards is visible without scrolling; large screens keep the full ring;'. Do not change the version or other entries.\n\nCONSTRAINTS: display only; no new dependencies; no changes to counts math, ticket statuses, run behavior, or the >1000px Hive layout.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/cc-hive-mount.test.mjs tests/command-center-counts.test.mjs tests/command-center-snapshot.test.mjs tests/t101-release.test.mjs -> all pass.",
+      "context": [
+        "tools/watch-assets/cc-hive.css",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/command-center-snapshot.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/t101-release.test.mjs",
+        "CHANGELOG.md",
+        "tests/_isolate-config.mjs"
+      ],
+      "outputs": [
+        "tools/watch-assets/cc-hive.css",
+        "tools/command-center-snapshot.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/anthropic-lane.test.mjs",
+        "tests/cap-reroute.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/codex-envelope.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-live.test.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lessons-batch-aa-core.test.mjs",
+        "tests/field-lessons-batch-ab-release.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-ai-context.test.mjs",
+        "tests/field-lessons-batch-ai-release.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/job-types.test.mjs",
+        "tests/openrouter.test.mjs",
+        "tests/router.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/update.test.mjs"
+      ],
+      "ignoreTestsReason": "Focused display tests run here; the listed suites run in the full suite after integration."
+    }
+  ],
+  "checks": [
+    {
+      "name": "t9-ring-direct",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/t101-release.test.mjs"
+      ]
+    }
+  ]
+}

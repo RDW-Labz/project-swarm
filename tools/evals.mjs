@@ -34,14 +34,20 @@ async function readJson(file) {
 
 // Kind of the path below base, checking every part with lstat. Never follows a symlink.
 async function pathKind(base, rel) {
-  const top = await fs.lstat(base).catch(() => null);
+  const top = await fs.lstat(base).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] pathKind lstat base:', error?.message ?? error);
+    return null;
+  });
   if (!top) return 'missing';
   if (top.isSymbolicLink()) return 'symlink';
   const parts = rel.split('/');
   let cur = base;
   for (let i = 0; i < parts.length; i++) {
     cur = path.join(cur, parts[i]);
-    const st = await fs.lstat(cur).catch(() => null);
+    const st = await fs.lstat(cur).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] pathKind lstat segment:', error?.message ?? error);
+      return null;
+    });
     if (!st) return 'missing';
     if (st.isSymbolicLink()) return 'symlink';
     if (i === parts.length - 1) return st.isFile() ? 'file' : st.isDirectory() ? 'dir' : 'other';
@@ -51,7 +57,10 @@ async function pathKind(base, rel) {
 }
 
 async function assertRealDir(dir) {
-  const st = await fs.lstat(dir).catch(() => null);
+  const st = await fs.lstat(dir).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] assertRealDir lstat:', error?.message ?? error);
+    return null;
+  });
   if (!st || st.isSymbolicLink() || !st.isDirectory()) throw refuse('not a real folder', 'not-folder');
 }
 
@@ -137,7 +146,10 @@ export const EVAL_GROUP_MARKER = '.eval-group';
 
 async function isEvalFixtureGroup(dir) {
   const marker = path.join(dir, EVAL_GROUP_MARKER);
-  const st = await fs.lstat(marker).catch(() => null);
+  const st = await fs.lstat(marker).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] isEvalFixtureGroup lstat marker:', error?.message ?? error);
+    return null;
+  });
   return Boolean(st && !st.isSymbolicLink() && st.isFile());
 }
 
@@ -145,7 +157,10 @@ export async function listEvals(root, { dir = 'evals' } = {}) {
   const base = path.join(root, dir);
   const evals = [];
   const invalid = [];
-  const bst = await fs.lstat(base).catch(() => null);
+  const bst = await fs.lstat(base).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] listEvals lstat base:', error?.message ?? error);
+    return null;
+  });
   if (!bst) return { evals, invalid };
   if (bst.isSymbolicLink()) throw refuse('evals folder is a symlink', 'symlink');
   const entries = await fs.readdir(base, { withFileTypes: true });
@@ -180,8 +195,8 @@ export function defaultRun(command, args, options = {}) {
       } catch {
         try {
           child.kill('SIGKILL');
-        } catch {
-          // already gone
+        } catch (e) {
+          if (e?.code !== 'ESRCH') console.error('[tools/evals.mjs] killGroup child.kill SIGKILL:', e?.message ?? e);
         }
       }
     };
@@ -225,7 +240,10 @@ export async function checkEval(evalDir, outputsDir, { run = defaultRun } = {}) 
       await copyFileSafe(path.join(outputsDir, rel), path.join(work, rel));
     }
     const hidden = path.join(evalDir, 'hidden');
-    if (await fs.lstat(hidden).catch(() => null)) await copyTree(hidden, work);
+    if (await fs.lstat(hidden).catch((error) => {
+      if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] checkEval lstat hidden:', error?.message ?? error);
+      return null;
+    })) await copyTree(hidden, work);
     const env = { PATH: process.env.PATH ?? '', HOME: tmp, TMPDIR: tmp, NODE_ENV: 'test' };
     const res = await run(spec.check.argv[0], spec.check.argv.slice(1), {
       cwd: work,
@@ -301,7 +319,10 @@ export function evalManifest(evals, { agent = 'auto', model, lane, maxUsd } = {}
 // The job workspace must be a real folder inside <root>/.swarm/workspaces with no symlink parts.
 async function workspaceFolder(root, ws) {
   if (typeof ws !== 'string' || !ws) return null;
-  const realRoot = await fs.realpath(root).catch(() => null);
+  const realRoot = await fs.realpath(root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/evals.mjs] workspaceFolder realpath root:', error?.message ?? error);
+    return null;
+  });
   if (!realRoot) return null;
   const base = path.resolve(realRoot, '.swarm', 'workspaces');
   const target = path.resolve(realRoot, ws);

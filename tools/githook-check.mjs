@@ -105,12 +105,20 @@ export function pathsFromCachedNameStatus(text) {
   return paths;
 }
 
+function isUnexpectedExecFileSyncError(error) {
+  return typeof error?.status !== 'number';
+}
+
 function gitCommentChar(root) {
   try {
     const ch = execFileSync('git', ['config', '--get', 'core.commentChar'], { cwd: root, encoding: 'utf8', timeout: 3000 }).trim();
     if (ch === 'auto') return '#';
     if (ch) return ch[0];
-  } catch { /* default */ }
+  } catch (error) {
+    if (isUnexpectedExecFileSyncError(error)) {
+      console.error('[tools/githook-check.mjs] gitCommentChar:', error?.message ?? error);
+    }
+  }
   return '#';
 }
 
@@ -159,14 +167,20 @@ export function shouldSkipCommitMsgCheck({ root, env = process.env, argv = proce
       if (fs.existsSync(path.join(gd, 'MERGE_HEAD'))) return true;
       if (fs.existsSync(path.join(gd, 'rebase-merge')) || fs.existsSync(path.join(gd, 'rebase-apply'))) return true;
       if (fs.existsSync(path.join(gd, 'CHERRY_PICK_HEAD'))) return true;
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.error('[tools/githook-check.mjs] shouldSkipCommitMsgCheck gitDir/exists:', error?.message ?? error);
+    }
   }
   const msgPath = messagePath ?? argv[3];
   if (msgPath) {
     try {
       const subj = readCommitSubjectFromFile(msgPath, { commentChar: root ? gitCommentChar(root) : '#' });
       if (/^(fixup|squash)!/i.test(subj.trim())) return true;
-    } catch { /* ignore */ }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        console.error('[tools/githook-check.mjs] shouldSkipCommitMsgCheck readCommitSubjectFromFile:', error?.message ?? error, msgPath);
+      }
+    }
   }
   const msg = env.GIT_COMMIT_MSG ?? '';
   if (/^(fixup|squash)!/i.test(msg.trim())) return true;
@@ -264,7 +278,11 @@ function syntheticRefsWhenStdinEmpty(root) {
   const localSha = gitQuiet(root, ['rev-parse', 'HEAD']);
   const ref = `refs/heads/${branch}`;
   let remoteSha = `${'0'.repeat(40)}`;
-  try { remoteSha = gitQuiet(root, ['rev-parse', `refs/remotes/origin/${branch}`]); } catch { /* first push */ }
+  try { remoteSha = gitQuiet(root, ['rev-parse', `refs/remotes/origin/${branch}`]); } catch (error) {
+    if (isUnexpectedExecFileSyncError(error)) {
+      console.error('[tools/githook-check.mjs] syntheticRefsWhenStdinEmpty remote rev-parse:', error?.message ?? error);
+    }
+  }
   let ahead = '0';
   try { ahead = gitQuiet(root, ['rev-list', '--count', `refs/remotes/origin/${branch}..HEAD`]); } catch {
     try { ahead = gitQuiet(root, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']); } catch { return []; }

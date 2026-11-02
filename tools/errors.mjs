@@ -102,7 +102,10 @@ export function normalizeRoute(value) {
   const parts = route.split('/').map(raw => {
     if (!raw) return raw;
     let part = raw;
-    try { part = decodeURIComponent(raw); } catch { /* keep as written */ }
+    try { part = decodeURIComponent(raw); } catch (error) {
+      if (!(error instanceof URIError)) console.error('[tools/errors.mjs] decodeURIComponent route segment:', error?.name ?? error);
+      /* keep as written */
+    }
     // Anything that names a person, a record or a secret becomes :id; plain words are kept (they are the route).
     if (/^\d+$/.test(part) || /[%=;@:,+]/.test(raw) || /@/.test(part) || /^(?:\d{1,3}\.){3}\d{1,3}$/.test(part) || /^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$/.test(part)
       || /^[0-9a-fA-F]{12,}$/.test(part) || part.length >= 21 || (part.length >= 8 && /\d/.test(part) && /[A-Za-z]/.test(part)) || /\.\d/.test(part) || /^(?:cus|pi|ch|sub|acct|evt)_/.test(part)) return ':id';
@@ -185,7 +188,10 @@ export function parseVercelLine(line) {
         level = 'error';
         message = String(inner.error?.message ?? inner.error ?? inner.message ?? inner.event ?? 'logged error');
       }
-    } catch { /* not JSON after all: the text is the message */ }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) console.error('[tools/errors.mjs] inner message JSON.parse:', error?.name, error?.code);
+      /* not JSON after all: the text is the message */
+    }
   }
   // Vercel reports what an app writes to stderr as warn: an Error-shaped message on stderr counts as an error, a plain warning does not.
   const errorShaped = /\b[A-Za-z][A-Za-z0-9_]*(?:Error|Exception)\b|^Error\b/.test(message.slice(0, 300));
@@ -208,11 +214,19 @@ async function withLock(root, fn) {
   const lock = path.join(root, '.swarm', 'project', 'errors.lock');
   await fs.mkdir(path.dirname(lock), { recursive: true });
   const started = Date.now();
+  let loggedStatError = false;
   for (;;) {
     try { const handle = await fs.open(lock, 'wx', 0o600); await handle.writeFile(String(process.pid)); await handle.close(); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.stat(lock).catch(() => null);
+      const stat = await fs.stat(lock).catch((statError) => {
+        if (statError?.code === 'ENOENT') return null;
+        if (!loggedStatError) {
+          loggedStatError = true;
+          console.error('[tools/errors.mjs] withLock fs.stat:', statError?.code ?? 'unknown');
+        }
+        return null;
+      });
       if (stat && Date.now() - stat.mtimeMs > 60000) { await fs.rm(lock, { force: true }); continue; }
       if (Date.now() - started > 15000) throw Object.assign(new Error('errors-busy: another swarm errors command is running; try again'), { code: 'errors-busy' });
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -323,7 +337,10 @@ export function ingestErrors(root, rawEvents, { config, addTicket, ticketStatus 
         if (result.tickets.length >= MAX_TICKETS_PER_INGEST) { result.held += 1; }
         else {
           const last = group.tickets.at(-1) ?? null;
-          const id = await addTicket(errorTicket(group, comesBack ? last?.id ?? null : null, cfg)).catch(() => null);
+          const id = await addTicket(errorTicket(group, comesBack ? last?.id ?? null : null, cfg)).catch((error) => {
+            console.error('[tools/errors.mjs] addTicket failed:', group.fingerprint, scrubText(String(error?.message ?? error), 200));
+            return null;
+          });
           if (id) { group.tickets.push({ id, at: time, reopenOf: comesBack ? last?.id ?? null : null }); result.tickets.push(id); }
           // A regression is recorded as one only when its proposal exists; otherwise the next batch tries again.
           if (comesBack && id) { group.status = 'open'; delete group.fixedAt; group.notifiedAt = null; result.reopened.push(group.fingerprint); }

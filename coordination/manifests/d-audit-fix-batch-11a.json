@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-lessons",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/lessons.mjs (search for '### tools/lessons.mjs' - it lists exact line numbers; note line 200 is listed TWICE because that one line has two separate inline `.catch(() => {})` calls chained one after another - find and fix both).\n\nIMPORTANT - this file is sensitive (LOCK): `withStoreLock`'s cleanup (`finally { await handle.close().catch(() => {}); await fs.unlink(lock).catch(() => {}); }`) releases an exclusive filesystem lock used to serialize lesson-file writes. If `fs.unlink(lock)` fails, the lock FILE ITSELF is left behind - every future call to `withStoreLock` for the same file would then fail to acquire the lock (it uses `fs.open(lock, 'wx', ...)`, an exclusive create that fails if the file already exists) and the whole lessons system would be stuck until someone manually deletes the stale lock file. Both catches in this cleanup (`handle.close()` and `fs.unlink(lock)`) need UNCONDITIONAL visibility (no narrowing, log every failure) given how serious a stuck lock would be - but do NOT add a throw, do NOT change what `withStoreLock` returns, do NOT change the finally block's structure.\n\nThe other flagged catches (two `fs.unlink(...).catch(() => {})` calls cleaning up temp/backup files in `replaceFiles`'s own finally block after a multi-file atomic swap, and two lines in `lessonAreas` checking for an optional skills folder/SKILL.md file) are ordinary best-effort cleanup/lookup, not lock-related - treat those per the normal rules below.\n\nFor EACH flagged line in tools/lessons.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. a skills folder or SKILL.md file that may not exist (ENOENT), a temp/backup file cleanup that may legitimately fail if the file was already removed. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), narrow to a specific error code where one clearly applies, and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) The two lock-release catches described above, or any other genuinely unexpected case with no narrower expected code. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention of its own - use `console.error('[tools/lessons.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call - do not just rename-and-ignore a binding.\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above - the lock acquire/release sequence and the atomic multi-file replace/recovery logic must behave identically to before.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration, and will also get this reviewed via the claude CLI before merge given the sensitivity (lock), and will send back any issue as a follow-up. List, in your final summary, which of the 6 flagged lines you touched, how (unconditional log for the two lock-release sites, or case a/b for the rest), with one line each, and confirm withStoreLock's lock acquire/release sequence is unchanged.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/lessons.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/batch-b-eval.test.mjs",
+        "tests/field-lesson-346.test.mjs",
+        "tests/field-lesson-t80-cli.test.mjs",
+        "tests/field-lesson-t80-core.test.mjs",
+        "tests/field-lesson-t80-import.test.mjs",
+        "tests/field-lesson-t80-ship.test.mjs",
+        "tests/field-lessons-batch-aa-lessons.test.mjs",
+        "tests/field-lessons-batch-ab-core.test.mjs",
+        "tests/field-lessons-batch-ag-release.test.mjs",
+        "tests/field-lessons-batch-ah-release.test.mjs",
+        "tests/field-lessons-batch-x.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lesson-backfill.test.mjs",
+        "tests/lessons-28-32-eval.test.mjs"
+      ],
+      "ignoreTestsReason": "worker workspace doesn't include the test suite (isolated-file copy per swarm skill); full local suite runs against the integrated result before shipping, not inside the worker"
+    }
+  ]
+}

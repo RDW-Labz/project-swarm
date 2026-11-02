@@ -55,7 +55,10 @@ async function latestRunEnd(roots) {
       try {
         const state = JSON.parse(await fs.readFile(path.join(oneRoot, '.swarm/runs', id, 'state.json'), 'utf8'));
         if (typeof state.finishedAt === 'string' && (!latest || state.finishedAt > latest)) latest = state.finishedAt;
-      } catch { /* skip unreadable/corrupt state */ }
+      } catch (error) {
+        if (error instanceof SyntaxError || error?.code === 'ENOENT' || error?.code === 'ENOTDIR') { /* skip unreadable/corrupt state */ }
+        else console.error('[tools/swarm/core-2.mjs] run state.json:', error?.message ?? error);
+      }
     }
   }
   return latest;
@@ -81,7 +84,10 @@ export function withoutApiOnlyFields(job) {
 async function resolveLicensesFlag(root, licenses) {
   if (licenses === undefined) return null;
   let text = null;
-  try { text = (await fs.readFile(path.resolve(root, licenses), 'utf8')); } catch { /* not a file: treat the value itself as the list */ }
+  try { text = (await fs.readFile(path.resolve(root, licenses), 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR' && error?.code !== 'EISDIR' && error?.code !== 'ENAMETOOLONG') console.error('[tools/swarm/core-2.mjs] resolveLicensesFlag readFile:', error?.message ?? error);
+    /* not a file: treat the value itself as the list */
+  }
   const source = text ?? licenses;
   return source.split(/[\n,]/).map(entry => entry.trim()).filter(Boolean);
 }
@@ -166,7 +172,10 @@ export async function resolvePathCwdThenRoot(rawPath, root, { cwd = process.cwd(
   const fromRoot = path.resolve(root, rawPath);
   const candidates = path.isAbsolute(rawPath) ? [fromRoot] : (fromCwd => (fromCwd === fromRoot ? [fromRoot] : [fromCwd, fromRoot]))(path.resolve(cwd, rawPath));
   for (const candidate of candidates) {
-    try { await fs.access(candidate); return candidate; } catch { /* try the next candidate */ }
+    try { await fs.access(candidate); return candidate; } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') console.error('[tools/swarm/core-2.mjs] resolvePathCwdThenRoot access:', error?.message ?? error);
+      /* try the next candidate */
+    }
   }
   throw Error(`${label} not found: ${rawPath} (tried: ${candidates.join(', ')})`);
 }
@@ -177,10 +186,16 @@ async function ticketForBudgetFailure(root, result, files) {
   const { readBudgetState, linkBudgetTicket } = await import('../budgets.mjs');
   const state = await readBudgetState(root);
   const existing = state.screens[result.id]?.ticket;
-  const ledger = await (await import('../tickets.mjs')).readLedger(root).catch(() => null);
+  const ledger = await (await import('../tickets.mjs')).readLedger(root).catch(error => {
+    console.error('[tools/swarm/core-2.mjs] readLedger for budget ticket:', error?.message ?? error);
+    return null;
+  });
   if (existing && ledger?.tickets.some(t => t.id === existing && !['done', 'cancelled'].includes(t.status))) return existing;
   const summary = `screen ${result.id}: ${result.failures.slice(0, 5).map(f => f.message).join('; ')}`;
-  const ticket = await addCiFixTicket(root, { ...fixTicketFromFailure({ kind: 'budget', batchNumber: 0, files, summary }), title: `Fix speed/accessibility budget on screen ${result.id}`.slice(0, 140), acceptance: [`Screen ${result.id} is back within its Lighthouse and axe budgets.`] }).catch(() => null);
+  const ticket = await addCiFixTicket(root, { ...fixTicketFromFailure({ kind: 'budget', batchNumber: 0, files, summary }), title: `Fix speed/accessibility budget on screen ${result.id}`.slice(0, 140), acceptance: [`Screen ${result.id} is back within its Lighthouse and axe budgets.`] }).catch(error => {
+    console.error('[tools/swarm/core-2.mjs] addCiFixTicket for budget screen:', result.id, error?.message ?? error);
+    return null;
+  });
   if (ticket) await linkBudgetTicket(root, result.id, ticket);
   return ticket;
 }
@@ -196,7 +211,10 @@ export async function invalidArgumentsMessage(command,installRoot,{importMetaUrl
     try{
       if(importMetaUrl){const {runnerVersion}=await import('../runner-version.mjs');version=await runnerVersion(importMetaUrl);}
       else version=JSON.parse(await fs.readFile(path.join(installRoot,'package.json'),'utf8')).version;
-    }catch{/* version stays unknown */}
+    }catch(error){
+      console.error('[tools/swarm/core-2.mjs] unknown-command version lookup:', error?.message ?? error);
+      /* version stays unknown */
+    }
     return `Unknown command "${command}". This is swarm ${version} (${installRoot}). If it is a newer command, run: swarm update. swarm --help lists the commands.`;
   }
   if(command&&command.startsWith('-'))return `Unknown option "${command}". swarm --help lists the commands and their options.`;

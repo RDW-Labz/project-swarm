@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t7-snapshot-safe",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "expensive",
+      "tierReason": "replace the OOM per-project snapshot caches with a bounded warm-cache fix; train 7 priority",
+      "sensitive": false,
+      "prompt": "FILE ACCESS: declared outputs are writable. Train 7: the per-project snapshot cache changes currently on the branch OOM the real-9-project board (4 GB heap, ArrayMap/readdir stack) even after the bounds; they are too risky. Replace them with a simple, bounded design and keep the perf script parser fix.\n\n1) In tools/board-data.mjs / tools/watch-server.mjs / tools/command-center-snapshot.mjs: remove the per-project aggregate caches and the run-state caches added by the last two runs (restore the plain snapshot computation), keeping every correctness/security change from train 6. Keep the watch-perf ps-time parser fix.\n2) Single snapshot cache in watch-server for /api/command-center and /api/command-center/project: one cached board/CC snapshot (no per-project map, no unbounded keys), TTL 60 s, stale-while-revalidate: serve the cached snapshot immediately even if older than the TTL, and trigger at most one background rebuild (single-flight) when stale; the next request gets the fresh one. On the page's first load, if the cache is cold, the request waits for the build as today. At server start, warm the snapshot once in the background (non-blocking, one attempt) so a dashboard opened shortly after the board starts is fast.\n3) Keep the security headers/token/cookie behavior and the 304/ETag behavior; keep the response bytes/shape identical.\n4) Update tests/command-center-perf-budget.test.mjs for the 60 s TTL and stale-while-revalidate (serve stale then refresh; one rebuild per stale period), update/replace tests/board-snapshot-perf.test.mjs with a bounded-memory test (many revisions; heap bounded) and a build-time bound, and add a test that a stale response is served without blocking while a single background rebuild runs. Remove the old per-project-cache tests that no longer apply. Verify: node --import ./tests/_isolate-config.mjs --test tests/command-center-perf-budget.test.mjs tests/board-snapshot-perf.test.mjs tests/watch-server.test.mjs tests/watch-token-urls.test.mjs tests/command-center-routes-flag.test.mjs -> all pass. Report the design and measured cold/warm behavior.",
+      "context": [
+        "tools/board-data.mjs",
+        "tools/watch-server.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tools/watch-perf.mjs"
+      ],
+      "outputs": [
+        "tools/board-data.mjs",
+        "tools/watch-server.mjs",
+        "tools/command-center-snapshot.mjs",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/board-snapshot-perf.test.mjs"
+      ],
+      "timeoutMs": 3000000,
+      "ignoreTests": [
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/board-accuracy-percent.test.mjs",
+        "tests/board-accuracy-untracked.test.mjs",
+        "tests/board-card-ui.test.mjs",
+        "tests/board-idle-ready.test.mjs",
+        "tests/board-inbox.test.mjs",
+        "tests/board-live-chip.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/board-nav.test.mjs",
+        "tests/board-no-money.test.mjs",
+        "tests/board-owner-actions.test.mjs",
+        "tests/board-owner-routes.test.mjs",
+        "tests/board-page.test.mjs",
+        "tests/board-projects-filter.test.mjs",
+        "tests/board-run-federation.test.mjs",
+        "tests/board-worktree-own-stats.test.mjs",
+        "tests/board-worktrees.test.mjs",
+        "tests/browser/command-center.smoke.mjs",
+        "tests/build-progress-untracked-filter.test.mjs",
+        "tests/build-progress.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/classic-routes.spec.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-robots.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-idle.test.mjs",
+        "tests/machine-share.test.mjs",
+        "tests/orchestrator-lane.test.mjs",
+        "tests/pins-board.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/remote.test.mjs",
+        "tests/server-record-version.test.mjs",
+        "tests/server-restart-review.test.mjs",
+        "tests/server-restart-round2.test.mjs",
+        "tests/server-restart.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/watch-leftovers.test.mjs",
+        "tests/watch-review-fixes.test.mjs",
+        "tests/watch-server-vendor-assets.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/watch-ui.test.mjs"
+      ],
+      "ignoreTestsReason": "focused snapshot/perf/server tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t7-snapshot-safe",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/command-center-perf-budget.test.mjs",
+        "tests/board-snapshot-perf.test.mjs",
+        "tests/watch-server.test.mjs",
+        "tests/watch-token-urls.test.mjs",
+        "tests/command-center-routes-flag.test.mjs"
+      ]
+    }
+  ]
+}

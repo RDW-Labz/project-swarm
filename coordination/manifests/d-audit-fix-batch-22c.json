@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-22c",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 22c (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/client-report.mjs, tools/generated-state.mjs, tools/go.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/client-report.mjs\nLogger prefix: console.error('[tools/client-report.mjs] <short context>:', error?.message ?? error)\n- Line 29 `} catch { /* a damaged line is skipped */ }` around JSON.parse of one log line: SILENT-SyntaxError; log others.\n- Line 165 `try { host = decodeURIComponent(new URL(url).hostname); } catch { /* as written */ }`: stay silent for TypeError (invalid URL) and URIError (bad escape); log others. host keeps its fallback.\n- Line 243 `await fs.lstat(path.join(root, REPORTS_DIR, dirName)).catch(() => null)`: SILENT-ENOENT; log others with the path; keep returning null.\n\n### tools/generated-state.mjs\nLogger prefix: console.error('[tools/generated-state.mjs] <short context>:', error?.message ?? error)\n- Line 238 `} catch { /* not in HEAD */ }` around exec('git', [... 'rev-parse', '--verify', ...]): git exiting nonzero is the normal 'not in HEAD' case. Stay silent when typeof error?.code === 'number' || typeof error?.status === 'number' (a git exit code); log others (e.g. ENOENT git missing) with relPath. A small private helper for this check is fine.\n- Line 272 `} catch { /* try next */ }` around access(candidate): SILENT-ENOENT; log others with candidate; keep trying the next candidate.\n- Line 274 `} catch { /* not in progress */ }` closing gitPathExists' outer try (exec git rev-parse --git-path + dynamic import): same numeric git exit-code rule as line 238 stays silent; log others with gitPathName. Still return false after as today.\n\n### tools/go.mjs\nLogger prefix: console.error('[tools/go.mjs] <short context>:', error?.message ?? error)\n- Line 239 `try { await fs.access(path.join(root, file)); toCommit.push(file); } catch { /* absent */ }`: SILENT-ENOENT; log others with file. (Audit said line 108; the file moved, 239 is current.)\n- Line 265 `await gitInRoot(exec, root, ['restore', '--staged', '--', ...toCommit], ...).catch(() => {})`: LOG-ALWAYS (files stay staged after a failed commit). Keep the return of the commit-failed result unchanged. (Audit said 134.)\n- Line 281 the `await appendEvent({ kind: 'integration', ... }).catch(() => {})` that ends on line 281: LOG-ALWAYS with runId (integration event lost). (Audit said 151.)\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/client-report.mjs",
+        "tools/generated-state.mjs",
+        "tools/go.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/autopilot-integrate-clean.test.mjs",
+        "tests/board-accuracy-activity.test.mjs",
+        "tests/board-accuracy-card.test.mjs",
+        "tests/board-accuracy-page.test.mjs",
+        "tests/client-report.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

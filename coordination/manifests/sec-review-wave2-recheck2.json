@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "sec-review-t0176-recheck2",
+      "type": "review",
+      "agent": "anthropic",
+      "model": "claude-opus-5-5",
+      "tier": "expensive",
+      "tierReason": "Final recheck of T-0176 after fixing the remaining timeout-detection finding from the prior recheck.",
+      "prompt": "Final recheck of T-0176 (tools/cluster-client.mjs). The prior recheck's one remaining finding was: isAbortError only matched 'AbortError'/'ABORT_ERR', but a real AbortSignal.timeout() firing rejects with a DOMException named 'TimeoutError', so real timeouts fell through to the generic 'cluster-request-failed' path instead of 'cluster-request-timeout'. Confirm isAbortError now also treats error.name === 'TimeoutError' as a timeout, and that there is a real end-to-end test (a real stalled HTTP server, not a mock that stubs the abort reason directly) proving a real AbortSignal.timeout firing is correctly mapped to 'cluster-request-timeout'. Report only real, concretely demonstrable remaining problems with file and line.\nFinish with exactly one JSON line: {\"reviews\":[{\"ticket\":\"T-0176\",\"verdict\":\"pass\"|\"fail\",\"findings\":[...]}]}. Use \"fail\" only for a genuine remaining high or medium finding.",
+      "context": ["tools/cluster-client.mjs", "tests/cluster-client.test.mjs"],
+      "outputs": [],
+      "timeoutMs": 900000,
+      "maxOutputTokens": 8192
+    }
+  ]
+}

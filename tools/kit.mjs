@@ -58,7 +58,10 @@ async function readOnlyEntries(root, kit) {
   const out = [];
   for (const slot of kit.slots.filter(s => s.owner === 'kit')) {
     for (const p of slot.paths) {
-      const stat = await fs.lstat(path.join(root, p)).catch(() => null);
+      const stat = await fs.lstat(path.join(root, p)).catch(error => {
+        if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] readOnlyEntries lstat:', error?.message ?? error);
+        return null;
+      });
       if (!stat) continue;
       out.push(normalizeProtectedPath(stat.isDirectory() ? `${p}/` : p));
     }
@@ -95,7 +98,10 @@ async function planCopy(src) {
 // The .gitignore of a new repo gets the kit's lines added: never a line that un-ignores something ("!.env"), and never through a link.
 async function mergeGitignore(root, kitText) {
   const dest = path.join(root, '.gitignore');
-  const stat = await fs.lstat(dest).catch(() => null);
+  const stat = await fs.lstat(dest).catch(error => {
+    if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] mergeGitignore lstat:', error?.message ?? error);
+    return null;
+  });
   if (stat && !stat.isFile()) throw bad('.gitignore in the project is a link or not a file; the kit was not copied');
   const existing = stat ? await fs.readFile(dest, 'utf8') : '';
   const have = new Set(existing.split('\n').map(l => l.trim()));
@@ -119,7 +125,10 @@ export async function resolveSource(source, { cloner = defaultClone } = {}) {
     return { dir, cleanup: () => fs.rm(dir, { recursive: true, force: true }) };
   }
   if (/^[a-z][a-z0-9+.-]*:/i.test(source)) throw bad('a kit source is a folder, an https address or a git@ address');
-  const dir = await fs.realpath(path.resolve(source)).catch(() => null);
+  const dir = await fs.realpath(path.resolve(source)).catch(error => {
+    if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] resolveSource realpath:', error?.message ?? error);
+    return null;
+  });
   if (!dir || !(await fs.stat(dir)).isDirectory()) throw bad(`no kit folder at ${redact(source)}`);
   return { dir, cleanup: async () => {} };
 }
@@ -138,10 +147,19 @@ export async function installKit({ root, kitName, source, name, protectKit = tru
     if (existing.length) throw bad(`the project folder is not new (${existing.slice(0, 5).join(', ')}${existing.length > 5 ? ', ...' : ''}): a kit is copied into an empty repo`);
     const plan = await planCopy(src.dir);   // reads and checks everything first
     // Only a bare README is replaced (by the kit's own); a README with real content stays and the kit's is added as KIT-README.md.
-    const readmeStat = await fs.lstat(path.join(root, 'README.md')).catch(() => null);
+    const readmeStat = await fs.lstat(path.join(root, 'README.md')).catch(error => {
+      if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] installKit README.md lstat:', error?.message ?? error);
+      return null;
+    });
     const keepReadme = Boolean(readmeStat) && (!readmeStat.isFile() || readmeStat.size > BARE_README_BYTES);
     const backups = new Map();
-    for (const f of ['README.md', '.gitignore']) { const s = await fs.lstat(path.join(root, f)).catch(() => null); if (s?.isFile()) backups.set(f, await fs.readFile(path.join(root, f))); }
+    for (const f of ['README.md', '.gitignore']) {
+      const s = await fs.lstat(path.join(root, f)).catch(error => {
+        if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] installKit backup lstat:', error?.message ?? error);
+        return null;
+      });
+      if (s?.isFile()) backups.set(f, await fs.readFile(path.join(root, f)));
+    }
     const written = [], createdDirs = [];
     try {
       for (const f of plan.files) {
@@ -162,7 +180,18 @@ export async function installKit({ root, kitName, source, name, protectKit = tru
       const project = displayName(name ?? path.basename(root));
       const targets = new Set(written);
       const pkgFile = path.join(root, 'package.json');
-      if (targets.has('package.json')) { try { const pkg = JSON.parse(await fs.readFile(pkgFile, 'utf8')); pkg.name = slug(name ?? path.basename(root)); pkg.version = '0.1.0'; await fs.writeFile(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`); } catch { /* a kit with no readable package.json has nothing to rename */ } }
+      if (targets.has('package.json')) {
+        try {
+          const pkg = JSON.parse(await fs.readFile(pkgFile, 'utf8'));
+          pkg.name = slug(name ?? path.basename(root));
+          pkg.version = '0.1.0';
+          await fs.writeFile(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`);
+        } catch (error) {
+          if (!(error instanceof SyntaxError) && error?.code !== 'ENOENT') {
+            console.error('[tools/kit.mjs] installKit package.json name/version:', error?.message ?? error);
+          }
+        }
+      }
       // Placeholders are replaced only in files the kit itself just wrote.
       for (const [file, words] of Object.entries(kit.placeholders)) {
         if (file === 'package.json' || !targets.has(file)) continue;
@@ -182,9 +211,27 @@ export async function installKit({ root, kitName, source, name, protectKit = tru
       return { kit: kit.kit, version: kit.version, files: written.length, skippedLinks: plan.skippedLinks, project, readOnly, day0, env: kit.env, swarmBuildsOnlyIn: kit.swarmBuildsOnlyIn };
     } catch (error) {
       // Put the folder back as it was: remove what was written (and the folders made for it), restore the README and .gitignore.
-      for (const rel of written.reverse()) await fs.rm(path.join(root, rel), { force: true }).catch(() => {});
-      for (const dir of [...new Set(createdDirs)].reverse()) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-      for (const f of ['README.md', '.gitignore']) { if (backups.has(f)) await fs.writeFile(path.join(root, f), backups.get(f)).catch(() => {}); else await fs.rm(path.join(root, f), { force: true }).catch(() => {}); }
+      for (const rel of written.reverse()) {
+        await fs.rm(path.join(root, rel), { force: true }).catch(error => {
+          if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] installKit rollback rm file:', error?.message ?? error);
+        });
+      }
+      for (const dir of [...new Set(createdDirs)].reverse()) {
+        await fs.rm(dir, { recursive: true, force: true }).catch(error => {
+          if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] installKit rollback rm dir:', error?.message ?? error);
+        });
+      }
+      for (const f of ['README.md', '.gitignore']) {
+        if (backups.has(f)) {
+          await fs.writeFile(path.join(root, f), backups.get(f)).catch(error => {
+            console.error('[tools/kit.mjs] installKit rollback restore:', error?.message ?? error);
+          });
+        } else {
+          await fs.rm(path.join(root, f), { force: true }).catch(error => {
+            if (error?.code !== 'ENOENT') console.error('[tools/kit.mjs] installKit rollback rm:', error?.message ?? error);
+          });
+        }
+      }
       throw error;
     }
   } finally { await src.cleanup(); }

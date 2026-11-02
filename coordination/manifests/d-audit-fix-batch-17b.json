@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-basechecklock-batch-17b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "sensitive": true,
+      "prompt": "Goal g-33a7a4ae, D-fix batch 17b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/base-check-lock.mjs' section. Edit ONLY tools/base-check-lock.mjs. This file is LOCK-sensitive (acquireBaseCheckLock: O_EXCL lockfile, stale detection, retry loop with sleep up to 250ms). Visibility only: do NOT change control flow, return values, throws, stale logic, retry timing, or lock semantics.\n\nNo logger exists in this file. Use console.error('[tools/base-check-lock.mjs] <short context>:', ...).\nAdd ONE module-level `const loggedCodes = new Set();` and a tiny private helper `function logOnce(context, error) { const code = error?.code ?? error?.name ?? 'unknown'; const key = `${context}:${code}`; if (loggedCodes.has(key)) return; loggedCodes.add(key); console.error(`[tools/base-check-lock.mjs] ${context}:`, error?.message ?? error); }` \u2014 use it for the catches reached inside the retry loop so a persistent error prints once per process, not every iteration.\n\nFlagged lines:\n1. Line 79 `await fs.unlink(temporary).catch(() => {});` in writeCacheRecord's catch (before `throw error`): ENOENT silent; log anything else with plain console.error. The original error must still be rethrown unchanged.\n2. Line 88 `} catch { /* unreadable or missing */ }` in readOwner: ENOENT (missing) and SyntaxError (a contender can read the file between the O_EXCL open and the writeFile, i.e. empty/partial JSON) are EXPECTED: stay silent. Anything else: logOnce('readOwner', error). Still return null.\n3. Line 108 `} catch { /* already gone */ }` in the release function: ENOENT silent; anything else plain console.error (release runs once). Keep the comment.\n4. Line 130 `const stat = await fs.stat(file).catch(() => null);` inside the acquire loop: ENOENT silent; anything else logOnce('acquire stat', error). Still evaluate to null.\n\nKeep all existing comments. Do NOT touch any other catch. Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run covering tests (grep tests/ for base-check-lock / BaseCheckLock) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/base-check-lock.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9tin3",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 tin 3 review: bugs 3-5 display fixes, direct-build mode, Hive ring height",
+      "prompt": "Delta review of train 9 tin 3 (1.167.36) on Project Swarm, on top of 1.167.35 (7b1b0170). The owner allowed this third release today for display-only bugs 3-5, the cancelled/percent note, and a height-aware Hive ring. The combined code diff is at coordination/review/t9-tin3.diff; evidence is at t9-tin3-evidence.json. Full suite is green: 7689 tests, 7658 pass, 0 fail, 22 skipped, 9 todo; focused checks listed in the evidence.\n\nWhat changed:\n1. Numeric stage order: cockpit-view.js adds compareStageIds (S<n> numeric; other ids by localeCompare) and uses it for both the scope stage list and the Object.keys(byStage) fallback, so S1, S2, S10 render in order.\n2. Done 24h: board-data.mjs adds doneLast24hCount, scanning the project's family roots with the existing doneTimes() ticket-log parser, merging unique ticket ids whose transition to done is within the last 24 hours (5 min future tolerance), returning 0 for a readable-but-empty or unreadable log. projectOverview and projectDetail add doneLast24h. command-center-snapshot buildHiveExtras sums the top-level project fields into hive.doneLast24h (0 is valid) and keeps the old throughput24h chart as a fallback. The Hive shows 0 instead of an em dash when there were no completions.\n3. Direct-build mode: a project entry may carry directBuild true (the live board will set it on parts-request-app in ~/.project-swarm/projects.json). board-data propagates it on projectOverview/projectDetail. board-inbox skips direct-build projects entirely and additionally drops needs-you items whose ledger ticket is superseded/cancelled and blocker items older than 48 hours (held/proposed items are not age-filtered). snapshot buildProjectCard hides counts/percent/meter/asks/fails/ticketsBuilding and sets lane control; snapshot totals exclude it; buildProjectCockpit returns directBuild; the Cockpit header shows em dashes, the summary tiles show 0, the footer says 'direct build: swarm counts hidden', and the Hive card shows 'direct build' with no ticket rows/percent. buildHiveExtras excludes direct-build projects from throughput24h, the doneLast24h sum and hiveEvents, so their swarm counts and ticket events do not leak into the Hive.\n4. Cancelled/percent note: the Cockpit footer now says 'N cancelled, not counted in the X live tickets or the percent' (only when cancelled > 0); the Hive tooltip says 'done divided by live tickets; cancelled not counted'. No denominator or percentDone value changed. The canonical live total is 407 and already excludes the 13 cancelled, so 230 of 407 = 57 percent is correct; 230 of 394 would double-exclude.\n5. Hive ring height: cc-hive.css adds @media (max-height:1000px) and (max-width:1340px) { stage gap/padding tightened; canvas width min(100%,300px) } and @media (max-height:1000px) and (min-width:1341px) { stage height clamp(440px, calc(100vh - 140px), 680px) }. The ring geometry follows the canvas/stage size, so the first row of project cards is visible without scrolling at short windows; above 1000px the rules are unchanged and the full ring stays.\n6. Version 1.167.36, CHANGELOG, README and release-test pins.\n\nLook hard at: the directBuild flag source and propagation (does any board path lose it?); direct-build counts leaking into Hive totals, hive extras, session events or needs-you; the 48h blocker filter not hiding held/proposed items; doneLast24h correctness (unique ids across family roots, 0 vs null, duplicate scans/performance, future tolerance); the stage comparator on non-S ids; the ring media query not changing >1000px behavior or causing card/ring overlap; whether the percent note is truthful and the math untouched; and whether the new tests exercise real behavior rather than stubs. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-tin3-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-tin3.diff",
+        "coordination/review/t9-tin3-evidence.json",
+        "tools/watch-assets/cc-hive.css",
+        "tools/command-center-snapshot.mjs",
+        "tools/board-data.mjs",
+        "tools/board-inbox.mjs",
+        "tools/watch-assets/cockpit-view.js",
+        "tools/watch-assets/cc-hive-mount.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/board-inbox.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-counts.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-tin3-review.json"
+      ],
+      "resultFile": "coordination/review/t9-tin3-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}

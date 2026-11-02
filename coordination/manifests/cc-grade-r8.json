@@ -1,0 +1,31 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccgrade8",
+   "agent": "claude",
+   "model": "fable",
+   "tier": "expensive",
+   "tierReason": "owner order: Fable grades the Command Center against the target images each round",
+   "prompt": "Grade round 8 of the Swarm Command Center. You are an independent design grader. Read ONLY the files in your context and LOOK at every image.\nTARGETS (the owner's bar): docs/design/reference/hive-target.png and docs/design/reference/cockpit-target.png. The owner wants the app to look IDENTICAL to these in composition, components, styling and motion. Their text and numbers are illustrative; the app shows real board data, so item counts, names and numbers will differ and that is not a fault. Everything else should match.\nAPP SCREENSHOTS (real code, realistic populated board): coordination/review/cc-grade/r8/hive-desktop.png and coordination/review/cc-grade/r8/cockpit-desktop.png at 1440x900; coordination/review/cc-grade/r8/hive-desktop-b.png and coordination/review/cc-grade/r8/cockpit-desktop-b.png are the same pages about 0.8 s later (compare them to judge motion); coordination/review/cc-grade/r8/hive-full.png and coordination/review/cc-grade/r8/cockpit-full.png are the whole desktop pages (scroll included), so grade the parts below the fold from them; coordination/review/cc-grade/r8/hive-phone.png and coordination/review/cc-grade/r8/cockpit-phone.png at 390x844 (the targets have no phone view: judge a faithful single-column adaptation).\nScore each page 0.0-5.0 in steps of 0.1:\n1 fidelity (weight 40%): side by side with the target, does it match? Hive: lane-coloured project nodes arranged AROUND a large glowing pink/violet ring (not in columns), particle streams flowing from each node into the ring, the ring's own label set along its arc, the central OPUS core, the header (script wordmark, one-line description, small stat counters, LIVE), the lane legend + italic tagline row, and the three dense bottom panels (session log with coloured category column + mini bar chart, all-gates with the big number and who-answered bars, what-it-saved bars + step chart). Cockpit: breadcrumb line, huge condensed headline + orange subhead, the segmented multi-colour rule, two columns of ten numbered ticket rows (coloured index chip, title, sub-line, check mark, category tag), the centred title box, the big pixel robot with an orbit ellipse and a dotted path to the active row, the NOW LOADING card, the loop strip, the 2x2 render-stream cards with coloured top rules and progress bars, and the bottom stack with the big count and coloured category tiles.\n2 polish (25%): glow and bloom where the target glows, gradients, crisp borders and radii, the target's typography (script/italic wordmarks, condensed display headline, mono labels), colour palette and contrast, nothing generic or flat where the target is rich; exactly one tasteful glitch effect is allowed.\n3 motion (15%): compare -b frames with the first frames: particles/streams moving, ring or scan animation, live chips, progress; a page that does not change between frames scores at most 2.0 here.\n4 data (10%): real values legible and consistent with each other, no 'undefined' or debug text, no contradictions.\n5 phone (10%): faithful single-column adaptation, nothing overlapping or hidden, the key things above the fold.\noverall = the weighted mean, one decimal. 5.0 = indistinguishable from the target in look and motion; 4.5 = a careful viewer sees only small differences; 3.0 = same idea, clearly different execution; 1.0 = unrelated.\nThen list the top fixes per page (at most 8 each, biggest gap to the target first). Each fix: what differs from the target, where on screen, the likely file (tools/watch-assets/cc-hive.css, cc-hive-mount.js, hive-panels.js for Hive; cc-cockpit.css, cc-cockpit-mount.js, cockpit-view.js, cockpit-lists.js for Cockpit) and a concrete CSS, markup or animation change. Never suggest hard-coded sample data.\nWrite ONLY coordination/review/cc-grade/r8/grade.json as JSON: {\"round\":\"8\",\"hive\":{\"scores\":{\"fidelity\":n,\"polish\":n,\"motion\":n,\"data\":n,\"phone\":n},\"overall\":n,\"fixes\":[{\"problem\":\"\",\"where\":\"\",\"file\":\"\",\"change\":\"\"}]},\"cockpit\":{same shape},\"notes\":\"one or two sentences\"}.",
+   "context": [
+    "coordination/review/cc-grade/r8/hive-desktop.png",
+    "coordination/review/cc-grade/r8/hive-desktop-b.png",
+    "coordination/review/cc-grade/r8/hive-full.png",
+    "coordination/review/cc-grade/r8/hive-phone.png",
+    "coordination/review/cc-grade/r8/cockpit-desktop.png",
+    "coordination/review/cc-grade/r8/cockpit-desktop-b.png",
+    "coordination/review/cc-grade/r8/cockpit-full.png",
+    "coordination/review/cc-grade/r8/cockpit-phone.png",
+    "docs/design/reference/hive-target.png",
+    "docs/design/reference/cockpit-target.png"
+   ],
+   "outputs": [
+    "coordination/review/cc-grade/r8/grade.json"
+   ],
+   "resultFile": "coordination/review/cc-grade/r8/grade.json",
+   "timeoutMs": 1500000
+  }
+ ]
+}

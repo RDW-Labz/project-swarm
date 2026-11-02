@@ -297,11 +297,11 @@ export function stableInstallDir(installRoot){
   if(path.basename(parent)==='versions')return path.join(path.dirname(parent),'current');
  }
  let resolved=installRoot;
- try{resolved=realpathSync(installRoot);}catch{/* keep installRoot */}
+ try{resolved=realpathSync(installRoot);}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] stableInstallDir realpathSync(installRoot):',error?.message??error);}
  const currentCandidate=path.join(resolved,'current');
  try{
   if(existsSync(path.join(currentCandidate,'tools','swarm.mjs')))return realpathSync(currentCandidate);
- }catch{/* no current */}
+ }catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] stableInstallDir current candidate realpath:',error?.message??error);}
  return installRoot;
 }
 export const HOOK_SCRIPT_MARKERS=Object.freeze(['handbuild-guard.mjs','orchestrator-hook.mjs','githook-check.mjs']);
@@ -395,7 +395,7 @@ export async function refreshTrackedSettingsHooks(root,installRoot){
  const patched=patchHookCommandsInSettingsText(before,settings,installRoot);
  if(!patched.changed)return {status:'unchanged'};
  let mode=0o644;
- try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* new */}
+ try{mode=(await fs.stat(destination)).mode&0o777;}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] refreshTrackedSettingsHooks stat(destination):',error?.message??error);}
  const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
  await fs.writeFile(temp,patched.text,{flag:'wx',mode});
  await fs.rename(temp,destination);
@@ -455,7 +455,7 @@ async function readSettings(root){
 async function writeSettings(root,destination,settings,before){
  // A temp file with its own name, created exclusively (a planted link at a fixed name cannot redirect the write), with the old file's mode, then renamed over.
  let mode=0o600;
- try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* a new file */}
+ try{mode=(await fs.stat(destination)).mode&0o777;}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] writeSettings stat(destination):',error?.message??error);}
  const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
  await fs.writeFile(temp,`${JSON.stringify(settings,null,2)}\n`,{flag:'wx',mode});
  await fs.rename(temp,destination);
@@ -488,7 +488,7 @@ async function ensureHookSpecs(root,installRoot,specs,{refreshOnly=false}={}){
   const patched=patchHookCommandsInSettingsText(before,settings,installRoot,specs);
   if(patched.changed){
    let mode=0o600;
-   try{mode=(await fs.stat(destination)).mode&0o777;}catch{/* new */}
+   try{mode=(await fs.stat(destination)).mode&0o777;}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] ensureHookSpecs stat(destination):',error?.message??error);}
    const temp=`${destination}.swarm-tmp-${process.pid}-${nodeCrypto.randomBytes(4).toString('hex')}`;
    await fs.writeFile(temp,patched.text,{flag:'wx',mode});
    await fs.rename(temp,destination);
@@ -502,14 +502,14 @@ const ORCHESTRATOR_SPECS=Object.entries(ORCHESTRATOR_HOOK_EVENTS).map(([event,ar
 // An owner who does not want the lane creates `.swarm/orchestrator/off`: nothing is installed or refreshed there. `refreshOnly` (used by `swarm update` on linked projects) only touches a
 // project that already has the checkpoint hook or the Orchestrator hooks, i.e. one that was set up with agent files.
 export async function ensureOrchestratorHooks(root,installRoot,{refreshOnly=false}={}){
- try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch{/* not switched off */}
+ try{await fs.access(path.join(root,'.swarm','orchestrator','off'));return {status:'off'};}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] ensureOrchestratorHooks orchestrator off marker:',error?.message??error);}
  return ensureHookSpecs(root,installRoot,ORCHESTRATOR_SPECS,{refreshOnly});
 }
 // The hand-build guard: installed on request (`swarm handbuild install`) and by `swarm init` for a new project; `swarm update` only refreshes where it is already installed.
 export async function ensureHandbuildGuard(root,installRoot,{refreshOnly=false,honorRemoved=false}={}){
  // `swarm handbuild uninstall` leaves a marker: a later `swarm init` does not bring the guard back (only `swarm handbuild install` does).
- if(honorRemoved){try{await fs.access(path.join(root,'.swarm','handbuild','removed'));return {status:'removed-by-owner'};}catch{/* no marker */}}
- await fs.rm(path.join(root,'.swarm','handbuild','removed'),{force:true}).catch(()=>{});
+ if(honorRemoved){try{await fs.access(path.join(root,'.swarm','handbuild','removed'));return {status:'removed-by-owner'};}catch(error){if(error?.code!=='ENOENT')console.error('[tools/install.mjs] ensureHandbuildGuard handbuild removed marker:',error?.message??error);}}
+ await fs.rm(path.join(root,'.swarm','handbuild','removed'),{force:true}).catch(error=>{if(error?.code!=='ENOENT')console.error('[tools/install.mjs] ensureHandbuildGuard rm removed marker:',error?.message??error);});
  if(refreshOnly){
   const read=await readSettings(root);
   if(read.problem)return {status:'skipped',reason:read.problem};
@@ -529,7 +529,7 @@ export async function removeHandbuildGuard(root){
   if(kept.length!==list.length||JSON.stringify(kept)!==JSON.stringify(list)){settings.hooks[event]=kept;changed=true;}
  }
  // the owner's choice is remembered: init does not bring the guard back
- try{await fs.mkdir(path.join(root,'.swarm','handbuild'),{recursive:true});await fs.writeFile(path.join(root,'.swarm','handbuild','removed'),'');}catch{/* best effort */}
+ try{await fs.mkdir(path.join(root,'.swarm','handbuild'),{recursive:true});await fs.writeFile(path.join(root,'.swarm','handbuild','removed'),'');}catch(error){console.error('[tools/install.mjs] removeHandbuildGuard write removed marker:',error?.message??error);}
  if(!changed)return {status:'was not installed'};
  await writeSettings(root,destination,settings,before);
  return {status:'removed'};

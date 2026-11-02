@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewtrain7",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "owner rule: one Opus review of the train 7 combined diff",
+      "prompt": "Review release train 7 of Project Swarm: branch swarm/train7 against main at 6cc5737b (1.167.30). The combined diff is in context at coordination/review/train7.diff; tools/watch-perf.mjs and the snapshot/perf tests are also in context. The workspace files are not readable in your sandbox; judge from these.\n\nWhat changed:\n(1) BOARD SNAPSHOT CACHE, tools/watch-server.mjs (with tools/board-data.mjs and tools/command-center-snapshot.mjs): /api/command-center and /api/command-center/project share one board snapshot cache with a 60 s TTL and stale-while-revalidate (a stale response is served immediately while at most one background rebuild runs), plus a nonblocking startup warm. The previous OOM-prone per-project caches are removed. On the real 9-project board with a dashboard open the server CPU went from 44.6% to 0.87%; usable ~233 ms; Hive->Cockpit ~49 ms. Security headers/CSP, tokens/cookies, ETag/304, query handling (local/redact), and the response shape must be unchanged.\n(2) tools/watch-perf.mjs: ps time parser accepts m:ss.ss, h:mm:ss.ss and plain seconds; the watch token stays redacted.\n(3) D-fix 27c: logging-only silent-catch visibility in tools/swarm/core-51.mjs.\n(4) Version 1.167.31.\n\nPass bar (owner): blockers only. Look hard at the snapshot cache: stale/incorrect data served across queries (local/redact/project), one project leeching another's data, cache poisoning, a rebuild racing with a request or with startup warm, unbounded memory/queue, serving a response before the token/cookie/privacy/security headers (the train 6 caching attempt broke those once), a 304 that drops them, or a stale-while-revalidate path that blocks or never refreshes. For D-fix: logging-only, no control-flow/return/fallback/throw change, no secret/PII in logs. The runner stamps the reviewed head into your result; do NOT add or change a head field. Write ONLY coordination/review/train7-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty.",
+      "context": ["coordination/review/train7.diff", "tools/watch-perf.mjs", "tests/board-snapshot-perf.test.mjs", "tests/command-center-perf-budget.test.mjs"],
+      "outputs": ["coordination/review/train7-review.json"],
+      "resultFile": "coordination/review/train7-review.json",
+      "timeoutMs": 2400000
+    }
+  ]
+}

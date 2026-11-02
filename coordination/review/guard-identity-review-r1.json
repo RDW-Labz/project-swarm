@@ -1,0 +1,58 @@
+{
+  "verdict": "fail",
+  "score": 4,
+  "blockers": [
+    {
+      "file": "tools/concurrency-guard.mjs",
+      "line": 60,
+      "problem": "New restoreIfStale self-exit compares marker.childPid with process.pid even when the marker is fromBeforeBoot. A pre-boot marker belongs to processes that no longer exist (the file's own comment says so), so a match after reboot can only be a recycled pid. Baseline 60de9058 restored in this case.",
+      "exploit_or_failure": "A marker survives a power cut, as the guard intends. After reboot, pids restart low and an innocent command (any swarm command, since mainInner calls restoreIfStale at swarm.mjs:2892 before dispatch) receives the saved childPid. It prints 'orphaned guarded command', exits 0 without running, and leaves machineConcurrency raised and the marker in place. This matches the coordinator reproduction, which I checked by reading the code: baseline restores to 1 and continues; head exits 0 with the value at 8 and the marker present. Owner criteria met: a normal command is exited wrongly, a success exit hides it, and existing power-cut restore behavior regresses.",
+      "fix": "Skip all childPid handling when fromBeforeBoot(marker) and go straight to restore(). Within the same boot, also bind the child's identity (start time or nonce) before self-exiting. Add a process-level test through swarm.mjs with a pre-boot marker whose childPid equals the command's pid."
+    },
+    {
+      "file": "tools/concurrency-guard.mjs",
+      "line": 64,
+      "problem": "New sibling branch: for a stale or pre-boot marker whose childPid is alive, it sends SIGTERM (termChildOnce) and refuses to restore. It never rejects pre-boot identity. Baseline simply restored.",
+      "exploit_or_failure": "After reboot, the saved childPid commonly belongs to an unrelated live process, such as a daemon or the user's shell job. Every swarm command start sends it SIGTERM and returns 'orphaned command still running'. The marker and raised value stay wedged, and apply() refuses with guard-busy for as long as that innocent process lives, possibly indefinitely. Owner criteria met: a live innocent process is killed, and the marker wedges after restore should have happened.",
+      "fix": "Same pre-boot short-circuit to restore(). Within a boot, verify child identity before signalling, and escalate or age out instead of wedging. Test: a pre-boot marker with a live unrelated childPid must restore and must not signal."
+    }
+  ],
+  "followups": [
+    {
+      "file": "tools/concurrency-guard.mjs",
+      "line": 101,
+      "problem": "Pre-existing (unchanged by this train): the watcher signals a live marker.childPid without an identity check and escalates to SIGKILL. It only runs within the same boot while the wrapper dies, so the reuse window is short. Train 3 only adds logging here.",
+      "exploit_or_failure": "Rare same-boot pid reuse could SIGKILL an innocent process.",
+      "fix": "Share the child identity check (start time or nonce) added for the blockers."
+    },
+    {
+      "file": "tools/concurrency-guard.mjs",
+      "line": 62,
+      "problem": "A genuine orphan self-exit uses code 0.",
+      "exploit_or_failure": "Callers treat a command that never ran as success.",
+      "fix": "Exit non-zero, for example 143."
+    },
+    {
+      "file": "tools/concurrency-guard.mjs",
+      "line": 66,
+      "problem": "Within one boot, an orphan that ignores SIGTERM after the watcher has died is never escalated.",
+      "exploit_or_failure": "guard-busy persists until the orphan exits.",
+      "fix": "Escalate after a grace period, and add a test with a SIGTERM-ignoring orphan."
+    },
+    {
+      "file": "tools/stress-tests.mjs",
+      "line": 28,
+      "problem": "spawnSync has no per-round timeout.",
+      "exploit_or_failure": "A hang stalls test:stress, though the grid is still reported as failed.",
+      "fix": "Add a timeout option."
+    },
+    {
+      "file": "tools/swarm.mjs",
+      "line": 2415,
+      "problem": "Partitions could not see the bindings for id/model/job/byteAt in the record branch, or the status.mjs sanitizeWorkerText export. Several D-fix logs print absolute paths or log ENOENT unfiltered.",
+      "exploit_or_failure": "Possible ReferenceError on the no-result path. Usernames appear in stderr. No secrets or file contents were seen.",
+      "fix": "Confirm the bindings and export with tests, and redact paths."
+    }
+  ],
+  "summary": "Method: tool-free API partition review plus final synthesis, not a single-pass raw-diff review. Inputs were five prior prefix reviews and five completed tail reviews, which coverage.json shows together cover every byte of the combined diff with overlap. The prefix-only synthesis was treated as provisional. I also read the full current sources for concurrency-guard, lane-health, stress-tests and screenshots; the concurrency-guard and lane-health-persist tests; the phase2 todo tests; the baseline concurrency-guard; the concurrency diff; and the swarm.mjs restoreIfStale call site (line 2892, before dispatch). I ran no tests. The owner reports 7293 passing, 0 failing or cancelled, and 3x8 stress; these are owner-reported and not verified by me. The coordinator pid-reuse reproduction was adjudicated by reading source, not rerun. Verdict: fail. Prior partitions rated pid reuse a race-only follow-up, but they missed that restoreIfStale applies the childPid branches even to pre-boot markers. After a reboot, pid recycling is likely rather than a narrow race. The new branches then wrongly exit an innocent command with code 0 and leave the value raised, or SIGTERM an unrelated live process and wedge the marker. Baseline restored in both cases, so this is an introduced regression under the owner criteria. The watcher's kill risk is pre-existing and same-boot only, so it is a follow-up. Other items look sound: lane-health serializes persists, drains on stop and stays silent after stop; screenshots atomicWrite closes once, rethrows and cleans up tmp; stress-tests fails fast with no retries; D-fix catches are reported logging-only across partitions; the phase2 todos document pre-existing lock bugs and are not new regressions; no test is weakened, retried or quarantined."
+}

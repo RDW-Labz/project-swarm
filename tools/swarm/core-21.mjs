@@ -141,8 +141,8 @@ async function originForCheck(root, baseCommit, check, integratedFiles, newFiles
     // Base could not be verified either way; never claim pre-existing without proof.
     return 'new';
   } finally {
-    try { if (added) await gitImpl(root, ['worktree', 'remove', '--force', checkout]); } catch { /* best-effort cleanup */ }
-    await fs.rm(temporary, { recursive: true, force: true }).catch(() => {});
+    try { if (added) await gitImpl(root, ['worktree', 'remove', '--force', checkout]); } catch (error) { console.error('[tools/swarm/core-21.mjs] worktree remove checkout:', error?.message ?? error, checkout); }
+    await fs.rm(temporary, { recursive: true, force: true }).catch((error) => { console.error('[tools/swarm/core-21.mjs] rm temporary:', error?.message ?? error, temporary); });
   }
 }
 
@@ -163,7 +163,7 @@ async function loadMutantsFile(path_) {
 async function loadMutantsFileForIntegrate(root, mutantsFile, writes) {
   const resolved = path.resolve(root, mutantsFile);
   let raw = null;
-  try { raw = await fs.readFile(resolved, 'utf8'); } catch { /* fall back to this run's own outputs below */ }
+  try { raw = await fs.readFile(resolved, 'utf8'); } catch (error) { if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-21.mjs] readFile resolved:', error?.message ?? error, resolved); }
   if (raw === null) {
     const fromRun = writes.find(change => change.file === mutantsFile && change.bytes !== null);
     if (fromRun) raw = fromRun.bytes.toString('utf8');

@@ -120,14 +120,18 @@ export async function readGitReleaseSignals({ exec = execFileAsync, root }) {
       encoding: 'utf8',
     });
     latestTagged = highestTaggedReleaseSemver(parseLsRemoteReleaseTags(stdout));
-  } catch {
-    /* offline or no remote */
+  } catch (error) {
+    if (typeof error?.code !== 'number') {
+      console.error('[tools/release-train-update.mjs] git ls-remote:', error?.message ?? error);
+    }
   }
   try {
     const { stdout } = await exec('git', ['-C', resolved, 'show', 'origin/main:package.json'], { encoding: 'utf8' });
     originMainVersion = packageJsonVersionFromText(stdout);
-  } catch {
-    /* tag-only remote need not have main */
+  } catch (error) {
+    if (typeof error?.code !== 'number') {
+      console.error('[tools/release-train-update.mjs] origin/main package.json:', error?.message ?? error);
+    }
   }
   return { current, latestTagged, originMainVersion };
 }

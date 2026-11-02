@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-23a-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 23a fixup (from Opus review of PR #455). Edit ONLY tools/quotes.mjs.\n\nIn readRuns, the catch around `JSON.parse(await fs.readFile(path.join(dir, id, 'state.json'), 'utf8'))` currently stays silent only for error?.code === 'ENOENT'. A stray non-directory entry in .swarm/runs (e.g. macOS .DS_Store) makes readFile throw ENOTDIR and would log on every call. Change that one condition to stay silent for ENOENT OR ENOTDIR; log everything else exactly as now. Change nothing else.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/quotes.test.mjs and confirm green. One-line summary.",
+      "context": [],
+      "outputs": [
+        "tools/quotes.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/estimates.test.mjs",
+        "tests/quotes.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/time-auto.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

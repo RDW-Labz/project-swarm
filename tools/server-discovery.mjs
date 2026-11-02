@@ -94,7 +94,12 @@ export function installRunnerCandidates(installRoot) {
     for (const name of readdirSync(versionsDir)) {
       out.push(path.join(versionsDir, name, 'tools', 'swarm.mjs'));
     }
-  } catch { /* no versions dir */ }
+  } catch (error) {
+    const code = error?.code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      console.error('[tools/server-discovery.mjs] installRunnerCandidates readdir versions:', error?.message ?? error);
+    }
+  }
   return out;
 }
 
@@ -284,7 +289,12 @@ async function readProcessCwd(pid, { execFileImpl, platform }) {
       const { stdout } = await execFileImpl('readlink', [`/proc/${pid}/cwd`]);
       const cwd = String(stdout).trim();
       return cwd || null;
-    } catch { /* fall through */ }
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM') {
+        console.error('[tools/server-discovery.mjs] readProcessCwd readlink /proc cwd:', error?.message ?? error);
+      }
+    }
   }
   try {
     const { stdout } = await execFileImpl('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn']);
@@ -304,7 +314,12 @@ async function collectSocketInodesForPid(pid, { readdirImpl = fs.readdir, readli
       const target = await readlinkImpl(path.join(fdDir, name));
       const inode = parseReadlinkSocketInode(target);
       if (inode !== null) inodes.push(inode);
-    } catch { /* fd vanished */ }
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM') {
+        console.error('[tools/server-discovery.mjs] collectSocketInodesForPid readlink fd:', error?.message ?? error);
+      }
+    }
   }
   return inodes;
 }
@@ -319,8 +334,18 @@ async function readListenPortsFromProcLinux(pid, {
     if (!socketInodes.length) return [];
     let tcpText = '';
     let tcp6Text = '';
-    try { tcpText = await readFileImpl('/proc/net/tcp', 'utf8'); } catch { /* optional */ }
-    try { tcp6Text = await readFileImpl('/proc/net/tcp6', 'utf8'); } catch { /* optional */ }
+    try { tcpText = await readFileImpl('/proc/net/tcp', 'utf8'); } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM') {
+        console.error('[tools/server-discovery.mjs] readListenPortsFromProcLinux read /proc/net/tcp:', error?.message ?? error);
+      }
+    }
+    try { tcp6Text = await readFileImpl('/proc/net/tcp6', 'utf8'); } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM') {
+        console.error('[tools/server-discovery.mjs] readListenPortsFromProcLinux read /proc/net/tcp6:', error?.message ?? error);
+      }
+    }
     return listenPortsMatchingProcInodes(socketInodes, tcpText, tcp6Text);
   } catch {
     return [];
@@ -341,7 +366,12 @@ export async function listenPortsForPid(pid, {
       const { stdout } = await execFileImpl('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn']);
       const ports = parseLsofListenPorts(stdout);
       if (ports.length) return ports;
-    } catch { /* try ss or /proc */ }
+    } catch (error) {
+      const code = error?.code;
+      if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM' && code !== 1) {
+        console.error('[tools/server-discovery.mjs] listenPortsForPid lsof:', error?.message ?? error);
+      }
+    }
   }
   try {
     const { stdout } = await execFileImpl('ss', ['-ltn', 'p']);
@@ -353,7 +383,12 @@ export async function listenPortsForPid(pid, {
     }
     const fromSs = [...new Set(ports)];
     if (fromSs.length) return fromSs;
-  } catch { /* try /proc on Linux */ }
+  } catch (error) {
+    const code = error?.code;
+    if (code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM' && code !== 1) {
+      console.error('[tools/server-discovery.mjs] listenPortsForPid ss:', error?.message ?? error);
+    }
+  }
   if (platform === 'linux') {
     return await readListenPortsFromProcLinux(pid, { readFileImpl, readdirImpl, readlinkImpl });
   }

@@ -201,9 +201,9 @@ async function appendPublic(destination, suffix) {
       }
     } catch { await handle.truncate(bytes.length); throw io('file'); }
   } catch {
-    if (created) await fs.unlink(target).catch(() => {});
+    if (created) await fs.unlink(target).catch((unlinkError) => { console.error('[tools/lessons-publish.mjs] unlink target:', target, unlinkError?.message ?? unlinkError); });
     throw io('file');
-  } finally { if (handle) await handle.close().catch(() => {}); }
+  } finally { if (handle) await handle.close().catch((closeError) => { console.error('[tools/lessons-publish.mjs] close handle:', closeError?.message ?? closeError); }); }
 }
 
 async function publish(root, options, privacy) {

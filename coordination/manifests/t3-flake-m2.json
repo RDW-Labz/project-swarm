@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakem2",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Flake g-f36125f2 part 2: tests/field-lessons-batch-m2.test.mjs line ~54 '#202: integrate --salvage accepts a timed-out job's already-written output' expected true and got undefined under load. Make it deterministic: wait for the worker's output file (bounded poll with a clear failure message) before triggering the timeout and salvage, instead of relying on wall-clock margins. ALSO in the same file, line ~156 ('#202 timed-out job ... lastActivity') saw lastActivity null under load on macOS CI: same treatment, wait for the worker's first transcript event deterministically before the timeout fires. Owner rule for flaky tests: fix at the root so flakes cannot hide real failures. Each test passes alone and fails under full-suite load (--test-concurrency=3 or more). Replace wall-clock races (fixed sleeps then assert) with deterministic ordering: await a ready signal, an event, a promise the code under test already exposes, or poll a condition with a bounded deadline that fails with a clear message. In your notes, list any other fixed-sleep-then-assert tests you saw in your file. PRODUCT-CODE RULE: you may edit ONLY your declared outputs. If you find the root cause is a product bug in a guard, process-kill/signal, lock or money path, do NOT work around it in the test: fix the test's own ordering only, and report the product bug in your notes (file, function, line, the exact misordering) so the coordinator can queue it for an Opus review. Never add retries, quarantine, skips or longer timeouts as the fix.",
+      "context": [],
+      "outputs": [
+        "tests/field-lessons-batch-m2.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakem2",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/field-lessons-batch-m2.test.mjs"
+      ]
+    }
+  ]
+}

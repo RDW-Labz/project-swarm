@@ -46,8 +46,9 @@ function lockPath(file) {
 
 async function acquireRegistryLock(file) {
   const lock = lockPath(file);
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }).catch(() => {});
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 }).catch((error) => { console.error('[tools/projects.mjs] pre-create registry dir:', error?.message ?? error); });
   const started = Date.now();
+  let loggedRetryError = false;
   for (;;) {
     try {
       await fs.mkdir(lock, { mode: 0o700 });
@@ -62,9 +63,23 @@ async function acquireRegistryLock(file) {
           try {
             await fs.rename(lock, stalePath);
             await fs.rm(stalePath, { recursive: true, force: true });
-          } catch { /* another writer won */ }
+          } catch (error) { /* another writer won */
+            if (error?.code !== 'ENOENT') {
+              if (!loggedRetryError) {
+                console.error('[tools/projects.mjs] stale lock reclaim rename/rm:', error?.message ?? error);
+                loggedRetryError = true;
+              }
+            }
+          }
         }
-      } catch { /* gone */ }
+      } catch (error) { /* gone */
+        if (error?.code !== 'ENOENT') {
+          if (!loggedRetryError) {
+            console.error('[tools/projects.mjs] lock stat after EEXIST:', error?.message ?? error);
+            loggedRetryError = true;
+          }
+        }
+      }
       if (Date.now() - started > 10_000) throw Object.assign(new Error('projects-lock-timeout'), { code: 'projects-lock-timeout' });
       await new Promise(r => setTimeout(r, 25));
     }
@@ -79,7 +94,7 @@ async function releaseRegistryLock(lock) {
   } catch {
     return;
   }
-  await fs.rm(lock, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(lock, { recursive: true, force: true }).catch((error) => { console.error('[tools/projects.mjs] releaseRegistryLock rm failed:', lock, error?.message ?? error); });
 }
 
 async function withRegistryLock(file, fn) {
@@ -277,7 +292,7 @@ async function write(file, projects) {
 
 // Scratch folders (a test's temp dir) are not projects unless the registry file was chosen explicitly.
 const inTmp = async real => {
-  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch(() => null), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
+  const bases = new Set([path.resolve(os.tmpdir()), await fs.realpath(os.tmpdir()).catch((error) => { console.error('[tools/projects.mjs] realpath tmpdir:', error?.message ?? error); return null; }), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(Boolean));
   return [...bases].some(tmp => real === tmp || real.startsWith(tmp + path.sep)) || real.split(path.sep).includes('.swarm') || real.split(path.sep).some(p => p.startsWith('.tmp'));
 };
 

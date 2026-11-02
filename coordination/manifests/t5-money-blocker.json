@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "t5-money-blocker",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Fix the train 5 Opus blocker: the Hive dashboard still renders a dollar amount, and the Command Center snapshot API forwards spend. The board must carry no money in browser output (no usd/spend/cost values), and the old classic board must stay reachable from the Cockpit too. Tests first where behavior changes.\n\n1) tools/command-center-snapshot.mjs: remove the per-project `spendUsd` card field (the `Spend` field built from p.spend.usd / p.cost.allUsd) and the machine `stats.spendUsd` (built from machine.cost.allUsd). Remove the now-unused money plumbing; keep every other field and behavior. The API must not contain usd/spend/cost keys or values.\n\n2) tools/watch-assets/hive-panels.js: remove the `spend recorded` kvRow, the `view.spend` mapping and every dollar construction, including `String.fromCharCode(36)` (it is an obfuscated dollar and a blocker). Replace that stat with a non-money value already present (e.g. done in 24h, jobs, or a muted 'spend tracked' with no value) or remove the row; keep the panel layout/density. No '$', no fromCharCode(36), no hidden money.\n\n3) tools/watch-assets/cc-cockpit-mount.js: the Cockpit's Classic tab still links to '/', which now serves the Command Center. Point it at '/classic' with the same search string as the Hive Classic tab, so the old board is reachable from both pages.\n\n4) tests/board-no-money.test.mjs: extend the browser source scan with a forbidden `String.fromCharCode(36)` pattern (label 'runtime dollar') so this class cannot come back.\n\n5) tests/command-center-hive.test.mjs: drop the spend / spendUsd / fromCharCode expectations from the Hive dashboard tests so they match the new no-money panel (keep the rest of the test behavior).\n\n6) tests/command-center-routes-flag.test.mjs: with a fixture that carries machine.cost.allUsd and project spend.usd, assert the /api/command-center and /api/command-center/project bodies contain no 'usd', 'spend' or 'cost' keys and no dollar values, and assert the Cockpit Classic tab href is /classic.\n\nVerify: node --import ./tests/_isolate-config.mjs --test tests/board-no-money.test.mjs tests/command-center-routes-flag.test.mjs tests/command-center-hive-panels.test.mjs tests/cc-cockpit-mount.test.mjs tests/cc-hive-mount.test.mjs tests/watch-assets.test.mjs tests/command-center-hive.test.mjs tests/command-center-cockpit.test.mjs -> all pass. Report counts.",
+      "context": [
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/board-no-money.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-hive.test.mjs"
+      ],
+      "outputs": [
+        "tools/command-center-snapshot.mjs",
+        "tools/watch-assets/hive-panels.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/board-no-money.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-hive.test.mjs"
+      ],
+      "timeoutMs": 1800000,
+      "ignoreTests": [
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/command-center-boot.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-snapshot.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "unrelated reference tests; focused money/CC tests run here, full suite before merge"
+    }
+  ],
+  "checks": [
+    {
+      "name": "t5-money-blocker",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/board-no-money.test.mjs",
+        "tests/command-center-routes-flag.test.mjs",
+        "tests/command-center-hive-panels.test.mjs",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/cc-hive-mount.test.mjs",
+        "tests/watch-assets.test.mjs",
+        "tests/command-center-hive.test.mjs",
+        "tests/command-center-cockpit.test.mjs"
+      ]
+    }
+  ]
+}

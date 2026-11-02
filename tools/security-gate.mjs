@@ -167,7 +167,7 @@ writeFileSync(path.join(baselineTmp,'package.json'),prevText);
 for(const lockName of NPM_LOCKS){const liveLock=path.join(cwd,lockName);if(existsSync(liveLock)){writeFileSync(path.join(baselineTmp,lockName),readFileSync(liveLock));break;}}
 const baselineRun=await run(['npm','audit','--json','--registry=https://registry.npmjs.org/'],'npm',{cwd:baselineTmp});
 if(baselineRun&&usable(baselineRun))baselineVulns=safeParse(scan.parseNpmAudit,baselineRun.stdout,warnings);
-}finally{if(baselineTmp)try{rmSync(baselineTmp,{recursive:true,force:true});}catch{/* best effort */}}
+}finally{if(baselineTmp)try{rmSync(baselineTmp,{recursive:true,force:true});}catch(error){console.error('[tools/security-gate.mjs] rmSync baselineTmp:',error?.message??error,baselineTmp);}}
 }
 }
 }
@@ -197,7 +197,7 @@ else warnings.push('npm audit of the lockfile built from package.json gave no us
 }
 else if(made)warnings.push('could not build a lockfile from package.json to audit it');
 }
-}finally{if(tmp)try{rmSync(tmp,{recursive:true,force:true});}catch{/* best effort */}}
+}finally{if(tmp)try{rmSync(tmp,{recursive:true,force:true});}catch(error){console.error('[tools/security-gate.mjs] rmSync tmp:',error?.message??error,tmp);}}
 }
 }
 for(const c of changes.filter(c=>isReq(c.file)))tally('pip-audit',await run(['pip-audit','-f','json','--no-deps','--disable-pip','-r',c.file],'pip-audit',{env:{PATH:process.env.PATH||'',HOME:os.tmpdir()}}),scan.parsePipAudit);
@@ -304,7 +304,7 @@ if(s)takeSemgrep(s);
 checked.push('code-scan');
 blocks.push({check:'code-scan',severity:'high',message:'could not prepare the isolated code scan'});
 }finally{
-try{rmSync(tmp,{recursive:true,force:true});}catch{}
+try{rmSync(tmp,{recursive:true,force:true});}catch(error){console.error('[tools/security-gate.mjs] rmSync tmp:',error?.message??error,tmp);}
 }
 }
 }

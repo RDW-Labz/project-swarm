@@ -20,7 +20,17 @@ import {
   runFieldReport,
 } from '../tools/field-report.mjs';
 
-async function fixture() {
+function fakeAwsAccessKeyId() {
+  return `AKIA${'0123456789ABCDEF'.slice(0, 16)}`;
+}
+
+const PII_SCAN_CASES = [
+  { kind: 'phone', snippet: ' callback (555) 867-5309 soon ' },
+  { kind: 'ipv4', snippet: ' host 192.168.0.42 reachable ' },
+  { kind: 'home-path', snippet: ' under /Users/janedoe/src/app ' },
+];
+
+async function fixture({ lesson = {} } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'field-ops-'));
   const lessonDir = path.join(root, 'lessons', 'abcdef12');
   await fs.mkdir(lessonDir, { recursive: true });
@@ -29,6 +39,7 @@ async function fixture() {
     rule: 'Keep the useful rule text private', fix: 'Use metadata only',
     stage: 'built', caughtBy: 'test', area: 'tool', status: 'shipped',
     version: '1.0.0', createdAt: '2026-10-21T12:00:00.000Z', tags: ['field', 'safe'],
+    ...lesson,
   }));
   await fs.mkdir(path.join(root, '.swarm', 'runs', 'run-1'), { recursive: true });
   await fs.writeFile(path.join(root, '.swarm', 'runs', 'run-1', 'state.json'), JSON.stringify({
@@ -106,6 +117,69 @@ test('refuses scanned-clean marker when payload still fails secret scanning', as
     error => error.code === 'field-push-unsafe' && error.findings.includes('email'),
   );
 });
+
+test('exportFieldData rejects lessons with secret-shaped tokens and writes no export file', async () => {
+  const secret = fakeAwsAccessKeyId();
+  const root = await fixture({ lesson: { rule: `rotate credential ${secret} nightly` } });
+  const exportsDir = path.join(root, '.swarm', 'field', 'exports');
+  const now = new Date('2026-10-21T15:30:00.000Z');
+  await assert.rejects(
+    () => exportFieldData(root, { now, projectId: 'abcdef12' }),
+    error => error.code === 'field-export-unsafe' && error.findings.includes('secret'),
+  );
+  let exportEntries = [];
+  try {
+    exportEntries = await fs.readdir(exportsDir);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  assert.equal(exportEntries.length, 0);
+});
+
+test('field-push re-scan rejects bundles carrying secret-shaped content and does not deliver', async () => {
+  const secret = fakeAwsAccessKeyId();
+  const root = await fixture();
+  const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+  const bundle = bundleForPush(data);
+  bundle.probe = secret;
+  let delivered = false;
+  await assert.rejects(
+    () => pushFieldBundle(root, { bundle, send: async () => { delivered = true; } }),
+    error => error.code === 'field-push-unsafe' && error.findings.includes('secret'),
+  );
+  assert.equal(delivered, false);
+});
+
+for (const { kind, snippet } of PII_SCAN_CASES) {
+  test(`exportFieldData rejects lesson text containing ${kind} and writes no export file`, async () => {
+    const root = await fixture({ lesson: { what: snippet } });
+    const exportsDir = path.join(root, '.swarm', 'field', 'exports');
+    await assert.rejects(
+      () => exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' }),
+      error => error.code === 'field-export-unsafe' && error.findings.includes(kind),
+    );
+    let exportEntries = [];
+    try {
+      exportEntries = await fs.readdir(exportsDir);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    assert.equal(exportEntries.length, 0);
+  });
+
+  test(`field-push re-scan rejects bundles containing ${kind} and does not deliver`, async () => {
+    const root = await fixture();
+    const data = await exportFieldData(root, { now: new Date('2026-10-21T15:30:00.000Z'), projectId: 'abcdef12' });
+    const bundle = bundleForPush(data);
+    bundle.probe = snippet;
+    let delivered = false;
+    await assert.rejects(
+      () => pushFieldBundle(root, { bundle, send: async () => { delivered = true; } }),
+      error => error.code === 'field-push-unsafe' && error.findings.includes(kind),
+    );
+    assert.equal(delivered, false);
+  });
+}
 
 const RAW_RULE_SNIPPET = 'Keep the useful rule text private';
 const RAW_WHAT_SNIPPET = 'A field observation';

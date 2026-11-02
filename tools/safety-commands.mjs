@@ -55,7 +55,15 @@ export function realStopDeps(root, { env = process.env, reason } = {}) {
       const dir = path.join(root, '.swarm', 'runs');
       const ids = await fs.readdir(dir).catch(() => []);
       const runs = [];
-      for (const id of ids) { try { runs.push({ id, status: (await (await swarm()).readState(root, id)).status }); } catch { /* not a run */ } }
+      for (const id of ids) {
+        try { runs.push({ id, status: (await (await swarm()).readState(root, id)).status }); }
+        catch (error) {
+          const message = error?.message ?? '';
+          if (message === 'Invalid run id' || message.startsWith('Unknown run:')) continue;
+          if (error instanceof SyntaxError) console.error('[tools/safety-commands.mjs] listRuns readState:', 'corrupt state.json (SyntaxError)', id);
+          else console.error('[tools/safety-commands.mjs] listRuns readState:', error?.message ?? error);
+        }
+      }
       return runs;
     },
     // A running run gets the cancel file (its runner stops the jobs); a paused, queued, pending or held one is cancelled in place.

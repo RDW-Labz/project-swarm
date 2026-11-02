@@ -39,7 +39,10 @@ export async function runReportCommand(root, args, { now = Date.now } = {}) {
   let sinceDays = 7;
   if (flags.since !== undefined) { sinceDays = Number(flags.since); if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 60) return out('--since must be a whole number of days, 1 to 60', 2); }
   if (flags.preview !== undefined) { const check = checkPreviewUrl(flags.preview); if (!check.ok) return out(`--preview: ${check.reason}`, 2); }
-  const ledger = await readLedger(root).catch(() => null);
+  const ledger = await readLedger(root).catch((error) => {
+    if (error?.code !== 'ENOENT') console.error('[tools/report-commands.mjs] runReportCommand readLedger:', (error instanceof SyntaxError || error?.name === 'SyntaxError') ? 'corrupt ledger (SyntaxError)' : (error?.message ?? error));
+    return null;
+  });
   if (!ledger) return out('no ticket ledger yet (swarm scope split), so there is nothing to report', 1);
   const text = await approvedScopeText(root, ledger);
   if (text === null) return out('the scope file is missing', 1);

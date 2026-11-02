@@ -181,7 +181,13 @@ export async function inspectResults(root, id) {
         for (const token of text.match(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+|[A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9_.-]*/g) ?? []) {
           const file = token.replace(/[.,;]+$/, '');
           if (job.outputs.includes(file) || mentioned.has(file)) continue;
-          try { await fs.stat(await safePath(root, file)); mentioned.add(file); warnings.push(`outside outputs: ${job.id}: ${file}`); } catch { /* Not an existing repo-relative path. */ }
+          try { await fs.stat(await safePath(root, file)); mentioned.add(file); warnings.push(`outside outputs: ${job.id}: ${file}`); } catch (error) {
+            /* Not an existing repo-relative path. */
+            const code = error?.code;
+            const msg = typeof error?.message === 'string' ? error.message : '';
+            const safePathFail = error instanceof Error && !code && /^(Invalid relative path:|Unsafe path:|Reserved or secret path:|Symlink refused:|Non-directory parent:|Unsafe parent:)/.test(msg);
+            if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'ENAMETOOLONG' && !safePathFail) console.error('[tools/swarm/core-52.mjs] inspectResults path probe:', error?.message ?? error);
+          }
         }
       }
     }
@@ -241,7 +247,12 @@ export async function updateInstall(root,{home,doctorAllImpl=doctorAll,env=proce
   const tagList=(await execFileAsync('git',['-C',root,'tag','--list','v*'],{encoding:'utf8'})).stdout.split('\n').map(line=>line.trim()).filter(Boolean);
   const latest=highestSemver(tagList);
   let mainVersion = null;
-  try { mainVersion = JSON.parse((await execFileAsync('git', ['-C', root, 'show', 'origin/main:package.json'], { encoding: 'utf8' })).stdout).version; } catch { /* A tag-only remote need not have main. */ }
+  try { mainVersion = JSON.parse((await execFileAsync('git', ['-C', root, 'show', 'origin/main:package.json'], { encoding: 'utf8' })).stdout).version; } catch (error) {
+    /* A tag-only remote need not have main. */
+    const stderr = String(error?.stderr ?? '');
+    const missingMain = /invalid object name|does not exist|bad revision|unknown revision/i.test(stderr);
+    if (error?.name === 'SyntaxError' || !missingMain) console.error('[tools/swarm/core-52.mjs] origin/main package.json:', error?.message ?? error);
+  }
   if (parseSemver(mainVersion) && (!latest || compareSemver(parseSemver(mainVersion), parseSemver(latest)) > 0)) return { from, to: mainVersion, tagPending: true, message: `tag pending for ${mainVersion}; retry in a minute` };
   if(!latest)fail('No release tags (v*) found in this checkout');
   let currentTag=null;
@@ -254,7 +265,7 @@ export async function updateInstall(root,{home,doctorAllImpl=doctorAll,env=proce
   const to=afterPkg.version;
   await installNewRelease(root,home);
   await doctorAllImpl();
-  const changelogText=await fs.readFile(path.join(root,'CHANGELOG.md'),'utf8').catch(()=>'');
+  const changelogText=await fs.readFile(path.join(root,'CHANGELOG.md'),'utf8').catch(error=>{ if (error?.code !== 'ENOENT') console.error('[tools/swarm/core-52.mjs] CHANGELOG read:', error?.message ?? error); return ''; });
   return await attachServerRestart({from,to,changelog:extractChangelog(changelogText,from,to)},root,{home,env,noRestart,write});
 }
 
@@ -432,7 +443,7 @@ export async function shipRun(root, id, flags, { spawnImpl = spawn, exec = shipE
     const profile = await projectProfile(root);
     if (profile?.budgets) {
       const { budgetShipGate, readBudgetState } = await import('../budgets.mjs');
-      const gate = budgetShipGate({ budgets: profile.budgets, state: await readBudgetState(root), ledger: await (await import('../tickets.mjs')).readLedger(root).catch(() => null), runJobIds: (state.jobs ?? []).map(job => job.id) });
+      const gate = budgetShipGate({ budgets: profile.budgets, state: await readBudgetState(root), ledger: await (await import('../tickets.mjs')).readLedger(root).catch(error=>{ console.error('[tools/swarm/core-52.mjs] readLedger for budgetShipGate:', error?.message ?? error); return null; }), runJobIds: (state.jobs ?? []).map(job => job.id) });
       if (gate) fail(gate.message, 'budgets-failing');
     }
   }

@@ -71,7 +71,12 @@ async function readJsonFile(file) {
 }
 
 async function assertRealDir(dir) {
-  const st = await fs.lstat(dir).catch(() => null);
+  const st = await fs.lstat(dir).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/managers/replay.mjs] lstat dir:', dir, error?.message ?? error);
+    }
+    return null;
+  });
   if (!st || st.isSymbolicLink() || !st.isDirectory()) throw new Error('replay-not-a-directory');
 }
 
@@ -106,7 +111,12 @@ async function copyTree(src, dst) {
 export async function loadManagerReplayFixture(ledgerDir) {
   const resolved = path.resolve(String(ledgerDir ?? ''));
   if (!resolved) throw new Error('replay-ledger-dir-invalid');
-  const st = await fs.lstat(resolved).catch(() => null);
+  const st = await fs.lstat(resolved).catch((error) => {
+    if (error?.code !== 'ENOENT') {
+      console.error('[tools/managers/replay.mjs] lstat resolved:', resolved, error?.message ?? error);
+    }
+    return null;
+  });
   if (!st || st.isSymbolicLink()) throw new Error('replay-ledger-dir-invalid');
 
   if (st.isFile()) {
@@ -467,7 +477,9 @@ export async function runManagerReplay(options) {
     };
   } finally {
     if (ownsWorkspace && !options.keepWorkspace) {
-      await fs.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(workspaceRoot, { recursive: true, force: true }).catch((error) => {
+        console.error('[tools/managers/replay.mjs] rm workspace:', workspaceRoot, error?.message ?? error);
+      });
     }
   }
 }

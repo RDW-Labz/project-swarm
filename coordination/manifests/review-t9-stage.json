@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "reviewt9stage",
+      "agent": "claude",
+      "model": "opus",
+      "tier": "expensive",
+      "tierReason": "train 9 hotfix review: Cockpit stage list numeric order",
+      "prompt": "Delta review of the train 9 hotfix (1.167.37) on top of 1.167.36 (82caca04). The owner verified 1.167.36 live and found one miss: the Cockpit TICKET STACK sub-line read s1 / s2 / s3 / s4 / s5 / s6 / s7 / s10 / s9 / s8 / s11. The combined code diff is at coordination/review/t9-stage-review.diff; evidence is at t9-stage-evidence.json. Full suite is green: 7690 tests, 7659 pass, 0 fail, 22 skipped, 9 todo; focused 20/20.\n\nWhat changed:\n- tools/watch-assets/cockpit-lists.js cockpitCategories now sorts category names numerically when the chosen category field is stage (s1, s2, ..., s10, s11; case-insensitive; non-S ids after by localeCompare). Lane/area/type category order is unchanged. This names list feeds the Cockpit TICKET STACK sub-line, the category legend and the stage-strip grouping, so all stage displays use numeric order. The stage-count span already used stageRingProgress/compareStageIds.\n- tests/cc-cockpit-mount.test.mjs adds a mounted-Cockpit test with stages S1,S10,S9,S8,S11,S2..S7 and no lane/area/type. It asserts the stage-count span and stack sub-line are numeric, then scans every leaf element whose text has 3+ stage ids and asserts numeric order, so any stage list rendered on the page is covered.\n- Version 1.167.37, CHANGELOG, README and release pins.\n\nLook hard at: any remaining stage list that is not covered by the comparator or the test; whether sorting only when field === 'stage' is right; case/locale edge cases; whether lane/area/type order changed; whether the test would fail on the old order (not tautological); and unrelated changes. Report only real findings with file and line, a concrete failure, and a fix.\n\nWrite ONLY coordination/review/t9-stage-review.json: {\"verdict\":\"pass\"|\"fail\",\"score\":0-10,\"blockers\":[{\"file\":\"\",\"line\":0,\"problem\":\"\",\"exploit_or_failure\":\"\",\"fix\":\"\"}],\"followups\":[same shape],\"summary\":\"\"}. verdict is fail only if blockers is non-empty. The runner stamps the reviewed head; do NOT add or change a head field.",
+      "context": [
+        "coordination/review/t9-stage-review.diff",
+        "coordination/review/t9-stage-evidence.json",
+        "tools/watch-assets/cockpit-lists.js",
+        "tools/watch-assets/cockpit-view.js",
+        "tools/watch-assets/cc-cockpit-mount.js",
+        "tests/cc-cockpit-mount.test.mjs",
+        "tests/command-center-lists.test.mjs",
+        "CHANGELOG.md"
+      ],
+      "outputs": [
+        "coordination/review/t9-stage-review.json"
+      ],
+      "resultFile": "coordination/review/t9-stage-review.json",
+      "timeoutMs": 1800000
+    }
+  ]
+}

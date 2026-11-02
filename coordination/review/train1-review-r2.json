@@ -1,0 +1,65 @@
+{
+  "verdict": "fail",
+  "score": 6,
+  "blockers": [
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 2006,
+      "problem": "New regression from the runner-side gate. orchestratorManifestGate (called first in applyManifestJobTypes, tools/swarm/core-1.mjs:454) runs vetManifestBody on every manifest the runner applies, including the ones swarm builds itself, and vetJobs refuses any job with shell: true or a model ending in '-shell'. Swarm's own verify jobs have exactly that shape. verifyJobFields (tools/verify-config.mjs:110-130) sets fields.shell = true for agent 'claude', and 'claude' is the default verify agent (verify-config.mjs:79). It also defaults the model to 'sonnet-shell' (verify-config.mjs:87). The gate is on in exactly the normal orchestrator setup: CLAUDECODE=1, orchestrator mode on, hook installed. The 'generated wave manifest' tests (diff lines 783-867) use jobs with no verify fields, so this case is never tested. (Line refers to the new file's line in the diff; it is vetJobs' shell check.)",
+      "exploit_or_failure": "Project with profile.verify = {command: ['npx','vitest','run','{tests}']} (agent defaults to claude) and an approved ticket of type test/build that lists tests. The orchestrator runs `swarm go --scope` (or swarm ticket / resume of such a run) in its Claude Code session. The generated job carries shell: true and model 'sonnet-shell'. applyManifestJobTypes throws 'orchestrator-manifest-unvetted: job T-xxxx has shell: true', and the wave never starts. Every test-gated ticket is stuck in orchestrator mode: a crash on the normal path and a regression from before this train. I could not read the ticket/go pipeline that merges verifyJobFields into the job. If that code drops shell/model before the job reaches applyManifestJobTypes, this downgrades to a follow-up. Please confirm with an end-to-end test.",
+      "fix": "Don't block swarm-generated verify jobs. Pick one: (a) allow a job with shell/-shell only when its {agent, model, shell, setup, testEnv, timeoutMs} exactly equal verifyJobFields(ledgerTicket(job.id), profile.verify) for the approved ledger ticket that job id maps to; or (b) mark manifests built in-process by go/scope/ticket from the approved ledger (an in-memory flag, never read from disk or manifest JSON) and apply only the argv vetting to them, keeping the shell refusal for manifests that came from a path argument. Add an end-to-end test: orchestrator mode + hook + CLAUDECODE=1, profile.verify with '{tests}', a ticket with tests; `swarm go --scope` starts the run. Add a negative test where a hand-written coordination/manifests job with shell: true is still refused."
+    }
+  ],
+  "followups": [
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 2093,
+      "problem": "The runner gate is a no-op unless env.CLAUDECODE === '1'. I found no allowed orchestrator command that can unset it: VAR= prefixes are refused (shell-writes.mjs:2347, 2547, 2616); env/exec/command wrappers are in OM_BLOCKED_WRAPPERS; unset/export are not allowed. Any swarm path that spawns the runner in a child with a cleaned env, though, skips the gate. Tools that launch nested `claude` workers often strip CLAUDECODE. I could not read the go/ticket/run spawn code to rule this out.",
+      "exploit_or_failure": "If `swarm go` or `swarm ticket` re-execs `swarm run` (or a detached runner) with CLAUDECODE removed, the orchestrator's manifest runs with no runner-side vetting. Only the hook check remains, which has the TOCTOU gap from round 1.",
+      "fix": "Key the gate on orchestrator mode + hook installed only, with an owner-only override flag the hook denies. Or pass an explicit 'orchestrator-session' marker through to every child runner. Add a test that a child runner started by go/ticket still enforces the gate."
+    },
+    {
+      "file": "tools/swarm/core-1.mjs",
+      "line": 454,
+      "problem": "The gate sits only in applyManifestJobTypes and runs before applyJobType expands job types. I could not confirm that resume, integrate (including `integrate --approve-manifest <path>`, which the orchestrator may run), redcheck, and the --pr manifest of `swarm ticket` go through applyManifestJobTypes. I also could not confirm that no job type expands into checks/setup after vetting. The hook still skips the --pr value (the test at diff line 655 allows `swarm ticket m.json --pr coordination/manifests/p.json` without vetting p.json).",
+      "exploit_or_failure": "If integrate reads checks from --approve-manifest or a stored pre-guard run state without the gate, the orchestrator can get unvetted argv run. (It can still write coordination/manifests/*.json.)",
+      "fix": "Call the gate on every path that loads a manifest or run-state manifest with commands (integrate --approve-manifest, resume, redcheck, the ticket --pr manifest). Vet after job-type expansion too, or check that expansion only adds internal constant commands. Have the hook vet --pr and --approve-manifest values like positionals."
+    },
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 1793,
+      "problem": "loadProfile and qualityCheckArgvsForProject read only <root>/.project-swarm.json and <root>/package.json. go.mjs (readIntegrateCommitBranches) falls back to the main worktree's .project-swarm.json, and scope-commands' qualityFor may use a sub-package or stack path in monorepos. The vetted set can then be smaller than what swarm generates.",
+      "exploit_or_failure": "In a linked worktree without its own .project-swarm.json, or a monorepo whose quality checks come from a sub-package, legitimate generated checks are refused. This fails closed but blocks work.",
+      "fix": "Use the same profile and package resolution as scope-commands (mainWorktreeRoot fallback, and the same package dir as qualityFor). Add a test that runs real qualityFor output through vetManifestBody."
+    },
+    {
+      "file": "tools/go.mjs",
+      "line": 1414,
+      "problem": "Round-1 blocker closed for '*'. Remaining gaps: (1) If the default branch is unknown (no refs/remotes/*/HEAD and no init.defaultBranch), an explicitly named pattern such as 'develop' or 'dev*' still commits to what is really the remote's default. (2) remoteHeadReadable becomes true if any one remote has a HEAD, so '*' is honored even when the remote that actually holds the default (e.g. origin without HEAD) is unknown. Line numbers are diff lines.",
+      "exploit_or_failure": "Repo created locally and pushed with `git push -u origin develop` (no origin/HEAD), with an 'upstream' remote whose HEAD is main and commitBranches ['*']: integrate commits onto develop. This needs owner-written config, so it is a follow-up.",
+      "fix": "Treat the default as known only when every remote has a HEAD. Also protect the branch.<name>.merge upstream of each remote-tracking default. When unknown, drop prefix patterns too unless they start with 'swarm/'."
+    },
+    {
+      "file": "tools/split-auto-approve.mjs",
+      "line": 2668,
+      "problem": "Round-1 blocker closed: any snapshot ticket that is now cancelled or missing fails. Status regressions from done (finished after the snapshot) back to todo/in-progress are still not caught, because ticketComparable drops status and the done check only looks at snapshot-time done. Line refers to the diff.",
+      "exploit_or_failure": "A change order reopens a ticket that was finished after the last approval, with new files/acceptance. Auto-approve passes (paid/migration/deploy checks still apply to it as 'changed'), and finished work gets reworked with no human. Nothing is lost, so this is a follow-up.",
+      "fix": "Also fail when a ticket has completion evidence (ledger done timestamp, integrated run) and its current status is not done."
+    },
+    {
+      "file": "tools/split-auto-approve.mjs",
+      "line": 2497,
+      "problem": "Carried from round 1: paid-lane detection is a regex on ticket.lane. It ignores API_AGENTS, profile default lanes and the escalation ladder. Migration and deploy path lists are narrow, and title/notes are not scanned for deploy or merge wording.",
+      "exploit_or_failure": "A ticket with no lane that inherits a paid default, or one on another API agent, is auto-approved and spends money.",
+      "fix": "Decide 'paid' from the lane registry and API_AGENTS on the effective lane. Widen the migration/deploy lists and scan all text fields."
+    },
+    {
+      "file": "tools/split-park-supersede.mjs",
+      "line": 2763,
+      "problem": "Carried from round 1, unchanged: the 'newest run' for a stage is the most recently raised blocker, not the newest split run. Owner-only, reversible, and --dry-run shows it.",
+      "exploit_or_failure": "Re-raising an old run's park makes a newer run's still-current park resolve as superseded.",
+      "fix": "Order runs by run creation time or a monotonic run id stored as a structured field on the park event."
+    }
+  ],
+  "summary": "Round-1 blockers, each one checked against the new code. (A) Snapshot forgery: CLOSED. orchestratorWriteAllowedRel now denies .swarm/project/approved-tickets.json, tickets.json and tickets.log (case-insensitive, checked before the rules). Directory renames and extensionless targets were already denied. evaluateAutoApprove requires sha(snapshot.tickets) === snapshot.ticketsHash === the last 'approve' ticketsHash in the append-only tickets.log, which the orchestrator also cannot write. The snapshot is written before writeLedger, so a partial failure fails closed. Plain `scope approve` is still denied, and only the exact lowercase `approve --auto-ok` is allowed, which also closes the round-1 uppercase follow-up. (B) Manifest-guard race: CLOSED for paths that reach applyManifestJobTypes. The runner vets the parsed object it then uses, a missing manifest-looking path is refused, and compound write+swarm commands (including '&' background) are refused. CLAUDECODE cannot be unset through any allowed command: VAR= prefixes, env/exec wrappers and unset/export are all refused. The vetted sources (coordination/checks.json, .project-swarm.json, package.json, tsconfig.json, .claude/settings.local.json and the orchestrator-mode folder) are all outside the orchestrator write allowlist. (C) Cancelled done work: CLOSED. Any ticket not cancelled in the snapshot that is now cancelled or missing fails. (D) Default branch: CLOSED for the reported case. Every refs/remotes/*/HEAD plus init.defaultBranch is protected case-insensitively, a lone '*' and patterns matching protected names are dropped when no remote HEAD is known, and the round-1 config-error regression on swarm/* branches is fixed (now a warning). NEW BLOCKER: the runner gate refuses jobs with shell: true or a '-shell' model. swarm's own verify jobs have that shape by default (verifyJobFields with agent claude / sonnet-shell), so in normal orchestrator operation `swarm go --scope` throws for every test-gated ticket. The tests only use generated manifests without verify fields. Limits: only the listed files were readable. I could not see the go/ticket/run pipeline, resume/integrate/redcheck code, approveLedger/ticketSetHash, or the approve log writer, so the blocker's trigger and some follow-ups (gate coverage of integrate --approve-manifest/resume/--pr, child-runner env) are inferred from verify-config.mjs and the core-1 call site, and need a quick end-to-end check. Diff-file line numbers are used for new files."
+}

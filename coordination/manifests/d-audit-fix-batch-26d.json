@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-26d",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 26d (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/autopilot-pause.mjs, tools/gate-fingerprint.mjs, tools/git-hooks.mjs, tools/goal.mjs, tools/lanes-rule.mjs, tools/release-train-merge.mjs, tools/runner-pointer.mjs, tools/swarm-env.mjs, tools/swarm/core-71.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/swarm/train3). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/autopilot-pause.mjs\nLogger prefix: console.error('[tools/autopilot-pause.mjs] <short context>:', error?.message ?? error)\n- Line 45 `} catch { /* already gone */ }`: SILENT-ENOENT \u2014 releases the pause marker. Stay silent on ENOENT; if a SyntaxError reaches here log fixed text 'corrupt pause marker (SyntaxError)' (never error.message); log anything else with the marker path.\n\n### tools/gate-fingerprint.mjs\nLogger prefix: console.error('[tools/gate-fingerprint.mjs] <short context>:', error?.message ?? error)\n- Line 268 `fsPromises.unlink(tmpPath).catch(() => {})`: LOG-CLEANUP \u2014 this cleanup runs inside an error path that rethrows: bind the cleanup error with a DIFFERENT name than the outer error and console.error it (stay silent on ENOENT for an unlink of a tmp file that may never have been created); the original error must still be rethrown unchanged.\n\n### tools/git-hooks.mjs\nLogger prefix: console.error('[tools/git-hooks.mjs] <short context>:', error?.message ?? error)\n- Line 157 `chmodSync(hookPath, 0o755) catch { /* best effort */ }`: LOG-ALWAYS \u2014 writeFileSync's mode option is ignored for a file that already exists, so a swallowed chmod failure can leave an existing git hook non-executable, silently disabling the pre-commit/pre-push/commit-msg guard.\n\n### tools/goal.mjs\nLogger prefix: console.error('[tools/goal.mjs] <short context>:', error?.message ?? error)\n- Line 164 `catch { /* not a git checkout (injected deps in tests) */ }`: SILENT when the repo is simply not a git checkout (read worktreeDirtyPaths to see how git is run: ENOENT for missing git, git exit 128 / 'not a git repository'); console.error anything else. Keep dirtyList as [] in every case.\n\n### tools/lanes-rule.mjs\nLogger prefix: console.error('[tools/lanes-rule.mjs] <short context>:', error?.message ?? error)\n- Line 118 `fs.unlink(tmpPath).catch(() => {})`: LOG-CLEANUP \u2014 this cleanup runs inside an error path that rethrows: bind the cleanup error with a DIFFERENT name than the outer error and console.error it (stay silent on ENOENT for an unlink of a tmp file that may never have been created); the original error must still be rethrown unchanged.\n\n### tools/release-train-merge.mjs\nLogger prefix: console.error('[tools/release-train-merge.mjs] <short context>:', error?.message ?? error)\n- Line 157 `await fs.unlink(tmp).catch(() => {})`: SILENT-ENOENT \u2014 same tmp-cleanup pattern as release-train-bump, used while recording a runner-only merge for the merge-guard/release-train pipeline; log any non-ENOENT unlink failure.\n\n### tools/runner-pointer.mjs\nLogger prefix: console.error('[tools/runner-pointer.mjs] <short context>:', error?.message ?? error)\n- Line 202 `try { await fs.access(trackedPath); hasTracked = true; } catch { /* new */ }`: SILENT-ENOENT \u2014 a missing tracked pointer file just means first link; console.error anything else (e.g. EACCES) with trackedPath. Keep hasTracked false in every catch case. Do NOT touch the git rev-parse catch at line 184.\n\n### tools/swarm-env.mjs\nLogger prefix: console.error('[tools/swarm-env.mjs] <short context>:', error?.message ?? error)\n- Line 191 `try { await access(candidate); return candidate }`: SILENT-ENOENT/EACCES/ENOTDIR \u2014 PATH probe for the real git binary used to build the stash-guard wrapper (field lesson #168); log anything else.\n\n### tools/swarm/core-71.mjs\nLogger prefix: console.error('[tools/swarm/core-71.mjs] <short context>:', error?.message ?? error)\n- Line 340 (was line 326 at audit commit 774c1a2, shifted by #416) `await cleanupRunWorkspaces(root, id, state, {...})`: LOG-ALWAYS \u2014 runs right after recording a merge-queue integration pass; no error is expected cleaning up finished run worktrees, and silently losing that cleanup can leak worktrees/disk in the merge pipeline.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/autopilot-pause.mjs",
+        "tools/gate-fingerprint.mjs",
+        "tools/git-hooks.mjs",
+        "tools/lanes-rule.mjs",
+        "tools/release-train-merge.mjs",
+        "tools/runner-pointer.mjs",
+        "tools/swarm-env.mjs",
+        "tools/swarm/core-71.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/auto-run-check.test.mjs",
+        "tests/b7-review-fixes.test.mjs",
+        "tests/batch-run.test.mjs",
+        "tests/codex-adapter.test.mjs",
+        "tests/commit-msg-manifest.test.mjs",
+        "tests/commit-msg-review.test.mjs",
+        "tests/commit-msg-round2.test.mjs",
+        "tests/commit-msg-round3.test.mjs",
+        "tests/crash-guards.test.mjs",
+        "tests/field-lessons-batch-e.test.mjs",
+        "tests/field-lessons-batch-f.test.mjs",
+        "tests/field-lessons-batch-g.test.mjs",
+        "tests/field-lessons-batch-o.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/gate-fingerprint.test.mjs",
+        "tests/generated-state.test.mjs",
+        "tests/git-hooks.test.mjs",
+        "tests/goal.test.mjs",
+        "tests/helpers/swarm-source.mjs",
+        "tests/hook-path-stable.test.mjs",
+        "tests/hooks-repoint-all.test.mjs",
+        "tests/lanes-rule.test.mjs",
+        "tests/lifecycle-list-shared.test.mjs",
+        "tests/phase10-swarm-command.test.mjs",
+        "tests/phase10b-cli.test.mjs",
+        "tests/phase11-cli.test.mjs",
+        "tests/phase12-cli.test.mjs",
+        "tests/pins.test.mjs",
+        "tests/plan-preview.test.mjs",
+        "tests/pointer-safety.test.mjs",
+        "tests/registry-round3.test.mjs",
+        "tests/release-train.test.mjs",
+        "tests/review-high-regressions.test.mjs",
+        "tests/rule-wiring.test.mjs",
+        "tests/runner-pointer.test.mjs",
+        "tests/scratch-cleanup.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/state-guard.test.mjs",
+        "tests/swarm-source-helper.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-kit",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "This is goal g-33a7a4ae, round 2 (fix round; round 1 was audit-only and already merged as docs/state/silent-failures.md; several fix batches already merged for other files). Read that doc's methodology section first (top of file) and the per-file section for tools/kit.mjs (search for '### tools/kit.mjs' - it lists exact line numbers and the catch form found there: try-catch-no-binding, dot-catch-arrow, or dot-catch-noop-expr; note line 187 is listed TWICE because that source line has two separate inline `.catch(() => {})` calls chained one after another - find and fix both).\n\nFor EACH flagged line in tools/kit.mjs only (do not touch any other file, do not fix findings in other files even if you notice them while reading):\n\n1. Read the surrounding function to understand what the catch is actually guarding against and what happens today when it swallows silently (what does the function return/do next).\n2. Decide, from the real code, whether this catch is:\n   (a) An EXPECTED/benign condition - e.g. an optional file that may not exist yet (ENOENT), a best-effort copy/write during kit install that can be retried or skipped. For these, keep the swallow (do not change control flow or add noisy logging for the expected path), but if the catch currently swallows ANY error unconditionally where a narrower code check makes sense, narrow it and add minimal visibility (see point 3) for anything else unexpected - same return value, same behavior, just visible.\n   (b) A genuinely UNEXPECTED-error catch with no narrower expected case. Add minimal visibility only: a one-line log. This file has no existing logger/journal convention for these specific catches (it imports appendEvent but only uses it for a human/journal event, not error logging) - use `console.error('[tools/kit.mjs] <short context naming the function/operation>:', error?.message ?? error)`. Do NOT add a throw, do NOT change the function's return value or control flow, do NOT change what happens next.\n3. If a catch binds no error variable, add a REAL binding and actually reference it in a console.error call where you are not simply preserving an already-safe silent fallback per (a) above - do not just rename-and-ignore a binding (including via a `void error;` no-op - if you decide a site should truly stay silent per case (a), say so in your summary and explain why, rather than adding an unused binding).\n\nDo not refactor anything beyond the flagged catch blocks. Do not reformat unrelated code. Do not rename functions or change exports. Preserve every existing behavior path exactly except for the narrowing/visibility described above.\n\nYour workspace does not include the test suite, so you cannot run it yourself - the orchestrator runs the real full suite against your output after integration and will send back any regression as a follow-up. List, in your final summary, which of the 10 flagged lines you narrowed (case a) vs. just added logging to (case b), with one line each.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/kit.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": ["tests/split-module.test.mjs", "tests/kit-and-interview.test.mjs"],
+      "ignoreTestsReason": "generic tools/ directory size enumeration; full suite runs before integrate anyway"
+    }
+  ]
+}

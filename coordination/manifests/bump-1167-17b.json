@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "bump16717b",
+   "agent": "claude",
+   "model": "haiku",
+   "tier": "cheap",
+   "prompt": "Finish the version bump to 1.167.17. Seven current-version pins were missed because the dots are escaped inside regular expressions. Change the current-version pin from 1.167.16 to 1.167.17 (keeping the escaped-dot spelling) on exactly these lines: tests/t101-release.test.mjs line 23 (the changelog heading regex); tests/field-lesson-t80-cli.test.mjs lines 327, 328 and 330 (README 'Use Project Swarm', README 'Install from tag v', changelog heading); tests/field-lessons-batch-ah-release.test.mjs line 39; tests/field-lessons-batch-ag-release.test.mjs line 32; tests/field-lessons-batch-ab-release.test.mjs line 21. Do not touch any other line or file, and do not touch historical entries.",
+   "context": [
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs"
+   ],
+   "outputs": [
+    "tests/t101-release.test.mjs",
+    "tests/field-lesson-t80-cli.test.mjs",
+    "tests/field-lessons-batch-ah-release.test.mjs",
+    "tests/field-lessons-batch-ag-release.test.mjs",
+    "tests/field-lessons-batch-ab-release.test.mjs"
+   ],
+   "timeoutMs": 900000
+  }
+ ]
+}

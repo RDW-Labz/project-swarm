@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24c-fix",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24c fixup. Edit ONLY tools/phone-commands.mjs and tools/report-commands.mjs. The working tree already contains this batch's logging changes; keep them.\n\nIn both files, the readLedger(...).catch((error) => { ... }) handlers currently stay silent for `error?.code !== 'ENOENT' && error?.name !== 'SyntaxError'`. A corrupt ledger must be VISIBLE. Change the condition in those readLedger handlers ONLY to `error?.code !== 'ENOENT'` (drop the SyntaxError exemption). Keep `return null;` and everything else byte-identical. Do not touch any other catch.\n\nThen run: node --import ./tests/_isolate-config.mjs --test tests/phone-commands.test.mjs (if present) and confirm green. One-line summary per file.",
+      "context": [],
+      "outputs": [
+        "tools/phone-commands.mjs",
+        "tools/report-commands.mjs"
+      ],
+      "timeoutMs": 1200000,
+      "ignoreTests": [
+        "tests/client-report.test.mjs",
+        "tests/phone.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

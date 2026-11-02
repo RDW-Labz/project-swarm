@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-versionmgr-batch-20b",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 20b (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/managers/version/index.mjs' section. Edit ONLY tools/managers/version/index.mjs. Visibility only: do NOT change control flow, return values, throws, or fallbacks.\n\nThe file is unchanged since the audit; lines 108, 161, 203, 312 are current.\n\nNo logger exists in this file. Use: console.error('[tools/managers/version/index.mjs] <short context>:', error?.message ?? error)\n\n1. Line 108, resolveProjectInstallRoot: `} catch { /* no pointer */ }` around reading/parsing .project-swarm.json and fs.realpath(pointer.install). A missing .project-swarm.json is the normal case: stay silent when error?.code === 'ENOENT' AND error.path is the .project-swarm.json path (hoisting that path into a local const is fine). Log everything else, including a corrupt JSON pointer and an ENOENT from realpath of pointer.install (a broken pointer), with projectRoot. Still fall through to realpath(swarmPackageRoot).\n2. Line 161, resolveSwarmUpdateRunner: `} catch { /* try next */ }` around fs.access(candidate). Stay silent for error?.code === 'ENOENT'; log anything else with the candidate path. Still continue to the next candidate.\n3. Line 203, machineBusyForUpdate: `} catch { /* not present */ }` around fs.realpath(dir). Stay silent for error?.code === 'ENOENT'; log anything else with dir. Keep looping.\n4. Line 312, run: `} catch { /* offline or non-install tree (replay) */ }` around readUpdateAvailability(installRoot). Bind and log unconditionally with installRoot (one line, so offline update checks become visible). availability keeps its default.\n\nDo NOT touch any other catch. Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run the covering tests (grep tests/ for managers/version) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/managers/version/index.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

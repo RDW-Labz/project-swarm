@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-busymarker-batch-18a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 18a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and its '### tools/busy-marker.mjs' section. Edit ONLY tools/busy-marker.mjs. Visibility only: do NOT change control flow, return values, throws, or which markers are kept/removed.\n\nNo logger exists in this file. Use: console.error('[tools/busy-marker.mjs] <short context>:', error?.message ?? error)\n\nAll four flagged lines are `fs.unlink(...).catch(() => {})` cleanups. For each: bind the error; stay silent for error?.code === 'ENOENT' (another process already removed it); log anything else, including the file path. Keep evaluating to undefined and continue exactly as today.\n1. Line 79: unlink of the temporary file in the write helper's catch (before `throw error` \u2014 the original error must still be rethrown unchanged).\n2. Line 95: unlink of an unreadable/corrupt marker inside the readFile/JSON.parse catch (do NOT change the outer catch, only the inner .catch).\n3. Line 96: unlink of a marker whose pid is invalid or dead.\n4. Line 101: unlink of a marker whose process start time no longer matches (pid reuse).\n\nA small private helper is fine, e.g. `const unlinkQuietly = (file, context) => fs.unlink(file).catch(error => { if (error?.code !== 'ENOENT') console.error(`[tools/busy-marker.mjs] ${context} ${file}:`, error?.message ?? error); });` \u2014 do not export it.\n\nDo NOT touch any other catch (e.g. the process.kill probe at line 19). Do not refactor, reformat, rename, or change exports.\n\nFORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen run covering tests (grep tests/ for busy-marker) with: node --import ./tests/_isolate-config.mjs --test <files>, confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/busy-marker.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/split-module.test.mjs",
+        "tests/busy-marker.test.mjs",
+        "tests/update-busy-marker.test.mjs",
+        "tests/update-when-idle.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

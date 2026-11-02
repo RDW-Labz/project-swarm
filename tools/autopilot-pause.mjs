@@ -42,7 +42,11 @@ export async function beginAutopilotPause(root, reason, { pid = process.pid, now
     try {
       const owner = await readMarker(root);
       if (owner?.pid === pid) await fs.rm(file, { force: true });
-    } catch { /* already gone */ }
+    } catch (error) {
+      if (error?.code === 'ENOENT') { /* already gone */ }
+      else if (error instanceof SyntaxError) console.error('[tools/autopilot-pause.mjs] release pause marker:', 'corrupt pause marker (SyntaxError)');
+      else console.error('[tools/autopilot-pause.mjs] release pause marker:', file, error?.message ?? error);
+    }
   };
 }
 

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-24a",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 24a (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/acceptance.mjs, tools/bench-commands.mjs, tools/board-keepalive.mjs, tools/board-live.mjs, tools/brain.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/acceptance.mjs\nLogger prefix: console.error('[tools/acceptance.mjs] <short context>:', error?.message ?? error)\n- Line 229 `} catch { /* missing: nothing covered by it */ }`: SILENT-ENOENT (lstatSync on a possibly-missing source file), log the rest (e.g. EACCES); no fallback value, loop just skips the file.\n- Line 364 `const candidate = await fs.realpath(...).catch(() => null);`: SILENT-ENOENT (workspace path gone/never existed), log the rest; keep null fallback (caller falls through to `return member`).\n\n### tools/bench-commands.mjs\nLogger prefix: console.error('[tools/bench-commands.mjs] <short context>:', error?.message ?? error)\n- Line 115 `} catch { /* skip */ }`: SILENT-ENOENT/SyntaxError (baseline file removed concurrently, or corrupt JSON from `readJsonFile`), log the rest (e.g. EACCES); no fallback value, entry is just omitted from `baselines`.\n- Line 128 `} catch { /* skip */ }`: SILENT-ENOENT/SyntaxError (replay file removed concurrently, or corrupt JSON), log the rest; no fallback value, entry omitted from `replays`.\n\n### tools/board-keepalive.mjs\nLogger prefix: console.error('[tools/board-keepalive.mjs] <short context>:', error?.message ?? error)\n- Line 138 `await handle.close().catch(() => {});`: close/cleanup catch on a file handle that was just read successfully (finally block) \u2014 LOG-ALWAYS with a different binding, include the file path; no fallback value, best-effort close.\n- Line 206 `try { await fs.rm(file, { force: true }); } catch { /* best effort */ }`: cleanup with `{ force: true }` on fs.rm (can't ENOENT) \u2014 LOG-ALWAYS, include the identity file path; no fallback value, best-effort removal.\n\n### tools/board-live.mjs\nLogger prefix: console.error('[tools/board-live.mjs] <short context>:', error?.message ?? error)\n- Line 121 `const ledger = await readLedger(project.root).catch(() => null);`: SILENT-ENOENT (a corrupt ledger must be visible, so SyntaxError is logged) (no ledger yet, or a torn write), log the rest; keep null fallback (handled via `ledger?.tickets ?? []`).\n- Line 122 `const ledgers = await Promise.all(roots.map(root => readLedger(root).catch(() => null)));`: SILENT-ENOENT (a corrupt ledger must be visible, so SyntaxError is logged) per-root ledger read, log the rest; keep null entries (filtered later via `ledgers.map(item => item?.updatedAt ...)`).\n\n### tools/brain.mjs\nLogger prefix: console.error('[tools/brain.mjs] <short context>:', error?.message ?? error)\n- Line 82 `try { await ledger(event); } catch { /* ignored by design */ }`: lost event/audit write (the caller-supplied `ledger` logger) \u2014 LOG-ALWAYS, include the event kind; no fallback value, write is simply dropped.\n- Line 166 `try { link?.close?.(); } catch { /* ignored by design */ }`: close/cleanup catch on the connection link during `close()` \u2014 LOG-ALWAYS with a different binding; no fallback value, best-effort close.\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/acceptance.mjs",
+        "tools/bench-commands.mjs",
+        "tools/board-keepalive.mjs",
+        "tools/board-live.mjs",
+        "tools/brain.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/acceptance-review-skip.test.mjs",
+        "tests/acceptance-review-worktree.test.mjs",
+        "tests/acceptance-sync.test.mjs",
+        "tests/acceptance.test.mjs",
+        "tests/bench-commands.test.mjs",
+        "tests/board-keepalive.test.mjs",
+        "tests/board-live.test.mjs",
+        "tests/brain.test.mjs",
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/memory-fixes.test.mjs",
+        "tests/practice-tooling.test.mjs",
+        "tests/s13-blockers.test.mjs",
+        "tests/s13-live-bugs.test.mjs",
+        "tests/scope-loop-resume-review.test.mjs",
+        "tests/scope-loop-review-stall.test.mjs",
+        "tests/split-module.test.mjs",
+        "tests/ticket-target-worktree.test.mjs",
+        "tests/wave-prep-context.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

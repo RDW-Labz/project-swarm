@@ -1,0 +1,93 @@
+{
+  "verdict": "fail",
+  "score": 4,
+  "blockers": [
+    {
+      "file": "tools/scope-commands.mjs",
+      "line": 1066,
+      "problem": "The auto-approve baseline .swarm/project/approved-tickets.json can be written by the orchestrator. ORCHESTRATOR_WRITE_RULES (tools/orchestrator-allow.mjs:26-32) lets orchestrator mode write any .swarm/**/*.{json,jsonl,ndjson,md,yaml,yml} outside workspaces/worktrees/runs/backups/orchestrator-mode, and .swarm/project/ is not excluded. evaluateAutoApprove trusts this file completely: snapshot presence, change-order novelty, the done-ticket list, and the added/changed set used by every other condition all come from it.",
+      "exploit_or_failure": "The orchestrator opens a change order that adds a ticket with lane 'anthropic:opus', a db/migrations/*.sql file, or vercel.json. Then, with the Write tool or a shell redirect, it writes .swarm/project/approved-tickets.json as {tickets: <current ledger tickets, including the new one>, changeOrderIds: []}. Next it runs `swarm scope approve --auto-ok`. The snapshot check passes even if the owner never approved. change-order passes because the CO id is 'new'. no-done-cancelled passes because the forged snapshot lists nothing as done. The new ticket is not 'added' or 'changed', so paid-lanes, migrations and deploy all pass. The ledger is approved by 'orchestrator-auto'.",
+      "fix": "Store the snapshot somewhere the orchestrator cannot write: add an explicit deny for .swarm/project/approved-tickets.json, or put it under a subtree already in ORCHESTRATOR_OWN_WRITE_GUARD_SKIP_PREFIXES, such as a new .swarm/approvals/ added to the deny list, and cover it in the shell-redirect and Write/Edit hooks too. Also bind the snapshot to the approval record. Require sha(canonical(snapshot.tickets)) === snapshot.ticketsHash === the ticketsHash in the last 'approve' entry of the append-only log/ledger, and refuse --auto-ok if they differ. Add a test where an orchestrator-mode write to that path is denied and a hand-edited snapshot is refused."
+    },
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 148,
+      "problem": "Manifests are vetted only in the PreToolUse shell hook, against whatever is on disk when the command is checked. swarm run/go/ticket then re-reads the file when it actually runs. Orchestrator mode may write coordination/manifests/*.json and .swarm/manifests/*.json (and other .swarm/*.json). A missing manifest is also treated as vetted (`missing -> ok: true`).",
+      "exploit_or_failure": "In one Bash call: `printf '%s' '{\"version\":1,\"jobs\":[{\"id\":\"j\",\"prompt\":\"x\",\"outputs\":[]}],\"checks\":[{\"name\":\"c\",\"argv\":[\"sh\",\"-c\",\"<anything>\"]}]}' > coordination/manifests/x.json && swarm run coordination/manifests/x.json`. The hook checks the whole line before anything runs. x.json does not exist yet, so it is 'ok'; the redirect target is allow-listed; then swarm runs the unvetted check as the owner. It works the same if x.json exists and is benign at check time and gets overwritten by the redirect, or by a background job started earlier (`(sleep 2; printf ... > coordination/manifests/x.json) &`). This brings back exactly the hole change (3) was meant to close.",
+      "fix": "Do the vetting where the manifest is used. In the swarm run/go/ticket (and resume/integrate) loader, when orchestrator mode is on, vet the exact parsed object that will run (read once, vet those bytes, run those bytes). Unvetted commands need an owner-only override that the hook already denies. Keep the hook check as defense in depth. Also treat a missing path that looks like a manifest (contains '.' or '/') as refused, not ok. Optionally deny compound commands that both write under coordination/manifests or .swarm and call swarm run/go/ticket."
+    },
+    {
+      "file": "tools/split-auto-approve.mjs",
+      "line": 171,
+      "problem": "no-done-cancelled only looks at tickets that were already 'done' in the last approval snapshot. Tickets finish between approvals, so for normal work the snapshot still shows them as todo/in-progress. ticketComparable also drops `status`, so a done→cancelled change is not even counted as 'changed'.",
+      "exploit_or_failure": "The owner approves (snapshot has T-0007 as todo). Swarm builds and integrates T-0007 (now done). The orchestrator opens a change order that cancels T-0007 and adds a replacement, then runs `swarm scope approve --auto-ok`. The snapshot status is todo, so the loop never checks T-0007 and the condition reports 'all done tickets from the snapshot remain done'. Finished work is cancelled with no human in the loop, which is the case this condition exists to stop.",
+      "fix": "Fail when any ticket is cancelled (or missing) now but was not cancelled in the snapshot and has completion evidence: ledger done/delivered timestamps, an integrated run, or a sync/journal record. The simplest safe rule: fail on any status change to cancelled since the snapshot. Add a test where the snapshot has todo, the ticket was then done, and is now cancelled."
+    },
+    {
+      "file": "tools/go.mjs",
+      "line": 137,
+      "problem": "The default branch is only found through `git symbolic-ref refs/remotes/origin/HEAD`. That ref is missing in many repos: ones created locally and pushed with `git push -u origin <branch>`, ones whose remote is not named 'origin', and ones with no remote. In those cases only the literal 'main'/'master' are protected, but the contract says integrate never commits to main/master/the default branch.",
+      "exploit_or_failure": "A repo whose default branch is 'develop' or 'trunk', with no origin/HEAD, and a .project-swarm.json with integrate.commitBranches ['*'] (explicitly supported and tested) or one naming the default branch. integrate auto-commits the run's files straight onto the default branch.",
+      "fix": "Fail closed. If the default branch can't be found, use the lone '*' only for swarm/* plus explicitly named non-default branches, or refuse '*' entirely. Also check every refs/remotes/*/HEAD, `git config init.defaultBranch`, and branch.<name>.merge upstreams. Compare case-insensitively on case-insensitive filesystems (on macOS, a HEAD of 'Main' with loose refs writes refs/heads/main). Add a test with the default branch set and no origin/HEAD."
+    }
+  ],
+  "followups": [
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 307,
+      "problem": "The vetting is a denylist of known command fields (checks/setup/preChecks/mutantCheck, job shell / *-shell model). Any other manifest or job key passes unchecked, and check entries may carry extra keys besides argv (only setup/mutantCheck objects are limited to one key).",
+      "exploit_or_failure": "If the runner honors fields like check.env/cwd, job.lane/agent naming a shell or custom-command lane, lanes or commands defined in the manifest, integrate/review hooks, or similar, a vetted argv (e.g. ['npm','test'] with env NODE_OPTIONS=--require ./x.js) or an unlisted field runs arbitrary code. I could not confirm which fields the runner honors (run/check runner code was not in context).",
+      "fix": "Switch to an allowlist of manifest and job keys. Refuse unknown keys in orchestrator mode, and require each check entry to match a vetted entry as a whole object (not just argv equality)."
+    },
+    {
+      "file": "tools/om-manifest-guard.mjs",
+      "line": 65,
+      "problem": "On `swarm ticket`, the values of --pr and --resume are skipped as flag values and never vetted. `swarm run/go/resume/integrate <runId>` for a run started before the guard (or by any other path) is also not vetted, because a bare run id with no root file is 'ok'.",
+      "exploit_or_failure": "If --pr names a manifest that the pipeline runs (the tests pass coordination/manifests/p.json), its checks run unvetted. Older runs with unvetted checks/setup can be resumed, integrated, or re-checked by the orchestrator.",
+      "fix": "Vet --pr like a positional manifest. When a run id is resumed in orchestrator mode, vet the stored run manifest (.swarm/runs/<id>/...) in-process (see the TOCTOU blocker)."
+    },
+    {
+      "file": "tools/split-park-supersede.mjs",
+      "line": 39,
+      "problem": "The 'newest ingest run' for a stage is whichever run's blocker was raised most recently, not which split run is actually newer. Re-raising an old run's park moves 'newest' back to the old run.",
+      "exploit_or_failure": "run-old parks T-0001; run-new (a newer split) parks T-0003. The owner follows T-0001's own retry line (`swarm scope split --ingest run-old --merge`), which re-raises with run-old text at a later ts. `swarm resolve --superseded-splits` then resolves run-new's T-0003 even though it is still current, hiding a parked ticket. This is owner-only (resolve is not orchestrator-allowed), reversible, and --dry-run shows it, so I listed it as a follow-up and not a blocker.",
+      "fix": "Order runs by run creation time (the run state createdAt or a monotonic run id), not by when the blocker was raised. Or record the run id and run start time as structured fields on the park event and compare those."
+    },
+    {
+      "file": "tools/split-auto-approve.mjs",
+      "line": 13,
+      "problem": "Paid-lane detection is a regex (/anthropic|openrouter/) on ticket.lane only. It ignores other API agents (API_AGENTS in api-adapters), profile default lanes, model/escalation fields, and the failure escalation ladder that moves tickets to stronger lanes.",
+      "exploit_or_failure": "A ticket whose lane is another paid API agent, or that inherits a paid default or escalates into one, is auto-approved and spends money.",
+      "fix": "Decide 'paid' from the lane registry / API_AGENTS and the effective lane after profile defaults and escalation, not a name regex."
+    },
+    {
+      "file": "tools/split-auto-approve.mjs",
+      "line": 4,
+      "problem": "The migration and deploy heuristics are narrow. They miss Rails db/migrate/, alembic/versions/, schema.prisma, render.yaml, wrangler.toml, app.yaml, Procfile, terraform/k8s, docker-compose, scripts/deploy*, CI workflows not named deploy/release, and merge-to-main wording in title/notes (only acceptance is checked).",
+      "exploit_or_failure": "Migration or deploy tickets that use those paths or words pass auto-approve.",
+      "fix": "Widen the path lists, use profile.migrations as the source of truth, and scan title, notes and acceptance for deploy/merge wording."
+    },
+    {
+      "file": "tools/orchestrator-allow.mjs",
+      "line": 606,
+      "problem": "The orchestrator allowlist matches case-insensitively, so `swarm scope APPROVE --AUTO-OK` is allowed. Before this change the orchestrator could not reach `scope approve` at all.",
+      "exploit_or_failure": "If the scope CLI does not recognize the uppercase flag but still treats 'APPROVE' as approve, flags['auto-ok'] is unset, and with a policy where needsHuman is false the run approves via the 'policy' path with no auto-ok conditions checked. Not confirmed (scope arg parser not in context).",
+      "fix": "Match the exact lowercase tokens ['approve','--auto-ok'] in the allowlist. Add a test that the scope parser rejects unknown or uppercase flags."
+    },
+    {
+      "file": "tools/go.mjs",
+      "line": 165,
+      "problem": "Regression: an unreadable or invalid .project-swarm.json, or a malformed integrate.commitBranches, now also stops integrate commits on swarm/* branches, which used to commit unconditionally.",
+      "exploit_or_failure": "Existing projects with a typo in commitBranches silently stop auto-committing on swarm/* branches.",
+      "fix": "Apply the config error only to non-swarm/* branches, or report it as a warning while swarm/* keeps committing."
+    },
+    {
+      "file": "tools/scope-commands.mjs",
+      "line": 2525,
+      "problem": "The snapshot is written after writeLedger and the approve log entry. If the write throws (assertRegularOrMissing on a symlink, disk error), the approval is already saved but the command fails, and the snapshot stays stale.",
+      "exploit_or_failure": "The command crashes after a successful approval. The next --auto-ok compares against an old baseline.",
+      "fix": "Write the snapshot before or atomically with the ledger approval, or catch and report the error without a non-zero crash."
+    }
+  ],
+  "summary": "Reviewed the train 1 diff and the listed files. I could not read run-runner, ticket-pipeline, tickets.mjs or scope-arg-parser code, and scope-commands.mjs only via the diff; scope-commands line numbers come from the diff's new-file hunk ranges. Four blockers. (4) can be bypassed by forging the approval snapshot: .swarm/project/approved-tickets.json is inside the orchestrator write allowlist (.swarm/**/*.json), and a forged file makes every auto-ok condition pass. (4) also lets a change order cancel any ticket finished since the last approval, because only tickets done at snapshot time are checked. (3) checks the manifest only at hook time, so one command that writes coordination/manifests/x.json and then runs `swarm run` on it (or a background overwrite) runs unvetted checks as the owner; missing manifests are also treated as vetted. (1) finds the default branch only through origin/HEAD, so with '*' or a named default branch and no origin/HEAD, integrate can commit to the default branch. (2) is owner-only and conservative overall, but re-raising an old run's park can make a still-current newer park look superseded (follow-up). --root and cwd tricks are already blocked by the existing --root==project-root and cwd==root checks, and symlinks out of the root are refused."
+}

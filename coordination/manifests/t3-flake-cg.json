@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakecg",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "tier": "mid",
+      "prompt": "Flake g-24a1587a part 1: tests/concurrency-guard.test.mjs:198 'Ctrl-C: a command that ends on its own after the terminal signal gets no second signal; one that keeps running gets exactly one' (and the :149 test, same shape) is cancelledByParent under load with 'Promise resolution is still pending but the event loop has already resolved'. Fixed sleeps (30/60/300 ms) let the fake child exit before runGuarded (tools/concurrency-guard.mjs) attaches its handlers, so a promise never settles and nothing keeps the loop alive. Make the order deterministic (await a ready hook from the fake child or runGuarded, then emit the signal). Owner rule for flaky tests: fix at the root so flakes cannot hide real failures. Each test passes alone and fails under full-suite load (--test-concurrency=3 or more). Replace wall-clock races (fixed sleeps then assert) with deterministic ordering: await a ready signal, an event, a promise the code under test already exposes, or poll a condition with a bounded deadline that fails with a clear message. In your notes, list any other fixed-sleep-then-assert tests you saw in your file. PRODUCT-CODE RULE: you may edit ONLY your declared outputs. If you find the root cause is a product bug in a guard, process-kill/signal, lock or money path, do NOT work around it in the test: fix the test's own ordering only, and report the product bug in your notes (file, function, line, the exact misordering) so the coordinator can queue it for an Opus review. Never add retries, quarantine, skips or longer timeouts as the fix.",
+      "context": [
+        "tools/concurrency-guard.mjs"
+      ],
+      "outputs": [
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakecg",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs"
+      ]
+    }
+  ]
+}

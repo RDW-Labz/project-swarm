@@ -1,0 +1,23 @@
+{
+ "tin": "train 9 hotfix - Cockpit ticket-stack stage list numeric order",
+ "base": "82caca04b5b690ead0a8988b2d4d80dc77d5df72 (1.167.36)",
+ "head": "9e24630593db22f4572c693d49c282beec2d1bd1",
+ "version": "1.167.37",
+ "owner_report": "Live 1.167.36 Cockpit TICKET STACK sub-line read s1 / s2 / s3 / s4 / s5 / s6 / s7 / s10 / s9 / s8 / s11.",
+ "full_suite": {
+  "tests": 7690,
+  "pass": 7659,
+  "fail": 0,
+  "skipped": 22,
+  "todo": 9,
+  "duration_ms": 349569
+ },
+ "focused": {
+  "t9-stage-list": {
+   "tests": 20,
+   "pass": 20
+  }
+ },
+ "fix": "cockpitCategories sorts category names numerically when the category field is stage (s1..s11, case-insensitive); lane/area/type order unchanged.",
+ "test": "a mounted Cockpit with stages S1,S10,S9,S8,S11,S2..S7 scans every leaf element containing 3+ stage ids and asserts numeric order; the stage-count span and stack sub-line are both found."
+}

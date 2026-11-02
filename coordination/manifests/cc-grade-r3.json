@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "concurrency": 1,
+ "jobs": [
+  {
+   "id": "ccgrade3",
+   "agent": "claude",
+   "model": "opus",
+   "tier": "expensive",
+   "tierReason": "owner order: Opus grades the Command Center design each round",
+   "prompt": "Grade round 3 of the Swarm Command Center. You are an independent design grader. Read ONLY the files in your context.\nThe four PNGs are real screenshots of the running app against live board data: Hive (all projects) and Cockpit (one project), each at 1440x900 desktop and 390x844 phone.\nThe approved target design is the static mockup: docs/design/command-center-mockup/hive.html, cockpit.html and shared.css (read their markup and CSS; you cannot render them).\nScore each page 0.0-5.0 in steps of 0.1 on this rubric, then give an overall per page (the mean, one decimal):\n1 layout: grid, alignment, spacing, nothing overlapping, clipped or stacked down one edge; 2 hierarchy: what matters first is biggest/brightest, readable type scale; 3 data clarity: numbers and states are legible and labelled, empty states make sense; 4 fidelity: matches the mockup's look (header, tiles, cards, colours, rules); 5 phone: single column, no overlap, tap targets, nothing cut off; 6 polish: consistent radii, borders, colour use, no debug text or stray UI (e.g. a tour panel covering content).\n5.0 = indistinguishable in quality from a top product dashboard and faithful to the mockup; 4.5 = ship-ready with small nits; 3.0 = mockup-level parity but rough; 1.0 = unstyled or broken.\nThen list the top fixes per page (at most 6 each, most impactful first). Each fix: the visible problem, where on screen, the likely file (tools/watch-assets/cc-hive.css, cc-hive-mount.js, hive-panels.js for Hive; cc-cockpit.css, cc-cockpit-mount.js, cockpit-view.js, cockpit-lists.js for Cockpit) and a concrete CSS or markup change. Do not suggest hard-coded sample data.\nWrite ONLY coordination/review/cc-grade/r3/grade.json as JSON: {\"round\":3,\"hive\":{\"scores\":{\"layout\":n,\"hierarchy\":n,\"data\":n,\"fidelity\":n,\"phone\":n,\"polish\":n},\"overall\":n,\"fixes\":[{\"problem\":\"\",\"where\":\"\",\"file\":\"\",\"change\":\"\"}]},\"cockpit\":{same shape},\"notes\":\"one or two sentences\"}.",
+   "context": [
+    "coordination/review/cc-grade/r3/hive-desktop.png",
+    "coordination/review/cc-grade/r3/hive-phone.png",
+    "coordination/review/cc-grade/r3/cockpit-desktop.png",
+    "coordination/review/cc-grade/r3/cockpit-phone.png",
+    "docs/design/command-center-mockup/hive.html",
+    "docs/design/command-center-mockup/cockpit.html",
+    "docs/design/command-center-mockup/shared.css"
+   ],
+   "outputs": [
+    "coordination/review/cc-grade/r3/grade.json"
+   ],
+   "resultFile": "coordination/review/cc-grade/r3/grade.json",
+   "timeoutMs": 1200000
+  }
+ ]
+}

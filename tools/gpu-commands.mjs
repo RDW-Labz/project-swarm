@@ -75,7 +75,7 @@ async function openTunnelReal({ target, key, ports, sshOptions = [] }) {
   child.unref();
   await new Promise(resolve => setTimeout(resolve, 1500));
   if (child.exitCode !== null) throw Object.assign(new Error('gpu-tunnel-failed: the ssh tunnel exited at once (check the key, the host key and that the ports are free)'), { code: 'gpu-tunnel-failed' });
-  return { pid: child.pid, stop: () => { try { process.kill(child.pid); } catch { /* gone */ } } };
+  return { pid: child.pid, stop: () => { try { process.kill(child.pid); } catch (error) { if (error?.code !== 'ESRCH') console.error('[tools/gpu-commands.mjs] stop tunnel kill pid', child.pid, ':', error?.message ?? error); /* gone */ } } };
 }
 
 // Kills the tunnel only if the pid is a real ssh process for this session's target (guards against pid reuse).
@@ -86,7 +86,10 @@ async function stopTunnelReal(pid, session) {
   try {
     const command = await new Promise((resolve, reject) => execFile('ps', ['-p', String(pid), '-o', 'command='], (error, stdout) => (error ? reject(error) : resolve(String(stdout)))));
     if (command.includes('ssh') && command.includes(target)) process.kill(pid);
-  } catch { /* gone */ }
+  } catch (error) {
+    if (error?.code !== 1 && error?.code !== 'ESRCH') console.error('[tools/gpu-commands.mjs] stopTunnelReal pid', pid, ':', error?.message ?? error);
+    /* gone */
+  }
 }
 
 const INTERRUPT_MESSAGE = 'interrupted: servers stopped; destroy the instance if you rented one (node bench/gpu-bakeoff/vast.mjs destroy)';
@@ -98,7 +101,7 @@ async function guarded(deps, real, work) {
   const exit = deps.exit ?? process.exit;
   const signals = ['SIGINT', 'SIGTERM'];
   const onSignal = () => {
-    Promise.resolve().then(() => gpuDown(real)).catch(() => {}).then(() => {
+    Promise.resolve().then(() => gpuDown(real)).catch((error) => { console.error('[tools/gpu-commands.mjs] gpu down on interrupt FAILED, the rented node may still be running; run `swarm gpu down`:', error?.message ?? error); }).then(() => {
       process.stderr.write(`${INTERRUPT_MESSAGE}\n`);
       exit(130);
     });
@@ -168,7 +171,7 @@ async function bakeoff(flags, { out, real, deps }) {
       try {
         session = await gpuUp({ ...base, model: candidate.model, quant: candidate.quant, args: candidate.args, env: candidate.env, routable: false, perReplica: Math.max(...levels, 1), maxUsd: Math.max(remainingUsd, 0.01) }, real);
       } catch (error) {
-        try { await gpuDown(real); } catch { /* ignore: the original error matters */ }
+        try { await gpuDown(real); } catch (downError) { console.error('[tools/gpu-commands.mjs] gpu down after failed bakeoff start FAILED, the rented node may still be running; run `swarm gpu down`:', downError?.message ?? downError); /* ignore: the original error matters */ }
         throw error;
       }
       apiKey = session.apiKey;
@@ -178,7 +181,7 @@ async function bakeoff(flags, { out, real, deps }) {
     cacheStats: async ({ endpoint }) => fetchCacheStats(endpoint, authFetch(real.fetchImpl, apiKey)),
     benchmark: async ({ model, bestOf, candidate }) => {
       const run = bench.runLane({ lane: 'rented', repo, runner, model, bestOf, maxUsd: base.maxUsd, baseInfo: info, log: real.log });
-      try { const dir = path.join(root, 'docs', 'state', 'gpu-bakeoff-details'); fs.mkdirSync(dir, { recursive: true }); const label = String(candidate?.label ?? model).replace(/[^A-Za-z0-9._-]/g, '_'); const details = run.results.map(item => ({ taskId: item.taskId, type: item.type, pass: item.pass, status: item.status, error: item.error, detail: String(item.detail ?? '').slice(0, 300), durationMs: item.durationMs, tokens: item.tokens })); fs.writeFileSync(path.join(dir, `${label}-bestof${bestOf}.json`), JSON.stringify(details, null, 1)); } catch { /* writing details must never fail the benchmark */ }
+      try { const dir = path.join(root, 'docs', 'state', 'gpu-bakeoff-details'); fs.mkdirSync(dir, { recursive: true }); const label = String(candidate?.label ?? model).replace(/[^A-Za-z0-9._-]/g, '_'); const details = run.results.map(item => ({ taskId: item.taskId, type: item.type, pass: item.pass, status: item.status, error: item.error, detail: String(item.detail ?? '').slice(0, 300), durationMs: item.durationMs, tokens: item.tokens })); fs.writeFileSync(path.join(dir, `${label}-bestof${bestOf}.json`), JSON.stringify(details, null, 1)); } catch (error) { console.error('[tools/gpu-commands.mjs] write gpu-bakeoff-details:', error?.message ?? error); /* writing details must never fail the benchmark */ }
       return { passed: run.results.filter(item => item.pass).length, total: run.results.length };
     },
     hardTask,

@@ -107,7 +107,8 @@ const laneModel = (job, agent, lanes, failures = {}, endpointHealth = () => ({ s
 
 function typeRouteAgents(job, lanes, endpointHealth) {
   const route = Array.isArray(job.typeRoute) ? job.typeRoute : [];
-  return route.filter(agent => agent !== 'claude' && knownLane(agent) && (agent !== 'local' || laneConfigured('local', lanes, job, endpointHealth)));
+  return route.filter(agent => agent !== 'claude' && knownLane(agent) && !laneConfigPaused(agent, lanes)
+    && (agent !== 'local' || laneConfigured('local', lanes, job, endpointHealth)));
 }
 
 export function routeJob(job, { lanes = {}, health = () => ({ state: 'ok' }), endpointHealth = () => ({ state: 'ok' }), failures = {}, accepts = () => true, contract, ready = 0 } = {}) {

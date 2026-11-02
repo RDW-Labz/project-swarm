@@ -1,0 +1,519 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index baff7341..3e5a8182 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## 1.167.33
++
++Hotfix: the Command Center scrolls again on Hive and Cockpit.
++- Scroll: removed the body viewport lock (100vh height, max-height and overflow hidden) that made wheel, trackpad, touch, PageDown and Space do nothing; the document now scrolls whenever the content is taller than the window;
++- Hive responsive: the shell fills the window below its 1320 px max width, and at 1340 px and below the ring scales down above a wrapping card grid (previously only below 900 px); the 1600 px desktop ellipse layout is unchanged and there is no horizontal overflow;
++- Cockpit: shares the scroll shell and has no vertical lock;
++- Tests: a real browser scroll test at 1600x900, 1280x800, 800x900 and 390x844 for Hive and Cockpit: wheel, touch and keyboard reach the last card and return to the top, and scrollWidth equals clientWidth;
++- Version 1.167.33.
++
+ ## 1.167.32
+ 
+ Release train 8: a live Command Center change feed, bounded live detection, change-driven snapshot rebuilds, and review/guard follow-ups.
+diff --git a/README.md b/README.md
+index 4ec86472..f8bf18b2 100644
+--- a/README.md
++++ b/README.md
+@@ -40,10 +40,10 @@ or another agent with file and command access. The worker adapter does not
+ need to match the orchestrator. Paste this into your agent at project start:
+ 
+ ```text
+-Use Project Swarm 1.167.32 for this project. Read docs/kickoff.md in the toolkit
++Use Project Swarm 1.167.33 for this project. Read docs/kickoff.md in the toolkit
+ and perform its kickoff workflow. Ask me up front which model providers may
+ receive project code and what spend ceiling applies; wait before model calls.
+-Install from tag v1.167.32 in ~/.project-swarm, run tools/install.mjs --user,
++Install from tag v1.167.33 in ~/.project-swarm, run tools/install.mjs --user,
+ link this project, run doctor, validate and run the read-only and writing smoke
+ jobs, inspect and integrate the reviewed writing output. Read the installed
+ SKILL.md and coordination/ORCHESTRATOR.md. Fill TASK.md from my goal, maintain
+diff --git a/package-lock.json b/package-lock.json
+index 11db593a..f32d5bc5 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.32",
++  "version": "1.167.33",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "project-swarm",
+-      "version": "1.167.32",
++      "version": "1.167.33",
+       "license": "Apache-2.0",
+       "devDependencies": {
+         "acorn": "8.18.0",
+diff --git a/package.json b/package.json
+index 3c90a65c..a1862da4 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "project-swarm",
+-  "version": "1.167.32",
++  "version": "1.167.33",
+   "description": "Project-local multi-provider worker orchestration with copied workspaces and reviewed integration.",
+   "private": true,
+   "type": "module",
+diff --git a/tests/browser/command-center.smoke.mjs b/tests/browser/command-center.smoke.mjs
+index e396c838..f653404e 100644
+--- a/tests/browser/command-center.smoke.mjs
++++ b/tests/browser/command-center.smoke.mjs
+@@ -243,13 +243,15 @@ async function assertMainArea(page, mainSelector, pageLabel) {
+   assert.ok(stats.boxed >= 20, `${pageLabel} page: too few laid-out elements in main (${stats.boxed})`);
+ }
+ 
+-async function startCommandCenterServer({ commandCenterOn }) {
++async function startCommandCenterServer({ commandCenterOn, boardPayload }) {
+   const prevFlag = process.env.SWARM_COMMAND_CENTER;
+   if (commandCenterOn) process.env.SWARM_COMMAND_CENTER = '1';
+ 
+   const board = {
+-    snapshot: async () => fakeBoardPayload(),
+-    project: async (id) => (id === 'alpha' ? { id: 'alpha', name: 'Alpha' } : null),
++    snapshot: async () => boardPayload ?? fakeBoardPayload(),
++    project: async (id) => (boardPayload
++      ? boardPayload.projects.find((project) => project.id === id) ?? null
++      : id === 'alpha' ? { id: 'alpha', name: 'Alpha' } : null),
+     live: async () => null,
+     history: async () => ({ events: [] }),
+     historyCsv: async () => '',
+@@ -411,7 +413,7 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
+     smokePages.push(cockpitDirectPage);
+     attachPageMonitors(cockpitDirectPage, 'Cockpit-direct', bag);
+     const cockpitDirectUrl = `http://127.0.0.1:${smokeOn.port}/command-center/project/alpha?${smokeOn.pageAuthQuery}`;
+-    await cockpitDirectPage.goto(cockpitDirectUrl, { waitUntil: 'networkidle', timeout: 60_000 });
++    await cockpitDirectPage.goto(cockpitDirectUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+     await cockpitDirectPage.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
+     await cockpitDirectPage.waitForSelector('.cc-cockpit-shell, #cc-cockpit-main', { timeout: 30_000 });
+     assertMonitorBag(bag, 'Cockpit-direct');
+@@ -423,7 +425,7 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
+     attachPageMonitors(page, 'Cockpit', bag);
+ 
+     const hiveUrl = `http://127.0.0.1:${smokeOn.port}/command-center?${smokeOn.pageAuthQuery}`;
+-    await page.goto(hiveUrl, { waitUntil: 'networkidle', timeout: 60_000 });
++    await page.goto(hiveUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+     await page.waitForSelector('#command-center-root', { state: 'attached', timeout: 30_000 });
+     await page.waitForSelector('.hive-shell', { timeout: 30_000 });
+     assertMonitorBag(bag, 'Hive');
+@@ -451,9 +453,10 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
+     smokePages.push(classicPage);
+     attachPageMonitors(classicPage, 'Classic board', classicBag);
+     await classicPage.goto(`http://127.0.0.1:${smokeOff.port}/?${smokeOff.pageAuthQuery}`, {
+-      waitUntil: 'networkidle',
++      waitUntil: 'domcontentloaded',
+       timeout: 60_000,
+     });
++    await classicPage.waitForSelector('body', { timeout: 30_000 });
+     assertMonitorBag(classicBag, 'Classic board');
+     assert.ok(classic.body.length > 100, 'Classic board page: home HTML body was empty');
+ 
+@@ -463,3 +466,170 @@ test('command center browser smoke (Hive and Cockpit)', { timeout: 120_000 }, as
+   }
+   assertNoLeftoverBrowser(smokeTracked);
+ });
++
++async function scrollState(page, cardSelector) {
++  return page.evaluate((selector) => {
++    const cards = document.querySelectorAll(selector);
++    const last = cards[cards.length - 1];
++    if (!last) throw new Error(`No cards for ${selector}`);
++    const rect = last.getBoundingClientRect();
++    return {
++      y: window.scrollY,
++      maxY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
++      remaining: rect.bottom - window.innerHeight,
++      lastVisible: rect.width > 0 && rect.height > 0
++        && rect.top >= 0 && rect.bottom <= window.innerHeight
++        && rect.left >= 0 && rect.right <= window.innerWidth,
++    };
++  }, cardSelector);
++}
++
++async function scrollUntil(page, cardSelector, label, input, goal, direction) {
++  const { height } = page.viewportSize();
++  for (let step = 0; step < 80; step += 1) {
++    const state = await scrollState(page, cardSelector);
++    if (goal === 'last' && state.lastVisible) return;
++    if (goal === 'bottom' && state.maxY - state.y <= 1) return;
++    if (goal === 'top' && state.y === 0) return;
++    // Stop just past the card's bottom so a gesture cannot skip over it.
++    const distance = goal === 'last' ? Math.max(40, state.remaining + 2) : height * 0.55;
++    await input(direction * Math.min(height * 0.55, distance));
++    await page.waitForFunction(({ before, sign }) => sign * (window.scrollY - before) > 0,
++      { before: state.y, sign: direction }, { timeout: 3_000 }).catch(() => {
++      assert.fail(`${label}: scrolling stopped at ${state.y} before reaching ${goal}`);
++    });
++    await page.waitForTimeout(150);
++  }
++  assert.fail(`${label}: did not reach ${goal} within 80 gestures`);
++}
++
++async function touchSwipe(page, session, delta) {
++  const { width, height } = page.viewportSize();
++  const x = Math.round(width / 2);
++  const startY = delta > 0 ? height * 0.8 : height * 0.2;
++  const point = (y) => [{ x, y, id: 1, radiusX: 1, radiusY: 1 }];
++  await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point(startY) });
++  try {
++    for (let step = 1; step <= 8; step += 1) {
++      await session.send('Input.dispatchTouchEvent', {
++        type: 'touchMove', touchPoints: point(startY - delta * step / 8),
++      });
++      await page.waitForTimeout(20);
++    }
++    // Pause before release to avoid a fling skipping the last card.
++    await page.waitForTimeout(100);
++  } finally {
++    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
++  }
++}
++
++test('command center scroll input reaches every card at desktop, tablet and phone sizes', { timeout: 180_000 }, async () => {
++  const payload = fakeBoardPayload();
++  const alpha = payload.projects[0];
++  alpha.ledger.tickets = Array.from({ length: 24 }, (_, index) => ({
++    id: `T-${index + 1}`, title: `Scroll regression ticket ${index + 1}`,
++    status: index < 12 ? 'ready' : 'done', stage: 'S1',
++  }));
++  alpha.tickets = { byStatus: { ready: 12, done: 12 } };
++  let server;
++  let launched;
++  let tracked;
++  try {
++    server = await startCommandCenterServer({ commandCenterOn: true, boardPayload: payload });
++    launched = await launchChromium();
++    tracked = trackBrowser(launched.server);
++    for (const viewport of [
++      { width: 1600, height: 900 }, { width: 1280, height: 800 },
++      { width: 800, height: 900 }, { width: 390, height: 844 },
++    ]) {
++      const context = await launched.browser.newContext({
++        viewport, hasTouch: true, isMobile: viewport.width === 390,
++      });
++      try {
++        for (const [name, route, cardSelector] of [
++          ['Hive', '/command-center', '.hive-card'],
++          ['Cockpit', '/command-center/project/alpha', '.tk'],
++        ]) {
++          const page = await context.newPage();
++          let session;
++          const label = `${name} ${viewport.width}x${viewport.height}`;
++          try {
++            await page.goto(`http://127.0.0.1:${server.port}${route}?${server.pageAuthQuery}`, {
++              waitUntil: 'domcontentloaded', timeout: 30_000,
++            });
++            await page.waitForSelector(name === 'Hive' ? '.hive-shell' : '.cc-cockpit-shell', { timeout: 30_000 });
++            await page.waitForSelector(cardSelector, { timeout: 30_000 });
++            if (name === 'Hive') {
++              const skipTour = page.getByRole('button', { name: 'Skip tour', exact: true });
++              if ((await skipTour.count()) > 0) {
++                await skipTour.first().click({ timeout: 10_000 });
++                await page.waitForSelector('.cc-tour-overlay', { state: 'hidden', timeout: 10_000 });
++              }
++            }
++            await page.evaluate(() => document.fonts.ready);
++            await page.evaluate(() => window.scrollTo(0, 0));
++            const widths = await page.evaluate(() => ({
++              scroll: document.documentElement.scrollWidth,
++              client: document.documentElement.clientWidth,
++            }));
++            assert.equal(widths.scroll, widths.client, `${label}: horizontal overflow`);
++            assert.ok((await scrollState(page, cardSelector)).maxY > 0, `${label}: fixture must scroll`);
++
++            await page.mouse.move(viewport.width / 2, viewport.height / 2);
++            const wheel = (delta) => page.mouse.wheel(0, delta);
++            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'last', 1);
++            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'bottom', 1);
++            await scrollUntil(page, cardSelector, `${label} wheel`, wheel, 'top', -1);
++            assert.equal(await page.evaluate(() => window.scrollY), 0, `${label}: wheel returns to top`);
++
++            session = await context.newCDPSession(page);
++            const swipe = (delta) => touchSwipe(page, session, delta);
++            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'last', 1);
++            // Desktop cards may already be visible; still exercise a real swipe in both directions.
++            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'bottom', 1);
++            await scrollUntil(page, cardSelector, `${label} touch`, swipe, 'top', -1);
++            assert.equal(await page.evaluate(() => window.scrollY), 0, `${label}: touch returns to top`);
++
++            if (viewport.width !== 390) {
++              await page.evaluate(() => document.activeElement?.blur());
++              await page.keyboard.press('PageDown');
++              await page.waitForFunction(() => window.scrollY > 0, null, { timeout: 5_000 });
++              const afterPageDown = await page.evaluate(() => window.scrollY);
++              await page.keyboard.press('Space');
++              await page.waitForFunction((before) => window.scrollY > before, afterPageDown, { timeout: 5_000 });
++              await page.waitForTimeout(300);
++              await page.keyboard.press('Home');
++              await page.evaluate(() => window.scrollTo(0, 0));
++              await page.waitForFunction(() => window.scrollY === 0, null, { timeout: 5_000 });
++            }
++          } finally {
++            try {
++              if (session) await session.detach();
++            } finally {
++              await page.close();
++            }
++          }
++        }
++      } finally {
++        await context.close();
++      }
++    }
++  } finally {
++    try {
++      if (launched) {
++        try {
++          await launched.browser.close();
++        } finally {
++          try {
++            await launched.server.close();
++          } finally {
++            await closeBrowserFully({ tracked });
++          }
++        }
++      }
++    } finally {
++      if (server) await server.dispose();
++    }
++  }
++  assertNoLeftoverBrowser(tracked);
++});
+diff --git a/tests/field-lesson-t80-cli.test.mjs b/tests/field-lesson-t80-cli.test.mjs
+index 94e2cec4..15500216 100644
+--- a/tests/field-lesson-t80-cli.test.mjs
++++ b/tests/field-lesson-t80-cli.test.mjs
+@@ -317,17 +317,17 @@ describe('T80 run queue integration', () => {
+   });
+ });
+ 
+-test('T80 release docs describe the bounded loop and pin kickoff to 1.167.32', async () => {
++test('T80 release docs describe the bounded loop and pin kickoff to 1.167.33', async () => {
+   const [pkgText, readme, changelog, skill] = await Promise.all(['package.json', 'README.md', 'CHANGELOG.md', 'skills/project-swarm/SKILL.md'].map(file => fs.readFile(path.join(installRoot, file), 'utf8')));
+   const pkg = JSON.parse(pkgText);
+-  assert.equal(pkg.version, '1.167.32');
++  assert.equal(pkg.version, '1.167.33');
+   assert.equal(pkg.scripts.test, 'node --import ./tests/_isolate-config.mjs --test --test-timeout=600000 tests/*.test.mjs tests/*/*.test.mjs');
+   assert.equal(pkg.scripts.check, 'node tools/check-package.mjs');
+   assert.equal(pkg.scripts.build, undefined);
+-  assert.match(readme, /Use Project Swarm 1\.167\.32/);
+-  assert.match(readme, /Install from tag v1\.167\.32/);
++  assert.match(readme, /Use Project Swarm 1\.167\.33/);
++  assert.match(readme, /Install from tag v1\.167\.33/);
+   assert.match(skill, /v1\.48\.0, run `install\.mjs --user`/);
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.33\n/);
+   const section = skill.slice(skill.indexOf('## Field lessons and prompt guidance\n'), skill.indexOf('## Completion and reuse\n'));
+   assert.ok(section.trimEnd().split('\n').length <= 10);
+   assert.equal(section.split('\n').filter(line => line.startsWith('- ')).length, 6);
+diff --git a/tests/field-lessons-batch-ab-release.test.mjs b/tests/field-lessons-batch-ab-release.test.mjs
+index afd99acb..87fda49f 100644
+--- a/tests/field-lessons-batch-ab-release.test.mjs
++++ b/tests/field-lessons-batch-ab-release.test.mjs
+@@ -8,17 +8,17 @@ import { fileURLToPath } from 'node:url';
+ 
+ const root = fileURLToPath(new URL('../', import.meta.url));
+ 
+-describe('release: 1.167.32', () => {
+-  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.32 while 1.46.1 history remains', async () => {
++describe('release: 1.167.33', () => {
++  test('package.json, package-lock.json, and CHANGELOG.md agree on 1.167.33 while 1.46.1 history remains', async () => {
+     const [pkgText, lockText, changelog] = await Promise.all(
+       ['package.json', 'package-lock.json', 'CHANGELOG.md'].map(file => fs.readFile(path.join(root, file), 'utf8')),
+     );
+     const pkg = JSON.parse(pkgText);
+     const lock = JSON.parse(lockText);
+-    assert.equal(pkg.version, '1.167.32');
+-    assert.equal(lock.version, '1.167.32');
+-    assert.equal(lock.packages[''].version, '1.167.32');
+-    assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
++    assert.equal(pkg.version, '1.167.33');
++    assert.equal(lock.version, '1.167.33');
++    assert.equal(lock.packages[''].version, '1.167.33');
++    assert.match(changelog, /^# Changelog\n\n## 1\.167\.33\n/);
+     const section = changelog.split('## 1.46.1\n')[1].split('\n## ')[0];
+     const bullets = section.split('\n').filter(line => line.startsWith('- '));
+     assert.equal(bullets.length, 3);
+diff --git a/tests/field-lessons-batch-ag-release.test.mjs b/tests/field-lessons-batch-ag-release.test.mjs
+index 16c2d74b..d1b540f0 100644
+--- a/tests/field-lessons-batch-ag-release.test.mjs
++++ b/tests/field-lessons-batch-ag-release.test.mjs
+@@ -25,11 +25,11 @@ test('AG historical dispositions remain under 1.47.0 while active release pins a
+   const text = Object.fromEntries(files);
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.32');
+-  assert.equal(lock.version, '1.167.32');
+-  assert.equal(lock.packages[''].version, '1.167.32');
++  assert.equal(pkg.version, '1.167.33');
++  assert.equal(lock.version, '1.167.33');
++  assert.equal(lock.packages[''].version, '1.167.33');
+ 
+-  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.32\n/);
++  assert.match(text['CHANGELOG.md'], /^# Changelog\n\n## 1\.167\.33\n/);
+   const current = text['CHANGELOG.md'].split('## 1.47.0\n')[1].split('\n## 1.46.1\n')[0];
+   const currentBullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(currentBullets.length, 9);
+diff --git a/tests/field-lessons-batch-ah-release.test.mjs b/tests/field-lessons-batch-ah-release.test.mjs
+index 52a5d436..48e3b20a 100644
+--- a/tests/field-lessons-batch-ah-release.test.mjs
++++ b/tests/field-lessons-batch-ah-release.test.mjs
+@@ -27,16 +27,16 @@ async function publicFiles() {
+   return Object.fromEntries(entries);
+ }
+ 
+-test('AH release pins 1.167.32 and publishes five scrubbed lesson dispositions', async () => {
++test('AH release pins 1.167.33 and publishes five scrubbed lesson dispositions', async () => {
+   const text = await publicFiles();
+   const pkg = JSON.parse(text['package.json']);
+   const lock = JSON.parse(text['package-lock.json']);
+-  assert.equal(pkg.version, '1.167.32');
+-  assert.equal(lock.version, '1.167.32');
+-  assert.equal(lock.packages[''].version, '1.167.32');
++  assert.equal(pkg.version, '1.167.33');
++  assert.equal(lock.version, '1.167.33');
++  assert.equal(lock.packages[''].version, '1.167.33');
+ 
+   const changelog = text['CHANGELOG.md'];
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.33\n/);
+   const current = changelog.split('## 1.48.0\n')[1].split('\n## 1.47.0\n')[0];
+   const bullets = current.split('\n').filter(line => line.startsWith('- '));
+   assert.equal(bullets.length, 5);
+@@ -82,12 +82,12 @@ test('AH retains historical AG dispositions while advancing active release pins'
+   assert.match(historical, /\n\nDesign-only Codex jobs are told to read and grep without tests or installs; sandbox test failures do not block them\. \(lesson 356\)\n/);
+ 
+   const expectedPins = {
+-    'README.md': '1.167.32',
++    'README.md': '1.167.33',
+     'skills/project-swarm/SKILL.md': '1.48.0',
+-    'tests/field-lesson-t80-cli.test.mjs': '1.167.32',
+-    'tests/field-lessons-batch-x.test.mjs': '1.167.32',
+-    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.32',
+-    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.32',
++    'tests/field-lesson-t80-cli.test.mjs': '1.167.33',
++    'tests/field-lessons-batch-x.test.mjs': '1.167.33',
++    'tests/field-lessons-batch-ab-release.test.mjs': '1.167.33',
++    'tests/field-lessons-batch-ag-release.test.mjs': '1.167.33',
+   };
+   for (const [file, version] of Object.entries(expectedPins)) {
+     assert.match(text[file], new RegExp(version.replaceAll('.', '\\.')));
+diff --git a/tests/field-lessons-batch-x.test.mjs b/tests/field-lessons-batch-x.test.mjs
+index 9f89173e..b5d69c60 100644
+--- a/tests/field-lessons-batch-x.test.mjs
++++ b/tests/field-lessons-batch-x.test.mjs
+@@ -366,14 +366,14 @@ describe('#288: a codex job\'s own repo AGENTS.md names required reads the promp
+ });
+ 
+ // ---------------------------------------------------------------------------------------------
+-describe('release: 1.167.32', () => {
+-  test('package.json and package-lock.json are both at 1.167.32', async () => {
++describe('release: 1.167.33', () => {
++  test('package.json and package-lock.json are both at 1.167.33', async () => {
+     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+     const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+     const lock = JSON.parse(await fs.readFile(path.join(root, 'package-lock.json'), 'utf8'));
+-    assert.equal(pkg.version, '1.167.32');
+-    assert.equal(lock.version, '1.167.32');
+-    assert.equal(lock.packages[''].version, '1.167.32');
++    assert.equal(pkg.version, '1.167.33');
++    assert.equal(lock.version, '1.167.33');
++    assert.equal(lock.packages[''].version, '1.167.33');
+   });
+ 
+   test('CHANGELOG.md has a 1.39.0 heading that absorbs the Unreleased ship --preflight line', async () => {
+diff --git a/tests/t101-release.test.mjs b/tests/t101-release.test.mjs
+index e16256d6..cb6b1c9b 100644
+--- a/tests/t101-release.test.mjs
++++ b/tests/t101-release.test.mjs
+@@ -19,8 +19,8 @@ test('T101 release records the vendored skills and their attribution', async ()
+     fs.readFile(path.join(root, 'CHANGELOG.md'), 'utf8'),
+     fs.readFile(path.join(root, 'NOTICE'), 'utf8'),
+   ]);
+-  assert.equal(JSON.parse(pkgText).version, '1.167.32');
+-  assert.match(changelog, /^# Changelog\n\n## 1\.167\.32\n/);
++  assert.equal(JSON.parse(pkgText).version, '1.167.33');
++  assert.match(changelog, /^# Changelog\n\n## 1\.167\.33\n/);
+   const current = changelog.split('## 1.50.0\n')[1].split('\n## ')[0];
+   assert.match(current, /MIT License/);
+   for (const pin of pins) {
+diff --git a/tools/watch-assets/cc-hive-mount.js b/tools/watch-assets/cc-hive-mount.js
+index da55d329..ed394a37 100644
+--- a/tools/watch-assets/cc-hive-mount.js
++++ b/tools/watch-assets/cc-hive-mount.js
+@@ -473,7 +473,7 @@ function resolveHivePanels() {
+ 
+ const ICON_BASE = '/assets/vendor/fluent-emoji/';
+ const TOAST_ICON = { volt: 'high_voltage_56.webp', done: 'party_popper_56.webp', think: 'thinking_face_56.webp' };
+-const PHONE_MAX = 900;
++const PHONE_MAX = 1340;
+ const RAW_URL = '/api/command-center';
+ 
+ function h(doc, tag, cls, text) {
+diff --git a/tools/watch-assets/cc-hive.css b/tools/watch-assets/cc-hive.css
+index 8aad4d0e..8d11bb79 100644
+--- a/tools/watch-assets/cc-hive.css
++++ b/tools/watch-assets/cc-hive.css
+@@ -47,7 +47,7 @@
+ .hive-body:has(.hive-shell) .cc-tour-fab{display:none}
+ .hive-body .cc-shell-message{max-width:720px;margin:40px auto;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--muted);font-family:var(--font-mono);font-size:13px}
+ 
+-.hive-shell{max-width:1320px;margin:0 auto}
++.hive-shell{width:100%;min-width:0;max-width:1320px;margin:0 auto}
+ .hive-shell .hive-mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+ .hive-shell button{font:inherit;font-size:13px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+ .hive-shell button:hover{border-color:var(--blue)}
+@@ -58,7 +58,7 @@
+ .hive-shell .hive-top{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:18px 0 20px;border-bottom:1px solid var(--line)}
+ .hive-shell .hive-logo{font-family:var(--font-display);font-style:italic;font-weight:900;font-size:44px;letter-spacing:-.01em;filter:drop-shadow(0 0 14px rgba(255,77,126,.35));line-height:1;background:linear-gradient(90deg,#ff4d7e,#a98bff);-webkit-background-clip:text;background-clip:text;color:transparent}
+ .hive-shell .hive-tag{font-family:var(--font-mono);font-size:12.5px;color:#c9d1e3;line-height:1.75;white-space:nowrap}
+-.hive-shell .hive-cnt{display:flex;gap:26px;margin-left:auto}
++.hive-shell .hive-cnt{display:flex;flex-wrap:wrap;gap:26px;margin-left:auto;min-width:0}
+ .hive-shell .hive-cnt>div{text-align:center}
+ .hive-shell .hive-cnt .l{font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}
+ .hive-shell .hive-cnt .v{font-family:var(--font-mono);font-size:24px;font-weight:500}
+@@ -127,7 +127,7 @@
+ .hive-shell .hive-core .x{font-family:var(--font-mono);font-size:max(8px,calc(var(--cr) * .12px));line-height:1.35;color:var(--dim);margin-top:2px;text-wrap:balance}
+ 
+ /* lane legend + tagline row */
+-.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center}
++.hive-shell .hive-legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:8px 4px 6px;align-items:center;min-width:0}
+ .hive-shell .hive-legend span i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;box-shadow:0 0 8px currentColor}
+ .hive-shell .hive-legend .tl{margin-left:auto;font-family:var(--font-display);font-style:italic;font-weight:700;font-size:23px;line-height:1.1;text-transform:none;letter-spacing:-.01em;color:var(--fg)}
+ .hive-shell .hive-legend .tl u{text-decoration:none;color:var(--fg)}
+@@ -230,7 +230,7 @@
+ .hive-body .cc-tour-highlight{outline:2px solid var(--cyan);outline-offset:3px}
+ 
+ /* narrow screens: the ring on top (square canvas, sprays come in from its edges), then the cards in a column */
+-@media (max-width:900px){
++@media (max-width:1340px){
+   .hive-shell .hive-tag{white-space:normal}
+   .hive-shell .hive-cnt{margin-left:0}
+   .hive-shell .hive-top{padding-bottom:14px}
+diff --git a/tools/watch-assets/command-center.css b/tools/watch-assets/command-center.css
+index 6426e49d..aeda891a 100644
+--- a/tools/watch-assets/command-center.css
++++ b/tools/watch-assets/command-center.css
+@@ -18,8 +18,10 @@ body {
+ 
+ body.cc-body.hive-body {
+   min-height: 100vh;
+-  max-height: 100vh;
+-  overflow: hidden;
++  height: auto;
++  max-height: none;
++  overflow-x: hidden;
++  overflow-y: auto;
+   background:
+     radial-gradient(900px 420px at 12% -5%, var(--bg-glow), transparent 58%),
+     radial-gradient(600px 300px at 88% 8%, rgba(30, 58, 138, .18), transparent 55%),

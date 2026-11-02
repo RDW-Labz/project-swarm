@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "d-fix-batch-25c",
+      "agent": "cursor",
+      "model": "composer-2.5",
+      "prompt": "Goal g-33a7a4ae, D-fix batch 25c (logging-only visibility round). Read docs/state/silent-failures.md methodology (top) and the sections for the files below. Edit ONLY: tools/lane-pass-routing.mjs, tools/managers/lane-health/index.mjs. Visibility only: do NOT change control flow, return values, fallbacks, throws, or exports. No refactors or reformatting.\n\nLine numbers below are CURRENT (verified against origin/main). For each listed catch, bind the error and do exactly what the line says:\n- SILENT-<CODE>: stay silent when error?.code === '<CODE>' (or the named class, e.g. SyntaxError); console.error anything else. Keep the same fallback value.\n- LEAVE: make NO change to that catch at all.\n- LOG-ALWAYS: console.error unconditionally, include the path/id named, keep the same fallback value.\n- For `.catch(() => null)` / `.catch(() => '')` forms, keep returning the same value from inside the new handler.\n- A close/cleanup inside an error path that rethrows: log the cleanup error with a DIFFERENT binding name; the original error must still be rethrown unchanged.\n\n### tools/lane-pass-routing.mjs\nLogger prefix: console.error('[tools/lane-pass-routing.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (routing). Line 93 `} catch { // A run may be incomplete or concurrently unavailable; keep the readable runs. }`: SILENT-ENOENT/SyntaxError (run's state.json missing or torn), log the rest; no fallback value, the run is simply left out of `runStates`.\n- Line 123 `} catch { // A run may be incomplete or concurrently unavailable; keep the readable runs. }`: SILENT-ENOENT/SyntaxError (same, sync variant), log the rest; no fallback value, run left out of `runStates`.\n\n### tools/managers/lane-health/index.mjs\nLogger prefix: console.error('[tools/managers/lane-health/index.mjs] <short context>:', error?.message ?? error)\n- SENSITIVE (routing). Line 57 `const st = await fs.stat(manifestFile).catch(() => null);`: SILENT-ENOENT (run's manifest.json not written yet/incomplete run), log the rest; keep null fallback (guarded by `if (st && st.isFile() ...)`).\n- Line 93 `const st = await fs.stat(manifestFile).catch(() => null);`: SILENT-ENOENT (same, latest-id variant), log the rest; keep null fallback (guarded the same way).\n\nDo NOT touch any other catch. FORBIDDEN shortcut patterns (rejected in review): `catch (e) { e; }`, `.catch((_e) => ...)` never logged, `void error`, any binding not used in a real check or console.error.\n\nThen grep tests/ for each file's basename and run those tests with: node --import ./tests/_isolate-config.mjs --test <files>; confirm green. Final summary: one line per flagged line.",
+      "context": [
+        "docs/state/silent-failures.md"
+      ],
+      "outputs": [
+        "tools/lane-pass-routing.mjs",
+        "tools/managers/lane-health/index.mjs"
+      ],
+      "timeoutMs": 2400000,
+      "ignoreTests": [
+        "tests/fixtures/ledgers/roadmap-ledger.json",
+        "tests/lane-health-core.test.mjs",
+        "tests/lane-idle-words.test.mjs",
+        "tests/lane-pass-routing.test.mjs",
+        "tests/self-manage-monitor.test.mjs",
+        "tests/split-module.test.mjs"
+      ],
+      "ignoreTestsReason": "covering tests are run by hand after integrate and the full suite runs in CI"
+    }
+  ]
+}

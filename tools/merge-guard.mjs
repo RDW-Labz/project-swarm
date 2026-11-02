@@ -5,11 +5,187 @@ import { dirtyFiles, formatDirtyListing } from './generated-state.mjs';
 import { holdsSwarmState } from './state-guard.mjs';
 import { projectsFile } from './projects.mjs';
 import os from 'node:os';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const execFileP = promisify(execFile);
 const USAGE = 'usage: merge PR [--repo OWNER/NAME]';
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const PR_FIELDS = 'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository';
+const PR_FIELDS =
+  'state,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,isCrossRepository,title,body';
+const RELEASE_TITLE_RE = /^(?:release\s+)?v?\d+\.\d+\.\d+/i;
+const HEAD_SHA40_RE = /^[0-9a-f]{40}$/i;
+const isSha = (value) => typeof value === 'string' && HEAD_SHA40_RE.test(value);
+
+// Strip fenced text before interpreting selectors. A closing
+// fence must use the opener's character and at least its delimiter length.
+function unfencedBodyText(body) {
+  const lines = [];
+  let fence = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    const delimiter = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence.char &&
+          delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      continue;
+    }
+    if (delimiter) {
+      fence = { char: delimiter[1][0], length: delimiter[1].length };
+      continue;
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+function safeReviewPath(value) {
+  if (typeof value !== 'string' || !value.startsWith('coordination/review/') || !value.endsWith('-review.json')) return false;
+  return value.split('/').every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..');
+}
+
+function decodeContents(response) {
+  if (!isObj(response) || response.encoding !== 'base64' || typeof response.content !== 'string') {
+    throw new Error('invalid contents response');
+  }
+  const encoded = response.content.replace(/\s/g, '');
+  // Buffer.from silently discards invalid base64 characters; reject those first.
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error('invalid base64');
+  }
+  return Buffer.from(encoded, 'base64');
+}
+
+export async function releaseReviewGate(
+  { title, body, headRefOid },
+  { gh, repoName, root = '.', fs: fsImpl = fs } = {},
+) {
+  if (!RELEASE_TITLE_RE.test(String(title ?? '').trimStart())) return { required: false, ok: true };
+  const refuse = (reason) => ({ required: true, ok: false, reason });
+  const markers = [...unfencedBodyText(body).matchAll(/^[\t ]*<!--[\t ]*swarm-review:[\t ]*([^\r\n]*?)[\t ]*-->[\t ]*$/gm)];
+  if (!markers.length) return refuse('marker-missing');
+  const resultFile = markers[0][1].trim();
+  if (markers.length !== 1 || !safeReviewPath(resultFile)) return refuse('selector-malformed');
+  if (!isSha(headRefOid)) return refuse('result-not-metadata-commit');
+
+  // R must contain only the integrated result; its sole parent H is the code
+  // head reviewed by the local run. Pin all GitHub reads to these commits.
+  const api = async (endpoint) => {
+    try {
+      const response = await gh(['api', 'repos/' + repoName + '/' + endpoint]);
+      return response.code === 0 ? { ok: true, value: parseJson(response) } : { ok: false };
+    } catch {
+      return { ok: false };
+    }
+  };
+  const commit = await api('commits/' + headRefOid);
+  const parents = commit.value?.parents;
+  if (!commit.ok || !Array.isArray(parents) || parents.length !== 1 || !isSha(parents[0]?.sha)) {
+    return refuse('result-not-metadata-commit');
+  }
+  const reviewedHead = parents[0].sha;
+  const comparison = await api('compare/' + reviewedHead + '...' + headRefOid);
+  const files = comparison.value?.files;
+  if (!comparison.ok || !Array.isArray(files) || files.length !== 1 ||
+      !isObj(files[0]) || files[0].filename !== resultFile ||
+      (files[0].previous_filename && files[0].previous_filename !== resultFile) ||
+      ['renamed', 'removed', 'copied'].includes(files[0].status)) {
+    return refuse('result-not-metadata-commit');
+  }
+
+  const runsDir = path.join(root, '.swarm', 'runs');
+  let entries;
+  try {
+    entries = await fsImpl.readdir(runsDir, { withFileTypes: true });
+  } catch {
+    return refuse('review-run-record-missing');
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const record = JSON.parse(await fsImpl.readFile(path.join(runsDir, entry.name, 'review-record.json'), 'utf8'));
+      if (isObj(record) && record.head === reviewedHead && record.resultFile === resultFile) {
+        candidates.push({ record, runId: entry.name });
+      }
+    } catch {
+      // Unrelated runs and runs without readable records cannot attest a review.
+    }
+  }
+  if (!candidates.length) return refuse('review-run-record-missing');
+  const opusRuns = candidates.filter(({ record }) =>
+    record.agent === 'claude' && typeof record.model === 'string' && /opus/i.test(record.model));
+  if (!opusRuns.length) return refuse('review-run-model-not-opus');
+
+  const expectedManifestPath = (runId) => '.swarm/runs/' + runId + '/manifest.json';
+  const manifestJobsList = (manifest) => {
+    const jobs = manifest?.jobs;
+    return isObj(jobs) ? Object.values(jobs) : jobs;
+  };
+  const manifestAttestsReview = (record, runId, resultFile, manifestJob) => {
+    if (!isObj(manifestJob) || manifestJob.id !== record.jobId) return false;
+    const reviewJob = manifestJob.type === 'review' || manifestJob.resultFile === resultFile;
+    if (!reviewJob) return false;
+    if (manifestJob.resultFile !== resultFile) return false;
+    if (!Array.isArray(manifestJob.outputs) || manifestJob.outputs.length !== 1 ||
+        manifestJob.outputs[0] !== resultFile) return false;
+    if (manifestJob.agent !== record.agent) return false;
+    if ((manifestJob.model ?? manifestJob.actualModel) !== record.model) return false;
+    return true;
+  };
+
+  const matching = [];
+  for (const { record, runId } of opusRuns) {
+    // Bind the state path to the directory containing the runner's record.
+    if (record.version !== 1 || record.runId !== runId || record.status !== 'complete' ||
+        typeof record.jobId !== 'string' || !record.jobId ||
+        record.stateFile !== '.swarm/runs/' + runId + '/state.json' ||
+        record.manifest !== expectedManifestPath(runId) ||
+        typeof record.finishedAt !== 'string' || !Number.isFinite(Date.parse(record.finishedAt))) continue;
+    try {
+      const state = JSON.parse(await fsImpl.readFile(path.join(root, record.stateFile), 'utf8'));
+      const jobs = isObj(state?.jobs) ? Object.values(state.jobs) : state?.jobs;
+      if (!isObj(state) || state.status !== 'complete' || state.baseCommit !== reviewedHead ||
+          !Array.isArray(jobs) || !jobs.some((job) =>
+            isObj(job) && job.id === record.jobId && job.status === 'complete' &&
+            job.agent === record.agent && (job.model ?? job.actualModel) === record.model)) continue;
+      const manifest = JSON.parse(await fsImpl.readFile(path.join(root, record.manifest), 'utf8'));
+      const manifestJobs = manifestJobsList(manifest);
+      const manifestJob = Array.isArray(manifestJobs)
+        ? manifestJobs.find((job) => isObj(job) && job.id === record.jobId)
+        : undefined;
+      if (!manifestAttestsReview(record, runId, resultFile, manifestJob)) continue;
+      matching.push(record);
+    } catch {
+      // Missing, malformed, or unreadable local state fails closed.
+    }
+  }
+  if (!matching.length) return refuse('review-run-state-mismatch');
+  matching.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+  const record = matching[0];
+
+  const fetched = await api('contents/' + resultFile + '?ref=' + headRefOid);
+  let resultBytes;
+  try {
+    if (!fetched.ok) throw new Error('result missing');
+    resultBytes = decodeContents(fetched.value);
+    if (typeof record.resultHash !== 'string' || !/^[0-9a-f]{64}$/i.test(record.resultHash) ||
+        createHash('sha256').update(resultBytes).digest('hex') !== record.resultHash.toLowerCase()) {
+      return refuse('result-hash-mismatch');
+    }
+  } catch {
+    return refuse('result-hash-mismatch');
+  }
+  let result;
+  try {
+    result = JSON.parse(resultBytes.toString('utf8'));
+  } catch {
+    return refuse('result-verdict');
+  }
+  if (!isObj(result) || result.verdict !== 'pass') return refuse('result-verdict');
+  if (Object.hasOwn(result, 'head') && result.head !== reviewedHead) return refuse('result-head-mismatch');
+  return { required: true, ok: true };
+}
 
 async function realExec(command, args, { cwd } = {}) {
   try {
@@ -274,6 +450,12 @@ export async function runMerge(root, args, { exec = realExec, sleep = defaultSle
 
   const reasons = [...verdict.reasons];
   if (missing.length) reasons.push(`missing-required: ${missing.join(', ')}`);
+  const reviewGate = await releaseReviewGate({
+    title: view.title,
+    body: view.body,
+    headRefOid: view.headRefOid,
+  }, { gh, repoName, root, fs: fsImpl });
+  if (reviewGate.required && !reviewGate.ok) reasons.push(reviewGate.reason);
   const checks = {
     failing: rollup.failing,
     pending: [...rollup.pending, ...missing],

@@ -18,7 +18,12 @@ async function gitRemote(dir) {
 
 export async function addProject(target, opts = {}) {
   const abs = path.resolve(target);
-  const info = await stat(abs).catch(() => null);
+  const info = await stat(abs).catch((error) => {
+    if (error?.code !== 'ENOENT' && error?.code !== 'EACCES' && error?.code !== 'ENOTDIR') {
+      console.error('[tools/project-add.mjs] stat target path:', error?.message ?? error);
+    }
+    return null;
+  });
   if (!info || !info.isDirectory()) throw new Error('not a directory: ' + abs);
   const root = await realpath(abs);
   const remote = await gitRemote(root);

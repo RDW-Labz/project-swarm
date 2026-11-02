@@ -49,7 +49,15 @@ export async function acquireChiefLock(machineDir, { pid = process.pid, isAlive 
         try {
           const owner = JSON.parse(await fs.readFile(file, 'utf8'));
           if (owner.pid === pid) await fs.rm(file, { force: true });
-        } catch { /* already gone */ }
+        } catch (error) {
+          if (error?.code === 'ENOENT') {
+            /* already gone */
+          } else if (error instanceof SyntaxError) {
+            console.error('[tools/chief-orchestrator.mjs] release chief lock:', 'corrupt chief lock (SyntaxError)');
+          } else {
+            console.error('[tools/chief-orchestrator.mjs] release chief lock:', file, error?.message ?? error);
+          }
+        }
       };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;

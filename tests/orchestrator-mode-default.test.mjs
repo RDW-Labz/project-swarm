@@ -12,7 +12,6 @@ import {
   orchestratorModeEnabled,
   ORCHESTRATOR_TEST_MARKER_REL,
   ORCHESTRATOR_TEST_MARKER_BODY,
-  SWARM_WORKER_RUN_ID_ENV,
 } from '../tools/shell-writes.mjs';
 
 const GUARD = fileURLToPath(new URL('../tools/handbuild-guard.mjs', import.meta.url));
@@ -137,37 +136,34 @@ test('handbuild-guard subprocess: default-on allowlist at project root', async t
   }
 });
 
-test('worker workspace and scratch tmp cwd are not subject to orchestrator mode', async t => {
+test('worker workspace cwd is subject to orchestrator mode when CLAUDE_PROJECT_DIR is set', async t => {
   const root = await defaultSwarmProject(t);
   await writeOrchestratorTestMarker(root);
   const runId = 'run1';
-  await fs.mkdir(path.join(root, '.swarm', 'runs', runId), { recursive: true });
-  await fs.writeFile(path.join(root, '.swarm', 'runs', runId, 'state.json'), '{}');
   const workspace = path.join(root, '.swarm', 'workspaces', 'run1', 'job-1');
   await fs.mkdir(workspace, { recursive: true });
   const prev = {
     CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
-    [SWARM_WORKER_RUN_ID_ENV]: process.env[SWARM_WORKER_RUN_ID_ENV],
+    SWARM_WORKER_RUN_ID: process.env.SWARM_WORKER_RUN_ID,
     SWARM_OMODE_SCRATCH_EXEMPT: process.env.SWARM_OMODE_SCRATCH_EXEMPT,
   };
   process.env.CLAUDE_PROJECT_DIR = root;
-  process.env[SWARM_WORKER_RUN_ID_ENV] = runId;
+  process.env.SWARM_WORKER_RUN_ID = runId;
   try {
-  assert.equal(orchestratorModeEnabled(root, workspace), false);
-  const dWs = guardDecision({
-    tool: 'Bash',
-    toolInput: { command: 'node -e 1' },
-    root,
-    cwd: workspace,
-    now: () => T0,
-  });
-  assert.equal(dWs.allow, true);
-
+    assert.equal(orchestratorModeEnabled(root, workspace), true);
+    const dWs = guardDecision({
+      tool: 'Bash',
+      toolInput: { command: 'node -e 1' },
+      root,
+      cwd: workspace,
+      now: () => T0,
+    });
+    assert.equal(dWs.allow, false);
   } finally {
     if (prev.CLAUDE_PROJECT_DIR === undefined) delete process.env.CLAUDE_PROJECT_DIR;
     else process.env.CLAUDE_PROJECT_DIR = prev.CLAUDE_PROJECT_DIR;
-    if (prev[SWARM_WORKER_RUN_ID_ENV] === undefined) delete process.env[SWARM_WORKER_RUN_ID_ENV];
-    else process.env[SWARM_WORKER_RUN_ID_ENV] = prev[SWARM_WORKER_RUN_ID_ENV];
+    if (prev.SWARM_WORKER_RUN_ID === undefined) delete process.env.SWARM_WORKER_RUN_ID;
+    else process.env.SWARM_WORKER_RUN_ID = prev.SWARM_WORKER_RUN_ID;
     if (prev.SWARM_OMODE_SCRATCH_EXEMPT === undefined) delete process.env.SWARM_OMODE_SCRATCH_EXEMPT;
     else process.env.SWARM_OMODE_SCRATCH_EXEMPT = prev.SWARM_OMODE_SCRATCH_EXEMPT;
   }

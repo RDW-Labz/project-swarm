@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "concurrency": 1,
+  "jobs": [
+    {
+      "id": "t3flakecg3",
+      "agent": "codex",
+      "model": "gpt-6.1-sol",
+      "tier": "mid",
+      "prompt": "FILE ACCESS: your declared output is in your worktree and you MAY read and edit it.\nDIAGNOSE then fix (g-24a1587a rules: root cause, no retries/skips/longer timeouts). tests/concurrency-guard.test.mjs:162 'process: the wrapper killed outright (SIGKILL, a crash) is restored by the watcher within seconds' fails about 1 in 15 under load (--test-concurrency=8) and in CI, with 'the orphaned command was stopped before the value went back' (line ~176: the test waits up to 15 s after restore for the command's pid to be dead). The watcher in tools/concurrency-guard.mjs watch() (~line 79) polls the wrapper every 300 ms; on death it reads marker.childPid, SIGTERMs it, waits up to 10 s with alive() (process.kill(pid,0)), SIGKILLs, then restores. A previous attempt replaced the test's sleep(500) 'watcher is up' wait with polling marker.childPid and FAILED its own check, so the watcher being up matters too. Find which of these is the real cause and prove it with evidence in your notes: (a) the test kills the wrapper before the watcher process is running or before noteChild recorded the real command pid; (b) alive() sees a zombie or reused pid (the orphan is reparented and not yet reaped), so the watcher and/or the test think it lives; (c) the command ignores SIGTERM and the 10 s + SIGKILL path runs past the test's window; (d) something else. If the cause is in the test (a, or a wrong expectation), fix the test deterministically (for example the watcher or wrapper writes a ready line or file the test awaits). If it is in the product (b, c, or a watcher ordering bug), DO NOT change product code (process-kill path, needs Opus): leave the test as is and report the exact bug, file, line and proposed fix. Run the file 20 times under --test-concurrency=8 and report the count.",
+      "context": [
+        "tools/concurrency-guard.mjs"
+      ],
+      "outputs": [
+        "tests/concurrency-guard.test.mjs"
+      ],
+      "timeoutMs": 2400000
+    }
+  ],
+  "checks": [
+    {
+      "name": "t3flakecg",
+      "argv": [
+        "node",
+        "--import",
+        "./tests/_isolate-config.mjs",
+        "--test",
+        "tests/concurrency-guard.test.mjs"
+      ]
+    }
+  ]
+}

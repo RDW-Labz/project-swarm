@@ -67,7 +67,10 @@ async function writeJson(file, value) {
 }
 
 export async function readPhoneConfig(dir = phoneDir()) {
-  const c = await readJson(path.join(dir, 'config.json'), null).catch(() => null);
+  const c = await readJson(path.join(dir, 'config.json'), null).catch((error) => {
+    console.error('[tools/phone.mjs] readPhoneConfig read config:', error?.message ?? error);
+    return null;
+  });
   if (!c || typeof c.repo !== 'string' || !REPO_RE.test(c.repo)) return null;
   // The owner may have more than one GitHub login (all of them are the owner); a config from before had a single `owner`.
   const owners = [...new Set([...(Array.isArray(c.owners) ? c.owners : []), ...(typeof c.owner === 'string' ? [c.owner] : [])].filter(l => typeof l === 'string' && LOGIN_RE.test(l)))].slice(0, MAX_OWNERS);
@@ -130,7 +133,10 @@ export async function setupPhone({ repo, dir = phoneDir(), deps, owners: extra =
     try { info = JSON.parse(await deps.gh(['repo', 'view', repo, '--json', 'isPrivate,nameWithOwner'])); } catch { return { ok: false, error: `${repo} was created but cannot be read back` }; }
   }
   if (info.isPrivate !== true) return { ok: false, error: `${repo} is PUBLIC. Phone decisions must be private: make it private or pick another repo` };
-  try { await deps.gh(['api', '-X', 'POST', `repos/${repo}/labels`, '--input', '-'], { input: JSON.stringify({ name: LABEL, color: '5319e7', description: 'created by swarm phone sync' }) }); } catch { /* the label may already exist */ }
+  try { await deps.gh(['api', '-X', 'POST', `repos/${repo}/labels`, '--input', '-'], { input: JSON.stringify({ name: LABEL, color: '5319e7', description: 'created by swarm phone sync' }) }); } catch (error) {
+    const msg = String(error?.message ?? error);
+    if (!/already exists|422|name already/i.test(msg)) console.error('[tools/phone.mjs] setupPhone create label:', msg);
+  }
   await writePhoneConfig(dir, { repo, owner: owners[0], owners, enabled: true });
   return { ok: true, repo, owner: owners[0], owners, created };
 }
@@ -207,17 +213,26 @@ async function syncUnlocked({ dir, deps, dryRun }) {
     if (rec.status !== 'open' && rec.status !== 'confirming') continue;
     if (now() > rec.expiresAt) {
       rec.status = 'expired'; report.expired.push(number);
-      if (!dryRun) { await comment(deps, config.repo, number, 'Expired. Nothing was done.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); }
+      if (!dryRun) {
+        await comment(deps, config.repo, number, 'Expired. Nothing was done.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked expired comment:', error?.message ?? error); });
+        await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked expired closeIssue:', error?.message ?? error); });
+      }
       continue;
     }
     if (rec.kind !== 'panic' && !offered.has(rec.key)) {
       rec.status = 'closed-elsewhere'; report.closed.push(number);
-      if (!dryRun) { await comment(deps, config.repo, number, 'Already handled at the computer. Nothing more to do.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); }
+      if (!dryRun) {
+        await comment(deps, config.repo, number, 'Already handled at the computer. Nothing more to do.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked closed-elsewhere comment:', error?.message ?? error); });
+        await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked closed-elsewhere closeIssue:', error?.message ?? error); });
+      }
       continue;
     }
     if (rec.kind === 'decision' && JSON.stringify(offered.get(rec.key).options) !== JSON.stringify(rec.options)) {
       rec.status = 'superseded'; report.closed.push(number);
-      if (!dryRun) { await comment(deps, config.repo, number, 'The choices changed, so this question is closed. A new one is opened if it still needs you.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); }
+      if (!dryRun) {
+        await comment(deps, config.repo, number, 'The choices changed, so this question is closed. A new one is opened if it still needs you.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked superseded comment:', error?.message ?? error); });
+        await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked superseded closeIssue:', error?.message ?? error); });
+      }
       continue;
     }
     if (rec.kind !== 'panic') rec.secondStep = rec.secondStep || Boolean(offered.get(rec.key).secondStep);
@@ -235,11 +250,31 @@ async function syncUnlocked({ dir, deps, dryRun }) {
       const token = String(c.body ?? '').trim().toLowerCase();
       if (token.length > 40 || /\s/.test(token)) { report.ignored += 1; if (!dryRun) await logIgnored(dir, { issue: Number(number), login, reason: 'not one word' }, now); continue; }
       if (rec.status === 'confirming') {
-        if (token === 'decline') { rec.status = 'declined'; report.answered.push(number); if (!dryRun) { await comment(deps, config.repo, number, 'Declined. Nothing was done.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); } continue; }
-        if (now() > rec.wordExpiresAt) { rec.status = 'expired'; report.expired.push(number); if (!dryRun) { await comment(deps, config.repo, number, 'The confirmation word expired. Nothing was done.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); } break; }
+        if (token === 'decline') {
+          rec.status = 'declined'; report.answered.push(number);
+          if (!dryRun) {
+            await comment(deps, config.repo, number, 'Declined. Nothing was done.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked confirming decline comment:', error?.message ?? error); });
+            await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked confirming decline closeIssue:', error?.message ?? error); });
+          }
+          continue;
+        }
+        if (now() > rec.wordExpiresAt) {
+          rec.status = 'expired'; report.expired.push(number);
+          if (!dryRun) {
+            await comment(deps, config.repo, number, 'The confirmation word expired. Nothing was done.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked word-expired comment:', error?.message ?? error); });
+            await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked word-expired closeIssue:', error?.message ?? error); });
+          }
+          break;
+        }
         if (!same(token, rec.word)) {
           rec.wrong = (rec.wrong ?? 0) + 1; report.ignored += 1;
-          if (rec.wrong >= MAX_WRONG_WORDS) { rec.status = 'locked'; if (!dryRun) { await comment(deps, config.repo, number, 'Too many wrong words. Locked; nothing was done.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); } }
+          if (rec.wrong >= MAX_WRONG_WORDS) {
+            rec.status = 'locked';
+            if (!dryRun) {
+              await comment(deps, config.repo, number, 'Too many wrong words. Locked; nothing was done.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked locked comment:', error?.message ?? error); });
+              await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked locked closeIssue:', error?.message ?? error); });
+            }
+          }
           continue;
         }
         await execute(number, rec, rec.pending);
@@ -247,13 +282,20 @@ async function syncUnlocked({ dir, deps, dryRun }) {
       }
       const actions = actionsOf(rec);
       if (!actions.includes(token)) { report.ignored += 1; if (!dryRun) await logIgnored(dir, { issue: Number(number), login, reason: 'not an offered action' }, now); continue; }
-      if (token === 'decline') { rec.status = 'declined'; report.answered.push(number); if (!dryRun) { await comment(deps, config.repo, number, 'Declined. Nothing was done.').catch(() => {}); await closeIssue(deps, config.repo, number).catch(() => {}); } continue; }
+      if (token === 'decline') {
+        rec.status = 'declined'; report.answered.push(number);
+        if (!dryRun) {
+          await comment(deps, config.repo, number, 'Declined. Nothing was done.').catch((error) => { console.error('[tools/phone.mjs] syncUnlocked decline comment:', error?.message ?? error); });
+          await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked decline closeIssue:', error?.message ?? error); });
+        }
+        continue;
+      }
       const action = rec.kind === 'decision' ? { type: 'choose', choice: rec.options[Number(token) - 1] } : rec.kind === 'ticket' ? { type: 'approve-ticket' } : { type: 'stop-all' };
       const changesDefault = rec.kind === 'decision' && action.choice !== rec.default;
       if (rec.secondStep || rec.kind === 'panic' || changesDefault) {
         rec.status = 'confirming'; rec.pending = action; rec.word = word(random); rec.wordExpiresAt = Math.min(now() + WORD_EXPIRY_MS, rec.expiresAt); rec.wrong = 0;
         report.confirming.push(number);
-        if (!dryRun) await comment(deps, config.repo, number, `To confirm, reply with this one-time word within one hour: \`${rec.word}\`. Reply \`decline\` to cancel.`).catch(() => {});
+        if (!dryRun) await comment(deps, config.repo, number, `To confirm, reply with this one-time word within one hour: \`${rec.word}\`. Reply \`decline\` to cancel.`).catch((error) => { console.error('[tools/phone.mjs] syncUnlocked confirmation prompt comment:', error?.message ?? error); });
         continue;
       }
       await execute(number, rec, action);
@@ -279,8 +321,8 @@ async function syncUnlocked({ dir, deps, dryRun }) {
       else result = await deps.runSwarm(null, ['stop', '--all']);
     } catch (error) { result = { ok: false, text: String(error.message ?? error) }; }
     rec.result = result.ok ? 'ok' : 'failed';
-    await comment(deps, config.repo, number, result.ok ? `Done: ${clean(result.text, 200) || 'ok'}` : `That did not work: ${clean(result.text, 200)}. Nothing else was done; try it at your computer.`).catch(() => {});
-    await closeIssue(deps, config.repo, number).catch(() => {});
+    await comment(deps, config.repo, number, result.ok ? `Done: ${clean(result.text, 200) || 'ok'}` : `That did not work: ${clean(result.text, 200)}. Nothing else was done; try it at your computer.`).catch((error) => { console.error('[tools/phone.mjs] execute result comment:', error?.message ?? error); });
+    await closeIssue(deps, config.repo, number).catch((error) => { console.error('[tools/phone.mjs] execute closeIssue:', error?.message ?? error); });
   }
 
   // 2) new issues for what is waiting (and one panic button)
@@ -304,7 +346,9 @@ async function syncUnlocked({ dir, deps, dryRun }) {
       state.issues[String(issue.number)] = rec;
       report.created.push(String(issue.number));
       made += 1;
-    } catch { /* one failure does not stop the rest; the next sync tries again */ }
+    } catch (error) {
+      console.error('[tools/phone.mjs] syncUnlocked create issue:', error?.message ?? error);
+    }
   }
   await save();
   return { ok: true, ...report };
