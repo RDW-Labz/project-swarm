@@ -1,0 +1,3 @@
+- 2026-10-28T23:23:18.075Z Mini review seat: swarm update --when-idle to 1.167.25 started (train 2 shipped as #441). Waiting on atlas-seafloor run 1793229778060-95a69e46.
+- 2026-10-28T23:24:24.082Z Mini: installed 1.167.25 (pointers bumped; Marketing agency pinned 1.167.8). Removed train2-review worktree. Remote server still 1.167.15 identity-unverified, left for MacBook/owner. Stale providerLimit (Oct 23) persists.
+- 2026-10-28T23:34:06.515Z Mini: owner-ordered remote restart via swarm remote off/on. Now pid 88234 on 1.167.25, tailnet only, Funnel off, login and token refusal checks pass. Token regenerated: phone needs 'swarm remote show'.

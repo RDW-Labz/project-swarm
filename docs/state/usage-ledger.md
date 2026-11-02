@@ -165,6 +165,7 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | - | y2-git-hooks: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-20 | - | w8-docs: complete | cursor | composer-2.5 | pass | - | subscription |
 | 2026-10-21 | - | s8-burst-gates: Added S8 requirements R-050 (GPU burst gates) and R-051 (cloud CPU test/e2e runners) | cursor | composer-2.5 | pass | - | subscription |
+| 2026-10-28 | - | ask-1793216618428-361f1ce0: All 3 catch sites still swallow every error and only add console.error l | claude | opus | pass | 12,491 | $0.03 |
 
 ## Daily summary
 
@@ -182,4 +183,5 @@ One row per worker call made while building the scale plan (`docs/plans/swarm-sc
 | 2026-10-20 | claude | 8 | 8 | 0 | 224,893 | $1.99 |
 | 2026-10-20 | cursor | 5 | 5 | 0 | 0 | subscription |
 | 2026-10-21 | cursor | 1 | 1 | 0 | 0 | subscription |
-| **total** | all | 161 | 146 | 15 | 14,711,375 | $26.67 (incl. estimates) |
+| 2026-10-28 | claude | 1 | 1 | 0 | 12,491 | $0.03 |
+| **total** | all | 162 | 147 | 15 | 14,723,866 | $26.70 (incl. estimates) |
